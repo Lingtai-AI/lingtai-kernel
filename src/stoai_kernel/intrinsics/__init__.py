@@ -5,7 +5,7 @@ Each intrinsic has:
 - DESCRIPTION: human-readable description
 - handle: handler function(agent, args) -> dict
 """
-from . import mail, system, eigen
+from . import mail, system, eigen, soul
 
 ALL_INTRINSICS = {
     "mail": {
@@ -19,5 +19,9 @@ ALL_INTRINSICS = {
     "eigen": {
         "schema": eigen.SCHEMA, "description": eigen.DESCRIPTION, "handle": eigen.handle,
         "system_prompt": "Core self-management — working notes and context control.",
+    },
+    "soul": {
+        "schema": soul.SCHEMA, "description": soul.DESCRIPTION, "handle": soul.handle,
+        "system_prompt": "Your inner voice — a clone of your conversation that whispers back after you go idle.",
     },
 }
