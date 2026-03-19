@@ -74,7 +74,10 @@ def handle(agent, args: dict) -> dict:
             return {"error": "prompt is required — tell your soul what to reflect on."}
 
         delay = args.get("delay", _DEFAULT_DELAY)
-        delay = float(delay)
+        try:
+            delay = float(delay)
+        except (TypeError, ValueError):
+            return {"error": "delay must be a number."}
         if delay < _MIN_DELAY:
             return {"error": f"delay must be >= {_MIN_DELAY} seconds."}
         delay = min(delay, _MAX_DELAY)
@@ -99,9 +102,9 @@ def whisper(agent) -> str | None:
 
     Returns the inner voice text, or None if there's nothing to reflect on.
 
-    Thread safety: called from the soul Timer thread while the agent thread
-    is blocked in inbox.get().  iface.to_dict() is a pure read over a Python
-    list — atomic under CPython's GIL.  The cloned interface is a deep copy
+    Thread safety: called from the soul Timer thread while the agent is
+    SLEEPING (blocked in inbox.get()), so the agent thread is not mutating
+    the interface.  The cloned interface is a deep copy via serialization,
     so the subsequent create_session/send touches no shared state.
     """
     from ..llm.interface import ChatInterface
@@ -113,7 +116,7 @@ def whisper(agent) -> str | None:
     if not iface.conversation_entries():
         return None
 
-    # Deep-copy the interface (GIL-safe read of the entry list)
+    # Deep-copy the interface (safe: agent thread is blocked in inbox.get())
     cloned = ChatInterface.from_dict(iface.to_dict())
 
     # Create a temporary session: same system prompt, no tools, cloned history

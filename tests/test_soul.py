@@ -67,6 +67,16 @@ class TestSoulHandle:
         result = soul.handle(agent, {"action": "on", "prompt": "   "})
         assert "error" in result
 
+    def test_non_numeric_delay_rejected(self):
+        agent = _make_mock_agent()
+        result = soul.handle(agent, {"action": "on", "prompt": "x", "delay": "fast"})
+        assert "error" in result
+
+    def test_none_delay_rejected(self):
+        agent = _make_mock_agent()
+        result = soul.handle(agent, {"action": "on", "prompt": "x", "delay": None})
+        assert "error" in result
+
 
 from stoai_kernel.intrinsics.soul import whisper
 
