@@ -10,7 +10,6 @@ Do not share across threads.
 
 from __future__ import annotations
 
-import base64
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -62,20 +61,7 @@ class ThinkingBlock:
         return d
 
 
-@dataclass
-class ImageBlock:
-    data: bytes
-    mime_type: str = "image/png"
-
-    def to_dict(self) -> dict:
-        return {
-            "type": "image",
-            "data": base64.b64encode(self.data).decode("ascii"),
-            "mime_type": self.mime_type,
-        }
-
-
-ContentBlock = Union[TextBlock, ToolCallBlock, ToolResultBlock, ThinkingBlock, ImageBlock]
+ContentBlock = Union[TextBlock, ToolCallBlock, ToolResultBlock, ThinkingBlock]
 
 
 def content_block_from_dict(d: dict) -> ContentBlock:
@@ -89,8 +75,6 @@ def content_block_from_dict(d: dict) -> ContentBlock:
         return ToolResultBlock(id=d["id"], name=d["name"], content=d["content"])
     elif btype == "thinking":
         return ThinkingBlock(text=d["text"], provider_data=d.get("provider_data", {}))
-    elif btype == "image":
-        return ImageBlock(data=base64.b64decode(d["data"]), mime_type=d["mime_type"])
     else:
         raise ValueError(f"Unknown content block type: {btype}")
 
@@ -276,17 +260,8 @@ class ChatInterface:
         entry = self._append("system", [TextBlock(text=text)])
         entry._tools = tools
 
-    def add_user_message(
-        self,
-        text: str,
-        *,
-        image_bytes: bytes | None = None,
-        mime_type: str = "image/png",
-    ) -> InterfaceEntry:
-        blocks: list[ContentBlock] = [TextBlock(text=text)]
-        if image_bytes is not None:
-            blocks.append(ImageBlock(data=image_bytes, mime_type=mime_type))
-        return self._append("user", blocks)
+    def add_user_message(self, text: str) -> InterfaceEntry:
+        return self._append("user", [TextBlock(text=text)])
 
     def add_assistant_message(
         self,
@@ -425,8 +400,6 @@ class ChatInterface:
                     content.append(block.to_dict())
                 elif isinstance(block, ThinkingBlock):
                     content.append({"type": "thinking", "text": block.text})
-                elif isinstance(block, ImageBlock):
-                    content.append(block.to_dict())
             messages.append({"role": entry.role, "content": content})
         return messages
 
@@ -478,9 +451,6 @@ class ChatInterface:
                     total += count_tokens(content_str)
                 elif isinstance(block, ThinkingBlock):
                     total += count_tokens(block.text)
-                elif isinstance(block, ImageBlock):
-                    # Rough estimate: images are ~1K tokens
-                    total += 1000
 
         return total
 
@@ -556,8 +526,6 @@ class ChatInterface:
                     )
                 elif isinstance(block, ThinkingBlock):
                     pass  # Drop thinking — large and not actionable
-                elif isinstance(block, ImageBlock):
-                    parts.append(f"[{entry.role}] [image: {block.mime_type}]")
 
         return "\n".join(parts)
 

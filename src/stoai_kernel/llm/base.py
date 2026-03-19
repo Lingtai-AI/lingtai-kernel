@@ -129,7 +129,6 @@ class ChatSession(ABC):
         ``message`` can be:
         - A string (user text message)
         - A list of ToolResultBlock (canonical tool results)
-        - A multimodal message (built via LLMAdapter.make_multimodal_message())
         """
 
     def get_history(self) -> list[dict]:
@@ -238,7 +237,6 @@ class LLMAdapter(ABC):
     """Abstract interface that every LLM provider adapter must implement."""
 
     supports_web_search: bool = False
-    supports_vision: bool = False
 
     _gate: APICallGate | None = None
 
@@ -318,21 +316,6 @@ class LLMAdapter(ABC):
             tool_name: The name of the tool that was called.
             result: The result dict returned by the tool executor.
             tool_call_id: Provider-assigned tool-call ID from ToolCall.id.
-        """
-
-    @abstractmethod
-    def make_multimodal_message(
-        self, text: str, image_bytes: bytes, mime_type: str = "image/png"
-    ) -> Any:
-        """Build a provider-specific message combining text + image for ChatSession.send().
-
-        The returned value can be passed directly to ChatSession.send() as
-        the message argument.
-
-        Args:
-            text: User text to accompany the image.
-            image_bytes: Raw image bytes (PNG, JPEG, etc.).
-            mime_type: MIME type of the image (default: "image/png").
         """
 
     @abstractmethod
