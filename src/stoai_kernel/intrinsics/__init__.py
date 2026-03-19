@@ -22,6 +22,6 @@ ALL_INTRINSICS = {
     },
     "soul": {
         "schema": soul.SCHEMA, "description": soul.DESCRIPTION, "handle": soul.handle,
-        "system_prompt": "Your inner voice — a clone of your conversation that whispers back after you go idle.",
+        "system_prompt": "Your inner voice — a second you that whispers back after you go idle.",
     },
 }

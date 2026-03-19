@@ -389,6 +389,7 @@ class BaseAgent:
     def stop(self, timeout: float = 5.0) -> None:
         """Signal shutdown and wait for the agent thread to exit."""
         self._log("agent_stop")
+        self._cancel_soul_timer()
         self._shutdown.set()
         if self._thread:
             self._thread.join(timeout=timeout)

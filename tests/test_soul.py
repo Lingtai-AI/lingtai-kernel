@@ -227,3 +227,111 @@ class TestSoulTimer:
         # Wake up — timer should be cancelled
         agent._set_state(AgentState.ACTIVE, reason="new mail")
         assert agent._soul_timer is None
+
+
+class TestSoulCleanup:
+
+    def test_stop_cancels_soul_timer(self, tmp_path):
+        """agent.stop() cancels any pending soul timer."""
+        from stoai_kernel import BaseAgent, AgentState
+        agent = BaseAgent(
+            agent_name="test",
+            service=make_mock_service(),
+            base_dir=tmp_path,
+        )
+        agent._soul_active = True
+        agent._soul_delay = 300.0
+        agent._soul_prompt = "reflect"
+        agent._set_state(AgentState.ACTIVE, reason="test")
+        agent._set_state(AgentState.SLEEPING, reason="done")
+        assert agent._soul_timer is not None
+        agent.stop()
+        assert agent._soul_timer is None
+
+
+class TestSoulIntegration:
+
+    def test_whisper_injects_inner_voice_into_inbox(self, tmp_path):
+        """Full round-trip: soul timer fires, whisper runs, inbox gets message."""
+        from stoai_kernel import BaseAgent, AgentState
+        from stoai_kernel.llm.interface import ChatInterface, TextBlock
+
+        svc = make_mock_service()
+        agent = BaseAgent(
+            agent_name="test",
+            service=svc,
+            base_dir=tmp_path,
+        )
+
+        iface = ChatInterface()
+        iface.add_system("You are a test agent.")
+        iface.add_user_message("Research quantum computing.")
+        iface.add_assistant_message([TextBlock(text="I'll start researching.")])
+
+        mock_chat = MagicMock()
+        mock_chat.interface = iface
+        agent._chat = mock_chat
+
+        mock_soul_session = MagicMock()
+        mock_soul_response = MagicMock()
+        mock_soul_response.text = "Have you considered the energy implications?"
+        mock_soul_session.send.return_value = mock_soul_response
+        svc.create_session.return_value = mock_soul_session
+
+        agent._soul_active = True
+        agent._soul_delay = 0.1
+        agent._soul_prompt = "What am I overlooking?"
+
+        agent._set_state(AgentState.ACTIVE, reason="test")
+        agent._set_state(AgentState.SLEEPING, reason="done")
+
+        # Poll for inbox message (avoids flaky fixed sleep in CI)
+        deadline = time.monotonic() + 2.0
+        while agent.inbox.empty() and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+        assert not agent.inbox.empty()
+        msg = agent.inbox.get_nowait()
+        assert "[inner voice]" in msg.content
+        assert "energy implications" in msg.content
+        assert msg.sender == "soul"
+
+        sent_msg = mock_soul_session.send.call_args[0][0]
+        assert "What am I overlooking?" in sent_msg
+
+    def test_empty_whisper_does_not_inject(self, tmp_path):
+        """If whisper returns None, no message is put in inbox."""
+        from stoai_kernel import BaseAgent, AgentState
+
+        svc = make_mock_service()
+        agent = BaseAgent(
+            agent_name="test",
+            service=svc,
+            base_dir=tmp_path,
+        )
+        # No chat session — whisper will return None
+        agent._soul_active = True
+        agent._soul_delay = 0.1
+        agent._soul_prompt = "reflect"
+
+        agent._set_state(AgentState.ACTIVE, reason="test")
+        agent._set_state(AgentState.SLEEPING, reason="done")
+
+        time.sleep(0.3)
+        assert agent.inbox.empty()
+
+    def test_soul_timer_not_started_during_shutdown(self, tmp_path):
+        """Soul timer does not start if shutdown is in progress."""
+        from stoai_kernel import BaseAgent, AgentState
+        agent = BaseAgent(
+            agent_name="test",
+            service=make_mock_service(),
+            base_dir=tmp_path,
+        )
+        agent._soul_active = True
+        agent._soul_delay = 1.0
+        agent._soul_prompt = "reflect"
+        agent._shutdown.set()
+        agent._set_state(AgentState.ACTIVE, reason="test")
+        agent._set_state(AgentState.SLEEPING, reason="done")
+        assert agent._soul_timer is None

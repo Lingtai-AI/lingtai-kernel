@@ -52,9 +52,9 @@ SCHEMA = {
 }
 
 DESCRIPTION = (
-    "Your inner voice — a clone of your conversation that whispers back "
-    "after you go idle. The clone sees your full history and system prompt "
-    "but has no tools. You control what it reflects on via 'prompt'. "
+    "Your inner voice — a second you that whispers back after you go idle. "
+    "A clone of your full conversation is created: same system prompt, "
+    "same history, no tools. You control what it reflects on via 'prompt'. "
     "Use 'on' with a prompt to activate, 'off' to silence. "
     "The soul keeps you going without external push."
 )
