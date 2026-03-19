@@ -555,11 +555,12 @@ class BaseAgent:
         self._soul_timer = None
         try:
             from .intrinsics.soul import whisper
-            text = whisper(self)
-            if text:
-                self._log("soul_whisper", length=len(text))
-                self._persist_soul_entry(self._soul_prompt, text)
-                msg = _make_message(MSG_REQUEST, "soul", _t(self._config.language, "system.inner_voice", text=text))
+            result = whisper(self)
+            if result:
+                voice = result["voice"]
+                self._log("soul_whisper", length=len(voice))
+                self._persist_soul_entry(result)
+                msg = _make_message(MSG_REQUEST, "soul", _t(self._config.language, "system.inner_voice", text=voice))
                 self.inbox.put(msg)
             # One-shot inquiry: clear after firing
             if self._soul_oneshot:
@@ -569,15 +570,16 @@ class BaseAgent:
         except Exception as e:
             self._log("soul_whisper_error", error=str(e))
 
-    def _persist_soul_entry(self, inquiry: str, voice: str) -> None:
+    def _persist_soul_entry(self, result: dict) -> None:
         """Append a soul whisper entry to system/soul.jsonl and git-track it."""
         from datetime import datetime, timezone
         soul_file = self._working_dir / "system" / "soul.jsonl"
         soul_file.parent.mkdir(exist_ok=True)
         entry = json.dumps({
             "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "inquiry": inquiry,
-            "voice": voice,
+            "prompt": result["prompt"],
+            "thinking": result["thinking"],
+            "voice": result["voice"],
         }, ensure_ascii=False)
         with open(soul_file, "a") as f:
             f.write(entry + "\n")

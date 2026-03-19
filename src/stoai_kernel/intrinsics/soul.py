@@ -78,11 +78,11 @@ def handle(agent, args: dict) -> dict:
         return {"error": f"Unknown soul action: {action}. Use inquiry or delay."}
 
 
-def whisper(agent) -> str | None:
+def whisper(agent) -> dict | None:
     """Clone the agent's conversation and reflect.
 
     Flow mode: free reflection. Inquiry mode: answer the specific question.
-    Returns the inner voice text, or None if there's nothing to reflect on.
+    Returns {"prompt": str, "voice": str, "thinking": list[str]} or None.
 
     Thread safety: called from the soul Timer thread while the agent is
     IDLE (blocked in inbox.get()), so the agent thread is not mutating
@@ -106,12 +106,13 @@ def whisper(agent) -> str | None:
     if agent._soul_prompt:
         content = agent._soul_prompt
     else:
-        content = t(agent._config.language, "soul.ponder")
+        delay = int(agent._soul_delay)
+        content = t(agent._config.language, "soul.time_lapse", seconds=delay)
 
     # Prepend timestamp — same pattern as _handle_request
     from datetime import datetime, timezone
     current_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    content = f"{t(agent._config.language, 'system.current_time', time=current_time)}\n\n{content}"
+    prompt = f"{t(agent._config.language, 'system.current_time', time=current_time)}\n\n{content}"
 
     # Create a temporary session: same system prompt, no tools, cloned history
     system_prompt = agent._build_system_prompt()
@@ -125,8 +126,15 @@ def whisper(agent) -> str | None:
             provider=agent._config.provider,
             interface=cloned,
         )
-        response = session.send(content)
+        response = session.send(prompt)
     except Exception:
         return None
 
-    return response.text or None
+    if not response.text:
+        return None
+
+    return {
+        "prompt": prompt,
+        "voice": response.text,
+        "thinking": response.thoughts or [],
+    }

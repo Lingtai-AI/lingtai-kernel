@@ -94,10 +94,12 @@ class TestWhisper:
         agent._chat = mock_chat
         agent._build_system_prompt = MagicMock(return_value="You are a test agent.")
         agent._soul_prompt = soul_prompt
+        agent._soul_delay = 120.0
 
         mock_session = MagicMock()
         mock_response = MagicMock()
         mock_response.text = "You should check your notes."
+        mock_response.thoughts = ["Maybe I should review my earlier findings."]
         mock_session.send.return_value = mock_response
         agent.service.create_session.return_value = mock_session
         agent._config = MagicMock()
@@ -109,22 +111,21 @@ class TestWhisper:
         return agent, mock_session
 
     def test_whisper_flow_mode(self):
-        """Flow mode: [Current time: ...] + ponder word."""
+        """Flow mode: [Current time: ...] + time lapse."""
         agent, mock_session = self._make_whisper_agent(soul_prompt="")
         result = whisper(agent)
-        assert result == "You should check your notes."
-        sent_msg = mock_session.send.call_args[0][0]
-        assert "[Current time:" in sent_msg
-        assert "Ponder." in sent_msg
+        assert result["voice"] == "You should check your notes."
+        assert result["thinking"] == ["Maybe I should review my earlier findings."]
+        assert "[Current time:" in result["prompt"]
+        assert "120 seconds passed..." in result["prompt"]
 
     def test_whisper_inquiry_mode(self):
         """Inquiry mode: [Current time: ...] + question."""
         agent, mock_session = self._make_whisper_agent(soul_prompt="What am I missing?")
         result = whisper(agent)
-        assert result == "You should check your notes."
-        sent_msg = mock_session.send.call_args[0][0]
-        assert "[Current time:" in sent_msg
-        assert "What am I missing?" in sent_msg
+        assert result["voice"] == "You should check your notes."
+        assert "[Current time:" in result["prompt"]
+        assert "What am I missing?" in result["prompt"]
 
     def test_whisper_same_pattern_flow_and_inquiry(self):
         """Flow and inquiry use the same [Current time: ...] pattern."""
@@ -143,13 +144,12 @@ class TestWhisper:
         assert ts_pattern.match(msg_inq)
 
     def test_whisper_flow_mode_chinese(self):
-        """Chinese config uses Chinese ponder word and timestamp."""
+        """Chinese config uses Chinese time lapse and timestamp."""
         agent, mock_session = self._make_whisper_agent(soul_prompt="")
         agent._config.language = "zh"
         result = whisper(agent)
-        sent_msg = mock_session.send.call_args[0][0]
-        assert "当前时间" in sent_msg
-        assert "沉思。" in sent_msg
+        assert "当前时间" in result["prompt"]
+        assert "已过去120秒..." in result["prompt"]
 
     def test_whisper_returns_none_when_no_chat(self):
         agent = MagicMock()
@@ -354,6 +354,7 @@ class TestSoulIntegration:
         mock_soul_session = MagicMock()
         mock_soul_response = MagicMock()
         mock_soul_response.text = "Have you considered the energy implications?"
+        mock_soul_response.thoughts = ["The user asked about quantum computing..."]
         mock_soul_session.send.return_value = mock_soul_response
         svc.create_session.return_value = mock_soul_session
 
@@ -375,12 +376,13 @@ class TestSoulIntegration:
         # Flow stays enabled (it's immutable)
         assert agent._soul_flow is True
 
-        # Verify soul.jsonl was written
+        # Verify soul.jsonl was written with prompt, thinking, voice
         import json
         soul_file = tmp_path / "test" / "system" / "soul.jsonl"
         assert soul_file.is_file()
         entry = json.loads(soul_file.read_text().strip())
-        assert entry["inquiry"] == ""
+        assert "seconds passed" in entry["prompt"]
+        assert entry["thinking"] == ["The user asked about quantum computing..."]
         assert entry["voice"] == "Have you considered the energy implications?"
 
     def test_inquiry_clears_after_firing(self, tmp_path):
@@ -408,6 +410,7 @@ class TestSoulIntegration:
         mock_soul_session = MagicMock()
         mock_soul_response = MagicMock()
         mock_soul_response.text = "Consider the edge cases."
+        mock_soul_response.thoughts = []
         mock_soul_session.send.return_value = mock_soul_response
         svc.create_session.return_value = mock_soul_session
 
