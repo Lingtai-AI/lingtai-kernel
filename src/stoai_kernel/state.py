@@ -9,8 +9,10 @@ class AgentState(enum.Enum):
     """Lifecycle state of an agent.
 
     SLEEPING --(inbox message)---> ACTIVE
-    ACTIVE   --(all done)--------> SLEEPING
+    ACTIVE   --(idle/stuck/error)-> SLEEPING
+    SLEEPING --(CPR timeout)-----> DEAD
     """
 
     ACTIVE = "active"
     SLEEPING = "sleeping"
+    DEAD = "dead"

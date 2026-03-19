@@ -221,6 +221,7 @@ class BaseAgent:
         self._idle = threading.Event()
         self._idle.set()
         self._state = AgentState.SLEEPING
+        self._sleep_reason = "idle"
         self._sealed = False
 
         # Soul — inner voice
@@ -229,6 +230,12 @@ class BaseAgent:
         self._soul_prompt = ""
         self._soul_oneshot = False
         self._soul_timer: threading.Timer | None = None
+
+        # Heartbeat — always-on health monitor
+        self._heartbeat: int = 0
+        self._heartbeat_thread: threading.Thread | None = None
+        self._cpr_start: float | None = None
+        self._sleep_reason: str = "idle"
 
         # Session manager — LLM session, token tracking, compaction
         self._session = SessionManager(
@@ -386,10 +393,12 @@ class BaseAgent:
             name=f"agent-{self.agent_name}",
         )
         self._thread.start()
+        self._start_heartbeat()
 
     def stop(self, timeout: float = 5.0) -> None:
         """Signal shutdown and wait for the agent thread to exit."""
         self._log("agent_stop")
+        self._stop_heartbeat()
         self._cancel_soul_timer()
         self._shutdown.set()
         if self._thread:
@@ -516,6 +525,7 @@ class BaseAgent:
             return
         self._state = new_state
         if new_state == AgentState.SLEEPING:
+            self._sleep_reason = reason
             self._idle.set()
             self._start_soul_timer()
         else:
@@ -574,6 +584,61 @@ class BaseAgent:
             f.write(entry + "\n")
         self._workdir.diff_and_commit("system/soul.jsonl", "soul")
 
+    # ------------------------------------------------------------------
+    # Heartbeat — always-on health monitor (involuntary)
+    # ------------------------------------------------------------------
+
+    _CPR_TIMEOUT = 600.0  # 10 minutes
+
+    def _start_heartbeat(self) -> None:
+        """Start the heartbeat daemon thread."""
+        if self._heartbeat_thread is not None:
+            return
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            daemon=True,
+            name=f"heartbeat-{self.agent_name}",
+        )
+        self._heartbeat_thread.start()
+
+    def _stop_heartbeat(self) -> None:
+        """Stop the heartbeat (called only by stop/shutdown)."""
+        self._heartbeat_thread = None
+
+    def _heartbeat_loop(self) -> None:
+        """Beat every 1 second. Perform CPR if agent is stuck or errored."""
+        while self._heartbeat_thread is not None and not self._shutdown.is_set():
+            self._heartbeat += 1
+
+            if (
+                self._state == AgentState.SLEEPING
+                and self._sleep_reason in ("stuck", "error")
+            ):
+                now = time.monotonic()
+                if self._cpr_start is None:
+                    self._cpr_start = now
+
+                elapsed = now - self._cpr_start
+                if elapsed > self._CPR_TIMEOUT:
+                    # CPR failed — pronounce dead
+                    self._log("heartbeat_dead", beats=self._heartbeat, cpr_seconds=elapsed)
+                    self._set_state(AgentState.DEAD, reason="CPR failed")
+                    self._persist_chat_history()
+                    self._shutdown.set()
+                else:
+                    # Perform CPR
+                    from datetime import datetime, timezone
+                    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    cpr_msg = f"[system] You were {self._sleep_reason} at {ts}, doing CPR..."
+                    self._log("heartbeat_cpr", beats=self._heartbeat, reason=self._sleep_reason)
+                    msg = _make_message(MSG_REQUEST, "system", cpr_msg)
+                    self.inbox.put(msg)
+            else:
+                # Healthy — reset CPR window
+                self._cpr_start = None
+
+            time.sleep(1.0)
+
     def _log(self, event_type: str, **fields) -> None:
         """Write a structured event to the logging service, if configured."""
         if self._log_service:
@@ -599,8 +664,17 @@ class BaseAgent:
                     continue
                 msg = self._concat_queued_messages(msg)
                 self._set_state(AgentState.ACTIVE, reason=f"received {msg.type}")
+                sleep_reason = "idle"
                 try:
                     self._handle_message(msg)
+                except TimeoutError as e:
+                    err_desc = str(e) or repr(e)
+                    logger.error(
+                        f"[{self.agent_name}] LLM timeout in message handler: {err_desc}",
+                        exc_info=True,
+                    )
+                    self._log("error", source="message_handler", message=err_desc)
+                    sleep_reason = "stuck"
                 except Exception as e:
                     err_desc = str(e) or repr(e)
                     logger.error(
@@ -608,9 +682,10 @@ class BaseAgent:
                         exc_info=True,
                     )
                     self._log("error", source="message_handler", message=err_desc)
+                    sleep_reason = "error"
                 finally:
+                    self._set_state(AgentState.SLEEPING, reason=sleep_reason)
                     self._persist_chat_history()
-                    self._set_state(AgentState.SLEEPING, reason="all done")
 
             # Check for restart (rebirth) before exiting
             if getattr(self, "_restart_requested", False):
@@ -1098,7 +1173,9 @@ class BaseAgent:
             "agent_name": self.agent_name,
             "agent_type": self.agent_type,
             "state": self._state.value,
+            "sleep_reason": self._sleep_reason,
             "idle": self.is_idle,
+            "heartbeat": self._heartbeat,
             "queue_depth": self.inbox.qsize(),
             "tokens": self.get_token_usage(),
         }
