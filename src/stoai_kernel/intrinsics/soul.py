@@ -87,7 +87,7 @@ def handle(agent, args: dict) -> dict:
         agent._soul_active = True
         agent._soul_delay = delay
         agent._soul_prompt = inquiry.strip()
-        agent._log("soul_on", delay=delay, inquiry=agent._soul_prompt[:200])
+        agent._log("soul_on", delay=delay, inquiry=agent._soul_prompt)
         return {"status": "ok", "active": True, "delay": delay}
 
     elif action == "off":
@@ -133,7 +133,9 @@ def whisper(agent) -> str | None:
             provider=agent._config.provider,
             interface=cloned,
         )
-        response = session.send(agent._soul_prompt)
+        response = session.send(
+            f"{agent._soul_prompt}\n\n[Budget: 1000 tokens. Be brief — you are a whisper, not a conversation.]"
+        )
     except Exception:
         return None
 
