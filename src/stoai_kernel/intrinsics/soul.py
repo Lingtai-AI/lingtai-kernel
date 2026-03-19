@@ -1,12 +1,12 @@
 """Soul intrinsic — the agent's inner voice.
 
 Actions:
-    on  — activate the soul (requires prompt, optional delay)
+    on  — activate the soul (requires inquiry, optional delay)
     off — deactivate the soul
 
 When active, the soul whispers after the agent goes idle:
 it clones the agent's full conversation into a temporary session,
-sends the agent-authored prompt, and injects the response as
+sends the agent's self-inquiry, and injects the response as
 [inner voice] into the agent's inbox. The clone sees everything
 the agent has seen — same system prompt, same history — but has
 no tools. One message in, one message out, then discarded.
@@ -23,19 +23,20 @@ SCHEMA = {
                 "on: activate your inner voice. "
                 "A clone of your full conversation is created — "
                 "same system prompt, same history, no tools. "
-                "After you go idle, the clone receives your prompt "
+                "After you go idle, the clone receives your inquiry "
                 "and its response is delivered to you as [inner voice]. "
-                "You must provide 'prompt' — the instruction you want "
-                "your clone to respond to. "
+                "You must provide 'inquiry' — your self-directed question, "
+                "the introspection you want your inner voice to reflect on. "
                 "off: silence your inner voice."
             ),
         },
-        "prompt": {
+        "inquiry": {
             "type": "string",
             "description": (
-                "The message sent to your clone. Required for 'on'. "
-                "This is fully under your control — write what you want "
-                "your inner voice to reflect on, question, or remind you of. "
+                "Your self-inquiry — introspection directed at yourself. "
+                "Required for 'on'. Not a prompt to someone else: "
+                "this is you asking yourself a question. "
+                "What do you want to reflect on, question, or reconsider? "
                 "The clone sees your entire conversation and system prompt."
             ),
         },
@@ -54,8 +55,9 @@ SCHEMA = {
 DESCRIPTION = (
     "Your inner voice — a second you that whispers back after you go idle. "
     "A clone of your full conversation is created: same system prompt, "
-    "same history, no tools. You control what it reflects on via 'prompt'. "
-    "Use 'on' with a prompt to activate, 'off' to silence. "
+    "same history, no tools. You control what it reflects on via 'inquiry' — "
+    "a self-directed question, introspection, not a prompt to someone else. "
+    "Use 'on' with an inquiry to activate, 'off' to silence. "
     "The soul keeps you going without external push."
 )
 
@@ -65,13 +67,13 @@ _DEFAULT_DELAY = 120.0
 
 
 def handle(agent, args: dict) -> dict:
-    """Handle soul tool — on/off toggle with agent-authored prompt."""
+    """Handle soul tool — on/off toggle with agent self-inquiry."""
     action = args.get("action", "")
 
     if action == "on":
-        prompt = args.get("prompt", "")
-        if not isinstance(prompt, str) or not prompt.strip():
-            return {"error": "prompt is required — tell your soul what to reflect on."}
+        inquiry = args.get("inquiry", "")
+        if not isinstance(inquiry, str) or not inquiry.strip():
+            return {"error": "inquiry is required — what do you want to reflect on?"}
 
         delay = args.get("delay", _DEFAULT_DELAY)
         try:
@@ -84,8 +86,8 @@ def handle(agent, args: dict) -> dict:
 
         agent._soul_active = True
         agent._soul_delay = delay
-        agent._soul_prompt = prompt.strip()
-        agent._log("soul_on", delay=delay, prompt=agent._soul_prompt[:200])
+        agent._soul_prompt = inquiry.strip()
+        agent._log("soul_on", delay=delay, inquiry=agent._soul_prompt[:200])
         return {"status": "ok", "active": True, "delay": delay}
 
     elif action == "off":
@@ -98,7 +100,7 @@ def handle(agent, args: dict) -> dict:
 
 
 def whisper(agent) -> str | None:
-    """Clone the agent's conversation and send the agent-authored prompt.
+    """Clone the agent's conversation and send the agent's self-inquiry.
 
     Returns the inner voice text, or None if there's nothing to reflect on.
 

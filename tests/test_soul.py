@@ -14,30 +14,30 @@ def _make_mock_agent():
 
 class TestSoulHandle:
 
-    def test_on_requires_prompt(self):
+    def test_on_requires_inquiry(self):
         agent = _make_mock_agent()
         result = soul.handle(agent, {"action": "on"})
         assert "error" in result
 
     def test_on_activates_soul(self):
         agent = _make_mock_agent()
-        result = soul.handle(agent, {"action": "on", "prompt": "reflect on my progress"})
+        result = soul.handle(agent, {"action": "on", "inquiry": "reflect on my progress"})
         assert result["status"] == "ok"
         assert agent._soul_active is True
         assert agent._soul_prompt == "reflect on my progress"
 
     def test_on_with_delay(self):
         agent = _make_mock_agent()
-        result = soul.handle(agent, {"action": "on", "delay": 30, "prompt": "whisper"})
+        result = soul.handle(agent, {"action": "on", "delay": 30, "inquiry": "whisper"})
         assert result["status"] == "ok"
         assert agent._soul_active is True
         assert agent._soul_delay == 30.0
 
-    def test_on_updates_prompt(self):
-        """Calling on again changes the prompt."""
+    def test_on_updates_inquiry(self):
+        """Calling on again changes the inquiry."""
         agent = _make_mock_agent()
-        soul.handle(agent, {"action": "on", "prompt": "first"})
-        soul.handle(agent, {"action": "on", "prompt": "second"})
+        soul.handle(agent, {"action": "on", "inquiry": "first"})
+        soul.handle(agent, {"action": "on", "inquiry": "second"})
         assert agent._soul_prompt == "second"
 
     def test_off_deactivates_soul(self):
@@ -54,27 +54,27 @@ class TestSoulHandle:
 
     def test_delay_must_be_positive(self):
         agent = _make_mock_agent()
-        result = soul.handle(agent, {"action": "on", "delay": -5, "prompt": "x"})
+        result = soul.handle(agent, {"action": "on", "delay": -5, "inquiry": "x"})
         assert "error" in result
 
     def test_delay_capped_at_3600(self):
         agent = _make_mock_agent()
-        soul.handle(agent, {"action": "on", "delay": 99999, "prompt": "x"})
+        soul.handle(agent, {"action": "on", "delay": 99999, "inquiry": "x"})
         assert agent._soul_delay == 3600.0
 
-    def test_empty_prompt_rejected(self):
+    def test_empty_inquiry_rejected(self):
         agent = _make_mock_agent()
-        result = soul.handle(agent, {"action": "on", "prompt": "   "})
+        result = soul.handle(agent, {"action": "on", "inquiry": "   "})
         assert "error" in result
 
     def test_non_numeric_delay_rejected(self):
         agent = _make_mock_agent()
-        result = soul.handle(agent, {"action": "on", "prompt": "x", "delay": "fast"})
+        result = soul.handle(agent, {"action": "on", "inquiry": "x", "delay": "fast"})
         assert "error" in result
 
     def test_none_delay_rejected(self):
         agent = _make_mock_agent()
-        result = soul.handle(agent, {"action": "on", "prompt": "x", "delay": None})
+        result = soul.handle(agent, {"action": "on", "inquiry": "x", "delay": None})
         assert "error" in result
 
 
@@ -84,7 +84,7 @@ from stoai_kernel.intrinsics.soul import whisper
 class TestWhisper:
 
     def test_whisper_returns_inner_voice_text(self):
-        """whisper() clones interface, sends the agent's prompt, returns text."""
+        """whisper() clones interface, sends the agent's inquiry, returns text."""
         from stoai_kernel.llm.interface import ChatInterface, TextBlock
 
         agent = MagicMock()
@@ -116,7 +116,7 @@ class TestWhisper:
         call_kwargs = agent.service.create_session.call_args
         assert call_kwargs.kwargs.get("tools") is None
 
-        # Verify the agent's prompt was sent
+        # Verify the agent's inquiry was sent
         sent_msg = mock_session.send.call_args[0][0]
         assert "What am I missing?" in sent_msg
 
