@@ -66,15 +66,6 @@ class SystemPromptManager:
         return "\n\n".join(ordered)
 
 
-BASE_PROMPT = """\
-# System Prompt
-
-Read your tool schemas carefully for capabilities, caveats and pipelines.
-Your working directory is your identity — all your state, memory, and files live there.
-Your memory section below may be updated mid-session.
-Automatic context compaction triggers at 80% of your context window — earlier conversation will be summarized to free space."""
-
-
 def _load_manifesto() -> str:
     """Load the kernel manifesto from manifesto.md (shipped with the package)."""
     from pathlib import Path
@@ -95,13 +86,17 @@ def get_manifesto() -> str:
 
 def build_system_prompt(
     prompt_manager: SystemPromptManager,
+    base_prompt: str = "",
 ) -> str:
     """Build the full system prompt from components.
 
     Order: manifesto → base prompt → sections.
     The manifesto is the agent's foundational truth — it comes first, always.
+    base_prompt is framework-level guidance injected by the wrapper package (stoai).
     """
-    parts = [get_manifesto(), BASE_PROMPT]
+    parts = [get_manifesto()]
+    if base_prompt:
+        parts.append(base_prompt)
 
     sections_text = prompt_manager.render()
     if sections_text:

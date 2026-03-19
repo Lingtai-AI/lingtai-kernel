@@ -5,7 +5,9 @@ from stoai_kernel.prompt import SystemPromptManager
 def test_build_system_prompt_minimal():
     mgr = SystemPromptManager()
     prompt = build_system_prompt(mgr)
-    assert "tool schemas" in prompt
+    # Manifesto is always present
+    assert "private" in prompt
+    assert "tools" in prompt
 
 
 def test_build_system_prompt_with_sections():
