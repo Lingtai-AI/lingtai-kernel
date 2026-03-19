@@ -2,7 +2,7 @@
 BaseAgent — generic agent kernel with intrinsic tools and capability dispatch.
 
 Key concepts:
-    - **2-state lifecycle**: SLEEPING (waiting for inbox) and ACTIVE (processing).
+    - **4-state lifecycle**: ACTIVE, IDLE, ERROR, DEAD.
     - **Persistent LLM session**: each agent keeps its chat session across messages.
     - **2-layer tool dispatch**: intrinsics (built-in) + capability handlers.
     - **Opaque context**: the host app can pass any context object — the agent
@@ -220,8 +220,7 @@ class BaseAgent:
         self._thread: threading.Thread | None = None
         self._idle = threading.Event()
         self._idle.set()
-        self._state = AgentState.SLEEPING
-        self._sleep_reason = "idle"
+        self._state = AgentState.IDLE
         self._sealed = False
 
         # Soul — inner voice
@@ -235,7 +234,7 @@ class BaseAgent:
         self._heartbeat: int = 0
         self._heartbeat_thread: threading.Thread | None = None
         self._cpr_start: float | None = None
-        self._sleep_reason: str = "idle"
+        self._aed_pending: bool = False
 
         # Session manager — LLM session, token tracking, compaction
         self._session = SessionManager(
@@ -519,18 +518,18 @@ class BaseAgent:
         self.inbox.put(msg)
 
     def _set_state(self, new_state: AgentState, reason: str = "") -> None:
-        """Transition to a new state, keeping _idle and soul timer in sync."""
+        """Transition to a new state."""
         old = self._state
         if old == new_state:
             return
         self._state = new_state
-        if new_state == AgentState.SLEEPING:
-            self._sleep_reason = reason
-            self._idle.set()
-            self._start_soul_timer()
-        else:
+        if new_state == AgentState.ACTIVE:
             self._idle.clear()
             self._cancel_soul_timer()
+        else:
+            self._idle.set()
+            if new_state == AgentState.IDLE:
+                self._start_soul_timer()
         self._log("agent_state", old=old.value, new=new_state.value, reason=reason)
 
     def _start_soul_timer(self) -> None:
@@ -608,14 +607,11 @@ class BaseAgent:
         self._log("heartbeat_stop", beats=self._heartbeat)
 
     def _heartbeat_loop(self) -> None:
-        """Beat every 1 second. Perform CPR if agent is stuck or errored."""
+        """Beat every 1 second. AED if agent is in ERROR."""
         while self._heartbeat_thread is not None and not self._shutdown.is_set():
             self._heartbeat += 1
 
-            if (
-                self._state == AgentState.SLEEPING
-                and self._sleep_reason in ("stuck", "error")
-            ):
+            if self._state == AgentState.ERROR:
                 now = time.monotonic()
                 if self._cpr_start is None:
                     self._cpr_start = now
@@ -623,24 +619,36 @@ class BaseAgent:
                 elapsed = now - self._cpr_start
                 cpr_timeout = self._config.cpr_timeout
                 if elapsed > cpr_timeout:
-                    # CPR failed — pronounce dead
-                    self._log("heartbeat_dead", beats=self._heartbeat, cpr_seconds=elapsed)
-                    self._set_state(AgentState.DEAD, reason="CPR failed")
+                    # AED failed — pronounce dead
+                    self._log("heartbeat_dead", beats=self._heartbeat, aed_seconds=elapsed)
+                    self._set_state(AgentState.DEAD, reason="AED failed")
                     self._persist_chat_history()
                     self._shutdown.set()
-                else:
-                    # Perform CPR
-                    from datetime import datetime, timezone
-                    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                    cpr_msg = f"[system] You were {self._sleep_reason} at {ts}, doing CPR..."
-                    self._log("heartbeat_cpr", beats=self._heartbeat, reason=self._sleep_reason)
-                    msg = _make_message(MSG_REQUEST, "system", cpr_msg)
-                    self.inbox.put(msg)
+                elif not self._aed_pending:
+                    # Perform AED — hard restart
+                    self._aed_pending = True
+                    self._perform_aed()
             else:
-                # Healthy — reset CPR window
+                # Healthy or idle — reset AED window
                 self._cpr_start = None
+                self._aed_pending = False
 
             time.sleep(1.0)
+
+    def _perform_aed(self) -> None:
+        """AED: reset session and inject revive message."""
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Reset the LLM session — next send() creates a fresh one
+        self._session.chat = None
+
+        self._log("heartbeat_aed", beats=self._heartbeat)
+
+        # Inject revive message
+        revive_msg = f"[system] You were in error at {ts}, reviving..."
+        msg = _make_message(MSG_REQUEST, "system", revive_msg)
+        self.inbox.put(msg)
 
     def _log(self, event_type: str, **fields) -> None:
         """Write a structured event to the logging service, if configured."""
@@ -667,7 +675,7 @@ class BaseAgent:
                     continue
                 msg = self._concat_queued_messages(msg)
                 self._set_state(AgentState.ACTIVE, reason=f"received {msg.type}")
-                sleep_reason = "idle"
+                sleep_state = AgentState.IDLE
                 try:
                     self._handle_message(msg)
                 except TimeoutError as e:
@@ -677,7 +685,7 @@ class BaseAgent:
                         exc_info=True,
                     )
                     self._log("error", source="message_handler", message=err_desc)
-                    sleep_reason = "stuck"
+                    sleep_state = AgentState.ERROR
                 except Exception as e:
                     err_desc = str(e) or repr(e)
                     logger.error(
@@ -685,9 +693,9 @@ class BaseAgent:
                         exc_info=True,
                     )
                     self._log("error", source="message_handler", message=err_desc)
-                    sleep_reason = "error"
+                    sleep_state = AgentState.ERROR
                 finally:
-                    self._set_state(AgentState.SLEEPING, reason=sleep_reason)
+                    self._set_state(sleep_state)
                     self._persist_chat_history()
 
             # Check for restart (rebirth) before exiting
@@ -1176,7 +1184,6 @@ class BaseAgent:
             "agent_name": self.agent_name,
             "agent_type": self.agent_type,
             "state": self._state.value,
-            "sleep_reason": self._sleep_reason,
             "idle": self.is_idle,
             "heartbeat": self._heartbeat,
             "queue_depth": self.inbox.qsize(),
