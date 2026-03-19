@@ -226,7 +226,7 @@ def whisper(agent) -> str | None:
     Returns the inner voice text, or None if there's nothing to reflect on.
 
     Thread safety: called from the soul Timer thread while the agent is
-    SLEEPING (blocked in inbox.get()), so the agent thread is not mutating
+    IDLE (blocked in inbox.get()), so the agent thread is not mutating
     the interface.  The cloned interface is a deep copy via serialization,
     so the subsequent create_session/send touches no shared state.
     """

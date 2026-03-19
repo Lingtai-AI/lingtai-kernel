@@ -1,4 +1,4 @@
-"""Tests for heartbeat — always-on agent health monitor."""
+"""Tests for heartbeat — always-on agent health monitor with AED."""
 import time
 from unittest.mock import MagicMock
 
@@ -22,7 +22,7 @@ class TestHeartbeatInit:
         assert agent._heartbeat == 0
         assert agent._heartbeat_thread is None
         assert agent._cpr_start is None
-        assert agent._sleep_reason == "idle"
+        assert agent._aed_pending is False
 
     def test_heartbeat_in_status(self, tmp_path):
         from stoai_kernel import BaseAgent
@@ -34,42 +34,6 @@ class TestHeartbeatInit:
         agent._heartbeat = 42
         status = agent.status()
         assert status["heartbeat"] == 42
-
-
-class TestSleepReason:
-
-    def test_sleep_reason_idle(self, tmp_path):
-        from stoai_kernel import BaseAgent, AgentState
-        agent = BaseAgent(
-            agent_name="test",
-            service=make_mock_service(),
-            base_dir=tmp_path,
-        )
-        agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="idle")
-        assert agent._sleep_reason == "idle"
-
-    def test_sleep_reason_stuck(self, tmp_path):
-        from stoai_kernel import BaseAgent, AgentState
-        agent = BaseAgent(
-            agent_name="test",
-            service=make_mock_service(),
-            base_dir=tmp_path,
-        )
-        agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="stuck")
-        assert agent._sleep_reason == "stuck"
-
-    def test_sleep_reason_error(self, tmp_path):
-        from stoai_kernel import BaseAgent, AgentState
-        agent = BaseAgent(
-            agent_name="test",
-            service=make_mock_service(),
-            base_dir=tmp_path,
-        )
-        agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="error")
-        assert agent._sleep_reason == "error"
 
 
 class TestHeartbeatBeating:
@@ -86,7 +50,8 @@ class TestHeartbeatBeating:
         agent._stop_heartbeat()
         assert agent._heartbeat >= 2
 
-    def test_no_cpr_on_idle(self, tmp_path):
+    def test_no_aed_on_idle(self, tmp_path):
+        """Heartbeat does NOT AED when agent is IDLE."""
         from stoai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             agent_name="test",
@@ -95,7 +60,7 @@ class TestHeartbeatBeating:
         )
         agent._start_heartbeat()
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="idle")
+        agent._set_state(AgentState.IDLE)
 
         time.sleep(2.0)
         agent._stop_heartbeat()
@@ -103,31 +68,30 @@ class TestHeartbeatBeating:
         assert agent._cpr_start is None
 
 
-class TestHeartbeatCPR:
+class TestAED:
 
-    def test_cpr_on_stuck(self, tmp_path):
+    def test_aed_resets_session_on_error(self, tmp_path):
+        """AED resets the LLM session when agent is in ERROR."""
         from stoai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             agent_name="test",
             service=make_mock_service(),
             base_dir=tmp_path,
         )
-        agent._start_heartbeat()
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="stuck")
+        agent._set_state(AgentState.ERROR)
+        agent._session._chat = MagicMock()  # has a session
 
-        deadline = time.monotonic() + 3.0
-        while agent.inbox.empty() and time.monotonic() < deadline:
-            time.sleep(0.1)
+        agent._perform_aed()
 
-        agent._stop_heartbeat()
+        assert agent._session.chat is None  # session reset
         assert not agent.inbox.empty()
         msg = agent.inbox.get_nowait()
-        assert "CPR" in msg.content
-        assert "stuck" in msg.content
+        assert "reviving" in msg.content
         assert msg.sender == "system"
 
-    def test_cpr_on_error(self, tmp_path):
+    def test_aed_fires_once_per_error(self, tmp_path):
+        """AED fires once, then waits — does NOT flood inbox."""
         from stoai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             agent_name="test",
@@ -136,8 +100,53 @@ class TestHeartbeatCPR:
         )
         agent._start_heartbeat()
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="error")
+        agent._set_state(AgentState.ERROR)
 
+        time.sleep(3.0)
+        agent._stop_heartbeat()
+
+        # Should have only ONE revive message
+        count = 0
+        while not agent.inbox.empty():
+            agent.inbox.get_nowait()
+            count += 1
+        assert count == 1
+
+    def test_aed_pending_resets_on_recovery(self, tmp_path):
+        """When agent recovers to ACTIVE, _aed_pending resets."""
+        from stoai_kernel import BaseAgent, AgentState
+        agent = BaseAgent(
+            agent_name="test",
+            service=make_mock_service(),
+            base_dir=tmp_path,
+        )
+        agent._aed_pending = True
+        agent._cpr_start = time.monotonic()
+
+        # Simulate recovery
+        agent._start_heartbeat()
+        agent._set_state(AgentState.ACTIVE, reason="revive")
+        agent._set_state(AgentState.IDLE)
+
+        time.sleep(1.5)
+        agent._stop_heartbeat()
+
+        assert agent._aed_pending is False
+        assert agent._cpr_start is None
+
+    def test_aed_on_error_via_heartbeat(self, tmp_path):
+        """Full cycle: error → heartbeat detects → AED → revive message."""
+        from stoai_kernel import BaseAgent, AgentState
+        agent = BaseAgent(
+            agent_name="test",
+            service=make_mock_service(),
+            base_dir=tmp_path,
+        )
+        agent._start_heartbeat()
+        agent._set_state(AgentState.ACTIVE, reason="test")
+        agent._set_state(AgentState.ERROR)
+
+        # Wait for heartbeat to detect and AED
         deadline = time.monotonic() + 3.0
         while agent.inbox.empty() and time.monotonic() < deadline:
             time.sleep(0.1)
@@ -145,29 +154,14 @@ class TestHeartbeatCPR:
         agent._stop_heartbeat()
         assert not agent.inbox.empty()
         msg = agent.inbox.get_nowait()
-        assert "CPR" in msg.content
+        assert "reviving" in msg.content
         assert "error" in msg.content
-
-    def test_cpr_resets_on_recovery(self, tmp_path):
-        from stoai_kernel import BaseAgent, AgentState
-        agent = BaseAgent(
-            agent_name="test",
-            service=make_mock_service(),
-            base_dir=tmp_path,
-        )
-        agent._cpr_start = time.monotonic()
-        agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="idle")
-
-        agent._start_heartbeat()
-        time.sleep(1.5)
-        agent._stop_heartbeat()
-        assert agent._cpr_start is None
 
 
 class TestHeartbeatDead:
 
-    def test_cpr_timeout_triggers_dead_and_shutdown(self, tmp_path):
+    def test_aed_timeout_triggers_dead(self, tmp_path):
+        """After AED timeout, agent is pronounced DEAD."""
         from stoai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             agent_name="test",
@@ -175,8 +169,8 @@ class TestHeartbeatDead:
             base_dir=tmp_path,
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="stuck")
-        # Simulate CPR started 21 minutes ago (exceeds 20 min window)
+        agent._set_state(AgentState.ERROR)
+        # Simulate AED started 21 minutes ago (exceeds 20 min window)
         agent._cpr_start = time.monotonic() - 1260
 
         agent._start_heartbeat()

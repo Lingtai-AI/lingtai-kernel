@@ -207,7 +207,7 @@ class TestSoulTimer:
         agent._soul_active = True
         agent._soul_delay = 1.0
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="done")
+        agent._set_state(AgentState.IDLE, reason="done")
         assert agent._soul_timer is not None
         assert agent._soul_timer.is_alive()
         agent._soul_timer.cancel()
@@ -221,7 +221,7 @@ class TestSoulTimer:
         )
         agent._soul_active = False
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="done")
+        agent._set_state(AgentState.IDLE, reason="done")
         assert agent._soul_timer is None
 
     def test_soul_timer_cancelled_on_wake(self, tmp_path):
@@ -234,7 +234,7 @@ class TestSoulTimer:
         agent._soul_active = True
         agent._soul_delay = 300.0
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="done")
+        agent._set_state(AgentState.IDLE, reason="done")
         assert agent._soul_timer is not None
         agent._set_state(AgentState.ACTIVE, reason="new mail")
         assert agent._soul_timer is None
@@ -252,7 +252,7 @@ class TestSoulCleanup:
         agent._soul_active = True
         agent._soul_delay = 300.0
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="done")
+        agent._set_state(AgentState.IDLE, reason="done")
         assert agent._soul_timer is not None
         agent.stop()
         assert agent._soul_timer is None
@@ -292,7 +292,7 @@ class TestSoulIntegration:
         agent._soul_prompt = ""  # flow mode
 
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="done")
+        agent._set_state(AgentState.IDLE, reason="done")
 
         deadline = time.monotonic() + 2.0
         while agent.inbox.empty() and time.monotonic() < deadline:
@@ -348,7 +348,7 @@ class TestSoulIntegration:
         agent._soul_oneshot = True
 
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="done")
+        agent._set_state(AgentState.IDLE, reason="done")
 
         deadline = time.monotonic() + 2.0
         while agent.inbox.empty() and time.monotonic() < deadline:
@@ -375,7 +375,7 @@ class TestSoulIntegration:
         agent._soul_delay = 0.1
 
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="done")
+        agent._set_state(AgentState.IDLE, reason="done")
 
         time.sleep(0.3)
         assert agent.inbox.empty()
@@ -391,5 +391,5 @@ class TestSoulIntegration:
         agent._soul_delay = 1.0
         agent._shutdown.set()
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.SLEEPING, reason="done")
+        agent._set_state(AgentState.IDLE, reason="done")
         assert agent._soul_timer is None
