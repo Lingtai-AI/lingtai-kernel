@@ -587,8 +587,6 @@ class BaseAgent:
     # Heartbeat — always-on health monitor (involuntary)
     # ------------------------------------------------------------------
 
-    _CPR_TIMEOUT_DEFAULT = 1200.0  # 20 minutes
-
     def _start_heartbeat(self) -> None:
         """Start the heartbeat daemon thread."""
         if self._heartbeat_thread is not None:
