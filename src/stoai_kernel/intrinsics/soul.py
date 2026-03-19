@@ -134,7 +134,7 @@ def whisper(agent) -> str | None:
             interface=cloned,
         )
         response = session.send(
-            f"This is your own question to yourself: {agent._soul_prompt}\n\nBe brief, you are addressing yourself. Answer in the same language as the inquiry. You don't have tools, do not attempt tool calls."
+            f"This is your own question to yourself: {agent._soul_prompt}\n\nBe brief, you are addressing yourself. Answer in the same language as the inquiry."
         )
     except Exception:
         return None
