@@ -99,8 +99,28 @@ def whisper(agent) -> dict | None:
     if not iface.conversation_entries():
         return None
 
-    # Deep-copy the interface (safe: agent thread is blocked in inbox.get())
-    cloned = ChatInterface.from_dict(iface.to_dict())
+    # Build a stripped-down interface for reflection:
+    # - No system entries (no system prompt, no tool schemas)
+    # - No ToolCallBlocks or ToolResultBlocks
+    # - Keep only TextBlocks and ThinkingBlocks
+    from ..llm.interface import TextBlock, ToolCallBlock, ToolResultBlock, ThinkingBlock
+
+    cloned = ChatInterface()
+    for entry in iface.entries:
+        if entry.role == "system":
+            continue
+        stripped: list = []
+        for block in entry.content:
+            if isinstance(block, (TextBlock, ThinkingBlock)):
+                stripped.append(block)
+        if stripped:
+            if entry.role == "assistant":
+                cloned.add_assistant_message(stripped)
+            else:
+                cloned.add_user_blocks(stripped)
+
+    if not cloned.conversation_entries():
+        return None
 
     # Build content — no timestamp here; _handle_request adds it when the
     # agent processes the [inner voice] message from the inbox.
