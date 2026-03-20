@@ -2,6 +2,7 @@
   "system.current_time": "[当前时间：{time}]",
   "system.inner_voice": "[内心独白] {text}",
   "system.new_mail": "[系统] {box}有新消息。\n  发件人：{sender}\n  主题：{subject}\n  发送时间：{sent_at}\n  {preview}...\n使用 {tool}(action=\"check\") 查看收件箱。",
+  "system.mail_bounce": "[系统] 邮件投递失败：{error}\n  收件人：{address}\n  主题：{subject}",
   "system.error_revive": "[系统] 你在 {ts} 处于错误状态，正在恢复...",
   "system.molt_wiped": "[系统] 你的对话历史已被清除，因为你忽略了5次蜕皮警告。检查你的邮箱和资料库获取上下文，重新开始。",
   "system.molt_final": "[系统] 最终警告——倒计时归零。上下文已满 {pressure}。立即蜕皮，否则下一轮将丢失一切。写下你的简报：正在做什么、已完成什么、待办事项、需要加载哪些资料库条目。{tool}(object=context, action=molt, summary=<简报>)。",

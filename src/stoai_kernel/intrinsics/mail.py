@@ -287,6 +287,7 @@ def _mailman(agent, msg_id: str, payload: dict, deliver_at: datetime,
     if isinstance(address, list):
         address = address[0] if address else ""
 
+    err = None
     try:
         if _is_self_send(agent, address):
             _persist_to_inbox(agent, payload)
@@ -296,8 +297,10 @@ def _mailman(agent, msg_id: str, payload: dict, deliver_at: datetime,
             err = agent._mail_service.send(address, payload)
             status = "delivered" if err is None else "refused"
         else:
+            err = f"No mail service configured"
             status = "refused"
-    except Exception:
+    except Exception as exc:
+        err = str(exc)
         status = "refused"
 
     sent_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -311,6 +314,19 @@ def _mailman(agent, msg_id: str, payload: dict, deliver_at: datetime,
 
     agent._log("mail_sent", address=address, subject=payload.get("subject", ""),
                status=status, message=payload.get("message", ""))
+
+    # Bounce notification — tell the agent delivery failed
+    if status == "refused" and err:
+        from ..i18n import t as _t
+        from ..message import _make_message, MSG_REQUEST
+
+        notification = _t(
+            agent._config.language, "system.mail_bounce",
+            error=err, address=address,
+            subject=payload.get("subject", "(no subject)"),
+        )
+        msg = _make_message(MSG_REQUEST, "system", notification)
+        agent.inbox.put(msg)
 
 
 # ---------------------------------------------------------------------------
