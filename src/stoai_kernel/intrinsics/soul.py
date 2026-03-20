@@ -107,8 +107,10 @@ def whisper(agent) -> dict | None:
     if agent._soul_prompt:
         content = agent._soul_prompt
     else:
+        from ..prompt import get_soul_prompt
         delay = int(agent._soul_delay)
-        content = t(agent._config.language, "soul.time_lapse", seconds=delay)
+        template = get_soul_prompt(agent._config.language)
+        content = template.format(seconds=delay)
 
     # Create a temporary session: same system prompt, no tools, cloned history
     system_prompt = agent._build_system_prompt()

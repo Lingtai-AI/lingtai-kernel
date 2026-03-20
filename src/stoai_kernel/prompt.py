@@ -87,6 +87,27 @@ def get_manifesto(lang: str = "en") -> str:
     return _MANIFESTO_CACHE[lang]
 
 
+def _load_soul_prompt(lang: str = "en") -> str:
+    """Load the soul prompt template for the given language."""
+    from pathlib import Path
+    base = Path(__file__).parent
+    if lang != "en":
+        path = base / f"soul_prompt_{lang}.md"
+        if path.is_file():
+            return path.read_text().strip()
+    return (base / "soul_prompt.md").read_text().strip()
+
+
+_SOUL_PROMPT_CACHE: dict[str, str] = {}
+
+
+def get_soul_prompt(lang: str = "en") -> str:
+    """Return the cached soul prompt template for the given language."""
+    if lang not in _SOUL_PROMPT_CACHE:
+        _SOUL_PROMPT_CACHE[lang] = _load_soul_prompt(lang)
+    return _SOUL_PROMPT_CACHE[lang]
+
+
 def build_system_prompt(
     prompt_manager: SystemPromptManager,
     base_prompt: str = "",
