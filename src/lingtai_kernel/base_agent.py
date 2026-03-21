@@ -229,7 +229,7 @@ class BaseAgent:
         self._soul_timer: threading.Timer | None = None
 
         # Heartbeat — always-on health monitor
-        self._heartbeat: int = 0
+        self._heartbeat: float = 0.0
         self._heartbeat_thread: threading.Thread | None = None
         self._cpr_start: float | None = None
         self._aed_pending: bool = False
@@ -612,12 +612,20 @@ class BaseAgent:
     def _stop_heartbeat(self) -> None:
         """Stop the heartbeat (called only by stop/shutdown)."""
         self._heartbeat_thread = None
-        self._log("heartbeat_stop", beats=self._heartbeat)
+        hb_file = self._working_dir / ".agent.heartbeat"
+        if hb_file.exists():
+            hb_file.unlink()
+        self._log("heartbeat_stop", heartbeat=self._heartbeat)
 
     def _heartbeat_loop(self) -> None:
         """Beat every 1 second. AED if agent is STUCK."""
         while self._heartbeat_thread is not None and not self._shutdown.is_set():
-            self._heartbeat += 1
+            self._heartbeat = time.time()
+
+            # Write heartbeat file for all living states (not DEAD)
+            if self._state != AgentState.DEAD:
+                hb_file = self._working_dir / ".agent.heartbeat"
+                hb_file.write_text(str(self._heartbeat))
 
             if self._state == AgentState.STUCK:
                 now = time.monotonic()
@@ -628,7 +636,7 @@ class BaseAgent:
                 cpr_timeout = self._config.cpr_timeout
                 if elapsed > cpr_timeout:
                     # AED failed — pronounce dead
-                    self._log("heartbeat_dead", beats=self._heartbeat, aed_seconds=elapsed)
+                    self._log("heartbeat_dead", heartbeat=self._heartbeat, aed_seconds=elapsed)
                     self._set_state(AgentState.DEAD, reason="AED failed")
                     self._persist_chat_history()
                     self._shutdown.set()
@@ -651,7 +659,7 @@ class BaseAgent:
         # Reset the LLM session — next send() creates a fresh one
         self._session.chat = None
 
-        self._log("heartbeat_aed", beats=self._heartbeat)
+        self._log("heartbeat_aed", heartbeat=self._heartbeat)
 
         # Inject revive message
         revive_msg = _t(self._config.language, "system.stuck_revive", ts=ts)

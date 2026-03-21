@@ -1,4 +1,4 @@
-"""Message types and Message dataclass for StoAI agent inboxes."""
+"""Message types and Message dataclass for 灵台 agent inboxes."""
 
 from __future__ import annotations
 

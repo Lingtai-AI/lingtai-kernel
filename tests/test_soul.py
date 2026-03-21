@@ -194,6 +194,7 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
@@ -208,6 +209,7 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             config=AgentConfig(flow=False),
             base_dir=tmp_path,
@@ -218,6 +220,7 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
@@ -232,6 +235,7 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             config=AgentConfig(flow=False),
             base_dir=tmp_path,
@@ -245,6 +249,7 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             config=AgentConfig(flow=False),
             base_dir=tmp_path,
@@ -260,6 +265,7 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
@@ -275,6 +281,7 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             config=AgentConfig(flow_delay=60.0),
             base_dir=tmp_path,
@@ -286,6 +293,7 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             config=AgentConfig(flow_delay=-10.0),
             base_dir=tmp_path,
@@ -299,6 +307,7 @@ class TestSoulCleanup:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
@@ -320,6 +329,7 @@ class TestSoulIntegration:
         svc = make_mock_service()
         agent = BaseAgent(
             service=svc,
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
@@ -375,6 +385,7 @@ class TestSoulIntegration:
         svc = make_mock_service()
         agent = BaseAgent(
             service=svc,
+            agent_id="test",
             agent_name="test",
             config=AgentConfig(flow=False),
             base_dir=tmp_path,
@@ -421,6 +432,7 @@ class TestSoulIntegration:
         svc = make_mock_service()
         agent = BaseAgent(
             service=svc,
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
@@ -436,6 +448,7 @@ class TestSoulIntegration:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )

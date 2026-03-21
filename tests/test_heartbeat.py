@@ -20,7 +20,7 @@ class TestHeartbeatInit:
             agent_name="test",
             base_dir=tmp_path,
         )
-        assert agent._heartbeat == 0
+        assert agent._heartbeat == 0.0
         assert agent._heartbeat_thread is None
         assert agent._cpr_start is None
         assert agent._aed_pending is False
@@ -33,9 +33,10 @@ class TestHeartbeatInit:
             agent_name="test",
             base_dir=tmp_path,
         )
-        agent._heartbeat = 42
+        agent._heartbeat = 1234567890.123
         status = agent.status()
-        assert status["heartbeat"] == 42
+        assert isinstance(status["heartbeat"], float)
+        assert status["heartbeat"] == 1234567890.123
 
 
 class TestHeartbeatBeating:
@@ -51,7 +52,8 @@ class TestHeartbeatBeating:
         agent._start_heartbeat()
         time.sleep(2.5)
         agent._stop_heartbeat()
-        assert agent._heartbeat >= 2
+        assert agent._heartbeat > 0
+        assert time.time() - agent._heartbeat < 2.0
 
     def test_no_aed_on_idle(self, tmp_path):
         """Heartbeat does NOT AED when agent is IDLE."""
@@ -70,6 +72,74 @@ class TestHeartbeatBeating:
         agent._stop_heartbeat()
         assert agent.inbox.empty()
         assert agent._cpr_start is None
+
+
+class TestHeartbeatFile:
+
+    def test_heartbeat_writes_file(self, tmp_path):
+        """Heartbeat file exists while running, deleted after stop."""
+        from lingtai_kernel import BaseAgent, AgentState
+        agent = BaseAgent(
+            service=make_mock_service(),
+            agent_id="test",
+            agent_name="test",
+            base_dir=tmp_path,
+        )
+        hb_file = agent._working_dir / ".agent.heartbeat"
+        agent._start_heartbeat()
+        time.sleep(1.5)
+        assert hb_file.exists()
+        agent._stop_heartbeat()
+        assert not hb_file.exists()
+
+    def test_heartbeat_file_written_while_running(self, tmp_path):
+        """While ACTIVE, heartbeat file exists with a fresh timestamp."""
+        from lingtai_kernel import BaseAgent, AgentState
+        agent = BaseAgent(
+            service=make_mock_service(),
+            agent_id="test",
+            agent_name="test",
+            base_dir=tmp_path,
+        )
+        hb_file = agent._working_dir / ".agent.heartbeat"
+        agent._start_heartbeat()
+        agent._set_state(AgentState.ACTIVE, reason="test")
+        time.sleep(1.5)
+
+        assert hb_file.exists()
+        ts = float(hb_file.read_text())
+        assert time.time() - ts < 2.0
+
+        agent._stop_heartbeat()
+
+    def test_heartbeat_file_stale_when_dead(self, tmp_path):
+        """After DEAD + shutdown, heartbeat file is gone or stale."""
+        from lingtai_kernel import BaseAgent, AgentState
+        agent = BaseAgent(
+            service=make_mock_service(),
+            agent_id="test",
+            agent_name="test",
+            base_dir=tmp_path,
+        )
+        hb_file = agent._working_dir / ".agent.heartbeat"
+        agent._start_heartbeat()
+        agent._set_state(AgentState.ACTIVE, reason="test")
+        time.sleep(1.5)
+        assert hb_file.exists()
+
+        # Simulate DEAD via AED timeout
+        agent._set_state(AgentState.STUCK)
+        agent._cpr_start = time.monotonic() - 1260  # exceeded 20 min
+        time.sleep(2.0)  # heartbeat detects and sets DEAD + shutdown
+
+        assert agent._state == AgentState.DEAD
+        # After DEAD, the heartbeat loop exits and _stop_heartbeat
+        # would clean the file. The loop itself stops writing once DEAD.
+        # The file may still exist with a stale timestamp from the last
+        # living tick, or may be gone if _stop_heartbeat was called.
+        if hb_file.exists():
+            ts = float(hb_file.read_text())
+            assert time.time() - ts > 1.0  # stale — not recently updated
 
 
 class TestAED:

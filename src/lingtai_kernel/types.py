@@ -1,4 +1,4 @@
-"""Core types for stoai."""
+"""Core types for lingtai."""
 from __future__ import annotations
 
 

@@ -133,11 +133,13 @@ class TCPMailService(MailService):
     def listen(self, on_message: Callable[[dict], None]) -> None:
         """Start a TCP server listening for incoming messages."""
         if self._listen_port is None:
-            raise RuntimeError("Cannot listen without a listen_port")
+            raise RuntimeError("Cannot listen without a listen_port (pass 0 for auto-assign)")
 
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server_socket.bind((self._listen_host, self._listen_port))
+        # Update port in case 0 was passed (OS-assigned)
+        self._listen_port = self._server_socket.getsockname()[1]
         self._server_socket.listen(16)
         self._server_socket.settimeout(1.0)  # for clean shutdown
         self._running = True

@@ -16,7 +16,7 @@ from .logging import get_logger
 _logger = get_logger()
 
 # Directory to save chat history snapshots on reset
-_RESET_SNAPSHOT_DIR = Path.home() / ".stoai" / "reset_snapshots"
+_RESET_SNAPSHOT_DIR = Path.home() / ".lingtai" / "reset_snapshots"
 
 
 def _save_reset_snapshot(chat, agent_name: str, error_context: str) -> None:

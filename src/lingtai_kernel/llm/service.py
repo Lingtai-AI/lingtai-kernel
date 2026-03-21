@@ -46,7 +46,7 @@ _litellm_lock = threading.Lock()
 def _get_cache_path(data_dir: str | None = None) -> Path:
     if data_dir:
         return Path(data_dir) / "model_context_windows.json"
-    return Path.home() / ".stoai" / "model_context_windows.json"
+    return Path.home() / ".lingtai" / "model_context_windows.json"
 
 
 def _fetch_litellm_registry(data_dir: str | None = None) -> dict[str, int]:
@@ -74,7 +74,7 @@ def _fetch_litellm_registry(data_dir: str | None = None) -> dict[str, int]:
     try:
         import urllib.request
         req = urllib.request.Request(LITELLM_REGISTRY_URL, headers={
-            "User-Agent": "stoai/1.0",
+            "User-Agent": "lingtai/1.0",
         })
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw = json.loads(resp.read().decode("utf-8"))
@@ -151,7 +151,7 @@ def get_context_limit(model_name: str) -> int:
     return DEFAULT_CONTEXT_WINDOW
 
 def _generate_session_id() -> str:
-    """Generate a unique stoai session ID."""
+    """Generate a unique lingtai session ID."""
     return f"st_{uuid.uuid4().hex[:12]}"
 
 
@@ -160,7 +160,7 @@ class LLMService:
 
     Responsibilities:
     - Adapter factory: constructs adapters via class-level registry
-    - Session registry: assigns stoai session IDs, tracks active sessions
+    - Session registry: assigns lingtai session IDs, tracks active sessions
     - One-shot gateway: routes generate() through the same tracking path
     - Token accounting: centralizes per-session usage tracking via interface
 
@@ -220,7 +220,7 @@ class LLMService:
             raise RuntimeError(
                 f"No adapter registered for provider {provider!r}. "
                 f"Registered: {', '.join(sorted(self._adapter_registry)) or '(none)'}. "
-                f"If using stoai, ensure 'import stoai' runs before creating LLMService."
+                f"If using lingtai, ensure 'import lingtai' runs before creating LLMService."
             )
 
         return factory(

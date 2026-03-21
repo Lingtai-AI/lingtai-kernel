@@ -1,10 +1,10 @@
-# CLAUDE.md — stoai-kernel
+# CLAUDE.md — lingtai-kernel
 
 Minimal agent kernel — think, communicate, remember, host tools.
 
-## What is stoai-kernel
+## What is lingtai-kernel
 
-The kernel of the stoai agent framework, extracted as a standalone package. Provides the minimal runtime for AI agents: LLM thinking, inter-agent mail, memory (eigen), tool dispatch, and working directory management. No capabilities, no file I/O tools, no MCP, no multimodal — just the core.
+The kernel of the lingtai agent framework, extracted as a standalone package. Provides the minimal runtime for AI agents: LLM thinking, inter-agent mail, memory (eigen), tool dispatch, and working directory management. No capabilities, no file I/O tools, no MCP, no multimodal — just the core.
 
 ## Build & Test
 
@@ -37,7 +37,7 @@ Zero hard dependencies. Optional LLM provider SDKs are lazy-imported.
 
 ### LLM Protocol
 
-`llm/base.py` defines `LLMAdapter` (ABC) and `ChatSession` (ABC). `llm/service.py` provides `LLMService` with adapter registry — adapters register via `LLMService.register_adapter()`. No built-in adapters; consumers (like `stoai`) register their own.
+`llm/base.py` defines `LLMAdapter` (ABC) and `ChatSession` (ABC). `llm/service.py` provides `LLMService` with adapter registry — adapters register via `LLMService.register_adapter()`. No built-in adapters; consumers (like `lingtai`) register their own.
 
 ### Services
 
@@ -60,13 +60,13 @@ Zero hard dependencies. Optional LLM provider SDKs are lazy-imported.
 - Python 3.11+, `from __future__ import annotations` throughout
 - Zero hard dependencies — provider SDKs lazy-imported
 - All services optional — missing service disables backed intrinsics
-- Kernel must never import from `stoai` — dependency is one-directional
+- Kernel must never import from `lingtai` — dependency is one-directional
 
 ## Extension
 
 ```python
-from stoai_kernel import BaseAgent
-from stoai_kernel.llm import LLMService, LLMAdapter
+from lingtai_kernel import BaseAgent
+from lingtai_kernel.llm import LLMService, LLMAdapter
 
 # Register a custom adapter
 LLMService.register_adapter("my_provider", lambda **kw: MyAdapter(**kw))

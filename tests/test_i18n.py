@@ -1,6 +1,6 @@
-"""Tests for stoai_kernel.i18n and soul prompt loading."""
-from stoai_kernel.i18n import t
-from stoai_kernel.prompt import get_soul_prompt
+"""Tests for lingtai_kernel.i18n and soul prompt loading."""
+from lingtai_kernel.i18n import t
+from lingtai_kernel.prompt import get_soul_prompt
 
 
 class TestT:

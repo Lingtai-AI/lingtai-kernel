@@ -1,4 +1,4 @@
-"""Package-internal logging for stoai."""
+"""Package-internal logging for lingtai."""
 from __future__ import annotations
 
 import logging
@@ -9,14 +9,14 @@ _logger: logging.Logger | None = None
 def setup_logging(
     verbose: bool = False,
     log_dir: Path | str | None = None,
-    logger_name: str = "stoai",
+    logger_name: str = "lingtai",
 ) -> logging.Logger:
     """Initialize the package logger.
 
     Args:
         verbose: If True, set console to DEBUG; otherwise INFO.
         log_dir: Directory for log files. None = no file logging.
-        logger_name: Logger name (default: "stoai").
+        logger_name: Logger name (default: "lingtai").
     """
     global _logger
     logger = logging.getLogger(logger_name)

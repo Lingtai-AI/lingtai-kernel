@@ -124,6 +124,7 @@ class TestBaseAgentLoggingIntegration:
 
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
@@ -161,6 +162,7 @@ class TestBaseAgentLoggingIntegration:
 
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
@@ -191,6 +193,7 @@ class TestBaseAgentLoggingIntegration:
         """State transitions are logged."""
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )

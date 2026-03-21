@@ -111,7 +111,7 @@ class FunctionSchema:
 class ChatSession(ABC):
     """Abstract multi-turn chat session."""
 
-    # stoai-assigned session ID, set by LLMService
+    # lingtai-assigned session ID, set by LLMService
     session_id: str = ""
     # Session metadata for get_state()
     _agent_type: str = ""

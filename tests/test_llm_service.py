@@ -1,5 +1,5 @@
-"""Tests for stoai_kernel.llm.service — model registry and context limits."""
-from stoai_kernel.llm.service import get_context_limit, DEFAULT_CONTEXT_WINDOW
+"""Tests for lingtai_kernel.llm.service — model registry and context limits."""
+from lingtai_kernel.llm.service import get_context_limit, DEFAULT_CONTEXT_WINDOW
 
 
 def test_get_context_limit_unknown():

@@ -1,12 +1,14 @@
 """Kernel i18n — language-aware string tables.
 
 Usage: t(lang, key, **kwargs)
-  lang: language code ("en", "zh")
+  lang: language code ("en", "zh", "wen")
   key: dotted string ID ("system.current_time")
   kwargs: template substitutions
 
-String tables are JSON files in this directory. Unknown language
-falls back to English. Unknown key returns the key itself.
+The kernel ships only en.json (English baseline). Other languages
+are registered by the lingtai package via register_strings().
+Unknown language falls back to English. Unknown key returns the
+key itself.
 """
 from __future__ import annotations
 
@@ -26,6 +28,17 @@ def _load(lang: str) -> dict[str, str]:
         else:
             _CACHE[lang] = {}
     return _CACHE[lang]
+
+
+def register_strings(lang: str, strings: dict[str, str]) -> None:
+    """Register (or extend) a language's string table.
+
+    Called by lingtai to inject non-English translations into the
+    kernel's cache so that kernel-level t() calls resolve correctly.
+    Merges into any existing entries for the language.
+    """
+    table = _CACHE.setdefault(lang, {})
+    table.update(strings)
 
 
 def t(lang: str, key: str, **kwargs) -> str:

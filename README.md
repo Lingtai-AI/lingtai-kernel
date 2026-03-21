@@ -1,13 +1,13 @@
-# stoai-kernel
+# lingtai-kernel
 
 Minimal agent kernel — think, communicate, remember, host tools.
 
-The kernel of the [stoai](https://github.com/user/stoai) agent framework, extracted as a standalone package. Provides the minimal runtime for AI agents without any capabilities, file I/O, or multimodal features.
+The kernel of the [lingtai](https://github.com/user/lingtai) agent framework, extracted as a standalone package. Provides the minimal runtime for AI agents without any capabilities, file I/O, or multimodal features.
 
 ## Install
 
 ```bash
-pip install stoai-kernel
+pip install lingtai-kernel
 ```
 
 ## What's included
@@ -19,13 +19,13 @@ pip install stoai-kernel
 
 ## What's NOT included
 
-Capabilities, file I/O, MCP, vision, web search, bash, delegate — these live in `stoai`.
+Capabilities, file I/O, MCP, vision, web search, bash, delegate — these live in `lingtai`.
 
 ## Quick start
 
 ```python
-from stoai_kernel import BaseAgent
-from stoai_kernel.llm import LLMService
+from lingtai_kernel import BaseAgent
+from lingtai_kernel.llm import LLMService
 
 # Register your adapter first
 LLMService.register_adapter("my_provider", my_adapter_factory)
