@@ -21,12 +21,12 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "object": {
                 "type": "string",
-                "enum": ["memory", "context"],
+                "enum": ["memory", "context", "name"],
                 "description": t(lang, "eigen.object_description"),
             },
             "action": {
                 "type": "string",
-                "enum": ["edit", "load", "molt"],
+                "enum": ["edit", "load", "molt", "set"],
                 "description": t(lang, "eigen.action_description"),
             },
             "content": {
@@ -64,8 +64,13 @@ def handle(agent, args: dict) -> dict:
             return _context_molt(agent, args)
         else:
             return {"error": f"Unknown context action: {action}. Use molt."}
+    elif obj == "name":
+        if action == "set":
+            return _name_set(agent, args)
+        else:
+            return {"error": f"Unknown name action: {action}. Use set."}
     else:
-        return {"error": f"Unknown object: {obj}. Use memory or context."}
+        return {"error": f"Unknown object: {obj}. Use memory, context, or name."}
 
 
 def _memory_edit(agent, args: dict) -> dict:
@@ -164,6 +169,18 @@ def _context_molt(agent, args: dict) -> dict:
         "before_tokens": before_tokens,
         "after_tokens": after_tokens,
     }
+
+
+def _name_set(agent, args: dict) -> dict:
+    """Set the agent's true name."""
+    name = args.get("content", "").strip()
+    if not name:
+        return {"error": "Name cannot be empty. Provide your chosen name in 'content'."}
+    try:
+        agent.set_name(name)
+    except RuntimeError as e:
+        return {"error": str(e)}
+    return {"status": "ok", "name": name}
 
 
 def context_forget(agent) -> dict:
