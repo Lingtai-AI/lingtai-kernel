@@ -78,6 +78,7 @@ class BaseAgent:
         service: LLMService,
         *,
         agent_name: str | None = None,
+        agent_id: str | None = None,
         file_io: Any | None = None,
         mail_service: Any | None = None,
         config: AgentConfig | None = None,
@@ -90,7 +91,7 @@ class BaseAgent:
     ):
         import uuid as _uuid
         self.agent_name = agent_name
-        self.agent_id = _uuid.uuid4().hex[:12]
+        self.agent_id = agent_id or _uuid.uuid4().hex[:12]
         self.service = service
         self._config = config or AgentConfig()
         self._context = context

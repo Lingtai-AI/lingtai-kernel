@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -27,7 +26,6 @@ else:
         _fcntl.flock(fd, _fcntl.LOCK_UN)
 
 
-_AGENT_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 _LOCK_FILE = ".agent.lock"
 _MANIFEST_FILE = ".agent.json"
 
@@ -36,9 +34,9 @@ class WorkingDir:
     """Manages an agent's working directory — locking, git, manifest."""
 
     def __init__(self, base_dir: Path | str, agent_id: str) -> None:
-        if not _AGENT_ID_RE.match(agent_id):
+        if not agent_id or "/" in agent_id or "\\" in agent_id:
             raise ValueError(
-                f"agent_id must match [0-9a-f]{{12}}, got: {agent_id!r}"
+                f"agent_id must be a non-empty path-safe string, got: {agent_id!r}"
             )
         self._base_dir = Path(base_dir)
         self._agent_id = agent_id
@@ -109,6 +107,10 @@ class WorkingDir:
                 "!logs/**\n"
                 "!mailbox/\n"
                 "!mailbox/**\n"
+                "!library/\n"
+                "!library/**\n"
+                "!exports/\n"
+                "!exports/**\n"
                 "!mcp/\n"
                 "!mcp/**\n"
             )
