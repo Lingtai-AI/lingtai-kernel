@@ -78,7 +78,7 @@ class BaseAgent:
         service: LLMService,
         *,
         agent_name: str | None = None,
-        agent_id: str | None = None,
+        agent_id: str,
         file_io: Any | None = None,
         mail_service: Any | None = None,
         config: AgentConfig | None = None,
@@ -89,9 +89,8 @@ class BaseAgent:
         covenant: str = "",
         memory: str = "",
     ):
-        import uuid as _uuid
         self.agent_name = agent_name
-        self.agent_id = agent_id or _uuid.uuid4().hex[:12]
+        self.agent_id = agent_id
         self.service = service
         self._config = config or AgentConfig()
         self._context = context
@@ -616,11 +615,11 @@ class BaseAgent:
         self._log("heartbeat_stop", beats=self._heartbeat)
 
     def _heartbeat_loop(self) -> None:
-        """Beat every 1 second. AED if agent is in ERROR."""
+        """Beat every 1 second. AED if agent is STUCK."""
         while self._heartbeat_thread is not None and not self._shutdown.is_set():
             self._heartbeat += 1
 
-            if self._state == AgentState.ERROR:
+            if self._state == AgentState.STUCK:
                 now = time.monotonic()
                 if self._cpr_start is None:
                     self._cpr_start = now
@@ -655,7 +654,7 @@ class BaseAgent:
         self._log("heartbeat_aed", beats=self._heartbeat)
 
         # Inject revive message
-        revive_msg = _t(self._config.language, "system.error_revive", ts=ts)
+        revive_msg = _t(self._config.language, "system.stuck_revive", ts=ts)
         msg = _make_message(MSG_REQUEST, "system", revive_msg)
         self.inbox.put(msg)
 
@@ -694,7 +693,7 @@ class BaseAgent:
                         exc_info=True,
                     )
                     self._log("error", source="message_handler", message=err_desc)
-                    sleep_state = AgentState.ERROR
+                    sleep_state = AgentState.STUCK
                 except Exception as e:
                     err_desc = str(e) or repr(e)
                     logger.error(
@@ -702,7 +701,7 @@ class BaseAgent:
                         exc_info=True,
                     )
                     self._log("error", source="message_handler", message=err_desc)
-                    sleep_state = AgentState.ERROR
+                    sleep_state = AgentState.STUCK
                 finally:
                     self._set_state(sleep_state)
                     self._persist_chat_history()

@@ -1,4 +1,4 @@
-"""AgentState — lifecycle state enum for StoAI agents."""
+"""AgentState — lifecycle state enum for 灵台 agents."""
 
 from __future__ import annotations
 
@@ -9,13 +9,13 @@ class AgentState(enum.Enum):
     """Lifecycle state of an agent.
 
     ACTIVE --(completed)--------> IDLE
-    ACTIVE --(timeout/exception)-> ERROR
+    ACTIVE --(timeout/exception)-> STUCK
     IDLE   --(inbox message)----> ACTIVE
-    ERROR  --(AED)--------------> ACTIVE  (session reset, fresh run loop)
-    ERROR  --(AED timeout)------> DEAD    (shutdown)
+    STUCK  --(AED)--------------> ACTIVE  (session reset, fresh run loop)
+    STUCK  --(AED timeout)------> DEAD    (shutdown)
     """
 
     ACTIVE = "active"
     IDLE = "idle"
-    ERROR = "error"
+    STUCK = "stuck"
     DEAD = "dead"

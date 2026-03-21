@@ -16,6 +16,7 @@ class TestHeartbeatInit:
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
@@ -28,6 +29,7 @@ class TestHeartbeatInit:
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
@@ -42,6 +44,7 @@ class TestHeartbeatBeating:
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
@@ -55,6 +58,7 @@ class TestHeartbeatBeating:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
@@ -71,15 +75,16 @@ class TestHeartbeatBeating:
 class TestAED:
 
     def test_aed_resets_session_on_error(self, tmp_path):
-        """AED resets the LLM session when agent is in ERROR."""
+        """AED resets the LLM session when agent is STUCK."""
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.ERROR)
+        agent._set_state(AgentState.STUCK)
         agent._session._chat = MagicMock()  # has a session
 
         agent._perform_aed()
@@ -95,12 +100,13 @@ class TestAED:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
         agent._start_heartbeat()
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.ERROR)
+        agent._set_state(AgentState.STUCK)
 
         time.sleep(3.0)
         agent._stop_heartbeat()
@@ -117,6 +123,7 @@ class TestAED:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
@@ -139,12 +146,13 @@ class TestAED:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
         agent._start_heartbeat()
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.ERROR)
+        agent._set_state(AgentState.STUCK)
 
         # Wait for heartbeat to detect and AED
         deadline = time.monotonic() + 3.0
@@ -155,7 +163,7 @@ class TestAED:
         assert not agent.inbox.empty()
         msg = agent.inbox.get_nowait()
         assert "reviving" in msg.content
-        assert "error" in msg.content
+        assert "stuck" in msg.content
 
 
 class TestHeartbeatDead:
@@ -165,11 +173,12 @@ class TestHeartbeatDead:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.ERROR)
+        agent._set_state(AgentState.STUCK)
         # Simulate AED started 21 minutes ago (exceeds 20 min window)
         agent._cpr_start = time.monotonic() - 1260
 
@@ -184,6 +193,7 @@ class TestHeartbeatDead:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
+            agent_id="test",
             agent_name="test",
             base_dir=tmp_path,
         )

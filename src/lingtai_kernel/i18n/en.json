@@ -3,7 +3,7 @@
   "system.inner_voice": "[inner voice] {text}",
   "system.new_mail": "[system] New message in {box}.\n  From: {sender}\n  Subject: {subject}\n  Sent at: {sent_at}\n  {preview}...\nUse {tool}(action=\"check\") to see your inbox.",
   "system.mail_bounce": "[system] Mail delivery failed: {error}\n  To: {address}\n  Subject: {subject}",
-  "system.error_revive": "[system] You were in error at {ts}, reviving...",
+  "system.stuck_revive": "[system] You were stuck at {ts}, reviving...",
   "system.molt_wiped": "[system] Your conversation history was wiped because you ignored 5 molt warnings. Check your email inbox and library for context. Start fresh.",
   "system.molt_final": "[system] FINAL — countdown 0. Context {pressure} full. Molt NOW or lose everything next turn. Write your briefing: what you're doing, what's done, what's pending, which library entries to load. {tool}(object=context, action=molt, summary=<briefing>).",
   "system.molt_urgent": "[system] Context pressure: {pressure} full — countdown {remaining} {turns} until auto-wipe. Deposit important data to library NOW ({tool} submit), then molt. Your molt summary is a briefing to your future self — the ONLY context you will have.",
