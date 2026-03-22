@@ -20,6 +20,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable
 
+from ..handshake import is_agent, is_alive, manifest
+
 
 class MailService(ABC):
     """Abstract message transport service.
@@ -136,26 +138,18 @@ class FilesystemMailService(MailService):
         recipient_dir = Path(address)
 
         # --- handshake ------------------------------------------------
-        agent_json_path = recipient_dir / ".agent.json"
-        if not agent_json_path.is_file():
+        if not is_agent(address):
             return f"No agent at {address}"
 
         if expected_agent_id is not None:
             try:
-                agent_meta = json.loads(agent_json_path.read_text())
+                agent_meta = manifest(address)
             except (json.JSONDecodeError, OSError):
                 return f"Cannot read agent metadata at {address}"
             if agent_meta.get("agent_id") != expected_agent_id:
                 return f"Agent at {address} has changed"
 
-        heartbeat_path = recipient_dir / ".agent.heartbeat"
-        if not heartbeat_path.is_file():
-            return f"Agent at {address} is not running"
-        try:
-            ts = float(heartbeat_path.read_text().strip())
-        except (ValueError, OSError):
-            return f"Agent at {address} is not running"
-        if time.time() - ts >= 2.0:
+        if not is_alive(address):
             return f"Agent at {address} is not running"
 
         # --- create inbox entry ---------------------------------------
