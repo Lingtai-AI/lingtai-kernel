@@ -163,6 +163,17 @@ class FilesystemMailService(MailService):
         inbox_dir = recipient_dir / self._mailbox_rel / "inbox"
         msg_dir = inbox_dir / msg_id
 
+        # Inject mailbox metadata (required by mail intrinsic for
+        # message tracking, read/unread, reply, archive, delete).
+        from datetime import datetime, timezone
+        message = {
+            **message,
+            "_mailbox_id": msg_id,
+            "received_at": datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+        }
+
         # Handle attachments
         attachment_paths = message.get("attachments")
         if attachment_paths:

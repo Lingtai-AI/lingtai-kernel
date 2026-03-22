@@ -40,6 +40,26 @@ class TestSend:
         assert data["message"] == "hello"
         assert data["subject"] == "test"
 
+    def test_send_injects_mailbox_metadata(self, tmp_path):
+        """send() must inject _mailbox_id and received_at for mail intrinsic."""
+        from lingtai_kernel.services.mail import FilesystemMailService
+
+        sender_dir = _make_agent_dir(tmp_path, "sender01")
+        recip_dir = _make_agent_dir(tmp_path, "recip01")
+        (recip_dir / "mailbox" / "inbox").mkdir(parents=True)
+
+        svc = FilesystemMailService(sender_dir, mailbox_rel="mailbox")
+        result = svc.send(str(recip_dir), {"message": "hello"})
+        assert result is None
+
+        inbox = recip_dir / "mailbox" / "inbox"
+        msg_dir = list(inbox.iterdir())[0]
+        data = json.loads((msg_dir / "message.json").read_text())
+        assert "_mailbox_id" in data
+        assert data["_mailbox_id"] == msg_dir.name  # UUID matches dir name
+        assert "received_at" in data
+        assert data["received_at"].endswith("Z")  # UTC format
+
     def test_send_copies_attachments(self, tmp_path):
         from lingtai_kernel.services.mail import FilesystemMailService
 
