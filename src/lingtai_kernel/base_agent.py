@@ -433,42 +433,12 @@ class BaseAgent:
         self._workdir.release_lock()
 
     def _on_mail_received(self, payload: dict) -> None:
-        """Callback for MailService — routes by mail type.
-
-        silence-type emails set the cancel event (interrupt current work).
-        kill-type emails signal shutdown (hard stop).
-        Normal emails are delegated to ``_on_normal_mail`` (which capabilities
-        like email can replace).
+        """Callback for MailService — route incoming mail to inbox.
 
         This method is never replaced — it is the stable entry point for all
-        incoming mail.
+        incoming mail. Lifecycle control (silence, quell, revive, annihilate)
+        is handled by the system intrinsic via signal files, not mail.
         """
-        mail_type = payload.get("type", "normal")
-
-        if mail_type == "silence":
-            self._cancel_event.set()
-            self._log(
-                "silence_received",
-                sender=payload.get("from", "unknown"),
-            )
-            return
-
-        if mail_type == "kill":
-            self._cancel_event.set()
-            self._shutdown.set()
-            self._log(
-                "kill_received",
-                sender=payload.get("from", "unknown"),
-            )
-            # Run stop() in a separate thread to avoid deadlocking
-            # the mail listener thread (stop() joins the agent thread).
-            threading.Thread(
-                target=self.stop,
-                daemon=True,
-                name=f"kill-{self.agent_id}",
-            ).start()
-            return
-
         self._on_normal_mail(payload)
 
     def _on_normal_mail(self, payload: dict) -> None:
