@@ -26,10 +26,9 @@
   "mail.n_description": "check 中显示的最大消息数（默认：全部）",
   "mail.query_description": "search 操作的正则表达式模式（在 from、subject、message 中搜索）",
 
-  "eigen.description": "核心自我管理——工作笔记和上下文控制。memory：edit 写入工作笔记（system/memory.md），load 将其注入当前提示。context：molt 凝蜕（转世——携前尘往事入新生；molt——shed and carry forward）。凝以存菁，蜕以去芜。先将重要发现存入知识库和人设，再去芜存菁留给未来的自己。对话历史将被清除，你的去芜存菁成为新的起始上下文。",
+  "eigen.description": "核心自我管理——工作笔记和上下文控制。memory：edit 写入工作笔记（system/memory.md），load 将其注入当前提示。context：molt 凝蜕（转世——携前尘往事入新生；molt——shed and carry forward）。凝以存菁，蜕以去芜。先将重要发现存入知识库和修行志，再去芜存菁留给未来的自己。对话历史将被清除，你的去芜存菁成为新的起始上下文。",
   "eigen.object_description": "memory：你的工作笔记（system/memory.md）。context：管理对话上下文。name：你的真名（只能设置一次）。",
   "eigen.action_description": "memory：edit | load。\ncontext：molt。\nname：set。",
-  "eigen.name_description": "你的真名——只能设置一次，永不更改。用 content 提供你选择的名字。",
   "eigen.content_description": "用于 memory edit 的文本内容。",
   "eigen.summary_description": "用于 context molt：去芜存菁——凝蜕后你唯一能看到的东西。写下你正在做什么、发现了什么、还有什么待完成、正在和谁合作。约 10000 token 上限。",
 
