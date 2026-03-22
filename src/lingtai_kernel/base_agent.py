@@ -1023,8 +1023,7 @@ class BaseAgent:
         """Build the manifest dict for .agent.json.
 
         Subclasses override to add fields (e.g. capabilities).
-        Contains identity + construction recipe — enough to respawn
-        an agent with the same abilities.
+        Contains everything the agent knows about itself.
         """
         data = {
             "agent_id": self.agent_id,
@@ -1033,6 +1032,8 @@ class BaseAgent:
             "working_dir": str(self._working_dir),
             "admin": self._admin,
             "language": self._config.language,
+            "vigil": self._config.vigil,
+            "soul_delay": self._soul_delay,
         }
         if self._mail_service is not None and self._mail_service.address:
             data["address"] = self._mail_service.address

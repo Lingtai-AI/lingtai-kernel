@@ -4,9 +4,8 @@ Actions:
     inquiry — one-shot self-directed question, fires once on next idle
     delay   — adjust the idle delay before the soul whispers
 
-Flow mode (continuous free reflection) is enabled at agent creation
-via config.flow and cannot be toggled at runtime.
-Inquiry works regardless of flow — it fires once on the next idle.
+soul_delay controls flow timing. Very large delay (> vigil) = effectively off.
+Inquiry works regardless of delay — it fires once on the next idle.
 """
 from __future__ import annotations
 
@@ -72,6 +71,8 @@ def handle(agent, args: dict) -> dict:
         old = agent._soul_delay
         agent._soul_delay = delay
         agent._log("soul_delay", old=old, new=delay)
+        # Persist to .agent.json
+        agent._workdir.write_manifest(agent._build_manifest())
         return {"status": "ok", "delay": delay}
 
     else:
