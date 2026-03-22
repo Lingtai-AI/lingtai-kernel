@@ -21,6 +21,14 @@ class TestT:
         result = t("zh", "system.current_time", time="2026-03-19T00:00:00Z")
         assert "2026-03-19T00:00:00Z" in result
 
+    def test_wen_key(self):
+        result = t("wen", "system.current_time", time="2026-03-19T00:00:00Z")
+        assert "2026-03-19T00:00:00Z" in result
+
+    def test_wen_template(self):
+        result = t("wen", "system.current_time", time="2026-03-19T00:00:00Z")
+        assert "此时" in result
+
     def test_unknown_lang_falls_back_to_en(self):
         result = t("xx", "system.current_time", time="now")
         assert "now" in result
@@ -47,6 +55,10 @@ class TestSoulPrompt:
         result = template.format(seconds=120)
         assert "120" in result
         assert "{" not in result
+
+    def test_wen_soul_prompt(self):
+        template = get_soul_prompt("wen")
+        assert "{seconds}" in template
 
     def test_unknown_lang_falls_back_to_en(self):
         template = get_soul_prompt("xx")

@@ -5,10 +5,10 @@ Usage: t(lang, key, **kwargs)
   key: dotted string ID ("system.current_time")
   kwargs: template substitutions
 
-The kernel ships only en.json (English baseline). Other languages
-are registered by the lingtai package via register_strings().
-Unknown language falls back to English. Unknown key returns the
-key itself.
+The kernel ships en.json (English), zh.json (中文), and wen.json (文言).
+Additional languages can be registered by the lingtai package via
+register_strings(). Unknown language falls back to English. Unknown
+key returns the key itself.
 """
 from __future__ import annotations
 
