@@ -1114,6 +1114,15 @@ class BaseAgent:
         if self._chat is not None:
             self._chat.update_system_prompt(prompt)
 
+    def _revive_agent(self, address: str) -> "BaseAgent | None":
+        """Reconstruct and start a dormant agent at *address*.
+
+        Returns the revived agent, or None if not supported.
+        Override in subclasses (e.g. lingtai's Agent) to provide
+        full reconstruction from persisted working dir state.
+        """
+        return None
+
     def send(
         self,
         content: str | dict,

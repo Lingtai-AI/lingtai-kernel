@@ -23,7 +23,7 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["show", "sleep", "shutdown", "restart"],
+                "enum": ["show", "sleep", "shutdown", "restart", "silence", "quell", "revive", "annihilate"],
                 "description": t(lang, "system_tool.action_description"),
             },
             "seconds": {
@@ -33,6 +33,10 @@ def get_schema(lang: str = "en") -> dict:
             "reason": {
                 "type": "string",
                 "description": t(lang, "system_tool.reason_description"),
+            },
+            "address": {
+                "type": "string",
+                "description": t(lang, "system_tool.address_description"),
             },
         },
         "required": ["action"],
@@ -52,6 +56,10 @@ def handle(agent, args: dict) -> dict:
         "sleep": _sleep,
         "shutdown": _shutdown,
         "restart": _restart,
+        "silence": _silence,
+        "quell": _quell,
+        "revive": _revive,
+        "annihilate": _annihilate,
     }.get(action)
     if handler is None:
         return {"status": "error", "message": f"Unknown system action: {action}"}
@@ -198,3 +206,94 @@ def _restart(agent, args: dict) -> dict:
         "status": "ok",
         "message": t(agent._config.language, "system_tool.restart_message"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Admin gate mapping
+# ---------------------------------------------------------------------------
+
+_KARMA_ACTIONS = {"silence", "quell", "revive"}
+_NIRVANA_ACTIONS = {"annihilate"}
+
+
+def _check_karma_gate(agent, action: str, args: dict) -> dict | None:
+    from ..handshake import is_agent
+    if action in _KARMA_ACTIONS and not agent._admin.get("karma"):
+        return {"error": True, "message": f"Not authorized for {action} (requires admin.karma=True)"}
+    if action in _NIRVANA_ACTIONS and not (agent._admin.get("karma") and agent._admin.get("nirvana")):
+        return {"error": True, "message": f"Not authorized for {action} (requires admin.nirvana=True)"}
+    address = args.get("address")
+    if not address:
+        return {"error": True, "message": f"{action} requires an address"}
+    if str(agent._working_dir) == str(address):
+        return {"error": True, "message": f"Cannot {action} self — use shutdown/restart instead"}
+    if not is_agent(address):
+        return {"error": True, "message": f"No agent at {address}"}
+    return None
+
+
+def _silence(agent, args: dict) -> dict:
+    from pathlib import Path
+    from ..handshake import is_alive
+    err = _check_karma_gate(agent, "silence", args)
+    if err:
+        return err
+    address = args["address"]
+    if not is_alive(address):
+        return {"error": True, "message": f"Agent at {address} is not running"}
+    (Path(address) / ".silence").write_text("")
+    agent._log("karma_silence", target=address)
+    return {"status": "silenced", "address": address}
+
+
+def _quell(agent, args: dict) -> dict:
+    from pathlib import Path
+    from ..handshake import is_alive
+    err = _check_karma_gate(agent, "quell", args)
+    if err:
+        return err
+    address = args["address"]
+    if not is_alive(address):
+        return {"error": True, "message": f"Agent at {address} is not running — already dormant?"}
+    (Path(address) / ".quell").write_text("")
+    agent._log("karma_quell", target=address)
+    return {"status": "quelled", "address": address}
+
+
+def _revive(agent, args: dict) -> dict:
+    from ..handshake import is_alive
+    err = _check_karma_gate(agent, "revive", args)
+    if err:
+        return err
+    address = args["address"]
+    if is_alive(address):
+        return {"error": True, "message": f"Agent at {address} is already running"}
+    revived = agent._revive_agent(address)
+    if revived is None:
+        return {"error": True, "message": "Revive not supported — no _revive_agent handler"}
+    agent._log("karma_revive", target=address)
+    return {"status": "revived", "address": address}
+
+
+def _annihilate(agent, args: dict) -> dict:
+    import shutil
+    from pathlib import Path
+    from ..handshake import is_alive
+    err = _check_karma_gate(agent, "annihilate", args)
+    if err:
+        return err
+    address = args["address"]
+    if is_alive(address):
+        (Path(address) / ".quell").write_text("")
+        import time as _time
+        deadline = _time.time() + 10.0
+        while _time.time() < deadline:
+            if not is_alive(address):
+                break
+            _time.sleep(0.5)
+        else:
+            if is_alive(address):
+                return {"error": True, "message": f"Agent at {address} did not quell within timeout"}
+    shutil.rmtree(address)
+    agent._log("karma_annihilate", target=address)
+    return {"status": "annihilated", "address": address}
