@@ -45,7 +45,7 @@ def get_schema(lang: str = "en") -> dict:
             },
             "type": {
                 "type": "string",
-                "enum": ["normal", "silence", "kill"],
+                "enum": ["normal"],
                 "description": t(lang, "mail.type_description"),
             },
             "delay": {
@@ -354,9 +354,6 @@ def _send(agent, args: dict) -> dict:
     message_text = args.get("message", "")
     mail_type = args.get("type", "normal")
     delay = args.get("delay", 0)
-
-    if mail_type != "normal" and not agent._admin.get(mail_type):
-        return {"error": f"Not authorized to send type={mail_type!r} mail (requires admin.{mail_type}=True)"}
 
     if not address:
         return {"error": "address is required"}

@@ -20,7 +20,7 @@
   "mail.subject_description": "Message subject (for send)",
   "mail.message_description": "Message body (for send)",
   "mail.attachments_description": "List of file paths to attach to the message (for send)",
-  "mail.type_description": "Mail type (for send). 'normal' (default) is regular mail. 'silence' interrupts the target agent and puts it to idle (revives on next email; requires admin.silence privilege). 'kill' hard-stops the target agent (requires admin.kill privilege). To revive: spawn a new 他我 with the SAME name.",
+  "mail.type_description": "Mail type (for send). Defaults to 'normal'.",
   "mail.delay_description": "Delay in seconds before delivery (default: 0)",
   "mail.id_description": "Message ID(s) for read or delete actions",
   "mail.n_description": "Max number of messages to show in check (default: all)",

@@ -20,7 +20,7 @@
   "mail.subject_description": "消息主题（用于 send）",
   "mail.message_description": "消息正文（用于 send）",
   "mail.attachments_description": "要附加到消息的文件路径列表（用于 send）",
-  "mail.type_description": "消息类型（用于 send）。'normal'（默认）是普通消息。'silence' 中断目标智能体并使其空闲（下封消息时恢复；需要 admin.silence 权限）。'kill' 强制停止目标智能体（需要 admin.kill 权限）。恢复方式：以同名重新创建子智能体。",
+  "mail.type_description": "消息类型（用于 send）。默认为 'normal'。",
   "mail.delay_description": "投递前延迟秒数（默认：0）",
   "mail.id_description": "用于 read 或 delete 操作的消息 ID",
   "mail.n_description": "check 中显示的最大消息数（默认：全部）",
