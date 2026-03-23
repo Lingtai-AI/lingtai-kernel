@@ -156,6 +156,7 @@ class BaseAgent:
 
         # Soul delay — needed before manifest build
         self._soul_delay = max(1.0, self._config.soul_delay)
+        self._molt_count: int = 0
 
         # Write manifest — stable identity + construction recipe (no runtime state)
         from datetime import datetime, timezone
@@ -311,14 +312,9 @@ class BaseAgent:
     # ------------------------------------------------------------------
 
     def set_name(self, name: str) -> None:
-        """Set the agent's true name (真名). Can only be done once."""
+        """Set or change the agent's name."""
         if not name:
             raise ValueError("Agent name cannot be empty.")
-        if self.agent_name is not None:
-            raise RuntimeError(
-                f"Agent is already named '{self.agent_name}'. "
-                "The true name can only be set once."
-            )
         self.agent_name = name
         # Update manifest on disk
         self._workdir.write_manifest(self._build_manifest())
@@ -383,6 +379,9 @@ class BaseAgent:
         )
         self._thread.start()
         self._start_heartbeat()
+        # 开窍 — arm soul timer at boot so the agent thinks on its own
+        if self._config.awaken:
+            self._start_soul_timer()
 
     def stop(self, timeout: float = 5.0) -> None:
         """Signal shutdown and wait for the agent thread to exit."""
@@ -1038,6 +1037,7 @@ class BaseAgent:
             "language": self._config.language,
             "vigil": self._config.vigil,
             "soul_delay": self._soul_delay,
+            "molt_count": self._molt_count,
         }
         if self._mail_service is not None and self._mail_service.address:
             data["address"] = self._mail_service.address

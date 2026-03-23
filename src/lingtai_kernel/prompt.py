@@ -66,30 +66,6 @@ class SystemPromptManager:
         return "\n\n".join(ordered)
 
 
-def _load_manifesto(lang: str = "en") -> str:
-    """Fallback manifesto loader. Returns empty string if no file found.
-
-    Wrapper packages (lingtai) register manifestos via set_manifesto().
-    The kernel ships no manifesto files.
-    """
-    return ""
-
-
-_MANIFESTO_CACHE: dict[str, str] = {}
-
-
-def get_manifesto(lang: str = "en") -> str:
-    """Return the cached manifesto text for the given language."""
-    if lang not in _MANIFESTO_CACHE:
-        _MANIFESTO_CACHE[lang] = _load_manifesto(lang)
-    return _MANIFESTO_CACHE[lang]
-
-
-def set_manifesto(lang: str, text: str) -> None:
-    """Register a manifesto for the given language (used by wrapper packages)."""
-    _MANIFESTO_CACHE[lang] = text
-
-
 def _load_soul_prompt(lang: str = "en") -> str:
     """Load the soul prompt template for the given language."""
     from pathlib import Path
@@ -118,11 +94,10 @@ def build_system_prompt(
 ) -> str:
     """Build the full system prompt from components.
 
-    Order: manifesto → base prompt → sections.
-    The manifesto is the agent's foundational truth — it comes first, always.
+    Order: base prompt → sections.
     base_prompt is framework-level guidance injected by the wrapper package (lingtai).
     """
-    parts = [get_manifesto(language)]
+    parts = []
     if base_prompt:
         parts.append(base_prompt)
 

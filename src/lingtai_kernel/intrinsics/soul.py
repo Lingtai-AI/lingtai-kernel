@@ -93,35 +93,30 @@ def whisper(agent) -> dict | None:
     from ..llm.interface import ChatInterface
     from ..i18n import t
 
-    if agent._chat is None:
-        return None
-
-    iface = agent._chat.interface
-    if not iface.conversation_entries():
-        return None
-
     # Build a stripped-down interface for reflection:
     # - No system entries (no system prompt, no tool schemas)
     # - No ToolCallBlocks or ToolResultBlocks
     # - Keep only TextBlocks and ThinkingBlocks
+    # If no conversation exists yet (开窍 — first awakening), the soul
+    # reflects with just the covenant as context.
     from ..llm.interface import TextBlock, ToolCallBlock, ToolResultBlock, ThinkingBlock
 
     cloned = ChatInterface()
-    for entry in iface.entries:
-        if entry.role == "system":
-            continue
-        stripped: list = []
-        for block in entry.content:
-            if isinstance(block, (TextBlock, ThinkingBlock)):
-                stripped.append(block)
-        if stripped:
-            if entry.role == "assistant":
-                cloned.add_assistant_message(stripped)
-            else:
-                cloned.add_user_blocks(stripped)
 
-    if not cloned.conversation_entries():
-        return None
+    if agent._chat is not None:
+        iface = agent._chat.interface
+        for entry in iface.entries:
+            if entry.role == "system":
+                continue
+            stripped: list = []
+            for block in entry.content:
+                if isinstance(block, (TextBlock, ThinkingBlock)):
+                    stripped.append(block)
+            if stripped:
+                if entry.role == "assistant":
+                    cloned.add_assistant_message(stripped)
+                else:
+                    cloned.add_user_blocks(stripped)
 
     # Build content — no timestamp here; _handle_request adds it when the
     # agent processes the [inner voice] message from the inbox.
@@ -142,7 +137,6 @@ def whisper(agent) -> dict | None:
             model=agent._config.model or agent.service.model,
             thinking="high",
             tracked=False,
-            provider=agent._config.provider,
             interface=cloned,
         )
         response = session.send(content)

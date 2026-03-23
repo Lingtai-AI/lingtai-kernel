@@ -155,10 +155,15 @@ def _context_molt(agent, args: dict) -> dict:
     if hasattr(agent._session, "_compaction_warnings"):
         agent._session._compaction_warnings = 0
 
+    # Track molt count and persist to manifest
+    agent._molt_count += 1
+    agent._workdir.write_manifest(agent._build_manifest())
+
     agent._log(
         "eigen_molt",
         before_tokens=before_tokens,
         after_tokens=after_tokens,
+        molt_count=agent._molt_count,
     )
 
     return {
