@@ -16,9 +16,8 @@ class TestHeartbeatInit:
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         assert agent._heartbeat == 0.0
         assert agent._heartbeat_thread is None
@@ -29,9 +28,8 @@ class TestHeartbeatInit:
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._heartbeat = 1234567890.123
         status = agent.status()
@@ -45,9 +43,8 @@ class TestHeartbeatBeating:
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._start_heartbeat()
         time.sleep(2.5)
@@ -60,9 +57,8 @@ class TestHeartbeatBeating:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._start_heartbeat()
         agent._set_state(AgentState.ACTIVE, reason="test")
@@ -81,9 +77,8 @@ class TestHeartbeatFile:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         hb_file = agent._working_dir / ".agent.heartbeat"
         agent._start_heartbeat()
@@ -97,9 +92,8 @@ class TestHeartbeatFile:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         hb_file = agent._working_dir / ".agent.heartbeat"
         agent._start_heartbeat()
@@ -117,9 +111,8 @@ class TestHeartbeatFile:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         hb_file = agent._working_dir / ".agent.heartbeat"
         agent._start_heartbeat()
@@ -149,9 +142,8 @@ class TestAED:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
         agent._set_state(AgentState.STUCK)
@@ -170,9 +162,8 @@ class TestAED:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._start_heartbeat()
         agent._set_state(AgentState.ACTIVE, reason="test")
@@ -193,9 +184,8 @@ class TestAED:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._aed_pending = True
         agent._cpr_start = time.monotonic()
@@ -216,9 +206,8 @@ class TestAED:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._start_heartbeat()
         agent._set_state(AgentState.ACTIVE, reason="test")
@@ -243,9 +232,8 @@ class TestHeartbeatDead:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
         agent._set_state(AgentState.STUCK)
@@ -263,9 +251,8 @@ class TestHeartbeatDead:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._state = AgentState.DORMANT
         status = agent.status()

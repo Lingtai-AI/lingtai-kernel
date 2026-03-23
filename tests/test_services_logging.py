@@ -124,9 +124,8 @@ class TestBaseAgentLoggingIntegration:
 
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent.add_tool("greet", schema={"type": "object", "properties": {}}, handler=lambda args: {"status": "ok"})
 
@@ -162,9 +161,8 @@ class TestBaseAgentLoggingIntegration:
 
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent.add_tool("greet", schema={"type": "object", "properties": {}}, handler=lambda args: {"status": "ok"})
 
@@ -193,9 +191,8 @@ class TestBaseAgentLoggingIntegration:
         """State transitions are logged."""
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
 

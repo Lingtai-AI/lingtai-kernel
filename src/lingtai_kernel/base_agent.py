@@ -78,11 +78,10 @@ class BaseAgent:
         service: LLMService,
         *,
         agent_name: str | None = None,
-        agent_id: str,
+        working_dir: str | Path,
         file_io: Any | None = None,
         mail_service: Any | None = None,
         config: AgentConfig | None = None,
-        base_dir: str | Path,
         context: Any = None,
         admin: dict | None = None,
         streaming: bool = False,
@@ -90,7 +89,6 @@ class BaseAgent:
         memory: str = "",
     ):
         self.agent_name = agent_name
-        self.agent_id = agent_id
         self.service = service
         self._config = config or AgentConfig()
         self._context = context
@@ -99,11 +97,8 @@ class BaseAgent:
         self._started_at: str = ""
         self._uptime_anchor: float | None = None  # set in start(), None means not started
 
-        # Base directory (shared root) and working directory (per-agent)
-        self._base_dir = Path(base_dir)
-        if not self._base_dir.is_dir():
-            raise FileNotFoundError(f"base_dir does not exist: {self._base_dir}")
-        self._workdir = WorkingDir(base_dir=base_dir, agent_id=self.agent_id)
+        # Working directory (caller-owned path)
+        self._workdir = WorkingDir(working_dir)
         self._working_dir = self._workdir.path
 
         # LoggingService: always JSONL in working dir
@@ -179,7 +174,7 @@ class BaseAgent:
         try:
             billboard_dir = Path.home() / ".lingtai" / "billboard"
             billboard_dir.mkdir(parents=True, exist_ok=True)
-            self._billboard_path = billboard_dir / f"{self.agent_id}.json"
+            self._billboard_path = billboard_dir / f"{self._working_dir.name}.json"
             import json as _json, os as _os
             tmp = self._billboard_path.with_suffix(".tmp")
             tmp.write_text(_json.dumps(manifest_data, indent=2, ensure_ascii=False))
@@ -232,7 +227,6 @@ class BaseAgent:
         self._session = SessionManager(
             llm_service=service,
             config=self._config,
-            agent_id=self.agent_id,
             agent_name=agent_name,
             streaming=streaming,
             build_system_prompt_fn=self._build_system_prompt,
@@ -385,7 +379,7 @@ class BaseAgent:
         self._thread = threading.Thread(
             target=self._run_loop,
             daemon=True,
-            name=f"agent-{self.agent_id}",
+            name=f"agent-{self.agent_name or self._working_dir.name}",
         )
         self._thread.start()
         self._start_heartbeat()
@@ -498,7 +492,7 @@ class BaseAgent:
         self._cancel_soul_timer()
         self._soul_timer = threading.Timer(self._soul_delay, self._soul_whisper)
         self._soul_timer.daemon = True
-        self._soul_timer.name = f"soul-{self.agent_id}"
+        self._soul_timer.name = f"soul-{self.agent_name or self._working_dir.name}"
         self._soul_timer.start()
 
     def _cancel_soul_timer(self) -> None:
@@ -553,7 +547,7 @@ class BaseAgent:
         self._heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop,
             daemon=True,
-            name=f"heartbeat-{self.agent_id}",
+            name=f"heartbeat-{self.agent_name or self._working_dir.name}",
         )
         self._heartbeat_thread.start()
         self._log("heartbeat_start")
@@ -655,7 +649,7 @@ class BaseAgent:
         if self._log_service:
             self._log_service.log({
                 "type": event_type,
-                "agent_id": self.agent_id,
+                "address": str(self._working_dir),
                 "agent_name": self.agent_name,
                 "ts": time.time(),
                 **fields,
@@ -1037,10 +1031,9 @@ class BaseAgent:
         Contains everything the agent knows about itself.
         """
         data = {
-            "agent_id": self.agent_id,
             "agent_name": self.agent_name,
+            "address": str(self._working_dir),
             "started_at": self._started_at,
-            "working_dir": str(self._working_dir),
             "admin": self._admin,
             "language": self._config.language,
             "vigil": self._config.vigil,
@@ -1199,7 +1192,7 @@ class BaseAgent:
             remaining = max(0.0, self._config.vigil - elapsed)
             vigil_left = round(remaining, 1)
         return {
-            "agent_id": self.agent_id,
+            "address": str(self._working_dir),
             "agent_name": self.agent_name,
             "agent_type": self.agent_type,
             "state": self._state.value,

@@ -33,15 +33,9 @@ _MANIFEST_FILE = ".agent.json"
 class WorkingDir:
     """Manages an agent's working directory — locking, git, manifest."""
 
-    def __init__(self, base_dir: Path | str, agent_id: str) -> None:
-        if not agent_id or "/" in agent_id or "\\" in agent_id:
-            raise ValueError(
-                f"agent_id must be a non-empty path-safe string, got: {agent_id!r}"
-            )
-        self._base_dir = Path(base_dir)
-        self._agent_id = agent_id
-        self._path = self._base_dir / agent_id
-        self._path.mkdir(exist_ok=True)
+    def __init__(self, working_dir: Path | str) -> None:
+        self._path = Path(working_dir)
+        self._path.mkdir(parents=True, exist_ok=True)
         self._lock_file: Any = None
 
     @property

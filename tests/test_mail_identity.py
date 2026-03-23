@@ -19,7 +19,6 @@ from lingtai_kernel.intrinsics import mail as mail_mod
 def _make_agent(tmp_path: Path, *, agent_name: str | None = None, admin: dict | None = None):
     """Build a minimal mock agent with working dir and manifest."""
     agent = MagicMock()
-    agent.agent_id = "aabbccddee01"
     agent.agent_name = agent_name
     agent._working_dir = tmp_path
     agent._config = MagicMock()
@@ -33,7 +32,6 @@ def _make_agent(tmp_path: Path, *, agent_name: str | None = None, admin: dict | 
 
     def _build_manifest():
         data = {
-            "agent_id": agent.agent_id,
             "agent_name": agent.agent_name,
             "started_at": agent._started_at,
             "working_dir": str(agent._working_dir),
@@ -86,7 +84,6 @@ class TestIdentityOnSend:
         assert "identity" in payload
 
         identity = payload["identity"]
-        assert identity["agent_id"] == "aabbccddee01"
         assert identity["agent_name"] == "alice"
         assert identity["admin"] == {"karma": True, "nirvana": False}
         assert identity["language"] == "en"
@@ -112,7 +109,6 @@ class TestIdentityOnSend:
 
         identity = written_payloads[0]["identity"]
         assert identity["agent_name"] is None
-        assert identity["agent_id"] == "aabbccddee01"
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +126,7 @@ class TestIdentityInCheck:
             "subject": "hello",
             "message": "body",
             "identity": {
-                "agent_id": "sender123456",
+                "address": "/agents/sender123456",
                 "agent_name": "bob",
                 "admin": {"karma": False, "nirvana": False},
             },
@@ -164,7 +160,7 @@ class TestIdentityInCheck:
             "subject": "nameless",
             "message": "body",
             "identity": {
-                "agent_id": "sender123456",
+                "address": "/agents/sender123456",
                 "agent_name": None,
                 "admin": {},
             },
@@ -187,11 +183,10 @@ class TestIdentityInRead:
         """Full read should include the identity card."""
         agent = _make_agent(tmp_path)
         identity = {
-            "agent_id": "sender123456",
+            "address": "/sender/path",
             "agent_name": "carol",
             "admin": {"karma": True, "nirvana": False},
             "language": "zh",
-            "address": "/sender/path",
         }
         payload = {
             "from": "/sender/path",
@@ -249,7 +244,7 @@ class TestIdentityInNotification:
             "subject": "greetings",
             "message": "hello from dave",
             "identity": {
-                "agent_id": "dave12345678",
+                "address": "/agents/dave12345678",
                 "agent_name": "dave",
                 "admin": {"karma": False, "nirvana": False},
             },

@@ -1,9 +1,8 @@
-"""LLM protocol layer — adapter ABCs, session management, provider-agnostic types."""
-from .base import LLMAdapter, ChatSession, LLMResponse, ToolCall, FunctionSchema
+"""LLM protocol layer — session ABC, service ABC, provider-agnostic types."""
+from .base import ChatSession, LLMResponse, ToolCall, FunctionSchema
 from .service import LLMService
 
 __all__ = [
-    "LLMAdapter",
     "ChatSession",
     "LLMResponse",
     "ToolCall",

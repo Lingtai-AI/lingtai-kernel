@@ -200,9 +200,9 @@ def _message_summary(msg: dict, read_ids: set[str]) -> dict:
 # ---------------------------------------------------------------------------
 
 def _is_self_send(agent, address: str) -> bool:
-    """Check if the address matches this agent's own address or agent_id."""
-    # Match by agent_id (works even without mail service)
-    if address == agent.agent_id:
+    """Check if the address matches this agent's own address (working dir path)."""
+    # Match by working directory path
+    if address == str(agent._working_dir):
         return True
     # Match by mail service address
     if agent._mail_service is not None and agent._mail_service.address:
@@ -291,20 +291,6 @@ def _mailman(agent, msg_id: str, payload: dict, deliver_at: datetime,
     if isinstance(address, list):
         address = address[0] if address else ""
 
-    # Look up expected_agent_id from contacts for delivery verification
-    contacts_path = _mailbox_dir(agent) / "contacts.json"
-    expected_id = None
-    if contacts_path.is_file():
-        try:
-            import json as _json
-            contacts = _json.loads(contacts_path.read_text())
-            for c in contacts:
-                if c.get("address") == address:
-                    expected_id = c.get("agent_id")
-                    break
-        except (json.JSONDecodeError, OSError):
-            pass
-
     err = None
     try:
         if _is_self_send(agent, address):
@@ -312,7 +298,7 @@ def _mailman(agent, msg_id: str, payload: dict, deliver_at: datetime,
             agent._mail_arrived.set()
             status = "delivered"
         elif agent._mail_service is not None:
-            err = agent._mail_service.send(address, payload, expected_agent_id=expected_id)
+            err = agent._mail_service.send(address, payload)
             status = "delivered" if err is None else "refused"
         else:
             err = f"No mail service configured"
@@ -363,7 +349,7 @@ def _send(agent, args: dict) -> dict:
         return {"error": "address is required"}
 
     payload = {
-        "from": (agent._mail_service.address if agent._mail_service is not None and agent._mail_service.address else agent.agent_id),
+        "from": (agent._mail_service.address if agent._mail_service is not None and agent._mail_service.address else str(agent._working_dir)),
         "to": address,
         "subject": subject,
         "message": message_text,

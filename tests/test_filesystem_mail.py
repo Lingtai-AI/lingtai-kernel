@@ -8,12 +8,11 @@ from pathlib import Path
 import pytest
 
 
-def _make_agent_dir(base: Path, agent_id: str) -> Path:
+def _make_agent_dir(base: Path, name: str) -> Path:
     """Create a minimal agent working dir with .agent.json and fresh heartbeat."""
-    d = base / agent_id
+    d = base / name
     d.mkdir()
     (d / ".agent.json").write_text(json.dumps({
-        "agent_id": agent_id,
         "agent_name": "test",
     }))
     (d / ".agent.heartbeat").write_text(str(time.time()))
@@ -115,22 +114,6 @@ class TestSend:
         assert result is not None
         assert "not running" in result.lower()
 
-    def test_send_fails_agent_id_mismatch(self, tmp_path):
-        from lingtai_kernel.services.mail import FilesystemMailService
-
-        sender_dir = _make_agent_dir(tmp_path, "sender01")
-        recip_dir = _make_agent_dir(tmp_path, "recip01")
-        (recip_dir / "mailbox" / "inbox").mkdir(parents=True)
-
-        svc = FilesystemMailService(sender_dir, mailbox_rel="mailbox")
-        result = svc.send(
-            str(recip_dir),
-            {"message": "hello"},
-            expected_agent_id="wrong_id",
-        )
-        assert result is not None
-        assert "changed" in result.lower()
-
     def test_send_self(self, tmp_path):
         """Send to own address should work (self-send)."""
         from lingtai_kernel.services.mail import FilesystemMailService
@@ -170,7 +153,6 @@ class TestSend:
         recip_dir = tmp_path / "recip01"
         recip_dir.mkdir()
         (recip_dir / ".agent.json").write_text(json.dumps({
-            "agent_id": "recip01",
             "agent_name": "test",
         }))
         # No .agent.heartbeat file

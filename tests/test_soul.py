@@ -193,9 +193,8 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         assert agent._soul_delay == 120.0
         assert agent._soul_prompt == ""
@@ -207,10 +206,9 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
             config=AgentConfig(soul_delay=99999.0, vigil=100.0),
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         assert agent._soul_delay == 99999.0
 
@@ -218,9 +216,8 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._soul_delay = 1.0
         agent._set_state(AgentState.ACTIVE, reason="test")
@@ -233,10 +230,9 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
             config=AgentConfig(soul_delay=99999.0, vigil=100.0),
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
         agent._set_state(AgentState.IDLE, reason="done")
@@ -247,10 +243,9 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
             config=AgentConfig(soul_delay=99999.0, vigil=100.0),
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._soul_oneshot = True
         agent._soul_prompt = "Am I stuck?"
@@ -263,9 +258,8 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._soul_delay = 300.0
         agent._set_state(AgentState.ACTIVE, reason="test")
@@ -279,10 +273,9 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
             config=AgentConfig(soul_delay=60.0),
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         assert agent._soul_delay == 60.0
 
@@ -291,10 +284,9 @@ class TestSoulTimer:
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
             config=AgentConfig(soul_delay=-10.0),
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         assert agent._soul_delay == 1.0
 
@@ -305,9 +297,8 @@ class TestSoulCleanup:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._soul_delay = 300.0
         agent._set_state(AgentState.ACTIVE, reason="test")
@@ -327,9 +318,8 @@ class TestSoulIntegration:
         svc = make_mock_service()
         agent = BaseAgent(
             service=svc,
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
 
         iface = ChatInterface()
@@ -380,10 +370,9 @@ class TestSoulIntegration:
         svc = make_mock_service()
         agent = BaseAgent(
             service=svc,
-            agent_id="test",
             agent_name="test",
             config=AgentConfig(soul_delay=99999.0, vigil=100.0),
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
 
         iface = ChatInterface()
@@ -427,9 +416,8 @@ class TestSoulIntegration:
         svc = make_mock_service()
         agent = BaseAgent(
             service=svc,
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._soul_delay = 0.1
 
@@ -443,9 +431,8 @@ class TestSoulIntegration:
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
-            agent_id="test",
             agent_name="test",
-            base_dir=tmp_path,
+            working_dir=tmp_path / "test_agent",
         )
         agent._soul_delay = 1.0
         agent._shutdown.set()

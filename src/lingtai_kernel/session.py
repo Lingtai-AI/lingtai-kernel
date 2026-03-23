@@ -39,7 +39,6 @@ class SessionManager:
         *,
         llm_service: LLMService,
         config: AgentConfig,
-        agent_id: str,
         agent_name: str | None = None,
         streaming: bool,
         build_system_prompt_fn: Callable[[], str],
@@ -48,9 +47,8 @@ class SessionManager:
     ):
         self._llm_service = llm_service
         self._config = config
-        self._agent_id = agent_id
         self._agent_name = agent_name
-        self._display_name = agent_name or agent_id
+        self._display_name = agent_name or "agent"
         self._streaming = streaming
         self._build_system_prompt_fn = build_system_prompt_fn
         self._build_tool_schemas_fn = build_tool_schemas_fn

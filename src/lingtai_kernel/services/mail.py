@@ -35,8 +35,6 @@ class MailService(ABC):
         self,
         address: str,
         message: dict,
-        *,
-        expected_agent_id: str | None = None,
     ) -> str | None:
         """Send a message to an address. Returns None on success, error string on failure.
 
@@ -49,9 +47,6 @@ class MailService(ABC):
             Recipient's address (working directory path).
         message:
             Payload dict to deliver.
-        expected_agent_id:
-            If set, verify the recipient's .agent.json ``agent_id`` matches.
-            On mismatch return an error (the agent at that address has changed).
         """
         ...
 
@@ -122,15 +117,12 @@ class FilesystemMailService(MailService):
         self,
         address: str,
         message: dict,
-        *,
-        expected_agent_id: str | None = None,
     ) -> str | None:
         """Deliver *message* to the agent at *address*.
 
         Handshake:
         1. ``{address}/.agent.json`` must exist.
-        2. If *expected_agent_id* is given, its ``agent_id`` must match.
-        3. ``{address}/.agent.heartbeat`` must be fresh (< 2 s).
+        2. ``{address}/.agent.heartbeat`` must be fresh (< 2 s).
 
         Then write ``message.json`` atomically into the recipient's inbox
         and copy any attachment files.
@@ -140,14 +132,6 @@ class FilesystemMailService(MailService):
         # --- handshake ------------------------------------------------
         if not is_agent(address):
             return f"No agent at {address}"
-
-        if expected_agent_id is not None:
-            try:
-                agent_meta = manifest(address)
-            except (json.JSONDecodeError, OSError):
-                return f"Cannot read agent metadata at {address}"
-            if agent_meta.get("agent_id") != expected_agent_id:
-                return f"Agent at {address} has changed"
 
         if not is_alive(address):
             return f"Agent at {address} is not running"
