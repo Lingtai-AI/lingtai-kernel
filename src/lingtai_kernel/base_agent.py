@@ -790,34 +790,25 @@ class BaseAgent:
         cap_managers = getattr(self, "_capability_managers", {})
         has_molt = "eigen" in self._intrinsics or "psyche" in cap_managers
         pressure = self._session.get_context_pressure()
-        if pressure >= 0.8 and has_molt:
-            # Detect tool name: psyche if capability registered, else eigen
-            tool_name = "psyche" if "psyche" in cap_managers else "eigen"
+        if pressure >= self._config.molt_pressure and has_molt:
+            max_warnings = self._config.molt_warnings
             self._session._compaction_warnings += 1
             warnings = self._session._compaction_warnings
-            if warnings > 5:
-                # Auto-forget — agent ignored 5 warnings
-                self._log("auto_forget", reason="ignored 5 molt warnings", pressure=pressure)
+            remaining = max(0, max_warnings - warnings)
+            if warnings > max_warnings:
+                # Auto-forget — agent ignored all warnings
+                self._log("auto_forget", reason=f"ignored {max_warnings} molt warnings", pressure=pressure)
                 from .intrinsics import eigen as _eigen
                 _eigen.context_forget(self)
                 self._session._compaction_warnings = 0
                 content = (
                     f"{_t(self._config.language, 'system.molt_wiped')}\n\n{content}"
                 )
-            elif warnings == 5:
-                content = (
-                    f"{_t(self._config.language, 'system.molt_final', pressure=f'{pressure:.0%}', tool=tool_name)}\n\n{content}"
-                )
-            elif warnings >= 3:
-                remaining = 5 - warnings
-                content = (
-                    f"{_t(self._config.language, 'system.molt_urgent', pressure=f'{pressure:.0%}', remaining=remaining, turns='turn' if remaining == 1 else 'turns', tool=tool_name)}\n\n{content}"
-                )
             else:
-                remaining = 5 - warnings
-                content = (
-                    f"{_t(self._config.language, 'system.molt_warning', pressure=f'{pressure:.0%}', remaining=remaining, tool=tool_name)}\n\n{content}"
-                )
+                # User prompt + mechanical data
+                molt_prompt = self._config.molt_prompt or _t(self._config.language, 'system.molt_warning_default')
+                status = f"[context: {pressure:.0%} | {remaining}/{max_warnings}]"
+                content = f"{molt_prompt}\n{status}\n\n{content}"
 
         content = f"{_t(self._config.language, 'system.current_time', time=current_time)}\n\n{content}"
         self._log("text_input", text=content)

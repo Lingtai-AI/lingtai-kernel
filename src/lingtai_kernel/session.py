@@ -284,7 +284,8 @@ class SessionManager:
         """Return context usage as fraction (0.0 to 1.0). Returns 0.0 if unknown."""
         if self._chat is None:
             return 0.0
-        ctx_window = self._chat.context_window()
+        # Use configured context_limit if set, otherwise model default
+        ctx_window = self._config.context_limit or self._chat.context_window()
         if ctx_window <= 0:
             return 0.0
         estimate = self._chat.interface.estimate_context_tokens()

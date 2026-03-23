@@ -23,4 +23,8 @@ class AgentConfig:
     soul_delay: float = 120.0  # seconds idle before soul whispers; large value (> vigil) = effectively off
     language: str = "en"  # agent language ("en", "zh"); controls all kernel-injected strings
     vigil: float = 3600.0  # agent vigil in seconds; set at birth, not changeable by the agent
+    context_limit: int | None = None  # max context tokens; None = use model default
+    molt_pressure: float = 0.8  # context usage fraction that triggers molt warnings (0.0–1.0)
+    molt_warnings: int = 5  # number of warnings before auto-wipe
+    molt_prompt: str = ""  # user-provided instruction for how to prepare for molt
     ensure_ascii: bool = False  # JSON output: False = readable unicode, True = \uXXXX escapes

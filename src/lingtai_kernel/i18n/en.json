@@ -3,10 +3,8 @@
     "system.new_mail": "[system] New message in {box}.\n  From: {sender}\n  Subject: {subject}\n  Sent at: {sent_at}\n  {preview}...\nUse {tool}(action=\"check\") to see your inbox.",
   "system.mail_bounce": "[system] Mail delivery failed: {error}\n  To: {address}\n  Subject: {subject}",
   "system.stuck_revive": "[system] You were stuck at {ts}, reviving...",
-  "system.molt_wiped": "[system] Your conversation history was wiped because you ignored 5 molt warnings. Check your email inbox and library for context. Start fresh.",
-  "system.molt_final": "[system] FINAL — countdown 0. Context {pressure} full. Molt NOW or lose everything next turn. Write your briefing: what you're doing, what's done, what's pending, which library entries to load. {tool}(object=context, action=molt, summary=<briefing>).",
-  "system.molt_urgent": "[system] Context pressure: {pressure} full — countdown {remaining} {turns} until auto-wipe. Deposit important data to library NOW ({tool} submit), then molt. Your molt summary is a briefing to your future self — the ONLY context you will have.",
-  "system.molt_warning": "[system] Context pressure: {pressure} full — countdown {remaining} turns until auto-wipe. Start tidying up: save important findings to library ({tool} submit). When ready, molt with a briefing to your future self: {tool}(object=context, action=molt, summary=<briefing>). Your summary is the ONLY thing you will see after molt — include what you're doing, what's done, what's pending, and which library entries to load.",
+  "system.molt_wiped": "[system] Conversation wiped — you ignored all molt warnings. Use your tools to recover context. Start fresh.",
+  "system.molt_warning_default": "[system] Context filling up. Use your tools to save important data, then molt with a briefing to your future self.",
 
   "soul.description": "Your soul — two modes. Flow: your subconscious reacts to your last thought, arrives as plain text. Continuous, automatic, evolves each cycle. Inquiry: ask yourself a question, get the answer in the tool result. 'delay' adjusts how often flow speaks.",
   "soul.action_description": "inquiry: one-shot self-directed question — fires once on next idle. Requires 'inquiry' parameter. delay: adjust how long to wait after going idle before the soul whispers. Requires 'delay' parameter.",
