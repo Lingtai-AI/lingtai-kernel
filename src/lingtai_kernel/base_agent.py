@@ -513,9 +513,9 @@ class BaseAgent:
             self._log("soul_whisper_error", error=str(e))
 
     def _persist_soul_entry(self, result: dict) -> None:
-        """Append a soul whisper entry to system/soul.jsonl and git-track it."""
+        """Append a soul whisper entry to logs/soul.jsonl."""
         from datetime import datetime, timezone
-        soul_file = self._working_dir / "system" / "soul.jsonl"
+        soul_file = self._working_dir / "logs" / "soul.jsonl"
         soul_file.parent.mkdir(exist_ok=True)
         entry = json.dumps({
             "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -525,7 +525,6 @@ class BaseAgent:
         }, ensure_ascii=False)
         with open(soul_file, "a") as f:
             f.write(entry + "\n")
-        self._workdir.diff_and_commit("system/soul.jsonl", "soul")
 
     # ------------------------------------------------------------------
     # Heartbeat — always-on health monitor (involuntary)
