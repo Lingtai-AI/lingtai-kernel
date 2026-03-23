@@ -2,13 +2,17 @@
 
 > [English](README.md) | [中文](README.zh.md) | [文言](README.wen.md)
 
+> *灵台者有持，而不知其所持，而不可持者也。*
+> *The spirit platform holds something, yet knows not what it holds — and what it holds cannot be held by force.*
+> — 庄子·庚桑楚
+
 Minimal agent kernel — think, communicate, remember, host tools.
 
 ## Philosophy
 
-In Chinese philosophy, **灵台** (Língtái) is the dwelling place of the soul — where consciousness resides. Zhuangzi writes: *"Do not disturb the spirit platform (灵台)."*
+**灵台**，心也 — the spirit platform is the mind. In Zhuangzi, it is where consciousness dwells: a place that naturally holds everything the soul needs, without knowing what it holds, and without forcing it.
 
-In this framework, the agent's 灵台 is its **working directory** — a folder on disk where memory, covenant, identity, and mailbox live. The directory IS the agent. Give the kernel a folder and an LLM service, it brings the agent to life. Take the folder away, the agent ceases to exist.
+In this framework, the agent's 灵台 is its **working directory** — a folder on disk where memory, covenant, identity, and mailbox live. The directory IS the agent. Give the kernel a folder and an LLM service, it brings the agent to life. Take the folder away, the agent ceases to exist. The kernel holds the agent's world, but does not interpret it — like the 灵台 of Zhuangzi, it holds without knowing what it holds.
 
 This kernel follows Unix design:
 
