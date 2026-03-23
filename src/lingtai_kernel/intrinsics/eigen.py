@@ -74,7 +74,7 @@ def handle(agent, args: dict) -> dict:
 
 
 def _memory_edit(agent, args: dict) -> dict:
-    """Write content to system/memory.md."""
+    """Write content to system/memory.md and auto-load into system prompt."""
     content = args.get("content", "")
 
     system_dir = agent._working_dir / "system"
@@ -83,6 +83,10 @@ def _memory_edit(agent, args: dict) -> dict:
     mem_path.write_text(content)
 
     agent._log("eigen_memory_edit", length=len(content))
+
+    # Auto-load into system prompt
+    _memory_load(agent, {})
+
     return {"status": "ok", "path": str(mem_path), "size_bytes": len(content.encode("utf-8"))}
 
 

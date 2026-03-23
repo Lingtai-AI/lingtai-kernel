@@ -25,7 +25,7 @@
 
   "eigen.description": "核心自治——工作笔记与上下文之管。memory：edit 写入工作笔记（system/memory.md），load 将其载入当前意识。context：molt 转世（凝蜕——去芜存菁；molt——shed and carry forward）。凝以存菁，蜕以去芜。先将要务存入藏经与心印，再留前尘往事于来世之己。对话之录尽数清去，汝之前尘往事成为新起之上下文。",
   "eigen.object_description": "memory：汝之工作笔记（system/memory.md）。context：管理对话上下文。name：汝之真名（一設不易）。",
-  "eigen.action_description": "memory：edit | load。\ncontext：molt。\nname：set。",
+  "eigen.action_description": "memory：edit | load。edit 自动 load。\ncontext：molt。\nname：set。",
   "eigen.content_description": "用于 memory edit 之文本。",
   "eigen.summary_description": "用于 context molt：留予来世之己之前尘往事——转世后汝唯一可见者。载明所为何事、所得何物、尚余何务、与谁协作。约一万 token 为上限。",
 
