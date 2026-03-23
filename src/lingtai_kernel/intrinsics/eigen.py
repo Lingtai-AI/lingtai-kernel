@@ -159,6 +159,10 @@ def _context_molt(agent, args: dict) -> dict:
     agent._molt_count += 1
     agent._workdir.write_manifest(agent._build_manifest())
 
+    # Reset soul mirror session — start fresh after molt
+    from .soul import reset_soul_session
+    reset_soul_session(agent)
+
     agent._log(
         "eigen_molt",
         before_tokens=before_tokens,

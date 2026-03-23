@@ -1,8 +1,11 @@
 """Soul intrinsic — the agent's inner voice.
 
 Two modes:
-    flow    — text completion from serialized thinking+diary. Stateless, automatic.
-    inquiry — mirror session with cloned conversation. Sync, on-demand.
+    flow    — persistent mirrored chat. Agent's diary becomes soul's input,
+              soul's response becomes agent's input. Shares the principle
+              section of the system prompt. Automatic, continuous.
+    inquiry — sync mirror session. Clones conversation (text+thinking only),
+              sends question, returns answer in tool result. On-demand.
 
 Actions:
     inquiry — ask yourself a question, get the answer in the tool result
@@ -79,7 +82,6 @@ def handle(agent, args: dict) -> dict:
         old = agent._soul_delay
         agent._soul_delay = delay
         agent._log("soul_delay", old=old, new=delay)
-        # Persist to .agent.json
         agent._workdir.write_manifest(agent._build_manifest())
         return {"status": "ok", "delay": delay}
 
@@ -104,90 +106,108 @@ def _send_with_timeout(agent, session, content: str):
         return None
 
 
-def soul_flow(agent) -> dict | None:
-    """Flow mode — mirrored chat session with roles swapped.
+def _get_principle(agent) -> str:
+    """Extract the principle section from the agent's prompt manager."""
+    content = agent._prompt_manager.read_section("principle")
+    return content or ""
 
-    The soul sees the agent's diary as [user] input and the agent's
-    [user] input as [assistant] output. A true mirror — the soul IS
-    the agent's reflection. The static soul prompt is sent as the
-    final message to keep the conversation going.
+
+def _collect_new_diary(agent) -> str:
+    """Collect diary text (assistant entries) since the last soul whisper.
+
+    Uses agent._soul_cursor to track how far we've read.
+    Returns squashed text of all new diary entries, or empty string.
     """
-    from ..llm.interface import ChatInterface, TextBlock, ThinkingBlock
+    from ..llm.interface import TextBlock, ThinkingBlock
 
-    # Build mirrored interface: swap user ↔ assistant, keep only text+thinking.
-    # Collect entries first, then strip the last assistant (diary) to use as prompt.
-    entries: list[tuple[str, list]] = []
+    if agent._chat is None:
+        return ""
 
-    if agent._chat is not None:
-        for entry in agent._chat.interface.entries:
-            if entry.role == "system":
-                continue
-            stripped: list = []
-            for block in entry.content:
-                if isinstance(block, (TextBlock, ThinkingBlock)) and block.text:
-                    stripped.append(block)
-            if stripped:
-                entries.append((entry.role, stripped))
+    entries = agent._chat.interface.entries
+    cursor = getattr(agent, "_soul_cursor", 0)
+    parts: list[str] = []
 
-    # Extract last diary as the prompt — the soul responds to this
-    last_diary = ""
-    if entries and entries[-1][0] == "assistant":
-        _, last_blocks = entries.pop()
-        for block in last_blocks:
+    for i in range(cursor, len(entries)):
+        entry = entries[i]
+        if entry.role != "assistant":
+            continue
+        for block in entry.content:
             if isinstance(block, TextBlock) and block.text:
-                last_diary = block.text
-                break
+                parts.append(block.text)
 
-    # Mirror remaining entries into the interface
-    mirrored = ChatInterface()
-    has_entries = False
-    for role, blocks in entries:
-        has_entries = True
-        if role == "user":
-            mirrored.add_assistant_message(blocks)
-        elif role == "assistant":
-            mirrored.add_user_blocks(blocks)
+    # Update cursor to current end
+    agent._soul_cursor = len(entries)
 
-    # Prompt: last diary, or static nudge if no diary yet
-    if last_diary:
-        content = last_diary
-    else:
-        from ..prompt import get_soul_prompt
-        content = get_soul_prompt(agent._config.language).format(
-            seconds=int(agent._soul_delay)
-        )
+    return "\n\n".join(parts)
 
-    # Mirrored session: no system prompt, no tools
+
+def _ensure_soul_session(agent):
+    """Get or create the persistent soul mirror session."""
+    if getattr(agent, "_soul_session", None) is not None:
+        return agent._soul_session
+
+    principle = _get_principle(agent)
+
     try:
-        session = agent.service.create_session(
-            system_prompt="",
+        agent._soul_session = agent.service.create_session(
+            system_prompt=principle,
             tools=None,
             model=agent._config.model or agent.service.model,
             thinking="high",
             tracked=False,
-            interface=mirrored if has_entries else None,
         )
     except Exception as e:
-        agent._log("soul_whisper_error", error=str(e)[:200])
+        agent._log("soul_whisper_error", error=f"Failed to create soul session: {e}")
+        agent._soul_session = None
+
+    return agent._soul_session
+
+
+def soul_flow(agent) -> dict | None:
+    """Flow mode — persistent mirrored chat.
+
+    Agent's diary → squashed into one message → sent to the soul session.
+    Soul responds → injected into agent's inbox as plain text.
+
+    The soul session persists across cycles. It shares the principle
+    section of the system prompt but has no tools, no covenant, no identity.
+    """
+    # Collect new diary entries since last whisper
+    diary = _collect_new_diary(agent)
+
+    if not diary:
+        # No new diary — use static nudge
+        from ..prompt import get_soul_prompt
+        diary = get_soul_prompt(agent._config.language).format(
+            seconds=int(agent._soul_delay)
+        )
+
+    session = _ensure_soul_session(agent)
+    if session is None:
         return None
 
-    response = _send_with_timeout(agent, session, content)
+    response = _send_with_timeout(agent, session, diary)
     if not response or not response.text:
         return None
 
     return {
-        "prompt": content[:500],
+        "prompt": diary[:500],
         "voice": response.text,
         "thinking": response.thoughts or [],
     }
 
 
+def reset_soul_session(agent) -> None:
+    """Reset the persistent soul session (called on molt)."""
+    agent._soul_session = None
+    agent._soul_cursor = 0
+
+
 def soul_inquiry(agent, question: str) -> dict | None:
-    """Inquiry mode — mirror session with cloned conversation.
+    """Inquiry mode — one-shot mirror session with cloned conversation.
 
     Clones the agent's conversation (thinking + diary only, no tool
-    calls/results), sends the question. The soul has full context to
-    give a meaningful answer.
+    calls/results), sends the question. Fresh session each time.
     """
     from ..llm.interface import ChatInterface, TextBlock, ThinkingBlock
 
@@ -207,10 +227,11 @@ def soul_inquiry(agent, question: str) -> dict | None:
                 else:
                     cloned.add_user_blocks(stripped)
 
-    # Mirror session: no system prompt, no tools, cloned history
+    principle = _get_principle(agent)
+
     try:
         session = agent.service.create_session(
-            system_prompt="",
+            system_prompt=principle,
             tools=None,
             model=agent._config.model or agent.service.model,
             thinking="high",
