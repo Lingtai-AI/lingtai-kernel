@@ -160,10 +160,10 @@ def whisper(agent) -> dict | None:
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
     timeout = agent._config.retry_timeout
 
-    system_prompt = agent._build_system_prompt()
+    # Soul clone: no system prompt, no tools. Pure text reflection.
     try:
         session = agent.service.create_session(
-            system_prompt=system_prompt,
+            system_prompt="",
             tools=None,
             model=agent._config.model or agent.service.model,
             thinking="high",
