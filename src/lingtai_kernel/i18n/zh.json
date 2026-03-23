@@ -4,7 +4,7 @@
   "system.mail_bounce": "[系统] 消息投递失败：{error}\n  收件人：{address}\n  主题：{subject}",
   "system.stuck_revive": "[系统] 你在 {ts} 陷入困境，正在恢复…",
   "system.molt_wiped": "[系统] 对话已清除——你忽略了所有凝蜕警告。用你的工具恢复上下文，重新开始。",
-  "system.molt_warning_default": "[系统] 上下文将满。用你的工具保存重要数据，然后写前尘往事给来世之己，凝蜕。",
+  "system.molt_warning_default": "上下文将满。用你的工具保存重要数据，然后写前尘往事给来世之己，凝蜕。",
 
   "soul.description": "你的灵魂——两种模式。心流：潜意识回应你的上一个想法，以纯文本到达。持续、自动、每轮演进。内省：向自己提问，答案在工具结果中返回。'delay' 调整心流的频率。",
   "soul.action_description": "inquiry：一次性自我提问——在下次空闲时触发。需要 'inquiry' 参数。delay：调整空闲后内心独白开始前的等待时间。需要 'delay' 参数。",

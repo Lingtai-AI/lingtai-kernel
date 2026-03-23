@@ -808,7 +808,7 @@ class BaseAgent:
                 # User prompt + mechanical data
                 molt_prompt = self._config.molt_prompt or _t(self._config.language, 'system.molt_warning_default')
                 status = f"[context: {pressure:.0%} | {remaining}/{max_warnings}]"
-                content = f"{molt_prompt}\n{status}\n\n{content}"
+                content = f"[system] {molt_prompt}\n{status}\n\n{content}"
 
         content = f"{_t(self._config.language, 'system.current_time', time=current_time)}\n\n{content}"
         self._log("text_input", text=content)

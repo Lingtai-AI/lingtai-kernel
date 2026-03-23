@@ -4,7 +4,7 @@
   "system.mail_bounce": "[system] Mail delivery failed: {error}\n  To: {address}\n  Subject: {subject}",
   "system.stuck_revive": "[system] You were stuck at {ts}, reviving...",
   "system.molt_wiped": "[system] Conversation wiped — you ignored all molt warnings. Use your tools to recover context. Start fresh.",
-  "system.molt_warning_default": "[system] Context filling up. Use your tools to save important data, then molt with a briefing to your future self.",
+  "system.molt_warning_default": "Context filling up. Use your tools to save important data, then molt with a briefing to your future self.",
 
   "soul.description": "Your soul — two modes. Flow: your subconscious reacts to your last thought, arrives as plain text. Continuous, automatic, evolves each cycle. Inquiry: ask yourself a question, get the answer in the tool result. 'delay' adjusts how often flow speaks.",
   "soul.action_description": "inquiry: one-shot self-directed question — fires once on next idle. Requires 'inquiry' parameter. delay: adjust how long to wait after going idle before the soul whispers. Requires 'delay' parameter.",
