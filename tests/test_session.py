@@ -226,10 +226,10 @@ def test_on_reset_passes_interface_to_new_session():
     svc.create_session.return_value = MagicMock()
     sm._on_reset(mock_chat, "failed")
 
-    # The new session should receive the interface for history continuity
-    call_kwargs = svc.create_session.call_args[1]
+    call_kwargs = svc.create_session.call_args.kwargs
     assert call_kwargs["interface"] is mock_iface
     assert call_kwargs["tracked"] is False
+    assert call_kwargs["system_prompt"] == "test prompt"
 
 
 # ------------------------------------------------------------------

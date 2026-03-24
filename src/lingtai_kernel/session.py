@@ -271,15 +271,7 @@ class SessionManager:
             and all(isinstance(b, ToolResultBlock) for b in e.content)
         )
 
-        self._chat = self._llm_service.create_session(
-            system_prompt=self._build_system_prompt_fn(),
-            tools=self._build_tool_schemas_fn() or None,
-            model=self._config.model or self._llm_service.model,
-            thinking="high",
-            tracked=False,
-            provider=self._config.provider,
-            interface=iface,
-        )
+        self._rebuild_session(iface, tracked=False)
         self._log("llm_reset", entries_kept=len(iface.entries))
 
         rollback_msg = (
