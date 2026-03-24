@@ -12,15 +12,15 @@ class AgentState(enum.Enum):
     ACTIVE --(timeout/exception)-> STUCK
     IDLE   --(inbox message)----> ACTIVE
     STUCK  --(AED)--------------> ACTIVE  (session reset, fresh run loop)
-    STUCK  --(AED timeout)------> DORMANT (sleep, listeners alive)
-    ACTIVE/IDLE --(quell)--------> DORMANT
-    DORMANT --(inbox message)---> ACTIVE  (wake from sleep)
-    DORMANT --(.suspend/SIGINT)-> SUSPENDED (process exits)
+    STUCK  --(AED timeout)------> ASLEEP  (sleep, listeners alive)
+    ACTIVE/IDLE --(sleep)-------> ASLEEP
+    ASLEEP --(inbox message)---> ACTIVE  (wake from sleep)
+    ASLEEP --(.suspend/SIGINT)-> SUSPENDED (process exits)
     SUSPENDED --(lingtai run)---> IDLE    (reconstructed from working dir)
     """
 
     ACTIVE = "active"
     IDLE = "idle"
     STUCK = "stuck"
-    DORMANT = "dormant"
+    ASLEEP = "asleep"
     SUSPENDED = "suspended"

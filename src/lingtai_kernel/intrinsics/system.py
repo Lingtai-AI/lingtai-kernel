@@ -4,10 +4,12 @@ Actions:
     show      — display agent identity, runtime, and resource usage
     nap       — pause execution; wakes on incoming message or timeout
     refresh   — stop, reload MCP servers and config from working dir, restart
-    quell     — self-quell (no address) or quell another agent (with address)
-    cpr       — resuscitate a suspended agent
-    interrupt — interrupt a running agent's current turn
-    nirvana   — permanently destroy an agent's working directory
+    sleep     — self only, go to sleep (no karma needed)
+    lull      — put another agent to sleep (requires karma)
+    suspend   — suspend another agent (requires nirvana)
+    cpr       — resuscitate a suspended agent (requires nirvana)
+    interrupt — interrupt a running agent's current turn (requires karma)
+    nirvana   — permanently destroy an agent's working directory (requires nirvana)
 """
 from __future__ import annotations
 
@@ -26,7 +28,7 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["show", "nap", "refresh", "quell", "cpr", "interrupt", "nirvana"],
+                "enum": ["show", "nap", "refresh", "sleep", "lull", "suspend", "cpr", "interrupt", "nirvana"],
                 "description": t(lang, "system_tool.action_description"),
             },
             "seconds": {
@@ -58,7 +60,9 @@ def handle(agent, args: dict) -> dict:
         "show": _show,
         "nap": _nap,
         "refresh": _refresh,
-        "quell": _quell,
+        "sleep": _sleep,
+        "lull": _lull,
+        "suspend": _suspend,
         "cpr": _cpr,
         "interrupt": _interrupt,
         "nirvana": _nirvana,
@@ -199,11 +203,11 @@ def _refresh(agent, args: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Karma gate mapping
+# Karma / Nirvana gate mapping
 # ---------------------------------------------------------------------------
 
-_KARMA_ACTIONS = {"interrupt", "quell", "cpr"}
-_NIRVANA_ACTIONS = {"nirvana"}
+_KARMA_ACTIONS = {"interrupt", "lull"}
+_NIRVANA_ACTIONS = {"nirvana", "suspend", "cpr"}
 
 
 def _check_karma_gate(agent, action: str, args: dict) -> dict | None:
@@ -222,32 +226,49 @@ def _check_karma_gate(agent, action: str, args: dict) -> dict | None:
     return None
 
 
-def _quell(agent, args: dict) -> dict:
+def _sleep(agent, args: dict) -> dict:
+    """Self-sleep — any agent can put itself to sleep, no karma needed."""
     from ..i18n import t
-    address = args.get("address")
-    if not address:
-        # Self-quell — any agent can put itself to sleep
-        from ..state import AgentState
-        reason = args.get("reason", "")
-        agent._log("self_quell", reason=reason)
-        agent._set_state(AgentState.DORMANT, reason="self-quell")
-        agent._dormant.set()
-        agent._cancel_event.set()
-        return {
-            "status": "ok",
-            "message": t(agent._config.language, "system_tool.quell_message"),
-        }
-    # Quell other — karma-gated
+    from ..state import AgentState
+    reason = args.get("reason", "")
+    agent._log("self_sleep", reason=reason)
+    agent._set_state(AgentState.ASLEEP, reason="self-sleep")
+    agent._asleep.set()
+    agent._cancel_event.set()
+    return {
+        "status": "ok",
+        "message": t(agent._config.language, "system_tool.sleep_message"),
+    }
+
+
+def _lull(agent, args: dict) -> dict:
+    """Lull another agent to sleep — karma-gated."""
     from pathlib import Path
     from ..handshake import is_alive
-    err = _check_karma_gate(agent, "quell", args)
+    err = _check_karma_gate(agent, "lull", args)
     if err:
         return err
+    address = args["address"]
     if not is_alive(address):
-        return {"error": True, "message": f"Agent at {address} is not running — already dormant?"}
-    (Path(address) / ".quell").write_text("")
-    agent._log("karma_quell", target=address)
-    return {"status": "quelled", "address": address}
+        return {"error": True, "message": f"Agent at {address} is not running — already asleep?"}
+    (Path(address) / ".sleep").write_text("")
+    agent._log("karma_lull", target=address)
+    return {"status": "asleep", "address": address}
+
+
+def _suspend(agent, args: dict) -> dict:
+    """Suspend another agent — nirvana-gated."""
+    from pathlib import Path
+    from ..handshake import is_alive
+    err = _check_karma_gate(agent, "suspend", args)
+    if err:
+        return err
+    address = args["address"]
+    if not is_alive(address):
+        return {"error": True, "message": f"Agent at {address} is not running — already suspended?"}
+    (Path(address) / ".suspend").write_text("")
+    agent._log("karma_suspend", target=address)
+    return {"status": "suspended", "address": address}
 
 
 def _cpr(agent, args: dict) -> dict:
@@ -288,7 +309,7 @@ def _nirvana(agent, args: dict) -> dict:
         return err
     address = args["address"]
     if is_alive(address):
-        (Path(address) / ".quell").write_text("")
+        (Path(address) / ".sleep").write_text("")
         import time as _time
         deadline = _time.time() + 10.0
         while _time.time() < deadline:
@@ -297,7 +318,7 @@ def _nirvana(agent, args: dict) -> dict:
             _time.sleep(0.5)
         else:
             if is_alive(address):
-                return {"error": True, "message": f"Agent at {address} did not quell within timeout"}
+                return {"error": True, "message": f"Agent at {address} did not sleep within timeout"}
     shutil.rmtree(address)
     agent._log("karma_nirvana", target=address)
     return {"status": "nirvana", "address": address}

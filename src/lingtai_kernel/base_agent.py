@@ -2,7 +2,7 @@
 BaseAgent — generic agent kernel with intrinsic tools and capability dispatch.
 
 Key concepts:
-    - **5-state lifecycle**: ACTIVE, IDLE, STUCK, DORMANT, SUSPENDED.
+    - **5-state lifecycle**: ACTIVE, IDLE, STUCK, ASLEEP, SUSPENDED.
     - **Persistent LLM session**: each agent keeps its chat session across messages.
     - **2-layer tool dispatch**: intrinsics (built-in) + capability handlers.
     - **Opaque context**: the host app can pass any context object — the agent
@@ -206,7 +206,7 @@ class BaseAgent:
 
         # Lifecycle
         self._shutdown = threading.Event()
-        self._dormant = threading.Event()   # set when entering DORMANT; cleared on wake
+        self._asleep = threading.Event()   # set when entering ASLEEP; cleared on wake
         self._thread: threading.Thread | None = None
         self._idle = threading.Event()
         self._idle.set()
@@ -395,7 +395,7 @@ class BaseAgent:
         self._start_heartbeat()
 
     def _reset_uptime(self) -> None:
-        """Reset the uptime anchor for stamina tracking (used on wake from dormant)."""
+        """Reset the uptime anchor for stamina tracking (used on wake from asleep)."""
         self._uptime_anchor = time.monotonic()
 
     def stop(self, timeout: float = 5.0) -> None:
@@ -445,7 +445,7 @@ class BaseAgent:
         """Callback for MailService — route incoming mail to inbox.
 
         This method is never replaced — it is the stable entry point for all
-        incoming mail. Lifecycle control (interrupt, quell, cpr, nirvana)
+        incoming mail. Lifecycle control (interrupt, sleep, lull, cpr, nirvana)
         is handled by the system intrinsic via signal files, not mail.
         """
         self._on_normal_mail(payload)
@@ -604,26 +604,26 @@ class BaseAgent:
                 self._shutdown.set()
                 self._log("suspend_received", source="signal_file")
 
-            # .quell = DORMANT (sleep, listeners stay alive)
-            quell_file = self._working_dir / ".quell"
-            if quell_file.is_file():
+            # .sleep = ASLEEP (sleep, listeners stay alive)
+            sleep_file = self._working_dir / ".sleep"
+            if sleep_file.is_file():
                 try:
-                    quell_file.unlink()
+                    sleep_file.unlink()
                 except OSError:
                     pass
                 self._cancel_event.set()
-                self._set_state(AgentState.DORMANT, reason="quell signal")
-                self._dormant.set()
-                self._log("quell_received", source="signal_file")
+                self._set_state(AgentState.ASLEEP, reason="sleep signal")
+                self._asleep.set()
+                self._log("sleep_received", source="signal_file")
 
-            # Stamina enforcement — dormant when stamina expires
-            if self._uptime_anchor is not None and self._state not in (AgentState.DORMANT, AgentState.SUSPENDED):
+            # Stamina enforcement — asleep when stamina expires
+            if self._uptime_anchor is not None and self._state not in (AgentState.ASLEEP, AgentState.SUSPENDED):
                 elapsed = time.monotonic() - self._uptime_anchor
                 if elapsed >= self._config.stamina:
                     self._log("stamina_expired", elapsed=round(elapsed, 1), stamina=self._config.stamina)
                     self._cancel_event.set()
-                    self._set_state(AgentState.DORMANT, reason="stamina expired")
-                    self._dormant.set()
+                    self._set_state(AgentState.ASLEEP, reason="stamina expired")
+                    self._asleep.set()
 
             if self._state == AgentState.STUCK:
                 now = time.monotonic()
@@ -633,11 +633,11 @@ class BaseAgent:
                 elapsed = now - self._cpr_start
                 cpr_timeout = self._config.cpr_timeout
                 if elapsed > cpr_timeout:
-                    # AED failed — go dormant (not suspended)
+                    # AED failed — go asleep (not suspended)
                     self._log("heartbeat_dead", heartbeat=self._heartbeat, aed_seconds=elapsed)
-                    self._set_state(AgentState.DORMANT, reason="AED failed")
+                    self._set_state(AgentState.ASLEEP, reason="AED failed")
                     self._persist_chat_history()
-                    self._dormant.set()
+                    self._asleep.set()
                 elif not self._aed_pending:
                     # Perform AED — hard restart
                     self._aed_pending = True
@@ -683,13 +683,13 @@ class BaseAgent:
         """Wait for messages, process them. Agent persists between messages."""
         while True:
             while not self._shutdown.is_set():
-                # --- Dormant sleep: soul off, wait for inbox message ---
-                if self._dormant.is_set():
+                # --- Asleep: soul off, wait for inbox message ---
+                if self._asleep.is_set():
                     self._cancel_soul_timer()
                     # Close session only if it's live (idempotent guard)
                     if self._session.chat is not None:
                         self._session.close()
-                    self._log("dormant_sleep")
+                    self._log("sleep")
 
                     # Block until a message arrives or shutdown
                     msg = None
@@ -704,10 +704,10 @@ class BaseAgent:
                         break  # shutdown was set — exit inner loop
 
                     # Wake up
-                    self._dormant.clear()
-                    self._cancel_event.clear()  # clear stale quell/stamina signal
-                    self._set_state(AgentState.ACTIVE, reason=f"woke from dormant: {msg.type}")
-                    self._log("dormant_wake", trigger=msg.type)
+                    self._asleep.clear()
+                    self._cancel_event.clear()  # clear stale sleep/stamina signal
+                    self._set_state(AgentState.ACTIVE, reason=f"woke from asleep: {msg.type}")
+                    self._log("wake", trigger=msg.type)
                     self._reset_uptime()
                     msg = self._concat_queued_messages(msg)
                     # Fall through to handle the message below
@@ -739,7 +739,7 @@ class BaseAgent:
                     self._log("error", source="message_handler", message=err_desc)
                     sleep_state = AgentState.STUCK
                 finally:
-                    if not self._dormant.is_set():
+                    if not self._asleep.is_set():
                         self._set_state(sleep_state)
                     self._persist_chat_history()
 

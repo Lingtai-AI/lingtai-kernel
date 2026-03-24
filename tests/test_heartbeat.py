@@ -106,8 +106,8 @@ class TestHeartbeatFile:
 
         agent._stop_heartbeat()
 
-    def test_heartbeat_file_alive_when_dormant(self, tmp_path):
-        """DORMANT is a living sleep — heartbeat keeps ticking."""
+    def test_heartbeat_file_alive_when_asleep(self, tmp_path):
+        """ASLEEP is a living sleep — heartbeat keeps ticking."""
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
@@ -120,14 +120,14 @@ class TestHeartbeatFile:
         time.sleep(1.5)
         assert hb_file.exists()
 
-        # Simulate DORMANT via AED timeout
+        # Simulate ASLEEP via AED timeout
         agent._set_state(AgentState.STUCK)
         agent._cpr_start = time.monotonic() - 1260  # exceeded 20 min
-        time.sleep(2.0)  # heartbeat detects and sets DORMANT
+        time.sleep(2.0)  # heartbeat detects and sets ASLEEP
 
-        assert agent._state == AgentState.DORMANT
-        assert agent._dormant.is_set()
-        # Heartbeat keeps ticking in DORMANT (living sleep) — file is fresh
+        assert agent._state == AgentState.ASLEEP
+        assert agent._asleep.is_set()
+        # Heartbeat keeps ticking in ASLEEP (living sleep) — file is fresh
         if hb_file.exists():
             ts = float(hb_file.read_text())
             assert time.time() - ts < 2.0  # still fresh
@@ -226,8 +226,8 @@ class TestAED:
 
 class TestHeartbeatDead:
 
-    def test_aed_timeout_triggers_dormant(self, tmp_path):
-        """After AED timeout, agent goes DORMANT."""
+    def test_aed_timeout_triggers_asleep(self, tmp_path):
+        """After AED timeout, agent goes ASLEEP."""
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
@@ -243,26 +243,26 @@ class TestHeartbeatDead:
         time.sleep(1.5)
         agent._stop_heartbeat()
 
-        assert agent._state == AgentState.DORMANT
-        assert agent._dormant.is_set()
+        assert agent._state == AgentState.ASLEEP
+        assert agent._asleep.is_set()
         assert not agent._shutdown.is_set()
 
-    def test_dormant_state_in_status(self, tmp_path):
+    def test_asleep_state_in_status(self, tmp_path):
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
         )
-        agent._state = AgentState.DORMANT
+        agent._state = AgentState.ASLEEP
         status = agent.status()
-        assert status["state"] == "dormant"
+        assert status["state"] == "asleep"
 
 
-class TestQuellFile:
+class TestSleepFile:
 
-    def test_quell_file_triggers_dormant_not_shutdown(self, tmp_path):
-        """When .quell is detected, agent goes DORMANT and _dormant is set, _shutdown is NOT set."""
+    def test_sleep_file_triggers_asleep_not_shutdown(self, tmp_path):
+        """When .sleep is detected, agent goes ASLEEP and _asleep is set, _shutdown is NOT set."""
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
@@ -272,13 +272,13 @@ class TestQuellFile:
         agent._start_heartbeat()
         agent._set_state(AgentState.ACTIVE, reason="test")
 
-        # Write .quell file for heartbeat to detect
-        (agent._working_dir / ".quell").write_text("")
+        # Write .sleep file for heartbeat to detect
+        (agent._working_dir / ".sleep").write_text("")
         time.sleep(2.0)
         agent._stop_heartbeat()
 
-        assert agent._state == AgentState.DORMANT
-        assert agent._dormant.is_set()
+        assert agent._state == AgentState.ASLEEP
+        assert agent._asleep.is_set()
         assert not agent._shutdown.is_set()
 
 
@@ -304,10 +304,10 @@ class TestSuspendFile:
         assert agent._shutdown.is_set()
 
 
-class TestSelfQuell:
+class TestSelfSleep:
 
-    def test_self_quell_no_karma_required(self, tmp_path):
-        """Any agent can self-quell to DORMANT without admin.karma."""
+    def test_self_sleep_no_karma_required(self, tmp_path):
+        """Any agent can self-sleep to ASLEEP without admin.karma."""
         from lingtai_kernel import BaseAgent, AgentState
         from lingtai_kernel.intrinsics.system import handle
         agent = BaseAgent(
@@ -317,10 +317,10 @@ class TestSelfQuell:
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
 
-        # Self-quell: action=quell with no address
-        result = handle(agent, {"action": "quell"})
+        # Self-sleep: action=sleep with no address
+        result = handle(agent, {"action": "sleep"})
 
         assert result["status"] == "ok"
-        assert agent._state == AgentState.DORMANT
-        assert agent._dormant.is_set()
+        assert agent._state == AgentState.ASLEEP
+        assert agent._asleep.is_set()
         assert not agent._shutdown.is_set()
