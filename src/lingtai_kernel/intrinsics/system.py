@@ -229,7 +229,9 @@ def _quell(agent, args: dict) -> dict:
     from ..i18n import t
     address = args.get("address")
     if not address:
-        # Self-quell
+        # Self-quell — requires karma
+        if not agent._admin.get("karma"):
+            return {"error": "Self-quell requires admin.karma."}
         from ..state import AgentState
         reason = args.get("reason", "")
         agent._log("self_quell", reason=reason)
