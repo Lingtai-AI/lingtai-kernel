@@ -119,12 +119,6 @@ def _send_with_timeout(agent, session, content: str):
     return result_box[0] if result_box else None
 
 
-def _get_principle(agent) -> str:
-    """Extract the principle section from the agent's prompt manager."""
-    content = agent._prompt_manager.read_section("principle")
-    return content or ""
-
-
 def _collect_new_diary(agent) -> str:
     """Collect diary text (assistant entries) since the last soul whisper.
 
@@ -154,16 +148,22 @@ def _collect_new_diary(agent) -> str:
     return "\n\n".join(parts)
 
 
+def _build_soul_system_prompt(agent) -> str:
+    """Build the soul session's system prompt."""
+    from ..i18n import t
+    return t(agent._config.language, "soul.system_prompt")
+
+
 def _ensure_soul_session(agent):
     """Get or create the persistent soul mirror session."""
     if getattr(agent, "_soul_session", None) is not None:
         return agent._soul_session
 
-    principle = _get_principle(agent)
+    system_prompt = _build_soul_system_prompt(agent)
 
     try:
         agent._soul_session = agent.service.create_session(
-            system_prompt=principle,
+            system_prompt=system_prompt,
             tools=None,
             model=agent._config.model or agent.service.model,
             thinking="high",
@@ -189,11 +189,7 @@ def soul_flow(agent) -> dict | None:
     diary = _collect_new_diary(agent)
 
     if not diary:
-        # No new diary — use static nudge
-        from ..prompt import get_soul_prompt
-        diary = get_soul_prompt(agent._config.language).format(
-            seconds=int(agent._soul_delay)
-        )
+        return None  # nothing to reflect on
 
     session = _ensure_soul_session(agent)
     if session is None:
@@ -240,11 +236,11 @@ def soul_inquiry(agent, question: str) -> dict | None:
                 else:
                     cloned.add_user_blocks(stripped)
 
-    principle = _get_principle(agent)
+    system_prompt = _build_soul_system_prompt(agent)
 
     try:
         session = agent.service.create_session(
-            system_prompt=principle,
+            system_prompt=system_prompt,
             tools=None,
             model=agent._config.model or agent.service.model,
             thinking="high",

@@ -1,1 +1,0 @@
-{seconds} seconds passed, cherish your time, take initiative.

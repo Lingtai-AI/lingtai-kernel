@@ -135,34 +135,7 @@ def _nap(agent, args: dict) -> dict:
     max_wait = 300
     seconds = args.get("seconds")
     if seconds is None:
-        # nap(null) = indefinite wait until interrupted or mail arrives
-        agent._log("system_nap_start", seconds=None)
-        agent._start_soul_timer()
-
-        def _check_wake(waited: float) -> dict | None:
-            if agent._cancel_event.is_set():
-                agent._log("system_nap_end", reason="interrupted", waited=waited)
-                return {"status": "ok", "reason": "interrupted", "waited": waited}
-            if agent._mail_arrived.is_set():
-                agent._log("system_nap_end", reason="mail_arrived", waited=waited)
-                return {"status": "ok", "reason": "mail_arrived", "waited": waited}
-            return None
-
-        # Check immediately first
-        result = _check_wake(0.0)
-        if result:
-            return result
-
-        agent._mail_arrived.clear()
-        poll_interval = 0.5
-        t0 = time.monotonic()
-
-        while True:
-            waited = time.monotonic() - t0
-            result = _check_wake(waited)
-            if result:
-                return result
-            agent._mail_arrived.wait(timeout=poll_interval)
+        return {"status": "error", "message": "seconds is required for nap"}
 
     seconds = float(seconds)
     if seconds < 0:

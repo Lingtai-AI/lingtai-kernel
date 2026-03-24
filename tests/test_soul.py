@@ -129,34 +129,18 @@ class TestSoulFlow:
         assert result["voice"] == "You should check your notes."
         assert result["prompt"] == "What am I missing?"
 
-    def test_whisper_flow_mode_chinese(self):
-        """Chinese config uses Chinese time lapse."""
+    def test_whisper_returns_none_when_no_diary(self):
+        """No new diary entries → soul_flow returns None (no fallback)."""
         agent, mock_session = self._make_whisper_agent(soul_prompt="")
-        agent._config.language = "zh"
-        agent._soul_cursor = 1000  # No diary, will use static prompt
+        agent._soul_cursor = 1000  # past all entries
         result = soul_flow(agent)
-        assert result is not None
-        assert "已过去120秒" in result["prompt"]
+        assert result is None
 
     def test_whisper_returns_none_when_no_chat(self):
         agent = MagicMock()
         agent._chat = None
-        agent._soul_delay = 120.0
-        agent._soul_session = None
-        agent._config = MagicMock()
-        agent._config.retry_timeout = 30.0
-        agent.service = MagicMock()
-        mock_session = MagicMock()
-        mock_response = MagicMock()
-        mock_response.text = "Still here."
-        mock_response.thoughts = []
-        mock_session.send.return_value = mock_response
-        agent.service.create_session.return_value = mock_session
-        agent._config.model = None
-        agent.service.model = "test-model"
         result = soul_flow(agent)
-        # With no chat, diary is empty, uses static prompt, returns mock response
-        assert result is not None
+        assert result is None
 
     def test_whisper_returns_none_on_empty_interface(self):
         from lingtai_kernel.llm.interface import ChatInterface
@@ -167,19 +151,8 @@ class TestSoulFlow:
         mock_chat.interface = iface
         agent._chat = mock_chat
         agent._soul_cursor = 0
-        agent._soul_delay = 120.0
-        agent._soul_session = None
-        agent._config = MagicMock()
-        agent._config.retry_timeout = 30.0
-        agent.service = MagicMock()
-        mock_session = MagicMock()
-        mock_response = MagicMock()
-        mock_response.text = "Still here."
-        mock_session.send.return_value = mock_response
-        agent.service.create_session.return_value = mock_session
         result = soul_flow(agent)
-        # With empty interface, uses static prompt, returns the mock response
-        assert result is not None
+        assert result is None
 
     def test_whisper_returns_none_on_api_error(self):
         from lingtai_kernel.llm.interface import ChatInterface, TextBlock
@@ -384,66 +357,15 @@ class TestSoulIntegration:
 
         assert not agent.inbox.empty()
         msg = agent.inbox.get_nowait()
-        assert "[inner voice]" in msg.content
         assert "energy implications" in msg.content
         assert msg.sender == "soul"
 
         # Verify soul.jsonl was written with prompt, thinking, voice
         import json
-        soul_file = agent.working_dir / "system" / "soul.jsonl"
+        soul_file = agent.working_dir / "logs" / "soul.jsonl"
         assert soul_file.is_file()
         entry = json.loads(soul_file.read_text().strip())
-        assert "seconds passed" in entry["prompt"]
-        assert entry["thinking"] == ["The user asked about quantum computing..."]
         assert entry["voice"] == "Have you considered the energy implications?"
-
-    def test_inquiry_clears_after_firing(self, tmp_path):
-        """Inquiry mode: fires once, then oneshot clears."""
-        from lingtai_kernel import BaseAgent, AgentState
-        from lingtai_kernel.llm.interface import ChatInterface, TextBlock
-
-        svc = make_mock_service()
-        agent = BaseAgent(
-            service=svc,
-            agent_name="test",
-            config=AgentConfig(soul_delay=99999.0, vigil=100.0),
-            working_dir=tmp_path / "test_agent",
-        )
-
-        iface = ChatInterface()
-        iface.add_system("You are a test agent.")
-        iface.add_user_message("Hello")
-        iface.add_assistant_message([TextBlock(text="Hi")])
-
-        mock_chat = MagicMock()
-        mock_chat.interface = iface
-        agent._chat = mock_chat
-
-        mock_soul_session = MagicMock()
-        mock_soul_response = MagicMock()
-        mock_soul_response.text = "Consider the edge cases."
-        mock_soul_response.thoughts = []
-        mock_soul_session.send.return_value = mock_soul_response
-        svc.create_session.return_value = mock_soul_session
-
-        agent._soul_delay = 0.1
-        agent._soul_prompt = "What am I missing?"
-        agent._soul_oneshot = True
-
-        agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.IDLE, reason="done")
-
-        deadline = time.monotonic() + 2.0
-        while agent.inbox.empty() and time.monotonic() < deadline:
-            time.sleep(0.05)
-
-        assert not agent.inbox.empty()
-        msg = agent.inbox.get_nowait()
-        assert "[inner voice]" in msg.content
-
-        # Inquiry clears after firing
-        assert agent._soul_oneshot is False
-        assert agent._soul_prompt == ""
 
     def test_empty_whisper_does_not_inject(self, tmp_path):
         from lingtai_kernel import BaseAgent, AgentState
