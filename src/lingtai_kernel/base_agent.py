@@ -532,13 +532,19 @@ class BaseAgent:
         except Exception as e:
             self._log("soul_whisper_error", error=str(e))
 
-    def _persist_soul_entry(self, result: dict) -> None:
-        """Append a soul whisper entry to logs/soul.jsonl."""
+    def _persist_soul_entry(self, result: dict, mode: str = "flow") -> None:
+        """Append a soul entry to the appropriate log file.
+
+        Flow entries go to logs/soul_flow.jsonl.
+        Inquiry entries go to logs/soul_inquiry.jsonl.
+        """
         from datetime import datetime, timezone
-        soul_file = self._working_dir / "logs" / "soul.jsonl"
+        filename = f"soul_{mode}.jsonl"
+        soul_file = self._working_dir / "logs" / filename
         soul_file.parent.mkdir(exist_ok=True)
         entry = json.dumps({
             "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "mode": mode,
             "prompt": result["prompt"],
             "thinking": result["thinking"],
             "voice": result["voice"],

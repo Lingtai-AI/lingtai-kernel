@@ -59,7 +59,7 @@ def handle(agent, args: dict) -> dict:
         result = soul_inquiry(agent, inquiry.strip())
 
         if result:
-            agent._persist_soul_entry(result)
+            agent._persist_soul_entry(result, mode="inquiry")
             agent._log("soul_inquiry_done")
             return {"status": "ok", "voice": result["voice"]}
         else:
