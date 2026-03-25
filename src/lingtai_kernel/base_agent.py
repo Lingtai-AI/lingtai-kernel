@@ -520,12 +520,13 @@ class BaseAgent:
         """Called by soul timer — flow mode only. Inquiry is sync via tool handler."""
         self._soul_timer = None
         try:
-            from .intrinsics.soul import soul_flow
+            from .intrinsics.soul import soul_flow, _save_soul_session
             result = soul_flow(self)
             if result:
                 voice = result["voice"]
                 self._log("soul_whisper", length=len(voice))
                 self._persist_soul_entry(result)
+                _save_soul_session(self)
                 msg = _make_message(MSG_REQUEST, "soul", voice)
                 self.inbox.put(msg)
         except Exception as e:

@@ -42,10 +42,6 @@ def get_schema(lang: str = "en") -> dict:
     }
 
 
-# Backward compat — evaluated at import with English defaults
-SCHEMA = get_schema("en")
-DESCRIPTION = get_description("en")
-
 _MIN_DELAY = 1.0
 
 
@@ -154,12 +150,50 @@ def _build_soul_system_prompt(agent) -> str:
     return t(agent._config.language, "soul.system_prompt")
 
 
+def _soul_history_path(agent):
+    """Path to the soul session's persisted history."""
+    return agent._working_dir / "history" / "soul_history.json"
+
+
+def _save_soul_session(agent) -> None:
+    """Persist soul session history and cursor to disk."""
+    session = getattr(agent, "_soul_session", None)
+    if session is None:
+        return
+    try:
+        import json
+        state = {
+            "messages": session.interface.to_dict(),
+            "cursor": getattr(agent, "_soul_cursor", 0),
+        }
+        path = _soul_history_path(agent)
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps(state, ensure_ascii=False))
+    except Exception:
+        pass  # best-effort — snapshot will catch it
+
+
 def _ensure_soul_session(agent):
     """Get or create the persistent soul mirror session."""
     if getattr(agent, "_soul_session", None) is not None:
         return agent._soul_session
 
     system_prompt = _build_soul_system_prompt(agent)
+
+    # Try to restore from disk
+    interface = None
+    path = _soul_history_path(agent)
+    if path.is_file():
+        try:
+            import json
+            from ..llm.interface import ChatInterface
+            state = json.loads(path.read_text())
+            messages = state.get("messages")
+            if messages:
+                interface = ChatInterface.from_dict(messages)
+            agent._soul_cursor = state.get("cursor", 0)
+        except Exception:
+            interface = None  # start fresh
 
     try:
         agent._soul_session = agent.service.create_session(
@@ -168,6 +202,7 @@ def _ensure_soul_session(agent):
             model=agent._config.model or agent.service.model,
             thinking="high",
             tracked=False,
+            interface=interface,
         )
     except Exception as e:
         agent._log("soul_whisper_error", error=f"Failed to create soul session: {e}")
@@ -207,8 +242,12 @@ def soul_flow(agent) -> dict | None:
 
 
 def reset_soul_session(agent) -> None:
-    """Reset the persistent soul session (called on molt)."""
-    agent._soul_session = None
+    """Reset the soul's diary cursor after molt.
+
+    The soul session itself is NOT reset — the soul's inner conversation
+    persists across molts. Only the cursor resets so the soul re-reads
+    the agent's post-molt diary from the beginning.
+    """
     agent._soul_cursor = 0
 
 
