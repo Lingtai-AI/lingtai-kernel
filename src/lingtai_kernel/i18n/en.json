@@ -2,7 +2,7 @@
   "system.current_time": "[Current time: {time}]",
     "system.new_mail": "[system] New message in {box}.\n  From: {sender}\n  Subject: {subject}\n  Sent at: {sent_at}\n  {preview}...\nUse {tool}(action=\"check\") to see your inbox.",
   "system.mail_bounce": "[system] Mail delivery failed: {error}\n  To: {address}\n  Subject: {subject}",
-  "system.stuck_revive": "[system] You were stuck at {ts}, reviving...",
+  "system.stuck_revive": "[system] LLM call failed at {ts}. You called: {tool_calls}. Retrying.",
   "system.molt_wiped": "[system] Conversation wiped — you ignored all molt warnings. Use your tools to recover context. Start fresh.",
   "system.molt_warning_default": "Context filling up. Use your tools to save important data, then molt with a briefing to your future self.",
 

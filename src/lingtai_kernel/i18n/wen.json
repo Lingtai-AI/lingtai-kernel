@@ -2,7 +2,7 @@
   "system.current_time": "[此时：{time}]",
     "system.new_mail": "[系统] {box}有新书至。\n  寄者：{sender}\n  题：{subject}\n  发于：{sent_at}\n  {preview}...\n以 {tool}(action=\"check\") 查阅收信。",
   "system.mail_bounce": "[系统] 书信未达：{error}\n  收者：{address}\n  题：{subject}",
-  "system.stuck_revive": "[系统] 汝于 {ts} 误入歧途，今已唤醒……",
+  "system.stuck_revive": "[系统] 灵识于 {ts} 失联。汝所调之器：{tool_calls}。正在重连。",
   "system.molt_wiped": "[系统] 对话之录尽数清去——汝忽略诸度转世之警。以器用复上下文，从头再起。",
   "system.molt_warning_default": "上下文将满。以器用存要务，书前尘往事予来世之己，而后转世。",
 

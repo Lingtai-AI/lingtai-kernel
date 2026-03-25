@@ -17,7 +17,8 @@ class AgentConfig:
     api_key: str | None = None
     base_url: str | None = None
     retry_timeout: float = 120.0
-    cpr_timeout: float = 1200.0  # 20 minutes — max CPR before pronouncing dead
+    aed_timeout: float = 360.0   # max seconds in STUCK before ASLEEP
+    max_aed_attempts: int = 3    # max AED retry attempts in message loop
     thinking_budget: int | None = None
     data_dir: str | None = None  # for cache files (e.g., model context windows)
     soul_delay: float = 120.0  # seconds idle before soul whispers; large value (> stamina) = effectively off

@@ -369,7 +369,7 @@ class ChatInterface:
 
         return removed_any
 
-    # -- Truncation (for _on_reset rollback) ----------------------------------
+    # -- Truncation -----------------------------------------------------------
 
     def drop_trailing(self, predicate: Callable[[InterfaceEntry], bool]) -> list[InterfaceEntry]:
         """Pop entries from the end while predicate is True.  Returns dropped entries."""

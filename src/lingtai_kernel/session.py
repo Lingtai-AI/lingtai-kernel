@@ -19,7 +19,6 @@ from .llm_utils import (
     send_with_timeout,
     send_with_timeout_stream,
     track_llm_usage,
-    _is_stale_interaction_error,
 )
 from .logging import get_logger
 from .token_counter import count_tokens, count_tool_tokens
@@ -166,7 +165,11 @@ class SessionManager:
         )
 
     def send(self, message: Any) -> LLMResponse:
-        """Send a message to the LLM, reusing the persistent chat session."""
+        """Send a message to the LLM, reusing the persistent chat session.
+
+        Single attempt — no retry. Raises on any failure; the caller
+        (BaseAgent._run_loop AED loop) handles recovery.
+        """
         self.ensure_session()
 
         self._log(
@@ -176,45 +179,17 @@ class SessionManager:
 
         retry_timeout = self._config.retry_timeout
 
-        try:
-            if self._streaming:
-                response = self._send_streaming(message, retry_timeout)
-            else:
-                response = send_with_timeout(
-                    chat=self._chat,
-                    message=message,
-                    timeout_pool=self._timeout_pool,
-                    retry_timeout=retry_timeout,
-                    agent_name=self._display_name,
-                    logger=logger,
-                    on_reset=self._on_reset,
-                )
-        except Exception as exc:
-            # Handle stale Interactions API session
-            if self._interaction_id and _is_stale_interaction_error(exc):
-                self._interaction_id = None
-                self._chat = self._llm_service.create_session(
-                    system_prompt=self._build_system_prompt_fn(),
-                    tools=self._build_tool_schemas_fn() or None,
-                    model=self._config.model or self._llm_service.model,
-                    thinking="high",
-                    agent_type=self._display_name,
-                    tracked=True,
-                    provider=self._config.provider,
-                )
-                if self._streaming:
-                    response = self._send_streaming(message, retry_timeout)
-                else:
-                    response = send_with_timeout(
-                        chat=self._chat,
-                        message=message,
-                        timeout_pool=self._timeout_pool,
-                        retry_timeout=retry_timeout,
-                        agent_name=self._display_name,
-                        logger=logger,
-                    )
-            else:
-                raise
+        if self._streaming:
+            response = self._send_streaming(message, retry_timeout)
+        else:
+            response = send_with_timeout(
+                chat=self._chat,
+                message=message,
+                timeout_pool=self._timeout_pool,
+                retry_timeout=retry_timeout,
+                agent_name=self._display_name,
+                logger=logger,
+            )
 
         self._track_usage(response)
         # Preserve interaction ID for session reuse
@@ -235,7 +210,6 @@ class SessionManager:
             retry_timeout=retry_timeout,
             agent_name=self._display_name,
             logger=logger,
-            on_reset=self._on_reset,
         )
 
         if response.text:
@@ -245,43 +219,6 @@ class SessionManager:
                 self._text_already_streamed = True
 
         return response
-
-    def _on_reset(self, chat, failed_message):
-        """Rollback reset: new chat, drop failed turn, inject context."""
-        from .llm.interface import ToolResultBlock, ToolCallBlock
-
-        iface = chat.interface
-
-        # Summarize tool calls from last assistant turn
-        parts = []
-        last_asst = iface.last_assistant_entry()
-        if last_asst:
-            for block in last_asst.content:
-                if isinstance(block, ToolCallBlock):
-                    args_str = ", ".join(
-                        f"{k}={repr(v)[:80]}" for k, v in block.args.items()
-                    )
-                    parts.append(f"- {block.name}({args_str})")
-        tool_summary = "\n".join(parts) if parts else "(no tool calls found)"
-
-        # Drop failed turn
-        iface.drop_trailing(lambda e: e.role == "assistant")
-        iface.drop_trailing(
-            lambda e: e.role == "user"
-            and all(isinstance(b, ToolResultBlock) for b in e.content)
-        )
-
-        self._rebuild_session(iface, tracked=False)
-        self._log("llm_reset", entries_kept=len(iface.entries))
-
-        rollback_msg = (
-            "Your previous response was lost due to a server error. "
-            "Here is what happened:\n\n"
-            f"You called these tools:\n{tool_summary}\n\n"
-            "Data already fetched is still available in memory. "
-            "Please continue based on these results."
-        )
-        return self._chat, rollback_msg
 
     # ------------------------------------------------------------------
     # Compaction

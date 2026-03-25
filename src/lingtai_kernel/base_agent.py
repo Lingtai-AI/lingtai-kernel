@@ -223,8 +223,7 @@ class BaseAgent:
         # Heartbeat — always-on health monitor
         self._heartbeat: float = 0.0
         self._heartbeat_thread: threading.Thread | None = None
-        self._cpr_start: float | None = None
-        self._aed_pending: bool = False
+        self._aed_start: float | None = None
 
         # Session manager — LLM session, token tracking, compaction
         self._session = SessionManager(
@@ -625,42 +624,17 @@ class BaseAgent:
 
             if self._state == AgentState.STUCK:
                 now = time.monotonic()
-                if self._cpr_start is None:
-                    self._cpr_start = now
-
-                elapsed = now - self._cpr_start
-                cpr_timeout = self._config.cpr_timeout
-                if elapsed > cpr_timeout:
-                    # AED failed — go asleep (not suspended)
-                    self._log("heartbeat_dead", heartbeat=self._heartbeat, aed_seconds=elapsed)
-                    self._set_state(AgentState.ASLEEP, reason="AED failed")
+                if self._aed_start is None:
+                    self._aed_start = now
+                if now - self._aed_start > self._config.aed_timeout:
+                    self._log("aed_timeout", seconds=now - self._aed_start)
+                    self._set_state(AgentState.ASLEEP, reason="AED timeout")
                     self._persist_chat_history()
                     self._asleep.set()
-                elif not self._aed_pending:
-                    # Perform AED — hard restart
-                    self._aed_pending = True
-                    self._perform_aed()
             else:
-                # Healthy or idle — reset AED window
-                self._cpr_start = None
-                self._aed_pending = False
+                self._aed_start = None
 
             time.sleep(1.0)
-
-    def _perform_aed(self) -> None:
-        """AED: reset session and inject recovery message."""
-        from datetime import datetime, timezone
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        # Reset the LLM session — next send() creates a fresh one
-        self._session.chat = None
-
-        self._log("heartbeat_aed", heartbeat=self._heartbeat)
-
-        # Inject AED recovery message
-        aed_msg = _t(self._config.language, "system.stuck_revive", ts=ts)
-        msg = _make_message(MSG_REQUEST, "system", aed_msg)
-        self.inbox.put(msg)
 
     def _log(self, event_type: str, **fields) -> None:
         """Write a structured event to the logging service, if configured."""
@@ -718,28 +692,47 @@ class BaseAgent:
                     self._set_state(AgentState.ACTIVE, reason=f"received {msg.type}")
 
                 sleep_state = AgentState.IDLE
-                try:
-                    self._handle_message(msg)
-                except TimeoutError as e:
-                    err_desc = str(e) or repr(e)
-                    logger.error(
-                        f"[{self.agent_name}] LLM timeout in message handler: {err_desc}",
-                        exc_info=True,
-                    )
-                    self._log("error", source="message_handler", message=err_desc)
-                    sleep_state = AgentState.STUCK
-                except Exception as e:
-                    err_desc = str(e) or repr(e)
-                    logger.error(
-                        f"[{self.agent_name}] Unhandled error in message handler: {err_desc}",
-                        exc_info=True,
-                    )
-                    self._log("error", source="message_handler", message=err_desc)
-                    sleep_state = AgentState.STUCK
-                finally:
-                    if not self._asleep.is_set():
-                        self._set_state(sleep_state)
-                    self._persist_chat_history()
+                aed_attempts = 0
+                while True:
+                    try:
+                        self._handle_message(msg)
+                        break  # success
+                    except (TimeoutError, Exception) as e:
+                        err_desc = str(e) or repr(e)
+                        aed_attempts += 1
+
+                        # Pop orphan tool call from interface (idempotent)
+                        if self._session.chat is not None:
+                            self._session.chat.interface.pop_orphan_tool_call()
+
+                        if aed_attempts > self._config.max_aed_attempts:
+                            logger.error(
+                                f"[{self.agent_name}] AED exhausted after {aed_attempts - 1} attempts: {err_desc}",
+                            )
+                            self._log("aed_exhausted", attempts=aed_attempts - 1, error=err_desc)
+                            sleep_state = AgentState.ASLEEP
+                            self._asleep.set()
+                            break
+
+                        self._set_state(AgentState.STUCK, reason=f"AED attempt {aed_attempts}: {err_desc}")
+                        self._log("aed_attempt", attempt=aed_attempts, error=err_desc)
+                        logger.warning(
+                            f"[{self.agent_name}] AED attempt {aed_attempts}/{self._config.max_aed_attempts}: {err_desc}",
+                        )
+
+                        # Rebuild session with current config, preserving history
+                        if self._session.chat is not None:
+                            self._session._rebuild_session(self._session.chat.interface)
+
+                        # Inject recovery message
+                        from datetime import datetime, timezone
+                        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        aed_msg = _t(self._config.language, "system.stuck_revive", ts=ts, tool_calls=err_desc)
+                        msg = _make_message(MSG_REQUEST, "system", aed_msg)
+
+                if not self._asleep.is_set():
+                    self._set_state(sleep_state)
+                self._persist_chat_history()
 
             # Check for refresh (rebirth) before exiting — but not if suspended
             if getattr(self, "_refresh_requested", False) and self._state != AgentState.SUSPENDED:
