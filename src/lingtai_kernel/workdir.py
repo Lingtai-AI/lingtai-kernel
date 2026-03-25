@@ -88,10 +88,7 @@ class WorkingDir:
             )
 
             gitignore = self._path / ".gitignore"
-            gitignore.write_text(
-                "# Transient process files\n"
-                ".agent.lock\n"
-            )
+            gitignore.write_text("")
 
             system_dir = self._path / "system"
             system_dir.mkdir(exist_ok=True)
