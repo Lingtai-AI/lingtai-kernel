@@ -159,8 +159,18 @@ class BaseAgent:
         self._soul_delay = max(1.0, self._config.soul_delay)
         self._molt_count: int = 0
 
-        # Write manifest — stable identity + construction recipe (no runtime state)
+        # Agent ID — permanent birth certificate, generated once, never changes.
+        # Read from existing manifest if present (resume); generate otherwise.
         from datetime import datetime, timezone
+        import secrets
+        existing = self._workdir.read_full_manifest()
+        self._agent_id: str = existing.get("agent_id", "")
+        if not self._agent_id:
+            now = datetime.now(timezone.utc)
+            ts = now.strftime("%Y%m%d%H%M%S") + f"{now.microsecond // 1000:03d}"
+            self._agent_id = ts + secrets.token_hex(2)
+
+        # Write manifest — identity + construction recipe (no runtime state)
         self._started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         manifest_data = self._build_manifest()
         self._workdir.write_manifest(manifest_data)
@@ -192,9 +202,9 @@ class BaseAgent:
         self._mailbox_name = "mail box"
         self._mailbox_tool = "mail"
 
-        # MCP tool handlers
-        self._mcp_handlers: dict[str, Callable[[dict], dict]] = {}
-        self._mcp_schemas: list[FunctionSchema] = []
+        # Non-intrinsic tool handlers (capabilities, MCP, add_tool)
+        self._tool_handlers: dict[str, Callable[[dict], dict]] = {}
+        self._tool_schemas: list[FunctionSchema] = []
 
 
         # --- Wire intrinsic tools ---
@@ -261,6 +271,11 @@ class BaseAgent:
     @property
     def state(self) -> AgentState:
         return self._state
+
+    @property
+    def agent_id(self) -> str:
+        """Permanent birth certificate — never changes across restarts or moves."""
+        return self._agent_id
 
     @property
     def working_dir(self) -> Path:
@@ -497,6 +512,7 @@ class BaseAgent:
             if new_state == AgentState.IDLE:
                 self._start_soul_timer()
         self._log("agent_state", old=old.value, new=new_state.value, reason=reason)
+        self._workdir.write_manifest(self._build_manifest())
 
     def _start_soul_timer(self) -> None:
         """Start the soul delay timer for flow or pending inquiry."""
@@ -680,9 +696,6 @@ class BaseAgent:
                 # --- Asleep: soul off, wait for inbox message ---
                 if self._asleep.is_set():
                     self._cancel_soul_timer()
-                    # Close session only if it's live (idempotent guard)
-                    if self._session.chat is not None:
-                        self._session.close()
                     self._log("sleep")
 
                     # Block until a message arrives or shutdown
@@ -781,11 +794,11 @@ class BaseAgent:
 
         # Remove old MCP tool registrations (keep intrinsics and capability tools)
         cap_tool_names = {name for name, _ in getattr(self, "_capabilities", [])}
-        mcp_names = list(self._mcp_handlers.keys())
+        mcp_names = list(self._tool_handlers.keys())
         for name in mcp_names:
             if name not in self._intrinsics and name not in cap_tool_names:
-                self._mcp_handlers.pop(name, None)
-                self._mcp_schemas = [s for s in self._mcp_schemas if s.name != name]
+                self._tool_handlers.pop(name, None)
+                self._tool_schemas = [s for s in self._tool_schemas if s.name != name]
 
         # Reload MCP servers from working dir
         if hasattr(self, "_load_mcp_from_workdir"):
@@ -799,7 +812,7 @@ class BaseAgent:
             self._session._rebuild_session(self._session.chat.interface)
         # If no session exists yet, ensure_session() will create one on next message
 
-        self._log("refresh_complete", tools=list(self._mcp_handlers.keys()))
+        self._log("refresh_complete", tools=list(self._tool_handlers.keys()))
 
     def _concat_queued_messages(self, msg: Message) -> Message:
         """Drain any additional queued messages and concatenate into one.
@@ -854,7 +867,7 @@ class BaseAgent:
                 name, result, provider=self._config.provider, **kw
             ),
             guard=guard,
-            known_tools=set(self._intrinsics) | set(self._mcp_handlers),
+            known_tools=set(self._intrinsics) | set(self._tool_handlers),
             parallel_safe_tools=self._PARALLEL_SAFE_TOOLS,
             logger_fn=self._log,
         )
@@ -999,8 +1012,8 @@ class BaseAgent:
         """
         if tc.name in self._intrinsics:
             return self._intrinsics[tc.name](tc.args or {})
-        elif tc.name in self._mcp_handlers:
-            return self._mcp_handlers[tc.name](tc.args or {})
+        elif tc.name in self._tool_handlers:
+            return self._tool_handlers[tc.name](tc.args or {})
         else:
             raise UnknownToolError(tc.name)
 
@@ -1017,7 +1030,7 @@ class BaseAgent:
             info = ALL_INTRINSICS.get(name)
             if info:
                 lines.append(f"### {name}\n{info['module'].get_description(lang)}")
-        for s in self._mcp_schemas:
+        for s in self._tool_schemas:
             if s.description:
                 lines.append(f"### {s.name}\n{s.description}")
         if lines:
@@ -1060,7 +1073,7 @@ class BaseAgent:
                 )
 
         # Capability + MCP schemas — inject reasoning into each
-        for s in self._mcp_schemas:
+        for s in self._tool_schemas:
             params = dict(s.parameters)
             props = dict(params.get("properties", {}))
             props.update(reasoning_prop)
@@ -1088,8 +1101,10 @@ class BaseAgent:
 
         Subclasses override to add fields (e.g. capabilities).
         Contains everything the agent knows about itself.
+        address is always the current working_dir (hot-refreshed on every write).
         """
         data = {
+            "agent_id": self._agent_id,
             "agent_name": self.agent_name,
             "nickname": self.nickname,
             "address": str(self._working_dir),
@@ -1097,6 +1112,7 @@ class BaseAgent:
             "admin": self._admin,
             "language": self._config.language,
             "stamina": self._config.stamina,
+            "state": self._state.value,
             "soul_delay": self._soul_delay,
             "molt_count": self._molt_count,
         }
@@ -1121,11 +1137,11 @@ class BaseAgent:
         if self._sealed:
             raise RuntimeError("Cannot modify tools after start()")
         if handler is not None:
-            self._mcp_handlers[name] = handler
+            self._tool_handlers[name] = handler
         if schema is not None:
             # Remove any existing schema with same name
-            self._mcp_schemas = [s for s in self._mcp_schemas if s.name != name]
-            self._mcp_schemas.append(
+            self._tool_schemas = [s for s in self._tool_schemas if s.name != name]
+            self._tool_schemas.append(
                 FunctionSchema(
                     name=name,
                     description=description,
@@ -1142,8 +1158,8 @@ class BaseAgent:
         """Unregister a dynamic tool."""
         if self._sealed:
             raise RuntimeError("Cannot modify tools after start()")
-        self._mcp_handlers.pop(name, None)
-        self._mcp_schemas = [s for s in self._mcp_schemas if s.name != name]
+        self._tool_handlers.pop(name, None)
+        self._tool_schemas = [s for s in self._tool_schemas if s.name != name]
         if self._chat is not None:
             self._chat.update_tools(self._build_tool_schemas())
         self._token_decomp_dirty = True

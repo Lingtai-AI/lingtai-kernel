@@ -6,8 +6,8 @@ Actions:
     refresh   — stop, reload MCP servers and config from working dir, restart
     sleep     — self only, go to sleep (no karma needed)
     lull      — put another agent to sleep (requires karma)
-    suspend   — suspend another agent (requires nirvana)
-    cpr       — resuscitate a suspended agent (requires nirvana)
+    suspend   — suspend another agent (requires karma)
+    cpr       — resuscitate a suspended agent (requires karma)
     interrupt — interrupt a running agent's current turn (requires karma)
     nirvana   — permanently destroy an agent's working directory (requires nirvana)
 """
@@ -201,8 +201,8 @@ def _refresh(agent, args: dict) -> dict:
 # Karma / Nirvana gate mapping
 # ---------------------------------------------------------------------------
 
-_KARMA_ACTIONS = {"interrupt", "lull"}
-_NIRVANA_ACTIONS = {"nirvana", "suspend", "cpr"}
+_KARMA_ACTIONS = {"interrupt", "lull", "suspend", "cpr"}
+_NIRVANA_ACTIONS = {"nirvana"}
 
 
 def _check_karma_gate(agent, action: str, args: dict) -> dict | None:
@@ -252,7 +252,7 @@ def _lull(agent, args: dict) -> dict:
 
 
 def _suspend(agent, args: dict) -> dict:
-    """Suspend another agent — nirvana-gated."""
+    """Suspend another agent — karma-gated."""
     from pathlib import Path
     from ..handshake import is_alive
     err = _check_karma_gate(agent, "suspend", args)

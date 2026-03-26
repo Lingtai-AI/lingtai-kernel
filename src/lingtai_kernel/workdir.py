@@ -250,6 +250,16 @@ class WorkingDir:
                 pass
             return ""
 
+    def read_full_manifest(self) -> dict:
+        """Read entire .agent.json as dict. Returns empty dict if missing or corrupt."""
+        path = self._path / _MANIFEST_FILE
+        if not path.is_file():
+            return {}
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+
     def write_manifest(self, manifest: dict) -> None:
         target = self._path / _MANIFEST_FILE
         tmp = self._path / ".agent.json.tmp"
