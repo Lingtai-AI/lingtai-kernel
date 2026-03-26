@@ -273,7 +273,7 @@ def _trim_soul_session(agent) -> None:
         return
 
     iface = session.interface
-    tokens = iface.estimate_token_count()
+    tokens = iface.estimate_context_tokens()
 
     while tokens > limit:
         # Find first non-system entry to drop
@@ -285,7 +285,7 @@ def _trim_soul_session(agent) -> None:
                 break
         if not dropped:
             break  # only system entries left
-        tokens = iface.estimate_token_count()
+        tokens = iface.estimate_context_tokens()
 
 
 def reset_soul_session(agent) -> None:

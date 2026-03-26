@@ -130,19 +130,17 @@ class BaseAgent:
         memory_file = system_dir / "memory.md"
         covenant_file = system_dir / "covenant.md"
 
-        # Resume: restore covenant from file if not provided by constructor
-        if not covenant and covenant_file.is_file():
+        system_dir.mkdir(exist_ok=True)
+
+        # Covenant: constructor value wins, then fall back to file on disk
+        if covenant:
+            covenant_file.write_text(covenant)
+        elif covenant_file.is_file():
             covenant = covenant_file.read_text()
 
-        # If constructor memory is provided and memory file doesn't exist, write it
+        # Memory: constructor value seeds the file if it doesn't exist
         if memory and not memory_file.is_file():
-            system_dir.mkdir(exist_ok=True)
             memory_file.write_text(memory)
-
-        # If constructor covenant is provided and covenant file doesn't exist, write it
-        if covenant and not covenant_file.is_file():
-            system_dir.mkdir(exist_ok=True)
-            covenant_file.write_text(covenant)
 
         # Auto-load memory from file into prompt manager
         loaded_memory = ""
