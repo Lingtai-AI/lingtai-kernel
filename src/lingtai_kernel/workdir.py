@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -44,18 +45,29 @@ class WorkingDir:
 
     # --- Lock lifecycle ---
 
-    def acquire_lock(self) -> None:
+    def acquire_lock(self, timeout: float = 0) -> None:
+        """Acquire an exclusive file lock on the working directory.
+
+        Args:
+            timeout: Max seconds to wait for the lock. 0 = fail immediately
+                (default, backward compatible). Polls at 250ms intervals.
+        """
         lock_path = self._path / _LOCK_FILE
-        self._lock_file = open(lock_path, "w")
-        try:
-            _lock_fd(self._lock_file)
-        except OSError:
-            self._lock_file.close()
-            self._lock_file = None
-            raise RuntimeError(
-                f"Working directory '{self._path}' is already in use "
-                f"by another agent. Each agent needs its own directory."
-            )
+        deadline = time.monotonic() + timeout
+        while True:
+            self._lock_file = open(lock_path, "w")
+            try:
+                _lock_fd(self._lock_file)
+                return  # success
+            except OSError:
+                self._lock_file.close()
+                self._lock_file = None
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"Working directory '{self._path}' is already in use "
+                        f"by another agent. Each agent needs its own directory."
+                    )
+                time.sleep(0.25)
 
     def release_lock(self) -> None:
         if self._lock_file is not None:

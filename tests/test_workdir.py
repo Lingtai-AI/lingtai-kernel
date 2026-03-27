@@ -111,3 +111,61 @@ def test_diff_read_only(tmp_path):
         cwd=wd.path, capture_output=True, text=True,
     )
     assert status.stdout.strip()  # still dirty
+
+
+import time
+import threading
+
+
+def test_acquire_lock_timeout_succeeds_after_release(tmp_path):
+    """acquire_lock with timeout should succeed once the lock is released."""
+    dir_a = tmp_path / "agent"
+    dir_a.mkdir()
+    wd1 = WorkingDir(dir_a)
+    wd1.acquire_lock()
+
+    acquired = threading.Event()
+
+    def try_lock():
+        wd2 = WorkingDir(dir_a)
+        wd2.acquire_lock(timeout=5.0)
+        acquired.set()
+        wd2.release_lock()
+
+    t = threading.Thread(target=try_lock)
+    t.start()
+
+    time.sleep(0.5)
+    assert not acquired.is_set()  # still waiting
+
+    wd1.release_lock()
+    t.join(timeout=5.0)
+    assert acquired.is_set()
+
+
+def test_acquire_lock_timeout_zero_raises_immediately(tmp_path):
+    """acquire_lock with timeout=0 (default) raises immediately if locked."""
+    dir_a = tmp_path / "agent"
+    dir_a.mkdir()
+    wd1 = WorkingDir(dir_a)
+    wd1.acquire_lock()
+
+    wd2 = WorkingDir(dir_a)
+    with pytest.raises(RuntimeError, match="already in use"):
+        wd2.acquire_lock(timeout=0)
+
+    wd1.release_lock()
+
+
+def test_acquire_lock_timeout_expires(tmp_path):
+    """acquire_lock should raise after timeout if lock is never released."""
+    dir_a = tmp_path / "agent"
+    dir_a.mkdir()
+    wd1 = WorkingDir(dir_a)
+    wd1.acquire_lock()
+
+    wd2 = WorkingDir(dir_a)
+    with pytest.raises(RuntimeError, match="already in use"):
+        wd2.acquire_lock(timeout=1.0)
+
+    wd1.release_lock()
