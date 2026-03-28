@@ -1092,6 +1092,8 @@ class BaseAgent:
 
     def get_token_usage(self) -> dict:
         """Return token usage summary (delegates to SessionManager)."""
+        if not hasattr(self, "_session"):
+            return {"input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0, "cached_tokens": 0}
         return self._session.get_token_usage()
 
     # ------------------------------------------------------------------
@@ -1117,6 +1119,7 @@ class BaseAgent:
             "state": self._state.value,
             "soul_delay": self._soul_delay,
             "molt_count": self._molt_count,
+            "tokens": self.get_token_usage(),
         }
         if self._mail_service is not None and self._mail_service.address:
             data["address"] = self._mail_service.address
@@ -1244,7 +1247,7 @@ class BaseAgent:
         self._session.restore_token_state(state)
 
     def _save_chat_history(self) -> None:
-        """Write chat history to disk (no git commit).
+        """Write chat history and token usage to disk (no git commit).
 
         Called after every completed interaction for crash resilience.
         Git commits are handled by the periodic snapshot system.
@@ -1258,6 +1261,11 @@ class BaseAgent:
                 (history_dir / "chat_history.jsonl").write_text("\n".join(lines) + "\n")
         except Exception as e:
             logger.warning(f"[{self.agent_name}] Failed to save chat history: {e}")
+        # Update .agent.json with current token usage
+        try:
+            self._workdir.write_manifest(self._build_manifest())
+        except Exception as e:
+            logger.warning(f"[{self.agent_name}] Failed to update manifest tokens: {e}")
 
     def _persist_chat_history(self) -> None:
         """Save chat history and status to history/ — called on state transitions."""
