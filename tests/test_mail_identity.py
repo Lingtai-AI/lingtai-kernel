@@ -27,7 +27,8 @@ def _make_agent(tmp_path: Path, *, agent_name: str | None = None, admin: dict | 
     agent._started_at = "2026-03-21T10:00:00Z"
     agent._mail_service = MagicMock()
     agent._mail_service.address = str(tmp_path)
-    agent._mail_arrived = threading.Event()
+    agent._nap_wake = threading.Event()
+    agent._nap_wake_reason = ""
     agent.inbox = MagicMock()
 
     def _build_manifest():
@@ -232,7 +233,6 @@ class TestIdentityInNotification:
         agent = BaseAgent.__new__(BaseAgent)
         agent._config = MagicMock()
         agent._config.language = "en"
-        agent._mail_arrived = threading.Event()
         agent._nap_wake = threading.Event()
         agent._nap_wake_reason = ""
         agent._mailbox_name = "mail box"
@@ -266,7 +266,6 @@ class TestIdentityInNotification:
         agent = BaseAgent.__new__(BaseAgent)
         agent._config = MagicMock()
         agent._config.language = "en"
-        agent._mail_arrived = threading.Event()
         agent._nap_wake = threading.Event()
         agent._nap_wake_reason = ""
         agent._mailbox_name = "mail box"
