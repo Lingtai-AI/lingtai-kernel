@@ -146,18 +146,19 @@ def _nap(agent, args: dict) -> dict:
     # Nap = idle: arm the soul timer so the inner voice can whisper during nap
     agent._start_soul_timer()
 
+    # Clear stale wake signals — only events arriving DURING the nap should wake it.
+    agent._nap_wake.clear()
+    agent._nap_wake_reason = ""
+
     def _check_wake(waited: float) -> dict | None:
         if agent._cancel_event.is_set():
             agent._log("system_nap_end", reason="interrupted", waited=waited)
             return {"status": "ok", "reason": "interrupted", "waited": waited}
-        if agent._mail_arrived.is_set():
-            agent._log("system_nap_end", reason="mail_arrived", waited=waited)
-            return {"status": "ok", "reason": "mail_arrived", "waited": waited}
+        if agent._nap_wake.is_set():
+            reason = agent._nap_wake_reason or "unknown"
+            agent._log("system_nap_end", reason=reason, waited=waited)
+            return {"status": "ok", "reason": reason, "waited": waited}
         return None
-
-    result = _check_wake(0.0)
-    if result:
-        return result
 
     poll_interval = 0.5
     t0 = time.monotonic()
@@ -176,11 +177,10 @@ def _nap(agent, args: dict) -> dict:
         remaining = seconds - waited
         sleep_time = min(poll_interval, remaining)
 
-        # Clear right before wait to avoid TOCTOU: if mail arrives between
-        # clear and wait, the event is re-set and wait returns immediately.
-        # The loop then re-checks via _check_wake on the next iteration.
-        agent._mail_arrived.clear()
-        agent._mail_arrived.wait(timeout=sleep_time)
+        # Clear right before wait to avoid TOCTOU: if a wake signal arrives
+        # between clear and wait, the event is re-set and wait returns immediately.
+        agent._nap_wake.clear()
+        agent._nap_wake.wait(timeout=sleep_time)
 
 
 # ---------------------------------------------------------------------------
