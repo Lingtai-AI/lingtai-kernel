@@ -37,6 +37,7 @@
   "system_tool.reason_description": "入寐或更衣之缘由（录于事件日志）。",
   "system_tool.sleep_message": "入寐矣。身与忆俱在。可经心肺复苏而醒。",
   "system_tool.refresh_message": "更衣中——重载器用，重置会话。身与忆俱在。",
+  "system.refresh_successful": "[system] 更衣已成。器用与配置俱已重载。可续前事。",
 
   "eigen.molt_summary_prefix": "[前尘往事]",
   "eigen.context_forget_summary": "[系统强令转世——汝五度忽略警告。]\n上下文已为系统清去。查阅持久之知（书信、藏经）以复上下文。",

@@ -37,6 +37,7 @@
   "system_tool.reason_description": "Reason for sleep or refresh (logged to event log).",
   "system_tool.sleep_message": "Going to sleep. Your identity and memory are preserved. You may be resuscitated via cpr.",
   "system_tool.refresh_message": "Refreshing — reloading tools and resetting session. Your identity and memory are preserved.",
+  "system.refresh_successful": "[system] Refresh successful. Tools and configuration reloaded. You may continue.",
 
   "eigen.molt_summary_prefix": "[Carried forward]",
   "eigen.context_forget_summary": "[System-initiated molt — you ignored 5 warnings.]\nContext wiped by system. Check persistent knowledge (mail, email, library) to recover context.",

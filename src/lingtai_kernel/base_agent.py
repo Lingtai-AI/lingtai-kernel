@@ -790,6 +790,8 @@ class BaseAgent:
         import subprocess
         self._log("refresh_start")
         self._persist_chat_history()
+        # Signal the new process that this is a refresh boot
+        (self._working_dir / ".refresh").touch()
         cmd = self._build_launch_cmd()
         if cmd is None:
             self._log("refresh_no_launch_cmd")
