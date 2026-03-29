@@ -805,14 +805,14 @@ class BaseAgent:
             break
 
     def _perform_refresh(self) -> None:
-        """Refresh = spawn a watcher process, then self-suspend.
+        """Refresh = self-suspend + deferred relaunch.
 
-        1. Launch a detached Python process (watcher) that waits for this
-           agent to die (heartbeat gone), then runs ``lingtai run <dir>``
+        1. Launch a detached process that sleeps 3 seconds then runs
+           ``lingtai run <dir>``
         2. Touch .suspend — the heartbeat loop picks it up and cleanly
            kills this process via the normal suspend path
 
-        The watcher outlives this process and acts as an automated CPR.
+        The 3-second delay is enough for the old process to die.
         No two agent processes overlap on the same working directory.
         """
         import subprocess, sys
@@ -824,35 +824,24 @@ class BaseAgent:
             return
 
         working_dir = self._working_dir
-        # Signal the new process that this is a refresh boot
         (working_dir / ".refresh").touch()
 
-        # Spawn a detached watcher: wait for heartbeat to go stale, then relaunch
-        hb_path = str(working_dir / ".agent.heartbeat")
-        watcher_script = (
-            "import time, subprocess, sys\n"
-            f"hb = {hb_path!r}\n"
-            "for _ in range(60):\n"
-            "    time.sleep(1)\n"
-            "    try:\n"
-            "        ts = float(open(hb).read())\n"
-            "        if time.time() - ts > 3.0:\n"
-            "            break\n"
-            "    except (OSError, ValueError):\n"
-            "        break\n"
-            "time.sleep(1)\n"
+        # Deferred relaunch: sleep 3s then start new process
+        relaunch_script = (
+            "import time, subprocess\n"
+            "time.sleep(3)\n"
             f"subprocess.Popen({cmd!r},\n"
             "    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,\n"
             "    stderr=subprocess.DEVNULL, start_new_session=True)\n"
         )
         subprocess.Popen(
-            [sys.executable, "-c", watcher_script],
+            [sys.executable, "-c", relaunch_script],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        self._log("refresh_watcher_launched", cmd=cmd[0])
+        self._log("refresh_deferred_relaunch", cmd=cmd[0])
 
         # Self-suspend — heartbeat loop picks this up cleanly
         (working_dir / ".suspend").touch()
