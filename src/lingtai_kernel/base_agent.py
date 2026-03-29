@@ -1131,6 +1131,24 @@ class BaseAgent:
         Contains everything the agent knows about itself.
         address is always the current working_dir (hot-refreshed on every write).
         """
+        # Context window usage (live session state)
+        usage = self.get_token_usage()
+        context = {
+            "total_tokens": usage["ctx_total_tokens"],
+            "window_size": None,
+            "usage_pct": None,
+        }
+        if self._chat is not None:
+            try:
+                window_size = self._chat.context_window()
+                context["window_size"] = window_size
+                if window_size:
+                    context["usage_pct"] = round(
+                        usage["ctx_total_tokens"] / window_size * 100, 1
+                    )
+            except Exception:
+                pass
+
         data = {
             "agent_id": self._agent_id,
             "agent_name": self.agent_name,
@@ -1144,6 +1162,7 @@ class BaseAgent:
             "state": self._state.value,
             "soul_delay": self._soul_delay,
             "molt_count": self._molt_count,
+            "context": context,
         }
         if self._mail_service is not None and self._mail_service.address:
             data["address"] = self._mail_service.address
