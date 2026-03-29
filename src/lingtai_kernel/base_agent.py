@@ -102,7 +102,6 @@ class BaseAgent:
         self._last_usage = None  # UsageMetadata from last LLM call, for ledger
         self._created_at: str = ""
         self._uptime_anchor: float | None = None  # set in start(), None means not started
-        self._refresh_requested: bool = False
 
         # Working directory (caller-owned path)
         self._workdir = WorkingDir(working_dir)
@@ -803,37 +802,60 @@ class BaseAgent:
                     self._set_state(sleep_state)
                 self._save_chat_history()
 
-            # Check for refresh (self-restart) before exiting — but not if suspended
-            if self._refresh_requested and self._state != AgentState.SUSPENDED:
-                self._refresh_requested = False
-                self._set_state(AgentState.IDLE, reason="refresh")
-                self._perform_refresh()
-                # Fall through to break — stop() will release lock, new process takes over
             break
 
     def _perform_refresh(self) -> None:
-        """Refresh by launching a replacement process and exiting.
+        """Refresh = spawn a watcher process, then self-suspend.
 
-        Subclasses provide the launch command via _build_launch_cmd().
-        If no command is available, logs and returns (no-op).
+        1. Launch a detached Python process (watcher) that waits for this
+           agent to die (heartbeat gone), then runs ``lingtai run <dir>``
+        2. Touch .suspend — the heartbeat loop picks it up and cleanly
+           kills this process via the normal suspend path
+
+        The watcher outlives this process and acts as an automated CPR.
+        No two agent processes overlap on the same working directory.
         """
-        import subprocess
+        import subprocess, sys
         self._log("refresh_start")
         self._save_chat_history()
-        # Signal the new process that this is a refresh boot
-        (self._working_dir / ".refresh").touch()
         cmd = self._build_launch_cmd()
         if cmd is None:
             self._log("refresh_no_launch_cmd")
             return
+
+        working_dir = self._working_dir
+        # Signal the new process that this is a refresh boot
+        (working_dir / ".refresh").touch()
+
+        # Spawn a detached watcher: wait for heartbeat to go stale, then relaunch
+        hb_path = str(working_dir / ".agent.heartbeat")
+        watcher_script = (
+            "import time, subprocess, sys\n"
+            f"hb = {hb_path!r}\n"
+            "for _ in range(60):\n"
+            "    time.sleep(1)\n"
+            "    try:\n"
+            "        ts = float(open(hb).read())\n"
+            "        if time.time() - ts > 3.0:\n"
+            "            break\n"
+            "    except (OSError, ValueError):\n"
+            "        break\n"
+            "time.sleep(1)\n"
+            f"subprocess.Popen({cmd!r},\n"
+            "    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,\n"
+            "    stderr=subprocess.DEVNULL, start_new_session=True)\n"
+        )
         subprocess.Popen(
-            cmd,
+            [sys.executable, "-c", watcher_script],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        self._log("refresh_launched", cmd=cmd[0])
+        self._log("refresh_watcher_launched", cmd=cmd[0])
+
+        # Self-suspend — heartbeat loop picks this up cleanly
+        (working_dir / ".suspend").touch()
 
     def _build_launch_cmd(self) -> list[str] | None:
         """Return the command to relaunch this agent. Override in subclasses."""

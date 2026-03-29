@@ -94,9 +94,6 @@ def _nap(agent, args: dict) -> dict:
 
     agent._log("system_nap_start", seconds=seconds)
 
-    # Nap = idle: arm the soul timer so the inner voice can whisper during nap
-    agent._start_soul_timer()
-
     # Clear stale wake signals — only events arriving DURING the nap should wake it.
     agent._nap_wake.clear()
     agent._nap_wake_reason = ""
@@ -142,8 +139,7 @@ def _refresh(agent, args: dict) -> dict:
     from ..i18n import t
     reason = args.get("reason", "")
     agent._log("refresh_requested", reason=reason)
-    agent._refresh_requested = True
-    agent._shutdown.set()
+    agent._perform_refresh()
     return {
         "status": "ok",
         "message": t(agent._config.language, "system_tool.refresh_message"),

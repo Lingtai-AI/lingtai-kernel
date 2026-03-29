@@ -116,7 +116,11 @@ def _send_with_timeout(agent, session, content: str):
 
 
 def _collect_new_diary(agent) -> str:
-    """Collect diary text (assistant entries) since the last soul whisper.
+    """Collect the agent's diary since the last soul whisper.
+
+    Includes assistant text (narration) and thinking blocks. The soul
+    needs both the agent's inner reasoning and its outward narration
+    to reflect meaningfully.
 
     Uses agent._soul_cursor to track how far we've read.
     Returns squashed text of all new diary entries, or empty string.
@@ -135,7 +139,9 @@ def _collect_new_diary(agent) -> str:
         if entry.role != "assistant":
             continue
         for block in entry.content:
-            if isinstance(block, TextBlock) and block.text:
+            if isinstance(block, ThinkingBlock) and block.text:
+                parts.append(f"[thinking] {block.text}")
+            elif isinstance(block, TextBlock) and block.text:
                 parts.append(block.text)
 
     # Update cursor to current end
