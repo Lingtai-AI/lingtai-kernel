@@ -224,6 +224,23 @@ def _ensure_soul_session(agent):
     return agent._soul_session
 
 
+def _write_soul_tokens(agent, response) -> None:
+    """Append soul session token usage to the agent's ledger."""
+    u = response.usage
+    if not (u.input_tokens or u.output_tokens or u.thinking_tokens or u.cached_tokens):
+        return
+    try:
+        from ..token_ledger import append_token_entry
+        ledger_path = agent._working_dir / "logs" / "token_ledger.jsonl"
+        append_token_entry(
+            ledger_path,
+            input=u.input_tokens, output=u.output_tokens,
+            thinking=u.thinking_tokens, cached=u.cached_tokens,
+        )
+    except Exception:
+        pass
+
+
 def soul_flow(agent) -> dict | None:
     """Flow mode — persistent mirrored chat.
 
@@ -246,6 +263,8 @@ def soul_flow(agent) -> dict | None:
     response = _send_with_timeout(agent, session, diary)
     if not response or not response.text:
         return None
+
+    _write_soul_tokens(agent, response)
 
     # Gradual forgetting — drop oldest entries when over budget
     _trim_soul_session(agent)
@@ -343,6 +362,8 @@ def soul_inquiry(agent, question: str) -> dict | None:
     response = _send_with_timeout(agent, session, question)
     if not response or not response.text:
         return None
+
+    _write_soul_tokens(agent, response)
 
     return {
         "prompt": question,
