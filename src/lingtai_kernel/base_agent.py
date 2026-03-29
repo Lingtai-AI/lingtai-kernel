@@ -412,11 +412,6 @@ class BaseAgent:
             except RuntimeError:
                 pass  # Already listening — that's fine
 
-        # Write PID file for external process management
-        import os
-        pid_file = self._working_dir / ".pid"
-        pid_file.write_text(str(os.getpid()))
-
         self._thread = threading.Thread(
             target=self._run_loop,
             daemon=True,
@@ -432,12 +427,6 @@ class BaseAgent:
     def stop(self, timeout: float = 5.0) -> None:
         """Signal shutdown and wait for the agent thread to exit."""
         self._log("agent_stop")
-        # Remove PID file
-        pid_file = self._working_dir / ".pid"
-        try:
-            pid_file.unlink(missing_ok=True)
-        except OSError:
-            pass
         self._stop_heartbeat()
         self._cancel_soul_timer()
         self._shutdown.set()
