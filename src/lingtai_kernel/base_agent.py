@@ -1117,7 +1117,13 @@ class BaseAgent:
     def get_token_usage(self) -> dict:
         """Return token usage summary (delegates to SessionManager)."""
         if not hasattr(self, "_session"):
-            return {"input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0, "cached_tokens": 0}
+            return {
+                "input_tokens": 0, "output_tokens": 0,
+                "thinking_tokens": 0, "cached_tokens": 0,
+                "total_tokens": 0, "api_calls": 0,
+                "ctx_system_tokens": 0, "ctx_tools_tokens": 0,
+                "ctx_history_tokens": 0, "ctx_total_tokens": 0,
+            }
         return self._session.get_token_usage()
 
     # ------------------------------------------------------------------
