@@ -184,9 +184,13 @@ class BaseAgent:
         self._workdir.write_manifest(manifest_data)
 
         # Auto-inject identity into system prompt from manifest
+        # Strip volatile fields that change every LLM call (break caching)
         import json as _json
+        identity = {k: v for k, v in manifest_data.items() if k != "context"}
+        if "context" in manifest_data and manifest_data["context"].get("window_size"):
+            identity["context_window"] = manifest_data["context"]["window_size"]
         self._prompt_manager.write_section(
-            "identity", _json.dumps(manifest_data, indent=2, ensure_ascii=False), protected=True
+            "identity", _json.dumps(identity, indent=2, ensure_ascii=False), protected=True
         )
 
         # Post to billboard — ephemeral discovery index at ~/.lingtai/billboard/
