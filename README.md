@@ -19,7 +19,7 @@ This kernel follows Unix design:
 - **Everything is a file.** The agent's identity is its directory path. No abstract IDs — the path is the address, the lock, the truth.
 - **The kernel defines protocols, not implementations.** `LLMService` and `ChatSession` are abstract interfaces. How they're fulfilled — adapters, API keys, rate limiting — is the caller's concern.
 - **Each agent is a self-contained process.** Own directory, own LLM service, own mail, own logs. Agents communicate through filesystem mail, not shared memory.
-- **The kernel is minimal.** Think (LLM), communicate (mail), remember (memory), host tools. Capabilities, file I/O, orchestration — those live in [lingtai](https://github.com/user/lingtai).
+- **The kernel is minimal.** Think (LLM), communicate (mail), remember (memory), host tools. Capabilities, file I/O, orchestration — those live in [lingtai](https://github.com/huangzesen/lingtai).
 
 ## Install
 
