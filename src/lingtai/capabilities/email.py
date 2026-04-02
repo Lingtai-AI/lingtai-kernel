@@ -34,6 +34,12 @@ from ..i18n import t
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
 
+
+def _preview(body: str) -> str:
+    if len(body) > 500:
+        return body[:500] + f"... ({len(body) - 500} more chars)"
+    return body
+
 PROVIDERS = {"providers": [], "default": "builtin"}
 
 def get_description(lang: str = "en") -> str:
@@ -271,7 +277,7 @@ class EmailManager:
             "from": e.get("from", ""),
             "to": e.get("to", []),
             "subject": e.get("subject", "(no subject)"),
-            "preview": e.get("message", "")[:200],
+            "preview": _preview(e.get("message", "")),
             "time": e.get("received_at") or e.get("sent_at") or e.get("time") or "",
             "folder": e.get("_folder", ""),
         }
@@ -285,11 +291,14 @@ class EmailManager:
         identity = raw.get("identity")
         if not identity or not isinstance(identity, dict):
             return
-        admin = identity.get("admin")
-        summary["is_human"] = admin is None
+        summary["is_human"] = identity.get("admin") is None
+        summary["sender_name"] = identity.get("agent_name", "")
+        summary["sender_nickname"] = identity.get("nickname", "")
+        summary["sender_agent_id"] = identity.get("agent_id", "")
+        summary["sender_language"] = identity.get("language", "")
         loc = identity.get("location")
         if isinstance(loc, dict) and loc.get("timezone"):
-            summary["location"] = {
+            summary["sender_location"] = {
                 "city": loc.get("city", ""),
                 "region": loc.get("region", ""),
                 "timezone": loc.get("timezone", ""),

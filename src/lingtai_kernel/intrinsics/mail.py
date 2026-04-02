@@ -174,7 +174,10 @@ def _message_summary(msg: dict, read_ids: set[str]) -> dict:
     """Build a summary dict for check output."""
     msg_id = msg.get("_mailbox_id", "")
     body = msg.get("message", "")
-    preview = body[:120] + "..." if len(body) > 120 else body
+    if len(body) > 500:
+        preview = body[:500] + f"... ({len(body) - 500} more chars)"
+    else:
+        preview = body
     identity = msg.get("identity")
     sender = msg.get("from", "")
     if identity and identity.get("agent_name"):

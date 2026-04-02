@@ -496,7 +496,10 @@ class BaseAgent:
 
         self._wake_nap("mail_arrived")
 
-        preview = message[:100].replace("\n", " ")
+        if len(message) > 500:
+            preview = message[:500].replace("\n", " ") + f"... ({len(message) - 500} more chars)"
+        else:
+            preview = message.replace("\n", " ")
         notification = _t(
             self._config.language, "system.new_mail",
             box=self._mailbox_name, sender=sender, subject=subject,
