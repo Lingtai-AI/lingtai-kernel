@@ -88,8 +88,12 @@ class Agent(BaseAgent):
         if addons:
             from .addons import setup_addon
             for addon_name, addon_kwargs in addons.items():
-                mgr = setup_addon(self, addon_name, **(addon_kwargs or {}))
-                self._addon_managers[addon_name] = mgr
+                try:
+                    mgr = setup_addon(self, addon_name, **(addon_kwargs or {}))
+                    self._addon_managers[addon_name] = mgr
+                except Exception as e:
+                    self._log("addon_skipped", addon=addon_name, reason=str(e))
+                    self._notify_addon_failure(addon_name, e)
 
         # Re-write manifest now that capabilities are registered
         if self._capabilities:
@@ -271,9 +275,29 @@ class Agent(BaseAgent):
 
     def start(self) -> None:
         super().start()
+        _failed_addons = []
         for name, mgr in self._addon_managers.items():
             if hasattr(mgr, "start"):
-                mgr.start()
+                try:
+                    mgr.start()
+                except Exception as e:
+                    self._log("addon_skipped", addon=name, reason=f"start failed: {e}")
+                    self._notify_addon_failure(name, e)
+                    _failed_addons.append(name)
+        for name in _failed_addons:
+            self._addon_managers.pop(name, None)
+            # Remove tool registered during setup so the LLM doesn't see it
+            self._tool_handlers.pop(name, None)
+            self._tool_schemas = [s for s in self._tool_schemas if s.name != name]
+
+    def _notify_addon_failure(self, addon_name: str, error: Exception) -> None:
+        """Queue a [system] message so the agent can inform the user."""
+        from lingtai_kernel.message import _make_message, MSG_REQUEST
+        msg = _make_message(
+            MSG_REQUEST, "system",
+            f"[system] Addon '{addon_name}' failed to load: {error}",
+        )
+        self.inbox.put(msg)
 
     def connect_mcp(
         self,
@@ -549,8 +573,12 @@ class Agent(BaseAgent):
         if addons:
             from .addons import setup_addon
             for addon_name, addon_kwargs in addons.items():
-                mgr = setup_addon(self, addon_name, **(addon_kwargs or {}))
-                self._addon_managers[addon_name] = mgr
+                try:
+                    mgr = setup_addon(self, addon_name, **(addon_kwargs or {}))
+                    self._addon_managers[addon_name] = mgr
+                except Exception as e:
+                    self._log("addon_skipped", addon=addon_name, reason=str(e))
+                    self._notify_addon_failure(addon_name, e)
 
         # Reload MCP
         self._load_mcp_from_workdir()
@@ -569,9 +597,20 @@ class Agent(BaseAgent):
             self._session._rebuild_session(saved_interface)
 
         # Start addon managers
+        _failed_addons = []
         for name, mgr in self._addon_managers.items():
             if hasattr(mgr, "start"):
-                mgr.start()
+                try:
+                    mgr.start()
+                except Exception as e:
+                    self._log("addon_skipped", addon=name, reason=f"start failed: {e}")
+                    self._notify_addon_failure(name, e)
+                    _failed_addons.append(name)
+        for name in _failed_addons:
+            self._addon_managers.pop(name, None)
+            # Remove tool registered during setup so the LLM doesn't see it
+            self._tool_handlers.pop(name, None)
+            self._tool_schemas = [s for s in self._tool_schemas if s.name != name]
 
         self._log(
             "refresh_complete",

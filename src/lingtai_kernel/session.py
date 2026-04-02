@@ -238,8 +238,12 @@ class SessionManager:
         ctx_window = self._config.context_limit or self._chat.context_window()
         if ctx_window <= 0:
             return 0.0
-        estimate = self._chat.interface.estimate_context_tokens()
-        return estimate / ctx_window if estimate > 0 else 0.0
+        # Prefer server-reported input tokens (authoritative).
+        # Fall back to local estimate only before the first API response.
+        tokens = self._latest_input_tokens
+        if tokens <= 0:
+            tokens = self._chat.interface.estimate_context_tokens()
+        return tokens / ctx_window if tokens > 0 else 0.0
 
     # ------------------------------------------------------------------
     # Token tracking
