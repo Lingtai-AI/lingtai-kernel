@@ -586,6 +586,19 @@ class BaseAgent:
         with open(soul_file, "a") as f:
             f.write(entry + "\n")
 
+    def _run_inquiry(self, question: str, source: str = "auto") -> None:
+        """Run soul.inquiry and log result as insight event."""
+        try:
+            from .intrinsics.soul import soul_inquiry
+            result = soul_inquiry(self, question)
+            if result:
+                self._log("insight", text=result["voice"], question=question, source=source)
+                self._persist_soul_entry(result, mode="inquiry")
+            else:
+                self._log("insight", text="(silence)", question=question, source=source)
+        except Exception as e:
+            self._log("insight_error", error=str(e)[:200], question=question)
+
     # ------------------------------------------------------------------
     # Heartbeat — always-on health monitor (involuntary)
     # ------------------------------------------------------------------
@@ -675,6 +688,20 @@ class BaseAgent:
                 if content:
                     self.send(content, sender="system")
                     self._log("prompt_received", source="signal_file")
+
+            # .inquiry = external soul inquiry (from TUI /btw command)
+            inquiry_file = self._working_dir / ".inquiry"
+            if inquiry_file.is_file():
+                try:
+                    question = inquiry_file.read_text().strip()
+                except OSError:
+                    question = ""
+                try:
+                    inquiry_file.unlink()
+                except OSError:
+                    pass
+                if question:
+                    self._run_inquiry(question, source="signal_file")
 
             # Stamina enforcement — asleep when stamina expires
             if self._uptime_anchor is not None and self._state not in (AgentState.ASLEEP, AgentState.SUSPENDED):
