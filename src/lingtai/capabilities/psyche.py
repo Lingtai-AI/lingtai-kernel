@@ -79,7 +79,7 @@ class PsycheManager:
     # ------------------------------------------------------------------
 
     _VALID_ACTIONS: dict[str, set[str]] = {
-        "character": {"update", "load"},
+        "lingtai": {"update", "load"},
         "memory": {"edit", "load"},
         "context": {"molt"},
     }
@@ -104,18 +104,18 @@ class PsycheManager:
         return method(args)
 
     # ------------------------------------------------------------------
-    # Character actions
+    # Lingtai (identity/character) actions
     # ------------------------------------------------------------------
 
-    def _character_update(self, args: dict) -> dict:
+    def _lingtai_update(self, args: dict) -> dict:
         content = args.get("content", "")
         self._character_path.parent.mkdir(exist_ok=True)
         self._character_path.write_text(content)
         # Auto-load into system prompt
-        self._character_load({})
+        self._lingtai_load({})
         return {"status": "ok", "path": str(self._character_path)}
 
-    def _character_load(self, _args: dict) -> dict:
+    def _lingtai_load(self, _args: dict) -> dict:
         covenant = ""
         if self._covenant_path.is_file():
             covenant = self._covenant_path.read_text()
@@ -210,13 +210,13 @@ def setup(agent: "BaseAgent") -> PsycheManager:
     mgr = PsycheManager(agent, eigen_handler)
 
     # Auto-load character and memory into system prompt at boot
-    mgr._character_load({})
+    mgr._lingtai_load({})
     mgr._memory_load({})
 
     # Register post-molt hook to reload character + memory
     if not hasattr(agent, "_post_molt_hooks"):
         agent._post_molt_hooks = []
-    agent._post_molt_hooks.append(lambda: (mgr._character_load({}), mgr._memory_load({})))
+    agent._post_molt_hooks.append(lambda: (mgr._lingtai_load({}), mgr._memory_load({})))
 
     agent.add_tool(
         "psyche", schema=get_schema(lang), handler=mgr.handle, description=get_description(lang),
