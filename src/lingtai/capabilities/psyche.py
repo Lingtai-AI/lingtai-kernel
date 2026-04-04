@@ -72,7 +72,7 @@ class PsycheManager:
         # Paths
         system_dir = self._working_dir / "system"
         self._covenant_path = system_dir / "covenant.md"
-        self._character_path = system_dir / "character.md"
+        self._character_path = system_dir / "lingtai.md"
 
     # ------------------------------------------------------------------
     # Dispatch
@@ -133,7 +133,7 @@ class PsycheManager:
         self._agent._token_decomp_dirty = True
         self._agent._flush_system_prompt()
 
-        rel_path = "system/character.md"
+        rel_path = "system/lingtai.md"
         git_diff = self._agent._workdir.diff(rel_path)
 
         self._agent._log(
