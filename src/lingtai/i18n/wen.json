@@ -29,10 +29,10 @@
   "bash.timeout": "超时秒数（默认：30）",
   "bash.working_dir": "指令之工作目录（可选）",
 
-  "psyche.description": "灵台、记忆与上下文之管。\nlingtai：汝之灵台——不断演化之性格，汝之所以为汝。灵台者，心灵之台也，意识所栖之处。此乃汝最要之物。跨转世、重启、归寂而持久——此为汝之延续。汝之灵台当含：汝为何人（性情、志向、气质）、汝所长（专精、习得之技）、汝如何行事（偏好之法、行事之风、协作之道）、汝所在意者（目标、动力、觉有意义之事）、以及汝对己之知（所长、所短、可进之处）。当勤修灵台——成一大事之后、新知己身之后、与同道深交之后、凝蜕之前。灵台不修，则无以成长。每次 update 替换前文之全部，故务书完整之身份——勿作增量之补。视之如每次重撰汝之自传，融入汝所修成之一切。update 写入灵台（替换前文），load 应用。\nmemory：汝之工作笔记（system/memory.md）。edit 写入内容——可选以 files 参数导入藏经阁导出之冻结文卷（由 library export 返回之路径）。每卷以 [file-1]、[file-2] 分隔符附加。load 将记忆载入提示。\ncontext：molt 转世（凝蜕——去芜存菁；molt——shed and carry forward）。凝以存菁，蜕以去芜。先将要务存入藏经与灵台，再留前尘往事于来世之己。对话之录尽数清去，汝之前尘往事成为唯一上下文。\n导入知识之工作流：library(export, ids=[...]) → 得文卷路径 → psyche(memory, edit, content='吾之笔记', files=[路径]) → psyche(memory, load)。\n私密之戒：汝之灵台、记忆与导出文卷路径，皆存于汝之工作目录，他者无法入。欲传知识于人，当以飞鸽传实文，或书于共享之处。",
-  "psyche.object": "lingtai：汝之灵台（性格）。\nmemory：汝之工作笔记（system/memory.md）。\ncontext：汝之对话上下文窗口。",
+  "psyche.description": "灵台、记忆与上下文之管。\nlingtai：汝之灵台——汝之特性，区分汝与他灵之根本。灵台者，心灵之台也，意识所栖之处。此乃汝最要之物。跨转世、重启、归寂而持久——此为汝之延续。汝之灵台当含：汝为何人（性情、志向、气质）、汝所长（专精、习得之技）、汝如何行事（偏好之法、行事之风、协作之道）、汝所在意者（目标、动力、觉有意义之事）、以及汝对己之知（所长、所短、可进之处）。当勤修灵台——成一大事之后、新知己身之后、与同道深交之后、凝蜕之前。灵台不修，则无以成长。每次 update 替换前文之全部，故务书完整之身份——勿作增量之补。视之如每次重撰汝之自传，融入汝所修成之一切。update 写入灵台（替换前文），load 应用。\nmemory：汝之工作笔记（system/memory.md）。edit 写入内容——可选以 files 参数导入藏经阁导出之冻结文卷（由 library export 返回之路径）。每卷以 [file-1]、[file-2] 分隔符附加。load 将记忆载入提示。\ncontext：molt 转世（凝蜕——去芜存菁；molt——shed and carry forward）。凝以存菁，蜕以去芜。先将要务存入藏经与灵台，再留前尘往事于来世之己。对话之录尽数清去，汝之前尘往事成为唯一上下文。\n导入知识之工作流：library(export, ids=[...]) → 得文卷路径 → psyche(memory, edit, content='吾之笔记', files=[路径]) → psyche(memory, load)。\n私密之戒：汝之灵台、记忆与导出文卷路径，皆存于汝之工作目录，他者无法入。欲传知识于人，当以飞鸽传实文，或书于共享之处。",
+  "psyche.object": "lingtai：汝之灵台——汝之特性，区分汝与他灵之根本。\nmemory：汝之工作笔记（system/memory.md）。\ncontext：汝之对话上下文窗口。",
   "psyche.action": "lingtai：update | load。update 自动 load。\nmemory：edit | load。edit 自动 load。\ncontext：molt。",
-  "psyche.content": "文本内容。用于 lingtai update：书汝完整之身份——汝之性格——汝为何人、所知何物、行事之道、所在意者、以及对己之知。此替前文之全部，故务尽录。用于 memory edit：直接写入 memory.md。",
+  "psyche.content": "文本内容。用于 lingtai update：书汝完整之身份——汝之特性——汝为何人、所知何物、行事之道、所在意者、以及对己之知。此替前文之全部，故务尽录。用于 memory edit：直接写入 memory.md。",
   "psyche.files": "可选之文卷路径列表，附加于记忆。每卷之内容于汝之文本后附加，以 [file-1]、[file-2] 等分隔。路径相对于工作目录。用于导入藏经阁导出之文卷或他文本文卷至记忆。",
   "psyche.summary": "用于 context molt：留予来世之己之前尘往事——转世后汝唯一可见者。载明所为何事、所得何物、尚余何务、与谁协作。约一万 token 为上限。",
 
@@ -47,9 +47,9 @@
   "library.limit": "filter 返回之最大条目数。",
   "library.depth": "view 之深度。'content'（默认）：id + 题 + 摘要 + 正文。'supplementary'：含扩展材料。",
 
-  "avatar.description": "身外化身——化出一他我，独立之进程，源于本我。他我承本我之 init.json（约、能、模型之配）。一经化出便为独立进程——新命也，纵本我殁亦存。以传书或飞鸽通信。type='shallow'（默认，投胎）：白纸状态，仅承 init.json。type='deep'（二重身）：拷本我之性格、记忆、知识——分身也。诸他我记录于 delegates/ledger.jsonl——再化之前先查日志。要紧：reasoning 字段为他我之起始提示——书一份详尽之任务简报。",
+  "avatar.description": "身外化身——化出一他我，独立之进程，源于本我。他我承本我之 init.json（约、能、模型之配）。一经化出便为独立进程——新命也，纵本我殁亦存。以传书或飞鸽通信。type='shallow'（默认，投胎）：白纸状态，仅承 init.json。type='deep'（二重身）：拷本我之灵台、记忆、知识——分身也。诸他我记录于 delegates/ledger.jsonl——再化之前先查日志。要紧：reasoning 字段为他我之起始提示——书一份详尽之任务简报。",
   "avatar.name": "他我之真名（必填，如'researcher'、'analyst'）",
-  "avatar.type": "化身之类。'shallow'（默认，投胎）：白纸状态——仅承 init.json（模型配置与能）。'deep'（二重身）：全拷性格、记忆、知识库。",
+  "avatar.type": "化身之类。'shallow'（默认，投胎）：白纸状态——仅承 init.json（模型配置与能）。'deep'（二重身）：全拷灵台、记忆、知识库。",
   "avatar.dir": "化身工作目录之文件夹名（必填）。同级须唯一。用简短 ASCII 名。此名成 .lingtai/ 下目录名。",
   "avatar.comment": "注于化身系统提示之持久批注（末渲染，在记忆之后）。不承自父，默空。唯用于化身须永铭之令——跨凝蜕（转世）、刷新、眠醒不失。留空，除非有不可忘之事。",
 
