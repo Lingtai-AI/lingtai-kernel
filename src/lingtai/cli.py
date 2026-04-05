@@ -77,7 +77,7 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
         agent_name=m.get("agent_name"),
         working_dir=working_dir,
         mail_service=mail_service,
-        streaming=m.get("streaming", True),
+        streaming=m.get("streaming", False),
     )
 
     # Full setup from init.json (capabilities, addons, config, covenant, etc.)
