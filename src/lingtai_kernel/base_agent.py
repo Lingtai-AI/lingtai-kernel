@@ -593,7 +593,7 @@ class BaseAgent:
         except Exception as e:
             self._log("soul_whisper_error", error=str(e))
 
-    def _persist_soul_entry(self, result: dict, mode: str = "flow") -> None:
+    def _persist_soul_entry(self, result: dict, mode: str = "flow", source: str = "agent") -> None:
         """Append a soul entry to the appropriate log file.
 
         Flow entries go to logs/soul_flow.jsonl.
@@ -606,6 +606,7 @@ class BaseAgent:
         entry = json.dumps({
             "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "mode": mode,
+            "source": source,
             "prompt": result["prompt"],
             "thinking": result["thinking"],
             "voice": result["voice"],
@@ -613,14 +614,14 @@ class BaseAgent:
         with open(soul_file, "a") as f:
             f.write(entry + "\n")
 
-    def _run_inquiry(self, question: str, source: str = "auto") -> None:
+    def _run_inquiry(self, question: str, source: str = "agent") -> None:
         """Run soul.inquiry and log result as insight event."""
         try:
             from .intrinsics.soul import soul_inquiry
             result = soul_inquiry(self, question)
             if result:
                 self._log("insight", text=result["voice"], question=question, source=source)
-                self._persist_soul_entry(result, mode="inquiry")
+                self._persist_soul_entry(result, mode="inquiry", source=source)
             else:
                 self._log("insight", text="(silence)", question=question, source=source)
         except Exception as e:
@@ -716,19 +717,50 @@ class BaseAgent:
                     self.send(content, sender="system")
                     self._log("prompt_received", source="signal_file")
 
-            # .inquiry = external soul inquiry (from TUI /btw command)
+            # .inquiry = soul inquiry (from TUI /btw or auto-insight)
+            # Format: first line = source, rest = question.
+            # If no newline, entire content is question with source "human".
+            # Flow: .inquiry → .inquiry.taken (processing) → deleted (done)
             inquiry_file = self._working_dir / ".inquiry"
-            if inquiry_file.is_file():
+            taken_file = self._working_dir / ".inquiry.taken"
+            if inquiry_file.is_file() and not taken_file.is_file():
                 try:
-                    question = inquiry_file.read_text().strip()
-                except OSError:
-                    question = ""
-                try:
-                    inquiry_file.unlink()
+                    inquiry_file.rename(taken_file)
                 except OSError:
                     pass
-                if question:
-                    self._run_inquiry(question, source="signal_file")
+                else:
+                    try:
+                        content = taken_file.read_text().strip()
+                    except OSError:
+                        content = ""
+                    if content:
+                        lines = content.split("\n", 1)
+                        if len(lines) == 2 and lines[0] in ("human", "insight", "agent"):
+                            source, question = lines[0], lines[1].strip()
+                        else:
+                            source, question = "human", content.strip()
+                        if question:
+                            def _inquiry_done(q: str, s: str, tf: Path) -> None:
+                                self._run_inquiry(q, source=s)
+                                try:
+                                    tf.unlink()
+                                except OSError:
+                                    pass
+                            threading.Thread(
+                                target=_inquiry_done,
+                                args=(question, source, taken_file),
+                                daemon=True,
+                            ).start()
+                        else:
+                            try:
+                                taken_file.unlink()
+                            except OSError:
+                                pass
+                    else:
+                        try:
+                            taken_file.unlink()
+                        except OSError:
+                            pass
 
             # Stamina enforcement — asleep when stamina expires
             if self._uptime_anchor is not None and self._state not in (AgentState.ASLEEP, AgentState.SUSPENDED):

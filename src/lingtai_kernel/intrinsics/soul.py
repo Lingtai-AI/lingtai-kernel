@@ -354,6 +354,7 @@ def soul_inquiry(agent, question: str) -> dict | None:
                     cloned.add_user_blocks(stripped)
 
     system_prompt = _build_soul_system_prompt(agent)
+    system_prompt += "\n\nYou have no tools. Respond with plain text only. Never output tool calls or XML tags."
 
     try:
         session = agent.service.create_session(
