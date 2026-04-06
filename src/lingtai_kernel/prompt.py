@@ -2,7 +2,7 @@
 
 SystemPromptManager manages named sections of an agent's system prompt.
 Sections are rendered in a configurable order. The default order is:
-    principle (no header) → covenant → tools → identity → memory
+    principle (no header) → covenant → rules → tools → identity → memory
 
 build_system_prompt() assembles base_prompt + rendered sections.
 """
@@ -23,7 +23,7 @@ class SystemPromptManager:
     """
 
     # Default render order. First entry rendered without ## header (raw text).
-    _DEFAULT_ORDER = ["principle", "covenant", "tools", "skills", "identity", "memory", "comment"]
+    _DEFAULT_ORDER = ["principle", "covenant", "rules", "tools", "skills", "identity", "memory", "comment"]
 
     def __init__(self) -> None:
         self._sections: dict[str, dict] = {}
