@@ -46,6 +46,11 @@ def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
         "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["spawn", "rules"],
+                "description": t(lang, "avatar.action"),
+            },
             "name": {
                 "type": "string",
                 "description": t(lang, "avatar.name"),
@@ -63,8 +68,12 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "string",
                 "description": t(lang, "avatar.comment"),
             },
+            "rules_content": {
+                "type": "string",
+                "description": t(lang, "avatar.rules_content"),
+            },
         },
-        "required": ["name", "dir"],
+        "required": [],
     }
 
 
@@ -85,6 +94,9 @@ class AvatarManager:
     # ------------------------------------------------------------------
 
     def handle(self, args: dict) -> dict:
+        action = args.get("action", "spawn")
+        if action == "rules":
+            return self._rules(args)
         return self._spawn(args)
 
     # ------------------------------------------------------------------
@@ -304,6 +316,96 @@ class AvatarManager:
                 except json.JSONDecodeError:
                     continue
         return records
+
+    # ------------------------------------------------------------------
+    # Rules distribution
+    # ------------------------------------------------------------------
+
+    def _rules(self, args: dict) -> dict:
+        """Set rules and distribute to all descendants via .rules signal files."""
+        parent = self._agent
+        content = args.get("rules_content", "").strip()
+        if not content:
+            return {"error": "rules_content is required"}
+
+        # Admin check: at least one admin privilege must be truthy
+        admin = getattr(parent, "_admin", {}) or {}
+        if not any(admin.values()):
+            return {"error": "Not authorized — admin privilege required to set rules"}
+
+        # Persist to own system/rules.md (canonical copy)
+        canonical = parent._working_dir / "system" / "rules.md"
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        canonical.write_text(content)
+
+        # Update own prompt section immediately (no signal needed for self)
+        parent._prompt_manager.write_section("rules", content, protected=True)
+        parent._flush_system_prompt()
+
+        # Write .rules signal file to all descendants
+        distributed: list[str] = []
+        for child_dir in self._walk_avatar_tree(parent._working_dir):
+            try:
+                (child_dir / ".rules").write_text(content)
+                distributed.append(child_dir.name)  # report relative name, consistent with addressing convention
+            except OSError:
+                pass
+
+        return {
+            "status": "ok",
+            "message": f"Rules set and distributed to {len(distributed)} descendant(s).",
+            "distributed_to": distributed,
+        }
+
+    @staticmethod
+    def _walk_avatar_tree(root: Path) -> list[Path]:
+        """Recursively collect all descendant working-dir Paths from ledger files.
+
+        Ledger entries store relative names (e.g. 'researcher'); we resolve each
+        against the *parent agent's parent directory* since avatars live as
+        siblings in .lingtai/. Returns absolute Paths of live descendant dirs.
+        """
+        from lingtai_kernel.handshake import resolve_address
+
+        visited: set[str] = set()
+        queue: list[Path] = [Path(root)]
+        result: list[Path] = []
+
+        while queue:
+            current = queue.pop(0)
+            ledger_path = current / "delegates" / "ledger.jsonl"
+            if not ledger_path.is_file():
+                continue
+            try:
+                lines = ledger_path.read_text().splitlines()
+            except OSError:
+                continue
+            # Siblings of `current` live in current.parent
+            base_dir = current.parent
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("event") != "avatar":
+                    continue
+                wd = record.get("working_dir", "")
+                if not wd:
+                    continue
+                # Resolve relative name to absolute Path
+                child_dir = resolve_address(wd, base_dir)
+                key = str(child_dir)
+                if key in visited:
+                    continue
+                if not child_dir.is_dir():
+                    continue  # dead avatar, directory gone
+                visited.add(key)
+                result.append(child_dir)
+                queue.append(child_dir)
+
+        return result
 
 
 def setup(agent: "Agent", **kwargs) -> AvatarManager:
