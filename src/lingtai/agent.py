@@ -235,10 +235,11 @@ class Agent(BaseAgent):
         The target must have init.json to boot from.
         """
         import subprocess
-        from lingtai_kernel.handshake import is_agent
+        from lingtai_kernel.handshake import is_agent, resolve_address
         from lingtai.venv_resolve import resolve_venv, venv_python
 
-        target = Path(address)
+        base_dir = self._working_dir.parent
+        target = resolve_address(address, base_dir)
         if not is_agent(target):
             return None
 
