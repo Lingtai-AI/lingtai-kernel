@@ -123,7 +123,7 @@ class TestThreeAgentEmail:
         shutil.rmtree(self.base_dir, ignore_errors=True)
 
     def _addr(self, name: str) -> str:
-        return str(self.agents[name].working_dir)
+        return self.agents[name].working_dir.name
 
     def _dir(self, name: str) -> Path:
         return self.agents[name].working_dir
