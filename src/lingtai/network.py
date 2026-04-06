@@ -167,6 +167,8 @@ def _discover_agents(base_dir: Path) -> dict[str, AgentNode]:
 
 def _build_avatar_edges(nodes: dict[str, AgentNode]) -> list[AvatarEdge]:
     """Pass 2 — read delegates/ledger.jsonl for each node."""
+    from lingtai_kernel.handshake import resolve_address
+
     edges: list[AvatarEdge] = []
     for parent_address, node in list(nodes.items()):
         if node.working_dir is None:
@@ -188,16 +190,18 @@ def _build_avatar_edges(nodes: dict[str, AgentNode]) -> list[AvatarEdge]:
                 continue
             if record.get("event") != "avatar":
                 continue
-            # Avatar ledger (written by avatar.py) records child's working dir path
+            # Avatar ledger records child's address (now a relative name, e.g. "本我")
             child_address = record.get("working_dir", "")
             if not child_address:
                 continue
             # Ensure child node exists (may be from a dead avatar)
             if child_address not in nodes:
+                # Resolve relative name to filesystem path for ghost node
+                child_dir = resolve_address(child_address, node.working_dir.parent)
                 nodes[child_address] = AgentNode(
                     address=child_address,
                     agent_name=record.get("name", ""),
-                    working_dir=None,
+                    working_dir=child_dir if child_dir is not None and child_dir.is_dir() else None,
                 )
             edges.append(AvatarEdge(
                 parent_address=parent_address,
