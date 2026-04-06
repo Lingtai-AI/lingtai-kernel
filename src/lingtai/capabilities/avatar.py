@@ -335,8 +335,11 @@ class AvatarManager:
 
         # Persist to own system/rules.md (canonical copy)
         canonical = parent._working_dir / "system" / "rules.md"
-        canonical.parent.mkdir(parents=True, exist_ok=True)
-        canonical.write_text(content)
+        try:
+            canonical.parent.mkdir(parents=True, exist_ok=True)
+            canonical.write_text(content)
+        except OSError as e:
+            return {"error": f"failed to persist rules to system/rules.md: {e}"}
 
         # Update own prompt section immediately (no signal needed for self)
         parent._prompt_manager.write_section("rules", content, protected=True)
@@ -367,7 +370,7 @@ class AvatarManager:
         """
         from lingtai_kernel.handshake import resolve_address
 
-        visited: set[str] = set()
+        visited: set[str] = {str(Path(root))}
         queue: list[Path] = [Path(root)]
         result: list[Path] = []
 

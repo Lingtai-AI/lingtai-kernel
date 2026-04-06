@@ -306,3 +306,47 @@ class TestAvatarRulesAction:
         assert result["status"] == "ok"
         assert result["agent_name"] == "child"
         assert result["address"] == "child"  # relative name (current convention)
+
+    def test_rules_root_not_self_distributed_via_cycle(self, tmp_path):
+        """If a descendant's ledger references the root, root should NOT receive .rules.
+
+        Verifies that _walk_avatar_tree's visited set is seeded with root, so cycles
+        through root cannot cause the admin's own dir to appear in the distribution set.
+        """
+        from lingtai.agent import Agent
+
+        parent_dir = tmp_path / "parent"
+        child_dir = tmp_path / "child"
+        child_dir.mkdir(parents=True)
+
+        parent = Agent(
+            service=make_mock_service(),
+            agent_name="parent",
+            working_dir=parent_dir,
+            capabilities=["avatar"],
+            admin={"karma": True},
+        )
+
+        # parent → child
+        p_ledger = parent_dir / "delegates" / "ledger.jsonl"
+        p_ledger.parent.mkdir(parents=True, exist_ok=True)
+        p_ledger.write_text(json.dumps({"event": "avatar", "name": "child", "working_dir": "child"}) + "\n")
+
+        # child → parent (malicious cycle pointing back to root)
+        c_ledger = child_dir / "delegates" / "ledger.jsonl"
+        c_ledger.parent.mkdir(parents=True, exist_ok=True)
+        c_ledger.write_text(json.dumps({"event": "avatar", "name": "parent", "working_dir": "parent"}) + "\n")
+
+        mgr = parent.get_capability("avatar")
+        result = mgr.handle({
+            "action": "rules",
+            "rules_content": "Cycle test.",
+        })
+        assert result["status"] == "ok"
+        # Child receives the signal
+        assert (child_dir / ".rules").read_text() == "Cycle test."
+        # Root should NOT receive a .rules signal — it gets system/rules.md directly
+        assert not (parent_dir / ".rules").is_file()
+        # distributed_to should contain only child, not parent
+        assert "parent" not in result["distributed_to"]
+        assert "child" in result["distributed_to"]
