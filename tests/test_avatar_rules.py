@@ -406,3 +406,20 @@ class TestAutoDistributeAfterSpawn:
 
         child_dir = parent_dir.parent / "child"
         assert not (child_dir / ".rules").is_file()
+
+    def test_spawn_deep_clone_also_gets_rules_signal(self, tmp_path):
+        """Deep clone already has system/rules.md from _prepare_deep,
+        but auto-distribute still writes .rules (redundant but harmless —
+        the heartbeat will diff and skip)."""
+        parent, parent_dir = self._setup_spawnable_parent(tmp_path, with_rules=True)
+
+        mgr = parent.get_capability("avatar")
+        with patch.object(AvatarManager, "_launch", return_value=12345):
+            result = mgr.handle({"name": "clone", "dir": "clone", "type": "deep"})
+        assert result["status"] == "ok"
+
+        clone_dir = parent_dir.parent / "clone"
+        # system/rules.md was copied by _prepare_deep
+        assert (clone_dir / "system" / "rules.md").read_text() == "Always be concise."
+        # .rules signal was also written (redundant but harmless)
+        assert (clone_dir / ".rules").read_text() == "Always be concise."

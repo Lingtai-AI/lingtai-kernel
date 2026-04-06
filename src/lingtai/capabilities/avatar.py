@@ -206,15 +206,10 @@ class AvatarManager:
         if parent_rules_md.is_file():
             try:
                 rules_content = parent_rules_md.read_text()
-                if rules_content.strip():
-                    # Write .rules signal to all descendants (newborn + existing)
-                    for child_dir in self._walk_avatar_tree(parent._working_dir):
-                        try:
-                            (child_dir / ".rules").write_text(rules_content)
-                        except OSError:
-                            pass
             except OSError:
-                pass
+                rules_content = ""
+            if rules_content.strip():
+                self._distribute_rules_to_descendants(rules_content, parent._working_dir)
 
         return {
             "status": "ok",
@@ -361,13 +356,7 @@ class AvatarManager:
         parent._flush_system_prompt()
 
         # Write .rules signal file to all descendants
-        distributed: list[str] = []
-        for child_dir in self._walk_avatar_tree(parent._working_dir):
-            try:
-                (child_dir / ".rules").write_text(content)
-                distributed.append(child_dir.name)  # report relative name, consistent with addressing convention
-            except OSError:
-                pass
+        distributed = self._distribute_rules_to_descendants(content, parent._working_dir)
 
         return {
             "status": "ok",
@@ -424,6 +413,22 @@ class AvatarManager:
                 queue.append(child_dir)
 
         return result
+
+    def _distribute_rules_to_descendants(self, content: str, root: Path) -> list[str]:
+        """Write `.rules` signal file to every descendant in the avatar tree.
+
+        Returns the list of descendant directory names that were successfully written.
+        Failures are silently swallowed (caller has no visibility), consistent with
+        the best-effort, idempotent design of signal files.
+        """
+        distributed: list[str] = []
+        for child_dir in self._walk_avatar_tree(root):
+            try:
+                (child_dir / ".rules").write_text(content)
+                distributed.append(child_dir.name)
+            except OSError:
+                pass
+        return distributed
 
 
 def setup(agent: "Agent", **kwargs) -> AvatarManager:
