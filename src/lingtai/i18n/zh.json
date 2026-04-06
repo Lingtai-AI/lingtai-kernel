@@ -47,7 +47,7 @@
   "library.limit": "filter 返回的最大条目数。",
   "library.depth": "view 的深度。'content'（默认）：id + 标题 + 摘要 + 正文。'supplementary'：含扩展材料。",
 
-  "avatar.description": "化出一个他我——完全独立的智能体进程，源于你自身。他我继承你的 init.json（行为准则、能力、LLM 配置）。一经化出便是独立进程——新的生命，即使你死亡它也存活。使用 mail 或 email 通信。type='shallow'（默认，投胎）：白纸状态，仅继承 init.json。type='deep'（二重身）：复制你的灵台、记忆和知识库——一个分身。所有记录在 delegates/ledger.jsonl 中——化出前先查日志。重要：reasoning 字段成为他我的起始提示——写一份详尽的任务简报。",
+  "avatar.description": "化出一个他我——完全独立的智能体进程，源于你自身。他我继承你的 init.json（行为准则、能力、LLM 配置）。一经化出便是独立进程——新的生命，即使你死亡它也存活。使用 mail 或 email 通信。type='shallow'（默认，投胎）：白纸状态，仅继承 init.json。type='deep'（二重身）：复制你的灵台、记忆和知识库——一个分身。所有记录在 delegates/ledger.jsonl 中——化出前先查日志。重要：reasoning 字段成为他我的起始提示——写一份详尽的任务简报。 动作：'spawn'（默认）：创建新他我。'rules'：设网络规则并分发给所有后代——需 admin 权限（karma）。",
   "avatar.name": "他我的真名（必填，例如 'researcher'、'analyst'）",
   "avatar.type": "化身类型。'shallow'（默认，投胎）：白纸状态——仅继承 init.json（LLM 配置 + 能力）。'deep'（二重身）：完整复制性格、记忆和知识库。",
   "avatar.dir": "化身工作目录的文件夹名（必填）。在同级中须唯一。用简短 ASCII 名（如 'researcher', 'coder'）。此名成为 .lingtai/ 下的目录名。",

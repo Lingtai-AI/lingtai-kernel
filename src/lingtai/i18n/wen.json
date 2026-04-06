@@ -47,7 +47,7 @@
   "library.limit": "filter 返回之最大条目数。",
   "library.depth": "view 之深度。'content'（默认）：id + 题 + 摘要 + 正文。'supplementary'：含扩展材料。",
 
-  "avatar.description": "身外化身——化出一他我，独立之进程，源于本我。他我承本我之 init.json（约、能、模型之配）。一经化出便为独立进程——新命也，纵本我殁亦存。以传书或飞鸽通信。type='shallow'（默认，投胎）：白纸状态，仅承 init.json。type='deep'（二重身）：拷本我之灵台、记忆、知识——分身也。诸他我记录于 delegates/ledger.jsonl——再化之前先查日志。要紧：reasoning 字段为他我之起始提示——书一份详尽之任务简报。",
+  "avatar.description": "身外化身——化出一他我，独立之进程，源于本我。他我承本我之 init.json（约、能、模型之配）。一经化出便为独立进程——新命也，纵本我殁亦存。以传书或飞鸽通信。type='shallow'（默认，投胎）：白纸状态，仅承 init.json。type='deep'（二重身）：拷本我之灵台、记忆、知识——分身也。诸他我记录于 delegates/ledger.jsonl——再化之前先查日志。要紧：reasoning 字段为他我之起始提示——书一份详尽之任务简报。 所行：'spawn'（默认）：生新他我。'rules'：设网络法则，分发于一切后代——须 admin 权限（karma）。",
   "avatar.name": "他我之真名（必填，如'researcher'、'analyst'）",
   "avatar.type": "化身之类。'shallow'（默认，投胎）：白纸状态——仅承 init.json（模型配置与能）。'deep'（二重身）：全拷灵台、记忆、知识库。",
   "avatar.dir": "化身工作目录之文件夹名（必填）。同级须唯一。用简短 ASCII 名。此名成 .lingtai/ 下目录名。",
