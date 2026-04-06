@@ -183,7 +183,7 @@ class AvatarManager:
         # Record in ledger
         self._append_ledger(
             "avatar", peer_name,
-            working_dir=str(avatar_working_dir),
+            working_dir=avatar_working_dir.name,
             mission=reasoning or "",
             type=avatar_type,
             pid=pid,
@@ -191,7 +191,7 @@ class AvatarManager:
 
         return {
             "status": "ok",
-            "working_dir": str(avatar_working_dir),
+            "address": avatar_working_dir.name,
             "agent_name": peer_name,
             "type": avatar_type,
             "pid": pid,

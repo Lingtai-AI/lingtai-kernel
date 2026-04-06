@@ -675,7 +675,7 @@ class EmailManager:
 
         sender = (self._agent._mail_service.address
                   if self._agent._mail_service is not None and self._agent._mail_service.address
-                  else str(self._agent._working_dir))
+                  else self._agent._working_dir.name)
 
         # Build visible payload (no bcc)
         base_payload = {
@@ -868,7 +868,7 @@ class EmailManager:
         my_address = (
             self._agent._mail_service.address
             if self._agent._mail_service
-            else str(self._agent._working_dir)
+            else self._agent._working_dir.name
         )
 
         reply_to = original["from"]
