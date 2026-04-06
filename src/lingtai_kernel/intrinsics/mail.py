@@ -198,8 +198,11 @@ def _message_summary(msg: dict, read_ids: set[str]) -> dict:
 # ---------------------------------------------------------------------------
 
 def _is_self_send(agent, address: str) -> bool:
-    """Check if the address matches this agent's own address (working dir path)."""
-    # Match by working directory path
+    """Check if the address matches this agent (by directory name or full path)."""
+    # Match by directory name (relative address)
+    if address == agent._working_dir.name:
+        return True
+    # Match by full working directory path (legacy absolute)
     if address == str(agent._working_dir):
         return True
     # Match by mail service address
@@ -347,7 +350,7 @@ def _send(agent, args: dict) -> dict:
         return {"error": "address is required"}
 
     payload = {
-        "from": (agent._mail_service.address if agent._mail_service is not None and agent._mail_service.address else str(agent._working_dir)),
+        "from": (agent._mail_service.address if agent._mail_service is not None and agent._mail_service.address else agent._working_dir.name),
         "to": address,
         "subject": subject,
         "message": message_text,
