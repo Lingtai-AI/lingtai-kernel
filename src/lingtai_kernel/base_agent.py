@@ -155,6 +155,15 @@ class BaseAgent:
         self._prompt_manager = SystemPromptManager()
         if covenant:
             self._prompt_manager.write_section("covenant", covenant, protected=True)
+        # Load existing rules from system/rules.md (survives molts, refreshes, and resumes)
+        rules_md = system_dir / "rules.md"
+        if rules_md.is_file():
+            try:
+                rules_content = rules_md.read_text().strip()
+                if rules_content:
+                    self._prompt_manager.write_section("rules", rules_content, protected=True)
+            except OSError:
+                pass
         if loaded_memory.strip():
             self._prompt_manager.write_section("memory", loaded_memory)
         if comment:
@@ -762,6 +771,9 @@ class BaseAgent:
                         except OSError:
                             pass
 
+            # .rules = network rules signal (consumed → persisted to system/rules.md)
+            self._check_rules_file()
+
             # Stamina enforcement — asleep when stamina expires
             if self._uptime_anchor is not None and self._state not in (AgentState.ASLEEP, AgentState.SUSPENDED):
                 elapsed = time.monotonic() - self._uptime_anchor
@@ -1328,6 +1340,39 @@ class BaseAgent:
         handler = self._intrinsics.pop(name)  # raises KeyError if missing
         self._token_decomp_dirty = True
         return handler
+
+    def _check_rules_file(self) -> None:
+        """Consume .rules signal file, diff against system/rules.md, update if changed."""
+        rules_file = self._working_dir / ".rules"
+        if not rules_file.is_file():
+            return
+        try:
+            content = rules_file.read_text().strip()
+        except OSError:
+            return
+        # Always consume the signal file
+        try:
+            rules_file.unlink()
+        except OSError:
+            pass
+        if not content:
+            return
+        # Diff against canonical system/rules.md
+        canonical = self._working_dir / "system" / "rules.md"
+        existing = ""
+        if canonical.is_file():
+            try:
+                existing = canonical.read_text().strip()
+            except OSError:
+                pass
+        if content == existing:
+            return
+        # Content changed — persist and refresh
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        canonical.write_text(content)
+        self._prompt_manager.write_section("rules", content, protected=True)
+        self._flush_system_prompt()
+        self._log("rules_loaded", source="signal")
 
     def _flush_system_prompt(self) -> None:
         """Rebuild system prompt, persist to system/system.md, update live session."""

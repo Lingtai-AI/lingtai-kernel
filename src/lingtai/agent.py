@@ -533,6 +533,21 @@ class Agent(BaseAgent):
         if covenant:
             self._prompt_manager.write_section("covenant", covenant, protected=True)
 
+        # Reload rules from system/rules.md (survives molts)
+        rules_md = system_dir / "rules.md"
+        if rules_md.is_file():
+            try:
+                rules_content = rules_md.read_text().strip()
+                if rules_content:
+                    self._prompt_manager.write_section("rules", rules_content, protected=True)
+                else:
+                    self._prompt_manager.delete_section("rules")
+            except OSError:
+                pass
+        else:
+            # No rules file — clear any stale section
+            self._prompt_manager.delete_section("rules")
+
         loaded_memory = ""
         if memory_file.is_file():
             loaded_memory = memory_file.read_text()
