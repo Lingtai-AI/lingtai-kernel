@@ -1566,3 +1566,131 @@ def test_schedule_sends_inbox_notification(tmp_path):
     assert "alarm" in notifications[0]
     # Last notification should say "schedule complete"
     assert "schedule complete" in notifications[-1]
+
+
+def test_schedule_reactivate_inactive_resumes(tmp_path):
+    """reactivate on an inactive schedule should flip status and reset last_sent_at."""
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
+                       capabilities=["email"])
+    mail_svc = MagicMock()
+    mail_svc.address = "me"
+    mail_svc.send.return_value = None
+    agent._mail_service = mail_svc
+    mgr = agent.get_capability("email")
+
+    # Manually create an inactive schedule
+    sched_id = "reactivate1234"
+    sched_dir = agent.working_dir / "mailbox" / "schedules" / sched_id
+    sched_dir.mkdir(parents=True, exist_ok=True)
+    record = {
+        "schedule_id": sched_id,
+        "send_payload": {"address": "someone", "subject": "", "message": "x", "cc": [], "bcc": [], "type": "normal"},
+        "interval": 60,
+        "count": 5,
+        "sent": 1,
+        "created_at": "2026-04-06T10:00:00Z",
+        "last_sent_at": "2026-04-06T10:00:00Z",
+        "status": "inactive",
+    }
+    (sched_dir / "schedule.json").write_text(json.dumps(record))
+
+    result = mgr.handle({"schedule": {"action": "reactivate", "schedule_id": sched_id}})
+    assert result["status"] == "reactivated"
+    assert result["schedule_id"] == sched_id
+
+    sched = json.loads((sched_dir / "schedule.json").read_text())
+    assert sched["status"] == "active"
+    # last_sent_at should be ~now (not the old "10:00:00Z")
+    assert sched["last_sent_at"] != "2026-04-06T10:00:00Z"
+
+
+def test_schedule_reactivate_active_is_noop(tmp_path):
+    """reactivate on an active schedule should return already_active without mutation."""
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
+                       capabilities=["email"])
+    mail_svc = MagicMock()
+    mail_svc.address = "me"
+    mail_svc.send.return_value = None
+    agent._mail_service = mail_svc
+    mgr = agent.get_capability("email")
+
+    create_result = mgr.handle({
+        "address": "someone", "message": "x",
+        "schedule": {"action": "create", "interval": 60, "count": 5},
+    })
+    sid = create_result["schedule_id"]
+    original = json.loads(
+        (agent.working_dir / "mailbox" / "schedules" / sid / "schedule.json").read_text()
+    )
+
+    result = mgr.handle({"schedule": {"action": "reactivate", "schedule_id": sid}})
+    assert result["status"] == "already_active"
+    assert result["schedule_id"] == sid
+
+    after = json.loads(
+        (agent.working_dir / "mailbox" / "schedules" / sid / "schedule.json").read_text()
+    )
+    # last_sent_at should be unchanged
+    assert after["last_sent_at"] == original["last_sent_at"]
+
+
+def test_schedule_reactivate_completed_errors(tmp_path):
+    """reactivate on a completed schedule should error."""
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
+                       capabilities=["email"])
+    mgr = agent.get_capability("email")
+
+    sched_id = "completed1234"
+    sched_dir = agent.working_dir / "mailbox" / "schedules" / sched_id
+    sched_dir.mkdir(parents=True, exist_ok=True)
+    record = {
+        "schedule_id": sched_id,
+        "send_payload": {"address": "x", "subject": "", "message": "y", "cc": [], "bcc": [], "type": "normal"},
+        "interval": 60, "count": 3, "sent": 3,
+        "created_at": "2026-04-06T10:00:00Z",
+        "last_sent_at": "2026-04-06T10:02:00Z",
+        "status": "completed",
+    }
+    (sched_dir / "schedule.json").write_text(json.dumps(record))
+
+    result = mgr.handle({"schedule": {"action": "reactivate", "schedule_id": sched_id}})
+    assert "error" in result
+    assert "completed" in result["error"].lower()
+
+
+def test_schedule_reactivate_not_found_errors(tmp_path):
+    """reactivate on a missing schedule should return Schedule not found."""
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
+                       capabilities=["email"])
+    mgr = agent.get_capability("email")
+    result = mgr.handle({"schedule": {"action": "reactivate", "schedule_id": "nonexistent"}})
+    assert "error" in result
+    assert "Schedule not found" in result["error"]
+
+
+def test_schedule_reactivate_self_heals_crash_mid_completion(tmp_path):
+    """If sent>=count but status==inactive (crash mid-completion), reactivate should self-heal to completed and refuse."""
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
+                       capabilities=["email"])
+    mgr = agent.get_capability("email")
+
+    sched_id = "crashed12345"
+    sched_dir = agent.working_dir / "mailbox" / "schedules" / sched_id
+    sched_dir.mkdir(parents=True, exist_ok=True)
+    record = {
+        "schedule_id": sched_id,
+        "send_payload": {"address": "x", "subject": "", "message": "y", "cc": [], "bcc": [], "type": "normal"},
+        "interval": 60, "count": 3, "sent": 3,  # sent==count
+        "created_at": "2026-04-06T10:00:00Z",
+        "last_sent_at": "2026-04-06T10:02:00Z",
+        "status": "inactive",  # but status was never updated to completed
+    }
+    (sched_dir / "schedule.json").write_text(json.dumps(record))
+
+    result = mgr.handle({"schedule": {"action": "reactivate", "schedule_id": sched_id}})
+    assert "error" in result
+    assert "completed" in result["error"].lower()
+
+    # The on-disk record should now be self-healed to completed
+    sched = json.loads((sched_dir / "schedule.json").read_text())
+    assert sched["status"] == "completed"

@@ -430,14 +430,32 @@ class EmailManager:
         return {"status": "cancelled", "schedule_id": schedule_id}
 
     def _schedule_reactivate(self, schedule: dict) -> dict:
-        """STUB — full implementation in Task 3."""
         schedule_id = schedule.get("schedule_id")
         if not schedule_id:
             return {"error": "schedule_id is required for reactivate"}
         record = self._read_schedule(schedule_id)
         if record is None:
             return {"error": f"Schedule not found: {schedule_id}"}
-        return {"error": "Reactivate not yet implemented"}
+        status = record.get("status", "active")
+        if status == "completed":
+            return {"error": "Cannot reactivate a completed schedule"}
+        if status == "active":
+            return {"status": "already_active", "schedule_id": schedule_id}
+        # Self-heal: crashed-mid-completion records have sent>=count but status!=completed
+        sent = record.get("sent", 0)
+        count = record.get("count", 0)
+        if sent >= count:
+            record["status"] = "completed"
+            sched_file = self._schedules_dir / schedule_id / "schedule.json"
+            self._write_schedule(sched_file, record)
+            return {"error": "Cannot reactivate a completed schedule"}
+        # status is "inactive" (or any non-terminal value, including legacy missing)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        record["status"] = "active"
+        record["last_sent_at"] = now
+        sched_file = self._schedules_dir / schedule_id / "schedule.json"
+        self._write_schedule(sched_file, record)
+        return {"status": "reactivated", "schedule_id": schedule_id}
 
     def _schedule_list(self) -> dict:
         schedules_dir = self._schedules_dir
