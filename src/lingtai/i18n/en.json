@@ -72,10 +72,10 @@
   "email.name": "Contact's human-readable name (for add_contact, edit_contact)",
   "email.note": "Free-text note about the contact (for add_contact, edit_contact)",
   "email.contact_address": "The contact's address (working directory path). Optional.",
-  "email.schedule_action": "create: start a recurring send (requires address, message + schedule.interval, schedule.count). cancel: stop a running schedule (requires schedule.schedule_id). list: show all schedules with progress.",
+  "email.schedule_action": "create: start a recurring send (requires address, message + schedule.interval, schedule.count). cancel: pause a running schedule (requires schedule.schedule_id). reactivate: resume a paused schedule (requires schedule.schedule_id). list: show all schedules with status.",
   "email.schedule_interval": "Seconds between each send (for create)",
   "email.schedule_count": "Total number of sends (for create)",
-  "email.schedule_id": "Schedule ID (for cancel)",
+  "email.schedule_id": "Schedule ID (for cancel/reactivate)",
 
   "vision.description": "Analyze an image using the LLM's vision capabilities. Supports JPEG, PNG, and WebP. Ask any question about the image — describe contents, read text, interpret charts, identify objects, assess style or mood. Combine with draw to generate then analyze images.",
   "vision.image_path": "Path to the image file",
