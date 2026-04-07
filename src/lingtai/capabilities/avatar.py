@@ -332,7 +332,15 @@ class AvatarManager:
     # ------------------------------------------------------------------
 
     def _rules(self, args: dict) -> dict:
-        """Set rules and distribute to all descendants via .rules signal files."""
+        """Set rules and distribute via .rules signal files to self + descendants.
+
+        Self and descendants are handled uniformly: a `.rules` signal file is
+        written to every agent directory in the subtree (including the caller's
+        own). Each agent's heartbeat loop (`_check_rules_file`) then consumes
+        the signal, diffs it against `system/rules.md`, and refreshes its own
+        system prompt if the content changed. The caller's own prompt refresh
+        happens on its next heartbeat tick (within ~1s).
+        """
         parent = self._agent
         content = args.get("rules_content", "").strip()
         if not content:
@@ -343,25 +351,20 @@ class AvatarManager:
         if not any(admin.values()):
             return {"error": "Not authorized — admin privilege required to set rules"}
 
-        # Persist to own system/rules.md (canonical copy)
-        canonical = parent._working_dir / "system" / "rules.md"
+        # Write .rules signal to self — heartbeat will consume and persist
         try:
-            canonical.parent.mkdir(parents=True, exist_ok=True)
-            canonical.write_text(content)
+            (parent._working_dir / ".rules").write_text(content)
         except OSError as e:
-            return {"error": f"failed to persist rules to system/rules.md: {e}"}
-
-        # Update own prompt section immediately (no signal needed for self)
-        parent._prompt_manager.write_section("rules", content, protected=True)
-        parent._flush_system_prompt()
+            return {"error": f"failed to write .rules signal: {e}"}
 
         # Write .rules signal file to all descendants
         distributed = self._distribute_rules_to_descendants(content, parent._working_dir)
 
+        # Include self in the reported distribution for transparency
         return {
             "status": "ok",
-            "message": f"Rules set and distributed to {len(distributed)} descendant(s).",
-            "distributed_to": distributed,
+            "message": f"Rules set; signal written to self and {len(distributed)} descendant(s).",
+            "distributed_to": [parent._working_dir.name] + distributed,
         }
 
     @staticmethod

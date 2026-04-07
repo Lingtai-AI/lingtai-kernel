@@ -154,8 +154,14 @@ class TestAvatarRulesAction:
         })
         assert "error" in result
 
-    def test_rules_persists_to_system_rules_md(self, tmp_path):
-        """Admin agent should persist rules to system/rules.md (canonical copy)."""
+    def test_rules_writes_self_signal_then_heartbeat_persists(self, tmp_path):
+        """Admin should write .rules signal to self; heartbeat persists to system/rules.md.
+
+        After calling _rules(), the caller's own directory has a .rules signal file.
+        The prompt section and system/rules.md are NOT updated synchronously — they're
+        applied by the caller's own heartbeat loop on its next tick. This test simulates
+        one heartbeat tick via _check_rules_file() to verify the end-to-end path.
+        """
         from lingtai.agent import Agent
 
         agent = Agent(
@@ -171,10 +177,21 @@ class TestAvatarRulesAction:
             "rules_content": "Always log actions.",
         })
         assert result["status"] == "ok"
-        # Canonical copy in system/rules.md
+
+        # .rules signal file was written to self (not yet consumed)
+        assert (agent._working_dir / ".rules").read_text() == "Always log actions."
+        # Canonical file and prompt section NOT yet updated — heartbeat hasn't ticked
+        assert not (agent._working_dir / "system" / "rules.md").is_file()
+        assert agent._prompt_manager.read_section("rules") is None
+
+        # Simulate one heartbeat tick
+        agent._check_rules_file()
+
+        # Now canonical file and prompt section are updated
         assert (agent._working_dir / "system" / "rules.md").read_text() == "Always log actions."
-        # Prompt section updated
         assert agent._prompt_manager.read_section("rules") == "Always log actions."
+        # Signal consumed
+        assert not (agent._working_dir / ".rules").is_file()
 
     def test_rules_distributes_signals_to_descendants(self, tmp_path):
         """Rules should write .rules signal files to all descendant directories.
@@ -214,13 +231,12 @@ class TestAvatarRulesAction:
             "rules_content": "No external API calls.",
         })
         assert result["status"] == "ok"
-        # Descendants get .rules signal files (their heartbeats will consume them)
+        # Self + descendants uniformly get .rules signal files
+        assert (parent_dir / ".rules").read_text() == "No external API calls."
         assert (child_a_dir / ".rules").read_text() == "No external API calls."
         assert (child_b_dir / ".rules").read_text() == "No external API calls."
-        # Parent gets canonical system/rules.md (not a signal)
-        assert (parent_dir / "system" / "rules.md").read_text() == "No external API calls."
-        # distributed_to reports relative names
-        assert set(result["distributed_to"]) == {"child_a", "child_b"}
+        # distributed_to reports relative names for self + descendants
+        assert set(result["distributed_to"]) == {"parent", "child_a", "child_b"}
 
     def test_rules_distributes_recursively(self, tmp_path):
         """Rules should propagate to grandchildren (avatars of avatars).
@@ -307,11 +323,12 @@ class TestAvatarRulesAction:
         assert result["agent_name"] == "child"
         assert result["address"] == "child"  # relative name (current convention)
 
-    def test_rules_root_not_self_distributed_via_cycle(self, tmp_path):
-        """If a descendant's ledger references the root, root should NOT receive .rules.
+    def test_rules_root_not_duplicated_via_cycle(self, tmp_path):
+        """Cycles through root should not cause root to appear twice in distributed_to.
 
-        Verifies that _walk_avatar_tree's visited set is seeded with root, so cycles
-        through root cannot cause the admin's own dir to appear in the distribution set.
+        The caller's own directory is included once (via the explicit self-write).
+        _walk_avatar_tree seeds its visited set with root so that cycles pointing
+        back to root from any descendant don't produce a duplicate entry.
         """
         from lingtai.agent import Agent
 
@@ -343,12 +360,12 @@ class TestAvatarRulesAction:
             "rules_content": "Cycle test.",
         })
         assert result["status"] == "ok"
-        # Child receives the signal
+        # Both self and child receive .rules signals
+        assert (parent_dir / ".rules").read_text() == "Cycle test."
         assert (child_dir / ".rules").read_text() == "Cycle test."
-        # Root should NOT receive a .rules signal — it gets system/rules.md directly
-        assert not (parent_dir / ".rules").is_file()
-        # distributed_to should contain only child, not parent
-        assert "parent" not in result["distributed_to"]
+        # 'parent' appears exactly once in distributed_to (from self-write,
+        # not duplicated by the BFS walk through the cycle)
+        assert result["distributed_to"].count("parent") == 1
         assert "child" in result["distributed_to"]
 
 
