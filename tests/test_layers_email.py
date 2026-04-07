@@ -878,7 +878,11 @@ def test_email_schedule_in_schema(tmp_path):
     schemas = {s.name: s for s in agent._tool_schemas}
     props = schemas["email"].parameters["properties"]
     assert "schedule" in props
-    assert "create" in props["schedule"]["properties"]["action"]["enum"]
+    actions = props["schedule"]["properties"]["action"]["enum"]
+    assert "create" in actions
+    assert "cancel" in actions
+    assert "list" in actions
+    assert "reactivate" in actions  # NEW
 
 
 def test_email_handle_without_action_or_schedule(tmp_path):
@@ -897,6 +901,19 @@ def test_email_schedule_unknown_action(tmp_path):
     mgr = agent.get_capability("email")
     result = mgr.handle({"schedule": {"action": "bogus"}})
     assert "error" in result
+
+
+def test_email_schedule_reactivate_routes_to_handler(tmp_path):
+    """reactivate action should be dispatched (not return 'Unknown schedule action')."""
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
+                       capabilities=["email"])
+    mgr = agent.get_capability("email")
+    result = mgr.handle({"schedule": {"action": "reactivate", "schedule_id": "nonexistent"}})
+    # Should NOT return the dispatch fallback error
+    assert "error" in result
+    assert "Unknown schedule action" not in result["error"]
+    # Should route to reactivate handler, which errors on missing record
+    assert "Schedule not found" in result["error"]
 
 
 # ---------------------------------------------------------------------------

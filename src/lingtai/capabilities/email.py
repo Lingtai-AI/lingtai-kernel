@@ -124,7 +124,7 @@ def get_schema(lang: str = "en") -> dict:
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["create", "cancel", "list"],
+                        "enum": ["create", "cancel", "list", "reactivate"],
                         "description": t(lang, "email.schedule_action"),
                     },
                     "interval": {
@@ -355,6 +355,8 @@ class EmailManager:
             return self._schedule_cancel(schedule)
         elif action == "list":
             return self._schedule_list()
+        elif action == "reactivate":
+            return self._schedule_reactivate(schedule)
         else:
             return {"error": f"Unknown schedule action: {action}"}
 
@@ -425,6 +427,16 @@ class EmailManager:
 
         (sched_dir / ".cancel").touch()
         return {"status": "cancelled", "schedule_id": schedule_id}
+
+    def _schedule_reactivate(self, schedule: dict) -> dict:
+        """STUB — full implementation in Task 3."""
+        schedule_id = schedule.get("schedule_id")
+        if not schedule_id:
+            return {"error": "schedule_id is required for reactivate"}
+        record = self._read_schedule(schedule_id)
+        if record is None:
+            return {"error": f"Schedule not found: {schedule_id}"}
+        return {"error": "Reactivate not yet implemented"}
 
     def _schedule_list(self) -> dict:
         schedules_dir = self._schedules_dir
