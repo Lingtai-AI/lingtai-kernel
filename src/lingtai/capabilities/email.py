@@ -410,24 +410,42 @@ class EmailManager:
         schedule_id = schedule.get("schedule_id")
 
         if not schedule_id:
-            # Agent-level cancel — cancel ALL schedules
-            self._schedules_dir.mkdir(parents=True, exist_ok=True)
-            (self._schedules_dir / ".cancel").touch()
-            return {"status": "cancelled", "message": "All schedules cancelled"}
+            # Agent-level cancel — flip every active-or-missing record to inactive
+            schedules_dir = self._schedules_dir
+            if not schedules_dir.is_dir():
+                return {"status": "paused", "message": "No schedules to cancel"}
+            for sched_dir in schedules_dir.iterdir():
+                if not sched_dir.is_dir():
+                    continue
+                sched_file = sched_dir / "schedule.json"
+                if not sched_file.is_file():
+                    continue
+                try:
+                    record = json.loads(sched_file.read_text())
+                except (json.JSONDecodeError, OSError):
+                    continue
+                status = record.get("status", "active")
+                if status in ("inactive", "completed"):
+                    continue  # already terminal-ish, skip
+                record["status"] = "inactive"
+                try:
+                    self._write_schedule(sched_file, record)
+                except OSError:
+                    continue
+            return {"status": "paused", "message": "All active schedules paused"}
 
         # Per-schedule cancel
-        sched_dir = self._schedules_dir / schedule_id
-        if not sched_dir.is_dir():
-            return {"error": f"Schedule not found: {schedule_id}"}
-
         record = self._read_schedule(schedule_id)
-        if record and (record.get("sent", 0) >= record.get("count", 0)):
-            return {"status": "already_stopped", "schedule_id": schedule_id}
-        if (sched_dir / ".cancel").is_file():
-            return {"status": "already_stopped", "schedule_id": schedule_id}
-
-        (sched_dir / ".cancel").touch()
-        return {"status": "cancelled", "schedule_id": schedule_id}
+        if record is None:
+            return {"error": f"Schedule not found: {schedule_id}"}
+        status = record.get("status", "active")
+        if status == "inactive":
+            return {"status": "already_inactive", "schedule_id": schedule_id}
+        if status == "completed":
+            return {"status": "already_completed", "schedule_id": schedule_id}
+        # active (or missing/legacy) → flip to inactive
+        self._set_schedule_status(schedule_id, "inactive")
+        return {"status": "paused", "schedule_id": schedule_id}
 
     def _schedule_reactivate(self, schedule: dict) -> dict:
         schedule_id = schedule.get("schedule_id")
