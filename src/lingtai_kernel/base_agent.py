@@ -1037,12 +1037,12 @@ class BaseAgent:
                 from .intrinsics import eigen as _eigen
                 _eigen.context_forget(self)
                 self._session._compaction_warnings = 0
-                molt_prompt = self._load_molt_prompt(warnings)
+                molt_prompt = self._load_molt_prompt(warnings, pressure=pressure, remaining=remaining)
                 if molt_prompt:
                     content = f"{molt_prompt}\n\n{content}"
             else:
                 # User prompt + mechanical data
-                molt_prompt = self._config.molt_prompt or self._load_molt_prompt(warnings)
+                molt_prompt = self._config.molt_prompt or self._load_molt_prompt(warnings, pressure=pressure, remaining=remaining)
                 if molt_prompt:
                     status = f"[context: {pressure:.0%} | {remaining}/{max_warnings}]"
                     content = f"{molt_prompt}\n{status}\n\n{content}"
@@ -1055,8 +1055,8 @@ class BaseAgent:
         result = self._process_response(response)
         self._post_request(msg, result)
 
-    def _load_molt_prompt(self, level: int) -> str:
-        """Load molt warning prompt from file based on warning level.
+    def _load_molt_prompt(self, level: int, pressure: float, remaining: int) -> str:
+        """Load and format molt warning prompt from file.
 
         Level 1-3: warning_level1/2/3.md
         Wiped: wiped.md
@@ -1074,7 +1074,9 @@ class BaseAgent:
         prompt_file = self._working_dir / "prompts" / "molt" / lang / filename
         if prompt_file.is_file():
             try:
-                return prompt_file.read_text(encoding="utf-8")
+                return prompt_file.read_text(encoding="utf-8").format(
+                    pressure=f"{pressure:.0%}", remaining=remaining
+                )
             except Exception:
                 pass
 
