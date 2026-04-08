@@ -554,8 +554,18 @@ class Agent(BaseAgent):
         if loaded_memory.strip():
             self._prompt_manager.write_section("memory", loaded_memory)
 
-        # Reload principle
+        # Reload principle (mirrors covenant's three-tier resolution:
+        # init.json wins and rewrites the on-disk mirror; otherwise fall back
+        # to the existing mirror; finally write the resolved text to the
+        # protected prompt section).
         principle = data.get("principle", "")
+        principle_file = system_dir / "principle.md"
+
+        # Copy principle from init.json to system/principle.md (canonical location)
+        if principle:
+            principle_file.write_text(principle)
+        elif principle_file.is_file():
+            principle = principle_file.read_text()
         if principle:
             self._prompt_manager.write_section("principle", principle, protected=True)
 

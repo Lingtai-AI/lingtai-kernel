@@ -87,6 +87,7 @@ class BaseAgent:
         admin: dict | None = None,
         streaming: bool = False,
         covenant: str = "",
+        principle: str = "",
         memory: str = "",
         comment: str = "",
     ):
@@ -129,10 +130,11 @@ class BaseAgent:
         # Set by psyche capability to prevent stop() from overwriting memory.md
         self._eigen_owns_memory = False
 
-        # Covenant and memory file paths
+        # Covenant, principle, and memory file paths
         system_dir = self._working_dir / "system"
         memory_file = system_dir / "memory.md"
         covenant_file = system_dir / "covenant.md"
+        principle_file = system_dir / "principle.md"
 
         system_dir.mkdir(exist_ok=True)
 
@@ -141,6 +143,14 @@ class BaseAgent:
             covenant_file.write_text(covenant)
         elif covenant_file.is_file():
             covenant = covenant_file.read_text()
+
+        # Principle: constructor value wins, then fall back to file on disk
+        # (mirrors covenant — ensures principle survives molts even when
+        # init.json omits it, and seeds the mirror on first construction).
+        if principle:
+            principle_file.write_text(principle)
+        elif principle_file.is_file():
+            principle = principle_file.read_text()
 
         # Memory: constructor value seeds the file if it doesn't exist
         if memory and not memory_file.is_file():
@@ -153,6 +163,8 @@ class BaseAgent:
 
         # System prompt manager
         self._prompt_manager = SystemPromptManager()
+        if principle:
+            self._prompt_manager.write_section("principle", principle, protected=True)
         if covenant:
             self._prompt_manager.write_section("covenant", covenant, protected=True)
         # Load existing rules from system/rules.md (survives molts, refreshes, and resumes)

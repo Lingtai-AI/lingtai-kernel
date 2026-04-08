@@ -107,6 +107,9 @@ class WorkingDir:
             covenant_file = system_dir / "covenant.md"
             if not covenant_file.is_file():
                 covenant_file.write_text("")
+            principle_file = system_dir / "principle.md"
+            if not principle_file.is_file():
+                principle_file.write_text("")
             memory_file = system_dir / "memory.md"
             if not memory_file.is_file():
                 memory_file.write_text("")
@@ -125,6 +128,9 @@ class WorkingDir:
             covenant_file = system_dir / "covenant.md"
             if not covenant_file.is_file():
                 covenant_file.write_text("")
+            principle_file = system_dir / "principle.md"
+            if not principle_file.is_file():
+                principle_file.write_text("")
             memory_file = system_dir / "memory.md"
             if not memory_file.is_file():
                 memory_file.write_text("")
