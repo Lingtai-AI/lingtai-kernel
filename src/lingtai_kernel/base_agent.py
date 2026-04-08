@@ -1037,14 +1037,15 @@ class BaseAgent:
                 from .intrinsics import eigen as _eigen
                 _eigen.context_forget(self)
                 self._session._compaction_warnings = 0
-                content = (
-                    f"{_t(self._config.language, 'system.molt_wiped')}\n\n{content}"
-                )
+                molt_prompt = self._load_molt_prompt(warnings)
+                if molt_prompt:
+                    content = f"{molt_prompt}\n\n{content}"
             else:
                 # User prompt + mechanical data
-                molt_prompt = self._config.molt_prompt or _t(self._config.language, 'system.molt_warning_default')
-                status = f"[context: {pressure:.0%} | {remaining}/{max_warnings}]"
-                content = f"[system] {molt_prompt}\n{status}\n\n{content}"
+                molt_prompt = self._config.molt_prompt or self._load_molt_prompt(warnings)
+                if molt_prompt:
+                    status = f"[context: {pressure:.0%} | {remaining}/{max_warnings}]"
+                    content = f"{molt_prompt}\n{status}\n\n{content}"
 
         content = f"{_t(self._config.language, 'system.current_time', time=current_time)}\n\n{content}"
         self._log("text_input", text=content)
@@ -1053,6 +1054,32 @@ class BaseAgent:
         self._save_chat_history()
         result = self._process_response(response)
         self._post_request(msg, result)
+
+    def _load_molt_prompt(self, level: int) -> str:
+        """Load molt warning prompt from file based on warning level.
+
+        Level 1-3: warning_level1/2/3.md
+        Wiped: wiped.md
+        File location: {globalDir}/prompts/molt/{lang}/
+
+        Migration: TUI bootstrap copies lingtai/prompt/molt/ to {globalDir}/prompts/molt/
+        """
+        lang = self._config.language
+        if level > self._config.molt_warnings:
+            filename = "wiped.md"
+        else:
+            filename = f"warning_level{level}.md"
+
+        # Read from global prompts directory
+        prompt_file = self._working_dir / "prompts" / "molt" / lang / filename
+        if prompt_file.is_file():
+            try:
+                return prompt_file.read_text(encoding="utf-8")
+            except Exception:
+                pass
+
+        # No fallback — migration should have placed files
+        return ""
 
     def _get_guard_limits(self) -> tuple[int, int, int]:
         """Return (max_total_calls, dup_free_passes, dup_hard_block).
