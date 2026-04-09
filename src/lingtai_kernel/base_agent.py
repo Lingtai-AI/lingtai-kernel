@@ -183,15 +183,18 @@ class BaseAgent:
 
         # Soul delay — needed before manifest build
         self._soul_delay = max(1.0, self._config.soul_delay)
-        self._molt_count: int = 0
 
-        # Agent ID — permanent birth certificate, generated once, never changes.
-        # Read from existing manifest if present (resume); generate otherwise.
+        # Agent ID, created_at, and molt_count — persistent state restored
+        # from the existing manifest on disk if present (resume path), or
+        # freshly initialized otherwise. All three must be set BEFORE the
+        # manifest write below, because _build_manifest() reads them and
+        # write_manifest() will overwrite the old file.
         from datetime import datetime, timezone
         import secrets
         existing = self._workdir.read_full_manifest()
         self._agent_id: str = existing.get("agent_id", "")
         self._created_at: str = existing.get("created_at", "")
+        self._molt_count: int = existing.get("molt_count", 0)
         if not self._agent_id or not self._created_at:
             now = datetime.now(timezone.utc)
             if not self._agent_id:
