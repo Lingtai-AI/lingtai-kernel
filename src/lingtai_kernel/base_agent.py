@@ -508,10 +508,11 @@ class BaseAgent:
         from uuid import uuid4
 
         email_id = payload.get("_mailbox_id") or str(uuid4())
-        sender = payload.get("from", "unknown")
+        address = payload.get("from", "unknown")
         identity = payload.get("identity")
+        name = address
         if identity and identity.get("agent_name"):
-            sender = f"{identity['agent_name']} ({sender})"
+            name = identity["agent_name"]
         subject = payload.get("subject", "(no subject)")
         message = payload.get("message", "")
         sent_at = payload.get("sent_at") or payload.get("time") or ""
@@ -524,11 +525,11 @@ class BaseAgent:
             preview = message.replace("\n", " ")
         notification = _t(
             self._config.language, "system.new_mail",
-            box=self._mailbox_name, sender=sender, subject=subject,
+            box=self._mailbox_name, address=address, name=name, subject=subject,
             sent_at=sent_at, preview=preview, tool=self._mailbox_tool,
         )
 
-        self._log("mail_received", sender=sender, subject=subject, message=message)
+        self._log("mail_received", address=address, name=name, subject=subject, message=message)
         msg = _make_message(MSG_REQUEST, "system", notification)
         self.inbox.put(msg)
 
