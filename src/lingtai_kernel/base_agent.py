@@ -89,6 +89,7 @@ class BaseAgent:
         covenant: str = "",
         principle: str = "",
         procedures: str = "",
+        brief: str = "",
         memory: str = "",
         comment: str = "",
     ):
@@ -131,12 +132,13 @@ class BaseAgent:
         # Set by psyche capability to prevent stop() from overwriting memory.md
         self._eigen_owns_memory = False
 
-        # Covenant, principle, procedures, and memory file paths
+        # Covenant, principle, procedures, brief, and memory file paths
         system_dir = self._working_dir / "system"
         memory_file = system_dir / "memory.md"
         covenant_file = system_dir / "covenant.md"
         principle_file = system_dir / "principle.md"
         procedures_file = system_dir / "procedures.md"
+        brief_file = system_dir / "brief.md"
 
         system_dir.mkdir(exist_ok=True)
 
@@ -160,6 +162,14 @@ class BaseAgent:
         elif procedures_file.is_file():
             procedures = procedures_file.read_text()
 
+        # Brief: externally-maintained context (written by secretary agent).
+        # init.json value only seeds the file if it doesn't exist yet;
+        # once the secretary writes brief.md, the disk version always wins.
+        if brief and not brief_file.is_file():
+            brief_file.write_text(brief)
+        elif brief_file.is_file():
+            brief = brief_file.read_text()
+
         # Memory: constructor value seeds the file if it doesn't exist
         if memory and not memory_file.is_file():
             memory_file.write_text(memory)
@@ -177,6 +187,8 @@ class BaseAgent:
             self._prompt_manager.write_section("covenant", covenant, protected=True)
         if procedures:
             self._prompt_manager.write_section("procedures", procedures, protected=True)
+        if brief:
+            self._prompt_manager.write_section("brief", brief, protected=True)
         # Load existing rules from system/rules.md (survives molts, refreshes, and resumes)
         rules_md = system_dir / "rules.md"
         if rules_md.is_file():

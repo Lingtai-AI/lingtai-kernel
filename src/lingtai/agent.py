@@ -430,7 +430,7 @@ class Agent(BaseAgent):
             load_env_file(env_file)
 
         # Resolve *_file fields for top-level text content
-        for key in ("covenant", "principle", "procedures", "memory", "prompt", "comment", "soul"):
+        for key in ("covenant", "principle", "procedures", "brief", "memory", "prompt", "comment", "soul"):
             file_key = f"{key}_file"
             if file_key in data:
                 data[key] = resolve_file(data.get(key), data.pop(file_key))
@@ -578,6 +578,21 @@ class Agent(BaseAgent):
             procedures = procedures_file.read_text()
         if procedures:
             self._prompt_manager.write_section("procedures", procedures, protected=True)
+
+        # Reload brief (externally-maintained context, re-read from disk on refresh).
+        # The external brief_file (resolved into data["brief"] by resolve_file above)
+        # always wins. Update the local system/brief.md mirror from it.
+        # Only fall back to system/brief.md if no external content is available.
+        brief = data.get("brief", "")
+        brief_file = system_dir / "brief.md"
+        if brief:
+            brief_file.write_text(brief)
+        elif brief_file.is_file():
+            brief = brief_file.read_text()
+        if brief:
+            self._prompt_manager.write_section("brief", brief, protected=True)
+        else:
+            self._prompt_manager.delete_section("brief")
 
         # Reload comment (app-level, always last, not inherited by avatars)
         comment = data.get("comment", "")

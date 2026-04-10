@@ -30,8 +30,8 @@ def validate_init(data: dict) -> list[str]:
         if has_file and not isinstance(data[file_key], str):
             raise ValueError(f"{file_key}: expected str, got {type(data[file_key]).__name__}")
 
-    # Comment: optional app-level system prompt section (inline or _file)
-    for key in ("comment",):
+    # Optional text fields: inline value OR _file path (neither required)
+    for key in ("comment", "procedures", "brief"):
         file_key = f"{key}_file"
         if key in data and not isinstance(data[key], str):
             raise ValueError(f"{key}: expected str, got {type(data[key]).__name__}")
@@ -49,6 +49,7 @@ def validate_init(data: dict) -> list[str]:
     _known_top = {
         "manifest", "env_file", "venv_path", "addons",
         "principle", "principle_file", "covenant", "covenant_file",
+        "procedures", "procedures_file", "brief", "brief_file",
         "memory", "memory_file", "prompt", "prompt_file",
         "soul", "soul_file", "comment", "comment_file",
     }

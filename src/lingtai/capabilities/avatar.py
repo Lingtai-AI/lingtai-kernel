@@ -165,7 +165,7 @@ class AvatarManager:
             avatar_working_dir.mkdir(parents=True, exist_ok=True)
 
         # Resolve relative file paths to absolute so avatar can find them
-        for key in ("env_file", "covenant_file", "principle_file", "comment_file", "soul_file"):
+        for key in ("env_file", "covenant_file", "principle_file", "procedures_file", "comment_file", "soul_file"):
             val = parent_init.get(key)
             if val and not os.path.isabs(val):
                 resolved = parent._working_dir / val
@@ -248,6 +248,9 @@ class AvatarManager:
         # Comment is not inherited — parent can set one explicitly for the avatar
         init["comment"] = comment
         init.pop("comment_file", None)
+        # Brief is not inherited — avatars don't need life context
+        init.pop("brief", None)
+        init.pop("brief_file", None)
         # Addons (IMAP, Telegram) are not inherited — each agent must be
         # explicitly configured to avoid multiple agents polling the same account
         init.pop("addons", None)
