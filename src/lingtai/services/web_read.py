@@ -39,46 +39,58 @@ class WebReadService(ABC):
 
 
 class ZhipuWebReadService(WebReadService):
-    """Web content extraction via Z.AI's ``/reader`` API.
+    """Web content extraction via Z.AI's ``webReader`` HTTP MCP tool.
 
-    Uses ``https://api.z.ai/api/paas/v4/reader`` to fetch and parse URLs.
-    Returns markdown by default.
+    Connects to the remote MCP server at
+    ``https://api.z.ai/api/mcp/web_reader/mcp``.
 
     Args:
         api_key: Z.AI API key (ZHIPU_API_KEY).
     """
 
-    API_URL = "https://api.z.ai/api/paas/v4/reader"
+    MCP_URL = "https://api.z.ai/api/mcp/web_reader/mcp"
 
     def __init__(self, api_key: str) -> None:
         self._api_key = api_key
+        self._client = None
+
+    def _ensure_client(self):
+        if self._client is not None:
+            if self._client.is_connected():
+                return
+            try:
+                self._client.close()
+            except Exception:
+                pass
+
+        from .mcp import HTTPMCPClient
+
+        self._client = HTTPMCPClient(
+            url=self.MCP_URL,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+        )
+        self._client.start()
+
+    def close(self) -> None:
+        if self._client is not None:
+            try:
+                self._client.close()
+            except Exception:
+                pass
+            self._client = None
 
     def read(self, url: str, output_format: str = "markdown") -> WebReadResult:
-        import requests
+        self._ensure_client()
+        result = self._client.call_tool("webReader", {"url": url})
 
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "url": url,
-            "return_format": output_format,
-            "timeout": 20,
-        }
+        if result.get("status") == "error":
+            raise RuntimeError(f"Zhipu web reader error: {result.get('message', 'unknown')}")
 
-        resp = requests.post(
-            self.API_URL, json=payload, headers=headers, timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-        reader = data.get("reader_result", {})
-        content = reader.get("content", "")
-        title = reader.get("title", "")
-        if not content:
+        text = result.get("text", "")
+        if not text:
             raise RuntimeError(f"No readable content extracted from: {url}")
 
-        return WebReadResult(title=title, content=content, url=url)
+        return WebReadResult(title="", content=text, url=url)
 
 
 class TrafilaturaWebReadService(WebReadService):
