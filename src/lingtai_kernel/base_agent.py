@@ -119,8 +119,8 @@ class BaseAgent:
             ensure_ascii=self._config.ensure_ascii,
         )
 
-        # Acquire working directory lock
-        self._workdir.acquire_lock()
+        # Acquire working directory lock (10s grace for prior process cleanup)
+        self._workdir.acquire_lock(timeout=10)
 
         # --- Wire services ---
         # FileIOService: optional, provided by Agent or host
