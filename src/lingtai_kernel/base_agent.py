@@ -981,12 +981,14 @@ class BaseAgent:
         # 60s to avoid orphaned relaunch scripts.
         lock_path = str(working_dir / ".agent.lock")
         relaunch_script = (
-            "import time, subprocess, os\n"
+            "import time, subprocess, os, sys\n"
             f"lock = {lock_path!r}\n"
             "deadline = time.time() + 60\n"
             "time.sleep(1)\n"  # brief grace period
             "while os.path.exists(lock) and time.time() < deadline:\n"
             "    time.sleep(0.5)\n"
+            "if os.path.exists(lock):\n"
+            "    sys.exit(1)\n"  # timed out — do not relaunch
             "time.sleep(0.5)\n"  # extra settle time after lock gone
             f"subprocess.Popen({cmd!r},\n"
             "    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,\n"

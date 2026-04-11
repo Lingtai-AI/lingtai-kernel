@@ -71,9 +71,14 @@ class WorkingDir:
 
     def release_lock(self) -> None:
         if self._lock_file is not None:
+            lock_path = self._path / _LOCK_FILE
             try:
                 _unlock_fd(self._lock_file)
                 self._lock_file.close()
+            except OSError:
+                pass
+            try:
+                lock_path.unlink(missing_ok=True)
             except OSError:
                 pass
             self._lock_file = None
