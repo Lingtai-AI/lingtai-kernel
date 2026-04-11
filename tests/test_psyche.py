@@ -64,9 +64,9 @@ def test_character_update_writes_character(tmp_path):
         capabilities=["psyche"],
     )
     mgr = agent.get_capability("psyche")
-    result = mgr.handle({"object": "character", "action": "update", "content": "I am a PDF specialist"})
+    result = mgr.handle({"object": "lingtai", "action": "update", "content": "I am a PDF specialist"})
     assert result["status"] == "ok"
-    character = (agent.working_dir / "system" / "character.md").read_text()
+    character = (agent.working_dir / "system" / "lingtai.md").read_text()
     assert character == "I am a PDF specialist"
     agent.stop(timeout=1.0)
 
@@ -77,9 +77,9 @@ def test_character_update_empty_clears_character(tmp_path):
         capabilities=["psyche"],
     )
     mgr = agent.get_capability("psyche")
-    mgr.handle({"object": "character", "action": "update", "content": "something"})
-    mgr.handle({"object": "character", "action": "update", "content": ""})
-    character = (agent.working_dir / "system" / "character.md").read_text()
+    mgr.handle({"object": "lingtai", "action": "update", "content": "something"})
+    mgr.handle({"object": "lingtai", "action": "update", "content": ""})
+    character = (agent.working_dir / "system" / "lingtai.md").read_text()
     assert character == ""
     agent.stop(timeout=1.0)
 
@@ -93,8 +93,8 @@ def test_character_load_combines_covenant_and_character(tmp_path):
     agent.start()
     try:
         mgr = agent.get_capability("psyche")
-        mgr.handle({"object": "character", "action": "update", "content": "I specialize in PDFs"})
-        mgr.handle({"object": "character", "action": "load"})
+        mgr.handle({"object": "lingtai", "action": "update", "content": "I specialize in PDFs"})
+        mgr.handle({"object": "lingtai", "action": "load"})
         section = agent._prompt_manager.read_section("covenant")
         assert "You are helpful" in section
         assert "I specialize in PDFs" in section
@@ -272,14 +272,14 @@ def test_psyche_schema_has_correct_objects():
     from lingtai.capabilities.psyche import get_schema
     SCHEMA = get_schema("en")
     objects = SCHEMA["properties"]["object"]["enum"]
-    assert set(objects) == {"character", "memory", "context"}
+    assert set(objects) == {"lingtai", "memory", "context"}
 
 
 def test_psyche_schema_has_correct_actions():
     from lingtai.capabilities.psyche import get_schema
     SCHEMA = get_schema("en")
     actions = SCHEMA["properties"]["action"]["enum"]
-    assert set(actions) == {"update", "load", "edit", "molt"}
+    assert set(actions) == {"update", "load", "edit", "append", "molt"}
 
 
 def test_psyche_schema_has_files_field():
@@ -310,7 +310,7 @@ def test_invalid_action_for_object(tmp_path):
         capabilities=["psyche"],
     )
     mgr = agent.get_capability("psyche")
-    result = mgr.handle({"object": "character", "action": "submit"})
+    result = mgr.handle({"object": "lingtai", "action": "submit"})
     assert "error" in result
     assert "update" in result["error"]
     agent.stop(timeout=1.0)

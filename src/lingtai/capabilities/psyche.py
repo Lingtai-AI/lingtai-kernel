@@ -36,7 +36,7 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "object": {
                 "type": "string",
-                "enum": ["character", "memory", "context"],
+                "enum": ["lingtai", "memory", "context"],
                 "description": t(lang, "psyche.object"),
             },
             "action": {
