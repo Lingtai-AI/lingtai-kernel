@@ -18,10 +18,14 @@ class ZhipuSearchService(SearchService):
         api_key: Z.AI API key (ZHIPU_API_KEY).
     """
 
-    MCP_URL = "https://api.z.ai/api/mcp/web_search_prime/mcp"
+    MCP_URLS = {
+        "ZAI": "https://api.z.ai/api/mcp/web_search_prime/mcp",
+        "ZHIPU": "https://open.bigmodel.cn/api/mcp/web_search_prime/mcp",
+    }
 
-    def __init__(self, api_key: str, **_kwargs) -> None:
+    def __init__(self, api_key: str, z_ai_mode: str = "ZAI", **_kwargs) -> None:
         self._api_key = api_key
+        self._z_ai_mode = z_ai_mode
         self._client = None
 
     def _ensure_client(self):
@@ -36,7 +40,7 @@ class ZhipuSearchService(SearchService):
         from ...services.mcp import HTTPMCPClient
 
         self._client = HTTPMCPClient(
-            url=self.MCP_URL,
+            url=self.MCP_URLS.get(self._z_ai_mode, self.MCP_URLS["ZAI"]),
             headers={"Authorization": f"Bearer {self._api_key}"},
         )
         self._client.start()

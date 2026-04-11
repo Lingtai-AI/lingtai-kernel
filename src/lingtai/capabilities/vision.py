@@ -102,6 +102,9 @@ def setup(
         from ._media_host import resolve_media_host
         if "api_host" not in kwargs:
             kwargs["api_host"] = resolve_media_host(agent)
+        if provider == "zhipu" and "z_ai_mode" not in kwargs:
+            from ._zhipu_mode import resolve_z_ai_mode
+            kwargs["z_ai_mode"] = resolve_z_ai_mode(agent)
         vision_service = create_vision_service(provider, api_key=api_key, **kwargs)
     elif vision_service is None:
         raise ValueError(

@@ -51,6 +51,7 @@ def create_search_service(
     api_key: str | None = None,
     model: str | None = None,
     api_host: str | None = None,
+    **kwargs,
 ) -> SearchService:
     """Factory — create a SearchService for the given provider.
 
@@ -107,7 +108,7 @@ def create_search_service(
 
     if name == "zhipu":
         from .zhipu import ZhipuSearchService
-        return ZhipuSearchService(api_key=_require_key())
+        return ZhipuSearchService(api_key=_require_key(), z_ai_mode=kwargs.get("z_ai_mode", "ZAI"))
 
     raise ValueError(
         f"Unknown web search provider: {provider!r}. "

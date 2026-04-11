@@ -48,10 +48,14 @@ class ZhipuWebReadService(WebReadService):
         api_key: Z.AI API key (ZHIPU_API_KEY).
     """
 
-    MCP_URL = "https://api.z.ai/api/mcp/web_reader/mcp"
+    MCP_URLS = {
+        "ZAI": "https://api.z.ai/api/mcp/web_reader/mcp",
+        "ZHIPU": "https://open.bigmodel.cn/api/mcp/web_reader/mcp",
+    }
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, api_key: str, z_ai_mode: str = "ZAI") -> None:
         self._api_key = api_key
+        self._z_ai_mode = z_ai_mode
         self._client = None
 
     def _ensure_client(self):
@@ -66,7 +70,7 @@ class ZhipuWebReadService(WebReadService):
         from .mcp import HTTPMCPClient
 
         self._client = HTTPMCPClient(
-            url=self.MCP_URL,
+            url=self.MCP_URLS.get(self._z_ai_mode, self.MCP_URLS["ZAI"]),
             headers={"Authorization": f"Bearer {self._api_key}"},
         )
         self._client.start()
@@ -80,17 +84,31 @@ class ZhipuWebReadService(WebReadService):
             self._client = None
 
     def read(self, url: str, output_format: str = "markdown") -> WebReadResult:
+        import json as _json
+
         self._ensure_client()
         result = self._client.call_tool("webReader", {"url": url})
 
-        if result.get("status") == "error":
-            raise RuntimeError(f"Zhipu web reader error: {result.get('message', 'unknown')}")
+        # Result may be a dict or a JSON string
+        if isinstance(result, str):
+            try:
+                result = _json.loads(result)
+            except (_json.JSONDecodeError, TypeError):
+                # Plain text response
+                if not result:
+                    raise RuntimeError(f"No readable content extracted from: {url}")
+                return WebReadResult(title="", content=result, url=url)
 
-        text = result.get("text", "")
-        if not text:
-            raise RuntimeError(f"No readable content extracted from: {url}")
+        if isinstance(result, dict):
+            if result.get("status") == "error":
+                raise RuntimeError(f"Zhipu web reader error: {result.get('message', 'unknown')}")
+            content = result.get("content", "")
+            title = result.get("title", "")
+            if not content:
+                raise RuntimeError(f"No readable content extracted from: {url}")
+            return WebReadResult(title=title, content=content, url=url)
 
-        return WebReadResult(title="", content=text, url=url)
+        raise RuntimeError(f"Unexpected response from web reader: {type(result)}")
 
 
 class TrafilaturaWebReadService(WebReadService):

@@ -21,9 +21,11 @@ class ZhipuVisionService(VisionService):
         self,
         *,
         api_key: str,
+        z_ai_mode: str = "ZAI",
         **_kwargs,
     ) -> None:
         self._api_key = api_key
+        self._z_ai_mode = z_ai_mode
         self._client = None  # lazy init
 
     def _ensure_client(self):
@@ -51,7 +53,7 @@ class ZhipuVisionService(VisionService):
         env = {
             **os.environ,
             "Z_AI_API_KEY": self._api_key,
-            "Z_AI_MODE": "ZAI",
+            "Z_AI_MODE": self._z_ai_mode,
         }
         self._client = MCPClient(
             command=npx_path,

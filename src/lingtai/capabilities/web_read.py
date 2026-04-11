@@ -76,7 +76,8 @@ def setup(agent: "BaseAgent", web_read_service: Any | None = None,
     """
     if web_read_service is None and provider == "zhipu" and api_key:
         from ..services.web_read import ZhipuWebReadService
-        web_read_service = ZhipuWebReadService(api_key=api_key)
+        from ._zhipu_mode import resolve_z_ai_mode
+        web_read_service = ZhipuWebReadService(api_key=api_key, z_ai_mode=resolve_z_ai_mode(agent))
     lang = agent._config.language
     mgr = WebReadManager(web_read_service=web_read_service)
     agent.add_tool("web_read", schema=get_schema(lang), handler=mgr.handle, description=get_description(lang))
