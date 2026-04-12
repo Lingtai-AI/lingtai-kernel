@@ -19,6 +19,14 @@ CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 REFRESH_BUFFER_SECONDS = 300  # refresh if within 5 minutes of expiry
 
 
+class CodexAuthError(Exception):
+    """Raised when Codex OAuth tokens cannot be refreshed.
+
+    The message is user-facing and points to /login for recovery.
+    """
+    pass
+
+
 class CodexTokenManager:
     """Manages Codex OAuth tokens stored on disk by the TUI."""
 
@@ -108,7 +116,14 @@ class CodexTokenManager:
                 },
                 timeout=30,
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code in (401, 403):
+                    raise CodexAuthError(
+                        "Codex session expired. Run /login in the TUI to re-authenticate."
+                    ) from e
+                raise
             result = response.json()
 
             # Merge new tokens into existing data, preserving email etc.

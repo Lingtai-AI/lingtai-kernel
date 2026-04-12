@@ -6,9 +6,10 @@ import json
 import time
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
-from lingtai.auth.codex import REFRESH_BUFFER_SECONDS, CodexTokenManager
+from lingtai.auth.codex import REFRESH_BUFFER_SECONDS, CodexAuthError, CodexTokenManager
 
 
 def _write_token_file(path, *, access_token="tok_valid", refresh_token="rt_abc",
@@ -131,3 +132,51 @@ class TestRefresh:
 
         assert token == "tok_refreshed"
         mock_post.assert_called_once()
+
+
+# ------------------------------------------------------------------
+# Refresh errors
+# ------------------------------------------------------------------
+
+class TestRefreshErrors:
+    @patch("lingtai.auth.codex.httpx.post")
+    def test_401_raises_codex_auth_error(self, mock_post, tmp_path):
+        """A 401 from the refresh endpoint raises CodexAuthError."""
+        token_file = tmp_path / "codex-auth.json"
+        _write_token_file(
+            token_file,
+            access_token="tok_old",
+            expires_at=int(time.time()) - 60,
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Unauthorized", request=MagicMock(), response=mock_response,
+        )
+        mock_post.return_value = mock_response
+
+        mgr = CodexTokenManager(token_path=str(token_file))
+        with pytest.raises(CodexAuthError, match="expired"):
+            mgr.get_access_token()
+
+    @patch("lingtai.auth.codex.httpx.post")
+    def test_500_propagates_raw_error(self, mock_post, tmp_path):
+        """A 500 from the refresh endpoint propagates as HTTPStatusError."""
+        token_file = tmp_path / "codex-auth.json"
+        _write_token_file(
+            token_file,
+            access_token="tok_old",
+            expires_at=int(time.time()) - 60,
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Server Error", request=MagicMock(), response=mock_response,
+        )
+        mock_post.return_value = mock_response
+
+        mgr = CodexTokenManager(token_path=str(token_file))
+        with pytest.raises(httpx.HTTPStatusError):
+            mgr.get_access_token()
