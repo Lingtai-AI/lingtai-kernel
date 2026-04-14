@@ -27,7 +27,7 @@ def _valid_init() -> dict:
         },
         "principle": "",
         "covenant": "",
-        "memory": "",
+        "pad": "",
         "prompt": "",
         "soul": "",
     }
@@ -63,7 +63,7 @@ def test_minimal_init_passes():
         },
         "principle": "",
         "covenant": "",
-        "memory": "",
+        "pad": "",
         "prompt": "",
         "soul": "",
     }

@@ -29,7 +29,7 @@ def _write_init(tmp_path: Path, overrides: dict | None = None) -> Path:
         },
         "principle": "",
         "covenant": "Be helpful.",
-        "memory": "I remember nothing.",
+        "pad": "I remember nothing.",
         "prompt": "",
     }
     if overrides:
@@ -95,7 +95,7 @@ def test_build_agent_constructs_correctly(mock_mail, mock_agent, mock_llm, tmp_p
     # covenant, memory, capabilities, addons no longer passed to constructor —
     # they are loaded by _perform_refresh() from init.json
     assert "covenant" not in call_kwargs.kwargs
-    assert "memory" not in call_kwargs.kwargs
+    assert "pad" not in call_kwargs.kwargs
     assert "capabilities" not in call_kwargs.kwargs
     assert "addons" not in call_kwargs.kwargs
     # _perform_refresh() is called on the constructed agent

@@ -91,7 +91,7 @@ def test_submit_requires_title(tmp_path):
 def test_submit_enforces_limit(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"codex": {"library_limit": 2}},
+        capabilities={"codex": {"codex_limit": 2}},
     )
     mgr = agent.get_capability("codex")
     mgr.handle({"action": "submit", "title": "A", "summary": "s", "content": "c"})

@@ -67,7 +67,7 @@ def _make_init(
         },
         "principle": principle,
         "covenant": covenant,
-        "memory": memory,
+        "pad": memory,
         "prompt": "",
         "soul": "",
     }

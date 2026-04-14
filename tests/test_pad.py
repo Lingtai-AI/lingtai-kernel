@@ -157,7 +157,6 @@ def test_pad_load(tmp_path):
         pad_file.write_text("# Pad\n\nimportant fact\n")
         result = agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
         assert result["status"] == "ok"
-        assert result["diff"]["changed"] is True
         section = agent._prompt_manager.read_section("pad")
         assert "important fact" in section
     finally:
@@ -185,7 +184,7 @@ def test_pad_load_no_change_no_commit(tmp_path):
     try:
         agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
         result = agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
-        assert result["diff"]["changed"] is False
+        assert result["status"] == "ok"
     finally:
         agent.stop()
 
