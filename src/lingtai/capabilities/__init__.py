@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 # Registry of built-in capability names → module paths (relative to this package).
 _BUILTIN: dict[str, str] = {
     "psyche": ".psyche",
-    "library": ".library",
+    "codex": ".codex",
     "bash": ".bash",
     "avatar": ".avatar",
     "daemon": ".daemon",
@@ -28,7 +28,7 @@ _BUILTIN: dict[str, str] = {
     "edit": ".edit",
     "glob": ".glob",
     "grep": ".grep",
-    "skills": ".skills",
+    "library": ".library",
 }
 
 # Group names that expand to multiple capabilities.
@@ -85,6 +85,7 @@ def get_all_providers() -> dict[str, dict]:
         "bash": ".bash",
         "web_search": ".web_search",
         "psyche": ".psyche",
+        "codex": ".codex",
         "library": ".library",
         "vision": ".vision",
         "talk": ".talk",

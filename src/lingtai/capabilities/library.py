@@ -1,21 +1,39 @@
-"""Library capability — standalone knowledge store.
+"""Library capability — shared skill store with registration and catalog injection.
 
-A structured knowledge archive persisted in library/library.json.
-Agents submit, browse, read, organize, and delete entries.
-Completely decoupled from psyche and memory — the agent decides
-what to do with the knowledge it retrieves.
+Skills are Markdown files (SKILL.md) with YAML frontmatter that teach the
+agent specialized behaviors.  All skills live in a shared git-tracked store
+at ``.lingtai/.library/<skill-name>/SKILL.md`` — a sibling directory to the
+agent working dirs, accessible to every agent in the same network.
 
-Usage:
-    agent = Agent(capabilities=["library"])
+Individual skill folders may themselves be git repos (cloned from a remote).
+The outer ``.library`` repo tracks the files and ignores inner ``.git`` dirs.
+
+Usage: Agent(capabilities=["library"])
+
+Tool actions:
+    register — validate all skill folders, git add + commit changes.
+    refresh  — rescan the store and re-inject the XML catalog into the
+               system prompt so newly added skills become available.
+
+SKILL.md format::
+
+    ---
+    name: my-skill
+    description: One-line description of what this skill does
+    version: 1.0.0
+    ---
+
+    Full instructions in Markdown…
+
+Required frontmatter: name, description.
+Optional frontmatter: version, author, tags (list[str]).
 """
 from __future__ import annotations
 
-import hashlib
-import json
-import os
+import logging
 import re
-import tempfile
-from datetime import datetime, timezone
+import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..i18n import t
@@ -23,8 +41,276 @@ from ..i18n import t
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
 
+log = logging.getLogger(__name__)
+
 PROVIDERS = {"providers": [], "default": "builtin"}
 
+# ---------------------------------------------------------------------------
+# Frontmatter parser (minimal, no PyYAML dependency)
+# ---------------------------------------------------------------------------
+
+_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
+_KV_RE = re.compile(r"^(\w[\w-]*)\s*:\s*(.+)$", re.MULTILINE)
+
+
+def _parse_frontmatter(text: str) -> dict[str, str]:
+    """Parse YAML-like frontmatter from a SKILL.md file.
+
+    Only handles simple ``key: value`` lines (no nesting, no lists).
+    Returns a dict of string key→value pairs.
+    """
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        return {}
+    block = m.group(1)
+    return {kv.group(1): kv.group(2).strip() for kv in _KV_RE.finditer(block)}
+
+
+def _resolve_library_dir(agent: "BaseAgent") -> Path:
+    """Resolve the shared skill library directory for this agent's network.
+
+    Skills live at ``.lingtai/.library/`` — a sibling to agent working dirs.
+    Agent working dirs are ``<network>/<agent-name>/``, so the library dir
+    is ``<network>/.library/``.
+    """
+    return agent._working_dir.parent / ".library"
+
+
+# ---------------------------------------------------------------------------
+# XML catalog builder
+# ---------------------------------------------------------------------------
+
+def _escape_xml(s: str) -> str:
+    return (
+        s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+
+
+def _build_catalog_xml(skills: list[dict], lang: str) -> str:
+    """Build the XML skill catalog for system prompt injection.
+
+    Each *skill* dict has keys: name, description, path.
+    """
+    if not skills:
+        return ""
+
+    lines = [
+        t(lang, "library.preamble"),
+        "",
+        "<available_skills>",
+    ]
+    for sk in skills:
+        lines.append("  <skill>")
+        lines.append(f"    <name>{_escape_xml(sk['name'])}</name>")
+        lines.append(f"    <description>{_escape_xml(sk['description'])}</description>")
+        lines.append(f"    <location>{_escape_xml(sk['path'])}</location>")
+        lines.append("  </skill>")
+    lines.append("</available_skills>")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Skill scanner
+# ---------------------------------------------------------------------------
+
+def _parse_skill_file(
+    skill_file: Path,
+    label: str,
+) -> tuple[dict | None, dict | None]:
+    """Parse a single SKILL.md. Returns (skill_dict, None) or (None, problem_dict)."""
+    try:
+        text = skill_file.read_text(encoding="utf-8")
+    except OSError as e:
+        return None, {"folder": label, "reason": f"cannot read SKILL.md: {e}"}
+
+    fm = _parse_frontmatter(text)
+    name = fm.get("name", "")
+    description = fm.get("description", "")
+    if not name:
+        return None, {"folder": label, "reason": "SKILL.md missing required frontmatter field: name"}
+    if not description:
+        return None, {"folder": label, "reason": "SKILL.md missing required frontmatter field: description"}
+
+    return {
+        "name": name,
+        "description": description,
+        "version": fm.get("version", ""),
+        "path": str(skill_file),
+    }, None
+
+
+def _scan_library_recursive(
+    directory: Path,
+    valid: list[dict],
+    problems: list[dict],
+    prefix: str = "",
+) -> None:
+    """Recursively scan a directory for skills.
+
+    A directory is classified as:
+    - **Skill folder**: contains ``SKILL.md`` → parse it, stop recursing.
+    - **Group folder**: no ``SKILL.md``, contains only subdirectories → recurse.
+    - **Corrupted**: no ``SKILL.md``, contains loose non-directory files → refuse.
+    """
+    for child in sorted(directory.iterdir()):
+        if not child.is_dir():
+            continue
+        if child.name.startswith("."):
+            continue
+
+        label = f"{prefix}{child.name}" if prefix else child.name
+        skill_file = child / "SKILL.md"
+
+        # Skill folder — has SKILL.md, parse and stop.
+        if skill_file.is_file():
+            sk, prob = _parse_skill_file(skill_file, label)
+            if sk:
+                valid.append(sk)
+            if prob:
+                problems.append(prob)
+            continue
+
+        # No SKILL.md — check if it's a valid group folder.
+        children = list(child.iterdir())
+        has_loose_files = any(
+            not c.is_dir() and not c.name.startswith(".")
+            for c in children
+        )
+        if has_loose_files:
+            problems.append({
+                "folder": label,
+                "reason": "not a skill (no SKILL.md) and has loose files — corrupted",
+            })
+            continue
+
+        # Pure group folder — recurse.
+        _scan_library_recursive(child, valid, problems, prefix=f"{label}/")
+
+
+def _scan_library(library_dir: Path) -> tuple[list[dict], list[dict]]:
+    """Scan ``library_dir`` for skill folders (recursive).
+
+    Supports arbitrary nesting: a directory with ``SKILL.md`` is a skill;
+    a directory containing only subdirectories is a group folder (recurse);
+    a directory with loose files but no ``SKILL.md`` is corrupted.
+
+    Returns (valid_skills, problems).
+    """
+    if not library_dir.is_dir():
+        return [], []
+
+    valid: list[dict] = []
+    problems: list[dict] = []
+    _scan_library_recursive(library_dir, valid, problems)
+    return valid, problems
+
+
+# ---------------------------------------------------------------------------
+# Git helpers
+# ---------------------------------------------------------------------------
+
+def _git(library_dir: Path, *args: str) -> subprocess.CompletedProcess:
+    """Run a git command in the library directory."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(library_dir),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def _ensure_git_repo(library_dir: Path) -> None:
+    """Ensure the library directory exists and is a git repo."""
+    library_dir.mkdir(parents=True, exist_ok=True)
+
+    gitdir = library_dir / ".git"
+    if not gitdir.exists():
+        _git(library_dir, "init")
+        # Ignore inner .git dirs (skills that are themselves git repos)
+        gitignore = library_dir / ".gitignore"
+        if not gitignore.exists():
+            gitignore.write_text("**/.git\n")
+        _git(library_dir, "add", ".gitignore")
+        _git(library_dir, "commit", "-m", "init skill library")
+
+
+# ---------------------------------------------------------------------------
+# Tool actions
+# ---------------------------------------------------------------------------
+
+def _action_register(agent: "BaseAgent", library_dir: Path) -> dict:
+    """Validate skill folders, git add + commit changes."""
+    _ensure_git_repo(library_dir)
+    valid, problems = _scan_library(library_dir)
+
+    # Stage all changes (new files, modifications, deletions)
+    _git(library_dir, "add", "-A")
+
+    # Check if there's anything to commit
+    status = _git(library_dir, "status", "--porcelain")
+    staged = status.stdout.strip()
+
+    commit_msg = ""
+    if staged:
+        # Build commit message from skill names
+        skill_names = [s["name"] for s in valid]
+        msg = f"register: {', '.join(skill_names)}" if skill_names else "register: update skills"
+        result = _git(library_dir, "commit", "-m", msg)
+        if result.returncode == 0:
+            commit_msg = msg
+        else:
+            commit_msg = f"commit failed: {result.stderr.strip()}"
+
+    # Re-inject catalog (or clear if no valid skills remain)
+    lang = agent._config.language
+    catalog_xml = _build_catalog_xml(valid, lang)
+    if catalog_xml:
+        agent.update_system_prompt("library", catalog_xml, protected=True)
+    else:
+        agent.update_system_prompt("library", "", protected=True)
+
+    return {
+        "status": "ok",
+        "library_dir": str(library_dir),
+        "registered": [
+            {"name": s["name"], "description": s["description"], "version": s["version"]}
+            for s in valid
+        ],
+        "problems": problems,
+        "committed": commit_msg,
+    }
+
+
+def _action_refresh(agent: "BaseAgent", library_dir: Path) -> dict:
+    """Rescan skills and re-inject the XML catalog into system prompt."""
+    valid, problems = _scan_library(library_dir)
+
+    lang = agent._config.language
+    catalog_xml = _build_catalog_xml(valid, lang)
+    if catalog_xml:
+        agent.update_system_prompt("library", catalog_xml, protected=True)
+    else:
+        agent.update_system_prompt("library", "", protected=True)
+
+    return {
+        "status": "ok",
+        "library_dir": str(library_dir),
+        "loaded": [
+            {"name": s["name"], "description": s["description"], "version": s["version"]}
+            for s in valid
+        ],
+        "problems": problems,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Capability setup
+# ---------------------------------------------------------------------------
 
 def get_description(lang: str = "en") -> str:
     return t(lang, "library.description")
@@ -36,306 +322,40 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["submit", "filter", "view", "consolidate", "delete", "export"],
+                "enum": ["register", "refresh"],
                 "description": t(lang, "library.action"),
-            },
-            "title": {
-                "type": "string",
-                "description": t(lang, "library.title"),
-            },
-            "summary": {
-                "type": "string",
-                "description": t(lang, "library.summary"),
-            },
-            "content": {
-                "type": "string",
-                "description": t(lang, "library.content"),
-            },
-            "supplementary": {
-                "type": "string",
-                "description": t(lang, "library.supplementary"),
-            },
-            "ids": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": t(lang, "library.ids"),
-            },
-            "pattern": {
-                "type": "string",
-                "description": t(lang, "library.pattern"),
-            },
-            "limit": {
-                "type": "integer",
-                "description": t(lang, "library.limit"),
-            },
-            "depth": {
-                "type": "string",
-                "enum": ["content", "supplementary"],
-                "description": t(lang, "library.depth"),
             },
         },
         "required": ["action"],
     }
 
 
-
-class LibraryManager:
-    """Knowledge archive — submit, browse, read, organize, delete."""
-
-    DEFAULT_MAX_ENTRIES = 20
-
-    def __init__(self, agent: "BaseAgent", *, library_limit: int | None = None):
-        self._agent = agent
-        self._working_dir = agent._working_dir
-        self._max_entries = library_limit if library_limit is not None else self.DEFAULT_MAX_ENTRIES
-
-        self._library_json = self._working_dir / "library" / "library.json"
-        self._exports_dir = self._working_dir / "exports"
-        self._entries: list[dict] = self._load_entries()
-
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
-
-    def _load_entries(self) -> list[dict]:
-        if not self._library_json.is_file():
-            return []
-        try:
-            data = json.loads(self._library_json.read_text())
-            entries = data.get("entries", [])
-            for e in entries:
-                if "title" not in e:
-                    e["title"] = e.get("content", "")[:50] or "Untitled"
-                    e["summary"] = e.get("content", "")[:200]
-                    e["supplementary"] = ""
-            return entries
-        except (json.JSONDecodeError, OSError):
-            return []
-
-    def _save_entries(self) -> None:
-        data = {"version": 1, "entries": self._entries}
-        self._library_json.parent.mkdir(exist_ok=True)
-        fd, tmp = tempfile.mkstemp(
-            dir=str(self._library_json.parent), suffix=".tmp",
-        )
-        try:
-            os.write(fd, json.dumps(data, indent=2, ensure_ascii=False).encode())
-            os.close(fd)
-            os.replace(tmp, str(self._library_json))
-        except Exception:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-            raise
-
-    @staticmethod
-    def _make_id(content: str, created_at: str) -> str:
-        return hashlib.sha256(
-            (content + created_at).encode()
-        ).hexdigest()[:8]
-
-    # ------------------------------------------------------------------
-    # Dispatch
-    # ------------------------------------------------------------------
-
-    _VALID_ACTIONS = {"submit", "filter", "view", "consolidate", "delete", "export"}
-
-    def handle(self, args: dict) -> dict:
-        action = args.get("action", "")
-        if action not in self._VALID_ACTIONS:
-            return {
-                "error": f"Unknown action: {action!r}. "
-                f"Valid: {', '.join(sorted(self._VALID_ACTIONS))}.",
-            }
-        method = getattr(self, f"_{action}")
-        return method(args)
-
-    # ------------------------------------------------------------------
-    # Actions
-    # ------------------------------------------------------------------
-
-    def _submit(self, args: dict) -> dict:
-        title = args.get("title", "").strip()
-        summary = args.get("summary", "").strip()
-        content = args.get("content", "").strip()
-        supplementary = args.get("supplementary", "").strip()
-        if not title:
-            return {"error": "title is required for submit."}
-        if not summary:
-            return {"error": "summary is required for submit."}
-        if not content:
-            return {"error": "content is required for submit."}
-        if len(self._entries) >= self._max_entries:
-            return {
-                "error": f"Library is full ({self._max_entries} entries). "
-                "Consolidate related entries first, "
-                "delete obsolete ones, or use supplementary "
-                "to pack more detail into existing entries.",
-                "entries": len(self._entries),
-                "max": self._max_entries,
-            }
-        now = datetime.now(timezone.utc).isoformat()
-        entry_id = self._make_id(title + content, now)
-        self._entries.append({
-            "id": entry_id,
-            "title": title,
-            "summary": summary,
-            "content": content,
-            "supplementary": supplementary,
-            "created_at": now,
-        })
-        self._save_entries()
-        return {
-            "status": "ok",
-            "id": entry_id,
-            "entries": len(self._entries),
-            "max": self._max_entries,
-        }
-
-    def _filter(self, args: dict) -> dict:
-        pattern = args.get("pattern")
-        limit = args.get("limit")
-        entries = self._entries
-        if pattern:
-            try:
-                rx = re.compile(pattern, re.IGNORECASE)
-            except re.error as exc:
-                return {"error": f"Invalid regex pattern: {exc}"}
-            entries = [
-                e for e in entries
-                if rx.search(e["title"])
-                or rx.search(e["summary"])
-                or rx.search(e["content"])
-            ]
-        if limit is not None and limit > 0:
-            entries = entries[:limit]
-        return {
-            "status": "ok",
-            "entries": [
-                {"id": e["id"], "title": e["title"], "summary": e["summary"]}
-                for e in entries
-            ],
-        }
-
-    def _view(self, args: dict) -> dict:
-        ids = args.get("ids")
-        if not ids:
-            return {"error": "ids is required for view."}
-        depth = args.get("depth", "content")
-
-        entries_by_id = {e["id"]: e for e in self._entries}
-        invalid = [i for i in ids if i not in entries_by_id]
-        if invalid:
-            return {"error": f"Unknown library IDs: {', '.join(invalid)}"}
-
-        result_entries = []
-        for entry_id in ids:
-            e = entries_by_id[entry_id]
-            item = {
-                "id": e["id"],
-                "title": e["title"],
-                "summary": e["summary"],
-                "content": e["content"],
-            }
-            if depth == "supplementary":
-                item["supplementary"] = e.get("supplementary", "")
-            result_entries.append(item)
-
-        return {"status": "ok", "entries": result_entries}
-
-    def _consolidate(self, args: dict) -> dict:
-        ids = args.get("ids")
-        title = args.get("title", "").strip()
-        summary = args.get("summary", "").strip()
-        content = args.get("content", "").strip()
-        supplementary = args.get("supplementary", "").strip()
-        if not ids:
-            return {"error": "ids is required for consolidate."}
-        if not title:
-            return {"error": "title is required for consolidate."}
-        if not summary:
-            return {"error": "summary is required for consolidate."}
-        if not content:
-            return {"error": "content is required for consolidate."}
-
-        existing_ids = {e["id"] for e in self._entries}
-        invalid = [i for i in ids if i not in existing_ids]
-        if invalid:
-            return {"error": f"Unknown library IDs: {', '.join(invalid)}"}
-
-        ids_set = set(ids)
-        self._entries = [e for e in self._entries if e["id"] not in ids_set]
-
-        now = datetime.now(timezone.utc).isoformat()
-        new_id = self._make_id(title + content, now)
-        self._entries.append({
-            "id": new_id,
-            "title": title,
-            "summary": summary,
-            "content": content,
-            "supplementary": supplementary,
-            "created_at": now,
-        })
-
-        self._save_entries()
-        return {"status": "ok", "id": new_id, "removed": len(ids)}
-
-    def _delete(self, args: dict) -> dict:
-        ids = args.get("ids")
-        if not ids:
-            return {"error": "ids is required for delete."}
-
-        existing_ids = {e["id"] for e in self._entries}
-        invalid = [i for i in ids if i not in existing_ids]
-        if invalid:
-            return {"error": f"Unknown library IDs: {', '.join(invalid)}"}
-
-        ids_set = set(ids)
-        before = len(self._entries)
-        self._entries = [e for e in self._entries if e["id"] not in ids_set]
-        removed = before - len(self._entries)
-
-        self._save_entries()
-        return {"status": "ok", "removed": removed}
-
-    def _export(self, args: dict) -> dict:
-        ids = args.get("ids")
-        if not ids:
-            return {"error": "ids is required for export."}
-
-        entries_by_id = {e["id"]: e for e in self._entries}
-        invalid = [i for i in ids if i not in entries_by_id]
-        if invalid:
-            return {"error": f"Unknown library IDs: {', '.join(invalid)}"}
-
-        self._exports_dir.mkdir(parents=True, exist_ok=True)
-
-        exported = []
-        for entry_id in ids:
-            e = entries_by_id[entry_id]
-            parts = [f"# {e['title']}", f"\n{e['content']}"]
-            if e.get("supplementary", "").strip():
-                parts.append(f"\n---\n{e['supplementary']}")
-            text = "\n".join(parts)
-
-            path = self._exports_dir / f"{entry_id}.txt"
-            path.write_text(text)
-            # Return path relative to working dir for use in memory.edit(files=[...])
-            exported.append(str(path.relative_to(self._working_dir)))
-
-        return {"status": "ok", "files": exported, "count": len(exported)}
-
-
-def setup(agent: "BaseAgent", *, library_limit: int | None = None) -> LibraryManager:
-    """Set up library capability — standalone knowledge store."""
+def setup(agent: "BaseAgent") -> None:
+    """Set up the library capability — tool + initial catalog injection."""
     lang = agent._config.language
+    library_dir = _resolve_library_dir(agent)
 
-    mgr = LibraryManager(agent, library_limit=library_limit)
+    def handle_library(args: dict) -> dict:
+        action = args.get("action", "")
+        if action == "register":
+            return _action_register(agent, library_dir)
+        elif action == "refresh":
+            return _action_refresh(agent, library_dir)
+        else:
+            return {"status": "error", "message": f"unknown action: {action!r}, use 'register' or 'refresh'"}
 
     agent.add_tool(
-        "library", schema=get_schema(lang), handler=mgr.handle, description=get_description(lang),
+        "library",
+        schema=get_schema(lang),
+        handler=handle_library,
+        description=get_description(lang),
     )
-    return mgr
+
+    # Initial catalog injection — scan and inject on startup
+    valid, _ = _scan_library(library_dir)
+    if valid:
+        catalog_xml = _build_catalog_xml(valid, lang)
+        agent.update_system_prompt("library", catalog_xml, protected=True)
+        log.info("library: injected %d skill(s) from %s", len(valid), library_dir)
+    else:
+        log.debug("library: no skills found in %s", library_dir)
