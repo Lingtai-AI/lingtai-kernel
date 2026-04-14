@@ -39,10 +39,11 @@ That's it. The TUI bootstraps everything — Python runtime, dependencies, and a
 
 > The TUI is a [Bubble Tea](https://github.com/charmbracelet/bubbletea) app designed for **dark terminals** — use a dark background for the best experience. Text selection requires [iTerm2](https://iterm2.com/) (hold Option + drag). On Windows Terminal, hold Shift to select text; Ctrl+V to paste. Ctrl+E opens an external editor as a last resort.
 
-**Python only:**
+**Python CLI only** (no TUI — for scripting, custom agents, and programmatic use):
 
 ```bash
 pip install lingtai
+lingtai --help
 ```
 
 ## Why Lingtai
