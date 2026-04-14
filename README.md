@@ -88,7 +88,7 @@ CustomAgent(Agent)     — your domain logic
 <td>
 
 `psyche` — evolving identity
-`library` — knowledge archive
+`codex` — knowledge archive
 `email` — full mailbox system
 
 </td>
@@ -114,7 +114,7 @@ Anthropic, OpenAI, Gemini, MiniMax, or any OpenAI-compatible API (DeepSeek, Grok
   .agent.json               ← manifest
   system/
     covenant.md             ← protected instructions (survive molts)
-    memory.md               ← working notes
+    pad.md                  ← working notes
   mailbox/
     inbox/                  ← received messages
     outbox/                 ← pending sends

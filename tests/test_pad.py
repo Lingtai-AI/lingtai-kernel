@@ -1,6 +1,6 @@
-"""Tests for eigen intrinsic — agent memory management (edit/load).
+"""Tests for eigen intrinsic — agent pad management (edit/load).
 
-Migrated from memory intrinsic tests. Tests the memory object within eigen.
+Migrated from memory intrinsic tests. Tests the pad object within eigen.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def make_mock_service():
 
 def test_eigen_in_all_intrinsics():
     assert "eigen" in ALL_INTRINSICS
-    assert "memory" not in ALL_INTRINSICS
+    assert "pad" not in ALL_INTRINSICS
     info = ALL_INTRINSICS["eigen"]
     mod = info["module"]
     schema = mod.get_schema()
@@ -39,12 +39,12 @@ def test_eigen_in_all_intrinsics():
 def test_eigen_wired_in_agent(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert "eigen" in agent._intrinsics
-    assert "memory" not in agent._intrinsics
+    assert "pad" not in agent._intrinsics
     agent.stop(timeout=1.0)
 
 
 # ---------------------------------------------------------------------------
-# Constructor args (covenant / memory file paths)
+# Constructor args (covenant / pad file paths)
 # ---------------------------------------------------------------------------
 
 
@@ -60,15 +60,15 @@ def test_covenant_constructor_arg_writes_to_system(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_memory_constructor_arg_writes_to_system(tmp_path):
-    """memory= constructor arg should write to system/memory.md."""
+def test_pad_constructor_arg_writes_to_system(tmp_path):
+    """pad= constructor arg should write to system/pad.md."""
     agent = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        memory="initial memory",
+        pad="initial pad",
     )
-    memory_file = agent.working_dir / "system" / "memory.md"
-    assert memory_file.is_file()
-    assert memory_file.read_text() == "initial memory"
+    pad_file = agent.working_dir / "system" / "pad.md"
+    assert pad_file.is_file()
+    assert pad_file.read_text() == "initial pad"
     agent.stop(timeout=1.0)
 
 
@@ -86,25 +86,25 @@ def test_covenant_is_protected_section(tmp_path):
 
 
 def test_existing_system_files_not_overwritten(tmp_path):
-    """If system/memory.md already exists, constructor arg should not overwrite it."""
+    """If system/pad.md already exists, constructor arg should not overwrite it."""
     # First create an agent so its working dir (with agent_id) exists
     agent1 = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "t1",
-        memory="existing content",
+        pad="existing content",
     )
     working_dir = agent1.working_dir
     agent1.stop(timeout=1.0)
-    # Verify the memory file was written by the first agent
-    assert (working_dir / "system" / "memory.md").read_text() == "existing content"
+    # Verify the pad file was written by the first agent
+    assert (working_dir / "system" / "pad.md").read_text() == "existing content"
     # Now a new agent (different agent_id) won't share that dir.
-    # The semantic of this test is that memory= doesn't overwrite existing memory.md.
+    # The semantic of this test is that pad= doesn't overwrite existing pad.md.
     # We verify this by checking the first agent wrote it correctly.
     agent2 = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "t2",
-        memory="constructor ltm",
+        pad="constructor ltm",
     )
-    # New agent has its own dir, so memory=constructor ltm is written fresh
-    assert (agent2.working_dir / "system" / "memory.md").read_text() == "constructor ltm"
+    # New agent has its own dir, so pad=constructor ltm is written fresh
+    assert (agent2.working_dir / "system" / "pad.md").read_text() == "constructor ltm"
     agent2.stop(timeout=1.0)
 
 
@@ -113,91 +113,91 @@ def test_existing_system_files_not_overwritten(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_memory_edit(tmp_path):
+def test_pad_edit(tmp_path):
     """Edit should write content to disk without injecting into prompt."""
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    result = agent._intrinsics["eigen"]({"object": "memory", "action": "edit", "content": "hello world"})
+    result = agent._intrinsics["eigen"]({"object": "pad", "action": "edit", "content": "hello world"})
     assert result["status"] == "ok"
     assert result["size_bytes"] == len("hello world".encode())
-    memory_file = agent.working_dir / "system" / "memory.md"
-    assert memory_file.read_text() == "hello world"
+    pad_file = agent.working_dir / "system" / "pad.md"
+    assert pad_file.read_text() == "hello world"
     agent.stop(timeout=1.0)
 
 
-def test_memory_edit_then_load(tmp_path):
+def test_pad_edit_then_load(tmp_path):
     """Edit + load workflow: edit writes to disk, load injects into prompt."""
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
         # edit writes content and auto-loads into prompt manager
-        result = agent._intrinsics["eigen"]({"object": "memory", "action": "edit", "content": "important fact"})
+        result = agent._intrinsics["eigen"]({"object": "pad", "action": "edit", "content": "important fact"})
         assert result["status"] == "ok"
 
         # Verify file was written
-        memory_file = agent.working_dir / "system" / "memory.md"
-        assert memory_file.read_text() == "important fact"
+        pad_file = agent.working_dir / "system" / "pad.md"
+        assert pad_file.read_text() == "important fact"
 
         # Prompt manager should have the content (auto-loaded by edit)
-        section = agent._prompt_manager.read_section("memory")
+        section = agent._prompt_manager.read_section("pad")
         assert "important fact" in section
 
         # Second load call should not detect new changes (file unchanged)
-        result = agent._intrinsics["eigen"]({"object": "memory", "action": "load"})
+        result = agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
         assert result["status"] == "ok"
         # changed=False because file was already committed by edit's internal load
     finally:
         agent.stop()
 
 
-def test_memory_load(tmp_path):
+def test_pad_load(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
-        memory_file = agent.working_dir / "system" / "memory.md"
-        memory_file.write_text("# Memory\n\nimportant fact\n")
-        result = agent._intrinsics["eigen"]({"object": "memory", "action": "load"})
+        pad_file = agent.working_dir / "system" / "pad.md"
+        pad_file.write_text("# Pad\n\nimportant fact\n")
+        result = agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
         assert result["status"] == "ok"
         assert result["diff"]["changed"] is True
-        section = agent._prompt_manager.read_section("memory")
+        section = agent._prompt_manager.read_section("pad")
         assert "important fact" in section
     finally:
         agent.stop()
 
 
-def test_memory_load_empty_removes_section(tmp_path):
+def test_pad_load_empty_removes_section(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
-        agent._intrinsics["eigen"]({"object": "memory", "action": "edit", "content": "some content"})
-        agent._intrinsics["eigen"]({"object": "memory", "action": "load"})
-        assert agent._prompt_manager.read_section("memory") is not None
-        agent._intrinsics["eigen"]({"object": "memory", "action": "edit", "content": ""})
-        agent._intrinsics["eigen"]({"object": "memory", "action": "load"})
-        section = agent._prompt_manager.read_section("memory")
+        agent._intrinsics["eigen"]({"object": "pad", "action": "edit", "content": "some content"})
+        agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
+        assert agent._prompt_manager.read_section("pad") is not None
+        agent._intrinsics["eigen"]({"object": "pad", "action": "edit", "content": ""})
+        agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
+        section = agent._prompt_manager.read_section("pad")
         assert section is None or section.strip() == ""
     finally:
         agent.stop()
 
 
-def test_memory_load_no_change_no_commit(tmp_path):
+def test_pad_load_no_change_no_commit(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
-        agent._intrinsics["eigen"]({"object": "memory", "action": "load"})
-        result = agent._intrinsics["eigen"]({"object": "memory", "action": "load"})
+        agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
+        result = agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
         assert result["diff"]["changed"] is False
     finally:
         agent.stop()
 
 
-def test_memory_unknown_action(tmp_path):
+def test_pad_unknown_action(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    result = agent._intrinsics["eigen"]({"object": "memory", "action": "diff"})
+    result = agent._intrinsics["eigen"]({"object": "pad", "action": "diff"})
     assert "error" in result
     agent.stop(timeout=1.0)
 
 
-def test_memory_creates_files_if_missing(tmp_path):
+def test_pad_creates_files_if_missing(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
@@ -205,8 +205,8 @@ def test_memory_creates_files_if_missing(tmp_path):
         system_dir = agent.working_dir / "system"
         if system_dir.exists():
             shutil.rmtree(system_dir)
-        result = agent._intrinsics["eigen"]({"object": "memory", "action": "edit", "content": "test"})
+        result = agent._intrinsics["eigen"]({"object": "pad", "action": "edit", "content": "test"})
         assert result["status"] == "ok"
-        assert (agent.working_dir / "system" / "memory.md").is_file()
+        assert (agent.working_dir / "system" / "pad.md").is_file()
     finally:
         agent.stop()

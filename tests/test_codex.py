@@ -1,4 +1,4 @@
-"""Tests for library capability — standalone knowledge store."""
+"""Tests for codex capability — standalone knowledge store."""
 from __future__ import annotations
 
 import json
@@ -22,33 +22,33 @@ def make_mock_service():
 # ---------------------------------------------------------------------------
 
 
-def test_library_setup_registers_tool(tmp_path):
+def test_codex_setup_registers_tool(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    assert "library" in agent._tool_handlers
+    assert "codex" in agent._tool_handlers
     agent.stop(timeout=1.0)
 
 
-def test_library_manager_accessible(tmp_path):
+def test_codex_manager_accessible(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     assert mgr is not None
     agent.stop(timeout=1.0)
 
 
-def test_library_independent_of_psyche(tmp_path):
-    """Library can be used without psyche — eigen stays intact."""
+def test_codex_independent_of_psyche(tmp_path):
+    """Codex can be used without psyche — eigen stays intact."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
     assert "eigen" in agent._intrinsics
-    assert "library" in agent._tool_handlers
+    assert "codex" in agent._tool_handlers
     agent.stop(timeout=1.0)
 
 
@@ -60,9 +60,9 @@ def test_library_independent_of_psyche(tmp_path):
 def test_submit_creates_entry(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     result = mgr.handle({
         "action": "submit",
         "title": "TCP Retry Logic",
@@ -71,7 +71,7 @@ def test_submit_creates_entry(tmp_path):
     })
     assert result["status"] == "ok"
     assert "id" in result
-    data = json.loads((agent.working_dir / "library" / "library.json").read_text())
+    data = json.loads((agent.working_dir / "codex" / "codex.json").read_text())
     assert len(data["entries"]) == 1
     assert data["entries"][0]["title"] == "TCP Retry Logic"
     agent.stop(timeout=1.0)
@@ -80,9 +80,9 @@ def test_submit_creates_entry(tmp_path):
 def test_submit_requires_title(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     result = mgr.handle({"action": "submit", "summary": "s", "content": "c"})
     assert "error" in result
     agent.stop(timeout=1.0)
@@ -91,9 +91,9 @@ def test_submit_requires_title(tmp_path):
 def test_submit_enforces_limit(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 2}},
+        capabilities={"codex": {"library_limit": 2}},
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     mgr.handle({"action": "submit", "title": "A", "summary": "s", "content": "c"})
     mgr.handle({"action": "submit", "title": "B", "summary": "s", "content": "c"})
     result = mgr.handle({"action": "submit", "title": "C", "summary": "s", "content": "c"})
@@ -110,9 +110,9 @@ def test_submit_enforces_limit(tmp_path):
 def test_filter_with_pattern(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     mgr.handle({"action": "submit", "title": "TCP Retry", "summary": "About TCP.", "content": "Backoff logic."})
     mgr.handle({"action": "submit", "title": "HTTP Caching", "summary": "About HTTP.", "content": "Cache rules."})
     result = mgr.handle({"action": "filter", "pattern": "TCP"})
@@ -124,9 +124,9 @@ def test_filter_with_pattern(tmp_path):
 def test_filter_all(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     mgr.handle({"action": "submit", "title": "A", "summary": "s", "content": "c"})
     mgr.handle({"action": "submit", "title": "B", "summary": "s", "content": "c"})
     result = mgr.handle({"action": "filter"})
@@ -137,9 +137,9 @@ def test_filter_all(tmp_path):
 def test_filter_with_limit(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     mgr.handle({"action": "submit", "title": "A", "summary": "s", "content": "c"})
     mgr.handle({"action": "submit", "title": "B", "summary": "s", "content": "c"})
     result = mgr.handle({"action": "filter", "limit": 1})
@@ -155,9 +155,9 @@ def test_filter_with_limit(tmp_path):
 def test_view_returns_content(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     r = mgr.handle({"action": "submit", "title": "X", "summary": "s", "content": "full content here"})
     result = mgr.handle({"action": "view", "ids": [r["id"]]})
     assert result["status"] == "ok"
@@ -168,9 +168,9 @@ def test_view_returns_content(tmp_path):
 def test_view_invalid_id(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     result = mgr.handle({"action": "view", "ids": ["nope"]})
     assert "error" in result
     agent.stop(timeout=1.0)
@@ -184,9 +184,9 @@ def test_view_invalid_id(tmp_path):
 def test_consolidate(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     r1 = mgr.handle({"action": "submit", "title": "A", "summary": "s1.", "content": "c1"})
     r2 = mgr.handle({"action": "submit", "title": "B", "summary": "s2.", "content": "c2"})
     result = mgr.handle({
@@ -198,7 +198,7 @@ def test_consolidate(tmp_path):
     })
     assert result["status"] == "ok"
     assert result["removed"] == 2
-    data = json.loads((agent.working_dir / "library" / "library.json").read_text())
+    data = json.loads((agent.working_dir / "codex" / "codex.json").read_text())
     assert len(data["entries"]) == 1
     assert data["entries"][0]["title"] == "AB Combined"
     agent.stop(timeout=1.0)
@@ -212,15 +212,15 @@ def test_consolidate(tmp_path):
 def test_delete(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     r1 = mgr.handle({"action": "submit", "title": "A", "summary": "s.", "content": "c"})
     r2 = mgr.handle({"action": "submit", "title": "B", "summary": "s.", "content": "c"})
     result = mgr.handle({"action": "delete", "ids": [r1["id"]]})
     assert result["status"] == "ok"
     assert result["removed"] == 1
-    data = json.loads((agent.working_dir / "library" / "library.json").read_text())
+    data = json.loads((agent.working_dir / "codex" / "codex.json").read_text())
     assert len(data["entries"]) == 1
     assert data["entries"][0]["id"] == r2["id"]
     agent.stop(timeout=1.0)
@@ -234,9 +234,9 @@ def test_delete(tmp_path):
 def test_export_creates_files(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     r = mgr.handle({
         "action": "submit", "title": "TCP Retry",
         "summary": "Backoff logic.", "content": "Exponential backoff details.",
@@ -258,9 +258,9 @@ def test_export_creates_files(tmp_path):
 def test_export_includes_supplementary(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     r = mgr.handle({
         "action": "submit", "title": "Deep Dive",
         "summary": "s.", "content": "Main content.",
@@ -275,12 +275,12 @@ def test_export_includes_supplementary(tmp_path):
 def test_export_returns_relative_paths(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     r = mgr.handle({"action": "submit", "title": "A", "summary": "s.", "content": "c"})
     result = mgr.handle({"action": "export", "ids": [r["id"]]})
-    # Paths should be relative (for use in memory.edit files param)
+    # Paths should be relative (for use in pad.edit files param)
     for f in result["files"]:
         assert not f.startswith("/")
         assert f.startswith("exports/")
@@ -290,21 +290,21 @@ def test_export_returns_relative_paths(tmp_path):
 def test_export_invalid_id(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library"],
+        capabilities=["codex"],
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("codex")
     result = mgr.handle({"action": "export", "ids": ["nope"]})
     assert "error" in result
     agent.stop(timeout=1.0)
 
 
-def test_export_to_memory_edit_workflow(tmp_path):
-    """Full workflow: library export → psyche memory.edit with files."""
+def test_export_to_pad_edit_workflow(tmp_path):
+    """Full workflow: codex export → psyche pad.edit with files."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["library", "psyche"],
+        capabilities=["codex", "psyche"],
     )
-    lib = agent.get_capability("library")
+    lib = agent.get_capability("codex")
     psy = agent.get_capability("psyche")
 
     r = lib.handle({
@@ -313,14 +313,14 @@ def test_export_to_memory_edit_workflow(tmp_path):
     })
     export_result = lib.handle({"action": "export", "ids": [r["id"]]})
 
-    mem_result = psy.handle({
-        "object": "memory", "action": "edit",
+    pad_result = psy.handle({
+        "object": "pad", "action": "edit",
         "content": "My working notes.",
         "files": export_result["files"],
     })
-    assert mem_result["status"] == "ok"
+    assert pad_result["status"] == "ok"
 
-    md = (agent.working_dir / "system" / "memory.md").read_text()
+    md = (agent.working_dir / "system" / "pad.md").read_text()
     assert "My working notes." in md
     assert "[file-1]" in md
     assert "The answer is 42." in md
@@ -333,7 +333,7 @@ def test_export_to_memory_edit_workflow(tmp_path):
 
 
 def test_schema_has_all_fields():
-    from lingtai.capabilities.library import get_schema
+    from lingtai.capabilities.codex import get_schema
     SCHEMA = get_schema("en")
     actions = SCHEMA["properties"]["action"]["enum"]
     assert set(actions) == {"submit", "filter", "view", "consolidate", "delete", "export"}
@@ -354,15 +354,15 @@ def test_schema_has_all_fields():
 
 
 def test_id_deterministic():
-    from lingtai.capabilities.library import LibraryManager
-    id1 = LibraryManager._make_id("hello", "2026-03-16T00:00:00Z")
-    id2 = LibraryManager._make_id("hello", "2026-03-16T00:00:00Z")
+    from lingtai.capabilities.codex import CodexManager
+    id1 = CodexManager._make_id("hello", "2026-03-16T00:00:00Z")
+    id2 = CodexManager._make_id("hello", "2026-03-16T00:00:00Z")
     assert id1 == id2
     assert len(id1) == 8
 
 
 def test_id_differs_by_content():
-    from lingtai.capabilities.library import LibraryManager
-    id1 = LibraryManager._make_id("hello", "2026-03-16T00:00:00Z")
-    id2 = LibraryManager._make_id("world", "2026-03-16T00:00:00Z")
+    from lingtai.capabilities.codex import CodexManager
+    id1 = CodexManager._make_id("hello", "2026-03-16T00:00:00Z")
+    id2 = CodexManager._make_id("world", "2026-03-16T00:00:00Z")
     assert id1 != id2

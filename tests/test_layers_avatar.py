@@ -86,7 +86,7 @@ class TestAvatarManager:
         assert r2["status"] == "already_active"
 
     def test_spawn_mirror_false_no_identity_files(self, tmp_path):
-        """mirror=False (default) should not copy character/memory/library."""
+        """mirror=False (default) should not copy character/pad/codex."""
         from lingtai.agent import Agent
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"])
@@ -94,21 +94,21 @@ class TestAvatarManager:
         system_dir = parent._working_dir / "system"
         system_dir.mkdir(parents=True, exist_ok=True)
         (system_dir / "character.md").write_text("I am the parent")
-        (system_dir / "memory.md").write_text("Parent memory")
-        lib_dir = parent._working_dir / "library"
+        (system_dir / "pad.md").write_text("Parent pad")
+        lib_dir = parent._working_dir / "codex"
         lib_dir.mkdir(parents=True, exist_ok=True)
-        (lib_dir / "library.json").write_text('{"entries": []}')
+        (lib_dir / "codex.json").write_text('{"entries": []}')
 
         mgr = parent.get_capability("avatar")
         result = mgr.handle({"name": "blank"})
         assert result["status"] == "ok"
         child = mgr._peers["blank"]
-        # Character and library should NOT be copied
+        # Character and codex should NOT be copied
         assert not (child._working_dir / "system" / "character.md").is_file()
-        assert not (child._working_dir / "library" / "library.json").is_file()
+        assert not (child._working_dir / "codex" / "codex.json").is_file()
 
     def test_spawn_mirror_true_copies_identity(self, tmp_path):
-        """mirror=True should copy character, memory, library, and exports."""
+        """mirror=True should copy character, pad, codex, and exports."""
         from lingtai.agent import Agent
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"])
@@ -116,10 +116,10 @@ class TestAvatarManager:
         system_dir = parent._working_dir / "system"
         system_dir.mkdir(parents=True, exist_ok=True)
         (system_dir / "character.md").write_text("I am the parent")
-        (system_dir / "memory.md").write_text("Parent memory")
-        lib_dir = parent._working_dir / "library"
+        (system_dir / "pad.md").write_text("Parent pad")
+        lib_dir = parent._working_dir / "codex"
         lib_dir.mkdir(parents=True, exist_ok=True)
-        (lib_dir / "library.json").write_text('{"entries": []}')
+        (lib_dir / "codex.json").write_text('{"entries": []}')
         exports_dir = parent._working_dir / "exports"
         exports_dir.mkdir(parents=True, exist_ok=True)
         (exports_dir / "abc123.txt").write_text("exported knowledge")
@@ -129,8 +129,8 @@ class TestAvatarManager:
         assert result["status"] == "ok"
         child = mgr._peers["clone"]
         assert (child._working_dir / "system" / "character.md").read_text() == "I am the parent"
-        assert (child._working_dir / "system" / "memory.md").read_text() == "Parent memory"
-        assert (child._working_dir / "library" / "library.json").read_text() == '{"entries": []}'
+        assert (child._working_dir / "system" / "pad.md").read_text() == "Parent pad"
+        assert (child._working_dir / "codex" / "codex.json").read_text() == '{"entries": []}'
         assert (child._working_dir / "exports" / "abc123.txt").read_text() == "exported knowledge"
 
     def test_spawn_mirror_missing_files_ok(self, tmp_path):

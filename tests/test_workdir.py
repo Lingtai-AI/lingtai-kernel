@@ -48,7 +48,7 @@ def test_git_init_creates_repo(tmp_path):
     assert (wd.path / ".git").is_dir()
     assert (wd.path / ".gitignore").is_file()
     assert (wd.path / "system" / "covenant.md").is_file()
-    assert (wd.path / "system" / "memory.md").is_file()
+    assert (wd.path / "system" / "pad.md").is_file()
 
 
 def test_git_init_skips_if_already_initialized(tmp_path):
@@ -83,9 +83,9 @@ def test_diff_and_commit(tmp_path):
     wd = WorkingDir(working_dir=tmp_path / "myagent")
     wd.init_git()
     # Write to tracked file
-    memory_file = wd.path / "system" / "memory.md"
-    memory_file.write_text("hello world")
-    diff_text, commit_hash = wd.diff_and_commit("system/memory.md", "memory")
+    pad_file = wd.path / "system" / "pad.md"
+    pad_file.write_text("hello world")
+    diff_text, commit_hash = wd.diff_and_commit("system/pad.md", "pad")
     assert commit_hash is not None
     assert diff_text  # should have some diff content
 
@@ -93,7 +93,7 @@ def test_diff_and_commit(tmp_path):
 def test_diff_and_commit_no_changes(tmp_path):
     wd = WorkingDir(working_dir=tmp_path / "myagent")
     wd.init_git()
-    diff_text, commit_hash = wd.diff_and_commit("system/memory.md", "memory")
+    diff_text, commit_hash = wd.diff_and_commit("system/pad.md", "pad")
     assert diff_text is None
     assert commit_hash is None
 
@@ -101,13 +101,13 @@ def test_diff_and_commit_no_changes(tmp_path):
 def test_diff_read_only(tmp_path):
     wd = WorkingDir(working_dir=tmp_path / "myagent")
     wd.init_git()
-    memory_file = wd.path / "system" / "memory.md"
-    memory_file.write_text("new content")
-    result = wd.diff("system/memory.md")
+    pad_file = wd.path / "system" / "pad.md"
+    pad_file.write_text("new content")
+    result = wd.diff("system/pad.md")
     assert isinstance(result, str)
     # Should not commit — file should still show as changed
     status = subprocess.run(
-        ["git", "status", "--porcelain", "system/memory.md"],
+        ["git", "status", "--porcelain", "system/pad.md"],
         cwd=wd.path, capture_output=True, text=True,
     )
     assert status.stdout.strip()  # still dirty

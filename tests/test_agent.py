@@ -441,15 +441,15 @@ def test_agent_creates_lock_file(tmp_path):
     assert (agent.working_dir / ".agent.lock").is_file()
 
 
-def test_agent_stop_persists_memory(tmp_path):
+def test_agent_stop_persists_pad(tmp_path):
     agent = BaseAgent(
-        service=make_mock_service(), agent_name="alice", working_dir=tmp_path / "test", memory="initial",
+        service=make_mock_service(), agent_name="alice", working_dir=tmp_path / "test", pad="initial",
     )
-    agent._prompt_manager.write_section("memory", "updated knowledge")
+    agent._prompt_manager.write_section("pad", "updated knowledge")
     agent.stop()
-    memory_file = agent.working_dir / "system" / "memory.md"
-    assert memory_file.is_file()
-    assert memory_file.read_text() == "updated knowledge"
+    pad_file = agent.working_dir / "system" / "pad.md"
+    assert pad_file.is_file()
+    assert pad_file.read_text() == "updated knowledge"
 
 
 def test_agent_name_stored(tmp_path):

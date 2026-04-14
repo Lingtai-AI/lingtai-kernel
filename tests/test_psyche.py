@@ -1,4 +1,4 @@
-"""Tests for psyche capability — identity, memory, and context management."""
+"""Tests for psyche capability — identity, pad, and context management."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -103,24 +103,24 @@ def test_character_load_combines_covenant_and_character(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Memory edit (upgraded with files support)
+# Pad edit (upgraded with files support)
 # ---------------------------------------------------------------------------
 
 
-def test_memory_edit_content_only(tmp_path):
+def test_pad_edit_content_only(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities=["psyche"],
     )
     mgr = agent.get_capability("psyche")
-    result = mgr.handle({"object": "memory", "action": "edit", "content": "my notes"})
+    result = mgr.handle({"object": "pad", "action": "edit", "content": "my notes"})
     assert result["status"] == "ok"
-    md = (agent.working_dir / "system" / "memory.md").read_text()
+    md = (agent.working_dir / "system" / "pad.md").read_text()
     assert "my notes" in md
     agent.stop(timeout=1.0)
 
 
-def test_memory_edit_with_files(tmp_path):
+def test_pad_edit_with_files(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities=["psyche"],
@@ -131,12 +131,12 @@ def test_memory_edit_with_files(tmp_path):
 
     mgr = agent.get_capability("psyche")
     result = mgr.handle({
-        "object": "memory", "action": "edit",
+        "object": "pad", "action": "edit",
         "content": "My working notes.",
         "files": ["export1.txt", "export2.txt"],
     })
     assert result["status"] == "ok"
-    md = (agent.working_dir / "system" / "memory.md").read_text()
+    md = (agent.working_dir / "system" / "pad.md").read_text()
     assert "My working notes." in md
     assert "[file-1]" in md
     assert "knowledge from export 1" in md
@@ -145,7 +145,7 @@ def test_memory_edit_with_files(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_memory_edit_files_only(tmp_path):
+def test_pad_edit_files_only(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities=["psyche"],
@@ -154,24 +154,24 @@ def test_memory_edit_files_only(tmp_path):
 
     mgr = agent.get_capability("psyche")
     result = mgr.handle({
-        "object": "memory", "action": "edit",
+        "object": "pad", "action": "edit",
         "files": ["data.txt"],
     })
     assert result["status"] == "ok"
-    md = (agent.working_dir / "system" / "memory.md").read_text()
+    md = (agent.working_dir / "system" / "pad.md").read_text()
     assert "[file-1]" in md
     assert "file data" in md
     agent.stop(timeout=1.0)
 
 
-def test_memory_edit_missing_file_errors(tmp_path):
+def test_pad_edit_missing_file_errors(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities=["psyche"],
     )
     mgr = agent.get_capability("psyche")
     result = mgr.handle({
-        "object": "memory", "action": "edit",
+        "object": "pad", "action": "edit",
         "content": "notes",
         "files": ["nonexistent.txt"],
     })
@@ -180,23 +180,23 @@ def test_memory_edit_missing_file_errors(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_memory_edit_empty_errors(tmp_path):
+def test_pad_edit_empty_errors(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities=["psyche"],
     )
     mgr = agent.get_capability("psyche")
-    result = mgr.handle({"object": "memory", "action": "edit"})
+    result = mgr.handle({"object": "pad", "action": "edit"})
     assert "error" in result
     agent.stop(timeout=1.0)
 
 
 # ---------------------------------------------------------------------------
-# Memory load (delegates to eigen)
+# Pad load (delegates to eigen)
 # ---------------------------------------------------------------------------
 
 
-def test_memory_load_delegates_to_eigen(tmp_path):
+def test_pad_load_delegates_to_eigen(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities=["psyche"],
@@ -206,11 +206,11 @@ def test_memory_load_delegates_to_eigen(tmp_path):
         mgr = agent.get_capability("psyche")
         system_dir = agent._working_dir / "system"
         system_dir.mkdir(exist_ok=True)
-        (system_dir / "memory.md").write_text("loaded via eigen")
+        (system_dir / "pad.md").write_text("loaded via eigen")
 
-        result = mgr.handle({"object": "memory", "action": "load"})
+        result = mgr.handle({"object": "pad", "action": "load"})
         assert result["status"] == "ok"
-        section = agent._prompt_manager.read_section("memory")
+        section = agent._prompt_manager.read_section("pad")
         assert "loaded via eigen" in section
     finally:
         agent.stop()
@@ -272,7 +272,7 @@ def test_psyche_schema_has_correct_objects():
     from lingtai.capabilities.psyche import get_schema
     SCHEMA = get_schema("en")
     objects = SCHEMA["properties"]["object"]["enum"]
-    assert set(objects) == {"lingtai", "memory", "context"}
+    assert set(objects) == {"lingtai", "pad", "context"}
 
 
 def test_psyche_schema_has_correct_actions():
@@ -316,13 +316,13 @@ def test_invalid_action_for_object(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_psyche_stop_does_not_overwrite_memory_md(tmp_path):
+def test_psyche_stop_does_not_overwrite_pad_md(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities=["psyche"],
     )
-    mem_file = agent.working_dir / "system" / "memory.md"
-    mem_file.parent.mkdir(exist_ok=True)
-    mem_file.write_text("previous session memory")
+    pad_file = agent.working_dir / "system" / "pad.md"
+    pad_file.parent.mkdir(exist_ok=True)
+    pad_file.write_text("previous session pad")
     agent.stop()
-    assert mem_file.read_text() == "previous session memory"
+    assert pad_file.read_text() == "previous session pad"
