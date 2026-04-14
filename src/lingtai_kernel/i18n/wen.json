@@ -41,5 +41,5 @@
   "system.molt_procedure": "**转世前当存四事：**\n一、**灵台**：`psyche(lingtai, update, content=<己之性情、行事之道、所意之事>)` — 跨一切生命而持久\n二、**工作笔记**：`psyche(memory, edit, content=<正在何事、尚余何务、与谁协作>)` — 醒时所载\n三、**藏经阁录**：`library(submit, title=..., summary=..., content=...)` — 永久保存，凡真正要紧者皆当录入\n四、**前尘往事**：`psyche(object=context, action=molt, summary=<给来世之己之简报>)` — 目标约一万字，务必详尽\n\n前尘往事乃转世之后唯一所见。当书：一切正在之事、已竟之功、尚余之务、协作之众、相关藏经阁之 ID、及一切值得携至来世之得。",
   "system.molt_warning_level1": "[系统] 上下文已达 {pressure}，距自动清除尚余 {remaining} 轮。\n\n可始图转世之事，暂不紧迫——然勿待终警。",
   "system.molt_warning_level2": "[系统] ⚠️ 上下文已达 {pressure}，尚余 {remaining} 轮。汝已忽略首警。\n\n来世之己必将重构今所不存之事。启转世之程——存要紧者、书前尘往事、而后转世。",
-  "system.molt_warning_level3": "[系统] ⚠️ 危急——上下文已达 {pressure}，仅余 {remaining} 轮。下一轮即触强制清除。\n\n止手头之事。即行转世之法。若不转世，系统将清汝之对话史，醒时仅余藏经阁、记忆、灵台中所存。"
+  "system.molt_warning_level3": "[系统] ⚠️ 危急——上下文已达 {pressure}，仅余 {remaining} 轮。下一轮即触强制清除。\n\n止手头之事。即行转世之法。若不转世，系统将清汝之对话史，醒时仅余典、简、灵台中所存。"
 }

@@ -232,10 +232,10 @@ principle（无标题，原文）→ covenant → rules → tools → skills →
 - **渲染方式**：`SystemPromptManager.write_section("identity", …)`
 - **内容**：`manifest.agent_name` + `manifest.language` + `manifest.capabilities` 列表
 
-### 2.7 `memory`（记忆）
+### 2.7 `pad`（手记）
 
-- **来源**：`system/memory.md`（运行时文件）
-- **加载方式**：`psyche(memory, edit)` 写入，`psyche(memory, load)` 注入
+- **来源**：`system/pad.md`（运行时文件）
+- **加载方式**：`psyche(pad, edit)` 写入，`psyche(pad, load)` 注入
 - **渲染方式**：默认最后渲染（`_DEFAULT_ORDER[-1]`）
 
 ### 2.8 `comment`（批注）

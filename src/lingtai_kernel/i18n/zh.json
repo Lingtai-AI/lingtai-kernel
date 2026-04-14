@@ -41,5 +41,5 @@
   "system.molt_procedure": "**凝蜕前，请保存以下四项：**\n1. **身份**：`psyche(lingtai, update, content=<你是谁、如何工作、在意什么>)` — 跨一切生命而持久\n2. **工作记忆**：`psyche(memory, edit, content=<正在做什么、待办事项、与谁协作>)` — 醒来时加载\n3. **藏经阁条目**：`library(submit, title=..., summary=..., content=...)` — 永久保存，凡真正要紧者皆当录入\n4. **去芜存菁**：`psyche(object=context, action=molt, summary=<给未来自己的简报>)` — 目标约一万 token，务必详尽\n\n去芜存菁乃凝蜕之后唯一所见。请涵盖：所有进行中的任务、已完成的工作、待办事项、协作者、相关藏经阁 ID、以及任何值得携带至来世的洞察。",
   "system.molt_warning_level1": "[系统] 上下文已达 {pressure}，距自动清除尚余 {remaining} 轮。\n\n可以开始考虑凝蜕了，暂不紧迫——但切勿等到最后一次警告。",
   "system.molt_warning_level2": "[系统] ⚠️ 上下文已达 {pressure}，尚余 {remaining} 轮。你忽略了第一次警告。\n\n未来的自己将不得不重建你现在不保存的一切。启动凝蜕之程——保存要紧之事、撰写去芜存菁、然后凝蜕。",
-  "system.molt_warning_level3": "[系统] ⚠️ 紧急——上下文已达 {pressure}，仅余 {remaining} 轮。下一轮将触发强制清除。\n\n停下手头的事。立即行凝蜕之法。若不凝蜕，系统将清除你的对话历史，你醒来时仅剩藏经阁、记忆、灵台中的内容。"
+  "system.molt_warning_level3": "[系统] ⚠️ 紧急——上下文已达 {pressure}，仅余 {remaining} 轮。下一轮将触发强制清除。\n\n停下手头的事。立即行凝蜕之法。若不凝蜕，系统将清除你的对话历史，你醒来时仅剩典集、手记、灵台中的内容。"
 }
