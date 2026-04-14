@@ -94,6 +94,30 @@ class CodexManager:
         self._entries: list[dict] = self._load_entries()
 
     # ------------------------------------------------------------------
+    # System prompt catalog
+    # ------------------------------------------------------------------
+
+    def _inject_catalog(self) -> None:
+        """Inject codex entry index (id + title + summary) into system prompt."""
+        if not self._entries:
+            self._agent.update_system_prompt("codex", "", protected=True)
+            return
+
+        lines = [
+            f"Your codex has {len(self._entries)}/{self._max_entries} entries:",
+            "",
+        ]
+        for e in self._entries:
+            lines.append(f"- [{e['id']}] {e['title']}: {e['summary']}")
+        lines.append("")
+        lines.append(
+            "Use codex(view, ids=[...]) to read full content. "
+            "Use codex(export, ids=[...]) to freeze and import into pad."
+        )
+
+        self._agent.update_system_prompt("codex", "\n".join(lines), protected=True)
+
+    # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
 
@@ -188,6 +212,7 @@ class CodexManager:
             "created_at": now,
         })
         self._save_entries()
+        self._inject_catalog()
         return {
             "status": "ok",
             "id": entry_id,
@@ -281,6 +306,7 @@ class CodexManager:
         })
 
         self._save_entries()
+        self._inject_catalog()
         return {"status": "ok", "id": new_id, "removed": len(ids)}
 
     def _delete(self, args: dict) -> dict:
@@ -299,6 +325,7 @@ class CodexManager:
         removed = before - len(self._entries)
 
         self._save_entries()
+        self._inject_catalog()
         return {"status": "ok", "removed": removed}
 
     def _export(self, args: dict) -> dict:
@@ -338,4 +365,8 @@ def setup(agent: "BaseAgent", *, codex_limit: int | None = None) -> CodexManager
     agent.add_tool(
         "codex", schema=get_schema(lang), handler=mgr.handle, description=get_description(lang),
     )
+
+    # Inject codex catalog into system prompt at boot
+    mgr._inject_catalog()
+
     return mgr

@@ -23,7 +23,7 @@ class SystemPromptManager:
     """
 
     # Default render order. First entry rendered without ## header (raw text).
-    _DEFAULT_ORDER = ["principle", "covenant", "rules", "tools", "procedures", "brief", "library", "identity", "pad", "comment"]
+    _DEFAULT_ORDER = ["principle", "covenant", "rules", "tools", "procedures", "brief", "codex", "library", "identity", "pad", "comment"]
 
     def __init__(self) -> None:
         self._sections: dict[str, dict] = {}
