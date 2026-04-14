@@ -135,23 +135,12 @@ class PsycheManager:
         self._agent._token_decomp_dirty = True
         self._agent._flush_system_prompt()
 
-        rel_path = "system/lingtai.md"
-        git_diff = self._agent._workdir.diff(rel_path)
-
-        self._agent._log(
-            "psyche_character_load",
-            changed=bool(git_diff),
-        )
+        self._agent._log("psyche_character_load")
 
         return {
             "status": "ok",
             "size_bytes": len(combined.encode("utf-8")),
             "content_preview": combined[:200],
-            "diff": {
-                "changed": bool(git_diff),
-                "git_diff": git_diff or "",
-                "commit": None,
-            },
         }
 
     # ------------------------------------------------------------------

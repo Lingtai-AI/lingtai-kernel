@@ -105,21 +105,13 @@ def _memory_load(agent, args: dict) -> dict:
     agent._token_decomp_dirty = True
     agent._flush_system_prompt()
 
-    rel_path = "system/memory.md"
-    git_diff = agent._workdir.diff(rel_path)
-
-    agent._log("eigen_memory_load", size_bytes=size_bytes, changed=bool(git_diff))
+    agent._log("eigen_memory_load", size_bytes=size_bytes)
 
     return {
         "status": "ok",
         "path": str(mem_path),
         "size_bytes": size_bytes,
         "content_preview": content[:200],
-        "diff": {
-            "changed": bool(git_diff),
-            "git_diff": git_diff or "",
-            "commit": None,
-        },
     }
 
 

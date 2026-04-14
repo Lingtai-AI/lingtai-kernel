@@ -579,92 +579,14 @@ class Agent(BaseAgent):
             context_limit=m.get("context_limit"),
             molt_pressure=m.get("molt_pressure", 0.8),
             molt_prompt=m.get("molt_prompt", ""),
+            snapshot_interval=m.get("snapshot_interval"),
         )
         self._soul_delay = max(1.0, self._config.soul_delay)
         self._session._config = self._config
 
-        # Reload covenant and memory
-        covenant = data.get("covenant", "")
-        system_dir = self._working_dir / "system"
-        system_dir.mkdir(exist_ok=True)
-        covenant_file = system_dir / "covenant.md"
-        memory_file = system_dir / "memory.md"
-
-        # Copy covenant from init.json to system/covenant.md (canonical location)
-        if covenant:
-            covenant_file.write_text(covenant)
-        elif covenant_file.is_file():
-            covenant = covenant_file.read_text()
-        if covenant:
-            self._prompt_manager.write_section("covenant", covenant, protected=True)
-
-        # Reload rules from system/rules.md (survives molts)
-        rules_md = system_dir / "rules.md"
-        if rules_md.is_file():
-            try:
-                rules_content = rules_md.read_text().strip()
-                if rules_content:
-                    self._prompt_manager.write_section("rules", rules_content, protected=True)
-                else:
-                    self._prompt_manager.delete_section("rules")
-            except OSError:
-                pass
-        else:
-            # No rules file — clear any stale section
-            self._prompt_manager.delete_section("rules")
-
-        loaded_memory = ""
-        if memory_file.is_file():
-            loaded_memory = memory_file.read_text()
-        if loaded_memory.strip():
-            self._prompt_manager.write_section("memory", loaded_memory)
-
-        # Reload principle (mirrors covenant's three-tier resolution:
-        # init.json wins and rewrites the on-disk mirror; otherwise fall back
-        # to the existing mirror; finally write the resolved text to the
-        # protected prompt section).
-        principle = data.get("principle", "")
-        principle_file = system_dir / "principle.md"
-
-        # Copy principle from init.json to system/principle.md (canonical location)
-        if principle:
-            principle_file.write_text(principle)
-        elif principle_file.is_file():
-            principle = principle_file.read_text()
-        if principle:
-            self._prompt_manager.write_section("principle", principle, protected=True)
-
-        # Reload procedures (same pattern as covenant/principle)
-        procedures = data.get("procedures", "")
-        procedures_file = system_dir / "procedures.md"
-        if procedures:
-            procedures_file.write_text(procedures)
-        elif procedures_file.is_file():
-            procedures = procedures_file.read_text()
-        if procedures:
-            self._prompt_manager.write_section("procedures", procedures, protected=True)
-
-        # Reload brief (externally-maintained context, re-read from disk on refresh).
-        # The external brief_file (resolved into data["brief"] by resolve_file above)
-        # always wins. Update the local system/brief.md mirror from it.
-        # Only fall back to system/brief.md if no external content is available.
-        brief = data.get("brief", "")
-        brief_file = system_dir / "brief.md"
-        if brief:
-            brief_file.write_text(brief)
-        elif brief_file.is_file():
-            brief = brief_file.read_text()
-        if brief:
-            self._prompt_manager.write_section("brief", brief, protected=True)
-        else:
-            self._prompt_manager.delete_section("brief")
-
-        # Reload comment (app-level, always last, not inherited by avatars)
-        comment = data.get("comment", "")
-        if comment:
-            self._prompt_manager.write_section("comment", comment)
-        else:
-            self._prompt_manager.delete_section("comment")
+        # Reload all prompt sections (covenant, principle, procedures, brief,
+        # rules, memory, comment) from init.json and disk.
+        self._reload_prompt_sections(data)
 
         # Re-run capability setup
         capabilities = _resolve_capabilities(m.get("capabilities", {}))
@@ -695,6 +617,12 @@ class Agent(BaseAgent):
                 except Exception as e:
                     self._log("addon_skipped", addon=addon_name, reason=str(e))
                     self._notify_addon_failure(addon_name, e)
+
+        # Register system prompt reload as post-molt hook — molt should
+        # reconstruct the system prompt the same way refresh does.
+        if not hasattr(self, "_post_molt_hooks"):
+            self._post_molt_hooks = []
+        self._post_molt_hooks.append(self._reload_prompt_sections)
 
         # Reload MCP
         self._load_mcp_from_workdir()
@@ -734,6 +662,98 @@ class Agent(BaseAgent):
             addons=list(self._addon_managers.keys()),
             tools=list(self._tool_handlers.keys()),
         )
+
+    def _reload_prompt_sections(self, data: dict | None = None) -> None:
+        """Re-read all prompt sections from init.json and disk.
+
+        Called by _setup_from_init() on refresh (with pre-resolved data) and
+        as a post-molt hook (no args — re-reads init.json from scratch).
+        Ensures the system prompt after molt is identical to after refresh.
+        """
+        if data is None:
+            data = self._read_init()
+            if data is None:
+                return
+            # Resolve *_file fields (brief_file, covenant_file, etc.)
+            from .config_resolve import resolve_file
+            for key in ("covenant", "principle", "procedures", "brief", "memory", "comment"):
+                file_key = f"{key}_file"
+                if file_key in data:
+                    data[key] = resolve_file(data.get(key), data.pop(file_key))
+
+        system_dir = self._working_dir / "system"
+        system_dir.mkdir(exist_ok=True)
+
+        # --- Covenant ---
+        covenant = data.get("covenant", "")
+        covenant_file = system_dir / "covenant.md"
+        if covenant:
+            covenant_file.write_text(covenant)
+        elif covenant_file.is_file():
+            covenant = covenant_file.read_text()
+        if covenant:
+            self._prompt_manager.write_section("covenant", covenant, protected=True)
+
+        # --- Rules (from system/rules.md, not init.json) ---
+        rules_md = system_dir / "rules.md"
+        if rules_md.is_file():
+            try:
+                rules_content = rules_md.read_text().strip()
+                if rules_content:
+                    self._prompt_manager.write_section("rules", rules_content, protected=True)
+                else:
+                    self._prompt_manager.delete_section("rules")
+            except OSError:
+                pass
+        else:
+            self._prompt_manager.delete_section("rules")
+
+        # --- Memory ---
+        memory_file = system_dir / "memory.md"
+        loaded_memory = ""
+        if memory_file.is_file():
+            loaded_memory = memory_file.read_text()
+        if loaded_memory.strip():
+            self._prompt_manager.write_section("memory", loaded_memory)
+
+        # --- Principle ---
+        principle = data.get("principle", "")
+        principle_file = system_dir / "principle.md"
+        if principle:
+            principle_file.write_text(principle)
+        elif principle_file.is_file():
+            principle = principle_file.read_text()
+        if principle:
+            self._prompt_manager.write_section("principle", principle, protected=True)
+
+        # --- Procedures ---
+        procedures = data.get("procedures", "")
+        procedures_file = system_dir / "procedures.md"
+        if procedures:
+            procedures_file.write_text(procedures)
+        elif procedures_file.is_file():
+            procedures = procedures_file.read_text()
+        if procedures:
+            self._prompt_manager.write_section("procedures", procedures, protected=True)
+
+        # --- Brief (externally-maintained, written by secretary) ---
+        brief = data.get("brief", "")
+        brief_file = system_dir / "brief.md"
+        if brief:
+            brief_file.write_text(brief)
+        elif brief_file.is_file():
+            brief = brief_file.read_text()
+        if brief:
+            self._prompt_manager.write_section("brief", brief, protected=True)
+        else:
+            self._prompt_manager.delete_section("brief")
+
+        # --- Comment ---
+        comment = data.get("comment", "")
+        if comment:
+            self._prompt_manager.write_section("comment", comment)
+        else:
+            self._prompt_manager.delete_section("comment")
 
     def _build_launch_cmd(self) -> list[str] | None:
         """Return the command to relaunch this agent via lingtai run."""

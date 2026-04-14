@@ -423,8 +423,9 @@ class BaseAgent:
             return
         self._shutdown.clear()
 
-        # Initialize git repo in working directory (first start only)
-        self._workdir.init_git()
+        # Initialize git repo in working directory (only if snapshots enabled)
+        if self._config.snapshot_interval is not None:
+            self._workdir.init_git()
 
         # Capture startup time for uptime tracking
         from datetime import datetime, timezone
@@ -846,16 +847,17 @@ class BaseAgent:
             else:
                 self._aed_start = None
 
-            # Periodic snapshot — every 5 minutes
-            now_mono = time.monotonic()
-            if now_mono - self._last_snapshot >= 300:  # 5 minutes
-                self._workdir.snapshot()
-                self._last_snapshot = now_mono
+            # Periodic snapshot (Time Machine) — off by default
+            if self._config.snapshot_interval is not None:
+                now_mono = time.monotonic()
+                if now_mono - self._last_snapshot >= self._config.snapshot_interval:
+                    self._workdir.snapshot()
+                    self._last_snapshot = now_mono
 
-            # Periodic GC — every 24 hours
-            if now_mono - self._last_gc >= 86400:  # 24 hours
-                self._workdir.gc()
-                self._last_gc = now_mono
+                # Periodic GC — every 24 hours
+                if now_mono - self._last_gc >= 86400:
+                    self._workdir.gc()
+                    self._last_gc = now_mono
 
             time.sleep(1.0)
 

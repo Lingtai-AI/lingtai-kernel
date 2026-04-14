@@ -31,3 +31,4 @@ class AgentConfig:
     ensure_ascii: bool = False  # JSON output: False = readable unicode, True = \uXXXX escapes
     soul_context_limit: int = 200_000  # max tokens for soul session; oldest entries dropped when exceeded
     insights_interval: int = 0  # turns between auto-insights; 0 = off
+    snapshot_interval: float | None = None  # seconds between git snapshots; None = off
