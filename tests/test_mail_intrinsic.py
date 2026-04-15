@@ -524,3 +524,59 @@ class TestOutboxAndMailman:
         assert len(sent_items) == 1
         msg = json.loads((sent_items[0] / "message.json").read_text())
         assert msg["status"] == "refused"
+
+
+# ---------------------------------------------------------------------------
+# _summary_to_list — display-layer normalize for `to` field
+# ---------------------------------------------------------------------------
+
+from lingtai_kernel.intrinsics.mail import _summary_to_list, _message_summary
+
+
+def test_summary_to_list_none():
+    assert _summary_to_list(None) == []
+
+
+def test_summary_to_list_empty_string():
+    assert _summary_to_list("") == []
+
+
+def test_summary_to_list_plain_string():
+    assert _summary_to_list("alice") == ["alice"]
+
+
+def test_summary_to_list_real_list():
+    assert _summary_to_list(["a", "b"]) == ["a", "b"]
+
+
+def test_summary_to_list_filters_non_str_items():
+    # Defensive — mixed lists shouldn't crash display
+    assert _summary_to_list(["a", 123, None, "b"]) == ["a", "b"]
+
+
+def test_message_summary_normalizes_str_to_list():
+    # Legacy pre-fix message still on disk has `to: "alice"`.
+    # Display layer must render it as ["alice"], not iterate char-by-char.
+    msg = {
+        "_mailbox_id": "m1",
+        "from": "bob",
+        "to": "alice",
+        "subject": "hi",
+        "message": "body",
+        "received_at": "2026-04-15T00:00:00Z",
+    }
+    summary = _message_summary(msg, read_ids=set())
+    assert summary["to"] == ["alice"]
+
+
+def test_message_summary_passes_list_through():
+    msg = {
+        "_mailbox_id": "m2",
+        "from": "bob",
+        "to": ["alice", "carol"],
+        "subject": "hi",
+        "message": "body",
+        "received_at": "2026-04-15T00:00:00Z",
+    }
+    summary = _message_summary(msg, read_ids=set())
+    assert summary["to"] == ["alice", "carol"]

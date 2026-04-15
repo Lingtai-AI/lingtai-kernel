@@ -170,6 +170,21 @@ def _mark_read(agent, msg_id: str) -> None:
     _save_read_ids(agent, ids)
 
 
+def _summary_to_list(raw) -> list[str]:
+    """Best-effort coercion of to/cc for display.
+
+    Minimal — only ensures list shape so the display doesn't iterate a
+    string char-by-char. Does not JSON-unwrap (the reader-side
+    _normalize_address_list handles that for delivery; display only
+    needs list shape).
+    """
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, str):
+        return [raw]
+    return [str(x) for x in raw if isinstance(x, str)]
+
+
 def _message_summary(msg: dict, read_ids: set[str], truncate: int = 500) -> dict:
     """Build a summary dict for check output."""
     msg_id = msg.get("_mailbox_id", "")
@@ -185,7 +200,7 @@ def _message_summary(msg: dict, read_ids: set[str], truncate: int = 500) -> dict
     return {
         "id": msg_id,
         "from": sender,
-        "to": msg.get("to", ""),
+        "to": _summary_to_list(msg.get("to")),
         "subject": msg.get("subject", ""),
         "preview": preview,
         "time": msg.get("received_at", ""),
