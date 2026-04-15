@@ -1898,3 +1898,60 @@ def test_coerce_address_list_drops_empty_items():
 def test_coerce_address_list_coerces_non_str_items():
     # Defensive — tool-call arg drift could give us numbers, etc.
     assert _coerce_address_list(["alice", 123]) == ["alice", "123"]
+
+
+# ---------------------------------------------------------------------------
+# Integration: capability _send unwraps JSON-string address on disk
+# ---------------------------------------------------------------------------
+
+def test_email_send_unwraps_json_string_address(tmp_path):
+    agent = Agent(service=make_mock_service(), agent_name="sender",
+                  working_dir=tmp_path / "sender", capabilities=["email"])
+    mail_svc = MagicMock()
+    mail_svc.address = "sender"
+    mail_svc.send.return_value = None
+    agent._mail_service = mail_svc
+    mgr = agent.get_capability("email")
+
+    # Simulate an LLM that serialized its list arg as a JSON string
+    result = mgr.handle({
+        "action": "send",
+        "address": '["alice","bob"]',
+        "subject": "hi",
+        "message": "test body",
+    })
+    assert result.get("status") == "sent" or "sent" in str(result), f"send failed: {result}"
+
+    # Read the persisted sent record
+    sent_dir = agent.working_dir / "mailbox" / "sent"
+    sent_files = list(sent_dir.glob("*/message.json"))
+    assert len(sent_files) == 1, f"expected 1 sent record, got {len(sent_files)}"
+
+    record = json.loads(sent_files[0].read_text())
+    assert record["to"] == ["alice", "bob"], \
+        f"to field not unwrapped: {record['to']!r}"
+
+
+def test_email_send_plain_string_address_becomes_list(tmp_path):
+    agent = Agent(service=make_mock_service(), agent_name="sender",
+                  working_dir=tmp_path / "sender", capabilities=["email"])
+    mail_svc = MagicMock()
+    mail_svc.address = "sender"
+    mail_svc.send.return_value = None
+    agent._mail_service = mail_svc
+    mgr = agent.get_capability("email")
+
+    result = mgr.handle({
+        "action": "send",
+        "address": "alice",
+        "subject": "hi",
+        "message": "test body",
+    })
+    assert result.get("status") == "sent" or "sent" in str(result), f"send failed: {result}"
+
+    sent_dir = agent.working_dir / "mailbox" / "sent"
+    sent_files = list(sent_dir.glob("*/message.json"))
+    assert len(sent_files) == 1
+
+    record = json.loads(sent_files[0].read_text())
+    assert record["to"] == ["alice"], f"to field not normalized: {record['to']!r}"

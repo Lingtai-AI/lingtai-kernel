@@ -446,10 +446,7 @@ class EmailManager:
             return {"error": "schedule.interval and schedule.count must be positive"}
 
         raw_address = args.get("address", "")
-        if isinstance(raw_address, str):
-            to_list = [raw_address] if raw_address else []
-        else:
-            to_list = list(raw_address)
+        to_list = _coerce_address_list(raw_address)
         if not to_list:
             return {"error": "address is required"}
 
@@ -793,10 +790,7 @@ class EmailManager:
         bcc = args.get("bcc") or []
         delay = args.get("delay", 0)
 
-        if isinstance(raw_address, str):
-            to_list = [raw_address] if raw_address else []
-        else:
-            to_list = list(raw_address)
+        to_list = _coerce_address_list(raw_address)
 
         if not to_list:
             return {"error": "address is required"}
