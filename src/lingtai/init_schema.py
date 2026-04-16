@@ -74,12 +74,13 @@ def validate_init(data: dict) -> list[str]:
         "admin": dict,
         "streaming": bool,
         "time_awareness": bool,
+        "timezone_awareness": bool,
     }, prefix="manifest")
 
     _known_manifest = {
         "llm", "agent_name", "language", "capabilities", "soul",
         "stamina", "context_limit", "molt_pressure", "molt_prompt",
-        "max_turns", "admin", "streaming", "time_awareness",
+        "max_turns", "admin", "streaming", "time_awareness", "timezone_awareness",
     }
     for key in manifest:
         if key not in _known_manifest:
