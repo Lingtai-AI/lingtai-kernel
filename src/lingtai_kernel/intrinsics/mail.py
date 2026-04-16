@@ -17,6 +17,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from ..time_veil import scrub_time_fields
+
 def get_description(lang: str = "en") -> str:
     from ..i18n import t
     return t(lang, "mail.description")
@@ -408,7 +410,7 @@ def _check(agent, args: dict) -> dict:
     n = args.get("n")
     shown = messages[:n] if n is not None else messages
 
-    summaries = [_message_summary(m, read_set) for m in shown]
+    summaries = [scrub_time_fields(agent, _message_summary(m, read_set)) for m in shown]
     unread_count = sum(1 for m in messages if m.get("_mailbox_id", "") not in read_set)
 
     return {
@@ -435,7 +437,8 @@ def _read(agent, args: dict) -> dict:
             _mark_read(agent, msg_id)
             results.append(msg)
 
-    response: dict = {"messages": results}
+    scrubbed_results = [scrub_time_fields(agent, m) for m in results]
+    response: dict = {"messages": scrubbed_results}
     if not_found:
         response["not_found"] = not_found
     return response
@@ -464,7 +467,8 @@ def _search(agent, args: dict) -> dict:
         if any(pattern.search(f) for f in fields):
             matches.append(_message_summary(msg, read_set))
 
-    return {"total": len(matches), "messages": matches}
+    scrubbed_matches = [scrub_time_fields(agent, m) for m in matches]
+    return {"total": len(scrubbed_matches), "messages": scrubbed_matches}
 
 
 def _delete(agent, args: dict) -> dict:
