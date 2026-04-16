@@ -29,6 +29,7 @@ from lingtai_kernel.intrinsics.mail import (
 )
 from lingtai_kernel.message import _make_message, MSG_REQUEST
 from lingtai_kernel.token_counter import count_tokens
+from lingtai_kernel.time_veil import scrub_time_fields
 
 from ..i18n import t
 
@@ -574,7 +575,7 @@ class EmailManager:
             sent = record.get("sent", 0)
             count = record.get("count", 0)
 
-            entries.append({
+            entries.append(scrub_time_fields(self._agent, {
                 "schedule_id": record.get("schedule_id", sched_dir.name),
                 "to": address,
                 "subject": payload.get("subject", ""),
@@ -584,7 +585,7 @@ class EmailManager:
                 "status": record.get("status", "active"),
                 "created_at": record.get("created_at", ""),
                 "last_sent_at": record.get("last_sent_at"),
-            })
+            }))
 
         entries.sort(key=lambda e: e.get("created_at", ""), reverse=True)
         return {"status": "ok", "schedules": entries}
@@ -938,7 +939,7 @@ class EmailManager:
 
         total = len(emails)
         recent = emails[:n] if n > 0 else emails
-        summaries = [self._email_summary(e, read_set, truncate=truncate) for e in recent]
+        summaries = [scrub_time_fields(self._agent, self._email_summary(e, read_set, truncate=truncate)) for e in recent]
 
         # Token budget — cap total response at 10k tokens
         result = {"status": "ok", "total": total, "showing": len(summaries), "emails": summaries}
@@ -1002,7 +1003,7 @@ class EmailManager:
             if data.get("attachments"):
                 entry["attachments"] = data["attachments"]
             self._inject_identity(entry, data)
-            results.append(entry)
+            results.append(scrub_time_fields(self._agent, entry))
 
         result = {"status": "ok", "emails": results}
         if errors:
