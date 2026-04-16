@@ -35,6 +35,7 @@ from .i18n import t as _t
 from .logging import get_logger
 from .loop_guard import LoopGuard
 from .prompt import build_system_prompt
+from .time_veil import now_iso, scrub_time_fields
 from .session import SessionManager
 from .tool_executor import ToolExecutor
 from .token_ledger import append_token_entry, sum_token_ledger
@@ -1620,13 +1621,17 @@ class BaseAgent:
                 "agent_name": self.agent_name,
                 "mail_address": mail_addr,
             },
-            "runtime": {
-                "current_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "started_at": self._started_at,
-                "uptime_seconds": round(uptime, 1),
-                "stamina": self._config.stamina,
-                "stamina_left": round(stamina_left, 1) if stamina_left is not None else None,
-            },
+            "runtime": scrub_time_fields(
+                self,
+                {
+                    "current_time": now_iso(self),
+                    "started_at": self._started_at,
+                    "uptime_seconds": round(uptime, 1),
+                    "stamina": self._config.stamina,
+                    "stamina_left": round(stamina_left, 1) if stamina_left is not None else None,
+                },
+                keys=("current_time", "started_at", "uptime_seconds", "stamina", "stamina_left"),
+            ),
             "tokens": {
                 "input_tokens": usage["input_tokens"],
                 "output_tokens": usage["output_tokens"],
