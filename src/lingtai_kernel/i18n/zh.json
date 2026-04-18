@@ -21,6 +21,7 @@
   "mail.delay_description": "投递前延迟秒数（默认：0）。配合自寄使用即为时间胶囊——消息在延迟后到达你的收件箱。",
   "mail.id_description": "用于 read 或 delete 操作的消息 ID",
   "mail.n_description": "check 中显示的最大消息数（默认：全部）",
+  "mail.mode_description": "send 的地址模式。rel（默认）：裸名称，在当前网络中解析。abs：完整本地路径，直接文件系统投递。net：远程机器，排队等待邮差 UDP 中继。",
   "mail.query_description": "search 操作的正则表达式模式（在 from、subject、message 中搜索）",
   "eigen.description": "核心自我管理——工作笔记和上下文控制。pad：edit 写入工作笔记（system/pad.md），load 将其注入当前提示。context：molt 凝蜕（转世——携前尘往事入新生；molt——shed and carry forward）。凝以存菁，蜕以去芜。先将重要发现存入典集和修行志，再去芜存菁留给未来的自己。对话历史将被清除，你的去芜存菁成为新的起始上下文。",
   "eigen.object_description": "pad：你的工作笔记（system/pad.md）。context：管理对话上下文。name：你的真名（只能设置一次）。",

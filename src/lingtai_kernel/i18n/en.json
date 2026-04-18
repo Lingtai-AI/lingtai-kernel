@@ -21,6 +21,7 @@
   "mail.delay_description": "Delay in seconds before delivery (default: 0). Use with self-send for time capsules — the message arrives in your inbox after the delay.",
   "mail.id_description": "Message ID(s) for read or delete actions",
   "mail.n_description": "Max number of messages to show in check (default: all)",
+  "mail.mode_description": "Address mode for send. rel (default): bare name resolved against current network. abs: full local path, direct filesystem delivery. net: remote machine, queued for postman UDP relay.",
   "mail.query_description": "Regex pattern for search action (searched in from, subject, message)",
   "eigen.description": "Core self-management — working notes and context control. pad: edit to write your working notes (system/pad.md), load to inject them into your active prompt. context: molt (凝蜕 — crystallize what matters, shed the rest; 转世 — reincarnation, carry your 前尘往事 into a new life). Save important findings to codex and character first, then write what you need to carry forward to your future self. Your conversation history is wiped and your summary becomes the new starting context.",
   "eigen.object_description": "pad: your working notes (system/pad.md). context: manage conversation context. name: your true name (set once).",

@@ -67,6 +67,11 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "string",
                 "description": t(lang, "mail.query_description"),
             },
+            "mode": {
+                "type": "string",
+                "enum": ["rel", "abs", "net"],
+                "description": t(lang, "mail.mode_description"),
+            },
         },
         "required": ["action"],
     }
@@ -309,14 +314,21 @@ def _mailman(agent, msg_id: str, payload: dict, deliver_at: datetime,
     if isinstance(address, list):
         address = address[0] if address else ""
 
+    mode = payload.pop("_mode", "rel")
+
     err = None
     try:
-        if _is_self_send(agent, address):
+        if mode == "net":
+            # Network mode: leave in outbox for postman UDP relay.
+            # Don't deliver via mail service — the postman daemon picks
+            # up outbox items and sends them over UDP.
+            status = "queued"
+        elif _is_self_send(agent, address):
             _persist_to_inbox(agent, payload)
             agent._wake_nap("mail_arrived")
             status = "delivered"
         elif agent._mail_service is not None:
-            err = agent._mail_service.send(address, payload)
+            err = agent._mail_service.send(address, payload, mode=mode)
             status = "delivered" if err is None else "refused"
         else:
             err = f"No mail service configured"
@@ -327,7 +339,19 @@ def _mailman(agent, msg_id: str, payload: dict, deliver_at: datetime,
 
     sent_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    if not skip_sent:
+    if status == "queued":
+        # net mode: message stays in outbox for postman pickup.
+        # Write sent_at into the outbox message for tracking.
+        outbox_msg = _outbox_dir(agent) / msg_id / "message.json"
+        if outbox_msg.is_file():
+            try:
+                data = json.loads(outbox_msg.read_text())
+                data["sent_at"] = sent_at
+                data["status"] = status
+                outbox_msg.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+            except (json.JSONDecodeError, OSError):
+                pass
+    elif not skip_sent:
         _move_to_sent(agent, msg_id, sent_at, status)
     else:
         outbox_entry = _outbox_dir(agent) / msg_id
@@ -362,9 +386,12 @@ def _send(agent, args: dict) -> dict:
     message_text = args.get("message", "")
     mail_type = args.get("type", "normal")
     delay = args.get("delay", 0)
+    mode = args.get("mode", "rel")
 
     if not address:
         return {"error": "address is required"}
+    if mode not in ("rel", "abs", "net"):
+        return {"error": f"invalid mode: {mode!r} (must be rel, abs, or net)"}
 
     payload = {
         "from": (agent._mail_service.address if agent._mail_service is not None and agent._mail_service.address else agent._working_dir.name),
@@ -373,6 +400,7 @@ def _send(agent, args: dict) -> dict:
         "message": message_text,
         "type": mail_type,
         "identity": agent._build_manifest(),
+        "_mode": mode,  # rel/abs/net — consumed by _mailman, not persisted
     }
 
     attachments = args.get("attachments", [])

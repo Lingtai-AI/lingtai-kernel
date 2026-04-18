@@ -35,6 +35,8 @@ class MailService(ABC):
         self,
         address: str,
         message: dict,
+        *,
+        mode: str = "rel",
     ) -> str | None:
         """Send a message to an address. Returns None on success, error string on failure.
 
@@ -47,6 +49,8 @@ class MailService(ABC):
             Recipient's address (working directory name or absolute path).
         message:
             Payload dict to deliver.
+        mode:
+            Address mode — "rel" (default), "abs", or "net".
         """
         ...
 
@@ -117,6 +121,8 @@ class FilesystemMailService(MailService):
         self,
         address: str,
         message: dict,
+        *,
+        mode: str = "rel",
     ) -> str | None:
         """Deliver *message* to the agent at *address*.
 
@@ -126,9 +132,17 @@ class FilesystemMailService(MailService):
 
         Then write ``message.json`` atomically into the recipient's inbox
         and copy any attachment files.
+
+        Modes:
+        - rel: resolve bare name against parent dir (default)
+        - abs: use address as a literal absolute path
+        - net: should not reach here (handled by _mailman)
         """
         base_dir = self._working_dir.parent  # .lingtai/ directory
-        recipient_dir = resolve_address(address, base_dir)
+        if mode == "abs":
+            recipient_dir = Path(address)
+        else:
+            recipient_dir = resolve_address(address, base_dir)
 
         # --- handshake ------------------------------------------------
         if not is_agent(recipient_dir):
