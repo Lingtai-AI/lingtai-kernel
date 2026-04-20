@@ -186,7 +186,7 @@ Hard-shipped at `src/lingtai_kernel/intrinsic_skills/skill-for-skill/SKILL.md`. 
   ---
   ```
 - Required: `name`, `description`. Optional: `version`, `author`, `tags`.
-- After authoring, call `system.refresh` to pick up the new skill into the catalog.
+- After authoring, call `system({"action": "refresh"})` to pick up the new skill into the catalog.
 
 **Publishing to the shared library:**
 - `cp -r .library/custom/<name> ../.library_shared/<name>` via bash.
@@ -198,7 +198,7 @@ Hard-shipped at `src/lingtai_kernel/intrinsic_skills/skill-for-skill/SKILL.md`. 
 
 **Adding a new library path:**
 - Edit `init.json` under `manifest.capabilities.library.paths`. Every folder listed there is scanned and its skills appear in your catalog.
-- Call `system.refresh` to apply.
+- Call `system({"action": "refresh"})` to apply.
 - Adding paths is intentional curation — only add sources you trust. Libraries are part of who you are.
 
 **Name collision discipline:**

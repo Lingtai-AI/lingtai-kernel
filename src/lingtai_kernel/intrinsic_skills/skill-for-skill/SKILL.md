@@ -54,7 +54,7 @@ If a custom skill is worth sharing with every agent in the network:
 bash({"command": "cp -r .library/custom/<name> ../.library_shared/<name>"})
 ```
 
-Then `system.refresh`. Do **not** overwrite an existing entry in `.library_shared/` — if the name collides, rename your skill or consult the admin agent.
+Then call `system({"action": "refresh"})`. Do **not** overwrite an existing entry in `.library_shared/` — if the name collides, rename your skill or consult the admin agent.
 
 ## Admin curation of `.library_shared/`
 
@@ -67,7 +67,7 @@ If you are not the admin agent, **do not modify** `.library_shared/` beyond addi
 To expand your library with another source directory:
 
 1. `edit` `init.json` under `manifest.capabilities.library.paths`. Append your new path (absolute or relative to your working dir; `~/` expansion honored).
-2. `system.refresh`.
+2. Call `system({"action": "refresh"})`.
 
 `init.json` is the ground truth. There is no runtime state — whatever is in `paths` at setup time is the exact set scanned.
 
@@ -76,11 +76,11 @@ To expand your library with another source directory:
 Two skills with the same `name` in the catalog would collide. Before authoring a new skill in `custom/` or publishing to shared, grep the existing catalog:
 
 ```
-bash({"command": "grep -rh '^name:' .library/ ../.library_shared/ ~/.lingtai-tui/utilities/"})
+bash({"command": "grep -rh '^name:' .library/ ../.library_shared/ ~/.lingtai-tui/utilities/ 2>/dev/null"})
 ```
 
 If you hit a collision: rename, or adapt the existing skill instead of forking a second one.
 
 ## Health check
 
-Call `library({"action": "info"})` to verify your library is wired correctly. It returns this SKILL.md body plus a runtime snapshot: `catalog_size`, resolved paths with exist/skill-count info, and any `problems` (invalid frontmatter, unreadable folders). If `status` is `"degraded"`, the error message tells you what needs fixing.
+Call `library({"action": "info"})` to verify your library is wired correctly. It returns this SKILL.md body plus a runtime snapshot: `library_dir`, `catalog_size`, resolved paths with exist/skill-count info, and any `problems` (invalid frontmatter, unreadable folders). If `status` is `"degraded"`, the error message tells you what needs fixing.
