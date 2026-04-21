@@ -341,3 +341,56 @@ def test_timezone_awareness_field_wrong_type_raises():
     }
     with pytest.raises(ValueError):
         validate_init(data)
+
+
+# --- schema self-consistency (drift prevention) ---
+#
+# The schema maintains two parallel structures per scope: an OPTIONAL dict
+# (field name -> expected type, used for type validation) and a KNOWN set
+# (used to suppress "unknown field" warnings). When a new field is added,
+# both must be updated. These tests catch the common drift where one is
+# updated and the other is forgotten.
+
+
+def test_manifest_optional_fields_all_in_known():
+    """Every optional manifest field must also be in MANIFEST_KNOWN,
+    otherwise a valid use of that field would produce a spurious
+    'unknown field' warning."""
+    from lingtai.init_schema import MANIFEST_OPTIONAL, MANIFEST_KNOWN
+    missing = set(MANIFEST_OPTIONAL) - MANIFEST_KNOWN
+    assert not missing, (
+        f"Fields in MANIFEST_OPTIONAL but not in MANIFEST_KNOWN "
+        f"(would trigger unknown-field warning): {sorted(missing)}"
+    )
+
+
+def test_manifest_required_fields_all_in_known():
+    """Every required manifest field must also be in MANIFEST_KNOWN."""
+    from lingtai.init_schema import MANIFEST_REQUIRED, MANIFEST_KNOWN
+    missing = set(MANIFEST_REQUIRED) - MANIFEST_KNOWN
+    assert not missing, (
+        f"Fields in MANIFEST_REQUIRED but not in MANIFEST_KNOWN: {sorted(missing)}"
+    )
+
+
+def test_manifest_known_fields_all_typed():
+    """Every field in MANIFEST_KNOWN must appear in either MANIFEST_REQUIRED
+    or MANIFEST_OPTIONAL, otherwise a user-supplied value passes without
+    any type check."""
+    from lingtai.init_schema import MANIFEST_OPTIONAL, MANIFEST_REQUIRED, MANIFEST_KNOWN
+    typed = set(MANIFEST_OPTIONAL) | set(MANIFEST_REQUIRED)
+    untyped = MANIFEST_KNOWN - typed
+    assert not untyped, (
+        f"Fields in MANIFEST_KNOWN but not type-checked (missing from "
+        f"MANIFEST_OPTIONAL or MANIFEST_REQUIRED): {sorted(untyped)}"
+    )
+
+
+def test_top_optional_fields_all_in_known():
+    """Every optional top-level field must also be in TOP_KNOWN."""
+    from lingtai.init_schema import TOP_OPTIONAL, TOP_KNOWN
+    missing = set(TOP_OPTIONAL) - TOP_KNOWN
+    assert not missing, (
+        f"Fields in TOP_OPTIONAL but not in TOP_KNOWN "
+        f"(would trigger unknown-field warning): {sorted(missing)}"
+    )

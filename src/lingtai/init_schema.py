@@ -5,6 +5,48 @@ import logging
 
 log = logging.getLogger(__name__)
 
+# Schema tables lifted to module scope so tests can assert internal consistency
+# (every optional field has a type, no known field is missing from the other).
+# When adding a new manifest field, update BOTH MANIFEST_OPTIONAL and
+# MANIFEST_KNOWN — test_init_schema.py enforces this.
+
+TOP_OPTIONAL: dict[str, type | tuple[type, ...]] = {
+    "env_file": str,
+    "venv_path": str,
+    "addons": dict,
+}
+
+TOP_KNOWN: set[str] = {
+    "manifest", "env_file", "venv_path", "addons",
+    "principle", "principle_file", "covenant", "covenant_file",
+    "procedures", "procedures_file", "brief", "brief_file",
+    "pad", "pad_file", "prompt", "prompt_file",
+    "soul", "soul_file", "comment", "comment_file",
+}
+
+MANIFEST_REQUIRED: dict[str, type | tuple[type, ...]] = {
+    "llm": dict,
+}
+
+MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
+    "agent_name": (str, type(None)),
+    "language": str,
+    "capabilities": dict,
+    "soul": dict,
+    "stamina": (int, float),
+    "context_limit": (int, type(None)),
+    "molt_pressure": (int, float),
+    "molt_prompt": str,
+    "max_turns": int,
+    "admin": dict,
+    "streaming": bool,
+    "time_awareness": bool,
+    "timezone_awareness": bool,
+    "context_rebuild_every_n_idles": int,
+}
+
+MANIFEST_KNOWN: set[str] = set(MANIFEST_REQUIRED) | set(MANIFEST_OPTIONAL)
+
 
 def validate_init(data: dict) -> list[str]:
     """Validate an init.json dict.
@@ -39,53 +81,19 @@ def validate_init(data: dict) -> list[str]:
             raise ValueError(f"{file_key}: expected str, got {type(data[file_key]).__name__}")
 
     # Optional top-level fields — check types for known ones
-    _optional_keys(data, {
-        "env_file": str,
-        "venv_path": str,
-        "addons": dict,
-    }, prefix="")
+    _optional_keys(data, TOP_OPTIONAL, prefix="")
 
     # Warn about unknown top-level keys
-    _known_top = {
-        "manifest", "env_file", "venv_path", "addons",
-        "principle", "principle_file", "covenant", "covenant_file",
-        "procedures", "procedures_file", "brief", "brief_file",
-        "pad", "pad_file", "prompt", "prompt_file",
-        "soul", "soul_file", "comment", "comment_file",
-    }
     for key in data:
-        if key not in _known_top:
+        if key not in TOP_KNOWN:
             warnings.append(f"unknown top-level field: {key}")
 
     manifest = data["manifest"]
-    _require_keys(manifest, {
-        "llm": dict,
-    }, prefix="manifest")
-    _optional_keys(manifest, {
-        "agent_name": (str, type(None)),
-        "language": str,
-        "capabilities": dict,
-        "soul": dict,
-        "stamina": (int, float),
-        "context_limit": (int, type(None)),
-        "molt_pressure": (int, float),
-        "molt_prompt": str,
-        "max_turns": int,
-        "admin": dict,
-        "streaming": bool,
-        "time_awareness": bool,
-        "timezone_awareness": bool,
-        "context_rebuild_every_n_idles": int,
-    }, prefix="manifest")
+    _require_keys(manifest, MANIFEST_REQUIRED, prefix="manifest")
+    _optional_keys(manifest, MANIFEST_OPTIONAL, prefix="manifest")
 
-    _known_manifest = {
-        "llm", "agent_name", "language", "capabilities", "soul",
-        "stamina", "context_limit", "molt_pressure", "molt_prompt",
-        "max_turns", "admin", "streaming", "time_awareness", "timezone_awareness",
-        "context_rebuild_every_n_idles",
-    }
     for key in manifest:
-        if key not in _known_manifest:
+        if key not in MANIFEST_KNOWN:
             warnings.append(f"unknown field: manifest.{key}")
 
     soul = manifest.get("soul")
