@@ -2,7 +2,7 @@
 
 SystemPromptManager manages named sections of an agent's system prompt.
 Sections are rendered in a configurable order. The default order is:
-    principle (no header) → covenant → rules → tools → procedures → comment → codex → library → identity → brief → pad
+    principle (no header) → covenant → rules → tools → procedures → comment → codex → library → identity → brief → pad → context
 
 build_system_prompt() assembles base_prompt + rendered sections.
 """
@@ -19,11 +19,11 @@ class SystemPromptManager:
 
     Render order is configurable via set_order(). Sections not in the order
     list are rendered between the ordered sections and the tail. The last
-    name in the order list is always rendered last (typically 'pad').
+    name in the order list is always rendered last (typically 'context').
     """
 
     # Default render order. First entry rendered without ## header (raw text).
-    _DEFAULT_ORDER = ["principle", "covenant", "rules", "tools", "procedures", "comment", "codex", "library", "identity", "brief", "pad"]
+    _DEFAULT_ORDER = ["principle", "covenant", "rules", "tools", "procedures", "comment", "codex", "library", "identity", "brief", "pad", "context"]
 
     def __init__(self) -> None:
         self._sections: dict[str, dict] = {}
