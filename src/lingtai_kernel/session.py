@@ -42,6 +42,7 @@ class SessionManager:
         streaming: bool,
         build_system_prompt_fn: Callable[[], str],
         build_tool_schemas_fn: Callable[[], list[FunctionSchema]],
+        read_context_section_fn: Callable[[], str],
         logger_fn: Callable[..., None] | None,
     ):
         self._llm_service = llm_service
@@ -51,6 +52,7 @@ class SessionManager:
         self._streaming = streaming
         self._build_system_prompt_fn = build_system_prompt_fn
         self._build_tool_schemas_fn = build_tool_schemas_fn
+        self._read_context_section_fn = read_context_section_fn
         self._logger_fn = logger_fn
 
         # Persistent LLM session
@@ -66,6 +68,7 @@ class SessionManager:
         self._last_tool_context = "send_message"
         self._system_prompt_tokens = 0
         self._tools_tokens = 0
+        self._context_section_tokens = 0
         self._token_decomp_dirty = True
         self._token_fallback_warned = False
         self._latest_input_tokens = 0
@@ -251,9 +254,10 @@ class SessionManager:
     # ------------------------------------------------------------------
 
     def _update_token_decomposition(self) -> None:
-        """Recompute cached system prompt and tools token counts."""
+        """Recompute cached system prompt, tools, and context-section token counts."""
         self._system_prompt_tokens = count_tokens(self._build_system_prompt_fn())
         self._tools_tokens = count_tool_tokens(self._build_tool_schemas_fn())
+        self._context_section_tokens = count_tokens(self._read_context_section_fn())
         self._token_decomp_dirty = False
 
     def _track_usage(self, response: LLMResponse) -> None:
@@ -346,6 +350,7 @@ class SessionManager:
             "api_calls": self._api_calls,
             "ctx_system_tokens": self._system_prompt_tokens,
             "ctx_tools_tokens": self._tools_tokens,
+            "ctx_context_section_tokens": self._context_section_tokens,
             "ctx_history_tokens": max(
                 0,
                 self._latest_input_tokens
