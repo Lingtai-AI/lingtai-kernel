@@ -203,6 +203,15 @@ class BaseAgent:
             self._prompt_manager.write_section("pad", loaded_pad)
         if comment:
             self._prompt_manager.write_section("comment", comment)
+        # Load existing context from system/context.md (survives restarts within a molt)
+        context_md = system_dir / "context.md"
+        if context_md.is_file():
+            try:
+                context_content = context_md.read_text().strip()
+                if context_content:
+                    self._prompt_manager.write_section("context", context_content, protected=False)
+            except OSError:
+                pass
 
         # Soul delay — needed before manifest build
         self._soul_delay = max(1.0, self._config.soul_delay)
@@ -423,15 +432,9 @@ class BaseAgent:
         # Export assembled system prompt to system/system.md
         self._flush_system_prompt()
 
-        # Restore chat session and token state from filesystem if available
-        chat_history_file = self._working_dir / "history" / "chat_history.jsonl"
-        if chat_history_file.is_file():
-            try:
-                messages = [json.loads(line) for line in chat_history_file.read_text().splitlines() if line.strip()]
-                self.restore_chat({"messages": messages})
-                self._log("session_restored")
-            except Exception as e:
-                logger.warning(f"[{self.agent_name}] Failed to restore chat history: {e}")
+        # chat_history.jsonl is now an append-only audit log.
+        # Conversation context is served from the "context" section
+        # (loaded from system/context.md in __init__).
         # Restore token state from ledger (lifetime accumulator)
         try:
             ledger_path = self._working_dir / "logs" / "token_ledger.jsonl"

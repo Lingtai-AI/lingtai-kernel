@@ -233,3 +233,49 @@ class TestFlushContextToPrompt:
         ctx = agent._prompt_manager.read_section("context")
         assert ctx is None
         agent.stop(timeout=2.0)
+
+
+class TestStartupContextLoad:
+    def test_startup_loads_context_md_into_prompt(self, tmp_path):
+        work_dir = tmp_path / "test"
+        work_dir.mkdir(parents=True)
+        system_dir = work_dir / "system"
+        system_dir.mkdir()
+        (system_dir / "context.md").write_text("### user [2026-04-20T10:00:00Z]\nprevious conversation")
+
+        agent = BaseAgent(
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=work_dir,
+        )
+        ctx = agent._prompt_manager.read_section("context")
+        assert ctx is not None
+        assert "previous conversation" in ctx
+
+    def test_startup_does_not_restore_chat_interface(self, tmp_path):
+        work_dir = tmp_path / "test"
+        work_dir.mkdir(parents=True)
+        history_dir = work_dir / "history"
+        history_dir.mkdir()
+        entry = {"id": 0, "role": "user", "content": [{"type": "text", "text": "old msg"}], "timestamp": 1.0}
+        (history_dir / "chat_history.jsonl").write_text(json.dumps(entry) + "\n")
+
+        agent = BaseAgent(
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=work_dir,
+        )
+        agent.start()
+        # No session should exist — we don't restore from JSONL anymore
+        assert agent._session.chat is None
+        agent.stop(timeout=2.0)
+
+    def test_startup_no_context_md_means_no_section(self, tmp_path):
+        work_dir = tmp_path / "test"
+        work_dir.mkdir(parents=True)
+        agent = BaseAgent(
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=work_dir,
+        )
+        assert agent._prompt_manager.read_section("context") is None
