@@ -120,3 +120,116 @@ class TestSerializeContextMd:
         assert "turn 1" in md
         assert "turn 2" in md
         assert "\n---\n" in md or "\n\n---\n\n" in md
+
+
+from pathlib import Path
+from unittest.mock import MagicMock
+from lingtai_kernel.base_agent import BaseAgent
+from lingtai_kernel.llm.interface import ChatInterface, TextBlock
+
+
+def make_mock_service():
+    svc = MagicMock()
+    svc.get_adapter.return_value = MagicMock()
+    svc.provider = "gemini"
+    svc.model = "gemini-test"
+
+    def fake_create_session(**kwargs):
+        mock_chat = MagicMock()
+        iface = ChatInterface()
+        mock_chat.interface = iface
+        mock_chat.context_window.return_value = 100_000
+        return mock_chat
+
+    svc.create_session.side_effect = fake_create_session
+    return svc
+
+
+class TestFlushContextToPrompt:
+    def _make_agent(self, tmp_path):
+        return BaseAgent(
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=tmp_path / "test",
+        )
+
+    def test_flush_rebuilds_context_from_jsonl(self, tmp_path):
+        agent = self._make_agent(tmp_path)
+        agent.start()
+
+        # Simulate a completed turn — append to JSONL manually
+        history_dir = tmp_path / "test" / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        entries = [
+            {"id": 0, "role": "user", "content": [{"type": "text", "text": "hello"}], "timestamp": 1713600000.0},
+            {"id": 1, "role": "assistant", "content": [{"type": "text", "text": "hi"}], "timestamp": 1713600001.0},
+        ]
+        with open(history_dir / "chat_history.jsonl", "w") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+
+        agent._rebuild_context_md()
+
+        ctx = agent._prompt_manager.read_section("context")
+        assert ctx is not None
+        assert "hello" in ctx
+        assert "hi" in ctx
+        agent.stop(timeout=2.0)
+
+    def test_flush_wipes_chat_interface(self, tmp_path):
+        agent = self._make_agent(tmp_path)
+        agent.start()
+        agent._session.ensure_session()
+        iface = agent._session.chat.interface
+        iface.add_user_message("hello")
+        iface.add_assistant_message([TextBlock(text="hi")])
+
+        agent._flush_context_to_prompt()
+
+        assert agent._session.chat is None
+        agent.stop(timeout=2.0)
+
+    def test_flush_persists_context_md_to_disk(self, tmp_path):
+        agent = self._make_agent(tmp_path)
+        agent.start()
+        agent._session.ensure_session()
+        iface = agent._session.chat.interface
+        iface.add_user_message("persist test")
+        iface.add_assistant_message([TextBlock(text="done")])
+
+        agent._flush_context_to_prompt()
+
+        context_file = tmp_path / "test" / "system" / "context.md"
+        assert context_file.exists()
+        assert "persist test" in context_file.read_text()
+        agent.stop(timeout=2.0)
+
+    def test_flush_only_reads_since_last_molt(self, tmp_path):
+        agent = self._make_agent(tmp_path)
+        agent.start()
+
+        history_dir = tmp_path / "test" / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        entries = [
+            {"id": 0, "role": "user", "content": [{"type": "text", "text": "before molt"}], "timestamp": 1.0},
+            {"type": "molt_boundary", "molt_count": 1, "timestamp": 2.0, "summary": "x"},
+            {"id": 0, "role": "user", "content": [{"type": "text", "text": "after molt"}], "timestamp": 3.0},
+        ]
+        with open(history_dir / "chat_history.jsonl", "w") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+
+        agent._rebuild_context_md()
+
+        ctx = agent._prompt_manager.read_section("context")
+        assert "before molt" not in ctx
+        assert "after molt" in ctx
+        agent.stop(timeout=2.0)
+
+    def test_flush_noop_when_no_jsonl(self, tmp_path):
+        agent = self._make_agent(tmp_path)
+        agent.start()
+        agent._rebuild_context_md()
+        ctx = agent._prompt_manager.read_section("context")
+        assert ctx is None
+        agent.stop(timeout=2.0)

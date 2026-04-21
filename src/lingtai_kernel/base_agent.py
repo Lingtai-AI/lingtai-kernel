@@ -1560,6 +1560,99 @@ class BaseAgent:
             except Exception as e:
                 logger.warning(f"[{self.agent_name}] Failed to append token ledger: {e}")
 
+    def _append_chat_audit(self) -> None:
+        """Append current interface entries to chat_history.jsonl (audit log).
+
+        Append-only — never rewrites. Each entry is one JSON line.
+        """
+        if self._session.chat is None:
+            return
+        state = self._session.get_chat_state()
+        messages = state.get("messages")
+        if not messages:
+            return
+        history_dir = self._working_dir / "history"
+        history_dir.mkdir(exist_ok=True)
+        try:
+            with open(history_dir / "chat_history.jsonl", "a") as f:
+                for entry in messages:
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.warning(f"[{self.agent_name}] Failed to append chat audit: {e}")
+
+    def _rebuild_context_md(self) -> None:
+        """Rebuild context.md from chat_history.jsonl since last molt boundary.
+
+        Reads the JSONL, finds the last molt_boundary, serializes everything
+        after it into markdown, and writes to the prompt manager + disk.
+        """
+        from .context_serializer import serialize_context_md
+
+        jsonl_path = self._working_dir / "history" / "chat_history.jsonl"
+        if not jsonl_path.is_file():
+            return
+
+        try:
+            lines = jsonl_path.read_text().splitlines()
+        except OSError:
+            return
+
+        # Find last molt boundary
+        last_boundary_idx = -1
+        for i, line in enumerate(lines):
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+                if entry.get("type") == "molt_boundary":
+                    last_boundary_idx = i
+            except json.JSONDecodeError:
+                continue
+
+        # Take entries after last molt boundary
+        start = last_boundary_idx + 1
+        entries = []
+        for line in lines[start:]:
+            if not line.strip():
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+        if not entries:
+            return
+
+        md = serialize_context_md(entries)
+        if not md:
+            return
+
+        self._prompt_manager.write_section("context", md, protected=False)
+
+        # Persist to disk
+        context_file = self._working_dir / "system" / "context.md"
+        context_file.parent.mkdir(exist_ok=True)
+        context_file.write_text(md)
+
+    def _flush_context_to_prompt(self) -> None:
+        """Append current turn to audit log, rebuild context.md, wipe ChatInterface.
+
+        Called on every idle transition.
+        """
+        # Append current turn to JSONL
+        self._append_chat_audit()
+
+        # Rebuild context.md from JSONL
+        self._rebuild_context_md()
+
+        # Wipe the ChatInterface
+        if self._session.chat is not None:
+            self._session._chat = None
+            self._session._interaction_id = None
+
+        # Update system prompt (includes the new context section)
+        self._flush_system_prompt()
+        self._session._token_decomp_dirty = True
 
     # ------------------------------------------------------------------
     # Status / introspection
