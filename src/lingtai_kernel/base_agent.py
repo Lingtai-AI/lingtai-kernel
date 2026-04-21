@@ -107,6 +107,10 @@ class BaseAgent:
         self._last_usage = None  # UsageMetadata from last LLM call, for ledger
         self._created_at: str = ""
         self._uptime_anchor: float | None = None  # set in start(), None means not started
+        # How many ChatInterface entries have already been appended to
+        # chat_history.jsonl for the current molt. Reset to 0 when the
+        # interface is wiped (idle flush, molt, agent restart).
+        self._chat_audit_watermark: int = 0
 
         # Working directory (caller-owned path)
         self._workdir = WorkingDir(working_dir)
@@ -1539,7 +1543,7 @@ class BaseAgent:
         """Write manifest, status, and token ledger to disk.
 
         Chat history persistence is now handled by:
-        - _append_chat_audit() — appends to chat_history.jsonl (mid-turn)
+        - _append_chat_audit() — appends new interface entries to chat_history.jsonl (mid-turn)
         - _flush_context_to_prompt() — appends + rebuilds context.md (on idle)
 
         This method only persists manifest, status, and token ledger.
@@ -1572,30 +1576,36 @@ class BaseAgent:
                 logger.warning(f"[{self.agent_name}] Failed to append token ledger: {e}")
 
     def _append_chat_audit(self) -> None:
-        """Append current interface entries to chat_history.jsonl (audit log).
+        """Append new ChatInterface entries to chat_history.jsonl.
 
-        Append-only — never rewrites. Each entry is one JSON line.
+        Uses a watermark (`self._chat_audit_watermark`) so only entries that
+        have appeared since the last call are written. The file is a
+        per-molt append-only log; on molt it is moved to
+        chat_history_archive.jsonl and the watermark resets.
         """
         if self._session.chat is None:
             return
         state = self._session.get_chat_state()
-        messages = state.get("messages")
-        if not messages:
+        messages = state.get("messages") or []
+        new_entries = messages[self._chat_audit_watermark:]
+        if not new_entries:
             return
         history_dir = self._working_dir / "history"
         history_dir.mkdir(exist_ok=True)
         try:
             with open(history_dir / "chat_history.jsonl", "a") as f:
-                for entry in messages:
+                for entry in new_entries:
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            self._chat_audit_watermark = len(messages)
         except Exception as e:
             logger.warning(f"[{self.agent_name}] Failed to append chat audit: {e}")
 
     def _rebuild_context_md(self) -> None:
-        """Rebuild context.md from chat_history.jsonl since last molt boundary.
+        """Rebuild context.md from chat_history.jsonl.
 
-        Reads the JSONL, finds the last molt_boundary, serializes everything
-        after it into markdown, and writes to the prompt manager + disk.
+        chat_history.jsonl is per-molt (molts move old content into
+        chat_history_archive.jsonl), so the whole file is the current
+        molt's conversation — no boundary scanning needed.
         """
         from .context_serializer import serialize_context_md
 
@@ -1608,22 +1618,8 @@ class BaseAgent:
         except OSError:
             return
 
-        # Find last molt boundary
-        last_boundary_idx = -1
-        for i, line in enumerate(lines):
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-                if entry.get("type") == "molt_boundary":
-                    last_boundary_idx = i
-            except json.JSONDecodeError:
-                continue
-
-        # Take entries after last molt boundary
-        start = last_boundary_idx + 1
         entries = []
-        for line in lines[start:]:
+        for line in lines:
             if not line.strip():
                 continue
             try:
@@ -1640,28 +1636,26 @@ class BaseAgent:
 
         self._prompt_manager.write_section("context", md, protected=False)
 
-        # Persist to disk
         context_file = self._working_dir / "system" / "context.md"
         context_file.parent.mkdir(exist_ok=True)
         context_file.write_text(md)
 
     def _flush_context_to_prompt(self) -> None:
-        """Append current turn to audit log, rebuild context.md, wipe ChatInterface.
+        """Snapshot interface to disk, rebuild context.md, wipe ChatInterface.
 
         Called on every idle transition.
         """
-        # Append current turn to JSONL
         self._append_chat_audit()
 
-        # Rebuild context.md from JSONL
         self._rebuild_context_md()
 
-        # Wipe the ChatInterface
         if self._session.chat is not None:
             self._session._chat = None
             self._session._interaction_id = None
+        # Next session starts with an empty interface; its first entries are
+        # new (watermark = 0), even though jsonl already holds prior turns.
+        self._chat_audit_watermark = 0
 
-        # Update system prompt (includes the new context section)
         self._flush_system_prompt()
         self._session._token_decomp_dirty = True
 
