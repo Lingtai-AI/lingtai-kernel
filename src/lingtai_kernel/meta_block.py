@@ -21,11 +21,51 @@ def build_meta(agent) -> dict:
 
     When the agent is time-blind and no other meta fields are curated in,
     returns ``{}``.
+
+    Context-window fields (``system_tokens``, ``context_tokens``,
+    ``context_usage``) are always emitted — the time veil does not cover
+    token accounting. When the session's token decomposition has not yet
+    run (dirty cache and no active chat), the three fields are emitted as
+    ``-1`` / ``-1.0`` sentinels so callers can render "unknown" without
+    ambiguity.
     """
     meta: dict = {}
     ts = now_iso(agent)
     if ts:
         meta["current_time"] = ts
+
+    # Context-window decomposition. Only meaningful after the session has
+    # run _update_token_decomposition at least once, which it does on first
+    # token-tracking call (see SessionManager._track_usage).
+    session = getattr(agent, "_session", None)
+    chat_obj = getattr(session, "chat", None) if session is not None else None
+    decomp_ran = session is not None and not session._token_decomp_dirty
+
+    if decomp_ran and chat_obj is not None:
+        sys_prompt = session._system_prompt_tokens
+        ctx_section = session._context_section_tokens
+        tools = session._tools_tokens
+        history = chat_obj.interface.estimate_context_tokens()
+
+        # The "system" bucket in the meta line is everything that is NOT
+        # accumulated memory: the prompt floor (minus the context section)
+        # plus the tool schemas. max(0, ...) guards against tokenizer
+        # underflow if the context section happens to outweigh the full
+        # prompt estimate (shouldn't happen, but defensive).
+        system_tokens = max(0, sys_prompt - ctx_section) + tools
+        context_tokens = ctx_section + history
+
+        limit = agent._config.context_limit or chat_obj.context_window()
+        usage = (system_tokens + context_tokens) / limit if limit > 0 else -1.0
+
+        meta["system_tokens"] = system_tokens
+        meta["context_tokens"] = context_tokens
+        meta["context_usage"] = usage
+    else:
+        meta["system_tokens"] = -1
+        meta["context_tokens"] = -1
+        meta["context_usage"] = -1.0
+
     return meta
 
 

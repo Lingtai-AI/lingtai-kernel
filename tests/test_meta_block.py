@@ -35,13 +35,14 @@ def test_build_meta_time_aware_utc_uses_z_suffix():
 def test_build_meta_time_blind_returns_empty_dict():
     agent = _fake_agent(time_awareness=False)
     meta = build_meta(agent)
-    assert meta == {}
+    assert "current_time" not in meta and meta["system_tokens"] == -1
 
 
 def test_build_meta_time_blind_regardless_of_timezone_awareness():
     # time_awareness=False short-circuits even when timezone_awareness=True.
     agent = _fake_agent(time_awareness=False, timezone_awareness=True)
-    assert build_meta(agent) == {}
+    meta = build_meta(agent)
+    assert "current_time" not in meta and meta["system_tokens"] == -1
 
 
 def _fake_agent_with_lang(lang: str, *, time_awareness: bool = True):
@@ -120,3 +121,88 @@ def test_stamp_meta_elapsed_ms_overrides_meta_key():
     result = {}
     stamp_meta(result, {"_elapsed_ms": 9999}, 7)
     assert result["_elapsed_ms"] == 7
+
+
+def _fake_agent_with_session(
+    *,
+    time_awareness=True,
+    timezone_awareness=True,
+    language="en",
+    system_prompt_tokens=0,
+    tools_tokens=0,
+    context_section_tokens=0,
+    history_tokens=0,
+    context_limit=100000,
+    decomp_ran=True,
+):
+    """Agent stand-in that exposes the session state build_meta reads."""
+    class _Chat:
+        def context_window(self_):
+            return 200000  # model default
+
+        class _iface:
+            @staticmethod
+            def estimate_context_tokens():
+                return history_tokens
+
+        interface = _iface()
+
+    chat_obj = _Chat() if decomp_ran else None
+
+    return SimpleNamespace(
+        _config=SimpleNamespace(
+            time_awareness=time_awareness,
+            timezone_awareness=timezone_awareness,
+            language=language,
+            context_limit=context_limit,
+        ),
+        _session=SimpleNamespace(
+            _system_prompt_tokens=system_prompt_tokens,
+            _tools_tokens=tools_tokens,
+            _context_section_tokens=context_section_tokens,
+            _token_decomp_dirty=not decomp_ran,
+            _chat=chat_obj,
+            chat=chat_obj,
+        ),
+    )
+
+
+def test_build_meta_emits_context_fields_when_decomp_ran():
+    agent = _fake_agent_with_session(
+        system_prompt_tokens=5000,   # includes 1000 of context section
+        context_section_tokens=1000,
+        tools_tokens=500,
+        history_tokens=200,
+        context_limit=100000,
+    )
+    meta = build_meta(agent)
+    # system = (system_prompt - context_section) + tools = 4000 + 500 = 4500
+    assert meta["system_tokens"] == 4500
+    # context = context_section + history = 1000 + 200 = 1200
+    assert meta["context_tokens"] == 1200
+    # usage = (4500 + 1200) / 100000 = 0.057
+    assert abs(meta["context_usage"] - 0.057) < 1e-6
+
+
+def test_build_meta_emits_sentinels_before_decomp_runs():
+    # When decomposition has never run (dirty flag True) and no chat yet,
+    # we cannot compute any of the three fields honestly.
+    agent = _fake_agent_with_session(decomp_ran=False)
+    meta = build_meta(agent)
+    assert meta["system_tokens"] == -1
+    assert meta["context_tokens"] == -1
+    assert meta["context_usage"] == -1.0
+
+
+def test_build_meta_time_blind_still_emits_context_fields():
+    agent = _fake_agent_with_session(
+        time_awareness=False,
+        system_prompt_tokens=5000,
+        context_section_tokens=1000,
+        tools_tokens=500,
+        history_tokens=200,
+    )
+    meta = build_meta(agent)
+    assert "current_time" not in meta
+    assert meta["system_tokens"] == 4500
+    assert meta["context_tokens"] == 1200
