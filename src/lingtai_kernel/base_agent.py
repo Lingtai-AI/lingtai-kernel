@@ -111,6 +111,10 @@ class BaseAgent:
         # chat_history.jsonl for the current molt. Reset to 0 when the
         # interface is wiped (idle flush, molt, agent restart).
         self._chat_audit_watermark: int = 0
+        # Number of idle flushes since the last context.md rebuild+nuke.
+        # Paired with config.context_rebuild_every_n_idles to keep Batch 3
+        # byte-stable (and therefore cacheable) across short idle gaps.
+        self._idles_since_context_rebuild: int = 0
 
         # Working directory (caller-owned path)
         self._workdir = WorkingDir(working_dir)
@@ -1669,11 +1673,20 @@ class BaseAgent:
         context_file.write_text(md)
 
     def _flush_context_to_prompt(self) -> None:
-        """Snapshot interface to disk, rebuild context.md, wipe ChatInterface.
+        """Snapshot interface to disk; every N idles rebuild context.md and wipe ChatInterface.
 
-        Called on every idle transition.
+        Called on every idle transition. The chat_history.jsonl append happens
+        every time (cheap, durable). The expensive rebuild+nuke pair runs only
+        every `context_rebuild_every_n_idles` flushes, so between rebuilds the
+        wire chat carries the recent tail across idles and Batch 3 stays
+        byte-stable (cacheable).
         """
         self._append_chat_audit()
+        self._idles_since_context_rebuild += 1
+
+        every_n = max(1, int(self._config.context_rebuild_every_n_idles))
+        if self._idles_since_context_rebuild < every_n:
+            return
 
         self._rebuild_context_md()
 
@@ -1683,6 +1696,7 @@ class BaseAgent:
         # Next session starts with an empty interface; its first entries are
         # new (watermark = 0), even though jsonl already holds prior turns.
         self._chat_audit_watermark = 0
+        self._idles_since_context_rebuild = 0
 
         self._flush_system_prompt()
         self._session._token_decomp_dirty = True

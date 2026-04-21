@@ -178,6 +178,7 @@ def _context_molt(agent, args: dict) -> dict:
     # Fresh molt starts with an empty jsonl; the next append_chat_audit call
     # must treat the new interface's entries as new.
     agent._chat_audit_watermark = 0
+    agent._idles_since_context_rebuild = 0
 
     # Reset soul mirror session
     from .soul import reset_soul_session
