@@ -301,6 +301,7 @@ class BaseAgent:
             streaming=streaming,
             build_system_prompt_fn=self._build_system_prompt,
             build_tool_schemas_fn=self._build_tool_schemas,
+            read_context_section_fn=self._read_context_section,
             logger_fn=self._log,
         )
 
@@ -1271,6 +1272,14 @@ class BaseAgent:
                 "tools", "\n\n".join(lines), protected=True
             )
         return build_system_prompt(prompt_manager=self._prompt_manager, language=self._config.language)
+
+    def _read_context_section(self) -> str:
+        """Return the current 'context' prompt-manager section, or '' if absent.
+
+        Passed as read_context_section_fn to SessionManager so it can
+        tokenize the section independently of the full system prompt.
+        """
+        return self._prompt_manager.read_section("context") or ""
 
     def _build_tool_schemas(self) -> list[FunctionSchema]:
         """Build the complete tool schema list for the LLM.
