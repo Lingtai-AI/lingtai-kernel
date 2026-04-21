@@ -279,3 +279,53 @@ class TestStartupContextLoad:
             working_dir=work_dir,
         )
         assert agent._prompt_manager.read_section("context") is None
+
+
+class TestMoltClearsContext:
+    def test_molt_deletes_context_section(self, tmp_path):
+        agent = BaseAgent(
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=tmp_path / "test",
+        )
+        agent.start()
+        agent._prompt_manager.write_section("context", "old context content")
+        context_file = tmp_path / "test" / "system" / "context.md"
+        context_file.parent.mkdir(exist_ok=True)
+        context_file.write_text("old context content")
+
+        # Create a session for molt to work
+        agent._session.ensure_session()
+        iface = agent._session.chat.interface
+        iface.add_user_message("trigger molt")
+
+        from lingtai_kernel.intrinsics.eigen import _context_molt
+        result = _context_molt(agent, {"summary": "test summary"})
+
+        assert result["status"] == "ok"
+        assert agent._prompt_manager.read_section("context") is None
+        assert not context_file.exists()
+        agent.stop(timeout=2.0)
+
+    def test_molt_writes_boundary_marker(self, tmp_path):
+        agent = BaseAgent(
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=tmp_path / "test",
+        )
+        agent.start()
+        agent._session.ensure_session()
+        iface = agent._session.chat.interface
+        iface.add_user_message("pre-molt msg")
+
+        from lingtai_kernel.intrinsics.eigen import _context_molt
+        _context_molt(agent, {"summary": "molt summary"})
+
+        audit_file = tmp_path / "test" / "history" / "chat_history.jsonl"
+        assert audit_file.exists()
+        lines = [json.loads(l) for l in audit_file.read_text().splitlines() if l.strip()]
+        boundary = lines[-1]
+        assert boundary["type"] == "molt_boundary"
+        assert boundary["molt_count"] == 1
+        assert boundary["summary"] == "molt summary"
+        agent.stop(timeout=2.0)

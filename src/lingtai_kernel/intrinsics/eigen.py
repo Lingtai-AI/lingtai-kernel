@@ -132,6 +132,12 @@ def _context_molt(agent, args: dict) -> dict:
     agent._session._chat = None
     agent._session._interaction_id = None
 
+    # Clear context section (context.md)
+    agent._prompt_manager.delete_section("context")
+    context_file = agent._working_dir / "system" / "context.md"
+    if context_file.exists():
+        context_file.unlink()
+
     # Reset molt warnings
     if hasattr(agent._session, "_compaction_warnings"):
         agent._session._compaction_warnings = 0
@@ -139,6 +145,23 @@ def _context_molt(agent, args: dict) -> dict:
     # Track molt count and persist to manifest
     agent._molt_count += 1
     agent._workdir.write_manifest(agent._build_manifest())
+
+    # Write molt boundary marker to audit log
+    import time as _time
+    import json as _json
+    boundary = {
+        "type": "molt_boundary",
+        "molt_count": agent._molt_count,
+        "timestamp": _time.time(),
+        "summary": summary,
+    }
+    history_dir = agent._working_dir / "history"
+    history_dir.mkdir(exist_ok=True)
+    try:
+        with open(history_dir / "chat_history.jsonl", "a") as f:
+            f.write(_json.dumps(boundary, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
     # Reset soul mirror session
     from .soul import reset_soul_session
