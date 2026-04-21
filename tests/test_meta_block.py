@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from types import SimpleNamespace
 
-from lingtai_kernel.meta_block import build_meta, render_meta
+from lingtai_kernel.meta_block import build_meta, render_meta, stamp_meta
 
 
 def _fake_agent(*, time_awareness: bool = True, timezone_awareness: bool = True):
@@ -75,3 +75,40 @@ def test_render_meta_wen_uses_existing_current_time_template():
     agent = _fake_agent_with_lang("wen")
     meta = {"current_time": "2026-04-20T10:15:23-07:00"}
     assert render_meta(agent, meta) == "[此时：2026-04-20T10:15:23-07:00]"
+
+
+def test_stamp_meta_writes_meta_keys_and_elapsed_ms_in_place():
+    result = {"status": "ok"}
+    out = stamp_meta(result, {"current_time": "2026-04-20T10:15:23-07:00"}, 42)
+    assert out is result  # in-place
+    assert out["current_time"] == "2026-04-20T10:15:23-07:00"
+    assert out["_elapsed_ms"] == 42
+    assert out["status"] == "ok"
+
+
+def test_stamp_meta_empty_meta_omits_both_keys():
+    # Time-blind case: empty meta ⇒ no current_time AND no _elapsed_ms.
+    # Preserves stamp_tool_result(time_awareness=False) behavior verbatim.
+    result = {"status": "ok"}
+    out = stamp_meta(result, {}, 42)
+    assert out is result
+    assert "current_time" not in out
+    assert "_elapsed_ms" not in out
+    assert out == {"status": "ok"}
+
+
+def test_stamp_meta_future_fields_are_merged_through():
+    # Forward-compatibility: every key in meta lands on the result.
+    result = {"status": "ok"}
+    meta = {"current_time": "2026-04-20T10:15:23-07:00", "future_field": 123}
+    stamp_meta(result, meta, 7)
+    assert result["future_field"] == 123
+    assert result["current_time"] == "2026-04-20T10:15:23-07:00"
+    assert result["_elapsed_ms"] == 7
+
+
+def test_stamp_meta_elapsed_ms_overrides_meta_key():
+    # Guard: if meta ever carries _elapsed_ms, the measured value wins.
+    result = {}
+    stamp_meta(result, {"_elapsed_ms": 9999}, 7)
+    assert result["_elapsed_ms"] == 7
