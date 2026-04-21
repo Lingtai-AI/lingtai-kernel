@@ -934,6 +934,7 @@ class BaseAgent:
 
                 if not self._asleep.is_set():
                     self._set_state(sleep_state)
+                self._flush_context_to_prompt()
                 self._save_chat_history()
 
                 # Auto-insight: fire after N turns
@@ -1126,6 +1127,7 @@ class BaseAgent:
         self._log("text_input", text=content)
         response = self._session.send(content)
         self._last_usage = response.usage
+        self._append_chat_audit()
         self._save_chat_history()
         result = self._process_response(response)
         self._post_request(msg, result)
@@ -1212,6 +1214,7 @@ class BaseAgent:
 
             response = self._session.send(tool_results)
             self._last_usage = response.usage
+            self._append_chat_audit()
             self._save_chat_history()
 
         final_text = "\n".join(collected_text_parts)
@@ -1518,34 +1521,27 @@ class BaseAgent:
         self._session.restore_token_state(state)
 
     def _save_chat_history(self) -> None:
-        """Write chat history and token usage to disk (no git commit).
+        """Write manifest, status, and token ledger to disk.
 
-        Called after every completed interaction for crash resilience.
-        Git commits are handled by the periodic snapshot system.
+        Chat history persistence is now handled by:
+        - _append_chat_audit() — appends to chat_history.jsonl (mid-turn)
+        - _flush_context_to_prompt() — appends + rebuilds context.md (on idle)
+
+        This method only persists manifest, status, and token ledger.
         """
-        history_dir = self._working_dir / "history"
-        history_dir.mkdir(exist_ok=True)
-        try:
-            state = self.get_chat_state()
-            if state and state.get("messages"):
-                lines = [json.dumps(entry, ensure_ascii=False) for entry in state["messages"]]
-                (history_dir / "chat_history.jsonl").write_text("\n".join(lines) + "\n")
-        except Exception as e:
-            logger.warning(f"[{self.agent_name}] Failed to save chat history: {e}")
         # Update .agent.json with current state
         try:
             self._workdir.write_manifest(self._build_manifest())
         except Exception as e:
             logger.warning(f"[{self.agent_name}] Failed to update manifest: {e}")
-        # Write .status.json — live runtime snapshot (same as system("show"))
+        # Write .status.json — live runtime snapshot
         try:
             (self._working_dir / ".status.json").write_text(
                 json.dumps(self.status(), ensure_ascii=False, indent=2)
             )
         except Exception as e:
             logger.warning(f"[{self.agent_name}] Failed to write .status.json: {e}")
-        # Append per-call token usage to ledger (capture-and-null to avoid race
-        # with heartbeat thread calling _save_chat_history on AED timeout)
+        # Append per-call token usage to ledger
         usage, self._last_usage = self._last_usage, None
         if usage is not None:
             try:
