@@ -1,5 +1,7 @@
 {
-  "system.current_time": "[Current time: {time}]",
+  "system.current_time": "[Current time: {time} | context: {ctx}]",
+  "system.context_breakdown": "{pct} (sys {sys} + ctx {ctx})",
+  "system.context_unknown": "unavailable",
   "system.new_mail": "[system] New message in {box}.\n  Address: {address}\n  Name: {name}\n  Subject: {subject}\n  Sent at: {sent_at}\n  {preview}\nUse {tool}(action=\"check\") if the preview above ends with \"... (N more chars)\".",
   "system.mail_bounce": "[system] Mail delivery failed: {error}\n  To: {address}\n  Subject: {subject}",
   "system.stuck_revive": "[system] LLM call failed at {ts}. You called: {tool_calls}. Retrying.",

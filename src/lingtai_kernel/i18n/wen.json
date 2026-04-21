@@ -1,5 +1,7 @@
 {
-  "system.current_time": "[此时：{time}]",
+  "system.current_time": "[此时：{time} | 上下文：{ctx}]",
+  "system.context_breakdown": "{pct} (系统 {sys} + 对话 {ctx})",
+  "system.context_unknown": "未知",
   "system.new_mail": "[系统] {box}有新书至。\n  址：{address}\n  名：{name}\n  题：{subject}\n  发于：{sent_at}\n  {preview}\n若上方预览末有 \"... (N more chars)\"，以 {tool}(action=\"check\") 展其全文。",
   "system.mail_bounce": "[系统] 书信未达：{error}\n  收者：{address}\n  题：{subject}",
   "system.stuck_revive": "[系统] 灵识于 {ts} 失联。汝所调之器：{tool_calls}。正在重连。",
