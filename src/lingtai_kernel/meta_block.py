@@ -9,6 +9,7 @@ and every tool result.
 """
 from __future__ import annotations
 
+from .i18n import t as _t
 from .time_veil import now_iso
 
 
@@ -26,3 +27,19 @@ def build_meta(agent) -> dict:
     if ts:
         meta["current_time"] = ts
     return meta
+
+
+def render_meta(agent, meta: dict) -> str:
+    """Render the meta dict as the line prepended to text input.
+
+    Returns '' when the meta dict is empty — callers should treat '' as
+    "no prefix" and skip concatenation.
+
+    Today this only knows how to render ``current_time`` (via the existing
+    ``system.current_time`` i18n key). Future fields are composed here.
+    """
+    if not meta:
+        return ""
+    if "current_time" in meta:
+        return _t(agent._config.language, "system.current_time", time=meta["current_time"])
+    return ""
