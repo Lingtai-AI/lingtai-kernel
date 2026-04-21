@@ -35,6 +35,7 @@ from .i18n import t as _t
 from .logging import get_logger
 from .loop_guard import LoopGuard
 from .prompt import build_system_prompt
+from .meta_block import build_meta, render_meta
 from .time_veil import now_iso, scrub_time_fields
 from .session import SessionManager
 from .tool_executor import ToolExecutor
@@ -1086,11 +1087,10 @@ class BaseAgent:
             known_tools=set(self._intrinsics) | set(self._tool_handlers),
             parallel_safe_tools=self._PARALLEL_SAFE_TOOLS,
             logger_fn=self._log,
-            time_awareness=self._config.time_awareness,
-            timezone_awareness=self._config.timezone_awareness,
+            meta_fn=lambda: build_meta(self),
         )
         content = self._pre_request(msg)
-        current_time = now_iso(self)
+        meta = build_meta(self)
 
         # Molt pressure — warn agent when context is getting full
         # Needs eigen intrinsic (always present) or psyche capability to self-molt
@@ -1126,7 +1126,9 @@ class BaseAgent:
                 status = f"[context: {pressure:.0%} | {remaining}/{max_warnings}]"
                 content = f"{molt_prompt}\n{status}\n\n{content}"
 
-        content = f"{_t(self._config.language, 'system.current_time', time=current_time)}\n\n{content}"
+        prefix = render_meta(self, meta)
+        if prefix:
+            content = f"{prefix}\n\n{content}"
         self._log("text_input", text=content)
         response = self._session.send(content)
         self._last_usage = response.usage
