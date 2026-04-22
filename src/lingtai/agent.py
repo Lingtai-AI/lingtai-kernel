@@ -656,15 +656,14 @@ class Agent(BaseAgent):
 
         # Reload config (all fields optional — fall back to AgentConfig defaults)
         soul = m.get("soul", {})
-        # context.md rebuild cadence default depends on the adapter's wire
+        # context.md serialization default depends on the adapter's wire
         # format — see LLMAdapter.prefers_serialized_context for the why.
-        # Adapters that round-trip cleanly (Anthropic / Gemini / MiniMax-via-
-        # Anthropic) get the standard N=3 cadence. Adapters whose wire format
-        # uses inline thinking tags (OpenAI-compat) skip mid-session
-        # serialization entirely (N very large — molt handles compaction).
-        # Manifest override wins over the adapter default.
+        # Anthropic / Gemini / MiniMax-via-Anthropic serialize cleanly (N=3
+        # cadence). OpenAI-compat adapters emit inline <think>...</think>
+        # tags that don't round-trip through serialization, so their default
+        # is to skip it entirely. Manifest override wins.
         adapter = self.service.get_adapter(self.service.provider)
-        default_rebuild_n = 3 if adapter.prefers_serialized_context else 999_999_999
+        default_serialization_enabled = bool(adapter.prefers_serialized_context)
         self._config = AgentConfig(
             stamina=m.get("stamina", 86400.0),
             soul_delay=soul.get("delay", 120.0),
@@ -678,8 +677,11 @@ class Agent(BaseAgent):
             timezone_awareness=m.get("timezone_awareness", True),
             aed_timeout=m.get("aed_timeout", 360.0),
             max_aed_attempts=m.get("max_aed_attempts", 3),
+            context_serialization_enabled=m.get(
+                "context_serialization_enabled", default_serialization_enabled
+            ),
             context_rebuild_every_n_idles=m.get(
-                "context_rebuild_every_n_idles", default_rebuild_n
+                "context_rebuild_every_n_idles", 3
             ),
         )
         self._soul_delay = max(1.0, self._config.soul_delay)

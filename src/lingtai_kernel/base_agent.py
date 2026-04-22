@@ -1673,17 +1673,23 @@ class BaseAgent:
         context_file.write_text(md)
 
     def _flush_context_to_prompt(self) -> None:
-        """Snapshot interface to disk; every N idles rebuild context.md and wipe ChatInterface.
+        """Snapshot interface to disk; optionally rebuild context.md and wipe ChatInterface.
 
-        Called on every idle transition. The chat_history.jsonl append happens
-        every time (cheap, durable). The expensive rebuild+nuke pair runs only
-        every `context_rebuild_every_n_idles` flushes, so between rebuilds the
-        wire chat carries the recent tail across idles and Batch 3 stays
-        byte-stable (cacheable).
+        Called on every idle transition. chat_history.jsonl append happens
+        every time (cheap, durable). The rebuild+nuke pair is gated by two
+        knobs:
+          - context_serialization_enabled=False → never rebuild mid-session
+            (wire chat carries history until molt).
+          - context_serialization_enabled=True → rebuild every N idles, where
+            N = context_rebuild_every_n_idles. Between rebuilds the wire
+            chat carries the tail so Batch 3 stays byte-stable (cacheable).
         """
         self._append_chat_audit()
-        self._idles_since_context_rebuild += 1
 
+        if not self._config.context_serialization_enabled:
+            return
+
+        self._idles_since_context_rebuild += 1
         every_n = max(1, int(self._config.context_rebuild_every_n_idles))
         if self._idles_since_context_rebuild < every_n:
             return
