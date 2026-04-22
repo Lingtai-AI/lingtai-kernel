@@ -92,12 +92,20 @@ class FilesystemMailService(MailService):
         self,
         working_dir: str | Path,
         mailbox_rel: str = "mailbox",
+        pseudo_agent_subscriptions: list[str] | None = None,
     ) -> None:
         self._working_dir = Path(working_dir)
         self._mailbox_rel = mailbox_rel
         self._mailbox_dir = self._working_dir / mailbox_rel
         self._inbox_dir = self._mailbox_dir / "inbox"
         self._inbox_dir.mkdir(parents=True, exist_ok=True)
+
+        # Resolve subscribed pseudo-agent folders once at construction time.
+        # Each subscription is a path relative to working_dir; we keep them as
+        # absolute Paths so a later cwd change doesn't break lookups.
+        self._pseudo_agent_dirs: list[Path] = []
+        for sub in (pseudo_agent_subscriptions or []):
+            self._pseudo_agent_dirs.append((self._working_dir / sub).resolve())
 
         # Polling state
         self._poll_thread: threading.Thread | None = None
@@ -220,6 +228,7 @@ class FilesystemMailService(MailService):
         def _poll_loop() -> None:
             while not self._poll_stop.is_set():
                 try:
+                    # Phase 1 — own inbox.
                     if self._inbox_dir.is_dir():
                         for entry in self._inbox_dir.iterdir():
                             if not entry.is_dir():
@@ -234,12 +243,74 @@ class FilesystemMailService(MailService):
                                 except (json.JSONDecodeError, OSError):
                                     pass
                                 self._seen.add(entry.name)
+
+                    # Phase 2 — subscribed pseudo-agent outboxes. Claim
+                    # messages addressed to self via atomic rename outbox→sent.
+                    for pseudo_dir in self._pseudo_agent_dirs:
+                        self._poll_pseudo_outbox(pseudo_dir, on_message)
                 except OSError:
                     pass
                 self._poll_stop.wait(0.5)
 
         self._poll_thread = threading.Thread(target=_poll_loop, daemon=True)
         self._poll_thread.start()
+
+    def _poll_pseudo_outbox(
+        self,
+        pseudo_dir: Path,
+        on_message: Callable[[dict], None],
+    ) -> None:
+        """Claim addressed-to-self messages from a pseudo-agent's outbox.
+
+        For each UUID folder in ``<pseudo_dir>/mailbox/outbox/``, read the
+        message, check whether this service's address appears in its ``to``
+        field, and if so atomically rename the folder to
+        ``<pseudo_dir>/mailbox/sent/``. On successful rename, dispatch via
+        ``on_message``. Concurrent pollers racing on the same message: only
+        one rename succeeds; the loser silently skips.
+        """
+        outbox_dir = pseudo_dir / self._mailbox_rel / "outbox"
+        if not outbox_dir.is_dir():
+            return
+        sent_parent = pseudo_dir / self._mailbox_rel / "sent"
+        sent_parent.mkdir(parents=True, exist_ok=True)
+
+        for entry in outbox_dir.iterdir():
+            if not entry.is_dir():
+                continue
+            msg_file = entry / "message.json"
+            if not msg_file.is_file():
+                continue
+            try:
+                payload = json.loads(msg_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            # Normalize `to` to a list of strings.
+            to_field = payload.get("to")
+            if isinstance(to_field, str):
+                recipients = [to_field]
+            elif isinstance(to_field, list):
+                recipients = [str(x) for x in to_field]
+            else:
+                recipients = []
+
+            if self.address not in recipients:
+                continue
+
+            # Claim by atomic rename. If someone else already claimed this
+            # message between our read and our rename, os.replace raises
+            # OSError (source no longer exists). Silently skip.
+            sent_dir = sent_parent / entry.name
+            try:
+                os.replace(str(entry), str(sent_dir))
+            except OSError:
+                continue
+
+            try:
+                on_message(payload)
+            except Exception:
+                pass
 
     def stop(self) -> None:
         """Stop the polling thread."""

@@ -297,3 +297,106 @@ class TestAddress:
         agent_dir = _make_agent_dir(tmp_path, "agent01")
         svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
         assert isinstance(svc.address, str)
+
+
+def test_pseudo_agent_outbox_pickup(tmp_path):
+    """Subscribed outbox messages addressed to self are claimed and dispatched."""
+    import json
+    import threading
+    from lingtai_kernel.services.mail import FilesystemMailService
+
+    # Two sibling folders under a shared parent.
+    base = tmp_path
+    pseudo_dir = base / "human"
+    my_dir = base / "本我"
+    pseudo_dir.mkdir()
+    my_dir.mkdir()
+
+    # Seed the pseudo-agent's outbox with a message addressed to "本我".
+    outbox_dir = pseudo_dir / "mailbox" / "outbox"
+    msg_dir = outbox_dir / "msg-001"
+    msg_dir.mkdir(parents=True)
+    msg = {
+        "id": "msg-001",
+        "_mailbox_id": "msg-001",
+        "from": "human",
+        "to": ["本我"],
+        "subject": "hi",
+        "message": "hello from human",
+        "type": "normal",
+        "received_at": "2026-04-21T10:00:00.000Z",
+    }
+    (msg_dir / "message.json").write_text(json.dumps(msg))
+
+    # Start the service for "本我" subscribed to "../human".
+    received: list[dict] = []
+    received_event = threading.Event()
+
+    def on_message(payload: dict) -> None:
+        received.append(payload)
+        received_event.set()
+
+    svc = FilesystemMailService(
+        working_dir=my_dir,
+        pseudo_agent_subscriptions=["../human"],
+    )
+    svc.listen(on_message=on_message)
+    try:
+        # Wait up to 3s for the poller to pick up the message.
+        assert received_event.wait(timeout=3.0), "on_message never fired"
+    finally:
+        svc.stop()
+
+    # The message is gone from outbox and now in sent.
+    assert not msg_dir.exists(), "message should have been renamed out of outbox"
+    sent_dir = pseudo_dir / "mailbox" / "sent" / "msg-001"
+    assert sent_dir.is_dir(), "message should now be in sent"
+
+    # The payload we got matches.
+    assert len(received) == 1
+    assert received[0]["message"] == "hello from human"
+
+
+def test_pseudo_agent_outbox_skips_non_matching_to(tmp_path):
+    """Messages addressed to a different agent are not claimed."""
+    import json
+    import time
+    from lingtai_kernel.services.mail import FilesystemMailService
+
+    base = tmp_path
+    pseudo_dir = base / "human"
+    my_dir = base / "本我"
+    pseudo_dir.mkdir()
+    my_dir.mkdir()
+
+    # Message addressed to someone else.
+    outbox_dir = pseudo_dir / "mailbox" / "outbox"
+    msg_dir = outbox_dir / "msg-002"
+    msg_dir.mkdir(parents=True)
+    msg = {
+        "id": "msg-002",
+        "_mailbox_id": "msg-002",
+        "from": "human",
+        "to": ["stranger"],
+        "message": "not for me",
+        "received_at": "2026-04-21T10:00:00.000Z",
+    }
+    (msg_dir / "message.json").write_text(json.dumps(msg))
+
+    received: list[dict] = []
+    svc = FilesystemMailService(
+        working_dir=my_dir,
+        pseudo_agent_subscriptions=["../human"],
+    )
+    svc.listen(on_message=lambda p: received.append(p))
+    try:
+        # Give the poller more than one tick to make sure it saw the file.
+        time.sleep(1.5)
+    finally:
+        svc.stop()
+
+    # Message must still be in outbox; not in sent; no dispatch.
+    assert msg_dir.exists(), "message must remain in outbox — it isn't addressed to us"
+    sent_dir = pseudo_dir / "mailbox" / "sent" / "msg-002"
+    assert not sent_dir.exists(), "message must not be moved to sent"
+    assert received == [], f"on_message must not fire for non-matching To: got {received}"
