@@ -69,8 +69,16 @@ def build_meta(agent) -> dict:
                 session._latest_input_tokens - sys_prompt - tools,
             )
         elif chat_obj is not None:
+            # interface.estimate_context_tokens() returns system + tools +
+            # conversation. Subtract system + tools to isolate the history
+            # portion — otherwise context_tokens would double-count them
+            # when system_tokens is added back in the usage calculation,
+            # diverging from session.get_context_pressure().
             try:
-                history = chat_obj.interface.estimate_context_tokens()
+                history = max(
+                    0,
+                    chat_obj.interface.estimate_context_tokens() - sys_prompt - tools,
+                )
             except Exception:
                 history = 0
         else:

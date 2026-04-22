@@ -192,7 +192,9 @@ def _fake_agent_with_session(
         class _iface:
             @staticmethod
             def estimate_context_tokens():
-                return history_tokens
+                # Real interface.estimate_context_tokens() returns
+                # system + tools + conversation — match that contract.
+                return system_prompt_tokens + tools_tokens + history_tokens
 
         interface = _iface()
 
@@ -310,3 +312,40 @@ def test_build_meta_context_tokens_does_not_double_count_system_and_tools():
     assert meta["context_tokens"] == 200
     # usage = (5500 + 200) / 100000 = 0.057
     assert abs(meta["context_usage"] - 0.057) < 1e-6
+
+
+def test_build_meta_usage_matches_get_context_pressure_after_restore():
+    """Regression: on the very first turn after a restore (before the first
+    LLM call returns), the meta-prefix usage% must match what
+    SessionManager.get_context_pressure() would report for the same state.
+    Otherwise the molt warning and the injected '[... | context: X%]'
+    prefix show different numbers on the same turn, confusing the agent.
+
+    Pre-fix bug: build_meta treated estimate_context_tokens() as
+    history-only, but the real method returns system + tools + conversation.
+    That made context_tokens = full estimate, which then double-counted
+    system + tools when added to system_tokens in the usage calculation.
+    """
+    sys_prompt = 5000
+    tools = 500
+    history = 50000
+    limit = 100000
+    agent = _fake_agent_with_session(
+        system_prompt_tokens=sys_prompt,
+        tools_tokens=tools,
+        history_tokens=history,
+        context_limit=limit,
+    )
+    # Simulate post-restore state: wire chat rehydrated from JSONL,
+    # but no LLM response has landed yet for this run.
+    agent._session._latest_input_tokens = 0
+    meta = build_meta(agent)
+
+    # context_tokens must be history-only, not the full estimate
+    assert meta["context_tokens"] == history
+    assert meta["system_tokens"] == sys_prompt + tools
+
+    # meta usage% must equal what get_context_pressure() would return:
+    # pressure = estimate_context_tokens() / limit = (sys+tools+history) / limit
+    expected_pressure = (sys_prompt + tools + history) / limit
+    assert abs(meta["context_usage"] - expected_pressure) < 1e-9
