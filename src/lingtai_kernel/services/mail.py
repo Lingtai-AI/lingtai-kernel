@@ -11,6 +11,7 @@ Design principles:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import threading
@@ -21,6 +22,8 @@ from pathlib import Path
 from typing import Callable
 
 from ..handshake import is_agent, is_alive, manifest, resolve_address
+
+logger = logging.getLogger(__name__)
 
 
 class MailService(ABC):
@@ -307,10 +310,18 @@ class FilesystemMailService(MailService):
             except OSError:
                 continue
 
+            # Best-effort dispatch. The message is already archived in sent/;
+            # if on_message raises, the message is effectively lost to the
+            # handler but remains visible in sent/ for manual inspection. Log
+            # so silent loss is observable.
             try:
                 on_message(payload)
             except Exception:
-                pass
+                logger.exception(
+                    "on_message raised for claimed pseudo-agent message %s from %s",
+                    entry.name,
+                    pseudo_dir,
+                )
 
     def stop(self) -> None:
         """Stop the polling thread."""
