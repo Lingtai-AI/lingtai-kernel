@@ -44,6 +44,7 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "timezone_awareness": bool,
     "context_serialization_enabled": bool,
     "context_rebuild_every_n_idles": int,
+    "pseudo_agent_subscriptions": list,
 }
 
 MANIFEST_KNOWN: set[str] = set(MANIFEST_REQUIRED) | set(MANIFEST_OPTIONAL)

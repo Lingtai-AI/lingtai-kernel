@@ -394,3 +394,20 @@ def test_top_optional_fields_all_in_known():
         f"Fields in TOP_OPTIONAL but not in TOP_KNOWN "
         f"(would trigger unknown-field warning): {sorted(missing)}"
     )
+
+
+def test_manifest_accepts_pseudo_agent_subscriptions():
+    data = _valid_init()
+    data["manifest"]["pseudo_agent_subscriptions"] = ["../human", "../announcements"]
+    warnings = validate_init(data)
+    # No warnings related to this field.
+    for w in warnings:
+        assert "pseudo_agent_subscriptions" not in w, f"unexpected warning: {w}"
+
+
+def test_manifest_rejects_non_list_pseudo_agent_subscriptions():
+    import pytest
+    data = _valid_init()
+    data["manifest"]["pseudo_agent_subscriptions"] = "../human"  # string, not list
+    with pytest.raises(ValueError, match="pseudo_agent_subscriptions"):
+        validate_init(data)
