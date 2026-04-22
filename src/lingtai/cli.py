@@ -69,7 +69,10 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
         context_window=m.get("context_limit", 200_000),
     )
 
-    mail_service = FilesystemMailService(working_dir=working_dir)
+    mail_service = FilesystemMailService(
+        working_dir=working_dir,
+        pseudo_agent_subscriptions=m.get("pseudo_agent_subscriptions", ["../human"]),
+    )
 
     # Minimal construction — _perform_refresh reads init.json for everything else
     agent = Agent(
