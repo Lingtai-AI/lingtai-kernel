@@ -55,15 +55,26 @@ def build_meta(agent) -> dict:
         sys_prompt = session._system_prompt_tokens
         tools = session._tools_tokens
         # "history" = in-memory turns (wire chat).
-        # Derived from the server-reported wire count (same pattern as
-        # SessionManager.get_token_usage's ctx_history_tokens) so the
-        # meta-line and status() agree on the number.
-        # _latest_input_tokens already contains system_prompt and tools;
-        # subtracting them gives the in-memory turn slice only.
-        history = max(
-            0,
-            session._latest_input_tokens - sys_prompt - tools,
-        )
+        # Derived from the server-reported wire count when available
+        # (_latest_input_tokens - sys_prompt - tools). Before the first
+        # LLM call of a session (e.g. right after start() rehydrates the
+        # ChatInterface from chat_history.jsonl on cold start or refresh),
+        # _latest_input_tokens is still 0, which would report "对话 0"
+        # even though the wire chat has been restored. Fall back to the
+        # interface's local estimate so the meta-line reflects the
+        # restored history from turn 1.
+        if session._latest_input_tokens > 0:
+            history = max(
+                0,
+                session._latest_input_tokens - sys_prompt - tools,
+            )
+        elif chat_obj is not None:
+            try:
+                history = chat_obj.interface.estimate_context_tokens()
+            except Exception:
+                history = 0
+        else:
+            history = 0
 
         system_tokens = sys_prompt + tools
         context_tokens = history

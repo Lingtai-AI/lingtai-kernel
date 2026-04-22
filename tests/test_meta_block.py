@@ -246,6 +246,25 @@ def test_build_meta_emits_sentinels_before_decomp_runs():
     assert meta["context_usage"] == -1.0
 
 
+def test_build_meta_history_falls_back_to_interface_estimate_after_restore():
+    """After start() rehydrates the wire ChatInterface from chat_history.jsonl,
+    _latest_input_tokens is still 0 until the first LLM call completes. The
+    meta-line must fall back to interface.estimate_context_tokens() so the
+    first post-refresh text_input shows the restored history, not '对话 0'."""
+    agent = _fake_agent_with_session(
+        system_prompt_tokens=5000,
+        tools_tokens=500,
+        history_tokens=50000,  # restored from JSONL
+    )
+    # Simulate pre-first-LLM-call state: interface has history but server
+    # has not reported an input count yet.
+    agent._session._latest_input_tokens = 0
+    meta = build_meta(agent)
+    # history should come from interface.estimate_context_tokens(), not 0
+    assert meta["context_tokens"] == 50000
+    assert meta["system_tokens"] == 5500
+
+
 def test_build_meta_time_blind_still_emits_context_fields():
     agent = _fake_agent_with_session(
         time_awareness=False,
