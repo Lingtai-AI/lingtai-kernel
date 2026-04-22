@@ -267,10 +267,22 @@ class FilesystemMailService(MailService):
 
         For each UUID folder in ``<pseudo_dir>/mailbox/outbox/``, read the
         message, check whether this service's address appears in its ``to``
-        field, and if so atomically rename the folder to
-        ``<pseudo_dir>/mailbox/sent/``. On successful rename, dispatch via
-        ``on_message``. Concurrent pollers racing on the same message: only
-        one rename succeeds; the loser silently skips.
+        field, and if so:
+
+          1. Pre-mark the UUID in ``_seen`` so Phase 1 won't re-dispatch it
+             after we place a copy in own inbox.
+          2. Write ``message.json`` atomically into ``<self>/mailbox/inbox/<uuid>/``
+             (same tmp-write + os.replace pattern as ``send()``) — this is
+             what makes the wake signal truthful: by the time ``on_message``
+             fires, the message really is in this agent's inbox.
+          3. Atomically rename ``<pseudo_dir>/mailbox/outbox/<uuid>/`` to
+             ``<pseudo_dir>/mailbox/sent/<uuid>/`` to claim the message.
+          4. Dispatch via ``on_message(payload)``.
+
+        Concurrent pollers racing on the same message: each writes its own
+        speculative inbox copy in step 2, then both race on step 3. Only one
+        rename succeeds; the loser deletes its speculative inbox copy, clears
+        ``_seen``, and silently skips.
         """
         outbox_dir = pseudo_dir / self._mailbox_rel / "outbox"
         if not outbox_dir.is_dir():
@@ -301,25 +313,57 @@ class FilesystemMailService(MailService):
             if self.address not in recipients:
                 continue
 
-            # Claim by atomic rename. If someone else already claimed this
-            # message between our read and our rename, os.replace raises
-            # OSError (source no longer exists). Silently skip.
-            sent_dir = sent_parent / entry.name
+            uuid_name = entry.name
+            own_inbox_dir = self._inbox_dir / uuid_name
+            own_msg_file = own_inbox_dir / "message.json"
+            own_tmp_file = own_inbox_dir / "message.json.tmp"
+
+            # Pre-mark BEFORE placing the file so Phase 1's own-inbox scan
+            # on the next tick doesn't treat this UUID as a new arrival and
+            # double-dispatch. Removed on rollback.
+            self._seen.add(uuid_name)
+
+            # Step 1: write the payload to own inbox (tmp → rename).
+            try:
+                own_inbox_dir.mkdir(parents=True, exist_ok=True)
+                own_tmp_file.write_text(
+                    json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+                )
+                os.replace(str(own_tmp_file), str(own_msg_file))
+            except OSError:
+                logger.warning(
+                    "failed to write claimed pseudo-agent message %s to own inbox",
+                    uuid_name,
+                    exc_info=True,
+                )
+                # Leave the message in the pseudo-agent outbox for retry;
+                # do not attempt the sent-rename.
+                self._seen.discard(uuid_name)
+                # Best-effort cleanup of the partial inbox dir.
+                shutil.rmtree(str(own_inbox_dir), ignore_errors=True)
+                continue
+
+            # Step 2: atomic claim by renaming outbox → sent. If a concurrent
+            # poller won the race, the source no longer exists — roll back
+            # our speculative inbox copy.
+            sent_dir = sent_parent / uuid_name
             try:
                 os.replace(str(entry), str(sent_dir))
             except OSError:
+                shutil.rmtree(str(own_inbox_dir), ignore_errors=True)
+                self._seen.discard(uuid_name)
                 continue
 
-            # Best-effort dispatch. The message is already archived in sent/;
-            # if on_message raises, the message is effectively lost to the
-            # handler but remains visible in sent/ for manual inspection. Log
-            # so silent loss is observable.
+            # Step 3: best-effort dispatch. If on_message raises, the
+            # message is fully persisted (own inbox + sender sent/) and
+            # nothing needs to unwind — just log so silent loss of the
+            # handler-side effect is observable.
             try:
                 on_message(payload)
             except Exception:
                 logger.exception(
                     "on_message raised for claimed pseudo-agent message %s from %s",
-                    entry.name,
+                    uuid_name,
                     pseudo_dir,
                 )
 
