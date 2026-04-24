@@ -7,13 +7,10 @@ a dangling assistant[tool_calls] followed by a plain-text user message.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ToolCallBlock,
-    ToolResultBlock,
 )
 
 
@@ -39,7 +36,6 @@ def test_close_pending_before_user_message_produces_valid_wire_format():
     iface.add_user_message("[system] retry — please continue")
 
     wire = to_openai(iface)
-    roles = [m["role"] for m in wire]
 
     # The assistant turn with tool_calls must be IMMEDIATELY followed by
     # two 'tool' entries (one per call id), THEN the user message.

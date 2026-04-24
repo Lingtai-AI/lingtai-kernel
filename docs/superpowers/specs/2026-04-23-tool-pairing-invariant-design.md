@@ -1,4 +1,4 @@
-l# Tool-Pairing Invariant — Design
+# Tool-Pairing Invariant — Design
 
 **Date:** 2026-04-23
 **Author:** Zesen Huang (with Claude)

@@ -419,6 +419,12 @@ class ChatInterface:
     def pop_orphan_tool_call(self) -> bool:
         """Remove orphaned trailing tool-call assistant entry and its tool results.
 
+        **Prefer ``close_pending_tool_calls(reason)``** for recovery paths —
+        it preserves the assistant turn and attaches error context as
+        synthetic tool_results rather than destroying the turn. This method
+        remains available for callers that genuinely need to discard the
+        turn entirely.
+
         When an LLM call fails mid-execution, the interface may have a trailing
         assistant entry containing ToolCallBlocks whose results were never
         followed by a successful assistant response.  This method pops that

@@ -315,12 +315,13 @@ class AnthropicChatSession(ChatSession):
         """Send a user message (str) or tool results (list of ToolResultBlock).
 
         For tool results, ``message`` is a list of ToolResultBlock (canonical).
-        The message is committed to the interface before the API call so that
-        add_user_message can strip unanswered tool_use entries.  On API error
+        The message is committed to the interface before the API call; if the
+        tail has unanswered tool_calls, add_user_message raises
+        PendingToolCallsError (recovery paths must close first). On API error
         the last user entry is reverted via drop_trailing.
         """
-        # Commit to interface first (add_user_message strips unanswered tool_use),
-        # then build API messages from the clean interface.
+        # Commit to interface first; enforce_tool_pairing() below handles any
+        # earlier-history orphans before the API call.
         if isinstance(message, str):
             self._interface.add_user_message(message)
         elif isinstance(message, list):
