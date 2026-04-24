@@ -15,6 +15,15 @@ _logger = get_logger()
 
 # LLM API call timeout thresholds (seconds)
 _LLM_WARN_INTERVAL = 20  # log a warning every N seconds while waiting
+
+# Grace period after retry_timeout expires: the worker's HTTP timeout should
+# fire at the same moment, its except-block runs drop_trailing synchronously,
+# then the future settles. We wait this long for that cleanup to complete
+# before raising TimeoutError to AED. Without the grace, AED races with the
+# worker's in-progress interface mutations.
+_WORKER_SETTLE_GRACE = 5.0
+
+
 def _send(
     submit_fn,
     timeout_pool: ThreadPoolExecutor,
@@ -28,7 +37,7 @@ def _send(
         elapsed = time.monotonic() - t0
         remaining = retry_timeout - elapsed
         if remaining <= 0:
-            future.cancel()
+            _wait_for_worker_settle(future, elapsed, agent_name)
             raise TimeoutError(f"LLM API call timed out after {elapsed:.0f}s")
         wait = min(_LLM_WARN_INTERVAL, remaining)
         try:
@@ -36,7 +45,7 @@ def _send(
         except TimeoutError:
             elapsed = time.monotonic() - t0
             if elapsed >= retry_timeout:
-                future.cancel()
+                _wait_for_worker_settle(future, elapsed, agent_name)
                 raise TimeoutError(f"LLM API call timed out after {elapsed:.0f}s")
             _logger.warning(
                 "[%s] LLM API not responding after %.0fs...",
@@ -44,20 +53,58 @@ def _send(
             )
 
 
+def _wait_for_worker_settle(future: Future, elapsed: float, agent_name: str) -> None:
+    """Wait briefly for the worker future to finish after the main-thread
+    watchdog expires. The worker's HTTP timeout should fire at (or near) the
+    same moment via the per-call ``timeout`` plumbed down to the SDK, letting
+    its except-block run ``drop_trailing`` on the shared ChatInterface
+    synchronously before we propagate. Without this wait, AED's recovery
+    races with the worker's in-progress mutations.
+
+    If the worker is still running after the grace period, log loudly and
+    proceed — something is wedged in the HTTP client and we accept the race
+    rather than block the agent indefinitely. This should be rare.
+    """
+    try:
+        future.result(timeout=_WORKER_SETTLE_GRACE)
+    except TimeoutError:
+        _logger.error(
+            "[%s] LLM worker thread still running after %.0fs + %.0fs grace — "
+            "interface state may be inconsistent. Investigate: HTTP client stuck?",
+            agent_name, elapsed, _WORKER_SETTLE_GRACE,
+        )
+    except Exception:
+        # Worker raised something other than timeout — that's fine, its
+        # except-block already ran drop_trailing. Swallow here; main thread
+        # re-raises its own TimeoutError.
+        pass
+
+
 class _SubmitFn:
-    """Callable that wraps chat.send or chat.send_stream for _send."""
+    """Callable that wraps chat.send or chat.send_stream for _send.
 
-    __slots__ = ("chat", "message", "_pool", "_method", "_extra_args")
+    Before submitting to the thread pool, sets ``chat._request_timeout`` to
+    ``retry_timeout`` so the adapter passes a matching per-call timeout to
+    the HTTP client. This aligns worker and main-thread timeouts: when the
+    watchdog raises in _send, the worker is already cleaning up or about
+    to, not mid-HTTP-request.
+    """
 
-    def __init__(self, pool, chat, message, method: str, extra_args: tuple = ()):
+    __slots__ = ("chat", "message", "_pool", "_method", "_extra_args", "_retry_timeout")
+
+    def __init__(self, pool, chat, message, method: str, extra_args: tuple = (),
+                 retry_timeout: float | None = None):
         self._pool = pool
         self.chat = chat
         self.message = message
         self._method = method
         self._extra_args = extra_args
+        self._retry_timeout = retry_timeout
 
     def __call__(self) -> Future:
         fn = getattr(self.chat, self._method)
+        if self._retry_timeout is not None and hasattr(self.chat, "_request_timeout"):
+            self.chat._request_timeout = self._retry_timeout
         return self._pool.submit(fn, self.message, *self._extra_args)
 
 
@@ -70,7 +117,8 @@ def send_with_timeout(
     logger,
 ) -> LLMResponse:
     """Send a message to the LLM with periodic warnings. Single attempt, no retry."""
-    submit_fn = _SubmitFn(timeout_pool, chat, message, "send")
+    submit_fn = _SubmitFn(timeout_pool, chat, message, "send",
+                          retry_timeout=retry_timeout)
     return _send(submit_fn, timeout_pool, retry_timeout, agent_name)
 
 
@@ -88,7 +136,8 @@ def send_with_timeout_stream(
     ``on_chunk`` is called from the thread-pool thread as text deltas arrive.
     """
     extra_args = (on_chunk,) if on_chunk is not None else ()
-    submit_fn = _SubmitFn(timeout_pool, chat, message, "send_stream", extra_args)
+    submit_fn = _SubmitFn(timeout_pool, chat, message, "send_stream", extra_args,
+                          retry_timeout=retry_timeout)
     return _send(submit_fn, timeout_pool, retry_timeout, agent_name)
 
 

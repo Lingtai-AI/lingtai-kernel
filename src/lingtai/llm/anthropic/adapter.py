@@ -290,6 +290,11 @@ class AnthropicChatSession(ChatSession):
         self._extra_kwargs = extra_kwargs
         self._client_kwargs = client_kwargs or {}
         self._context_window = context_window
+        # Per-request HTTP timeout (seconds). Set by send_with_timeout before
+        # dispatching the worker so the HTTP client aborts at the same moment
+        # the main-thread watchdog gives up. See OpenAI adapter for the race
+        # this prevents.
+        self._request_timeout: float | None = None
 
     @property
     def interface(self) -> ChatInterface:
@@ -309,6 +314,10 @@ class AnthropicChatSession(ChatSession):
             kwargs["tools"] = self._tools
             if self._tool_choice:
                 kwargs["tool_choice"] = self._tool_choice
+        if self._request_timeout is not None:
+            # Per-call HTTP timeout overrides the client-level timeout so this
+            # worker aborts at the same moment as the main-thread watchdog.
+            kwargs["timeout"] = self._request_timeout
         return kwargs
 
     def send(self, message) -> LLMResponse:

@@ -197,6 +197,12 @@ class OpenAIChatSession(ChatSession):
         self._extra_kwargs = extra_kwargs
         self._client_kwargs = client_kwargs or {}
         self._context_window = context_window
+        # Per-request HTTP timeout (seconds). Set by send_with_timeout before
+        # dispatching the worker so the HTTP client aborts at the same moment
+        # the main-thread watchdog gives up. Prevents a race where the worker
+        # keeps mutating the shared ChatInterface after AED has already
+        # declared a timeout and started recovering.
+        self._request_timeout: float | None = None
 
     @property
     def interface(self) -> ChatInterface:
@@ -246,6 +252,10 @@ class OpenAIChatSession(ChatSession):
             kwargs["parallel_tool_calls"] = True
             if self._tool_choice:
                 kwargs["tool_choice"] = self._tool_choice
+        if self._request_timeout is not None:
+            # Per-call HTTP timeout overrides the client-level timeout so this
+            # worker aborts at the same moment as the main-thread watchdog.
+            kwargs["timeout"] = self._request_timeout
 
         # 3. Make the API call; revert interface on error
         try:
@@ -384,6 +394,8 @@ class OpenAIChatSession(ChatSession):
             kwargs["parallel_tool_calls"] = True
             if self._tool_choice:
                 kwargs["tool_choice"] = self._tool_choice
+        if self._request_timeout is not None:
+            kwargs["timeout"] = self._request_timeout
 
         acc = StreamingAccumulator()
         usage = UsageMetadata()
