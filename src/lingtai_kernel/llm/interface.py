@@ -308,6 +308,12 @@ class ChatInterface:
         entry._tools = tools
 
     def add_user_message(self, text: str) -> InterfaceEntry:
+        if self.has_pending_tool_calls():
+            raise PendingToolCallsError(
+                "Cannot append user message while the tail assistant turn has "
+                "unanswered tool_calls. Call close_pending_tool_calls(reason) "
+                "or add_tool_results(...) first."
+            )
         return self._append("user", [TextBlock(text=text)])
 
     def add_assistant_message(
@@ -326,7 +332,20 @@ class ChatInterface:
         return entry
 
     def add_user_blocks(self, blocks: list[ContentBlock]) -> InterfaceEntry:
-        """Record a user entry with pre-built content blocks (for converters)."""
+        """Record a user entry with pre-built content blocks (for converters).
+
+        ToolResultBlocks are the legitimate closing op for pending tool_calls
+        and are allowed through. Anything else (text, mixed) is rejected when
+        the tail has unanswered tool_calls.
+        """
+        is_tool_result_only = bool(blocks) and all(
+            isinstance(b, ToolResultBlock) for b in blocks
+        )
+        if self.has_pending_tool_calls() and not is_tool_result_only:
+            raise PendingToolCallsError(
+                "Cannot append non-tool-result user blocks while the tail "
+                "assistant turn has unanswered tool_calls."
+            )
         return self._append("user", blocks)
 
     def add_tool_results(self, results: list[ToolResultBlock]) -> InterfaceEntry:

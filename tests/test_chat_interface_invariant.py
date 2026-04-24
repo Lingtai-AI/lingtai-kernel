@@ -114,3 +114,54 @@ class TestClosePendingToolCalls:
         iface.close_pending_tool_calls("r2")
         # Second call is a no-op because tail is now clean.
         assert len(iface.entries) == entries_after_first
+
+
+class TestAddUserMessageGuard:
+    def test_raises_when_tail_has_pending_tool_calls(self):
+        iface = _iface_with_pending_tool_calls()
+        with pytest.raises(PendingToolCallsError):
+            iface.add_user_message("new message")
+
+    def test_succeeds_after_close(self):
+        iface = _iface_with_pending_tool_calls()
+        iface.close_pending_tool_calls("test")
+        # Should not raise.
+        iface.add_user_message("recovery message")
+        tail = iface.entries[-1]
+        assert tail.role == "user"
+        assert len(tail.content) == 1
+        assert isinstance(tail.content[0], TextBlock)
+        assert tail.content[0].text == "recovery message"
+
+    def test_succeeds_after_tool_results(self):
+        iface = _iface_with_pending_tool_calls()
+        iface.add_tool_results([ToolResultBlock(id="call_A", name="noop", content="done")])
+        # Should not raise.
+        iface.add_user_message("next")
+
+    def test_clean_interface_not_affected(self):
+        iface = ChatInterface()
+        iface.add_system("prompt")
+        iface.add_user_message("first")  # should not raise
+
+
+class TestAddUserBlocksGuard:
+    def test_raises_for_text_blocks_when_pending(self):
+        iface = _iface_with_pending_tool_calls()
+        with pytest.raises(PendingToolCallsError):
+            iface.add_user_blocks([TextBlock(text="hi")])
+
+    def test_tool_results_allowed_when_pending(self):
+        """ToolResultBlocks ARE the legitimate closing operation."""
+        iface = _iface_with_pending_tool_calls()
+        # Should not raise.
+        iface.add_user_blocks([ToolResultBlock(id="call_A", name="noop", content="ok")])
+        assert iface.has_pending_tool_calls() is False
+
+    def test_mixed_blocks_rejected_when_pending(self):
+        iface = _iface_with_pending_tool_calls()
+        with pytest.raises(PendingToolCallsError):
+            iface.add_user_blocks([
+                ToolResultBlock(id="call_A", name="noop", content="ok"),
+                TextBlock(text="extra"),
+            ])
