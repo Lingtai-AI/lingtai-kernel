@@ -944,9 +944,17 @@ class BaseAgent:
                         err_desc = str(e) or repr(e)
                         aed_attempts += 1
 
-                        # Pop orphan tool call from interface (idempotent)
+                        # Close any dangling tool_calls with synthetic error
+                        # tool_results, preserving the assistant turn and the
+                        # error context (err_desc). Without this, a subsequent
+                        # add_user_message — e.g. the AED revive below —
+                        # would violate the chat-completions positional
+                        # invariant and strict providers (DeepSeek, OpenAI)
+                        # would 400 on the next request.
                         if self._session.chat is not None:
-                            self._session.chat.interface.pop_orphan_tool_call()
+                            self._session.chat.interface.close_pending_tool_calls(
+                                reason=err_desc or "aed_recovery"
+                            )
 
                         if aed_attempts > self._config.max_aed_attempts:
                             logger.error(
