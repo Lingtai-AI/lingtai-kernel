@@ -83,8 +83,8 @@ class TestReasoningPlaceholder:
             if m.get("role") == "assistant" and m.get("tool_calls")
         ]
         assert len(assistant_tool_turns) == 1
+        # Field must be present; empty string is the expected placeholder.
         assert "reasoning_content" in assistant_tool_turns[0]
-        assert assistant_tool_turns[0]["reasoning_content"]  # non-empty string
 
     def test_plain_text_turn_before_any_tool_call_has_no_reasoning(self):
         """Plain-text assistant turns that precede the first tool_call must
@@ -145,12 +145,12 @@ class TestReasoningPlaceholder:
         # Two assistant turns in history: the tool-call one AND the plain-text one
         assistant_turns = [m for m in messages if m.get("role") == "assistant"]
         assert len(assistant_turns) == 2
-        # BOTH must carry reasoning_content on replay
+        # BOTH must carry reasoning_content on replay (empty placeholder is OK
+        # — DeepSeek validates field presence, not content).
         for m in assistant_turns:
             assert "reasoning_content" in m, (
                 f"assistant turn missing reasoning_content: {m}"
             )
-            assert m["reasoning_content"]
 
     def test_rehydrated_history_with_trailing_plain_text_still_valid(self):
         """After a session restart, restored history with tool_calls but no
@@ -194,8 +194,8 @@ class TestReasoningPlaceholder:
             if m.get("role") == "assistant" and m.get("tool_calls")
         ]
         assert len(assistant_tool_turns) == 1
+        # Field must be present; empty string is the expected placeholder.
         assert "reasoning_content" in assistant_tool_turns[0]
-        assert assistant_tool_turns[0]["reasoning_content"]
 
 
 class TestDeepSeekAdapterWiring:

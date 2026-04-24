@@ -40,9 +40,18 @@ from ..openai.adapter import OpenAIAdapter, OpenAIChatSession
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 
-# Stable placeholder sent on every tool-call assistant turn. DeepSeek only
-# validates that the field is present; the string content is never inspected.
-_REASONING_PLACEHOLDER = "(reasoning omitted — not preserved across turns)"
+# Empty string sent as reasoning_content on every assistant turn once
+# thinking mode has been invoked by a prior tool_call. DeepSeek validates
+# field presence, not content — empty string is accepted.
+#
+# We use empty rather than a human-readable marker (tried previously:
+# "(reasoning omitted — not preserved across turns)") because the model,
+# trained on reasoning_content examples in its context, treats the field's
+# content as a style cue: a non-empty placeholder like that string gets
+# partially mimicked into the next turn's actual reasoning_content, showing
+# up in soul-flow / thinking-event logs prefixed with our exact placeholder
+# text followed by real reasoning. Empty string short-circuits that.
+_REASONING_PLACEHOLDER = ""
 
 
 class DeepSeekChatSession(OpenAIChatSession):
