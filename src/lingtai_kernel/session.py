@@ -383,12 +383,27 @@ class SessionManager:
             return {}
 
     def restore_chat(self, state: dict) -> None:
-        """Restore chat history with current system prompt and tools."""
+        """Restore chat history with current system prompt and tools.
+
+        Heals two classes of on-disk corruption before building the session:
+        1. Set-level orphans (tool_call without result or vice versa) —
+           handled by enforce_tool_pairing(), which strips them (except tail
+           assistant[tool_calls], which is deferred).
+        2. Positional violations (assistant[tool_calls] at tail with no
+           matching tool_results) — handled by close_pending_tool_calls(),
+           which synthesizes placeholder error results so the next send is
+           well-formed for strict providers (DeepSeek, OpenAI).
+        """
         from .llm.interface import ChatInterface
         messages = state.get("messages")
         if messages:
             try:
                 interface = ChatInterface.from_dict(messages)
+                interface.enforce_tool_pairing()
+                if interface.has_pending_tool_calls():
+                    interface.close_pending_tool_calls(
+                        reason="restored from disk — prior session ended mid-tool-loop"
+                    )
                 self._rebuild_session(interface)
                 return
             except Exception as e:

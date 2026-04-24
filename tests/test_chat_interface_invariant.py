@@ -165,3 +165,41 @@ class TestAddUserBlocksGuard:
                 ToolResultBlock(id="call_A", name="noop", content="ok"),
                 TextBlock(text="extra"),
             ])
+
+
+class TestRestoreDanglingToolCalls:
+    def test_rehydrate_closes_pending_tool_calls(self):
+        """A chat_history.jsonl persisted mid-tool-loop (process crashed
+        between tool_call emission and tool_result arrival) should
+        rehydrate with synthetic tool_results so the first send after
+        restore is well-formed."""
+        persisted = [
+            {"id": 0, "role": "system", "system": "prompt", "timestamp": 0.0},
+            {"id": 1, "role": "user",
+             "content": [{"type": "text", "text": "go"}],
+             "timestamp": 1.0},
+            {"id": 2, "role": "assistant",
+             "content": [
+                 {"type": "text", "text": "checking"},
+                 {"type": "tool_call", "id": "call_X", "name": "tool1", "args": {}},
+             ],
+             "timestamp": 2.0},
+        ]
+        iface = ChatInterface.from_dict(persisted)
+        assert iface.has_pending_tool_calls() is True
+
+        # The restore path will call these two methods in sequence.
+        iface.enforce_tool_pairing()
+        if iface.has_pending_tool_calls():
+            iface.close_pending_tool_calls(
+                reason="restored from disk — prior session ended mid-tool-loop"
+            )
+
+        # After recovery, no pending tool_calls and a synthetic tool_result entry.
+        assert iface.has_pending_tool_calls() is False
+        tail = iface.entries[-1]
+        assert tail.role == "user"
+        assert len(tail.content) == 1
+        assert isinstance(tail.content[0], ToolResultBlock)
+        assert tail.content[0].id == "call_X"
+        assert "restored from disk" in tail.content[0].content

@@ -206,15 +206,25 @@ class ChatInterface:
         """Ensure every ToolCallBlock has a matching ToolResultBlock and vice versa.
 
         Walks all entries and:
-        - Strips ToolCallBlocks from assistant entries that have no matching
-          ToolResultBlock anywhere in subsequent user entries.
+        - Strips ToolCallBlocks from EARLIER assistant entries that have no
+          matching ToolResultBlock anywhere in subsequent user entries.
         - Strips ToolResultBlocks from user entries that have no matching
           ToolCallBlock in any preceding assistant entry.
         - If stripping leaves an entry with no content blocks, inserts a
           placeholder TextBlock.
 
+        **Leaves tail-dangling assistant[tool_calls] intact** — those represent
+        a turn that was emitted but whose tool_results never arrived (typically
+        because the process crashed or the send raised mid-loop). The canonical
+        repair for that case is ``close_pending_tool_calls(reason)``, which
+        synthesizes placeholder tool_results preserving the assistant turn and
+        the error context. Repairing it here would destroy that signal.
+
         Mutates entries in place.  Idempotent.
         """
+        if not self._entries:
+            return
+
         # Collect all tool call IDs and all answered IDs
         all_call_ids: set[str] = set()
         answered_ids: set[str] = set()
@@ -229,8 +239,18 @@ class ChatInterface:
         if all_call_ids == answered_ids:
             return
 
-        for entry in self._entries:
+        # Identify the tail assistant-with-tool-calls (if any) so we can skip
+        # stripping it — close_pending_tool_calls owns that repair.
+        tail_idx = len(self._entries) - 1
+        tail_is_pending_assistant = (
+            self._entries[tail_idx].role == "assistant"
+            and any(isinstance(b, ToolCallBlock) for b in self._entries[tail_idx].content)
+        )
+
+        for i, entry in enumerate(self._entries):
             if entry.role == "assistant":
+                if i == tail_idx and tail_is_pending_assistant:
+                    continue  # leave the tail for close_pending_tool_calls
                 stripped_names: list[str] = []
                 new_content: list[ContentBlock] = []
                 for block in entry.content:
