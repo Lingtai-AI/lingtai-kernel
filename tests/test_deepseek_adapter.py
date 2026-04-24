@@ -83,8 +83,10 @@ class TestReasoningPlaceholder:
             if m.get("role") == "assistant" and m.get("tool_calls")
         ]
         assert len(assistant_tool_turns) == 1
-        # Field must be present; empty string is the expected placeholder.
         assert "reasoning_content" in assistant_tool_turns[0]
+        # Non-empty human-readable placeholder — stripped from response.thoughts
+        # on receive by _strip_placeholder_echoes (see dedicated tests below).
+        assert assistant_tool_turns[0]["reasoning_content"]
 
     def test_plain_text_turn_before_any_tool_call_has_no_reasoning(self):
         """Plain-text assistant turns that precede the first tool_call must
@@ -145,12 +147,12 @@ class TestReasoningPlaceholder:
         # Two assistant turns in history: the tool-call one AND the plain-text one
         assistant_turns = [m for m in messages if m.get("role") == "assistant"]
         assert len(assistant_turns) == 2
-        # BOTH must carry reasoning_content on replay (empty placeholder is OK
-        # — DeepSeek validates field presence, not content).
+        # BOTH must carry a non-empty reasoning_content on replay.
         for m in assistant_turns:
             assert "reasoning_content" in m, (
                 f"assistant turn missing reasoning_content: {m}"
             )
+            assert m["reasoning_content"]
 
     def test_rehydrated_history_with_trailing_plain_text_still_valid(self):
         """After a session restart, restored history with tool_calls but no
@@ -194,8 +196,8 @@ class TestReasoningPlaceholder:
             if m.get("role") == "assistant" and m.get("tool_calls")
         ]
         assert len(assistant_tool_turns) == 1
-        # Field must be present; empty string is the expected placeholder.
         assert "reasoning_content" in assistant_tool_turns[0]
+        assert assistant_tool_turns[0]["reasoning_content"]
 
 
 class TestDeepSeekAdapterWiring:
@@ -209,3 +211,79 @@ class TestDeepSeekAdapterWiring:
     def test_base_url_override(self):
         adapter = DeepSeekAdapter(api_key="stub", base_url="https://alt.example/v1")
         assert adapter.base_url == "https://alt.example/v1"
+
+
+class TestStripPlaceholderEchoes:
+    """DeepSeek V4 prepends our placeholder to its own fresh reasoning when
+    the placeholder appears on prior assistant turns in context. The filter
+    chops the placeholder prefix off so the kernel's 'thinking' log shows
+    just the real reasoning tail."""
+
+    def _make_response(self, thoughts):
+        return SimpleNamespace(thoughts=list(thoughts), text="reply", tool_calls=[])
+
+    def test_pure_echo_dropped(self):
+        """thought == placeholder only → drop entirely (no real reasoning)."""
+        from lingtai.llm.deepseek.adapter import (
+            _strip_placeholder_echoes, _REASONING_PLACEHOLDER,
+        )
+        resp = self._make_response([_REASONING_PLACEHOLDER])
+        _strip_placeholder_echoes(resp)
+        assert resp.thoughts == []
+
+    def test_prefix_plus_real_reasoning_stripped_to_tail(self):
+        """thought starts with placeholder, has real reasoning after → keep the tail."""
+        from lingtai.llm.deepseek.adapter import (
+            _strip_placeholder_echoes, _REASONING_PLACEHOLDER,
+        )
+        resp = self._make_response([
+            _REASONING_PLACEHOLDER + "发现 args 检查失败，让我换个方式。",
+        ])
+        _strip_placeholder_echoes(resp)
+        assert resp.thoughts == ["发现 args 检查失败，让我换个方式。"]
+
+    def test_prefix_with_leading_whitespace_stripped(self):
+        """Placeholder followed by whitespace then real reasoning."""
+        from lingtai.llm.deepseek.adapter import (
+            _strip_placeholder_echoes, _REASONING_PLACEHOLDER,
+        )
+        resp = self._make_response([
+            _REASONING_PLACEHOLDER + "\n\nThe user is asking...",
+        ])
+        _strip_placeholder_echoes(resp)
+        assert resp.thoughts == ["The user is asking..."]
+
+    def test_real_thought_without_prefix_preserved(self):
+        from lingtai.llm.deepseek.adapter import _strip_placeholder_echoes
+        resp = self._make_response(["The user is asking about X. I should Y."])
+        _strip_placeholder_echoes(resp)
+        assert resp.thoughts == ["The user is asking about X. I should Y."]
+
+    def test_mid_string_placeholder_preserved(self):
+        """Placeholder as a substring (not at start) is NOT stripped — only
+        prefix matches are treated as echoes."""
+        from lingtai.llm.deepseek.adapter import (
+            _strip_placeholder_echoes, _REASONING_PLACEHOLDER,
+        )
+        text = f"I noticed the marker: {_REASONING_PLACEHOLDER} — continuing."
+        resp = self._make_response([text])
+        _strip_placeholder_echoes(resp)
+        assert resp.thoughts == [text]
+
+    def test_mixed_list(self):
+        from lingtai.llm.deepseek.adapter import (
+            _strip_placeholder_echoes, _REASONING_PLACEHOLDER,
+        )
+        resp = self._make_response([
+            _REASONING_PLACEHOLDER,  # pure echo → drop
+            _REASONING_PLACEHOLDER + "real part",  # prefix echo → strip
+            "Real reasoning content here.",  # untouched
+        ])
+        _strip_placeholder_echoes(resp)
+        assert resp.thoughts == ["real part", "Real reasoning content here."]
+
+    def test_no_thoughts_attribute_noop(self):
+        from lingtai.llm.deepseek.adapter import _strip_placeholder_echoes
+        resp = SimpleNamespace(text="reply")  # no thoughts attr
+        # Should not raise.
+        _strip_placeholder_echoes(resp)

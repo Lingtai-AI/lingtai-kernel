@@ -40,18 +40,18 @@ from ..openai.adapter import OpenAIAdapter, OpenAIChatSession
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 
-# Empty string sent as reasoning_content on every assistant turn once
-# thinking mode has been invoked by a prior tool_call. DeepSeek validates
-# field presence, not content — empty string is accepted.
+# Human-readable placeholder sent as reasoning_content on every assistant
+# turn once thinking mode has been invoked by a prior tool_call. DeepSeek
+# validates field presence, not content — any non-empty string is accepted.
+# A readable string is preferred over empty for wire-debugging clarity.
 #
-# We use empty rather than a human-readable marker (tried previously:
-# "(reasoning omitted — not preserved across turns)") because the model,
-# trained on reasoning_content examples in its context, treats the field's
-# content as a style cue: a non-empty placeholder like that string gets
-# partially mimicked into the next turn's actual reasoning_content, showing
-# up in soul-flow / thinking-event logs prefixed with our exact placeholder
-# text followed by real reasoning. Empty string short-circuits that.
-_REASONING_PLACEHOLDER = ""
+# DeepSeek V4's cache-hit fast-path (verified empirically: high cache hit +
+# low thinking_tokens ~= 10) echoes the last reasoning_content it saw in
+# context verbatim, rather than generating fresh reasoning. This causes the
+# kernel's 'thinking' event to log this exact string as the agent's thought.
+# The strip-on-parse in DeepSeekChatSession.send/send_stream filters these
+# exact-match echoes out of response.thoughts.
+_REASONING_PLACEHOLDER = "(reasoning omitted — not preserved across turns)"
 
 
 class DeepSeekChatSession(OpenAIChatSession):
@@ -72,6 +72,42 @@ class DeepSeekChatSession(OpenAIChatSession):
             if seen_tool_call:
                 msg["reasoning_content"] = _REASONING_PLACEHOLDER
         return messages
+
+    def send(self, message):
+        response = super().send(message)
+        _strip_placeholder_echoes(response)
+        return response
+
+    def send_stream(self, message, on_chunk=None):
+        response = super().send_stream(message, on_chunk)
+        _strip_placeholder_echoes(response)
+        return response
+
+
+def _strip_placeholder_echoes(response) -> None:
+    """Strip our placeholder string from the start of each thought.
+
+    DeepSeek V4, seeing our placeholder on every recent assistant turn in
+    context, prepends that exact string to its own fresh reasoning on the
+    next response. Result: thoughts like
+        "(reasoning omitted — not preserved across turns)发现 args 检查失败..."
+    We chop the placeholder prefix off so the kernel's 'thinking' event log
+    shows just the real reasoning.
+
+    Pure-echo responses (where thought == placeholder with no tail) become
+    empty strings and are dropped entirely — there's no reasoning to keep.
+    """
+    if not getattr(response, "thoughts", None):
+        return
+    cleaned: list[str] = []
+    for t in response.thoughts:
+        if t and t.startswith(_REASONING_PLACEHOLDER):
+            tail = t[len(_REASONING_PLACEHOLDER):].lstrip()
+            if tail:
+                cleaned.append(tail)
+        else:
+            cleaned.append(t)
+    response.thoughts = cleaned
 
 
 class DeepSeekAdapter(OpenAIAdapter):
