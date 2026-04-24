@@ -21,6 +21,16 @@ from typing import Any, Union
 # ---------------------------------------------------------------------------
 
 
+class PendingToolCallsError(Exception):
+    """Raised when a user entry would be appended while tool_calls are unanswered.
+
+    Callers should close the pending tool_calls first — either by appending
+    the real ToolResultBlocks via ``add_tool_results(...)``, or by calling
+    ``close_pending_tool_calls(reason)`` to synthesize placeholder results
+    (used by recovery paths like AED and session restore).
+    """
+
+
 @dataclass
 class TextBlock:
     text: str
@@ -248,6 +258,21 @@ class ChatInterface:
                     ))
                 if new_content_u:
                     entry.content = new_content_u
+
+    def has_pending_tool_calls(self) -> bool:
+        """True iff the tail entry is an assistant with unanswered ToolCallBlocks.
+
+        "Unanswered" is defined positionally: if the very next entry contains
+        ToolResultBlocks, the calls are considered answered. The canonical
+        pattern is ``assistant[tool_calls] -> user[tool_results]``; anything
+        else leaves the calls pending.
+        """
+        if not self._entries:
+            return False
+        last = self._entries[-1]
+        if last.role != "assistant":
+            return False
+        return any(isinstance(b, ToolCallBlock) for b in last.content)
 
     # -- Add methods ----------------------------------------------------------
 
