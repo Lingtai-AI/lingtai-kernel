@@ -214,13 +214,6 @@ class AvatarManager:
         if hasattr(parent, "_venv_path") and parent._venv_path:
             parent_init["venv_path"] = parent._venv_path
 
-        # Write avatar's init.json (modified copy of parent's)
-        avatar_comment = args.get("comment", "")
-        avatar_init = self._make_avatar_init(parent_init, peer_name, comment=avatar_comment)
-        (avatar_working_dir / "init.json").write_text(
-            json.dumps(avatar_init, indent=2, ensure_ascii=False)
-        )
-
         # Clean stale signal files before launch
         for sig in (".suspend", ".sleep", ".interrupt"):
             sig_file = avatar_working_dir / sig
@@ -228,11 +221,9 @@ class AvatarManager:
                 sig_file.unlink(missing_ok=True)
 
         # Seed the avatar's first turn with a parent-identity prompt + the
-        # caller's reasoning (task brief). The avatar's heartbeat loop picks
-        # up .prompt on first tick and injects it as a [system] message.
-        # Both pieces arrive together so the newborn knows who spawned it,
-        # where to report back, AND what task it was spawned to do.
-        # Uses the avatar's inherited language.
+        # caller's reasoning (task brief). Written into init.json's `prompt`
+        # field so it's visible to schema validation and consumed on first
+        # turn the same way any static prompt is — no file-watch dance.
         parent_name = parent.agent_name or parent._working_dir.name
         parent_address = parent._working_dir.name
         avatar_lang = parent_init.get("manifest", {}).get("language", "en")
@@ -244,7 +235,16 @@ class AvatarManager:
         first_prompt = parent_prompt
         if reasoning and reasoning.strip():
             first_prompt = f"{parent_prompt}\n\n{reasoning.strip()}"
-        (avatar_working_dir / ".prompt").write_text(first_prompt)
+
+        # Write avatar's init.json (modified copy of parent's), with the
+        # spawn prompt set so the schema sees a non-empty prompt field.
+        avatar_comment = args.get("comment", "")
+        avatar_init = self._make_avatar_init(
+            parent_init, peer_name, comment=avatar_comment, prompt=first_prompt,
+        )
+        (avatar_working_dir / "init.json").write_text(
+            json.dumps(avatar_init, indent=2, ensure_ascii=False)
+        )
 
         # Launch as detached process
         pid = self._launch(avatar_working_dir)
@@ -281,19 +281,21 @@ class AvatarManager:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _make_avatar_init(parent_init: dict, name: str, comment: str = "") -> dict:
-        """Build avatar's init.json from parent's, setting name.
+    def _make_avatar_init(
+        parent_init: dict, name: str, *, comment: str = "", prompt: str = "",
+    ) -> dict:
+        """Build avatar's init.json from parent's, setting name and first prompt.
 
-        Task brief (reasoning) is NOT stored in init.json — it's written to
-        the avatar's .prompt file alongside the parent-identity message so
-        the heartbeat loop delivers both together as the first [system]
-        input on the avatar's first turn.
+        The spawn brief (parent identity + reasoning) is stored in the
+        ``prompt`` field and consumed on the avatar's first turn, same as
+        any manually-configured prompt. This replaces the older ``.prompt``
+        file handshake which couldn't pass schema validation.
         """
         init = json.loads(json.dumps(parent_init))  # deep copy
         init["manifest"]["agent_name"] = name
-        # Drop any stale prompt field inherited from parent — avatar's first
-        # prompt comes from .prompt (written by _spawn), not init.json.
-        init.pop("prompt", None)
+        # Set avatar's first prompt — overrides any stale prompt inherited from parent
+        init["prompt"] = prompt
+        init.pop("prompt_file", None)
         # Avatar has no admin privileges
         init["manifest"]["admin"] = {}
         # Comment is not inherited — parent can set one explicitly for the avatar
