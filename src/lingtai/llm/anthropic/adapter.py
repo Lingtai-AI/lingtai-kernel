@@ -666,7 +666,7 @@ class AnthropicAdapter(LLMAdapter):
                 thinking_budget * 2, thinking_budget + 8192
             )
 
-        return AnthropicChatSession(
+        session = AnthropicChatSession(
             client=self._client,
             model=model,
             system_prompt=_build_system_with_cache(system_prompt),
@@ -677,6 +677,7 @@ class AnthropicAdapter(LLMAdapter):
             client_kwargs=self._client_kwargs,
             context_window=context_window,
         )
+        return self._wrap_with_gate(session)
 
     def generate(
         self,
@@ -720,7 +721,7 @@ class AnthropicAdapter(LLMAdapter):
                 "name": json_schema.get("title", "structured_output"),
             }
 
-        raw = self._client.messages.create(**kwargs)
+        raw = self._gated_call(lambda: self._client.messages.create(**kwargs))
         return _parse_response(raw)
 
     def make_tool_result_message(

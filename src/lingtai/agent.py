@@ -631,14 +631,23 @@ class Agent(BaseAgent):
         new_model = llm["model"]
         new_base_url = llm.get("base_url")
 
+        new_max_rpm = m.get("max_rpm", 0)
+        new_provider_defaults: dict | None = None
+        if new_max_rpm > 0:
+            new_provider_defaults = {new_provider.lower(): {"max_rpm": new_max_rpm}}
+
         if (
             new_provider != self.service.provider
             or new_model != self.service.model
             or new_base_url != getattr(self.service, "_base_url", None)
+            or new_max_rpm != getattr(self.service, "_provider_defaults", {}).get(
+                new_provider.lower(), {}
+            ).get("max_rpm", 0)
         ):
             self.service = LLMService(
                 provider=new_provider, model=new_model,
                 api_key=api_key, base_url=new_base_url,
+                provider_defaults=new_provider_defaults,
             )
             self._session._llm_service = self.service
 
@@ -660,6 +669,7 @@ class Agent(BaseAgent):
             timezone_awareness=m.get("timezone_awareness", True),
             aed_timeout=m.get("aed_timeout", 360.0),
             max_aed_attempts=m.get("max_aed_attempts", 3),
+            max_rpm=new_max_rpm,
         )
         self._soul_delay = max(1.0, self._config.soul_delay)
         self._session._config = self._config

@@ -16,6 +16,40 @@ from lingtai_kernel.llm.interface import ChatInterface, ToolResultBlock
 from .api_gate import APICallGate
 
 
+class _GatedSession:
+    """Thin proxy that routes session.send / send_stream through the gate.
+
+    Hoisted from the MiniMax adapter so every provider gets rate gating
+    by inheritance. Read-only attribute access falls through to the inner
+    session via __getattr__; attribute writes (e.g. ``chat.session_id =
+    ...`` from LLMService.create_session) land on the proxy itself, which
+    is fine because subsequent reads of those names hit the proxy first
+    and never reach __getattr__.
+    """
+
+    def __init__(self, inner: ChatSession, gate: "APICallGate"):
+        # Use object.__setattr__ to avoid triggering any subclass __setattr__
+        # and to land these on the proxy itself, not the inner.
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_gate", gate)
+
+    @property
+    def interface(self):
+        return self._inner.interface
+
+    def send(self, message):
+        return self._gate.submit(lambda: self._inner.send(message))
+
+    def send_stream(self, message, on_chunk=None):
+        return self._gate.submit(
+            lambda: self._inner.send_stream(message, on_chunk=on_chunk)
+        )
+
+    def __getattr__(self, name):
+        # Only fires when normal attribute lookup on the proxy fails.
+        return getattr(self._inner, name)
+
+
 class LLMAdapter(ABC):
     """Abstract interface that every LLM provider adapter must implement."""
 
@@ -35,6 +69,18 @@ class LLMAdapter(ABC):
         if self._gate is not None:
             return self._gate.submit(fn)
         return fn()
+
+    def _wrap_with_gate(self, session: ChatSession) -> ChatSession:
+        """Return *session* wrapped in a gate proxy if a gate is configured,
+        otherwise return *session* unchanged.
+
+        Every adapter's ``create_chat`` implementation should pass its
+        return value through this helper so per-call rate limiting is
+        applied uniformly across providers without per-adapter code.
+        """
+        if self._gate is None:
+            return session
+        return _GatedSession(session, self._gate)  # type: ignore[return-value]
 
     @abstractmethod
     def create_chat(

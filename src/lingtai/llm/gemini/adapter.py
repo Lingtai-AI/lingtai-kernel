@@ -681,7 +681,7 @@ class GeminiAdapter(LLMAdapter):
 
         if use_interactions and not json_schema:
             # Interactions API path — server-side conversation state
-            return self._create_interactions_session(
+            session = self._create_interactions_session(
                 model,
                 system_prompt,
                 tools,
@@ -692,6 +692,7 @@ class GeminiAdapter(LLMAdapter):
                 interaction_id=interaction_id,
                 context_window=context_window,
             )
+            return self._wrap_with_gate(session)
 
         # --- Chat API path (used for json_schema mode) ---
         # Build GenerateContentConfig
@@ -736,7 +737,9 @@ class GeminiAdapter(LLMAdapter):
         self._use_interactions = False
         chat = self._client.chats.create(**create_kwargs)
 
-        return GeminiChatSession(chat, context_window=context_window, interface=interface)
+        return self._wrap_with_gate(
+            GeminiChatSession(chat, context_window=context_window, interface=interface)
+        )
 
     def _create_interactions_session(
         self,
@@ -841,10 +844,12 @@ class GeminiAdapter(LLMAdapter):
 
         config = types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
 
-        raw = self._client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=config,
+        raw = self._gated_call(
+            lambda: self._client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config,
+            )
         )
         return _parse_response(raw)
 

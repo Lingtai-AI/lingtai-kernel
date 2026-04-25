@@ -775,7 +775,7 @@ class OpenAIAdapter(LLMAdapter):
 
         # Only use Responses API for actual OpenAI (not compatible providers)
         if use_responses and (not self.base_url or self._force_responses):
-            return self._create_responses_session(
+            session = self._create_responses_session(
                 model,
                 system_prompt,
                 tools,
@@ -784,12 +784,13 @@ class OpenAIAdapter(LLMAdapter):
                 interface,
                 thinking,
             )
-
-        # Fallback: Chat Completions for compatible providers
-        return self._create_completions_session(
-            model, system_prompt, tools, json_schema, force_tool_call, interface, thinking,
-            context_window=context_window,
-        )
+        else:
+            # Fallback: Chat Completions for compatible providers
+            session = self._create_completions_session(
+                model, system_prompt, tools, json_schema, force_tool_call, interface, thinking,
+                context_window=context_window,
+            )
+        return self._wrap_with_gate(session)
 
     def _create_responses_session(
         self,
@@ -952,7 +953,7 @@ class OpenAIAdapter(LLMAdapter):
                 },
             }
 
-        raw = self._client.chat.completions.create(**kwargs)
+        raw = self._gated_call(lambda: self._client.chat.completions.create(**kwargs))
         return _parse_response(raw)
 
     def make_tool_result_message(

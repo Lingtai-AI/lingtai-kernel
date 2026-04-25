@@ -61,12 +61,19 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
 
     api_key = resolve_env(llm.get("api_key"), llm.get("api_key_env"))
 
+    max_rpm = m.get("max_rpm", 0)
+    provider_defaults: dict | None = None
+    if max_rpm > 0:
+        # provider_defaults is dict[provider_name, defaults_dict]; scope to
+        # the agent's configured provider so other providers stay unaffected.
+        provider_defaults = {llm["provider"].lower(): {"max_rpm": max_rpm}}
     service = LLMService(
         provider=llm["provider"],
         model=llm["model"],
         api_key=api_key,
         base_url=llm.get("base_url"),
         context_window=m.get("context_limit", 200_000),
+        provider_defaults=provider_defaults,
     )
 
     mail_service = FilesystemMailService(

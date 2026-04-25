@@ -38,6 +38,7 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "molt_pressure": (int, float),
     "molt_prompt": str,
     "max_turns": int,
+    "max_rpm": int,
     "admin": dict,
     "streaming": bool,
     "time_awareness": bool,
