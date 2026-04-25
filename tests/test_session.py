@@ -381,3 +381,60 @@ def test_close_shuts_down_pool():
     sm.close()
     # Should not raise on second close
     sm.close()
+
+
+# ------------------------------------------------------------------
+# Health check (pre-send invariant)
+# ------------------------------------------------------------------
+
+def test_health_check_heals_pending_tool_calls_on_user_message():
+    """Before dispatch, if the canonical tail has unanswered tool_calls and
+    the next message is a user-text string, close the dangling calls and
+    log a structured health_check event. Adapter never sees the broken state."""
+    events: list[tuple[str, dict]] = []
+    sm, _, mock_session = make_session_manager(
+        logger_fn=lambda evt, **kw: events.append((evt, kw))
+    )
+    mock_session.interface.has_pending_tool_calls.return_value = True
+
+    sm.send("follow-up user text")
+
+    mock_session.interface.close_pending_tool_calls.assert_called_once_with(
+        reason="health_check:pre_send_pairing"
+    )
+    health_events = [(e, kw) for e, kw in events if e == "health_check"]
+    assert health_events, f"expected a health_check event, got {events}"
+    _, fields = health_events[0]
+    assert fields["check"] == "pre_send_pairing"
+    assert fields["action"] == "auto_heal"
+
+
+def test_health_check_noop_when_tail_is_clean():
+    """No heal, no warning event, no close_pending_tool_calls call when
+    the canonical tail has no pending tool_calls."""
+    events: list[tuple[str, dict]] = []
+    sm, _, mock_session = make_session_manager(
+        logger_fn=lambda evt, **kw: events.append((evt, kw))
+    )
+    mock_session.interface.has_pending_tool_calls.return_value = False
+
+    sm.send("normal user text")
+
+    mock_session.interface.close_pending_tool_calls.assert_not_called()
+    assert not [e for e, _ in events if e == "health_check"]
+
+
+def test_health_check_noop_when_message_is_tool_results():
+    """Tool-results sends are the legitimate answer to pending calls —
+    don't synthesize placeholders that would compete with real results."""
+    events: list[tuple[str, dict]] = []
+    sm, _, mock_session = make_session_manager(
+        logger_fn=lambda evt, **kw: events.append((evt, kw))
+    )
+    mock_session.interface.has_pending_tool_calls.return_value = True
+
+    # ToolResultBlock-shaped message (non-string)
+    sm.send([MagicMock()])
+
+    mock_session.interface.close_pending_tool_calls.assert_not_called()
+    assert not [e for e, _ in events if e == "health_check"]

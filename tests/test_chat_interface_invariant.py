@@ -101,11 +101,21 @@ class TestClosePendingToolCalls:
         assert isinstance(result_A, ToolResultBlock)
         assert result_A.id == "call_A"
         assert result_A.name == "tool1"
-        assert "aborted" in result_A.content
+        # Synthesized placeholders are tagged so add_tool_results can replace
+        # them when the real result for the same id later arrives.
+        assert result_A.synthesized is True
+        # Heal content is written for the agent to read on the next turn:
+        # it must signal that the call did not complete, that the side effect
+        # MAY have happened, and the kernel-supplied reason must be carried
+        # through so the agent can decide whether to verify or retry.
+        assert "did not complete" in result_A.content
+        assert "tool1" in result_A.content
         assert "network timeout" in result_A.content
         assert isinstance(result_B, ToolResultBlock)
         assert result_B.id == "call_B"
         assert result_B.name == "tool2"
+        assert result_B.synthesized is True
+        assert "tool2" in result_B.content
 
     def test_idempotent(self):
         iface = _iface_with_pending_tool_calls()
@@ -203,3 +213,98 @@ class TestRestoreDanglingToolCalls:
         assert isinstance(tail.content[0], ToolResultBlock)
         assert tail.content[0].id == "call_X"
         assert "restored from disk" in tail.content[0].content
+
+
+# ---------------------------------------------------------------------------
+# Real result arriving after a heal — replace-in-place behavior
+# ---------------------------------------------------------------------------
+
+class TestRealResultReplacesSynthesized:
+    """When a tool call was healed (synthesized placeholder appended) and
+    the real tool_result later arrives via add_tool_results, the placeholder
+    is overwritten in place. This keeps a single tool_result per id in the
+    canonical interface — strict providers reject duplicate tool_call_ids
+    on the wire.
+
+    Note: in current production paths the real result never arrives after
+    a heal (heal fires only when the prior send was interrupted, so the
+    execution that would have produced the real result died). This is
+    defensive coverage for future async-tool-result patterns.
+    """
+
+    def test_real_result_replaces_synthesized_in_place(self):
+        iface = ChatInterface()
+        iface.add_system("s")
+        iface.add_user_message("go")
+        iface.add_assistant_message(
+            [ToolCallBlock(id="call_X", name="tool1", args={})],
+        )
+        iface.close_pending_tool_calls("network timeout")
+        # Tail is now user[ToolResultBlock(synthesized=True, id=call_X)]
+        synth_entry = iface.entries[-1]
+        assert synth_entry.content[0].synthesized is True
+        n_entries_before = len(iface.entries)
+
+        # Real result arrives. add_tool_results should overwrite in place,
+        # not append a new entry (which would create a duplicate tool_call_id
+        # on the wire).
+        real = ToolResultBlock(id="call_X", name="tool1", content="real output")
+        iface.add_tool_results([real])
+
+        # No new entry appended — the placeholder slot was overwritten.
+        assert len(iface.entries) == n_entries_before
+        # The block at the placeholder's slot is now the real one.
+        replaced = synth_entry.content[0]
+        assert replaced.content == "real output"
+        assert replaced.synthesized is False  # real result is not synthesized
+
+    def test_real_result_appends_when_no_synthesized_match(self):
+        """Normal (non-heal) flow — add_tool_results appends a fresh entry."""
+        iface = ChatInterface()
+        iface.add_system("s")
+        iface.add_user_message("go")
+        iface.add_assistant_message(
+            [ToolCallBlock(id="call_Y", name="tool2", args={})],
+        )
+        n_entries_before = len(iface.entries)
+
+        real = ToolResultBlock(id="call_Y", name="tool2", content="ok")
+        iface.add_tool_results([real])
+
+        assert len(iface.entries) == n_entries_before + 1
+        tail = iface.entries[-1]
+        assert tail.role == "user"
+        assert tail.content[0].content == "ok"
+
+    def test_partial_overlap_replaces_some_appends_rest(self):
+        """Mix of incoming results: some replace placeholders, the rest
+        are appended together as one new entry."""
+        iface = ChatInterface()
+        iface.add_system("s")
+        iface.add_user_message("go")
+        iface.add_assistant_message(
+            [
+                ToolCallBlock(id="call_A", name="tool1", args={}),
+                ToolCallBlock(id="call_B", name="tool2", args={}),
+            ],
+        )
+        iface.close_pending_tool_calls("timeout")
+        synth_entry = iface.entries[-1]
+        n_entries_before = len(iface.entries)
+
+        real_A = ToolResultBlock(id="call_A", name="tool1", content="A real")
+        real_C = ToolResultBlock(id="call_C", name="tool3", content="C real")  # new id
+        iface.add_tool_results([real_A, real_C])
+
+        # call_A overwrote the placeholder; call_C had no match, so a new
+        # entry was appended carrying just real_C.
+        assert len(iface.entries) == n_entries_before + 1
+        assert synth_entry.content[0].content == "A real"
+        assert synth_entry.content[0].synthesized is False
+        # Placeholder for call_B is untouched (still synthesized).
+        assert synth_entry.content[1].id == "call_B"
+        assert synth_entry.content[1].synthesized is True
+        # New entry has only the leftover (call_C).
+        new_entry = iface.entries[-1]
+        assert len(new_entry.content) == 1
+        assert new_entry.content[0].id == "call_C"

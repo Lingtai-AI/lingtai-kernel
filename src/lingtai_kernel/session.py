@@ -171,6 +171,29 @@ class SessionManager:
             interface=interface,
         )
 
+    def _health_check(self, message: Any) -> None:
+        """Pre-send invariant checks on the canonical interface.
+
+        Runs after system-prompt/tools refresh and before dispatch. Each
+        check is a one-liner so future invariants land here, not scattered
+        across adapters. Non-destructive: synthesizes placeholders rather
+        than mutating committed history. Every heal logs a structured
+        ``health_check`` event so operators can audit how often each
+        invariant fires and trace the upstream callsite.
+        """
+        # Tail tool-call pairing: if we're about to append a user-text
+        # message but the tail is assistant[tool_calls] (e.g. the prior
+        # turn's tool_results never landed because of a timeout, daemon
+        # crash, or partial AED recovery), close the dangling calls with
+        # synthesized [aborted: ...] tool_results. The next add_user_message
+        # will then succeed, and the model sees the abort reason on the
+        # next turn.
+        if isinstance(message, str) and self._chat.interface.has_pending_tool_calls():
+            self._chat.interface.close_pending_tool_calls(
+                reason="health_check:pre_send_pairing"
+            )
+            self._log("health_check", check="pre_send_pairing", action="auto_heal")
+
     def send(self, message: Any) -> LLMResponse:
         """Send a message to the LLM, reusing the persistent chat session.
 
@@ -192,6 +215,8 @@ class SessionManager:
         else:
             self._chat.update_system_prompt(self._build_system_prompt_fn())
         self._chat.update_tools(self._build_tool_schemas_fn() or None)
+
+        self._health_check(message)
 
         self._log(
             "llm_call",

@@ -54,9 +54,44 @@ class ToolResultBlock:
     id: str
     name: str
     content: Any  # str or dict
+    # True iff this block was created by close_pending_tool_calls (heal path),
+    # not by a real tool execution. add_tool_results will overwrite a
+    # synthesized block in place when the real result for the same id arrives.
+    synthesized: bool = False
 
     def to_dict(self) -> dict:
         return {"type": "tool_result", "id": self.id, "name": self.name, "content": self.content}
+
+
+def _synthesized_abort_message(tool_name: str, reason: str) -> str:
+    """Content for a heal-path placeholder ToolResultBlock.
+
+    Written FOR THE AGENT to read on the next turn — not for log-readers.
+    The agent needs three things from this message: (1) clear signal that
+    the tool did NOT complete normally, (2) honest acknowledgement that
+    the side effect MAY have happened (the failure could have been after
+    the side effect committed but before the result returned), (3) actionable
+    guidance to verify state before retrying. Tone matches the kernel's
+    other system-injected notices the agent already knows how to read.
+    """
+    return (
+        f"[kernel notice — tool call did not complete]\n"
+        f"\n"
+        f"Your prior turn emitted a call to `{tool_name}`, but the kernel's "
+        f"pre-send health check found this call still unanswered when it "
+        f"was about to dispatch the next message. The tool execution either "
+        f"timed out, errored, or was interrupted before its result could be "
+        f"committed to the conversation.\n"
+        f"\n"
+        f"**Important:** the side effect of `{tool_name}` MAY OR MAY NOT have "
+        f"happened. The kernel cannot tell. Do not assume the action took "
+        f"effect. If the action mattered (file write, email send, mail reply, "
+        f"state change, daemon spawn, etc.), verify the actual state before "
+        f"retrying — read the file, check the inbox, list the daemon, etc. "
+        f"Only retry the call if you've confirmed it didn't take effect.\n"
+        f"\n"
+        f"Reason recorded by the kernel: {reason}"
+    )
 
 
 @dataclass
@@ -311,7 +346,12 @@ class ChatInterface:
         last = self._entries[-1]
         pending = [b for b in last.content if isinstance(b, ToolCallBlock)]
         placeholders = [
-            ToolResultBlock(id=b.id, name=b.name, content=f"[aborted: {reason}]")
+            ToolResultBlock(
+                id=b.id,
+                name=b.name,
+                content=_synthesized_abort_message(b.name, reason),
+                synthesized=True,
+            )
             for b in pending
         ]
         self._append("user", placeholders)
@@ -369,8 +409,52 @@ class ChatInterface:
         return self._append("user", blocks)
 
     def add_tool_results(self, results: list[ToolResultBlock]) -> InterfaceEntry:
-        """Record tool results as a user-role entry."""
-        return self._append("user", list(results))
+        """Record tool results as a user-role entry.
+
+        If a synthesized placeholder for the same tool_call_id already
+        exists in the canonical history (created by close_pending_tool_calls
+        when the original send was interrupted), replace that placeholder
+        in place instead of appending a duplicate. The real result wins;
+        the synthesized abort note is overwritten so the wire payload has
+        a single tool message per id (strict providers reject duplicates).
+
+        Returns the entry that received the new (or last) block: the existing
+        entry if any replacements happened, or the newly appended entry
+        otherwise. If all incoming results replaced existing placeholders,
+        no new entry is appended.
+        """
+        results = list(results)
+        leftover: list[ToolResultBlock] = []
+        last_touched_entry: InterfaceEntry | None = None
+
+        for incoming in results:
+            replaced = False
+            for entry in self._entries:
+                if entry.role != "user":
+                    continue
+                for idx, block in enumerate(entry.content):
+                    if (
+                        isinstance(block, ToolResultBlock)
+                        and block.id == incoming.id
+                        and block.synthesized
+                    ):
+                        # Real result arrived after the heal — overwrite the
+                        # placeholder in place. Synthesized flag clears so a
+                        # second real arrival would NOT replace this one (it
+                        # would fall through to the leftover path and append,
+                        # which the wire-layer dedup catches as a true bug).
+                        entry.content[idx] = incoming
+                        last_touched_entry = entry
+                        replaced = True
+                        break
+                if replaced:
+                    break
+            if not replaced:
+                leftover.append(incoming)
+
+        if leftover:
+            return self._append("user", leftover)
+        return last_touched_entry  # type: ignore[return-value]
 
     # -- Query methods --------------------------------------------------------
 
