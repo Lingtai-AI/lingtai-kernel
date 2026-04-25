@@ -220,6 +220,169 @@ class OpenAIChatSession(ChatSession):
         """
         return to_openai(self._interface)
 
+    # Maximum number of context-overflow halving rounds before giving up.
+    # 10 rounds × 10% drop ≈ 65% of conversation eligible for trimming —
+    # plenty of headroom for any single-attachment overflow without thrashing.
+    _OVERFLOW_MAX_ROUNDS = 10
+    _OVERFLOW_DROP_FRACTION = 0.10
+
+    @staticmethod
+    def _is_context_overflow_error(exc: Exception) -> bool:
+        """Detect provider 400-class context-length-exceeded errors.
+
+        Covers OpenAI's canonical ``context_length_exceeded`` code plus the
+        loose string-match heuristics used by compatible vendors (DeepSeek,
+        Together, Groq, etc.) that often only signal via the message body.
+        """
+        if not isinstance(exc, openai.BadRequestError):
+            return False
+        # Canonical OpenAI code on the body's error object.
+        code = None
+        try:
+            body = getattr(exc, "body", None) or {}
+            err = body.get("error") if isinstance(body, dict) else None
+            if isinstance(err, dict):
+                code = err.get("code")
+        except Exception:
+            pass
+        if code == "context_length_exceeded":
+            return True
+        msg = (str(exc) or "").lower()
+        return any(
+            needle in msg
+            for needle in (
+                "context length",
+                "context_length_exceeded",
+                "maximum context",
+                "context window",
+                "too many tokens",
+                "input is too long",
+                "prompt is too long",
+            )
+        )
+
+    def _trim_context_one_round(self) -> int:
+        """Drop ~10% of non-system entries from the FRONT of the interface.
+
+        Snaps the cut point forward so we never split an
+        ``assistant[ToolCallBlock]`` from its matching
+        ``user[ToolResultBlock]`` — the resulting wire payload would be
+        invalid for strict providers.
+
+        Returns the number of entries dropped (0 if none could be dropped
+        — caller should treat that as terminal).
+        """
+        entries = self._interface._entries  # canonical list, mutated in place
+        if not entries:
+            return 0
+        # Index of first non-system entry.
+        first_conv = 0
+        if entries[0].role == "system":
+            first_conv = 1
+        conv_len = len(entries) - first_conv
+        if conv_len <= 1:
+            return 0
+        drop_n = max(1, int(conv_len * self._OVERFLOW_DROP_FRACTION))
+        cut = first_conv + drop_n  # entries[first_conv:cut] get dropped
+
+        # Snap cut forward past any assistant[tool_calls] / user[tool_results]
+        # boundary so we never strand a tool_call without its result.
+        max_cut = len(entries)
+        while cut < max_cut:
+            # If the entry just *before* the cut is assistant[tool_calls],
+            # advance until we're past its matching user[tool_results].
+            if cut == 0:
+                break
+            prev = entries[cut - 1]
+            if prev.role == "assistant" and any(
+                isinstance(b, ToolCallBlock) for b in prev.content
+            ):
+                cut += 1
+                continue
+            # If the entry at the cut is a user[tool_results-only], advance
+            # past it so we don't leave dangling results without their call.
+            cur = entries[cut]
+            if cur.role == "user" and cur.content and all(
+                isinstance(b, ToolResultBlock) for b in cur.content
+            ):
+                cut += 1
+                continue
+            break
+
+        if cut >= max_cut:
+            # Snap consumed everything — refuse to drop the entire conversation.
+            return 0
+
+        dropped = cut - first_conv
+        # Mutate in place: keep system + everything from cut onward.
+        del entries[first_conv:cut]
+        return dropped
+
+    def _inject_overflow_notice(self, total_dropped: int, rounds: int) -> None:
+        """Append a single user-role kernel notice after successful recovery.
+
+        We use the user role (universally supported) with an explicit
+        ``[kernel]`` prefix — same pattern as our synthesized tool aborts.
+        The notice strongly recommends molting since context pressure is
+        now demonstrably above the model's hard ceiling.
+        """
+        notice = (
+            f"[kernel] Context exceeded the provider's hard token limit. "
+            f"To recover, the kernel dropped {total_dropped} oldest entries "
+            f"across {rounds} retry round(s). Detail from earlier turns may "
+            f"be lost — re-read recent context before acting on it. "
+            f"**Strongly recommend triggering a molt soon** — the conversation "
+            f"is past the model's safe limit and further growth will overflow "
+            f"again."
+        )
+        self._interface._append("user", [TextBlock(text=notice)])
+
+    def _run_with_overflow_recovery(self, do_call):
+        """Run an API call with context-overflow auto-recovery.
+
+        ``do_call`` is a zero-arg callable performing one full attempt
+        (build kwargs from current interface state + invoke the API). It
+        is re-called after each trim so the request reflects the post-trim
+        canonical interface.
+
+        Returns ``(result, total_dropped, rounds)``. ``total_dropped`` is 0
+        and ``rounds`` is 0 when no recovery was needed. On non-overflow
+        errors, re-raises immediately. On terminal failure (cannot trim
+        further, or max rounds hit), re-raises the original error.
+        """
+        total_dropped = 0
+        rounds = 0
+        while True:
+            try:
+                result = do_call()
+                return result, total_dropped, rounds
+            except Exception as exc:
+                if not self._is_context_overflow_error(exc):
+                    raise
+                if rounds >= self._OVERFLOW_MAX_ROUNDS:
+                    logger.warning(
+                        "[overflow-recovery] giving up after %d rounds "
+                        "(dropped %d entries total) — re-raising provider error.",
+                        rounds, total_dropped,
+                    )
+                    raise
+                dropped = self._trim_context_one_round()
+                if dropped == 0:
+                    logger.warning(
+                        "[overflow-recovery] cannot trim further "
+                        "(dropped %d entries across %d rounds) — re-raising.",
+                        total_dropped, rounds,
+                    )
+                    raise
+                total_dropped += dropped
+                rounds += 1
+                logger.warning(
+                    "[overflow-recovery] round %d: dropped %d entries "
+                    "(running total %d). Retrying.",
+                    rounds, dropped, total_dropped,
+                )
+                continue
+
     def _pair_orphan_tool_calls(self, messages: list[dict]) -> list[dict]:
         """Final wire-layer guard: synthesize placeholder tool messages for
         any assistant[tool_calls] that are not immediately followed by
@@ -300,35 +463,44 @@ class OpenAIChatSession(ChatSession):
         else:
             raise TypeError(f"Unsupported message type: {type(message)}")
 
-        # 2. Build ephemeral provider messages from interface
-        self._interface.enforce_tool_pairing()
-        candidate = self._build_messages()
-        # Final wire-layer guard: synthesize placeholder tool messages for
-        # any orphan assistant[tool_calls] that aren't immediately followed
-        # by matching role=tool entries. Canonical interface untouched.
-        candidate = self._pair_orphan_tool_calls(candidate)
+        # 2. Build ephemeral provider messages from interface — re-runs
+        #    inside the overflow-recovery loop so each retry sees the
+        #    post-trim canonical interface.
+        def _build_kwargs() -> dict[str, Any]:
+            self._interface.enforce_tool_pairing()
+            candidate = self._build_messages()
+            # Final wire-layer guard: synthesize placeholder tool messages for
+            # any orphan assistant[tool_calls] that aren't immediately followed
+            # by matching role=tool entries. Canonical interface untouched.
+            candidate = self._pair_orphan_tool_calls(candidate)
+            kw: dict[str, Any] = {
+                "model": self._model,
+                "messages": candidate,
+                **self._extra_kwargs,
+            }
+            if self._tools:
+                kw["tools"] = self._tools
+                kw["parallel_tool_calls"] = True
+                if self._tool_choice:
+                    kw["tool_choice"] = self._tool_choice
+            if self._request_timeout is not None:
+                kw["timeout"] = self._request_timeout
+            return kw
 
-        kwargs: dict[str, Any] = {
-            "model": self._model,
-            "messages": candidate,
-            **self._extra_kwargs,
-        }
-        if self._tools:
-            kwargs["tools"] = self._tools
-            kwargs["parallel_tool_calls"] = True
-            if self._tool_choice:
-                kwargs["tool_choice"] = self._tool_choice
-        if self._request_timeout is not None:
-            # Per-call HTTP timeout overrides the client-level timeout so this
-            # worker aborts at the same moment as the main-thread watchdog.
-            kwargs["timeout"] = self._request_timeout
+        # 3. Make the API call (with auto-recovery on context overflow);
+        #    revert interface on any other error.
+        def _do_call():
+            return self._client.chat.completions.create(**_build_kwargs())
 
-        # 3. Make the API call; revert interface on error
         try:
-            raw = self._client.chat.completions.create(**kwargs)
+            raw, total_dropped, rounds = self._run_with_overflow_recovery(_do_call)
         except Exception:
             self._interface.drop_trailing(lambda e: e.role == "user")
             raise
+
+        # 3b. If recovery fired (entries were dropped), inject the molt notice.
+        if rounds > 0:
+            self._inject_overflow_notice(total_dropped=total_dropped, rounds=rounds)
 
         # 4. Record assistant response into interface
         self._record_assistant_response(raw)
@@ -444,34 +616,63 @@ class OpenAIChatSession(ChatSession):
         else:
             raise TypeError(f"Unsupported message type: {type(message)}")
 
-        # 2. Build ephemeral provider messages from interface
-        self._interface.enforce_tool_pairing()
-        candidate = self._build_messages()
-        # Final wire-layer guard — same as non-streaming send().
-        candidate = self._pair_orphan_tool_calls(candidate)
-
-        kwargs: dict[str, Any] = {
-            "model": self._model,
-            "messages": candidate,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-            **self._extra_kwargs,
-        }
-        if self._tools:
-            kwargs["tools"] = self._tools
-            kwargs["parallel_tool_calls"] = True
-            if self._tool_choice:
-                kwargs["tool_choice"] = self._tool_choice
-        if self._request_timeout is not None:
-            kwargs["timeout"] = self._request_timeout
+        # 2. Build ephemeral provider messages from interface — re-runs
+        #    inside the overflow-recovery loop so each retry sees the
+        #    post-trim canonical interface.
+        def _build_kwargs() -> dict[str, Any]:
+            self._interface.enforce_tool_pairing()
+            candidate = self._build_messages()
+            # Final wire-layer guard — same as non-streaming send().
+            candidate = self._pair_orphan_tool_calls(candidate)
+            kw: dict[str, Any] = {
+                "model": self._model,
+                "messages": candidate,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                **self._extra_kwargs,
+            }
+            if self._tools:
+                kw["tools"] = self._tools
+                kw["parallel_tool_calls"] = True
+                if self._tool_choice:
+                    kw["tool_choice"] = self._tool_choice
+            if self._request_timeout is not None:
+                kw["timeout"] = self._request_timeout
+            return kw
 
         acc = StreamingAccumulator()
         usage = UsageMetadata()
 
+        # Streaming overflow-recovery: most providers raise the 400 either
+        # when ``create()`` returns or on the first iteration of the stream
+        # — before any content has been emitted to ``on_chunk``. We open the
+        # stream and pull the first chunk inside the recovery wrapper; once
+        # that succeeds, we hand off to the regular streaming loop.
+        def _open_and_first_chunk():
+            stream = self._client.chat.completions.create(**_build_kwargs())
+            it = iter(stream)
+            try:
+                first = next(it)
+            except StopIteration:
+                first = None
+            return stream, it, first
+
         # 3. Stream; revert interface on error
         try:
-            stream = self._client.chat.completions.create(**kwargs)
-            for chunk in stream:
+            (stream, it, first_chunk), total_dropped, rounds = (
+                self._run_with_overflow_recovery(_open_and_first_chunk)
+            )
+            if rounds > 0:
+                self._inject_overflow_notice(
+                    total_dropped=total_dropped, rounds=rounds,
+                )
+            # Re-stitch: first chunk + remaining iterator.
+            def _chunks():
+                if first_chunk is not None:
+                    yield first_chunk
+                for c in it:
+                    yield c
+            for chunk in _chunks():
                 if not chunk.choices:
                     if chunk.usage:
                         cached = getattr(chunk.usage, "prompt_tokens_details", None)
