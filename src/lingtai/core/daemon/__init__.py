@@ -230,12 +230,19 @@ class DaemonManager:
                 _accum(response)
                 turns += 1
 
-                # Inject follow-up as a separate user message
-                followup = self._drain_followup(em_id)
-                if followup:
-                    response = session.send(followup)
-                    _accum(response)
-                    turns += 1
+                # Inject follow-up as a separate user message — only safe when
+                # the response is text-only. If it carries new tool_calls, the
+                # canonical interface tail is assistant[tool_calls] and a user
+                # message here would violate the pairing invariant. The followup
+                # waits one more iteration; the next loop pass executes the
+                # pending tool_calls and the followup drains on the iteration
+                # after that, when the tail is clean.
+                if not response.tool_calls:
+                    followup = self._drain_followup(em_id)
+                    if followup:
+                        response = session.send(followup)
+                        _accum(response)
+                        turns += 1
 
             return response.text or "[no output]"
         finally:
