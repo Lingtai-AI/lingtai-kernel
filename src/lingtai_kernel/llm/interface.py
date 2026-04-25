@@ -210,6 +210,11 @@ class ChatInterface:
         self._next_id: int = 0
         self._current_system_text: str | None = None
         self._current_tools: list[dict] | None = None
+        # Deferred system update — stashed by add_system when the tail has a
+        # pending tool_call, flushed by enforce_tool_pairing at the start of
+        # the next send. Prevents an interleaved system entry from splitting
+        # an assistant[tool_calls] from its tool_results on the wire.
+        self._pending_system: tuple[str, list[dict] | None] | None = None
 
     @property
     def entries(self) -> list[InterfaceEntry]:
@@ -256,7 +261,14 @@ class ChatInterface:
         the error context. Repairing it here would destroy that signal.
 
         Mutates entries in place.  Idempotent.
+
+        Also flushes any system entry that was deferred by ``add_system`` while
+        a tool_call was pending — by the time we're about to serialize, the
+        tool_results have landed and the deferred system can be appended
+        safely after them.
         """
+        self._flush_pending_system()
+
         if not self._entries:
             return
 
@@ -359,11 +371,53 @@ class ChatInterface:
     # -- Add methods ----------------------------------------------------------
 
     def add_system(self, text: str, tools: list[dict] | None = None) -> None:
-        """Record a system prompt + tools.  Only adds entry if either changed."""
+        """Record a system prompt + tools.  Only adds entry if either changed.
+
+        If the tail entry is an assistant turn with unanswered tool_calls
+        (e.g. a tool that mutates the system prompt — psyche, codex, library —
+        is running mid-loop), the new system entry is stashed in
+        ``_pending_system`` instead of appended. Inserting it now would split
+        the assistant[tool_calls] from its tool_results on the wire and break
+        strict providers (DeepSeek, OpenAI). The stash is flushed by
+        ``enforce_tool_pairing`` at the start of the next send, after the tool
+        results have landed and the tail is no longer assistant[tool_calls].
+        Last write wins — repeat calls overwrite the pending entry.
+        """
         if text == self._current_system_text and tools == self._current_tools:
+            self._pending_system = None
             return
         self._current_system_text = text
         self._current_tools = tools
+        if self.has_pending_tool_calls():
+            self._pending_system = (text, tools)
+            return
+        self._pending_system = None
+        entry = self._append("system", [TextBlock(text=text)])
+        entry._tools = tools
+
+    def _flush_pending_system(self) -> None:
+        """Append a deferred system entry if one is queued. Idempotent.
+
+        Skips appending when the pending text/tools match the most recent
+        system entry already on disk — this handles the case where a tool
+        mutates the prompt and then reverts it back to the prior value while
+        still mid-tool-loop. Without this, we'd append a redundant duplicate
+        system entry.
+        """
+        if self._pending_system is None:
+            return
+        if self.has_pending_tool_calls():
+            return
+        text, tools = self._pending_system
+        self._pending_system = None
+        last_system = next(
+            (e for e in reversed(self._entries) if e.role == "system"), None
+        )
+        if last_system is not None:
+            last_text = last_system.content[0].text if last_system.content else None
+            last_tools = getattr(last_system, "_tools", None)
+            if last_text == text and last_tools == tools:
+                return
         entry = self._append("system", [TextBlock(text=text)])
         entry._tools = tools
 

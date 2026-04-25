@@ -308,3 +308,103 @@ class TestRealResultReplacesSynthesized:
         new_entry = iface.entries[-1]
         assert len(new_entry.content) == 1
         assert new_entry.content[0].id == "call_C"
+
+
+class TestAddSystemDefersDuringPendingToolCall:
+    """Regression: psyche / codex / library mutate the system prompt as a
+    side effect of running. When the model emits assistant[tool_calls] and
+    such a tool runs mid-loop, the synchronous add_system call used to insert
+    a system entry between the assistant turn and the tool_results, breaking
+    the wire-level invariant that tool messages must immediately follow
+    assistant[tool_calls]. The fix: defer the new system entry until the
+    pending tool_call is resolved, then flush at enforce_tool_pairing time.
+    """
+
+    def test_add_system_during_pending_tool_call_does_not_append(self):
+        iface = _iface_with_pending_tool_calls()
+        n_before = len(iface.entries)
+
+        iface.add_system("system prompt v2")
+
+        # No new system entry while the tool_call is unanswered.
+        assert len(iface.entries) == n_before
+        # current_system_prompt still tracks the latest text.
+        assert iface.current_system_prompt == "system prompt v2"
+
+    def test_pending_system_flushes_after_tool_results_via_enforce(self):
+        iface = _iface_with_pending_tool_calls()
+        iface.add_system("system prompt v2")
+        iface.add_tool_results([ToolResultBlock(id="call_A", name="noop", content="ok")])
+
+        # Tail is now user[tool_results]; deferred system not yet appended.
+        assert iface.entries[-1].role == "user"
+
+        # enforce_tool_pairing flushes the deferred system.
+        iface.enforce_tool_pairing()
+
+        # Layout: ..., assistant[tc], user[tool_results], system(v2)
+        assert iface.entries[-1].role == "system"
+        assert iface.entries[-1].content[0].text == "system prompt v2"
+        assert iface.entries[-2].role == "user"
+        assert iface.entries[-3].role == "assistant"
+
+    def test_repeat_add_system_overwrites_pending_last_write_wins(self):
+        iface = _iface_with_pending_tool_calls()
+        iface.add_system("v2")
+        iface.add_system("v3")
+        iface.add_tool_results([ToolResultBlock(id="call_A", name="noop", content="ok")])
+        iface.enforce_tool_pairing()
+
+        assert iface.entries[-1].role == "system"
+        assert iface.entries[-1].content[0].text == "v3"
+        # Only ONE system entry was appended (v3), not two.
+        system_count = sum(1 for e in iface.entries if e.role == "system")
+        # _iface_with_pending_tool_calls already added one system at start.
+        assert system_count == 2
+
+    def test_add_system_no_change_clears_pending(self):
+        """If add_system is called with text that matches the current prompt,
+        any deferred entry is cleared — there is nothing to flush."""
+        iface = _iface_with_pending_tool_calls()
+        iface.add_system("v2")
+        # Now pretend something reverts the prompt back to the original.
+        iface.add_system("system prompt")  # matches the current prompt set by helper
+
+        iface.add_tool_results([ToolResultBlock(id="call_A", name="noop", content="ok")])
+        iface.enforce_tool_pairing()
+
+        # Tail is the user[tool_results] — no system flushed.
+        assert iface.entries[-1].role == "user"
+
+    def test_add_system_with_no_pending_calls_appends_immediately(self):
+        """Sanity: the fix only changes behavior when a tool_call is pending."""
+        iface = ChatInterface()
+        iface.add_system("v1")
+        iface.add_user_message("hi")
+        iface.add_assistant_message([TextBlock(text="ok")])
+        n_before = len(iface.entries)
+
+        iface.add_system("v2")
+
+        assert len(iface.entries) == n_before + 1
+        assert iface.entries[-1].role == "system"
+        assert iface.entries[-1].content[0].text == "v2"
+
+    def test_wire_layout_has_no_system_between_assistant_and_tool(self):
+        """End-to-end: simulate the exact production failure shape and confirm
+        the OpenAI wire serialization no longer interleaves system between
+        assistant[tool_calls] and tool[tool_result]."""
+        from lingtai.llm.interface_converters import to_openai
+
+        iface = _iface_with_pending_tool_calls()
+        iface.add_system("system prompt v2")  # psyche-style mid-tool mutation
+        iface.add_tool_results([ToolResultBlock(id="call_A", name="noop", content="ok")])
+        iface.enforce_tool_pairing()
+
+        msgs = to_openai(iface)
+        # Find the assistant turn that carries tool_calls.
+        idx = next(i for i, m in enumerate(msgs) if m.get("tool_calls"))
+        # The very next message must be role=tool with the matching id.
+        nxt = msgs[idx + 1]
+        assert nxt["role"] == "tool"
+        assert nxt["tool_call_id"] == "call_A"
