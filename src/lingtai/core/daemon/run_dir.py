@@ -15,6 +15,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from lingtai_kernel.token_ledger import append_token_entry
+
 
 class DaemonRunDir:
     """Filesystem-backed mini-avatar log surface for one daemon emanation.
@@ -44,6 +46,7 @@ class DaemonRunDir:
         system_prompt: str,
     ):
         self._handle = handle
+        self._parent_token_ledger = parent_working_dir / "logs" / "token_ledger.jsonl"
         self._started_monotonic = time.monotonic()
         started_at_iso = self._now_iso()
 
@@ -263,3 +266,58 @@ class DaemonRunDir:
                 },
             )
         self._safe("clear_current_tool", _write)
+
+    # ------------------------------------------------------------------
+    # Token accounting — dual ledger writes
+    # ------------------------------------------------------------------
+
+    def append_tokens(self, *, input: int, output: int,
+                     thinking: int, cached: int) -> None:
+        """Record per-call token usage to both ledgers.
+
+        Daemon's own logs/token_ledger.jsonl gets an untagged entry (the
+        location is already attribution enough). Parent's logs/token_ledger.jsonl
+        gets a tagged entry with source/em_id/run_id so future analytics can
+        decompose, while existing sum_token_ledger callers continue to count
+        daemon spend in the parent's lifetime totals (they only read the
+        numeric fields).
+
+        Skips both writes if all four values are zero — avoids ledger noise
+        from LLM calls that returned no usage.
+
+        Each write is independently fault-tolerant — if the parent's ledger
+        write fails, the daemon's local ledger is still authoritative.
+        """
+        if not (input or output or thinking or cached):
+            return
+
+        # Update running totals in daemon.json
+        def _update_state():
+            self._state["tokens"]["input"] += input
+            self._state["tokens"]["output"] += output
+            self._state["tokens"]["thinking"] += thinking
+            self._state["tokens"]["cached"] += cached
+            self._atomic_write_json(self.daemon_json_path, self._state)
+        self._safe("append_tokens.state", _update_state)
+
+        # Daemon's own ledger — no tag needed (location attributes it)
+        self._safe(
+            "append_tokens.daemon_ledger",
+            lambda: append_token_entry(
+                self.token_ledger_path,
+                input=input, output=output,
+                thinking=thinking, cached=cached,
+            ),
+        )
+
+        # Parent's ledger — tagged for attribution
+        self._safe(
+            "append_tokens.parent_ledger",
+            lambda: append_token_entry(
+                self._parent_token_ledger,
+                input=input, output=output,
+                thinking=thinking, cached=cached,
+                extra={"source": "daemon", "em_id": self._handle,
+                       "run_id": self._run_id},
+            ),
+        )

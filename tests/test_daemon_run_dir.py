@@ -245,3 +245,61 @@ def test_multiple_tool_dispatches_increment_count(tmp_path):
     rd.clear_current_tool(result_status="ok")
     data = json.loads(rd.daemon_json_path.read_text())
     assert data["tool_call_count"] == 2
+
+
+def test_append_tokens_writes_daemon_ledger(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    rd.append_tokens(input=100, output=20, thinking=5, cached=10)
+    line = rd.token_ledger_path.read_text().splitlines()[0]
+    entry = json.loads(line)
+    assert entry["input"] == 100
+    assert entry["output"] == 20
+    assert entry["thinking"] == 5
+    assert entry["cached"] == 10
+    assert "ts" in entry
+    # daemon's own ledger has no source tag (it's already daemon-scoped by location)
+    assert "source" not in entry
+
+
+def test_append_tokens_writes_parent_ledger_tagged(tmp_path):
+    rd = _make_run_dir(tmp_path, parent_addr="researcher")
+    rd.append_tokens(input=100, output=20, thinking=5, cached=10)
+    parent_ledger = tmp_path / "parent" / "logs" / "token_ledger.jsonl"
+    line = parent_ledger.read_text().splitlines()[0]
+    entry = json.loads(line)
+    assert entry["input"] == 100
+    assert entry["source"] == "daemon"
+    assert entry["em_id"] == "em-3"
+    assert entry["run_id"] == rd.run_id
+
+
+def test_append_tokens_updates_running_totals(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    rd.append_tokens(input=100, output=20, thinking=5, cached=10)
+    rd.append_tokens(input=50, output=15, thinking=3, cached=5)
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["tokens"] == {"input": 150, "output": 35, "thinking": 8, "cached": 15}
+
+
+def test_append_tokens_skipped_when_all_zero(tmp_path):
+    """Don't write a noise entry if the LLM call returned zero tokens."""
+    rd = _make_run_dir(tmp_path)
+    rd.append_tokens(input=0, output=0, thinking=0, cached=0)
+    assert not rd.token_ledger_path.exists() or rd.token_ledger_path.read_text() == ""
+    parent_ledger = tmp_path / "parent" / "logs" / "token_ledger.jsonl"
+    assert not parent_ledger.exists() or parent_ledger.read_text() == ""
+
+
+def test_summing_parent_ledger_includes_daemon_spend(tmp_path):
+    """sum_token_ledger on parent's ledger sums daemon and parent calls together."""
+    from lingtai_kernel.token_ledger import append_token_entry, sum_token_ledger
+    rd = _make_run_dir(tmp_path)
+    parent_ledger = tmp_path / "parent" / "logs" / "token_ledger.jsonl"
+    # Parent's own call
+    append_token_entry(parent_ledger, input=200, output=40, thinking=10, cached=20)
+    # Daemon call
+    rd.append_tokens(input=100, output=20, thinking=5, cached=10)
+    totals = sum_token_ledger(parent_ledger)
+    assert totals["input_tokens"] == 300
+    assert totals["output_tokens"] == 60
+    assert totals["api_calls"] == 2
