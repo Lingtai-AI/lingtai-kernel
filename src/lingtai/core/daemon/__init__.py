@@ -11,6 +11,7 @@ Usage:
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -24,6 +25,8 @@ if TYPE_CHECKING:
 from lingtai_kernel.llm.base import FunctionSchema
 from lingtai_kernel.message import MSG_REQUEST, _make_message
 from lingtai_kernel.token_ledger import append_token_entry
+
+from .run_dir import DaemonRunDir
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 
@@ -169,17 +172,15 @@ class DaemonManager:
 
         return "\n".join(lines)
 
-    def _run_emanation(self, em_id: str, task: str, tool_names: list[str],
-                       model: str | None, cancel_event: threading.Event) -> str:
+    def _run_emanation(self, em_id: str, run_dir, schemas, dispatch,
+                       task: str, model: str | None,
+                       cancel_event: threading.Event) -> str:
         """Run a single emanation's tool loop. Called in a worker thread."""
-        schemas, dispatch = self._build_tool_surface(tool_names)
-        system_prompt = self._build_emanation_prompt(task, schemas)
-
         if cancel_event.is_set():
             return "[cancelled]"
 
         session = self._agent.service.create_session(
-            system_prompt=system_prompt,
+            system_prompt=run_dir.prompt_path.read_text(encoding="utf-8"),
             tools=schemas or None,
             model=model or self._default_model,
             thinking="default",
@@ -296,15 +297,47 @@ class DaemonManager:
         self._pools.append((pool, cancel_event))
 
         ids = []
+        parent_addr = self._agent._working_dir.name
+        parent_pid = os.getpid()
+
         for spec in tasks:
             em_id = f"em-{self._next_id}"
             self._next_id += 1
             ids.append(em_id)
 
+            # Build tool surface and system prompt up front so the run_dir
+            # records the prompt verbatim before any LLM call. Validation
+            # (unknown tools) raises here and aborts before scheduling.
+            try:
+                schemas, dispatch = self._build_tool_surface(spec["tools"])
+            except ValueError as e:
+                return {"status": "error", "message": str(e)}
+            system_prompt = self._build_emanation_prompt(spec["task"], schemas)
+
+            # Construct run_dir — creates folder on disk, writes daemon.json,
+            # .prompt, .heartbeat, daemon_start event. If FS construction fails,
+            # propagate as a tool-level error and skip scheduling for this spec.
+            try:
+                run_dir = DaemonRunDir(
+                    parent_working_dir=self._agent._working_dir,
+                    handle=em_id,
+                    task=spec["task"],
+                    tools=spec["tools"],
+                    model=spec.get("model") or self._default_model,
+                    max_turns=self._max_turns,
+                    timeout_s=self._timeout,
+                    parent_addr=parent_addr,
+                    parent_pid=parent_pid,
+                    system_prompt=system_prompt,
+                )
+            except OSError as e:
+                return {"status": "error",
+                        "message": f"Failed to create daemon folder: {e}"}
+
             future = pool.submit(
                 self._run_emanation,
-                em_id, spec["task"], spec["tools"],
-                spec.get("model"), cancel_event,
+                em_id, run_dir, schemas, dispatch,
+                spec["task"], spec.get("model"), cancel_event,
             )
             future.add_done_callback(
                 lambda f, eid=em_id, task=spec["task"]:
@@ -317,6 +350,7 @@ class DaemonManager:
                 "cancel_event": cancel_event,
                 "followup_buffer": "",
                 "followup_lock": threading.Lock(),
+                "run_dir": run_dir,
             }
 
         # Start watchdog

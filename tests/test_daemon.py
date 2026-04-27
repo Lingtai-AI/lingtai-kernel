@@ -1,6 +1,8 @@
 # tests/test_daemon.py
 """Tests for the daemon (神識) capability — subagent system."""
+import json
 import queue
+import re
 import threading
 import time
 from unittest.mock import MagicMock
@@ -373,3 +375,38 @@ def test_sequential_emanate_increments_ids(tmp_path):
 
     assert r1["ids"] == ["em-1"]
     assert r2["ids"] == ["em-2"]
+
+
+def test_emanate_creates_folder_on_disk(tmp_path):
+    """_handle_emanate creates daemons/<run_id>/ before the future starts."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    mock_session = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = "done"
+    mock_resp.tool_calls = []
+    mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
+                                 thinking_tokens=0, cached_tokens=0)
+    mock_session.send = MagicMock(return_value=mock_resp)
+    agent.service.create_session = MagicMock(return_value=mock_session)
+
+    result = mgr.handle({"action": "emanate", "tasks": [
+        {"task": "find todos", "tools": ["file"]},
+    ]})
+    assert result["status"] == "dispatched"
+
+    daemons_dir = agent._working_dir / "daemons"
+    assert daemons_dir.is_dir()
+    children = list(daemons_dir.iterdir())
+    assert len(children) == 1
+    folder = children[0]
+    # Folder name matches em-1-<YYYYMMDD-HHMMSS>-<6 hex>
+    assert re.fullmatch(r"em-1-\d{8}-\d{6}-[0-9a-f]{6}", folder.name)
+    # daemon.json exists with state=running and identity fields
+    data = json.loads((folder / "daemon.json").read_text())
+    assert data["handle"] == "em-1"
+    assert data["task"] == "find todos"
+    assert data["tools"] == ["file"]
+    assert data["state"] == "running"
