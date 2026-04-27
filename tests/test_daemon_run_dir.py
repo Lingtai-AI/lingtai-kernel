@@ -303,3 +303,78 @@ def test_summing_parent_ledger_includes_daemon_spend(tmp_path):
     assert totals["input_tokens"] == 300
     assert totals["output_tokens"] == 60
     assert totals["api_calls"] == 2
+
+
+def test_mark_done_writes_terminal_state(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    rd.mark_done("Task done. Found 3 TODOs.")
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["state"] == "done"
+    assert data["finished_at"] is not None
+    assert data["result_preview"] == "Task done. Found 3 TODOs."
+    assert data["error"] is None
+
+
+def test_mark_done_truncates_result_preview(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    long_text = "a" * 500
+    rd.mark_done(long_text)
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert len(data["result_preview"]) <= 200
+
+
+def test_mark_done_logs_event(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    rd.mark_done("ok")
+    lines = rd.events_path.read_text().splitlines()
+    last = json.loads(lines[-1])
+    assert last["event"] == "daemon_done"
+    assert "elapsed_s" in last
+
+
+def test_mark_failed_records_error(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    exc = RuntimeError("boom")
+    rd.mark_failed(exc)
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["state"] == "failed"
+    assert data["finished_at"] is not None
+    assert data["error"]["type"] == "RuntimeError"
+    assert data["error"]["message"] == "boom"
+    assert data["result_preview"] is None
+
+
+def test_mark_failed_logs_event(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    rd.mark_failed(ValueError("bad"))
+    last = json.loads(rd.events_path.read_text().splitlines()[-1])
+    assert last["event"] == "daemon_error"
+    assert last["exception"] == "ValueError"
+
+
+def test_mark_cancelled_writes_state(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    rd.mark_cancelled()
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["state"] == "cancelled"
+    assert data["finished_at"] is not None
+    last = json.loads(rd.events_path.read_text().splitlines()[-1])
+    assert last["event"] == "daemon_cancelled"
+
+
+def test_mark_timeout_writes_state(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    rd.mark_timeout()
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["state"] == "timeout"
+    last = json.loads(rd.events_path.read_text().splitlines()[-1])
+    assert last["event"] == "daemon_timeout"
+
+
+def test_terminal_markers_idempotent_safe(tmp_path):
+    """Calling a terminal marker twice does not crash (defensive)."""
+    rd = _make_run_dir(tmp_path)
+    rd.mark_done("first")
+    rd.mark_done("second")  # should not raise
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["result_preview"] == "second"  # last write wins

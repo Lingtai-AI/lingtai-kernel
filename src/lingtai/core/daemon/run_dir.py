@@ -321,3 +321,79 @@ class DaemonRunDir:
                        "run_id": self._run_id},
             ),
         )
+
+    # ------------------------------------------------------------------
+    # Terminal markers
+    # ------------------------------------------------------------------
+
+    _RESULT_PREVIEW_MAX = 200
+
+    def mark_done(self, text: str) -> None:
+        """Normal completion. Sets state=done, finished_at, result_preview."""
+        def _write():
+            self._state["state"] = "done"
+            self._state["finished_at"] = self._now_iso()
+            self._state["elapsed_s"] = self._now_secs()
+            self._state["current_tool"] = None
+            preview = text or ""
+            if len(preview) > self._RESULT_PREVIEW_MAX:
+                preview = preview[:self._RESULT_PREVIEW_MAX]
+            self._state["result_preview"] = preview
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._append_jsonl(
+                self.events_path,
+                {
+                    "event": "daemon_done",
+                    "elapsed_s": self._state["elapsed_s"],
+                    "ts": self._now_iso(),
+                },
+            )
+        self._safe("mark_done", _write)
+
+    def mark_failed(self, exc: BaseException) -> None:
+        """Exception in run loop. Sets state=failed, error.{type, message}."""
+        def _write():
+            self._state["state"] = "failed"
+            self._state["finished_at"] = self._now_iso()
+            self._state["elapsed_s"] = self._now_secs()
+            self._state["current_tool"] = None
+            self._state["error"] = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            }
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._append_jsonl(
+                self.events_path,
+                {
+                    "event": "daemon_error",
+                    "exception": type(exc).__name__,
+                    "message": str(exc),
+                    "ts": self._now_iso(),
+                },
+            )
+        self._safe("mark_failed", _write)
+
+    def mark_cancelled(self) -> None:
+        """Cancel event observed. Sets state=cancelled."""
+        self._mark_terminal("cancelled", "daemon_cancelled")
+
+    def mark_timeout(self) -> None:
+        """Watchdog timeout. Sets state=timeout."""
+        self._mark_terminal("timeout", "daemon_timeout")
+
+    def _mark_terminal(self, state: str, event: str) -> None:
+        def _write():
+            self._state["state"] = state
+            self._state["finished_at"] = self._now_iso()
+            self._state["elapsed_s"] = self._now_secs()
+            self._state["current_tool"] = None
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._append_jsonl(
+                self.events_path,
+                {
+                    "event": event,
+                    "elapsed_s": self._state["elapsed_s"],
+                    "ts": self._now_iso(),
+                },
+            )
+        self._safe(f"mark_{state}", _write)
