@@ -1,3 +1,5 @@
+"""Tests for token_ledger.append_token_entry — including the optional extra kwarg
+that lets daemon writes carry attribution tags into the parent's ledger."""
 from __future__ import annotations
 
 import json
@@ -73,3 +75,69 @@ def test_append_entry_has_timestamp(tmp_path):
     from datetime import datetime, timezone
     dt = datetime.fromisoformat(entry["ts"].replace("Z", "+00:00"))
     assert dt.tzinfo is not None
+
+
+def test_append_token_entry_basic(tmp_path):
+    """Default behavior: writes ts + 4 numeric fields."""
+    path = tmp_path / "ledger.jsonl"
+    append_token_entry(path, input=10, output=5, thinking=2, cached=1)
+    lines = path.read_text().splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert entry["input"] == 10
+    assert entry["output"] == 5
+    assert entry["thinking"] == 2
+    assert entry["cached"] == 1
+    assert "ts" in entry
+    assert "source" not in entry  # no extras
+
+
+def test_append_token_entry_with_extra(tmp_path):
+    """`extra` dict keys merge into the entry before serialization."""
+    path = tmp_path / "ledger.jsonl"
+    append_token_entry(
+        path,
+        input=10, output=5, thinking=2, cached=1,
+        extra={"source": "daemon", "em_id": "em-3",
+               "run_id": "em-3-20260427-094215-a1b2c3"},
+    )
+    entry = json.loads(path.read_text().splitlines()[0])
+    assert entry["source"] == "daemon"
+    assert entry["em_id"] == "em-3"
+    assert entry["run_id"] == "em-3-20260427-094215-a1b2c3"
+    # numeric fields still present
+    assert entry["input"] == 10
+
+
+def test_extra_does_not_break_summing(tmp_path):
+    """sum_token_ledger ignores unknown keys — daemon tags do not affect totals."""
+    path = tmp_path / "ledger.jsonl"
+    append_token_entry(path, input=10, output=5, thinking=2, cached=1)
+    append_token_entry(
+        path,
+        input=20, output=8, thinking=3, cached=4,
+        extra={"source": "daemon", "em_id": "em-1", "run_id": "x"},
+    )
+    totals = sum_token_ledger(path)
+    assert totals["input_tokens"] == 30
+    assert totals["output_tokens"] == 13
+    assert totals["thinking_tokens"] == 5
+    assert totals["cached_tokens"] == 5
+    assert totals["api_calls"] == 2
+
+
+def test_extra_cannot_override_required_fields(tmp_path):
+    """Required fields (input/output/thinking/cached/ts) take precedence over `extra`.
+
+    This protects against accidental tag conflicts. If a caller passes
+    extra={"input": 999}, the explicit input=10 still wins.
+    """
+    path = tmp_path / "ledger.jsonl"
+    append_token_entry(
+        path,
+        input=10, output=5, thinking=2, cached=1,
+        extra={"input": 999, "ts": "fake"},
+    )
+    entry = json.loads(path.read_text().splitlines()[0])
+    assert entry["input"] == 10
+    assert entry["ts"] != "fake"

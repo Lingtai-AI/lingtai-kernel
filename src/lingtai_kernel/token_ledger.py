@@ -17,20 +17,30 @@ def append_token_entry(
     output: int,
     thinking: int,
     cached: int,
+    extra: dict | None = None,
 ) -> None:
     """Append one token usage entry to the ledger.
 
     Creates parent directories and the file if they don't exist.
+
+    `extra` is an optional dict of additional fields merged into the entry.
+    Required fields (ts/input/output/thinking/cached) take precedence — if a
+    caller passes `extra={"input": 999}`, the explicit input value still wins.
+    Used by the daemon capability to tag entries with source/em_id/run_id
+    so the parent's ledger preserves per-daemon attribution.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    entry = {
+    entry: dict = {}
+    if extra:
+        entry.update(extra)
+    entry.update({
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "input": input,
         "output": output,
         "thinking": thinking,
         "cached": cached,
-    }
+    })
     with open(path, "a") as f:
         f.write(json.dumps(entry) + "\n")
 
