@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/huangzesen/lingtai/main/docs/assets/network-demo.gif" alt="Agent network growing — one soul spawning avatars that communicate and multiply" width="100%">
+<img src="https://raw.githubusercontent.com/Lingtai-AI/lingtai/main/docs/assets/network-demo.gif" alt="Agent network growing — one soul spawning avatars that communicate and multiply" width="100%">
 
 # 灵台 LingTai
 
@@ -13,7 +13,7 @@
 > — Zhuangzi · Gengsang Chu (庄子 · 庚桑楚)
 
 [![PyPI](https://img.shields.io/pypi/v/lingtai?color=%237dab8f)](https://pypi.org/project/lingtai/)
-[![License](https://img.shields.io/github/license/huangzesen/lingtai-kernel?color=%237dab8f)](LICENSE)
+[![License](https://img.shields.io/github/license/Lingtai-AI/lingtai-kernel?color=%237dab8f)](LICENSE)
 [![Blog](https://img.shields.io/badge/blog-lingtai.ai-%23d4a853)](https://lingtai.ai)
 
 [lingtai.ai](https://lingtai.ai)
@@ -23,7 +23,7 @@
 ---
 
 <p align="center">This is the Python runtime and CLI for LingTai.</p>
-<p align="center">For the full experience with guided setup, use the <a href="https://github.com/huangzesen/lingtai">TUI</a> instead — <code>brew install huangzesen/lingtai/lingtai-tui</code></p>
+<p align="center">For the full experience with guided setup, use the <a href="https://github.com/Lingtai-AI/lingtai">TUI</a> instead — <code>brew install lingtai-ai/lingtai/lingtai-tui</code></p>
 
 ## Install
 
@@ -43,7 +43,7 @@ lingtai run /path/to/agent/
 lingtai check-caps
 ```
 
-Agents are typically managed by the [TUI](https://github.com/huangzesen/lingtai), which handles initialization, lifecycle, and monitoring. The CLI is for scripting, custom agents, and programmatic use.
+Agents are typically managed by the [TUI](https://github.com/Lingtai-AI/lingtai), which handles initialization, lifecycle, and monitoring. The CLI is for scripting, custom agents, and programmatic use.
 
 ## Architecture
 
@@ -135,6 +135,6 @@ MIT — [Zesen Huang](https://github.com/huangzesen), 2025–2026
 
 <div align="center">
 
-[lingtai.ai](https://lingtai.ai) · [GitHub](https://github.com/huangzesen/lingtai-kernel) · [TUI](https://github.com/huangzesen/lingtai)
+[lingtai.ai](https://lingtai.ai) · [GitHub](https://github.com/Lingtai-AI/lingtai-kernel) · [TUI](https://github.com/Lingtai-AI/lingtai)
 
 </div>
