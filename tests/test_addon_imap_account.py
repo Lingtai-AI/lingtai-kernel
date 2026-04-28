@@ -194,3 +194,27 @@ def test_fetch_headers_by_uids(
     assert len(out) == 1
     assert out[0]["uid"] == "42"
     assert out[0]["from"] == "x@y.com"
+
+
+def test_envelope_handles_non_ascii_keyword_flag(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    """Custom keyword flags with non-ASCII bytes must not crash the parser."""
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+    instance.fetch.return_value = {
+        7: {
+            b"FLAGS": (b"\\Seen", b"\xe2\x98\x85important"),  # star-prefixed UTF-8
+            b"BODY[HEADER.FIELDS (FROM TO SUBJECT DATE)]":
+                b"From: a@b.com\r\nSubject: hi\r\n",
+        },
+    }
+    account.connect()
+
+    out = account.fetch_headers_by_uids("INBOX", ["7"])
+    # Did not raise. Flag list contains the seen flag and a (possibly
+    # mojibake'd) keyword flag — both are strings, no exception.
+    assert len(out) == 1
+    assert "\\Seen" in out[0]["flags"]
+    assert all(isinstance(f, str) for f in out[0]["flags"])

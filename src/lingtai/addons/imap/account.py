@@ -290,10 +290,15 @@ class IMAPAccount:
             imap = self._ensure_connected()
             imap.select_folder(folder, readonly=True)
             all_uids = imap.search("ALL")
-        if not all_uids:
-            return []
-        recent = all_uids[-n:] if n > 0 else all_uids
-        return self.fetch_headers_by_uids(folder, [str(u) for u in recent])
+            if not all_uids:
+                return []
+            recent = all_uids[-n:] if n > 0 else all_uids
+            data = imap.fetch(
+                recent,
+                ["FLAGS", "BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE)]"],
+            )
+        return [self._envelope_from_fetch(uid, info, folder)
+                for uid, info in sorted(data.items())]
 
     def fetch_headers_by_uids(
         self, folder: str, uids: list[str],
@@ -313,8 +318,11 @@ class IMAPAccount:
         self, uid: int, info: dict, folder: str,
     ) -> dict:
         flags_raw = info.get(b"FLAGS", ())
-        flags = [f.decode("ascii") if isinstance(f, bytes) else str(f)
-                 for f in flags_raw]
+        flags = [
+            f.decode("ascii", errors="replace") if isinstance(f, bytes)
+            else str(f)
+            for f in flags_raw
+        ]
         header_bytes = info.get(self._HEADER_FETCH_KEY, b"") or b""
         msg = email_mod.message_from_bytes(
             header_bytes, policy=email_policy.default,
