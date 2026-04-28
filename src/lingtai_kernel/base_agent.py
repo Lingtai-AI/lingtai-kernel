@@ -961,14 +961,9 @@ class BaseAgent:
                                 reason=err_desc or "aed_recovery"
                             )
 
-                        if aed_attempts > self._config.max_aed_attempts:
-                            logger.error(
-                                f"[{self.agent_name}] AED exhausted after {aed_attempts - 1} attempts: {err_desc}",
-                            )
-                            self._log("aed_exhausted", attempts=aed_attempts - 1, error=err_desc)
-                            sleep_state = AgentState.ASLEEP
-                            self._asleep.set()
-                            break
+                        # NB: the `== max_aed_attempts` branch below either auto-falls-back
+                        # to the default preset (returning early) or breaks to ASLEEP, so
+                        # `aed_attempts > max_aed_attempts` is unreachable.
 
                         self._set_state(AgentState.STUCK, reason=f"AED attempt {aed_attempts}: {err_desc}")
                         self._log("aed_attempt", attempt=aed_attempts, error=err_desc)

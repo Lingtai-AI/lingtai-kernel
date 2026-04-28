@@ -1,8 +1,9 @@
 """Preset library — atomic {llm, capabilities} bundles for agent runtime swap.
 
-A preset lives as a single JSON or JSONC file in `manifest.presets_path`. The
-filename stem is the preset's discovery name (e.g. `cheap.json` → `"cheap"`).
-The kernel reads the file's `manifest.llm` and `manifest.capabilities` and
+A preset lives as a single JSON or JSONC file in `manifest.preset.path` (or
+the default `~/.lingtai-tui/presets/` when path is omitted). The filename
+stem is the preset's discovery name (e.g. `cheap.json` → `"cheap"`). The
+kernel reads the file's `manifest.llm` and `manifest.capabilities` and
 substitutes them into the running agent's manifest at boot time or on swap.
 
 This module owns:
