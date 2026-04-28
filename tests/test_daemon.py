@@ -134,7 +134,7 @@ def test_run_emanation_returns_text(tmp_path):
         "run_dir": run_dir,
     }
     result = mgr._run_emanation(em_id, run_dir, schemas, dispatch,
-                                "find stuff", None, cancel)
+                                "find stuff", cancel)
     assert "Found 3 files" in result
 
 
@@ -174,7 +174,7 @@ def test_run_emanation_dispatches_tools(tmp_path):
         "run_dir": run_dir,
     }
     result = mgr._run_emanation(em_id, run_dir, schemas, dispatch,
-                                "read a file", None, cancel)
+                                "read a file", cancel)
     assert "Read the file" in result
     assert mock_handler.called
 
@@ -198,7 +198,7 @@ def test_run_emanation_respects_cancel_before_first_send(tmp_path):
         "run_dir": run_dir,
     }
     result = mgr._run_emanation(em_id, run_dir, schemas, dispatch,
-                                "do stuff", None, cancel)
+                                "do stuff", cancel)
     assert result == "[cancelled]"
     mock_session.send.assert_not_called()
 
@@ -354,7 +354,7 @@ def test_run_emanation_respects_cancel_mid_loop(tmp_path):
         "run_dir": run_dir,
     }
     result = mgr._run_emanation(em_id, run_dir, schemas, dispatch,
-                                "do stuff", None, cancel)
+                                "do stuff", cancel)
     assert result == "[cancelled]"
 
 
@@ -643,7 +643,7 @@ def test_run_emanation_timeout_calls_mark_timeout(tmp_path):
         "run_dir": run_dir,
     }
     result = mgr._run_emanation("em-test", run_dir, schemas, dispatch,
-                                 "task", None, cancel, timeout_event)
+                                 "task", cancel, timeout_event)
     assert result == "[cancelled]"
     data = json.loads(run_dir.daemon_json_path.read_text())
     assert data["state"] == "timeout"
@@ -670,7 +670,7 @@ def test_run_emanation_manual_reclaim_calls_mark_cancelled(tmp_path):
         "run_dir": run_dir,
     }
     result = mgr._run_emanation("em-test", run_dir, schemas, dispatch,
-                                 "task", None, cancel, timeout_event)
+                                 "task", cancel, timeout_event)
     assert result == "[cancelled]"
     data = json.loads(run_dir.daemon_json_path.read_text())
     assert data["state"] == "cancelled"

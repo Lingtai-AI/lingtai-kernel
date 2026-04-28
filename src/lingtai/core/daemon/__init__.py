@@ -54,7 +54,6 @@ def get_schema(lang: str = "en") -> dict:
                     "properties": {
                         "task": {"type": "string"},
                         "tools": {"type": "array", "items": {"type": "string"}},
-                        "model": {"type": "string"},
                     },
                     "required": ["task", "tools"],
                 },
@@ -173,7 +172,7 @@ class DaemonManager:
         return "\n".join(lines)
 
     def _run_emanation(self, em_id: str, run_dir, schemas, dispatch,
-                       task: str, model: str | None,
+                       task: str,
                        cancel_event: threading.Event,
                        timeout_event: threading.Event | None = None) -> str:
         """Run a single emanation's tool loop. Called in a worker thread.
@@ -199,7 +198,7 @@ class DaemonManager:
         session = self._agent.service.create_session(
             system_prompt=run_dir.prompt_path.read_text(encoding="utf-8"),
             tools=schemas or None,
-            model=model or self._default_model,
+            model=self._default_model,
             thinking="default",
             tracked=False,
         )
@@ -352,7 +351,7 @@ class DaemonManager:
                     handle=em_id,
                     task=spec["task"],
                     tools=spec["tools"],
-                    model=spec.get("model") or self._default_model,
+                    model=self._default_model,
                     max_turns=self._max_turns,
                     timeout_s=self._timeout,
                     parent_addr=parent_addr,
@@ -367,7 +366,7 @@ class DaemonManager:
             future = pool.submit(
                 self._run_emanation,
                 em_id, run_dir, schemas, dispatch,
-                spec["task"], spec.get("model"), cancel_event, timeout_event,
+                spec["task"], cancel_event, timeout_event,
             )
             future.add_done_callback(
                 lambda f, eid=em_id, task=spec["task"]:
