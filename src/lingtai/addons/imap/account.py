@@ -155,7 +155,8 @@ class IMAPAccount:
         self._folder_by_role: dict[str, str] = {}
 
         # Watermark
-        self._watermark = WatermarkStore(self._state_path()) if self._state_path() else None
+        _sp = self._state_path()
+        self._watermark = WatermarkStore(_sp) if _sp else None
 
         # Reconnect backoff
         self._backoff_steps = [1, 2, 5, 10, 60]
@@ -202,6 +203,7 @@ class IMAPAccount:
                 self._tool_imap.noop()
             return True
         except Exception:
+            self._tool_imap = None
             return False
 
     @property
@@ -217,6 +219,8 @@ class IMAPAccount:
 
     def connect(self) -> None:
         """Open the tool-call connection, parse capabilities, discover folders."""
+        if self._tool_imap is not None:
+            return
         client = IMAPClient(self._imap_host, port=self._imap_port, ssl=True)
         client.login(self._email_address, self._email_password)
         self._tool_imap = client

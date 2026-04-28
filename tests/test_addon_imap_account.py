@@ -81,3 +81,40 @@ def test_connected_reports_false_when_noop_fails(
     instance.noop.side_effect = OSError("connection reset")
 
     assert account.connected is False
+
+
+def test_connect_is_idempotent(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    """Double connect() must not open a second client."""
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+
+    account.connect()
+    account.connect()  # second call
+
+    # IMAPClient(...) called exactly once, login called exactly once
+    assert mock_imapclient_class.call_count == 1
+    instance.login.assert_called_once()
+
+
+def test_connected_clears_dead_pointer_so_next_call_reconnects(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    """After NOOP fails, _tool_imap must be cleared so _ensure_connected reconnects."""
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+
+    account.connect()
+    assert mock_imapclient_class.call_count == 1
+
+    # Simulate dead connection
+    instance.noop.side_effect = OSError("connection reset")
+    assert account.connected is False
+
+    # Next access via _ensure_connected should trigger a fresh connect
+    instance.noop.side_effect = None  # let the next NOOP succeed
+    account.connect()
+    assert mock_imapclient_class.call_count == 2
