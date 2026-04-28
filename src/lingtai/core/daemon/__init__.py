@@ -54,6 +54,7 @@ def get_schema(lang: str = "en") -> dict:
                     "properties": {
                         "task": {"type": "string"},
                         "tools": {"type": "array", "items": {"type": "string"}},
+                        "preset": {"type": "string"},
                     },
                     "required": ["task", "tools"],
                 },
@@ -174,7 +175,8 @@ class DaemonManager:
     def _run_emanation(self, em_id: str, run_dir, schemas, dispatch,
                        task: str,
                        cancel_event: threading.Event,
-                       timeout_event: threading.Event | None = None) -> str:
+                       timeout_event: threading.Event | None = None,
+                       preset_llm: dict | None = None) -> str:
         """Run a single emanation's tool loop. Called in a worker thread.
 
         run_dir is the DaemonRunDir constructed in _handle_emanate. All
@@ -184,6 +186,11 @@ class DaemonManager:
         manual reclaim. When set alongside cancel_event, the run loop calls
         mark_timeout instead of mark_cancelled. None is allowed for direct-call
         tests and the cancellation defaults to "cancelled" semantics.
+
+        preset_llm: if provided, a dict with keys provider/model/api_key_env/
+        base_url (and optionally api_key) resolved from the preset. A dedicated
+        LLMService is constructed for this emanation instead of reusing
+        self._agent.service.
         """
         def _exit_cancelled() -> str:
             if timeout_event is not None and timeout_event.is_set():
@@ -195,10 +202,26 @@ class DaemonManager:
         if cancel_event.is_set():
             return _exit_cancelled()
 
-        session = self._agent.service.create_session(
+        if preset_llm:
+            # Build a dedicated LLM service for this emanation from the preset.
+            from lingtai.llm.service import LLMService
+            from ...config_resolve import resolve_env
+            api_key = resolve_env(preset_llm.get("api_key"), preset_llm.get("api_key_env"))
+            service = LLMService(
+                provider=preset_llm["provider"],
+                model=preset_llm["model"],
+                api_key=api_key,
+                base_url=preset_llm.get("base_url"),
+            )
+            effective_model = preset_llm["model"]
+        else:
+            service = self._agent.service
+            effective_model = self._default_model
+
+        session = service.create_session(
             system_prompt=run_dir.prompt_path.read_text(encoding="utf-8"),
             tools=schemas or None,
-            model=self._default_model,
+            model=effective_model,
             thinking="default",
             tracked=False,
         )
@@ -246,7 +269,7 @@ class DaemonManager:
                             result = {"status": "error", "message": str(e)}
                             run_dir.clear_current_tool(result_status="error")
                     tool_results.append(
-                        self._agent.service.make_tool_result(
+                        service.make_tool_result(
                             tc.name, result, tool_call_id=tc.id,
                         )
                     )
@@ -315,6 +338,44 @@ class DaemonManager:
                                  running=running, requested=len(tasks),
                                  max=self._max_emanations)}
 
+        # Pre-flight: resolve any per-task presets BEFORE scheduling.
+        # If any preset is invalid, refuse the whole batch.
+        from lingtai.presets import load_preset, resolve_presets_path
+        from lingtai.preset_connectivity import check_connectivity
+
+        parent_manifest_raw = self._agent._read_init()
+        parent_manifest = (parent_manifest_raw or {}).get("manifest", {})
+        presets_path = resolve_presets_path(parent_manifest, self._agent._working_dir)
+
+        resolved_presets: list[dict | None] = []  # one entry per task — None means inherit
+        for spec in tasks:
+            preset_name = spec.get("preset")
+            if not preset_name:
+                resolved_presets.append(None)
+                continue
+            # Validate preset exists and is loadable
+            try:
+                preset = load_preset(presets_path, preset_name)
+            except (KeyError, ValueError) as e:
+                return {"status": "error",
+                        "message": f"preset {preset_name!r} unloadable: {e}"}
+            preset_llm = preset.get("manifest", {}).get("llm", {})
+            # Connectivity check — refuse upfront rather than burning tokens later
+            conn = check_connectivity(
+                provider=preset_llm.get("provider"),
+                base_url=preset_llm.get("base_url"),
+                api_key_env=preset_llm.get("api_key_env"),
+            )
+            if conn["status"] != "ok":
+                return {"status": "error",
+                        "message": f"preset {preset_name!r}: {conn['status']} — "
+                                   f"{conn.get('error', 'cannot reach LLM')}"}
+            resolved_presets.append({
+                "name": preset_name,
+                "llm": preset_llm,
+                "capabilities": preset.get("manifest", {}).get("capabilities", {}),
+            })
+
         cancel_event = threading.Event()
         # Separate event so the watchdog can distinguish timeout from manual
         # reclaim. Watchdog sets BOTH on timeout; reclaim sets only cancel_event.
@@ -328,10 +389,11 @@ class DaemonManager:
         parent_addr = self._agent._working_dir.name
         parent_pid = os.getpid()
 
-        for spec in tasks:
+        for i, spec in enumerate(tasks):
             em_id = f"em-{self._next_id}"
             self._next_id += 1
             ids.append(em_id)
+            resolved = resolved_presets[i]
 
             # Build tool surface and system prompt up front so the run_dir
             # records the prompt verbatim before any LLM call. Validation
@@ -342,6 +404,10 @@ class DaemonManager:
                 return {"status": "error", "message": str(e)}
             system_prompt = self._build_emanation_prompt(spec["task"], schemas)
 
+            # Effective model for this emanation (preset overrides if present)
+            effective_model = (resolved["llm"]["model"]
+                               if resolved else self._default_model)
+
             # Construct run_dir — creates folder on disk, writes daemon.json,
             # .prompt, .heartbeat, daemon_start event. If FS construction fails,
             # propagate as a tool-level error and skip scheduling for this spec.
@@ -351,13 +417,16 @@ class DaemonManager:
                     handle=em_id,
                     task=spec["task"],
                     tools=spec["tools"],
-                    model=self._default_model,
+                    model=effective_model,
                     max_turns=self._max_turns,
                     timeout_s=self._timeout,
                     parent_addr=parent_addr,
                     parent_pid=parent_pid,
                     system_prompt=system_prompt,
                     log_callback=self._log,
+                    preset_name=resolved["name"] if resolved else None,
+                    preset_provider=resolved["llm"].get("provider") if resolved else None,
+                    preset_model=resolved["llm"].get("model") if resolved else None,
                 )
             except OSError as e:
                 return {"status": "error",
@@ -367,6 +436,7 @@ class DaemonManager:
                 self._run_emanation,
                 em_id, run_dir, schemas, dispatch,
                 spec["task"], cancel_event, timeout_event,
+                resolved["llm"] if resolved else None,
             )
             future.add_done_callback(
                 lambda f, eid=em_id, task=spec["task"]:

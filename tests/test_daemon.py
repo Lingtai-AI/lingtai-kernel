@@ -703,3 +703,213 @@ def test_watchdog_returns_when_already_cancelled(tmp_path):
     mgr._watchdog(cancel, timeout_event, timeout=60.0)
     assert cancel.is_set()
     assert not timeout_event.is_set()
+
+
+# ---------------------------------------------------------------------------
+# Per-emanation preset tests
+# ---------------------------------------------------------------------------
+
+def _write_preset_file(presets_dir, name, provider="deepseek", model="deepseek-v3",
+                        api_key_env="DEEPSEEK_API_KEY", base_url=None):
+    """Write a minimal preset JSON file to the presets directory."""
+    import json
+    preset = {
+        "name": name,
+        "description": f"{name} preset",
+        "manifest": {
+            "llm": {
+                "provider": provider,
+                "model": model,
+                "api_key": None,
+                "api_key_env": api_key_env,
+                **({"base_url": base_url} if base_url else {}),
+            },
+            "capabilities": {"file": {}},
+        },
+    }
+    (presets_dir / f"{name}.json").write_text(json.dumps(preset))
+
+
+def _make_agent_with_presets(tmp_path, presets_dir):
+    """Create an agent whose init.json references a preset library."""
+    from lingtai.agent import Agent
+    svc = MagicMock()
+    svc.provider = "mock"
+    svc.model = "mock-model"
+    svc.create_session = MagicMock()
+    svc.make_tool_result = MagicMock()
+    agent = Agent(
+        svc,
+        working_dir=tmp_path / "daemon-agent",
+        capabilities=["file", "daemon"],
+        config=AgentConfig(),
+    )
+    # Patch _read_init to return a manifest with a preset.path pointing to our dir
+    agent._read_init = lambda: {
+        "manifest": {
+            "preset": {
+                "active": "mock",
+                "default": "mock",
+                "path": str(presets_dir),
+            },
+            "llm": {"provider": "mock", "model": "mock-model"},
+        }
+    }
+    return agent
+
+
+def test_emanate_with_preset_validates_preset_exists(tmp_path, monkeypatch):
+    """If a per-task preset is specified but doesn't exist in the library,
+    refuse THE WHOLE BATCH (no partial emanations)."""
+    from unittest.mock import patch
+    import lingtai.preset_connectivity as preset_connectivity
+
+    presets_dir = tmp_path / "presets"
+    presets_dir.mkdir()
+    _write_preset_file(presets_dir, "deepseek")
+
+    agent = _make_agent_with_presets(tmp_path, presets_dir)
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    # 'ghost' doesn't exist in the library
+    result = mgr.handle({"action": "emanate", "tasks": [
+        {"task": "task A", "tools": ["file"], "preset": "ghost"},
+        {"task": "task B", "tools": ["file"]},  # valid task, but should be refused too
+    ]})
+    assert result["status"] == "error"
+    assert "ghost" in result["message"]
+    # No daemons spawned — whole batch refused
+    daemons_dir = agent._working_dir / "daemons"
+    assert not daemons_dir.exists() or not list(daemons_dir.iterdir())
+
+
+def test_emanate_with_preset_unreachable_refuses(tmp_path, monkeypatch):
+    """If the requested preset has connectivity 'unreachable', refuse the emanation."""
+    from unittest.mock import patch
+    import lingtai.preset_connectivity as preset_connectivity
+
+    presets_dir = tmp_path / "presets"
+    presets_dir.mkdir()
+    _write_preset_file(presets_dir, "deepseek", api_key_env="DEEPSEEK_API_KEY")
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    agent = _make_agent_with_presets(tmp_path, presets_dir)
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    with patch.object(preset_connectivity, "_probe_host",
+                      side_effect=OSError("connection refused")):
+        result = mgr.handle({"action": "emanate", "tasks": [
+            {"task": "task A", "tools": ["file"], "preset": "deepseek"},
+        ]})
+    assert result["status"] == "error"
+    assert "unreachable" in result["message"]
+    assert "deepseek" in result["message"]
+
+
+def test_emanate_with_preset_no_credentials_refuses(tmp_path, monkeypatch):
+    """If the requested preset has 'no_credentials', refuse the emanation."""
+    presets_dir = tmp_path / "presets"
+    presets_dir.mkdir()
+    _write_preset_file(presets_dir, "deepseek", api_key_env="DEEPSEEK_API_KEY_MISSING_XYZ")
+
+    # Ensure the env var is NOT set
+    monkeypatch.delenv("DEEPSEEK_API_KEY_MISSING_XYZ", raising=False)
+
+    agent = _make_agent_with_presets(tmp_path, presets_dir)
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    result = mgr.handle({"action": "emanate", "tasks": [
+        {"task": "task A", "tools": ["file"], "preset": "deepseek"},
+    ]})
+    assert result["status"] == "error"
+    assert "no_credentials" in result["message"]
+    assert "deepseek" in result["message"]
+
+
+def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
+    """When preset is valid and reachable, emanation is scheduled and
+    daemon.json records the preset name + provider + model."""
+    from unittest.mock import patch
+    import lingtai.preset_connectivity as preset_connectivity
+
+    presets_dir = tmp_path / "presets"
+    presets_dir.mkdir()
+    _write_preset_file(presets_dir, "deepseek", provider="deepseek",
+                       model="deepseek-v3", api_key_env="DEEPSEEK_API_KEY_TEST")
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY_TEST", "sk-test-key")
+
+    agent = _make_agent_with_presets(tmp_path, presets_dir)
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    mock_session = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = "task done — finished successfully"
+    mock_resp.tool_calls = []
+    mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
+                                thinking_tokens=0, cached_tokens=0)
+    mock_session.send = MagicMock(return_value=mock_resp)
+
+    # The preset's LLMService will call create_session — mock at the class level
+    from lingtai.llm.service import LLMService as ConcreteLLMService
+    preset_svc = MagicMock()
+    preset_svc.create_session = MagicMock(return_value=mock_session)
+    preset_svc.make_tool_result = MagicMock(return_value="mock_result")
+
+    with patch.object(preset_connectivity, "_probe_host", return_value=42), \
+         patch("lingtai.llm.service.LLMService", return_value=preset_svc):
+        result = mgr.handle({"action": "emanate", "tasks": [
+            {"task": "find todos", "tools": ["file"], "preset": "deepseek"},
+        ]})
+
+    assert result["status"] == "dispatched"
+    assert result["count"] == 1
+
+    # Wait for completion
+    time.sleep(1.5)
+
+    # Check daemon.json records preset metadata
+    daemons_dir = agent._working_dir / "daemons"
+    folders = list(daemons_dir.iterdir())
+    assert len(folders) == 1
+    data = json.loads((folders[0] / "daemon.json").read_text())
+    assert data.get("preset_name") == "deepseek"
+    assert data.get("preset_provider") == "deepseek"
+    assert data.get("preset_model") == "deepseek-v3"
+
+
+def test_emanate_without_preset_inherits_parent(tmp_path, monkeypatch):
+    """Existing behavior: omitting preset means daemon uses parent's
+    currently-active LLM (no new LLMService created)."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    mock_session = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = "task done — finished successfully"
+    mock_resp.tool_calls = []
+    mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
+                                thinking_tokens=0, cached_tokens=0)
+    mock_session.send = MagicMock(return_value=mock_resp)
+    agent.service.create_session = MagicMock(return_value=mock_session)
+
+    result = mgr.handle({"action": "emanate", "tasks": [
+        {"task": "task A", "tools": ["file"]},
+    ]})
+    assert result["status"] == "dispatched"
+    # Parent's service was used (create_session called on agent.service)
+    time.sleep(1.0)
+    assert agent.service.create_session.called
+
+    # daemon.json has no preset_name (None)
+    daemons_dir = agent._working_dir / "daemons"
+    folders = list(daemons_dir.iterdir())
+    assert len(folders) == 1
+    data = json.loads((folders[0] / "daemon.json").read_text())
+    assert data.get("preset_name") is None

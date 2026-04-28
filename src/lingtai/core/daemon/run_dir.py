@@ -45,6 +45,9 @@ class DaemonRunDir:
         parent_pid: int,
         system_prompt: str,
         log_callback=None,
+        preset_name: str | None = None,
+        preset_provider: str | None = None,
+        preset_model: str | None = None,
     ):
         self._handle = handle
         self._parent_token_ledger = parent_working_dir / "logs" / "token_ledger.jsonl"
@@ -88,6 +91,9 @@ class DaemonRunDir:
             "tokens": {"input": 0, "output": 0, "thinking": 0, "cached": 0},
             "result_preview": None,
             "error": None,
+            "preset_name": preset_name,
+            "preset_provider": preset_provider,
+            "preset_model": preset_model,
         }
 
         self._atomic_write_json(self.daemon_json_path, self._state)
