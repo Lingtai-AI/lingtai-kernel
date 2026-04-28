@@ -11,6 +11,7 @@ Usage:
 """
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -24,7 +25,6 @@ if TYPE_CHECKING:
 
 from lingtai_kernel.llm.base import FunctionSchema
 from lingtai_kernel.message import MSG_REQUEST, _make_message
-from lingtai_kernel.token_ledger import append_token_entry
 
 from .run_dir import DaemonRunDir
 
@@ -175,8 +175,13 @@ class DaemonManager:
     def _run_emanation(self, em_id: str, run_dir, schemas, dispatch,
                        task: str, model: str | None,
                        cancel_event: threading.Event) -> str:
-        """Run a single emanation's tool loop. Called in a worker thread."""
+        """Run a single emanation's tool loop. Called in a worker thread.
+
+        run_dir is the DaemonRunDir constructed in _handle_emanate. All
+        filesystem effects flow through it.
+        """
         if cancel_event.is_set():
+            run_dir.mark_cancelled()
             return "[cancelled]"
 
         session = self._agent.service.create_session(
@@ -187,24 +192,25 @@ class DaemonManager:
             tracked=False,
         )
 
-        # Token accumulator — daemon sessions are untracked so we write
-        # to the parent agent's token ledger ourselves.
-        tok_in = tok_out = tok_think = tok_cache = 0
-
         def _accum(resp):
-            nonlocal tok_in, tok_out, tok_think, tok_cache
             u = resp.usage
-            tok_in += u.input_tokens
-            tok_out += u.output_tokens
-            tok_think += u.thinking_tokens
-            tok_cache += u.cached_tokens
+            run_dir.append_tokens(
+                input=u.input_tokens,
+                output=u.output_tokens,
+                thinking=u.thinking_tokens,
+                cached=u.cached_tokens,
+            )
 
         try:
+            run_dir.record_user_send(task, kind="task")
             response = session.send(task)
             _accum(response)
             turns = 0
+            run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
+
             while response.tool_calls and turns < self._max_turns:
                 if cancel_event.is_set():
+                    run_dir.mark_cancelled()
                     return "[cancelled]"
 
                 # Intermediate text → notify parent
@@ -215,48 +221,53 @@ class DaemonManager:
                 for tc in response.tool_calls:
                     handler = dispatch.get(tc.name)
                     if handler is None:
+                        run_dir.set_current_tool(tc.name, tc.args or {})
                         result = {"status": "error", "message": f"Unknown tool: {tc.name}"}
+                        run_dir.clear_current_tool(result_status="error")
                     else:
+                        run_dir.set_current_tool(tc.name, tc.args or {})
                         try:
                             result = handler(tc.args or {})
+                            status = "error" if isinstance(result, dict) and result.get("status") == "error" else "ok"
+                            run_dir.clear_current_tool(result_status=status)
                         except Exception as e:
                             result = {"status": "error", "message": str(e)}
+                            run_dir.clear_current_tool(result_status="error")
                     tool_results.append(
                         self._agent.service.make_tool_result(
                             tc.name, result, tool_call_id=tc.id,
                         )
                     )
 
+                # Tool results are written to chat_history before sending
+                run_dir.record_user_send(
+                    json.dumps([str(r) for r in tool_results], ensure_ascii=False),
+                    kind="tool_results",
+                )
                 response = session.send(tool_results)
                 _accum(response)
                 turns += 1
+                run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
 
                 # Inject follow-up as a separate user message — only safe when
                 # the response is text-only. If it carries new tool_calls, the
                 # canonical interface tail is assistant[tool_calls] and a user
-                # message here would violate the pairing invariant. The followup
-                # waits one more iteration; the next loop pass executes the
-                # pending tool_calls and the followup drains on the iteration
-                # after that, when the tail is clean.
+                # message here would violate the pairing invariant.
                 if not response.tool_calls:
                     followup = self._drain_followup(em_id)
                     if followup:
+                        run_dir.record_user_send(followup, kind="followup")
                         response = session.send(followup)
                         _accum(response)
                         turns += 1
+                        run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
 
-            return response.text or "[no output]"
-        finally:
-            if tok_in or tok_out or tok_think or tok_cache:
-                try:
-                    ledger_path = self._agent._working_dir / "logs" / "token_ledger.jsonl"
-                    append_token_entry(
-                        ledger_path,
-                        input=tok_in, output=tok_out,
-                        thinking=tok_think, cached=tok_cache,
-                    )
-                except Exception:
-                    pass
+            text = response.text or "[no output]"
+            run_dir.mark_done(text)
+            return text
+        except Exception as e:
+            run_dir.mark_failed(e)
+            raise
 
     def _notify_parent(self, em_id: str, text: str) -> None:
         """Send a [daemon] notification to parent's inbox."""

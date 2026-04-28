@@ -28,6 +28,23 @@ def _make_agent(tmp_path, capabilities=None):
     return agent
 
 
+def _make_run_dir(agent, em_id="em-test"):
+    """Helper: build a DaemonRunDir matching the new _run_emanation signature."""
+    from lingtai.core.daemon.run_dir import DaemonRunDir
+    return DaemonRunDir(
+        parent_working_dir=agent._working_dir,
+        handle=em_id,
+        task="test task",
+        tools=["file"],
+        model="mock-model",
+        max_turns=30,
+        timeout_s=300.0,
+        parent_addr=agent._working_dir.name,
+        parent_pid=12345,
+        system_prompt="You are a daemon.",
+    )
+
+
 def test_daemon_registers_tool(tmp_path):
     agent = _make_agent(tmp_path, ["daemon"])
     tool_names = {s.name for s in agent._tool_schemas}
@@ -102,16 +119,22 @@ def test_run_emanation_returns_text(tmp_path):
     mock_response = MagicMock()
     mock_response.text = "Task done. Found 3 files."
     mock_response.tool_calls = []
+    mock_response.usage = MagicMock(input_tokens=0, output_tokens=0,
+                                    thinking_tokens=0, cached_tokens=0)
     mock_session.send = MagicMock(return_value=mock_response)
     agent.service.create_session = MagicMock(return_value=mock_session)
 
     cancel = threading.Event()
     em_id = "em-test"
+    schemas, dispatch = mgr._build_tool_surface(["file"])
+    run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
         "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
     }
-    result = mgr._run_emanation(em_id, "find stuff", ["file"], None, cancel)
+    result = mgr._run_emanation(em_id, run_dir, schemas, dispatch,
+                                "find stuff", None, cancel)
     assert "Found 3 files" in result
 
 
@@ -128,9 +151,13 @@ def test_run_emanation_dispatches_tools(tmp_path):
     resp1 = MagicMock()
     resp1.text = ""
     resp1.tool_calls = [tc]
+    resp1.usage = MagicMock(input_tokens=0, output_tokens=0,
+                            thinking_tokens=0, cached_tokens=0)
     resp2 = MagicMock()
     resp2.text = "Task done. Read the file."
     resp2.tool_calls = []
+    resp2.usage = MagicMock(input_tokens=0, output_tokens=0,
+                            thinking_tokens=0, cached_tokens=0)
 
     mock_session = MagicMock()
     mock_session.send = MagicMock(side_effect=[resp1, resp2])
@@ -139,11 +166,15 @@ def test_run_emanation_dispatches_tools(tmp_path):
 
     cancel = threading.Event()
     em_id = "em-test"
+    schemas, dispatch = mgr._build_tool_surface(["file"])
+    run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
         "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
     }
-    result = mgr._run_emanation(em_id, "read a file", ["file"], None, cancel)
+    result = mgr._run_emanation(em_id, run_dir, schemas, dispatch,
+                                "read a file", None, cancel)
     assert "Read the file" in result
     assert mock_handler.called
 
@@ -159,11 +190,15 @@ def test_run_emanation_respects_cancel_before_first_send(tmp_path):
     cancel = threading.Event()
     cancel.set()
     em_id = "em-test"
+    schemas, dispatch = mgr._build_tool_surface(["file"])
+    run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
         "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
     }
-    result = mgr._run_emanation(em_id, "do stuff", ["file"], None, cancel)
+    result = mgr._run_emanation(em_id, run_dir, schemas, dispatch,
+                                "do stuff", None, cancel)
     assert result == "[cancelled]"
     mock_session.send.assert_not_called()
 
@@ -178,6 +213,8 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
     mock_resp = MagicMock()
     mock_resp.text = "done"
     mock_resp.tool_calls = []
+    mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
+                                thinking_tokens=0, cached_tokens=0)
     mock_session.send = MagicMock(return_value=mock_resp)
     agent.service.create_session = MagicMock(return_value=mock_session)
 
@@ -202,7 +239,7 @@ def test_handle_emanate_rejects_over_limit(tmp_path):
     agent = _make_agent(tmp_path, {"daemon": {"max_emanations": 1}})
     mgr = agent.get_capability("daemon")
 
-    mgr._emanations["em-0"] = {"future": MagicMock(done=MagicMock(return_value=False))}
+    mgr._emanations["em-0"] = {"future": MagicMock(done=MagicMock(return_value=False)), "run_dir": None}
     result = mgr.handle({"action": "emanate", "tasks": [
         {"task": "x", "tools": ["file"]},
     ]})
@@ -222,8 +259,8 @@ def test_handle_list_shows_status(tmp_path):
     running_future.done.return_value = False
 
     mgr._emanations = {
-        "em-1": {"future": done_future, "task": "task A", "start_time": time.time() - 10, "cancel_event": threading.Event()},
-        "em-2": {"future": running_future, "task": "task B", "start_time": time.time() - 5, "cancel_event": threading.Event()},
+        "em-1": {"future": done_future, "task": "task A", "start_time": time.time() - 10, "cancel_event": threading.Event(), "run_dir": None},
+        "em-2": {"future": running_future, "task": "task B", "start_time": time.time() - 5, "cancel_event": threading.Event(), "run_dir": None},
     }
     result = mgr._handle_list()
     assert len(result["emanations"]) == 2
@@ -241,6 +278,7 @@ def test_handle_ask_sends_followup(tmp_path):
         "task": "x",
         "followup_buffer": "",
         "followup_lock": threading.Lock(),
+        "run_dir": None,
     }
     result = mgr._handle_ask("em-1", "also check tests/")
     assert result["status"] == "sent"
@@ -256,6 +294,7 @@ def test_handle_ask_collapses_multiple(tmp_path):
         "task": "x",
         "followup_buffer": "",
         "followup_lock": threading.Lock(),
+        "run_dir": None,
     }
     mgr._handle_ask("em-1", "first")
     mgr._handle_ask("em-1", "second")
@@ -270,7 +309,7 @@ def test_handle_reclaim_cancels_all(tmp_path):
     pool = MagicMock()
     mgr._pools = [(pool, cancel)]
     mgr._emanations = {
-        "em-1": {"future": MagicMock(done=MagicMock(return_value=False)), "cancel_event": cancel},
+        "em-1": {"future": MagicMock(done=MagicMock(return_value=False)), "cancel_event": cancel, "run_dir": None},
     }
     result = mgr._handle_reclaim()
     assert result["status"] == "reclaimed"
@@ -289,6 +328,8 @@ def test_run_emanation_respects_cancel_mid_loop(tmp_path):
     resp = MagicMock()
     resp.text = ""
     resp.tool_calls = [tc]
+    resp.usage = MagicMock(input_tokens=0, output_tokens=0,
+                           thinking_tokens=0, cached_tokens=0)
 
     mock_session = MagicMock()
     agent.service.create_session = MagicMock(return_value=mock_session)
@@ -305,11 +346,15 @@ def test_run_emanation_respects_cancel_mid_loop(tmp_path):
     mock_session.send = send_and_cancel
 
     em_id = "em-test"
+    schemas, dispatch = mgr._build_tool_surface(["file"])
+    run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
         "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
     }
-    result = mgr._run_emanation(em_id, "do stuff", ["file"], None, cancel)
+    result = mgr._run_emanation(em_id, run_dir, schemas, dispatch,
+                                "do stuff", None, cancel)
     assert result == "[cancelled]"
 
 
@@ -323,9 +368,13 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path):
     resp1 = MagicMock()
     resp1.text = "Checking files..."
     resp1.tool_calls = [tc]
+    resp1.usage = MagicMock(input_tokens=0, output_tokens=0,
+                            thinking_tokens=0, cached_tokens=0)
     resp2 = MagicMock()
     resp2.text = "Task done. Summarized architecture."
     resp2.tool_calls = []
+    resp2.usage = MagicMock(input_tokens=0, output_tokens=0,
+                            thinking_tokens=0, cached_tokens=0)
 
     mock_session = MagicMock()
     mock_session.send = MagicMock(side_effect=[resp1, resp2])
@@ -366,6 +415,8 @@ def test_sequential_emanate_increments_ids(tmp_path):
     mock_resp = MagicMock()
     mock_resp.text = "done"
     mock_resp.tool_calls = []
+    mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
+                                thinking_tokens=0, cached_tokens=0)
     mock_session.send = MagicMock(return_value=mock_resp)
     agent.service.create_session = MagicMock(return_value=mock_session)
 
