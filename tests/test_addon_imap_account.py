@@ -537,3 +537,56 @@ def test_reconcile_no_new_mail_is_noop(
     assert account.reconcile("INBOX") == []
     # Watermark untouched
     assert account._watermark.load()["INBOX"]["last_delivered_uid"] == 5000
+
+
+def test_reconcile_bootstrap_pins_watermark_at_uidnext_minus_one(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    """Bootstrap with UNSEEN well below UIDNEXT must NOT cause re-delivery
+    of old read mail on the next reconcile call.
+
+    Pre-fix bug: watermark was set to max(unseen_uids), so a mailbox with
+    UNSEEN=[10, 20] and UIDNEXT=100 would set watermark=20, and the next
+    reconcile would search UID 21:* and re-deliver the already-read mail
+    in UIDs 21..99.
+    """
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+    instance.folder_status.return_value = {b"UIDVALIDITY": 7, b"UIDNEXT": 100}
+    instance.search.return_value = [10, 20]  # UNSEEN — both well below UIDNEXT
+    instance.fetch.return_value = {
+        10: {b"FLAGS": (), b"BODY[HEADER.FIELDS (FROM TO SUBJECT DATE)]":
+             b"From: a@b.com\r\nSubject: ten\r\n"},
+        20: {b"FLAGS": (), b"BODY[HEADER.FIELDS (FROM TO SUBJECT DATE)]":
+             b"From: c@d.com\r\nSubject: twenty\r\n"},
+    }
+    account.connect()
+
+    delivered = account.reconcile("INBOX")
+
+    # Bootstrap delivered UIDs 10 and 20
+    assert {e["uid"] for e in delivered} == {"10", "20"}
+    # CRITICAL: watermark must be UIDNEXT-1 = 99, NOT max(unseen) = 20
+    state = account._watermark.load()
+    assert state["INBOX"]["last_delivered_uid"] == 99
+    assert state["INBOX"]["uidvalidity"] == 7
+
+
+def test_reconcile_bootstrap_with_no_unseen_pins_at_uidnext_minus_one(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    """Bootstrap with empty UNSEEN should still set watermark to UIDNEXT-1."""
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+    instance.folder_status.return_value = {b"UIDVALIDITY": 1, b"UIDNEXT": 5000}
+    instance.search.return_value = []  # no unseen
+    account.connect()
+
+    delivered = account.reconcile("INBOX")
+
+    assert delivered == []
+    assert account._watermark.load() == {
+        "INBOX": {"uidvalidity": 1, "last_delivered_uid": 4999}
+    }

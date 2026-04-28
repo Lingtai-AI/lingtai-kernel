@@ -630,15 +630,16 @@ class IMAPAccount:
         state = self._watermark.load()
         folder_state = state.get(folder)
 
-        # Bootstrap: no state for this folder
+        # Bootstrap: no state for this folder. Deliver currently-UNSEEN
+        # messages once and pin watermark at uidnext-1 so future calls
+        # only consider UIDs >= uidnext as new. UNSEEN UIDs are by
+        # definition < UIDNEXT, so they are guaranteed to be at or below
+        # the watermark we set here.
         if folder_state is None:
             unseen_envelopes = self._bootstrap_deliver_unseen(folder)
             state[folder] = {
                 "uidvalidity": uidvalidity,
-                "last_delivered_uid": max(
-                    (int(e["uid"]) for e in unseen_envelopes),
-                    default=uidnext - 1,
-                ),
+                "last_delivered_uid": uidnext - 1,
             }
             self._watermark.save(state)
             return unseen_envelopes
@@ -680,14 +681,23 @@ class IMAPAccount:
         return envelopes
 
     def _bootstrap_deliver_unseen(self, folder: str) -> list[dict]:
-        """Bootstrap path: deliver currently-UNSEEN messages once."""
+        """Bootstrap path: deliver currently-UNSEEN messages once.
+
+        SELECT + SEARCH + FETCH all run inside one lock scope so a
+        concurrent tool-call cannot select a different folder mid-flight.
+        """
         with self._lock:
             imap = self._ensure_connected()
             imap.select_folder(folder, readonly=True)
             uids = imap.search(b"UNSEEN")
-        if not uids:
-            return []
-        return self.fetch_headers_by_uids(folder, [str(u) for u in uids])
+            if not uids:
+                return []
+            data = imap.fetch(
+                uids,
+                ["FLAGS", "BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE)]"],
+            )
+        return [self._envelope_from_fetch(uid, info, folder)
+                for uid, info in sorted(data.items())]
 
     # -- Listener (added in subsequent tasks) ------------------------------
 
