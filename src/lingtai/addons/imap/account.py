@@ -280,7 +280,54 @@ class IMAPAccount:
         # Per-account file: working_dir/imap/<address>.state.json
         return self._working_dir / "imap" / f"{self._email_address}.state.json"
 
-    # -- Tool-call methods (added in subsequent tasks) ---------------------
+    # -- Tool-call methods --------------------------------------------------
+
+    _HEADER_FETCH_KEY = b"BODY[HEADER.FIELDS (FROM TO SUBJECT DATE)]"
+
+    def fetch_envelopes(self, folder: str, n: int = 20) -> list[dict]:
+        """Return headers for the N most recent UIDs in `folder`."""
+        with self._lock:
+            imap = self._ensure_connected()
+            imap.select_folder(folder, readonly=True)
+            all_uids = imap.search("ALL")
+        if not all_uids:
+            return []
+        recent = all_uids[-n:] if n > 0 else all_uids
+        return self.fetch_headers_by_uids(folder, [str(u) for u in recent])
+
+    def fetch_headers_by_uids(
+        self, folder: str, uids: list[str],
+    ) -> list[dict]:
+        """Fetch headers for explicit UIDs."""
+        if not uids:
+            return []
+        int_uids = [int(u) for u in uids]
+        with self._lock:
+            imap = self._ensure_connected()
+            imap.select_folder(folder, readonly=True)
+            data = imap.fetch(int_uids, ["FLAGS", "BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE)]"])
+        return [self._envelope_from_fetch(uid, info, folder)
+                for uid, info in sorted(data.items())]
+
+    def _envelope_from_fetch(
+        self, uid: int, info: dict, folder: str,
+    ) -> dict:
+        flags_raw = info.get(b"FLAGS", ())
+        flags = [f.decode("ascii") if isinstance(f, bytes) else str(f)
+                 for f in flags_raw]
+        header_bytes = info.get(self._HEADER_FETCH_KEY, b"") or b""
+        msg = email_mod.message_from_bytes(
+            header_bytes, policy=email_policy.default,
+        )
+        return {
+            "uid": str(uid),
+            "from": _decode_header_value(msg.get("From", "")),
+            "to": _decode_header_value(msg.get("To", "")),
+            "subject": _decode_header_value(msg.get("Subject", "")),
+            "date": msg.get("Date", ""),
+            "flags": flags,
+            "email_id": f"{self._email_address}:{folder}:{uid}",
+        }
 
     # -- Listener (added in subsequent tasks) ------------------------------
 
