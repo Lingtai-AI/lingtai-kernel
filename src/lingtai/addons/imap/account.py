@@ -603,6 +603,92 @@ class IMAPAccount:
             logger.error(error)
             return error
 
+    # -- UID watermark reconcile --------------------------------------------
+
+    def reconcile(self, folder: str = "INBOX") -> list[dict]:
+        """Detect and return new headers since last watermark.
+
+        Returns a list of envelope dicts (same shape as fetch_headers_by_uids)
+        for messages that have not yet been delivered. Updates the watermark
+        atomically before returning.
+
+        On UIDVALIDITY change, resets state for the folder and returns [].
+        On first call (no state), bootstraps by delivering current UNSEEN
+        once and setting the watermark to UIDNEXT-1.
+        """
+        if self._watermark is None:
+            return []
+
+        with self._lock:
+            imap = self._ensure_connected()
+            status = imap.folder_status(
+                folder, [b"UIDVALIDITY", b"UIDNEXT"],
+            )
+        uidvalidity = int(status[b"UIDVALIDITY"])
+        uidnext = int(status[b"UIDNEXT"])
+
+        state = self._watermark.load()
+        folder_state = state.get(folder)
+
+        # Bootstrap: no state for this folder
+        if folder_state is None:
+            unseen_envelopes = self._bootstrap_deliver_unseen(folder)
+            state[folder] = {
+                "uidvalidity": uidvalidity,
+                "last_delivered_uid": max(
+                    (int(e["uid"]) for e in unseen_envelopes),
+                    default=uidnext - 1,
+                ),
+            }
+            self._watermark.save(state)
+            return unseen_envelopes
+
+        # UIDVALIDITY change: reset, deliver nothing
+        if folder_state.get("uidvalidity") != uidvalidity:
+            logger.warning(
+                "UIDVALIDITY changed for %s/%s (%s -> %s); resetting watermark",
+                self._email_address, folder,
+                folder_state.get("uidvalidity"), uidvalidity,
+            )
+            state[folder] = {
+                "uidvalidity": uidvalidity,
+                "last_delivered_uid": uidnext - 1,
+            }
+            self._watermark.save(state)
+            return []
+
+        # Normal path
+        last = int(folder_state["last_delivered_uid"])
+        with self._lock:
+            imap = self._ensure_connected()
+            imap.select_folder(folder, readonly=True)
+            new_uids = imap.search([b"UID", f"{last+1}:*".encode()])
+        # IMAP semantics: when range start > UIDNEXT the server returns
+        # the highest existing UID. Filter that out.
+        new_uids = [u for u in new_uids if int(u) > last]
+        if not new_uids:
+            return []
+
+        envelopes = self.fetch_headers_by_uids(folder, [str(u) for u in new_uids])
+        if envelopes:
+            new_high = max(int(e["uid"]) for e in envelopes)
+            state[folder] = {
+                "uidvalidity": uidvalidity,
+                "last_delivered_uid": new_high,
+            }
+            self._watermark.save(state)
+        return envelopes
+
+    def _bootstrap_deliver_unseen(self, folder: str) -> list[dict]:
+        """Bootstrap path: deliver currently-UNSEEN messages once."""
+        with self._lock:
+            imap = self._ensure_connected()
+            imap.select_folder(folder, readonly=True)
+            uids = imap.search(b"UNSEEN")
+        if not uids:
+            return []
+        return self.fetch_headers_by_uids(folder, [str(u) for u in uids])
+
     # -- Listener (added in subsequent tasks) ------------------------------
 
     def start_listening(self, on_message: Callable[[list[dict]], None]) -> None:

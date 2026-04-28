@@ -445,3 +445,95 @@ def test_send_email_signature(account: IMAPAccount) -> None:
     assert "attachments" in params
     assert "in_reply_to" in params
     assert "references" in params
+
+
+def test_reconcile_first_run_bootstraps_from_uidnext_and_unseen(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    """First run: no state file. Bootstrap delivers current UNSEEN once,
+    then sets watermark to current UIDNEXT. UNSEEN flag is consulted only here."""
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+    instance.folder_status.return_value = {b"UIDVALIDITY": 12345, b"UIDNEXT": 5000}
+    instance.search.return_value = [4998, 4999]  # currently UNSEEN
+    instance.fetch.return_value = {
+        4998: {b"FLAGS": (), b"BODY[HEADER.FIELDS (FROM TO SUBJECT DATE)]":
+               b"From: a@b.com\r\nSubject: one\r\n"},
+        4999: {b"FLAGS": (), b"BODY[HEADER.FIELDS (FROM TO SUBJECT DATE)]":
+               b"From: c@d.com\r\nSubject: two\r\n"},
+    }
+    account.connect()
+
+    delivered = account.reconcile("INBOX")
+
+    instance.search.assert_called_with(b"UNSEEN")
+    assert {e["uid"] for e in delivered} == {"4998", "4999"}
+    # Watermark persisted at UIDNEXT - 1
+    assert account._watermark.load() == {
+        "INBOX": {"uidvalidity": 12345, "last_delivered_uid": 4999}
+    }
+
+
+def test_reconcile_normal_path_uses_uid_range(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    """Subsequent runs: watermark exists, search by UID range, deliver new only."""
+    # Pre-seed watermark
+    account._watermark.save({"INBOX": {"uidvalidity": 12345, "last_delivered_uid": 4999}})
+
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+    instance.folder_status.return_value = {b"UIDVALIDITY": 12345, b"UIDNEXT": 5003}
+    instance.search.return_value = [5001, 5002]
+    instance.fetch.return_value = {
+        5001: {b"FLAGS": (), b"BODY[HEADER.FIELDS (FROM TO SUBJECT DATE)]":
+               b"From: a@b.com\r\nSubject: new1\r\n"},
+        5002: {b"FLAGS": (), b"BODY[HEADER.FIELDS (FROM TO SUBJECT DATE)]":
+               b"From: c@d.com\r\nSubject: new2\r\n"},
+    }
+    account.connect()
+
+    delivered = account.reconcile("INBOX")
+
+    instance.search.assert_called_with([b"UID", b"5000:*"])
+    assert {e["uid"] for e in delivered} == {"5001", "5002"}
+    assert account._watermark.load()["INBOX"]["last_delivered_uid"] == 5002
+
+
+def test_reconcile_uidvalidity_change_resets_and_delivers_nothing(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    """UIDVALIDITY mismatch → reset watermark, deliver nothing this round."""
+    account._watermark.save({"INBOX": {"uidvalidity": 12345, "last_delivered_uid": 5000}})
+
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+    instance.folder_status.return_value = {b"UIDVALIDITY": 99999, b"UIDNEXT": 200}
+    account.connect()
+
+    delivered = account.reconcile("INBOX")
+
+    assert delivered == []
+    assert account._watermark.load() == {
+        "INBOX": {"uidvalidity": 99999, "last_delivered_uid": 199}
+    }
+
+
+def test_reconcile_no_new_mail_is_noop(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    account._watermark.save({"INBOX": {"uidvalidity": 12345, "last_delivered_uid": 5000}})
+
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+    instance.folder_status.return_value = {b"UIDVALIDITY": 12345, b"UIDNEXT": 5001}
+    instance.search.return_value = []
+    account.connect()
+
+    assert account.reconcile("INBOX") == []
+    # Watermark untouched
+    assert account._watermark.load()["INBOX"]["last_delivered_uid"] == 5000
