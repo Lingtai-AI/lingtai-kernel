@@ -169,6 +169,71 @@ def test_swap_allowed_when_target_has_no_context_limit(tmp_path, monkeypatch):
     assert activate_calls == ["no_limit"]
 
 
+def test_swap_skips_guard_when_target_limit_is_zero(tmp_path, monkeypatch):
+    """context_limit: 0 means unlimited / unset, not 'always refuse'."""
+    agent, plib = _make_test_agent(tmp_path)
+    # Add a preset with limit=0 to the library
+    (plib / "zero.json").write_text(json.dumps({
+        "name": "zero",
+        "description": "zero limit",
+        "manifest": {
+            "llm": {"provider": "p4", "model": "m4",
+                    "api_key": None, "api_key_env": "P4KEY"},
+            "capabilities": {"file": {}},
+            "context_limit": 0,
+        },
+    }))
+
+    monkeypatch.setattr(agent, "get_token_usage", lambda: {
+        "ctx_total_tokens": 999999,
+        "input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0,
+        "cached_tokens": 0, "total_tokens": 0, "api_calls": 0,
+        "ctx_system_tokens": 0, "ctx_tools_tokens": 0,
+        "ctx_history_tokens": 999999,
+    })
+
+    activate_calls = []
+    monkeypatch.setattr(agent, "_activate_preset",
+                        lambda n: activate_calls.append(n))
+    monkeypatch.setattr(agent, "_perform_refresh", lambda: None)
+
+    result = agent._intrinsics["system"]({"action": "refresh", "preset": "zero"})
+    assert result["status"] == "ok"
+    assert activate_calls == ["zero"]
+
+
+def test_swap_skips_guard_when_target_limit_is_negative(tmp_path, monkeypatch):
+    """context_limit: -1 means unlimited, not 'always refuse'."""
+    agent, plib = _make_test_agent(tmp_path)
+    (plib / "negone.json").write_text(json.dumps({
+        "name": "negone",
+        "description": "negative limit",
+        "manifest": {
+            "llm": {"provider": "p5", "model": "m5",
+                    "api_key": None, "api_key_env": "P5KEY"},
+            "capabilities": {"file": {}},
+            "context_limit": -1,
+        },
+    }))
+
+    monkeypatch.setattr(agent, "get_token_usage", lambda: {
+        "ctx_total_tokens": 999999,
+        "input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0,
+        "cached_tokens": 0, "total_tokens": 0, "api_calls": 0,
+        "ctx_system_tokens": 0, "ctx_tools_tokens": 0,
+        "ctx_history_tokens": 999999,
+    })
+
+    activate_calls = []
+    monkeypatch.setattr(agent, "_activate_preset",
+                        lambda n: activate_calls.append(n))
+    monkeypatch.setattr(agent, "_perform_refresh", lambda: None)
+
+    result = agent._intrinsics["system"]({"action": "refresh", "preset": "negone"})
+    assert result["status"] == "ok"
+    assert activate_calls == ["negone"]
+
+
 def test_swap_to_unknown_preset_still_returns_not_found(tmp_path, monkeypatch):
     """Guard does not interfere with the existing 'unknown preset' error."""
     agent, plib = _make_test_agent(tmp_path)

@@ -205,6 +205,46 @@ def test_expand_inherit_handles_missing_main_llm_creds():
 # ---------------------------------------------------------------------------
 
 
+def test_load_preset_rejects_dot_dot_traversal(tmp_path):
+    """A preset name containing path traversal (..) is rejected."""
+    plib = tmp_path / "presets"
+    plib.mkdir()
+    # Create a file outside the library that would be reachable via traversal
+    outside = tmp_path / "secret.json"
+    outside.write_text(json.dumps({
+        "name": "secret", "manifest": {"llm": {"provider": "x", "model": "y"}}
+    }))
+    with pytest.raises(KeyError, match="not found|escapes"):
+        load_preset(plib, "../secret")
+
+
+def test_load_preset_rejects_absolute_path_in_name(tmp_path):
+    """A preset name that is an absolute path is rejected (or simply not found)."""
+    plib = tmp_path / "presets"
+    plib.mkdir()
+    with pytest.raises(KeyError):
+        load_preset(plib, "/etc/passwd")
+
+
+def test_load_preset_rejects_nested_traversal(tmp_path):
+    """A preset name with multiple '..' segments is rejected."""
+    plib = tmp_path / "presets"
+    plib.mkdir()
+    sneaky = tmp_path.parent / "sneaky.json"
+    if sneaky.parent.exists():
+        sneaky.write_text('{"name":"x","manifest":{"llm":{"provider":"x","model":"y"}}}')
+        try:
+            with pytest.raises(KeyError):
+                load_preset(plib, "../../sneaky")
+        finally:
+            sneaky.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# resolve_presets_path
+# ---------------------------------------------------------------------------
+
+
 def test_resolve_presets_path_absolute(tmp_path):
     abs_path = tmp_path / "presets"
     manifest = {"presets_path": str(abs_path)}

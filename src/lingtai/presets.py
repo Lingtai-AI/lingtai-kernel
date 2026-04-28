@@ -98,6 +98,19 @@ def load_preset(presets_path: Path | str, name: str) -> dict:
     if file_path is None:
         raise KeyError(f"preset not found: {name!r} in {presets_path}")
 
+    # Boundary check: refuse names that escape the presets directory.
+    # An agent passing "../../../etc/passwd" would otherwise let load_preset
+    # follow that path out of the library.
+    try:
+        resolved = file_path.resolve()
+        root = presets_path.resolve()
+    except OSError as e:
+        raise KeyError(f"preset path resolution failed for {name!r}: {e}") from e
+    if not str(resolved).startswith(str(root) + "/") and resolved.parent != root:
+        raise KeyError(
+            f"preset name {name!r} escapes presets directory {presets_path}"
+        )
+
     try:
         data = load_jsonc(file_path)
     except Exception as e:

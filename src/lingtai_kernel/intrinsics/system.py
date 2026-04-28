@@ -171,8 +171,8 @@ def _check_context_fits(agent, preset_name: str) -> tuple:
         return True, None, None  # let activate_preset surface the error
 
     target_limit = preset.get("manifest", {}).get("context_limit")
-    if target_limit is None:
-        return True, None, None  # no limit set on target → no guard
+    if target_limit is None or target_limit <= 0:
+        return True, None, None  # no usable limit → no guard
 
     try:
         usage = agent.get_token_usage()
@@ -214,7 +214,7 @@ def _refresh(agent, args: dict) -> dict:
                        requested=preset_name,
                        reason="not_found")
             return {"status": "error",
-                    "message": f"preset {preset_name!r} not found"}
+                    "message": f"preset {preset_name!r} not found — call system(action='presets') to see available presets"}
         except (ValueError, OSError, NotImplementedError) as e:
             agent._log("preset_swap_failed",
                        requested=preset_name,

@@ -351,6 +351,7 @@ def test_refresh_with_unknown_preset_returns_error(tmp_path, monkeypatch):
 
     assert result["status"] == "error"
     assert "ghost" in result["message"]
+    assert "presets" in result["message"]  # guidance: call system(action='presets')
     events = [e for e, _ in log_events]
     assert "preset_swap_failed" in events
     assert perform_calls == []  # refresh NOT triggered
