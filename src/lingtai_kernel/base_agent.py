@@ -290,6 +290,11 @@ class BaseAgent:
         self._last_snapshot: float = 0.0
         self._last_gc: float = 0.0
 
+        # Auto-fallback state: True after we've tried swapping to default_preset
+        # during an AED exhaustion. One-shot per process — the next AED exhaustion
+        # proceeds to ASLEEP normally.
+        self._preset_fallback_attempted = False
+
         # Session manager — LLM session, token tracking, compaction
         self._session = SessionManager(
             llm_service=service,
@@ -980,6 +985,24 @@ class BaseAgent:
                         # message (or explicit /cpr) drive recovery with context
                         # intact.
                         if aed_attempts == self._config.max_aed_attempts:
+                            # Auto-fallback: if we're on a non-default preset, try swapping to
+                            # default before going ASLEEP. One-shot per process — guarded by
+                            # _preset_fallback_attempted so a default-preset failure proceeds normally.
+                            if not self._preset_fallback_attempted and self._can_fallback_preset():
+                                self._preset_fallback_attempted = True
+                                self._log("preset_auto_fallback",
+                                          reason=err_desc,
+                                          failed_attempts=aed_attempts)
+                                try:
+                                    self._activate_default_preset()
+                                except Exception as e:
+                                    self._log("preset_auto_fallback_failed", error=str(e))
+                                    # fall through to ASLEEP
+                                else:
+                                    # Successfully swapped — trigger refresh and let the relaunch take over
+                                    self._perform_refresh()
+                                    return
+
                             self._log("aed_exhausted", attempts=aed_attempts, error=err_desc)
                             sleep_state = AgentState.ASLEEP
                             self._asleep.set()
@@ -1090,10 +1113,35 @@ class BaseAgent:
         """Swap to a named preset — override in subclasses that support presets.
 
         BaseAgent raises NotImplementedError; Agent (lingtai.agent) overrides
-        this with the real implementation (T5).
+        this with the real implementation.
         """
         raise NotImplementedError(
             f"_activate_preset not supported on {type(self).__name__}"
+        )
+
+    def _can_fallback_preset(self) -> bool:
+        """True if init.json has manifest.preset and active != default.
+
+        Returns False if the umbrella is missing, fields are missing, or
+        active already equals default (already on the fallback target).
+        """
+        import json
+        try:
+            data = json.loads((self._working_dir / "init.json").read_text(encoding="utf-8"))
+            preset = data.get("manifest", {}).get("preset") or {}
+            if not isinstance(preset, dict):
+                return False
+            active = preset.get("active")
+            default = preset.get("default")
+            return bool(active and default and active != default)
+        except Exception:
+            return False
+
+    def _activate_default_preset(self) -> None:
+        """Override hook — Agent subclass implements via _activate_preset(default).
+        BaseAgent stub raises NotImplementedError."""
+        raise NotImplementedError(
+            "_activate_default_preset must be implemented by Agent subclass"
         )
 
     def _build_launch_cmd(self) -> list[str] | None:

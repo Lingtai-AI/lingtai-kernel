@@ -628,6 +628,16 @@ class Agent(BaseAgent):
                        encoding="utf-8")
         os.replace(str(tmp), str(init_path))
 
+    def _activate_default_preset(self) -> None:
+        """Read manifest.preset.default and activate it. Used by AED auto-fallback."""
+        import json
+        data = json.loads((self._working_dir / "init.json").read_text(encoding="utf-8"))
+        preset = data.get("manifest", {}).get("preset") or {}
+        default_name = preset.get("default")
+        if not default_name:
+            raise RuntimeError("no default preset configured")
+        self._activate_preset(default_name)
+
     def _setup_from_init(self) -> None:
         """Full construct/reconstruct from init.json."""
         self._log("refresh_start")
