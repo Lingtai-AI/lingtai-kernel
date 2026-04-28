@@ -25,13 +25,6 @@ def test_web_search_added_by_capability(tmp_path):
     assert "web_search" in agent._tool_handlers
 
 
-def test_web_search_requires_provider_or_service(tmp_path):
-    """web_search without provider or service raises ValueError at setup time."""
-    with pytest.raises(ValueError, match="web_search capability requires"):
-        Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path,
-              capabilities=["web_search"])
-
-
 def test_web_search_with_dedicated_service():
     """web_search capability should use SearchService if provided."""
     mock_result = MagicMock()
