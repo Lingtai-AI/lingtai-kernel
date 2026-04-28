@@ -718,3 +718,41 @@ def test_listener_stop_event_exits_cleanly(
 
     # idle_check should NOT have been called when stop was set before entry
     instance.idle_check.assert_not_called()
+
+
+def test_stop_listening_calls_idle_done_to_unblock(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    """stop_listening must send DONE on the listener socket so a long-running
+    idle_check returns promptly instead of waiting up to 9 minutes."""
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+
+    # Pretend the listener has connected and is in IDLE
+    account._listen_imap = instance
+    account._listen_in_idle = True
+    account._stop_event = threading.Event()
+
+    account.stop_listening()
+
+    assert account._stop_event.is_set()
+    instance.idle_done.assert_called_once()
+
+
+def test_stop_listening_skips_idle_done_if_not_in_idle(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    """If the listener isn't in IDLE, stop_listening should not call idle_done."""
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+
+    account._listen_imap = instance
+    account._listen_in_idle = False
+    account._stop_event = threading.Event()
+
+    account.stop_listening()
+
+    assert account._stop_event.is_set()
+    instance.idle_done.assert_not_called()

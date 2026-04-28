@@ -140,6 +140,11 @@ class IMAPAccount:
         self._tool_imap: IMAPClient | None = None
         self._lock = threading.Lock()
 
+        # Serializes the watermark load→search→save round-trip in reconcile()
+        # against any potential concurrent callers. The listener thread is the
+        # only intended caller in production; this lock is a defensive guard.
+        self._reconcile_lock = threading.Lock()
+
         # Listener connection (background thread only)
         self._listen_imap: IMAPClient | None = None
         self._listen_in_idle = False
@@ -615,70 +620,76 @@ class IMAPAccount:
         On UIDVALIDITY change, resets state for the folder and returns [].
         On first call (no state), bootstraps by delivering current UNSEEN
         once and setting the watermark to UIDNEXT-1.
+
+        The listener thread is the intended caller. The watermark load → SEARCH
+        → save round-trip is serialized via _reconcile_lock so concurrent
+        callers (e.g., a tool-call invocation from manager) cannot deliver
+        duplicate envelopes by both reading the same stale watermark.
         """
         if self._watermark is None:
             return []
 
-        with self._lock:
-            imap = self._ensure_connected()
-            status = imap.folder_status(
-                folder, [b"UIDVALIDITY", b"UIDNEXT"],
-            )
-        uidvalidity = int(status[b"UIDVALIDITY"])
-        uidnext = int(status[b"UIDNEXT"])
+        with self._reconcile_lock:
+            with self._lock:
+                imap = self._ensure_connected()
+                status = imap.folder_status(
+                    folder, [b"UIDVALIDITY", b"UIDNEXT"],
+                )
+            uidvalidity = int(status[b"UIDVALIDITY"])
+            uidnext = int(status[b"UIDNEXT"])
 
-        state = self._watermark.load()
-        folder_state = state.get(folder)
+            state = self._watermark.load()
+            folder_state = state.get(folder)
 
-        # Bootstrap: no state for this folder. Deliver currently-UNSEEN
-        # messages once and pin watermark at uidnext-1 so future calls
-        # only consider UIDs >= uidnext as new. UNSEEN UIDs are by
-        # definition < UIDNEXT, so they are guaranteed to be at or below
-        # the watermark we set here.
-        if folder_state is None:
-            unseen_envelopes = self._bootstrap_deliver_unseen(folder)
-            state[folder] = {
-                "uidvalidity": uidvalidity,
-                "last_delivered_uid": uidnext - 1,
-            }
-            self._watermark.save(state)
-            return unseen_envelopes
+            # Bootstrap: no state for this folder. Deliver currently-UNSEEN
+            # messages once and pin watermark at uidnext-1 so future calls
+            # only consider UIDs >= uidnext as new. UNSEEN UIDs are by
+            # definition < UIDNEXT, so they are guaranteed to be at or below
+            # the watermark we set here.
+            if folder_state is None:
+                unseen_envelopes = self._bootstrap_deliver_unseen(folder)
+                state[folder] = {
+                    "uidvalidity": uidvalidity,
+                    "last_delivered_uid": uidnext - 1,
+                }
+                self._watermark.save(state)
+                return unseen_envelopes
 
-        # UIDVALIDITY change: reset, deliver nothing
-        if folder_state.get("uidvalidity") != uidvalidity:
-            logger.warning(
-                "UIDVALIDITY changed for %s/%s (%s -> %s); resetting watermark",
-                self._email_address, folder,
-                folder_state.get("uidvalidity"), uidvalidity,
-            )
-            state[folder] = {
-                "uidvalidity": uidvalidity,
-                "last_delivered_uid": uidnext - 1,
-            }
-            self._watermark.save(state)
-            return []
+            # UIDVALIDITY change: reset, deliver nothing
+            if folder_state.get("uidvalidity") != uidvalidity:
+                logger.warning(
+                    "UIDVALIDITY changed for %s/%s (%s -> %s); resetting watermark",
+                    self._email_address, folder,
+                    folder_state.get("uidvalidity"), uidvalidity,
+                )
+                state[folder] = {
+                    "uidvalidity": uidvalidity,
+                    "last_delivered_uid": uidnext - 1,
+                }
+                self._watermark.save(state)
+                return []
 
-        # Normal path
-        last = int(folder_state["last_delivered_uid"])
-        with self._lock:
-            imap = self._ensure_connected()
-            imap.select_folder(folder, readonly=True)
-            new_uids = imap.search([b"UID", f"{last+1}:*".encode()])
-        # IMAP semantics: when range start > UIDNEXT the server returns
-        # the highest existing UID. Filter that out.
-        new_uids = [u for u in new_uids if int(u) > last]
-        if not new_uids:
-            return []
+            # Normal path
+            last = int(folder_state["last_delivered_uid"])
+            with self._lock:
+                imap = self._ensure_connected()
+                imap.select_folder(folder, readonly=True)
+                new_uids = imap.search([b"UID", f"{last+1}:*".encode()])
+            # IMAP semantics: when range start > UIDNEXT the server returns
+            # the highest existing UID. Filter that out.
+            new_uids = [u for u in new_uids if int(u) > last]
+            if not new_uids:
+                return []
 
-        envelopes = self.fetch_headers_by_uids(folder, [str(u) for u in new_uids])
-        if envelopes:
-            new_high = max(int(e["uid"]) for e in envelopes)
-            state[folder] = {
-                "uidvalidity": uidvalidity,
-                "last_delivered_uid": new_high,
-            }
-            self._watermark.save(state)
-        return envelopes
+            envelopes = self.fetch_headers_by_uids(folder, [str(u) for u in new_uids])
+            if envelopes:
+                new_high = max(int(e["uid"]) for e in envelopes)
+                state[folder] = {
+                    "uidvalidity": uidvalidity,
+                    "last_delivered_uid": new_high,
+                }
+                self._watermark.save(state)
+            return envelopes
 
     def _bootstrap_deliver_unseen(self, folder: str) -> list[dict]:
         """Bootstrap path: deliver currently-UNSEEN messages once.
@@ -809,6 +820,8 @@ class IMAPAccount:
                 if interesting:
                     imap.idle_done()
                     self._listen_in_idle = False
+                    if self._stop_event.is_set():
+                        return
                     envelopes = self.reconcile(folder)
                     if envelopes:
                         on_message(envelopes)
@@ -837,6 +850,17 @@ class IMAPAccount:
     def stop_listening(self) -> None:
         if self._stop_event is not None:
             self._stop_event.set()
+        # Unblock any in-flight idle_check on the listener thread by sending
+        # DONE on the listener socket. Cross-thread send is safe: imapclient's
+        # idle_done() is a single socket write + read, and the listener thread
+        # will observe either a normal idle_check return or an IMAPClientError,
+        # check the stop event, and exit. Without this, idle_check can block
+        # for up to _IDLE_SLICE_SEC (9 min) before noticing the stop event.
+        if self._listen_imap is not None and self._listen_in_idle:
+            try:
+                self._listen_imap.idle_done()
+            except Exception:
+                pass
         if self._bg_thread is not None:
             self._bg_thread.join(timeout=15.0)
             self._bg_thread = None
