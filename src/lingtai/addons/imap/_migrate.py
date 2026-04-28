@@ -50,6 +50,6 @@ def migrate_legacy_state(state_dir: Path | str) -> list[Path]:
             path.unlink()
             deleted.append(path)
             logger.info("imap: removed legacy state file %s", path)
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.warning("imap: could not remove legacy state file %s: %s", path, exc)
     return deleted

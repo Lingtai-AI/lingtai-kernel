@@ -48,3 +48,11 @@ def test_unrelated_files_ignored(tmp_path: Path) -> None:
     deleted = migrate_legacy_state(tmp_path)
     assert deleted == []
     assert (tmp_path / "contacts.json").exists()
+
+
+def test_unparseable_json_is_preserved(tmp_path: Path) -> None:
+    corrupt = tmp_path / "alice@gmail.com.state.json"
+    corrupt.write_text("{not valid json")
+    deleted = migrate_legacy_state(tmp_path)
+    assert deleted == []
+    assert corrupt.exists()
