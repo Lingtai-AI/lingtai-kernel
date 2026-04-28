@@ -11,6 +11,16 @@ from lingtai_kernel.base_agent import BaseAgent
 from lingtai_kernel.intrinsics import ALL_INTRINSICS
 
 
+@pytest.fixture(autouse=True)
+def _stub_preset_connectivity(monkeypatch):
+    """Auto-mock network probes in test_system.py so _presets tests don't
+    actually open sockets. Returns a fixed 42ms latency."""
+    from lingtai import preset_connectivity
+    monkeypatch.setattr(preset_connectivity, "_probe_host",
+                        lambda host, port, timeout: 42)
+    yield
+
+
 def make_mock_service():
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
@@ -434,9 +444,20 @@ def test_presets_action_lists_full_library(tmp_path):
     beta = next(p for p in result["available"] if p["name"] == "beta")
     assert beta["description"] == {"summary": "structured", "gains": ["a"]}
 
+    for entry in result["available"]:
+        assert "connectivity" in entry
+        assert entry["connectivity"]["status"] in ("ok", "no_credentials", "unreachable")
+        assert "checked_at" in entry["connectivity"]
+
 
 def test_presets_action_strips_credentials(tmp_path):
-    """presets action does not surface api_key, api_key_env, base_url, api_compat."""
+    """presets action does not surface api_key, base_url, or api_compat in the llm summary.
+
+    api_key_env names (e.g. 'OPENAI_API_KEY') are not credentials — they are just
+    environment variable names. The connectivity field may mention the env var name
+    in its 'no_credentials' error message, which is intentional and non-sensitive.
+    Only the actual key value ('SECRET') must never appear in the output.
+    """
     import json
     plib = tmp_path / "presets"
     plib.mkdir()
@@ -455,8 +476,10 @@ def test_presets_action_strips_credentials(tmp_path):
 
     secret = result["available"][0]
     assert set(secret["llm"].keys()) == {"provider", "model"}
+    # The actual api_key value must never appear — it is a true credential.
     assert "SECRET" not in json.dumps(result)
-    assert "ENVKEY" not in json.dumps(result)
+    # The base_url must not appear in the llm summary (connectivity uses it
+    # internally for probing but does not store it in the output).
     assert "example.com" not in json.dumps(result)
 
 
@@ -655,3 +678,79 @@ def test_refresh_revert_preset_when_active_equals_default_still_succeeds(tmp_pat
     assert result["status"] == "ok"
     assert activate_default_calls == [True]  # called even though it's effectively a no-op
     assert perform_calls == [True]
+
+
+# ---------------------------------------------------------------------------
+# connectivity field on presets action
+# ---------------------------------------------------------------------------
+
+
+def test_presets_action_includes_connectivity(tmp_path, monkeypatch):
+    """presets action returns a connectivity field for each preset.
+    Test covers: ok (with credentials), no_credentials (env var missing)."""
+    import json
+    plib = tmp_path / "presets"
+    plib.mkdir()
+    (plib / "alpha.json").write_text(json.dumps({
+        "name": "alpha", "description": "x",
+        "manifest": {
+            "llm": {"provider": "openai", "model": "gpt-4",
+                    "api_key": None, "api_key_env": "ALPHA_KEY",
+                    "base_url": "https://api.example.com"},
+            "capabilities": {"file": {}},
+        },
+    }))
+    (plib / "beta.json").write_text(json.dumps({
+        "name": "beta", "description": "y",
+        "manifest": {
+            "llm": {"provider": "openai", "model": "gpt-3",
+                    "api_key": None, "api_key_env": "BETA_KEY",
+                    "base_url": "https://api.example.com"},
+            "capabilities": {"file": {}},
+        },
+    }))
+    # alpha has credentials, beta doesn't
+    monkeypatch.setenv("ALPHA_KEY", "sk-test")
+    monkeypatch.delenv("BETA_KEY", raising=False)
+
+    agent = _make_test_agent_for_presets(tmp_path, presets_path=plib, active_preset="alpha")
+    result = agent._intrinsics["system"]({"action": "presets"})
+
+    assert result["status"] == "ok"
+    by_name = {p["name"]: p for p in result["available"]}
+
+    # alpha — has credentials, mocked probe succeeds → ok
+    assert by_name["alpha"]["connectivity"]["status"] == "ok"
+    assert by_name["alpha"]["connectivity"]["latency_ms"] == 42
+
+    # beta — no credentials → no_credentials, no network call
+    assert by_name["beta"]["connectivity"]["status"] == "no_credentials"
+    assert by_name["beta"]["connectivity"]["latency_ms"] is None
+
+
+def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch):
+    """If the network probe raises, connectivity status is 'unreachable'."""
+    import json
+    plib = tmp_path / "presets"
+    plib.mkdir()
+    (plib / "broken.json").write_text(json.dumps({
+        "name": "broken", "description": "x",
+        "manifest": {
+            "llm": {"provider": "openai", "model": "gpt-4",
+                    "api_key": None, "api_key_env": "BROKEN_KEY",
+                    "base_url": "https://api.example.com"},
+            "capabilities": {"file": {}},
+        },
+    }))
+    monkeypatch.setenv("BROKEN_KEY", "sk-test")
+    from lingtai import preset_connectivity
+    # Override the autouse fixture's stub for this test
+    monkeypatch.setattr(preset_connectivity, "_probe_host",
+                        lambda host, port, timeout: (_ for _ in ()).throw(OSError("DNS fail")))
+
+    agent = _make_test_agent_for_presets(tmp_path, presets_path=plib, active_preset="broken")
+    result = agent._intrinsics["system"]({"action": "presets"})
+
+    by_name = {p["name"]: p for p in result["available"]}
+    assert by_name["broken"]["connectivity"]["status"] == "unreachable"
+    assert "DNS fail" in by_name["broken"]["connectivity"]["error"]

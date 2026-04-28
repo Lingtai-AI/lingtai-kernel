@@ -267,12 +267,13 @@ def _refresh(agent, args: dict) -> dict:
 def _presets(agent, args: dict) -> dict:
     """List available presets in the agent's library, with active marker.
 
-    Reads init.json from disk to discover manifest.preset.path and
-    manifest.preset.active, then enumerates the library.
-    Strips credentials from llm summary.
+    For each preset, includes a `connectivity` field reporting whether the
+    preset's LLM endpoint is reachable RIGHT NOW. Probes run in parallel.
+    No caching — every call is a fresh check.
     """
     import json
     from lingtai.presets import discover_presets, load_preset, resolve_presets_path
+    from lingtai.preset_connectivity import check_many
 
     init_path = agent._working_dir / "init.json"
     try:
@@ -286,6 +287,7 @@ def _presets(agent, args: dict) -> dict:
     presets_path = resolve_presets_path(manifest, agent._working_dir)
 
     available = []
+    connectivity_specs = []
     for name in sorted(discover_presets(presets_path).keys()):
         try:
             preset = load_preset(presets_path, name)
@@ -302,6 +304,16 @@ def _presets(agent, args: dict) -> dict:
             },
             "capabilities": pm.get("capabilities", {}),
         })
+        connectivity_specs.append({
+            "provider": llm.get("provider"),
+            "base_url": llm.get("base_url"),
+            "api_key_env": llm.get("api_key_env"),
+        })
+
+    # Probe all presets in parallel — fresh each call.
+    connectivities = check_many(connectivity_specs)
+    for entry, conn in zip(available, connectivities):
+        entry["connectivity"] = conn
 
     return {
         "status": "ok",
