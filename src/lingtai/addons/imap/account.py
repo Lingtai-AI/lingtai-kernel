@@ -699,10 +699,140 @@ class IMAPAccount:
         return [self._envelope_from_fetch(uid, info, folder)
                 for uid, info in sorted(data.items())]
 
-    # -- Listener (added in subsequent tasks) ------------------------------
+    # -- Listener loop ------------------------------------------------------
+
+    _IDLE_SLICE_SEC = 540          # 9 min slice
+    _IDLE_CYCLE_SEC = 29 * 60      # 29 min hard cap
 
     def start_listening(self, on_message: Callable[[list[dict]], None]) -> None:
-        raise NotImplementedError("filled in Task 11")
+        if self._bg_thread is not None:
+            return
+        self._stop_event = threading.Event()
+        self._bg_thread = threading.Thread(
+            target=self._run_listener_loop,
+            args=("INBOX", on_message),
+            daemon=True,
+        )
+        self._bg_thread.start()
+
+    def _run_listener_loop(
+        self,
+        folder: str,
+        on_message: Callable[[list[dict]], None],
+        *,
+        max_iterations: int | None = None,
+        backoff_override: float | None = None,
+    ) -> None:
+        """The listener body. Connect, IDLE in 9-min slices for up to 29 min,
+        reconcile on EXISTS/RECENT, NOOP on silent slice, reconnect on error.
+
+        ``max_iterations`` and ``backoff_override`` exist for testability —
+        production calls leave them None.
+        """
+        assert self._stop_event is not None
+        iterations = 0
+        while not self._stop_event.is_set():
+            if max_iterations is not None and iterations >= max_iterations:
+                return
+            iterations += 1
+            try:
+                self._connect_listener(folder)
+                self._backoff_index = 0
+                # Catch up on anything that arrived while we were down
+                envelopes = self.reconcile(folder)
+                if envelopes:
+                    on_message(envelopes)
+                if self._stop_event.is_set():
+                    return
+                self._idle_session(folder, on_message)
+            except (socket.error, OSError, IMAPClientError) as e:
+                logger.warning(
+                    "listener error on %s: %s", self._email_address, e,
+                )
+                self._disconnect_listener()
+                delay = (
+                    backoff_override
+                    if backoff_override is not None
+                    else self._backoff_steps[
+                        min(self._backoff_index, len(self._backoff_steps) - 1)
+                    ]
+                )
+                self._backoff_index += 1
+                if self._stop_event.wait(delay):
+                    return
+        self._disconnect_listener()
+
+    def _connect_listener(self, folder: str) -> None:
+        """Open the dedicated listener IMAPClient and select INBOX."""
+        if self._listen_imap is not None:
+            try:
+                self._listen_imap.logout()
+            except Exception:
+                pass
+        client = IMAPClient(self._imap_host, port=self._imap_port, ssl=True)
+        client.login(self._email_address, self._email_password)
+        client.select_folder(folder)
+        self._listen_imap = client
+
+    def _disconnect_listener(self) -> None:
+        if self._listen_imap is not None:
+            try:
+                self._listen_imap.logout()
+            except Exception:
+                pass
+            self._listen_imap = None
+        self._listen_in_idle = False
+
+    def _idle_session(
+        self,
+        folder: str,
+        on_message: Callable[[list[dict]], None],
+    ) -> None:
+        """One full IDLE session: re-issue every 29 min, slice every 9 min,
+        NOOP probe on silent slices."""
+        assert self._listen_imap is not None
+        assert self._stop_event is not None
+        imap = self._listen_imap
+        cycle_deadline = time.monotonic() + self._IDLE_CYCLE_SEC
+        imap.idle()
+        self._listen_in_idle = True
+        try:
+            while time.monotonic() < cycle_deadline:
+                if self._stop_event.is_set():
+                    return
+                responses = imap.idle_check(timeout=self._IDLE_SLICE_SEC)
+                interesting = [
+                    r for r in responses
+                    if isinstance(r, tuple) and len(r) >= 2
+                    and r[1] in (b"EXISTS", b"RECENT")
+                ]
+                if interesting:
+                    imap.idle_done()
+                    self._listen_in_idle = False
+                    envelopes = self.reconcile(folder)
+                    if envelopes:
+                        on_message(envelopes)
+                    if self._stop_event.is_set():
+                        return
+                    imap.idle()
+                    self._listen_in_idle = True
+                elif not responses:
+                    # Silent slice — probe socket
+                    imap.idle_done()
+                    self._listen_in_idle = False
+                    imap.noop()
+                    if self._stop_event.is_set():
+                        return
+                    imap.idle()
+                    self._listen_in_idle = True
+                # else: keep-alive or unrelated event, stay in IDLE
+        finally:
+            try:
+                if self._listen_in_idle:
+                    imap.idle_done()
+            except Exception:
+                pass
+            self._listen_in_idle = False
 
     def stop_listening(self) -> None:
         if self._stop_event is not None:

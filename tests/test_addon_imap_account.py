@@ -5,6 +5,8 @@ with synthetic IDLE responses.
 """
 from __future__ import annotations
 
+import socket
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -590,3 +592,129 @@ def test_reconcile_bootstrap_with_no_unseen_pins_at_uidnext_minus_one(
     assert account._watermark.load() == {
         "INBOX": {"uidvalidity": 1, "last_delivered_uid": 4999}
     }
+
+
+def test_listener_idle_exists_triggers_reconcile(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    """One IDLE slice returns EXISTS → loop calls idle_done, reconcile, idle again.
+
+    NOTE: Uses UID 101 (above UIDNEXT=100 watermark baseline) so the
+    reconcile UID-range filter (> last=99) accepts it. The original spec
+    used UID 99 which is at-or-below the watermark and would be silently
+    filtered out, making the delivery assertion unreachable.
+    """
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+    instance.folder_status.return_value = {b"UIDVALIDITY": 1, b"UIDNEXT": 100}
+    instance.search.side_effect = [
+        [],            # bootstrap UNSEEN search → empty
+        [101],         # second search: UID range query for new mail (filtered)
+    ]
+    # idle_check returns: first call → EXISTS; second call → empty (slice expired)
+    instance.idle_check.side_effect = [
+        [(101, b"EXISTS")],
+        [],
+    ]
+    instance.fetch.return_value = {
+        101: {b"FLAGS": (), b"BODY[HEADER.FIELDS (FROM TO SUBJECT DATE)]":
+              b"From: a@b.com\r\nSubject: hi\r\n"},
+    }
+
+    received: list[dict] = []
+    stop = threading.Event()
+
+    def on_message(headers: list[dict]) -> None:
+        received.extend(headers)
+        stop.set()  # exit loop after first delivery
+
+    account._stop_event = stop
+    account._run_listener_loop(folder="INBOX", on_message=on_message,
+                               max_iterations=3)
+
+    instance.idle.assert_called()
+    instance.idle_done.assert_called()
+    assert any(e["uid"] == "101" for e in received)
+
+
+def test_listener_silent_slice_runs_noop_keepalive(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+    instance.folder_status.return_value = {b"UIDVALIDITY": 1, b"UIDNEXT": 100}
+    instance.search.return_value = []
+    # idle_check always returns nothing (silent slice) — callable so it
+    # never raises StopIteration regardless of how many times it's called
+    instance.idle_check.side_effect = None
+    instance.idle_check.return_value = []
+
+    stop = threading.Event()
+
+    def on_message(headers: list[dict]) -> None:
+        pass
+
+    account._stop_event = stop
+    # Stop after a tight loop
+    threading.Timer(0.05, stop.set).start()
+    account._run_listener_loop(folder="INBOX", on_message=on_message,
+                               max_iterations=3)
+
+    instance.noop.assert_called()
+
+
+def test_listener_reconnects_on_idle_check_error(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+    instance.folder_status.return_value = {b"UIDVALIDITY": 1, b"UIDNEXT": 100}
+    instance.search.return_value = []
+    # First idle_check raises (triggers reconnect); all subsequent calls
+    # return [] so the loop runs cleanly until stop fires
+    _idle_check_calls = [0]
+
+    def _idle_check_side_effect(**kwargs: object) -> list:
+        _idle_check_calls[0] += 1
+        if _idle_check_calls[0] == 1:
+            raise socket.error("connection reset")
+        return []
+
+    instance.idle_check.side_effect = _idle_check_side_effect
+
+    stop = threading.Event()
+
+    def on_message(headers: list[dict]) -> None:
+        pass
+
+    threading.Timer(0.1, stop.set).start()
+    account._stop_event = stop
+    account._run_listener_loop(folder="INBOX", on_message=on_message,
+                               max_iterations=3, backoff_override=0.0)
+
+    # connect was called more than once (initial + reconnect)
+    assert mock_imapclient_class.call_count >= 2
+
+
+def test_listener_stop_event_exits_cleanly(
+    mock_imapclient_class, account: IMAPAccount,
+) -> None:
+    instance = mock_imapclient_class.return_value
+    instance.capabilities.return_value = (b"IDLE",)
+    instance.list_folders.return_value = []
+    instance.folder_status.return_value = {b"UIDVALIDITY": 1, b"UIDNEXT": 100}
+    instance.search.return_value = []
+    instance.idle_check.return_value = []
+
+    stop = threading.Event()
+    stop.set()  # already set — loop should not enter even one full slice
+    account._stop_event = stop
+
+    account._run_listener_loop(folder="INBOX", on_message=lambda h: None,
+                               max_iterations=3)
+
+    # idle_check should NOT have been called when stop was set before entry
+    instance.idle_check.assert_not_called()
