@@ -1,21 +1,101 @@
 ---
 name: daemon-manual
-description: Reference manual for the `daemon` tool — debugging, advanced patterns, best practices, and worked examples. Read when you need depth beyond the tool description.
-version: 0.1.0
+description: Reference manual for the `daemon` tool — debugging, inspection patterns, and worked examples for the filesystem-backed emanation log surface.
+version: 0.2.0
 ---
 
 # daemon manual
 
-*This manual is a placeholder. Content will be populated as operational knowledge accumulates.*
+The `daemon` tool's schema description covers the happy path. This manual is the deeper reference: how to inspect a slow or failed emanation, the on-disk artifact layout, and worked examples.
 
-The `daemon` tool's schema-level description covers the happy path. This manual is the place for depth the description can't carry: symptoms → causes → fixes, non-obvious idioms, worked multi-step examples, migration notes when behavior changes, and companion scripts for diagnostics.
+## Each emanation is a forensic mini-avatar
 
-## Structure (planned)
+Every time you call `daemon(action="emanate", tasks=[...])`, each task gets a working folder under `daemons/` in your own directory. The folder is named:
 
-- `SKILL.md` — this entry point.
-- `references/debugging.md` — symptom/cause/fix.
-- `references/advanced.md` — non-obvious patterns and idioms.
-- `references/examples.md` — full worked sequences.
-- `scripts/` — runnable diagnostics and helpers.
+    daemons/em-<N>-<YYYYMMDD-HHMMSS>-<6 hex>/
 
-Sub-documents appear as they're authored. Absent sections mean nothing's been written yet — not that the topic is irrelevant.
+where `em-<N>` is the in-context handle (e.g. `em-3`). The handle resets to `em-1` after `reclaim`, but the timestamp+hash means historical folders never collide. **Folders persist forever** — `reclaim` only stops processes, not files. They're cleaned up incidentally when you molt (which wipes the working directory).
+
+This means: when an emanation looks stuck, you can read its actual state instead of guessing. Don't kill it on a hunch — inspect first.
+
+## Folder layout
+
+```
+daemons/em-3-20260427-094215-a1b2c3/
+├── daemon.json                  ← identity card + live status snapshot
+├── .prompt                      ← system prompt as built (forensic)
+├── .heartbeat                   ← mtime touched on every write
+├── history/
+│   └── chat_history.jsonl       ← full LLM transcript
+└── logs/
+    ├── token_ledger.jsonl       ← per-call token usage
+    └── events.jsonl             ← daemon_start, tool_call, tool_result, daemon_done/...
+```
+
+## Inspection patterns
+
+### "Is this emanation actually doing anything?"
+
+Read `daemon.json` once. The fields you want:
+
+- `state` — `running` / `done` / `failed` / `cancelled` / `timeout`
+- `current_tool` — `"read"` / `"bash"` / null. If null while `state=running`, the emanation is waiting on the LLM. If non-null, it's executing that tool.
+- `turn` — which LLM round the emanation is on
+- `tool_call_count` — how many tool dispatches it has done
+- `tokens` — running totals
+- `elapsed_s` — wall clock since start
+
+If `current_tool` is null AND `tool_call_count` hasn't changed for a while, the LLM is thinking — wait. If `current_tool` is set and stays set, that tool is slow (e.g., a big file read or a long bash command).
+
+### "What has it figured out so far?"
+
+Tail `history/chat_history.jsonl`. Each line is one role/turn entry:
+
+- `{role: "user", kind: "task"}` — the original task
+- `{role: "assistant", text: "..."}` — what the emanation said
+- `{role: "user", kind: "tool_results"}` — what the tools returned
+- `{role: "user", kind: "followup"}` — your `daemon(action="ask", ...)` messages
+
+Read the most recent assistant text to see the latest progress narrative.
+
+### "What did it spend?"
+
+Either of:
+- `daemon.json` field `tokens` — running totals across the whole run
+- `logs/token_ledger.jsonl` — per-call entries, sortable by line
+
+The same per-call entries are also in your own `logs/token_ledger.jsonl` (the parent's), tagged with `source: "daemon"` and `em_id`. Your lifetime token totals (what `sum_token_ledger` reports) include all daemon spend.
+
+### "Why did it fail?"
+
+Read `daemon.json`'s `error` field — `{type, message}`. For more depth, tail `logs/events.jsonl` for the `daemon_error` event and look at the preceding `tool_call`/`tool_result` entries to see what was happening just before the failure.
+
+## Worked example: a daemon that's been running 5 minutes
+
+You called `daemon(action="emanate", ...)` for `em-3`, asked it to "scan src/ for security issues", and it's been running 5 minutes. You're nervous.
+
+```bash
+# What's the live state?
+read("daemons/em-3-20260427-094215-abc123/daemon.json")
+# → state=running, turn=8, current_tool=null, tool_call_count=15, tokens.input=22000
+
+# Last few lines of the transcript
+bash("tail -n 20 daemons/em-3-20260427-094215-abc123/history/chat_history.jsonl")
+# → assistant: "Found a potential SQL injection in db.py:42. Continuing..."
+
+# Recent tool activity
+bash("tail -n 10 daemons/em-3-20260427-094215-abc123/logs/events.jsonl")
+# → series of read/grep events on src/db/, src/auth/
+```
+
+That's a healthy pattern: the LLM is between tool calls, has good progress narrative, and is steadily working through files. **Don't reclaim.** Let it cook.
+
+## API note: `daemon(action="list")`
+
+`list` reports only currently-active emanations (in-memory registry). It includes `run_id` and `path` so you know where to read on disk. Historical (completed/failed/cancelled) emanations don't appear in `list` — find them with `bash("ls daemons/")` instead.
+
+## What the manual does NOT cover
+
+- Provider routing / LLM presets — deferred to a separate spec.
+- Cross-process recovery — if your kernel restarted mid-daemon, the folder may show `state=running` indefinitely. Compare `now()` vs `.heartbeat` mtime to detect orphans.
+- Folder cleanup — there is none. Molts wipe the working dir. For non-molting agents, you may eventually want to `rm -rf daemons/em-*-2026-04-*` manually.
