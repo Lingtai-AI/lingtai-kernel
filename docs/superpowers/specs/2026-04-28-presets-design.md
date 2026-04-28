@@ -471,6 +471,7 @@ This means **TUI-created agents automatically gain preset-swap capability after 
 
 ## Future Directions (deferred)
 
+- **Preset-builder skill.** A future LingTai skill will interview users to author new presets and save them to `~/.lingtai-tui/presets/`. Combined with this kernel feature, agents become self-extending: an agent can guide a user to add a new preset to the library, and that preset is then immediately available to every agent in the user's network. The agent's bag of implements grows over time, populated by the agents themselves.
 - **Provider pool / quiver.** Top-level `providers: { main: {...}, stealth: {...} }` with capabilities referencing pools by name. This is a deeper refactor; presets ship first and can later layer on top.
 - **TUI preset library editor.** Browse and edit presets visually. The kernel design supports this fully (preset files are plain JSONC).
 - **Cross-agent preset libraries.** A project-wide library at `<project>/.lingtai/presets/` that all agents in the project pull from. Today users can already achieve this by setting `presets_path: "../.lingtai/presets"` on each agent; standardizing it is a TUI/convention concern, not a kernel one.
@@ -485,4 +486,4 @@ Across the spec, the following framing terms are used in agent-facing i18n descr
 - **行囊** (xíng náng) — the preset library. The agent's bag of implements.
 - **易形换胎** — the swap act. Light, deliberate, identity-preserving.
 
-The agent reads `refresh` schema description as: *"Re-read your config and rebuild yourself. Optional `preset` argument: pick a different bundle of mind-light (LLM) and hands (capabilities) from your library — like a practitioner reaching into their bag for a different set of implements. Each preset is a deliberate tradeoff between the two halves: a smarter LLM with fewer faculties, a weaker LLM with multi-modal vision, a fast model with stealth web tools. Read each preset's `comment` field to know what you'd gain and lose. The swap is light, takes one call, and reversible. You remain yourself; only your current implements change."*
+The agent reads `refresh` schema description as: *"Re-read your config and rebuild yourself. Optional `preset` argument: pick a different bundle of mind-light (LLM) and hands (capabilities) from your library — like a practitioner reaching into their bag for a different set of implements. Each preset is a deliberate tradeoff between the two halves: a smarter LLM with fewer faculties, a weaker LLM with multi-modal vision, a fast model with stealth web tools. Read each preset's `description` field to know what you'd gain and lose. The swap is light, takes one call, and reversible. You remain yourself; only your current implements change."*
