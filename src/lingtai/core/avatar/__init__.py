@@ -331,6 +331,23 @@ class AvatarManager:
                         preset_block["path"] = str(
                             (Path(parent_working_dir) / p).resolve()
                         )
+
+        # Avatars always spawn on the parent's DEFAULT preset, not its
+        # currently-active one. This keeps the avatar's notion of 'default'
+        # well-defined as a peer in the network — auto-fallback targets a
+        # stable home base, not whatever transient preset the parent happened
+        # to be on at spawn time.
+        #
+        # Strip materialized llm + capabilities unconditionally so the avatar's
+        # _read_init re-materializes from the (possibly-rewritten) active on
+        # first boot. Letting the existing materialization path do its job
+        # is cleaner than manually re-substituting here.
+        preset_block = init["manifest"].get("preset")
+        if isinstance(preset_block, dict) and preset_block.get("default"):
+            preset_block["active"] = preset_block["default"]
+            init["manifest"].pop("llm", None)
+            init["manifest"].pop("capabilities", None)
+
         return init
 
     # ------------------------------------------------------------------
