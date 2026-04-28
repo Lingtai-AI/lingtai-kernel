@@ -235,8 +235,9 @@ def _refresh(agent, args: dict) -> dict:
 def _presets(agent, args: dict) -> dict:
     """List available presets in the agent's library, with active marker.
 
-    Reads init.json from disk to discover presets_path and active_preset,
-    then enumerates the library. Strips credentials from llm summary.
+    Reads init.json from disk to discover manifest.preset.path and
+    manifest.preset.active, then enumerates the library.
+    Strips credentials from llm summary.
     """
     import json
     from lingtai.presets import discover_presets, load_preset, resolve_presets_path
@@ -248,7 +249,8 @@ def _presets(agent, args: dict) -> dict:
         return {"status": "error", "message": f"failed to read init.json: {e}"}
 
     manifest = raw.get("manifest", {})
-    active = manifest.get("active_preset")
+    preset_block = manifest.get("preset") or {}
+    active = preset_block.get("active") if isinstance(preset_block, dict) else None
     presets_path = resolve_presets_path(manifest, agent._working_dir)
 
     available = []

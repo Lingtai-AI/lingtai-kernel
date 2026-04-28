@@ -285,7 +285,7 @@ def test_system_unknown_action(tmp_path):
 
 def _make_test_agent_for_presets(tmp_path, presets_path=None, active_preset=None):
     """Build a BaseAgent for preset tests with init.json containing optional
-    presets_path/active_preset fields. The agent's _activate_preset and
+    manifest.preset umbrella. The agent's _activate_preset and
     _perform_refresh are intentionally left as the BaseAgent defaults; tests
     monkeypatch them to observe call patterns."""
     import json
@@ -302,9 +302,10 @@ def _make_test_agent_for_presets(tmp_path, presets_path=None, active_preset=None
         "admin": {}, "streaming": False,
     }
     if active_preset:
-        manifest["active_preset"] = active_preset
-    if presets_path:
-        manifest["presets_path"] = str(presets_path)
+        preset_block: dict = {"active": active_preset, "default": active_preset}
+        if presets_path:
+            preset_block["path"] = str(presets_path)
+        manifest["preset"] = preset_block
     init = {
         "manifest": manifest,
         "principle": "p", "covenant": "c", "pad": "", "prompt": "",
@@ -458,7 +459,11 @@ def test_presets_action_empty_library(tmp_path):
     """Empty library returns empty available[] without error."""
     plib = tmp_path / "presets"
     plib.mkdir()
-    agent = _make_test_agent_for_presets(tmp_path, presets_path=plib)
+    # Must provide active_preset so the preset umbrella block is written with the
+    # explicit path — otherwise resolve_presets_path defaults to ~/.lingtai-tui/presets/
+    # and would read the user's real presets library.
+    agent = _make_test_agent_for_presets(tmp_path, presets_path=plib,
+                                          active_preset="nonexistent")
 
     result = agent._intrinsics["system"]({"action": "presets"})
 

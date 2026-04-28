@@ -413,49 +413,69 @@ def test_manifest_rejects_non_list_pseudo_agent_subscriptions():
         validate_init(data)
 
 
-def test_active_preset_field_accepted():
-    """`manifest.active_preset` is a known optional field."""
+def test_preset_block_minimum():
+    """manifest.preset with active + default is valid."""
     data = _valid_init()
-    data["manifest"]["active_preset"] = "default"
+    data["manifest"]["preset"] = {"active": "minimax", "default": "minimax"}
     validate_init(data)  # should not raise
 
 
-def test_presets_path_field_accepted():
-    """`manifest.presets_path` is a known optional field."""
+def test_preset_block_with_path():
+    """manifest.preset with active, default, and path is valid."""
     data = _valid_init()
-    data["manifest"]["presets_path"] = "/some/path"
-    data["manifest"]["active_preset"] = "default"
+    data["manifest"]["preset"] = {
+        "active": "minimax", "default": "minimax", "path": "/some/presets"
+    }
     validate_init(data)  # should not raise
 
 
-def test_presets_path_set_without_active_preset_raises():
-    """`presets_path` without `active_preset` is invalid."""
+def test_preset_block_missing_active_raises():
+    """`manifest.preset` without `active` raises."""
     data = _valid_init()
-    data["manifest"]["presets_path"] = "/some/path"
-    with pytest.raises(ValueError, match="active_preset"):
+    data["manifest"]["preset"] = {"default": "minimax"}
+    with pytest.raises(ValueError, match="manifest.preset.active"):
         validate_init(data)
 
 
-def test_active_preset_wrong_type_raises():
-    """`active_preset` must be a string."""
+def test_preset_block_missing_default_raises():
+    """`manifest.preset` without `default` raises."""
     data = _valid_init()
-    data["manifest"]["active_preset"] = 42
-    with pytest.raises(ValueError, match="active_preset"):
+    data["manifest"]["preset"] = {"active": "minimax"}
+    with pytest.raises(ValueError, match="manifest.preset.default"):
         validate_init(data)
 
 
-def test_presets_path_wrong_type_raises():
-    """`presets_path` must be a string."""
+def test_preset_block_active_wrong_type_raises():
+    """`manifest.preset.active` must be a string."""
     data = _valid_init()
-    data["manifest"]["presets_path"] = ["a", "b"]
-    data["manifest"]["active_preset"] = "default"  # satisfy cross-field guard; not under test here
-    with pytest.raises(ValueError, match="presets_path"):
+    data["manifest"]["preset"] = {"active": 42, "default": "minimax"}
+    with pytest.raises(ValueError, match="manifest.preset.active"):
         validate_init(data)
 
 
-def test_presets_path_empty_string_without_active_preset_raises():
-    """An explicit empty-string presets_path also requires active_preset."""
+def test_preset_block_default_wrong_type_raises():
+    """`manifest.preset.default` must be a string."""
     data = _valid_init()
-    data["manifest"]["presets_path"] = ""
-    with pytest.raises(ValueError, match="active_preset"):
+    data["manifest"]["preset"] = {"active": "minimax", "default": 42}
+    with pytest.raises(ValueError, match="manifest.preset.default"):
         validate_init(data)
+
+
+def test_preset_block_path_wrong_type_raises():
+    """`manifest.preset.path` must be a string when present."""
+    data = _valid_init()
+    data["manifest"]["preset"] = {
+        "active": "minimax", "default": "minimax", "path": ["bad"]
+    }
+    with pytest.raises(ValueError, match="manifest.preset.path"):
+        validate_init(data)
+
+
+def test_preset_block_unknown_field_warns():
+    """Unknown fields inside manifest.preset produce a warning, not an error."""
+    data = _valid_init()
+    data["manifest"]["preset"] = {
+        "active": "minimax", "default": "minimax", "extra_key": "foo"
+    }
+    warnings = validate_init(data)
+    assert any("unknown field in manifest.preset" in w for w in warnings)

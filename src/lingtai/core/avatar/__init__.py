@@ -297,8 +297,8 @@ class AvatarManager:
         caller — see ``_spawn``. Here we only blank the inherited prompt so the
         schema sees a present-but-empty field (no stale prompt carried over).
 
-        If ``parent_working_dir`` is given and the parent's ``presets_path`` is
-        relative, it is resolved to an absolute path before the copy is written
+        If ``parent_working_dir`` is given and the parent's ``manifest.preset.path``
+        is relative, it is resolved to an absolute path before the copy is written
         so the avatar (which has a different working dir) can still locate the
         preset library.
         """
@@ -319,16 +319,18 @@ class AvatarManager:
         # Addons (IMAP, Telegram) are not inherited — each agent must be
         # explicitly configured to avoid multiple agents polling the same account
         init.pop("addons", None)
-        # Resolve relative presets_path against parent's working dir so it
-        # remains valid from the avatar's different working directory.
+        # Resolve relative manifest.preset.path against parent's working dir so
+        # it remains valid from the avatar's different working directory.
         if parent_working_dir is not None:
-            pp = init["manifest"].get("presets_path")
-            if pp:
-                p = Path(pp).expanduser()
-                if not p.is_absolute():
-                    init["manifest"]["presets_path"] = str(
-                        (Path(parent_working_dir) / p).resolve()
-                    )
+            preset_block = init["manifest"].get("preset")
+            if isinstance(preset_block, dict):
+                pp = preset_block.get("path")
+                if pp:
+                    p = Path(pp).expanduser()
+                    if not p.is_absolute():
+                        preset_block["path"] = str(
+                            (Path(parent_working_dir) / p).resolve()
+                        )
         return init
 
     # ------------------------------------------------------------------

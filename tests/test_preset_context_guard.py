@@ -50,8 +50,11 @@ def _build_workdir(wd: Path, plib: Path, active: str = "big"):
     init = {
         "manifest": {
             "agent_name": "test", "language": "en",
-            "presets_path": str(plib),
-            "active_preset": active,
+            "preset": {
+                "path": str(plib),
+                "active": active,
+                "default": active,
+            },
             "llm": {"provider": "PLACEHOLDER", "model": "PLACEHOLDER",
                     "api_key": None, "api_key_env": "PLACEHOLDER"},
             "capabilities": {},

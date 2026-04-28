@@ -46,8 +46,11 @@ def _build_workdir(wd: Path, plib: Path, active: str):
         "manifest": {
             "agent_name": "test",
             "language": "en",
-            "presets_path": str(plib),
-            "active_preset": active,
+            "preset": {
+                "path": str(plib),
+                "active": active,
+                "default": active,
+            },
             "llm": {"provider": "PLACEHOLDER", "model": "PLACEHOLDER",
                     "api_key": None, "api_key_env": "PLACEHOLDER"},
             "capabilities": {},
@@ -110,7 +113,8 @@ def test_e2e_boot_with_alpha_then_swap_to_beta(tmp_path, monkeypatch):
     assert data2["manifest"]["admin"]["karma"] is True  # admin preserved
     assert data2["manifest"]["soul"]["delay"] == 120  # soul preserved
     assert data2["manifest"]["stamina"] == 3600  # stamina preserved
-    assert data2["manifest"]["active_preset"] == "beta"
+    assert data2["manifest"]["preset"]["active"] == "beta"
+    assert data2["manifest"]["preset"]["default"] == "alpha"  # original default preserved
 
 
 def test_e2e_swap_to_unknown_preserves_init(tmp_path, monkeypatch):
@@ -157,8 +161,11 @@ def test_e2e_inherit_resolves_after_swap(tmp_path, monkeypatch):
         "manifest": {
             "agent_name": "test",
             "language": "en",
-            "presets_path": str(plib),
-            "active_preset": "smart",
+            "preset": {
+                "path": str(plib),
+                "active": "smart",
+                "default": "smart",
+            },
             "llm": {"provider": "PLACEHOLDER", "model": "PLACEHOLDER",
                     "api_key": None, "api_key_env": "PLACEHOLDER"},
             "capabilities": {},

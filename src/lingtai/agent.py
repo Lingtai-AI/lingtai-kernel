@@ -524,7 +524,7 @@ class Agent(BaseAgent):
     def _read_init(self) -> dict | None:
         """Read and validate init.json from working directory.
 
-        If ``manifest.active_preset`` is set, materialize the named preset's
+        If ``manifest.preset.active`` is set, materialize the named preset's
         ``llm`` and ``capabilities`` into the manifest before validation. The
         running agent thus always sees a fully resolved manifest.
         """
@@ -546,12 +546,9 @@ class Agent(BaseAgent):
         # Materialize active preset, if any, BEFORE validation so the manifest
         # the schema validates is the fully-resolved one the agent will run on.
         manifest = data.get("manifest")
-        if isinstance(manifest, dict) and manifest.get("active_preset"):
-            preset_name = manifest["active_preset"]
-            presets_path_str = manifest.get("presets_path")
-            if presets_path_str == "":
-                self._log("refresh_init_warning",
-                          warning="manifest.presets_path is empty string — falling back to default")
+        preset_block = manifest.get("preset") if isinstance(manifest, dict) else None
+        if isinstance(preset_block, dict) and preset_block.get("active"):
+            preset_name = preset_block["active"]
             presets_path = resolve_presets_path(manifest, self._working_dir)
             try:
                 preset = load_preset(presets_path, preset_name)
@@ -587,13 +584,12 @@ class Agent(BaseAgent):
     def _activate_preset(self, name: str) -> None:
         """Substitute a preset's llm + capabilities into init.json on disk.
 
-        Reads the named preset from ``manifest.presets_path`` (default
-        ``~/.lingtai-tui/presets/``), substitutes its ``manifest.llm`` and
-        ``manifest.capabilities`` into the agent's init.json, sets
-        ``manifest.active_preset = name``, and writes atomically.
+        Reads the named preset from `manifest.preset.path` (default
+        ~/.lingtai-tui/presets/), substitutes its `manifest.llm` and
+        `manifest.capabilities` into the agent's init.json, sets
+        `manifest.preset.active = name`, and writes atomically.
 
-        Other manifest fields (admin, soul, stamina, agent_name, etc.)
-        are preserved — they are part of the running agent, not the preset.
+        Other manifest fields are preserved.
 
         Raises:
             KeyError: the named preset does not exist
@@ -616,9 +612,17 @@ class Agent(BaseAgent):
         manifest["llm"] = preset_manifest.get("llm", manifest.get("llm"))
         manifest["capabilities"] = preset_manifest.get(
             "capabilities", manifest.get("capabilities", {}))
-        manifest["active_preset"] = name
+        if "context_limit" in preset_manifest:
+            manifest["context_limit"] = preset_manifest["context_limit"]
 
-        # Atomic write: tmp + os.replace
+        # Set active in the umbrella. Preserve default if already set; otherwise
+        # initialize default to the same value as active (first activation).
+        preset_block = manifest.setdefault("preset", {})
+        preset_block["active"] = name
+        if not preset_block.get("default"):
+            preset_block["default"] = name
+
+        # Atomic write
         tmp = init_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False),
                        encoding="utf-8")

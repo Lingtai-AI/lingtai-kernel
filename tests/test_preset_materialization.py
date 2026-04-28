@@ -27,9 +27,10 @@ def _make_workdir(tmp_path: Path, active_preset: str | None = None,
         "streaming": False,
     }
     if active_preset is not None:
-        manifest["active_preset"] = active_preset
-    if presets_path is not None:
-        manifest["presets_path"] = presets_path
+        preset_block: dict = {"active": active_preset, "default": active_preset}
+        if presets_path is not None:
+            preset_block["path"] = presets_path
+        manifest["preset"] = preset_block
     if manifest_extra:
         manifest.update(manifest_extra)
     # Create a dummy env_file so validate_init doesn't reject api_key_env
@@ -164,8 +165,11 @@ def test_materialize_relative_presets_path_resolves_against_workdir(tmp_path, mo
         "manifest": {
             "agent_name": "alice",
             "language": "en",
-            "presets_path": "./my_presets",  # RELATIVE to agent workdir
-            "active_preset": "local",
+            "preset": {
+                "path": "./my_presets",  # RELATIVE to agent workdir
+                "active": "local",
+                "default": "local",
+            },
             "llm": {"provider": "PLACEHOLDER", "model": "PLACEHOLDER",
                     "api_key": None, "api_key_env": "P1KEY"},
             "capabilities": {},
@@ -192,8 +196,8 @@ def test_materialize_relative_presets_path_resolves_against_workdir(tmp_path, mo
     assert data["manifest"]["llm"]["provider"] == "p1"
 
 
-def test_materialize_empty_presets_path_warns_and_falls_back(tmp_path, monkeypatch):
-    """Empty-string presets_path warns and falls back to default."""
+def test_materialize_omitted_path_falls_back_to_default(tmp_path, monkeypatch):
+    """preset block without path falls back to ~/.lingtai-tui/presets."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
@@ -218,8 +222,10 @@ def test_materialize_empty_presets_path_warns_and_falls_back(tmp_path, monkeypat
         "manifest": {
             "agent_name": "alice",
             "language": "en",
-            "presets_path": "",  # explicit empty string
-            "active_preset": "fallback",
+            "preset": {
+                "active": "fallback",  # path omitted → falls back to default
+                "default": "fallback",
+            },
             "llm": {"provider": "PLACEHOLDER", "model": "PLACEHOLDER",
                     "api_key": None, "api_key_env": "P2KEY"},
             "capabilities": {},
@@ -241,10 +247,6 @@ def test_materialize_empty_presets_path_warns_and_falls_back(tmp_path, monkeypat
     data = a._read_init()
     assert data is not None
     assert data["manifest"]["llm"]["provider"] == "p2"
-    # Verify the warning was logged
-    warnings = [kw.get("warning") for evt, kw in a._log_events
-                if evt == "refresh_init_warning"]
-    assert any("empty string" in w for w in warnings)
 
 
 def test_materialize_picks_up_context_limit_from_preset(tmp_path, monkeypatch):

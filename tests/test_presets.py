@@ -247,7 +247,7 @@ def test_load_preset_rejects_nested_traversal(tmp_path):
 
 def test_resolve_presets_path_absolute(tmp_path):
     abs_path = tmp_path / "presets"
-    manifest = {"presets_path": str(abs_path)}
+    manifest = {"preset": {"path": str(abs_path), "active": "x", "default": "x"}}
     result = resolve_presets_path(manifest, tmp_path / "wd")
     assert result == abs_path
 
@@ -256,20 +256,20 @@ def test_resolve_presets_path_relative(tmp_path):
     """Relative path resolves against working_dir, not CWD."""
     wd = tmp_path / "wd"
     wd.mkdir()
-    manifest = {"presets_path": "./my_presets"}
+    manifest = {"preset": {"path": "./my_presets", "active": "x", "default": "x"}}
     result = resolve_presets_path(manifest, wd)
     assert result == (wd / "my_presets").resolve()
 
 
 def test_resolve_presets_path_default_when_missing(tmp_path):
-    """Missing presets_path falls back to default_presets_path."""
+    """Missing preset block falls back to default_presets_path."""
     manifest = {}
     result = resolve_presets_path(manifest, tmp_path)
     assert result == default_presets_path()
 
 
 def test_resolve_presets_path_default_when_empty(tmp_path):
-    """Empty-string presets_path falls back to default."""
-    manifest = {"presets_path": ""}
+    """Empty preset.path falls back to default."""
+    manifest = {"preset": {"active": "x", "default": "x"}}  # path absent
     result = resolve_presets_path(manifest, tmp_path)
     assert result == default_presets_path()

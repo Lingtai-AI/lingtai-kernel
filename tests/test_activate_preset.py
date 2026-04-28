@@ -36,8 +36,11 @@ def _make_workdir_and_lib(tmp_path: Path) -> tuple[Path, Path]:
         "manifest": {
             "agent_name": "alice",
             "language": "en",
-            "presets_path": str(plib),
-            "active_preset": "deepseek",
+            "preset": {
+                "path": str(plib),
+                "active": "deepseek",
+                "default": "deepseek",
+            },
             "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
                     "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
             "capabilities": {"file": {}, "web_search": {"provider": "duckduckgo"}},
@@ -78,7 +81,8 @@ def test_activate_preset_substitutes_llm_and_capabilities(tmp_path):
     assert data["manifest"]["llm"]["provider"] == "minimax"
     assert data["manifest"]["llm"]["model"] == "MiniMax-M2.7-highspeed"
     assert "vision" in data["manifest"]["capabilities"]
-    assert data["manifest"]["active_preset"] == "minimax"
+    assert data["manifest"]["preset"]["active"] == "minimax"
+    assert data["manifest"]["preset"]["default"] == "deepseek"  # original default preserved
 
 
 def test_activate_preset_preserves_other_manifest_fields(tmp_path):
@@ -145,13 +149,17 @@ def test_activate_preset_uses_default_path_when_unset(tmp_path, monkeypatch):
         },
     }))
 
-    # Build workdir without presets_path
+    # Build workdir without preset.path (path omitted → uses default ~/.lingtai-tui/presets)
     wd = tmp_path / "agent"
     wd.mkdir()
     init = {
         "manifest": {
             "agent_name": "alice", "language": "en",
-            "active_preset": "deepseek",
+            "preset": {
+                "active": "deepseek",
+                "default": "deepseek",
+                # no "path" — falls back to ~/.lingtai-tui/presets
+            },
             "llm": {"provider": "x", "model": "x", "api_key": None,
                     "api_key_env": "X"},
             "capabilities": {},

@@ -44,8 +44,7 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "time_awareness": bool,
     "timezone_awareness": bool,
     "pseudo_agent_subscriptions": list,
-    "presets_path": str,
-    "active_preset": str,
+    "preset": dict,
 }
 
 MANIFEST_KNOWN: set[str] = set(MANIFEST_REQUIRED) | set(MANIFEST_OPTIONAL)
@@ -95,15 +94,25 @@ def validate_init(data: dict) -> list[str]:
     _require_keys(manifest, MANIFEST_REQUIRED, prefix="manifest")
     _optional_keys(manifest, MANIFEST_OPTIONAL, prefix="manifest")
 
-    # Cross-field: presets_path requires active_preset.
-    # (active_preset alone is fine — presets_path defaults to ~/.lingtai-tui/presets/)
-    presets_path = manifest.get("presets_path")
-    active_preset = manifest.get("active_preset")
-    if presets_path is not None and not active_preset:
-        raise ValueError(
-            "manifest.presets_path is set but manifest.active_preset is not — "
-            "every presets folder must have an active preset selected"
-        )
+    # Validate manifest.preset umbrella if present.
+    preset = manifest.get("preset")
+    if preset is not None:
+        if not isinstance(preset, dict):
+            raise ValueError(f"manifest.preset: expected object, got {type(preset).__name__}")
+        if not preset.get("active"):
+            raise ValueError("manifest.preset.active is required when manifest.preset is set")
+        if not preset.get("default"):
+            raise ValueError("manifest.preset.default is required when manifest.preset is set")
+        if not isinstance(preset["active"], str):
+            raise ValueError(f"manifest.preset.active: expected str, got {type(preset['active']).__name__}")
+        if not isinstance(preset["default"], str):
+            raise ValueError(f"manifest.preset.default: expected str, got {type(preset['default']).__name__}")
+        if "path" in preset and not isinstance(preset["path"], str):
+            raise ValueError(f"manifest.preset.path: expected str, got {type(preset['path']).__name__}")
+        # Warn on unknown keys
+        for key in preset:
+            if key not in {"active", "default", "path"}:
+                warnings.append(f"unknown field in manifest.preset: {key}")
 
     for key in manifest:
         if key not in MANIFEST_KNOWN:
