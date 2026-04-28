@@ -211,7 +211,7 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
 
     mock_session = MagicMock()
     mock_resp = MagicMock()
-    mock_resp.text = "done"
+    mock_resp.text = "task done — finished successfully"
     mock_resp.tool_calls = []
     mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
                                 thinking_tokens=0, cached_tokens=0)
@@ -461,3 +461,78 @@ def test_emanate_creates_folder_on_disk(tmp_path):
     assert data["task"] == "find todos"
     assert data["tools"] == ["file"]
     assert data["state"] == "running"
+
+
+def test_reclaim_resets_next_id_to_1(tmp_path):
+    """After reclaim, the next emanate gets em-1 again. Folder timestamps disambiguate."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    mock_session = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = "done"
+    mock_resp.tool_calls = []
+    mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
+                                 thinking_tokens=0, cached_tokens=0)
+    mock_session.send = MagicMock(return_value=mock_resp)
+    agent.service.create_session = MagicMock(return_value=mock_session)
+
+    r1 = mgr.handle({"action": "emanate", "tasks": [{"task": "a", "tools": ["file"]}]})
+    assert r1["ids"] == ["em-1"]
+    time.sleep(0.5)
+    mgr.handle({"action": "reclaim"})
+    r2 = mgr.handle({"action": "emanate", "tasks": [{"task": "b", "tools": ["file"]}]})
+    assert r2["ids"] == ["em-1"]  # handle reused after reclaim
+
+
+def test_reclaim_preserves_folders(tmp_path):
+    """reclaim stops processes but leaves daemon folders on disk."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    mock_session = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = "done"
+    mock_resp.tool_calls = []
+    mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
+                                 thinking_tokens=0, cached_tokens=0)
+    mock_session.send = MagicMock(return_value=mock_resp)
+    agent.service.create_session = MagicMock(return_value=mock_session)
+
+    mgr.handle({"action": "emanate", "tasks": [{"task": "a", "tools": ["file"]}]})
+    time.sleep(0.5)
+    daemons_dir = agent._working_dir / "daemons"
+    folders_before = list(daemons_dir.iterdir())
+    assert len(folders_before) == 1
+
+    mgr.handle({"action": "reclaim"})
+    folders_after = list(daemons_dir.iterdir())
+    assert folders_after == folders_before  # same folder still there
+
+
+def test_handle_list_includes_run_id_and_path(tmp_path):
+    """list output exposes run_id and path so inspectors know where to read."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    mock_session = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = "running"
+    mock_resp.tool_calls = []
+    mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
+                                 thinking_tokens=0, cached_tokens=0)
+    mock_session.send = MagicMock(return_value=mock_resp)
+    agent.service.create_session = MagicMock(return_value=mock_session)
+
+    mgr.handle({"action": "emanate", "tasks": [{"task": "x", "tools": ["file"]}]})
+    time.sleep(0.5)
+    listing = mgr._handle_list()
+    assert len(listing["emanations"]) >= 1
+    em = listing["emanations"][0]
+    assert "run_id" in em
+    assert "path" in em
+    assert em["run_id"].startswith("em-1-")
+    assert em["path"].endswith(em["run_id"])

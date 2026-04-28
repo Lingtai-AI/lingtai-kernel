@@ -193,6 +193,8 @@ class DaemonManager:
         )
 
         def _accum(resp):
+            if resp.usage is None:
+                return
             u = resp.usage
             run_dir.append_tokens(
                 input=u.input_tokens,
@@ -391,10 +393,15 @@ class DaemonManager:
             else:
                 status = "running"
                 running += 1
+                exc = None
             info = {"id": em_id, "task": entry["task"][:80],
                     "status": status, "elapsed_s": round(elapsed)}
             if status == "failed" and exc:
                 info["error"] = str(exc)
+            run_dir = entry.get("run_dir")
+            if run_dir is not None:
+                info["run_id"] = run_dir.run_id
+                info["path"] = str(run_dir.path)
             emanations.append(info)
         return {
             "emanations": emanations,
@@ -424,6 +431,7 @@ class DaemonManager:
             pool.shutdown(wait=False, cancel_futures=True)
         self._pools.clear()
         self._emanations.clear()
+        self._next_id = 1  # handles can be re-used; folder names disambiguate
         self._log("daemon_reclaim", cancelled_count=cancelled)
         return {"status": "reclaimed", "cancelled": cancelled}
 
