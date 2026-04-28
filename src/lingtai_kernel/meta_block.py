@@ -106,7 +106,50 @@ def build_meta(agent) -> dict:
         meta["context_tokens"] = -1
         meta["context_usage"] = -1.0
 
+    notif = _pending_notifications_summary(agent)
+    if notif is not None:
+        meta["pending_notifications"] = notif
+
     return meta
+
+
+def _pending_notifications_summary(agent) -> dict | None:
+    """Non-destructive snapshot of queued runtime notifications.
+
+    Peeks at ``agent.inbox`` (a queue.Queue holding system notifications,
+    soul whispers, addon notifies, etc.) without consuming. Returns None
+    when the queue is empty.
+
+    Surface shape:
+        {"count": int, "previews": list[str]}
+    where ``previews`` lists every queued entry, each truncated to 50 chars
+    with newlines flattened. ``count`` mirrors len(previews).
+
+    The agent will see this in the text-input prefix at turn start AND on
+    every tool result via stamp_meta — giving them an early heads-up that
+    notifications are waiting before the actual messages get drained at
+    the next outer-loop boundary by ``_concat_queued_messages``.
+    """
+    inbox = getattr(agent, "inbox", None)
+    if inbox is None:
+        return None
+    try:
+        snapshot = list(inbox.queue)
+    except (AttributeError, RuntimeError):
+        return None
+    if not snapshot:
+        return None
+
+    previews: list[str] = []
+    for m in snapshot:
+        content = getattr(m, "content", "")
+        text = content if isinstance(content, str) else str(content)
+        flat = text.replace("\n", " ")
+        if len(flat) > 50:
+            flat = flat[:50] + "..."
+        previews.append(flat)
+
+    return {"count": len(snapshot), "previews": previews}
 
 
 def render_meta(agent, meta: dict) -> str:
@@ -118,22 +161,49 @@ def render_meta(agent, meta: dict) -> str:
     Composes the existing ``system.current_time`` template (now
     extended with a context slot) plus a context fragment via
     ``system.context_breakdown`` (or ``system.context_unknown`` when the
-    session has not yet computed its token decomposition).
+    session has not yet computed its token decomposition). When pending
+    runtime notifications are present, a second line is appended.
     """
     if not meta:
         return ""
 
     time_val = meta.get("current_time", "")
     ctx_val = _render_context_fragment(agent, meta)
+    notif_line = _render_notifications_fragment(agent, meta)
 
-    if time_val == "" and ctx_val == "":
+    if time_val == "" and ctx_val == "" and notif_line == "":
         return ""
 
-    return _t(
+    head = _t(
         agent._config.language,
         "system.current_time",
         time=time_val,
         ctx=ctx_val,
+    )
+    if notif_line:
+        return f"{head}\n{notif_line}"
+    return head
+
+
+def _render_notifications_fragment(agent, meta: dict) -> str:
+    """Render the pending-notifications line for the text-input prefix.
+
+    Returns '' when no pending notifications are present in ``meta``.
+    Otherwise returns a localized i18n line summarizing count + previews.
+    """
+    notif = meta.get("pending_notifications")
+    if not notif:
+        return ""
+    count = notif.get("count", 0)
+    previews = notif.get("previews", [])
+    if count <= 0 or not previews:
+        return ""
+    bullets = "\n".join(f"  - {p}" for p in previews)
+    return _t(
+        agent._config.language,
+        "system.pending_notifications",
+        count=count,
+        previews=bullets,
     )
 
 

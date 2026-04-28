@@ -349,3 +349,112 @@ def test_build_meta_usage_matches_get_context_pressure_after_restore():
     # pressure = estimate_context_tokens() / limit = (sys+tools+history) / limit
     expected_pressure = (sys_prompt + tools + history) / limit
     assert abs(meta["context_usage"] - expected_pressure) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# pending_notifications — non-destructive snapshot of agent.inbox
+# ---------------------------------------------------------------------------
+
+def _fake_agent_with_inbox(messages: list, *, language: str = "en"):
+    """Agent stand-in with an inbox queue. messages is a list of pre-built Message objects."""
+    import queue as _q
+    inbox = _q.Queue()
+    for m in messages:
+        inbox.put(m)
+    return SimpleNamespace(
+        _config=SimpleNamespace(
+            time_awareness=False,
+            timezone_awareness=False,
+            language=language,
+        ),
+        inbox=inbox,
+    )
+
+
+def _msg(content: str):
+    """Minimal Message-like object — only .content is read by the summary helper."""
+    from lingtai_kernel.message import _make_message, MSG_REQUEST
+    return _make_message(MSG_REQUEST, "system", content)
+
+
+def test_pending_notifications_absent_when_inbox_empty():
+    agent = _fake_agent_with_inbox([])
+    meta = build_meta(agent)
+    assert "pending_notifications" not in meta
+
+
+def test_pending_notifications_absent_when_agent_has_no_inbox():
+    """build_meta must tolerate agents without an inbox attribute (legacy callers)."""
+    agent = _fake_agent(time_awareness=False)  # no inbox attribute
+    meta = build_meta(agent)
+    assert "pending_notifications" not in meta
+
+
+def test_pending_notifications_count_and_previews():
+    msgs = [_msg("[system] mail from alice"), _msg("[soul flow] short whisper"), _msg("[system] mail from bob")]
+    agent = _fake_agent_with_inbox(msgs)
+    meta = build_meta(agent)
+    pn = meta["pending_notifications"]
+    assert pn["count"] == 3
+    assert len(pn["previews"]) == 3
+    assert pn["previews"][0] == "[system] mail from alice"
+    assert pn["previews"][1] == "[soul flow] short whisper"
+
+
+def test_pending_notifications_does_not_consume_inbox():
+    msgs = [_msg("a"), _msg("b")]
+    agent = _fake_agent_with_inbox(msgs)
+    build_meta(agent)
+    # Inbox must remain intact — drain happens elsewhere (_concat_queued_messages).
+    assert agent.inbox.qsize() == 2
+
+
+def test_pending_notifications_preview_truncated_to_50_chars():
+    long_content = "x" * 200
+    agent = _fake_agent_with_inbox([_msg(long_content)])
+    meta = build_meta(agent)
+    preview = meta["pending_notifications"]["previews"][0]
+    assert len(preview) == 53  # 50 + "..."
+    assert preview.endswith("...")
+
+
+def test_pending_notifications_preview_flattens_newlines():
+    agent = _fake_agent_with_inbox([_msg("line1\nline2\nline3")])
+    meta = build_meta(agent)
+    preview = meta["pending_notifications"]["previews"][0]
+    assert "\n" not in preview
+    assert preview == "line1 line2 line3"
+
+
+def test_pending_notifications_lists_all_queued_messages():
+    msgs = [_msg(f"msg-{i}") for i in range(15)]
+    agent = _fake_agent_with_inbox(msgs)
+    meta = build_meta(agent)
+    pn = meta["pending_notifications"]
+    assert pn["count"] == 15
+    assert len(pn["previews"]) == 15
+    assert pn["previews"][0] == "msg-0"
+    assert pn["previews"][14] == "msg-14"
+
+
+def test_render_meta_includes_notifications_line_when_present_en():
+    msgs = [_msg("[system] mail from alice"), _msg("[soul flow] short whisper")]
+    agent = _fake_agent_with_inbox(msgs, language="en")
+    meta = build_meta(agent)
+    rendered = render_meta(agent, meta)
+    assert "Pending notifications (2)" in rendered
+    assert "[system] mail from alice" in rendered
+    assert "[soul flow] short whisper" in rendered
+
+
+def test_stamp_meta_propagates_pending_notifications_to_tool_result():
+    msgs = [_msg("[system] new mail")]
+    agent = _fake_agent_with_inbox(msgs)
+    meta = build_meta(agent)
+    result = {"status": "ok"}
+    stamp_meta(result, meta, 50)
+    # Tool result now carries the structured pending_notifications dict so
+    # the LLM sees it on every tool result during a cascade.
+    assert "pending_notifications" in result
+    assert result["pending_notifications"]["count"] == 1
+    assert result["pending_notifications"]["previews"] == ["[system] new mail"]
