@@ -97,7 +97,9 @@ def validate_init(data: dict) -> list[str]:
 
     # Cross-field: presets_path requires active_preset.
     # (active_preset alone is fine — presets_path defaults to ~/.lingtai-tui/presets/)
-    if manifest.get("presets_path") and not manifest.get("active_preset"):
+    presets_path = manifest.get("presets_path")
+    active_preset = manifest.get("active_preset")
+    if presets_path is not None and not active_preset:
         raise ValueError(
             "manifest.presets_path is set but manifest.active_preset is not — "
             "every presets folder must have an active preset selected"

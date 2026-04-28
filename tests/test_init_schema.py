@@ -448,6 +448,14 @@ def test_presets_path_wrong_type_raises():
     """`presets_path` must be a string."""
     data = _valid_init()
     data["manifest"]["presets_path"] = ["a", "b"]
-    data["manifest"]["active_preset"] = "default"
+    data["manifest"]["active_preset"] = "default"  # satisfy cross-field guard; not under test here
     with pytest.raises(ValueError, match="presets_path"):
+        validate_init(data)
+
+
+def test_presets_path_empty_string_without_active_preset_raises():
+    """An explicit empty-string presets_path also requires active_preset."""
+    data = _valid_init()
+    data["manifest"]["presets_path"] = ""
+    with pytest.raises(ValueError, match="active_preset"):
         validate_init(data)
