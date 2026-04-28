@@ -39,7 +39,7 @@ class MailService(ABC):
         address: str,
         message: dict,
         *,
-        mode: str = "rel",
+        mode: str = "peer",
     ) -> str | None:
         """Send a message to an address. Returns None on success, error string on failure.
 
@@ -53,7 +53,7 @@ class MailService(ABC):
         message:
             Payload dict to deliver.
         mode:
-            Address mode — "rel" (default), "abs", or "net".
+            Address mode — "peer" (default) or "abs".
         """
         ...
 
@@ -133,7 +133,7 @@ class FilesystemMailService(MailService):
         address: str,
         message: dict,
         *,
-        mode: str = "rel",
+        mode: str = "peer",
     ) -> str | None:
         """Deliver *message* to the agent at *address*.
 
@@ -145,9 +145,8 @@ class FilesystemMailService(MailService):
         and copy any attachment files.
 
         Modes:
-        - rel: resolve bare name against parent dir (default)
-        - abs: use address as a literal absolute path
-        - ssh: should not reach here (handled by _mailman via _deliver_ssh)
+        - peer: resolve bare name against parent dir (default — sibling agents in same .lingtai/)
+        - abs: use address as a literal absolute path (cross-network, same machine)
         """
         base_dir = self._working_dir.parent  # .lingtai/ directory
         if mode == "abs":

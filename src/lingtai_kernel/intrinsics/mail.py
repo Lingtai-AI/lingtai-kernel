@@ -24,6 +24,21 @@ def get_description(lang: str = "en") -> str:
     return t(lang, "mail.description")
 
 
+def mode_field(lang: str = "en") -> dict:
+    """Schema field for the address-mode parameter.
+
+    Single source of truth for the mode enum and description, so other tools
+    that thread sends through _mailman (e.g. the email capability) can inherit
+    the exact same semantics without redefining the enum.
+    """
+    from ..i18n import t
+    return {
+        "type": "string",
+        "enum": ["peer", "abs"],
+        "description": t(lang, "mail.mode_description"),
+    }
+
+
 def get_schema(lang: str = "en") -> dict:
     from ..i18n import t
     return {
@@ -67,11 +82,7 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "string",
                 "description": t(lang, "mail.query_description"),
             },
-            "mode": {
-                "type": "string",
-                "enum": ["rel", "abs", "ssh"],
-                "description": t(lang, "mail.mode_description"),
-            },
+            "mode": mode_field(lang),
         },
         "required": ["action"],
     }
@@ -303,84 +314,6 @@ def _move_to_sent(agent, msg_id: str, sent_at: str, status: str) -> None:
     shutil.move(str(src), str(dst))
 
 
-def _deliver_ssh(address: str, payload: dict, msg_id: str) -> str | None:
-    """Deliver a message to a remote agent's inbox via SSH.
-
-    Address format: user@host:/path/to/.lingtai/agent_name
-
-    Writes message.json into the remote agent's mailbox/inbox/{msg_id}/
-    using ssh + cat. Returns None on success, error string on failure.
-    """
-    import re
-    import shlex
-    import subprocess
-
-    # Parse user@host:/path from address
-    if ":" not in address:
-        return (f"SSH delivery failed — address must be user@host:/path/to/.lingtai/agent_name, "
-                f"got {address!r}. Check that you are using mode='ssh' with a remote address.")
-    ssh_target, remote_path = address.split(":", 1)
-    if not ssh_target or not remote_path:
-        return f"SSH delivery failed — invalid address: {address!r}"
-    if "@" not in ssh_target:
-        return (f"SSH delivery failed — address must include user@host, "
-                f"got {ssh_target!r}. Format: user@host:/path/to/.lingtai/agent_name")
-
-    # Validate ssh_target against injection (must be user@hostname pattern)
-    if not re.match(r'^[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+$', ssh_target):
-        return f"SSH delivery failed — invalid ssh target: {ssh_target!r}"
-
-    # remote_path must be absolute (prevent traversal)
-    if not remote_path.startswith("/"):
-        return (f"SSH delivery failed — remote path must be absolute, "
-                f"got {remote_path!r}. Format: user@host:/absolute/path/to/.lingtai/agent_name")
-
-    remote_inbox = f"{remote_path}/mailbox/inbox/{msg_id}"
-    remote_file = f"{remote_inbox}/message.json"
-
-    # Inject mailbox metadata
-    payload = {
-        **payload,
-        "_mailbox_id": msg_id,
-        "received_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-    # Remove internal fields
-    payload.pop("_mode", None)
-    payload.pop("_dispatch_to", None)
-
-    msg_json = json.dumps(payload, indent=2, ensure_ascii=False, default=str)
-
-    try:
-        # Create remote directory and write message in one ssh call.
-        # shlex.quote prevents shell injection via crafted paths.
-        cmd = (
-            f"mkdir -p {shlex.quote(remote_inbox)} && "
-            f"cat > {shlex.quote(remote_file)}"
-        )
-        result = subprocess.run(
-            ["ssh", ssh_target, cmd],
-            input=msg_json,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            return (f"SSH delivery failed to {ssh_target} — {stderr}. "
-                    f"Check: 1) SSH key is set up (ssh {ssh_target} should work without password), "
-                    f"2) remote path {remote_path} exists, "
-                    f"3) remote agent has a mailbox/inbox/ directory.")
-        return None
-    except subprocess.TimeoutExpired:
-        return (f"SSH delivery timed out connecting to {ssh_target}. "
-                f"Check: 1) host is reachable, 2) SSH is running on remote, "
-                f"3) no firewall blocking port 22.")
-    except FileNotFoundError:
-        return "SSH delivery failed — 'ssh' command not found. Is OpenSSH installed?"
-    except OSError as e:
-        return f"SSH delivery failed — OS error: {e}"
-
-
 def _mailman(agent, msg_id: str, payload: dict, deliver_at: datetime,
              *, skip_sent: bool = False) -> None:
     """Daemon thread — one per message. Waits, dispatches, archives to sent."""
@@ -394,14 +327,11 @@ def _mailman(agent, msg_id: str, payload: dict, deliver_at: datetime,
     if isinstance(address, list):
         address = address[0] if address else ""
 
-    mode = payload.pop("_mode", "rel")
+    mode = payload.pop("_mode", "peer")
 
     err = None
     try:
-        if mode == "ssh":
-            err = _deliver_ssh(address, payload, msg_id)
-            status = "delivered" if err is None else "refused"
-        elif _is_self_send(agent, address):
+        if _is_self_send(agent, address):
             _persist_to_inbox(agent, payload)
             agent._wake_nap("mail_arrived")
             status = "delivered"
@@ -452,12 +382,12 @@ def _send(agent, args: dict) -> dict:
     message_text = args.get("message", "")
     mail_type = args.get("type", "normal")
     delay = args.get("delay", 0)
-    mode = args.get("mode", "rel")
+    mode = args.get("mode", "peer")
 
     if not address:
         return {"error": "address is required"}
-    if mode not in ("rel", "abs", "ssh"):
-        return {"error": f"invalid mode: {mode!r} (must be rel, abs, or ssh)"}
+    if mode not in ("peer", "abs"):
+        return {"error": f"invalid mode: {mode!r} (must be peer or abs)"}
 
     payload = {
         "from": (agent._mail_service.address if agent._mail_service is not None and agent._mail_service.address else agent._working_dir.name),
@@ -466,7 +396,7 @@ def _send(agent, args: dict) -> dict:
         "message": message_text,
         "type": mail_type,
         "identity": agent._build_manifest(),
-        "_mode": mode,  # rel/abs/ssh — consumed by _mailman, not persisted
+        "_mode": mode,  # peer/abs — consumed by _mailman, not persisted
     }
 
     attachments = args.get("attachments", [])

@@ -26,6 +26,7 @@ from lingtai_kernel.intrinsics.mail import (
     _list_inbox, _load_message, _read_ids, _mark_read, _save_read_ids,
     _message_summary, _mailbox_dir,
     _persist_to_outbox, _mailman,
+    mode_field,
 )
 from lingtai_kernel.message import _make_message, MSG_REQUEST
 from lingtai_kernel.token_counter import count_tokens
@@ -142,6 +143,7 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "integer",
                 "description": t(lang, "email.delay"),
             },
+            "mode": mode_field(lang),
             "type": {
                 "type": "string",
                 "enum": ["normal"],
@@ -790,11 +792,14 @@ class EmailManager:
         cc = args.get("cc") or []
         bcc = args.get("bcc") or []
         delay = args.get("delay", 0)
+        mode = args.get("mode", "peer")
 
         to_list = _coerce_address_list(raw_address)
 
         if not to_list:
             return {"error": "address is required"}
+        if mode not in ("peer", "abs"):
+            return {"error": f"invalid mode: {mode!r} (must be peer or abs)"}
 
         # Block identical consecutive messages (skip for scheduled sends)
         all_targets = to_list + cc + bcc
@@ -857,6 +862,7 @@ class EmailManager:
         for addr in all_recipients:
             dispatch_payload = dict(base_payload)
             dispatch_payload["_dispatch_to"] = addr
+            dispatch_payload["_mode"] = mode
             msg_id = _persist_to_outbox(self._agent, dispatch_payload, deliver_at)
             t = threading.Thread(
                 target=_mailman,
