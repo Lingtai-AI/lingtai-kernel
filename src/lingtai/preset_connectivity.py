@@ -33,6 +33,7 @@ _PROVIDER_DEFAULT_URLS = {
     "zhipu":      "https://open.bigmodel.cn",
     "openrouter": "https://openrouter.ai",
     "codex":      "https://chatgpt.com",
+    "mimo":       "https://api.xiaomimimo.com",
 }
 
 

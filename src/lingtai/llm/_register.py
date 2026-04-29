@@ -89,5 +89,5 @@ def register_all_adapters() -> None:
     LLMService.register_adapter("deepseek", _deepseek)
 
     # Providers routed through the generic custom adapter
-    for name in ("grok", "qwen", "glm", "zhipu", "kimi"):
+    for name in ("grok", "qwen", "glm", "zhipu", "kimi", "mimo"):
         LLMService.register_adapter(name, _custom)
