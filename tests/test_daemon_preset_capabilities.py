@@ -57,52 +57,52 @@ def _write_preset(presets_dir, name, capabilities, provider="deepseek",
 
 
 # ---------------------------------------------------------------------------
-# Sandbox unit tests
+# _ToolCollector unit tests
 # ---------------------------------------------------------------------------
 
-def test_sandbox_captures_add_tool_calls():
-    from lingtai.core.daemon._capability_sandbox import _CapabilitySandbox
+def test_collector_captures_add_tool_calls():
+    from lingtai.core.daemon import _ToolCollector
 
     parent = MagicMock()
-    sandbox = _CapabilitySandbox(parent)
+    collector = _ToolCollector(parent)
 
-    sandbox.add_tool("foo", schema={"type": "object"},
-                     handler=lambda args: {"ok": True}, description="foo desc")
-    sandbox.add_tool("bar", schema={"type": "object"},
-                     handler=lambda args: {"ok": True})
+    collector.add_tool("foo", schema={"type": "object"},
+                       handler=lambda args: {"ok": True}, description="foo desc")
+    collector.add_tool("bar", schema={"type": "object"},
+                       handler=lambda args: {"ok": True})
 
-    assert "foo" in sandbox.schemas
-    assert "bar" in sandbox.schemas
-    assert isinstance(sandbox.schemas["foo"], FunctionSchema)
-    assert sandbox.schemas["foo"].description == "foo desc"
-    assert callable(sandbox.handlers["foo"])
+    assert "foo" in collector.schemas
+    assert "bar" in collector.schemas
+    assert isinstance(collector.schemas["foo"], FunctionSchema)
+    assert collector.schemas["foo"].description == "foo desc"
+    assert callable(collector.handlers["foo"])
 
 
-def test_sandbox_forwards_unknown_attrs_to_parent():
-    from lingtai.core.daemon._capability_sandbox import _CapabilitySandbox
+def test_collector_forwards_unknown_attrs_to_parent():
+    from lingtai.core.daemon import _ToolCollector
 
     parent = MagicMock()
     parent._working_dir = "/tmp/x"
     parent._log = MagicMock()
 
-    sandbox = _CapabilitySandbox(parent)
+    collector = _ToolCollector(parent)
     # Read-through to parent
-    assert sandbox._working_dir == "/tmp/x"
-    sandbox._log("event", x=1)
+    assert collector._working_dir == "/tmp/x"
+    collector._log("event", x=1)
     parent._log.assert_called_once_with("event", x=1)
 
 
-def test_sandbox_does_not_pollute_parent_tool_registry():
+def test_collector_does_not_pollute_parent_tool_registry():
     """Most important property: the parent's _tool_handlers / _tool_schemas
-    must remain unchanged after sandbox add_tool calls."""
-    from lingtai.core.daemon._capability_sandbox import _CapabilitySandbox
+    must remain unchanged after collector add_tool calls."""
+    from lingtai.core.daemon import _ToolCollector
 
     parent = MagicMock()
     parent._tool_handlers = {}
     parent._tool_schemas = []
-    sandbox = _CapabilitySandbox(parent)
+    collector = _ToolCollector(parent)
 
-    sandbox.add_tool("foo", schema={}, handler=lambda a: {})
+    collector.add_tool("foo", schema={}, handler=lambda a: {})
     assert parent._tool_handlers == {}
     assert parent._tool_schemas == []
 

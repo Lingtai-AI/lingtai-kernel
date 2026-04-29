@@ -34,6 +34,36 @@ PROVIDERS = {"providers": [], "default": "builtin"}
 EMANATION_BLACKLIST = {"daemon", "avatar", "psyche", "library"}
 
 
+class _ToolCollector:
+    """Captures add_tool calls during preset-driven capability setup.
+
+    A capability's setup() expects something with add_tool plus the rest of
+    the parent's interface (_log, _config, _working_dir, inbox, ...). The
+    collector intercepts add_tool into local dicts and forwards every other
+    attribute read to the real parent agent, so the parent's tool registry
+    stays untouched while we still get the schema + handler the capability
+    wanted to register.
+    """
+
+    def __init__(self, parent):
+        self._parent = parent
+        self.schemas: dict = {}
+        self.handlers: dict = {}
+
+    def add_tool(self, name, *, schema=None, handler=None,
+                 description: str = "", system_prompt: str = ""):
+        if handler is not None:
+            self.handlers[name] = handler
+        if schema is not None:
+            self.schemas[name] = FunctionSchema(
+                name=name, description=description,
+                parameters=schema, system_prompt=system_prompt,
+            )
+
+    def __getattr__(self, n):
+        return getattr(self._parent, n)
+
+
 def get_description(lang: str = "en") -> str:
     return t(lang, "daemon.description")
 
@@ -235,7 +265,6 @@ class DaemonManager:
         """
         from ...capabilities import setup_capability, _GROUPS
         from ...presets import expand_inherit
-        from ._capability_sandbox import _CapabilitySandbox
 
         # Resolve provider:"inherit" sentinels against the preset's LLM
         # (not the parent's). expand_inherit mutates in place — work on a
@@ -256,20 +285,20 @@ class DaemonManager:
             else:
                 expanded[name] = kwargs
 
-        sandbox = _CapabilitySandbox(self._agent)
+        collector = _ToolCollector(self._agent)
         for name, kwargs in expanded.items():
             if name in EMANATION_BLACKLIST:
                 continue
             if not isinstance(kwargs, dict):
                 kwargs = {}
             try:
-                setup_capability(sandbox, name, **kwargs)
+                setup_capability(collector, name, **kwargs)
             except Exception as e:
                 raise ValueError(
                     f"preset capability {name!r} failed to set up: {e}"
                 ) from e
 
-        return sandbox.schemas, sandbox.handlers
+        return collector.schemas, collector.handlers
 
     def _build_emanation_prompt(self, task: str, schemas: list[FunctionSchema]) -> str:
         """Build the system prompt for an emanation."""
