@@ -81,7 +81,7 @@ class DaemonManager:
     _NOTIFY_MIN_LEN = 20
 
     def __init__(self, agent: "Agent", max_emanations: int = 4,
-                 max_turns: int = 30, timeout: float = 300.0,
+                 max_turns: int = 200, timeout: float = 3600.0,
                  notify_threshold: int = 20, max_result_chars: int = 2000):
         self._agent = agent
         self._max_emanations = max_emanations
@@ -571,7 +571,7 @@ class DaemonManager:
 
 
 def setup(agent: "Agent", max_emanations: int = 4,
-          max_turns: int = 30, timeout: float = 300.0,
+          max_turns: int = 200, timeout: float = 3600.0,
           notify_threshold: int = 20, max_result_chars: int = 2000) -> DaemonManager:
     """Set up the daemon capability on an agent."""
     lang = agent._config.language
