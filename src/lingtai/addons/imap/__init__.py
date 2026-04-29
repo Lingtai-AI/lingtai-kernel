@@ -129,6 +129,12 @@ def setup(
             "imap addon requires 'config', 'accounts', or 'email_address'"
         )
 
+    # One-shot legacy state cleanup (pre-rewrite _processed_uids files)
+    from ._migrate import migrate_legacy_state
+    state_dir = Path(agent._working_dir) / "imap"
+    if state_dir.is_dir():
+        migrate_legacy_state(state_dir)
+
     working_dir = Path(agent._working_dir)
     bridge_dir = working_dir / "imap_bridge"
     bridge_dir.mkdir(parents=True, exist_ok=True)

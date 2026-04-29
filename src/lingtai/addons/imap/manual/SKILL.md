@@ -42,7 +42,7 @@ If the human does ask you to migrate an old setup:
 - **Secrets are plaintext in the JSON.** Do not use `email_password_env`. The `.env` file is only for LLM API keys and other non-addon secrets.
 - **Activation:** after creating or editing `.secrets/imap.json`, run `system(action="refresh")` yourself to reload.
 - **Troubleshooting:** if the addon fails to load, check that `.secrets/imap.json` exists, is valid JSON, and that your `init.json` `addons.imap.config` points at `.secrets/imap.json`. Report back to the human with the specific problem.
-- **Status caveat:** after refresh, `imap(action="accounts")` may show `connected: false` even when IMAP is working. This is a known display bug. Always verify with `imap(action="check")` — if it returns emails, the connection is working regardless of what `connected` says.
+- **Status:** `imap(action="accounts")` returns three flags per account: `tool_connected` (the on-demand connection used by tool calls), `listener_connected` (the background listener's connection), and `listening` (whether the listener is currently in IDLE waiting for new mail). All three should be `true` for a healthy account.
 
 ## What You Need From the Human
 
