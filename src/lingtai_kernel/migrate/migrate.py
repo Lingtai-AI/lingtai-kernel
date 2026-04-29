@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Callable
 
 from .m001_context_limit_relocation import migrate_context_limit_relocation
+from .m002_description_object import migrate_description_object
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ _migrated: set[str] = set()
 # The validator below catches violations at import time.
 _MIGRATIONS: tuple[tuple[int, str, Callable[[Path], None]], ...] = (
     (1, "context_limit_relocation", migrate_context_limit_relocation),
+    (2, "description_object", migrate_description_object),
 )
 
 

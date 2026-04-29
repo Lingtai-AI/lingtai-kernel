@@ -42,7 +42,7 @@ def _write_preset(presets_dir, name, capabilities, provider="deepseek",
                   model="deepseek-v3", api_key_env="DEEPSEEK_API_KEY"):
     preset = {
         "name": name,
-        "description": f"{name} preset",
+        "description": {"summary": f"{name} preset"},
         "manifest": {
             "llm": {
                 "provider": provider,

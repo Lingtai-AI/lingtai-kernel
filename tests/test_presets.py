@@ -12,11 +12,9 @@ from lingtai.presets import (
     expand_inherit,
     home_shortened,
     preset_context_limit,
-    preset_tags,
     preset_tier,
     resolve_preset_name,
     resolve_presets_path,
-    TIER_TAGS,
     TIER_VALUES,
 )
 
@@ -33,10 +31,10 @@ def test_discover_presets_empty_dir(tmp_path):
 def test_discover_presets_lists_json_files_keyed_by_path(tmp_path):
     """Top-level *.json files are discovered, keyed by their path string."""
     (tmp_path / "alpha.json").write_text(
-        '{"name": "alpha", "manifest": {"llm": {"provider": "x", "model": "y"}}}'
+        '{"name": "alpha", "description": {"summary": "ok"}, "manifest": {"llm": {"provider": "x", "model": "y"}}}'
     )
     (tmp_path / "beta.json").write_text(
-        '{"name": "beta", "manifest": {"llm": {"provider": "x", "model": "y"}}}'
+        '{"name": "beta", "description": {"summary": "ok"}, "manifest": {"llm": {"provider": "x", "model": "y"}}}'
     )
     result = discover_presets(tmp_path)
     assert len(result) == 2
@@ -50,7 +48,7 @@ def test_discover_presets_lists_json_files_keyed_by_path(tmp_path):
 def test_discover_presets_ignores_non_json(tmp_path):
     """Non-.json files (README.md, etc.) are ignored."""
     (tmp_path / "preset.json").write_text(
-        '{"name": "p", "manifest": {"llm": {"provider": "x", "model": "y"}}}'
+        '{"name": "p", "description": {"summary": "ok"}, "manifest": {"llm": {"provider": "x", "model": "y"}}}'
     )
     (tmp_path / "README.md").write_text("# Library docs")
     (tmp_path / "notes.txt").write_text("scratch")
@@ -62,12 +60,12 @@ def test_discover_presets_ignores_non_json(tmp_path):
 def test_discover_presets_ignores_subdirs(tmp_path):
     """Subdirectories are not recursed into."""
     (tmp_path / "top.json").write_text(
-        '{"name": "top", "manifest": {"llm": {"provider": "x", "model": "y"}}}'
+        '{"name": "top", "description": {"summary": "ok"}, "manifest": {"llm": {"provider": "x", "model": "y"}}}'
     )
     sub = tmp_path / "subdir"
     sub.mkdir()
     (sub / "nested.json").write_text(
-        '{"name": "nested", "manifest": {"llm": {"provider": "x", "model": "y"}}}'
+        '{"name": "nested", "description": {"summary": "ok"}, "manifest": {"llm": {"provider": "x", "model": "y"}}}'
     )
     result = discover_presets(tmp_path)
     assert len(result) == 1
@@ -77,7 +75,7 @@ def test_discover_presets_ignores_subdirs(tmp_path):
 def test_discover_presets_accepts_jsonc(tmp_path):
     """*.jsonc files are also discovered."""
     (tmp_path / "with_comments.jsonc").write_text(
-        '{"name": "with_comments", "manifest": {"llm": {"provider": "x", "model": "y"}}}'
+        '{"name": "with_comments", "description": {"summary": "ok"}, "manifest": {"llm": {"provider": "x", "model": "y"}}}'
     )
     result = discover_presets(tmp_path)
     assert len(result) == 1
@@ -110,13 +108,19 @@ def _write_preset(dir: Path, name: str, content: dict) -> Path:
 def _valid_preset(name: str = "test") -> dict:
     return {
         "name": name,
-        "description": "test preset",
+        "description": {"summary": "test preset"},
         "manifest": {
             "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
                     "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
             "capabilities": {"file": {}, "email": {}},
         },
     }
+
+
+# Minimal-but-valid description block used inline in tests where the test
+# wants to focus on some other field while still passing description
+# validation. Every preset on disk MUST have description.summary.
+_DESC = {"summary": "ok"}
 
 
 def test_load_preset_absolute_path(tmp_path):
@@ -171,7 +175,7 @@ def test_load_preset_jsonc_strips_comments(tmp_path):
     """JSONC with // comments and trailing commas parses correctly."""
     body = '''{
       "name": "withcomments",   // inline comment
-      "description": "tests JSONC",
+      "description": {"summary": "tests JSONC"},
       "manifest": {
         "llm": {"provider": "x", "model": "y"},
         "capabilities": {"file": {}},   // trailing comma here
@@ -225,6 +229,7 @@ def test_load_preset_malformed_json_raises(tmp_path):
 def test_load_preset_accepts_context_limit_inside_llm_block(tmp_path):
     p = {
         "name": "okllm",
+        "description": _DESC,
         "manifest": {
             "llm": {"provider": "x", "model": "y", "context_limit": 65536},
             "capabilities": {},
@@ -244,6 +249,7 @@ def test_load_preset_relocates_legacy_root_context_limit(tmp_path):
     """
     p = {
         "name": "legacy",
+        "description": _DESC,
         "manifest": {
             "llm": {"provider": "x", "model": "y"},
             "capabilities": {},
@@ -519,83 +525,121 @@ def test_discover_presets_listing_keys_round_trip_through_load(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Tags + tier vocabulary
+# description object validation + tier vocabulary
 # ---------------------------------------------------------------------------
 
-def test_load_preset_accepts_tags_list(tmp_path):
-    p = {
-        "name": "tagged",
-        "tags": ["tier:4", "specialty:code"],
+def test_load_preset_missing_description_synthesized_then_rejected(tmp_path):
+    """Missing description is normalized by m002 to {summary: ""}, which then
+    fails non-empty-summary validation. The user is forced to fix the file
+    rather than have a silent default mask the absent commentary."""
+    bad = {
+        "name": "nodesc",
         "manifest": {
             "llm": {"provider": "x", "model": "y"},
             "capabilities": {},
         },
     }
-    f = tmp_path / "tagged.json"
-    f.write_text(json.dumps(p))
-    loaded = load_preset(str(f))
-    assert loaded["tags"] == ["tier:4", "specialty:code"]
-
-
-def test_load_preset_treats_missing_tags_as_empty(tmp_path):
-    p = _valid_preset("notags")
-    f = tmp_path / "notags.json"
-    f.write_text(json.dumps(p))
-    loaded = load_preset(str(f))
-    assert preset_tags(loaded) == []
-
-
-def test_load_preset_rejects_non_list_tags(tmp_path):
-    p = {
-        "name": "bad",
-        "tags": "tier:4",
-        "manifest": {
-            "llm": {"provider": "x", "model": "y"},
-            "capabilities": {},
-        },
-    }
-    f = tmp_path / "bad.json"
-    f.write_text(json.dumps(p))
-    with pytest.raises(ValueError, match="tags.*list"):
+    f = tmp_path / "nodesc.json"
+    f.write_text(json.dumps(bad))
+    with pytest.raises(ValueError, match="summary.*non-empty"):
         load_preset(str(f))
 
 
-def test_load_preset_rejects_non_string_tag_entry(tmp_path):
-    p = {
-        "name": "bad",
-        "tags": ["tier:4", 42],
+def test_load_preset_string_description_promoted_by_migration(tmp_path):
+    """Plain-string descriptions are promoted to {summary: "<old>"} by m002,
+    so a legacy file loads cleanly without operator intervention."""
+    legacy = {
+        "name": "stringdesc",
+        "description": "legacy text-only description",
         "manifest": {
             "llm": {"provider": "x", "model": "y"},
             "capabilities": {},
         },
     }
-    f = tmp_path / "bad.json"
-    f.write_text(json.dumps(p))
-    with pytest.raises(ValueError, match=r"tags\[1\]"):
+    f = tmp_path / "stringdesc.json"
+    f.write_text(json.dumps(legacy))
+    loaded = load_preset(str(f))
+    assert loaded["description"] == {"summary": "legacy text-only description"}
+
+
+def test_load_preset_requires_non_empty_summary(tmp_path):
+    bad = {
+        "name": "emptysum",
+        "description": {"summary": ""},
+        "manifest": {
+            "llm": {"provider": "x", "model": "y"},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "emptysum.json"
+    f.write_text(json.dumps(bad))
+    with pytest.raises(ValueError, match="summary.*non-empty"):
         load_preset(str(f))
 
 
-def test_preset_tags_returns_empty_for_missing_field():
-    assert preset_tags({"name": "x"}) == []
+def test_load_preset_accepts_tier_value(tmp_path):
+    p = {
+        "name": "tiered",
+        "description": {"summary": "ok", "tier": "4"},
+        "manifest": {
+            "llm": {"provider": "x", "model": "y"},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "tiered.json"
+    f.write_text(json.dumps(p))
+    loaded = load_preset(str(f))
+    assert loaded["description"]["tier"] == "4"
 
 
-def test_preset_tags_filters_non_strings_defensively():
-    assert preset_tags({"tags": ["tier:4", 42, "specialty:code"]}) == [
-        "tier:4", "specialty:code"
-    ]
+def test_load_preset_rejects_invalid_tier(tmp_path):
+    bad = {
+        "name": "badtier",
+        "description": {"summary": "ok", "tier": "godlike"},
+        "manifest": {
+            "llm": {"provider": "x", "model": "y"},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "badtier.json"
+    f.write_text(json.dumps(bad))
+    with pytest.raises(ValueError, match="tier.*one of"):
+        load_preset(str(f))
 
 
-def test_preset_tier_returns_canonical_value():
-    assert preset_tier({"tags": ["tier:4"]}) == "4"
-    assert preset_tier({"tags": ["specialty:code", "tier:1"]}) == "1"
+def test_load_preset_preserves_extra_description_keys(tmp_path):
+    """Author-chosen extra keys (gains/loses/etc.) survive load verbatim."""
+    p = {
+        "name": "rich",
+        "description": {
+            "summary": "ok",
+            "tier": "3",
+            "gains": ["1M context"],
+            "loses": ["vision"],
+            "recommended_for": "code review",
+        },
+        "manifest": {
+            "llm": {"provider": "x", "model": "y"},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "rich.json"
+    f.write_text(json.dumps(p))
+    loaded = load_preset(str(f))
+    assert loaded["description"]["gains"] == ["1M context"]
+    assert loaded["description"]["loses"] == ["vision"]
+    assert loaded["description"]["recommended_for"] == "code review"
+
+
+def test_preset_tier_reads_description_block():
+    assert preset_tier({"description": {"summary": "x", "tier": "4"}}) == "4"
 
 
 def test_preset_tier_returns_none_when_unset():
-    assert preset_tier({"tags": []}) is None
-    assert preset_tier({"tags": ["specialty:code"]}) is None
+    assert preset_tier({"description": {"summary": "x"}}) is None
     assert preset_tier({}) is None
+    assert preset_tier({"description": "old string form"}) is None
 
 
 def test_tier_vocabulary_is_numeric_one_through_five():
     assert TIER_VALUES == ("1", "2", "3", "4", "5")
-    assert TIER_TAGS == ("tier:1", "tier:2", "tier:3", "tier:4", "tier:5")

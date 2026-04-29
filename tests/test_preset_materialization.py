@@ -78,7 +78,7 @@ def test_materialize_substitutes_llm_and_capabilities(tmp_path, monkeypatch):
     plib = _make_preset_lib(tmp_path, {
         "minimax": {
             "name": "minimax",
-            "description": "MiniMax M2.7",
+            "description": {"summary": "MiniMax M2.7"},
             "manifest": {
                 "llm": {"provider": "minimax", "model": "MiniMax-M2.7-highspeed",
                         "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
@@ -129,7 +129,7 @@ def test_materialize_default_presets_path(tmp_path, monkeypatch):
     plib.mkdir(parents=True)
     (plib / "deepseek.json").write_text(json.dumps({
         "name": "deepseek",
-        "description": "DeepSeek default",
+        "description": {"summary": "DeepSeek default"},
         "manifest": {
             "llm": {"provider": "deepseek-NEW", "model": "v4-NEW",
                     "api_key": None, "api_key_env": "X"},
@@ -151,7 +151,7 @@ def test_materialize_relative_presets_path_resolves_against_workdir(tmp_path, mo
     plib.mkdir()
     (plib / "local.json").write_text(json.dumps({
         "name": "local",
-        "description": "local preset",
+        "description": {"summary": "local preset"},
         "manifest": {
             "llm": {"provider": "p1", "model": "m1",
                     "api_key": None, "api_key_env": "P1KEY"},
@@ -207,7 +207,7 @@ def test_materialize_omitted_path_falls_back_to_default(tmp_path, monkeypatch):
     plib.mkdir(parents=True)
     (plib / "fallback.json").write_text(json.dumps({
         "name": "fallback",
-        "description": "fallback preset",
+        "description": {"summary": "fallback preset"},
         "manifest": {
             "llm": {"provider": "p2", "model": "m2",
                     "api_key": None, "api_key_env": "P2KEY"},
@@ -264,7 +264,7 @@ def test_materialize_picks_up_context_limit_from_legacy_layout(tmp_path, monkeyp
     plib = _make_preset_lib(tmp_path, {
         "narrow": {
             "name": "narrow",
-            "description": "narrow context",
+            "description": {"summary": "narrow context"},
             "manifest": {
                 "llm": {"provider": "p", "model": "m",
                         "api_key": None, "api_key_env": "PKEY"},
@@ -298,7 +298,7 @@ def test_materialize_picks_up_context_limit_from_llm_block(tmp_path, monkeypatch
     plib = _make_preset_lib(tmp_path, {
         "narrow": {
             "name": "narrow",
-            "description": "narrow context",
+            "description": {"summary": "narrow context"},
             "manifest": {
                 "llm": {"provider": "p", "model": "m",
                         "api_key": None, "api_key_env": "PKEY",
@@ -324,7 +324,7 @@ def test_materialize_inherit_expansion_runs(tmp_path, monkeypatch):
     plib = _make_preset_lib(tmp_path, {
         "smart": {
             "name": "smart",
-            "description": "smart preset",
+            "description": {"summary": "smart preset"},
             "manifest": {
                 "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
                         "api_key": None, "api_key_env": "GEMINI_API_KEY"},

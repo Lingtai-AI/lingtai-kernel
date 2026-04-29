@@ -26,9 +26,11 @@ This module owns:
 - `resolve_presets_path`: resolve manifest.preset.path entries to list[Path]
 - `home_shortened`: render an absolute path with `~/...` when under $HOME
 
-The on-disk shape is `{name, description, manifest: {...}}` (with optional
-`tags`). The `description` field may be a plain string or a structured
-object — both are surfaced verbatim to the agent.
+The on-disk shape is `{name, description, manifest: {...}}`. The
+`description` field is a structured object with a required `summary`
+string and optional `tier` (the cost/quality ladder, "1".."5"). Authors
+may add arbitrary extra keys (`gains`, `loses`, `recommended_for`, ...);
+the kernel surfaces the whole object verbatim to the agent.
 """
 from __future__ import annotations
 
@@ -264,65 +266,56 @@ def load_preset(
     if not isinstance(caps, dict):
         raise ValueError(f"preset {name!r} ({p}): manifest.capabilities must be an object")
 
-    # Optional top-level `tags` field — list of namespaced strings like
-    # "tier:4" or "specialty:code". Used by agents (and the TUI) to pick
-    # presets by category. The first namespace shipped is "tier:",
-    # whose vocabulary is the numeric strings 1|2|3|4|5 (higher = better;
-    # see TIER_VALUES below).
-    tags = data.get("tags", [])
-    if not isinstance(tags, list):
+    # Required top-level `description` object. Required keys: summary
+    # (non-empty string). Optional: tier (string in TIER_VALUES). Extra
+    # keys are accepted as-is and surfaced verbatim to the agent.
+    description = data.get("description")
+    if not isinstance(description, dict):
         raise ValueError(
-            f"preset {name!r} ({p}): 'tags' must be a list of strings"
+            f"preset {name!r} ({p}): 'description' must be an object "
+            f"with at least a 'summary' field"
         )
-    for i, tag in enumerate(tags):
-        if not isinstance(tag, str):
+    summary = description.get("summary")
+    if not isinstance(summary, str) or not summary:
+        raise ValueError(
+            f"preset {name!r} ({p}): 'description.summary' must be a "
+            f"non-empty string"
+        )
+    tier = description.get("tier")
+    if tier is not None:
+        if not isinstance(tier, str) or tier not in TIER_VALUES:
             raise ValueError(
-                f"preset {name!r} ({p}): tags[{i}] must be a string (got {type(tag).__name__})"
+                f"preset {name!r} ({p}): 'description.tier' must be one of "
+                f"{TIER_VALUES} (got {tier!r})"
             )
 
     return data
 
 
 # ---------------------------------------------------------------------------
-# Tag taxonomy
+# Tier taxonomy
 # ---------------------------------------------------------------------------
 #
-# Tags are namespaced strings stored as a top-level list on each preset:
-#
-#     "tags": ["tier:4", "specialty:code"]
-#
-# The first namespace introduced is `tier:`, a five-rung cost/quality ladder
-# stored as plain numeric strings 1..5 — higher is better. The TUI renders
-# these as star icons (★ through ★★★★★). Agents read tags via
+# `description.tier` is a five-rung cost/quality ladder stored as plain
+# numeric strings 1..5 — higher is better. The TUI renders these as
+# locale-appropriate chips. Agents read the full description block via
 # `system(action='presets')` and pick presets accordingly.
-#
-# Future namespaces (specialty, modality, context-class) follow the same
-# `<namespace>:<value>` pattern so callers can filter by `t.startswith("X:")`.
-TIER_NAMESPACE = "tier"
 TIER_VALUES = ("1", "2", "3", "4", "5")
-TIER_TAGS = tuple(f"{TIER_NAMESPACE}:{v}" for v in TIER_VALUES)
-
-
-def preset_tags(preset: dict) -> list[str]:
-    """Return the preset's tags list (or [] when unset)."""
-    if not isinstance(preset, dict):
-        return []
-    tags = preset.get("tags")
-    if not isinstance(tags, list):
-        return []
-    return [t for t in tags if isinstance(t, str)]
 
 
 def preset_tier(preset: dict) -> str | None:
     """Return the preset's tier value (e.g. '4') or None.
 
-    Reads the first `tier:*` tag — multiple tier tags on one preset is
-    nonsensical, so the helper trusts the first.
+    Reads `description.tier`. Returns None for malformed presets that
+    didn't pass through `load_preset` validation.
     """
-    for t in preset_tags(preset):
-        if t.startswith(f"{TIER_NAMESPACE}:"):
-            return t.split(":", 1)[1]
-    return None
+    if not isinstance(preset, dict):
+        return None
+    desc = preset.get("description")
+    if not isinstance(desc, dict):
+        return None
+    tier = desc.get("tier")
+    return tier if isinstance(tier, str) else None
 
 
 def preset_context_limit(preset_manifest: dict) -> int | None:

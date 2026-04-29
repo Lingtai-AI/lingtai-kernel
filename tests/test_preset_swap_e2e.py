@@ -12,7 +12,7 @@ def _build_lib(plib: Path):
     plib.mkdir(parents=True, exist_ok=True)
     (plib / "alpha.json").write_text(json.dumps({
         "name": "alpha",
-        "description": "alpha — text-only",
+        "description": {"summary": "alpha — text-only"},
         "manifest": {
             "llm": {"provider": "p1", "model": "m1",
                     "api_key": None, "api_key_env": "P1KEY"},
@@ -142,7 +142,7 @@ def test_e2e_inherit_resolves_after_swap(tmp_path, monkeypatch):
     plib.mkdir(parents=True, exist_ok=True)
     (plib / "smart.json").write_text(json.dumps({
         "name": "smart",
-        "description": "vision via inherit",
+        "description": {"summary": "vision via inherit"},
         "manifest": {
             "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
                     "api_key": None, "api_key_env": "GEMINI_API_KEY"},

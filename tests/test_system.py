@@ -354,7 +354,7 @@ def test_refresh_with_unknown_preset_returns_error(tmp_path, monkeypatch):
     plib = tmp_path / "presets"
     plib.mkdir()
     (plib / "minimax.json").write_text(json.dumps({
-        "name": "minimax", "description": "x",
+        "name": "minimax", "description": {"summary": "x"},
         "manifest": {"llm": {"provider": "minimax", "model": "y",
                              "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
                      "capabilities": {"file": {}}},
@@ -431,7 +431,7 @@ def test_presets_action_lists_full_library(tmp_path):
     plib = tmp_path / "presets"
     plib.mkdir()
     (plib / "alpha.json").write_text(json.dumps({
-        "name": "alpha", "description": "alpha desc",
+        "name": "alpha", "description": {"summary": "alpha desc"},
         "manifest": {"llm": {"provider": "p1", "model": "m1",
                              "api_key": None, "api_key_env": "X"},
                      "capabilities": {"file": {}, "vision": {"provider": "p1"}}},
@@ -456,7 +456,7 @@ def test_presets_action_lists_full_library(tmp_path):
     assert sorted(names) == sorted([alpha_path, beta_path])
 
     alpha = next(p for p in result["available"] if p["name"] == alpha_path)
-    assert alpha["description"] == "alpha desc"
+    assert alpha["description"] == {"summary": "alpha desc"}
     assert alpha["llm"] == {"provider": "p1", "model": "m1"}
     assert "vision" in alpha["capabilities"]
 
@@ -481,7 +481,7 @@ def test_presets_action_strips_credentials(tmp_path):
     plib = tmp_path / "presets"
     plib.mkdir()
     (plib / "secret.json").write_text(json.dumps({
-        "name": "secret", "description": "x",
+        "name": "secret", "description": {"summary": "x"},
         "manifest": {"llm": {"provider": "p", "model": "m",
                              "api_key": "SECRET", "api_key_env": "ENVKEY",
                              "base_url": "https://example.com",
@@ -547,13 +547,13 @@ def test_refresh_revert_preset_swaps_to_default(tmp_path, monkeypatch):
     plib = tmp_path / "presets"
     plib.mkdir()
     (plib / "boring.json").write_text(json.dumps({
-        "name": "boring", "description": "default",
+        "name": "boring", "description": {"summary": "default"},
         "manifest": {"llm": {"provider": "p1", "model": "m1",
                              "api_key": None, "api_key_env": "P1KEY"},
                      "capabilities": {"file": {}}},
     }))
     (plib / "fancy.json").write_text(json.dumps({
-        "name": "fancy", "description": "non-default",
+        "name": "fancy", "description": {"summary": "non-default"},
         "manifest": {"llm": {"provider": "p2", "model": "m2",
                              "api_key": None, "api_key_env": "P2KEY"},
                      "capabilities": {"file": {}}},
@@ -675,7 +675,7 @@ def test_refresh_revert_preset_when_active_equals_default_still_succeeds(tmp_pat
     plib = tmp_path / "presets"
     plib.mkdir()
     (plib / "home.json").write_text(json.dumps({
-        "name": "home", "description": "x",
+        "name": "home", "description": {"summary": "x"},
         "manifest": {"llm": {"provider": "p", "model": "m",
                              "api_key": None, "api_key_env": "PKEY"},
                      "capabilities": {"file": {}}},
@@ -711,7 +711,7 @@ def test_presets_action_includes_connectivity(tmp_path, monkeypatch):
     plib = tmp_path / "presets"
     plib.mkdir()
     (plib / "alpha.json").write_text(json.dumps({
-        "name": "alpha", "description": "x",
+        "name": "alpha", "description": {"summary": "x"},
         "manifest": {
             "llm": {"provider": "openai", "model": "gpt-4",
                     "api_key": None, "api_key_env": "ALPHA_KEY",
@@ -720,7 +720,7 @@ def test_presets_action_includes_connectivity(tmp_path, monkeypatch):
         },
     }))
     (plib / "beta.json").write_text(json.dumps({
-        "name": "beta", "description": "y",
+        "name": "beta", "description": {"summary": "y"},
         "manifest": {
             "llm": {"provider": "openai", "model": "gpt-3",
                     "api_key": None, "api_key_env": "BETA_KEY",
@@ -755,7 +755,7 @@ def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch
     plib = tmp_path / "presets"
     plib.mkdir()
     (plib / "broken.json").write_text(json.dumps({
-        "name": "broken", "description": "x",
+        "name": "broken", "description": {"summary": "x"},
         "manifest": {
             "llm": {"provider": "openai", "model": "gpt-4",
                     "api_key": None, "api_key_env": "BROKEN_KEY",

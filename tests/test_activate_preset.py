@@ -12,7 +12,7 @@ def _make_workdir_and_lib(tmp_path: Path) -> tuple[Path, Path]:
     plib.mkdir()
     (plib / "deepseek.json").write_text(json.dumps({
         "name": "deepseek",
-        "description": "DeepSeek V4",
+        "description": {"summary": "DeepSeek V4"},
         "manifest": {
             "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
                     "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
@@ -21,7 +21,7 @@ def _make_workdir_and_lib(tmp_path: Path) -> tuple[Path, Path]:
     }))
     (plib / "minimax.json").write_text(json.dumps({
         "name": "minimax",
-        "description": "MiniMax M2.7",
+        "description": {"summary": "MiniMax M2.7"},
         "manifest": {
             "llm": {"provider": "minimax", "model": "MiniMax-M2.7-highspeed",
                     "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
@@ -144,7 +144,7 @@ def test_activate_preset_uses_default_path_when_unset(tmp_path, monkeypatch):
     plib.mkdir(parents=True)
     (plib / "minimax.json").write_text(json.dumps({
         "name": "minimax",
-        "description": "MiniMax",
+        "description": {"summary": "MiniMax"},
         "manifest": {
             "llm": {"provider": "minimax", "model": "x",
                     "api_key": None, "api_key_env": "MINIMAX_API_KEY"},

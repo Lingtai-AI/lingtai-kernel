@@ -13,7 +13,7 @@ def _build_lib(plib: Path, *, big_limit=200000, small_limit=8000):
     plib.mkdir(parents=True, exist_ok=True)
     (plib / "big.json").write_text(json.dumps({
         "name": "big",
-        "description": "big context preset",
+        "description": {"summary": "big context preset"},
         "manifest": {
             "llm": {"provider": "p1", "model": "m1",
                     "api_key": None, "api_key_env": "P1KEY"},
@@ -23,7 +23,7 @@ def _build_lib(plib: Path, *, big_limit=200000, small_limit=8000):
     }))
     (plib / "small.json").write_text(json.dumps({
         "name": "small",
-        "description": "small context preset",
+        "description": {"summary": "small context preset"},
         "manifest": {
             "llm": {"provider": "p2", "model": "m2",
                     "api_key": None, "api_key_env": "P2KEY"},
@@ -33,7 +33,7 @@ def _build_lib(plib: Path, *, big_limit=200000, small_limit=8000):
     }))
     (plib / "no_limit.json").write_text(json.dumps({
         "name": "no_limit",
-        "description": "no context_limit specified",
+        "description": {"summary": "no context_limit specified"},
         "manifest": {
             "llm": {"provider": "p3", "model": "m3",
                     "api_key": None, "api_key_env": "P3KEY"},
@@ -181,7 +181,7 @@ def test_swap_skips_guard_when_target_limit_is_zero(tmp_path, monkeypatch):
     # Add a preset with limit=0 to the library
     (plib / "zero.json").write_text(json.dumps({
         "name": "zero",
-        "description": "zero limit",
+        "description": {"summary": "zero limit"},
         "manifest": {
             "llm": {"provider": "p4", "model": "m4",
                     "api_key": None, "api_key_env": "P4KEY"},
@@ -214,7 +214,7 @@ def test_swap_skips_guard_when_target_limit_is_negative(tmp_path, monkeypatch):
     agent, plib = _make_test_agent(tmp_path)
     (plib / "negone.json").write_text(json.dumps({
         "name": "negone",
-        "description": "negative limit",
+        "description": {"summary": "negative limit"},
         "manifest": {
             "llm": {"provider": "p5", "model": "m5",
                     "api_key": None, "api_key_env": "P5KEY"},
@@ -254,7 +254,7 @@ def test_guard_reads_context_limit_from_llm_block(tmp_path, monkeypatch):
     # Add a preset with context_limit nested inside llm.
     (plib / "tight.json").write_text(json.dumps({
         "name": "tight",
-        "description": "context_limit lives in llm block",
+        "description": {"summary": "context_limit lives in llm block"},
         "manifest": {
             "llm": {"provider": "px", "model": "mx",
                     "api_key": None, "api_key_env": "PXKEY",

@@ -295,8 +295,7 @@ def _presets(agent, args: dict) -> dict:
         llm = pm.get("llm", {})
         available.append({
             "name": name,
-            "description": preset.get("description", ""),
-            "tags": preset.get("tags", []),
+            "description": preset.get("description", {}),
             "llm": {
                 "provider": llm.get("provider"),
                 "model": llm.get("model"),
