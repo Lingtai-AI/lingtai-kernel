@@ -166,3 +166,56 @@ def test_check_default_last_is_20(tmp_path):
     out = mgr.handle({"action": "check", "id": "em-6"})
     assert out["events_returned"] == 20
     assert out["events_total"] == 31
+
+
+def test_check_rejects_non_numeric_last(tmp_path):
+    """Non-numeric `last` must return a clean error, not raise."""
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    out = mgr.handle({"action": "check", "id": "em-x", "last": "twenty"})
+    assert out["status"] == "error"
+    assert "last" in out["message"]
+
+
+def test_check_rejects_non_numeric_truncate(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    out = mgr.handle({"action": "check", "id": "em-x", "truncate": "tons"})
+    assert out["status"] == "error"
+    assert "truncate" in out["message"]
+
+
+def test_check_rejects_zero_or_negative_last(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    out = mgr.handle({"action": "check", "id": "em-x", "last": 0})
+    assert out["status"] == "error"
+    assert "last" in out["message"]
+    out = mgr.handle({"action": "check", "id": "em-x", "last": -1})
+    assert out["status"] == "error"
+
+
+def test_check_rejects_negative_truncate(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    out = mgr.handle({"action": "check", "id": "em-x", "truncate": -10})
+    assert out["status"] == "error"
+    assert "truncate" in out["message"]
+
+
+def test_check_caps_last_at_max(tmp_path):
+    """last is capped at _CHECK_LAST_MAX so events.jsonl can't be slurped
+    unboundedly (readlines() would otherwise read the whole file)."""
+    from lingtai.core.daemon import DaemonManager
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    rd = _make_run_dir(agent, "em-cap")
+    _register(mgr, "em-cap", rd)
+
+    # Asking for a huge value still works but only returns up to the cap.
+    out = mgr.handle({"action": "check", "id": "em-cap", "last": 10**9})
+    # Successful check returns the data shape (no `status` field — that's
+    # reserved for error responses). The important property: no exception,
+    # no DoS, response shape intact.
+    assert "events" in out
+    assert out["events_returned"] <= DaemonManager._CHECK_LAST_MAX

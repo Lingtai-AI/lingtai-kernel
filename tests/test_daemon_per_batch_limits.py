@@ -180,3 +180,16 @@ def test_emanate_rejects_negative_timeout(tmp_path):
                       "tasks": [{"task": "x", "tools": ["read"]}]})
     assert out["status"] == "error"
     assert "timeout" in out["message"]
+
+
+def test_emanate_rejects_sub_5s_timeout(tmp_path):
+    """Sub-5s timeouts can fire before the emanation thread starts (the
+    watchdog ticks at 1s and OS scheduling can delay its first run).
+    Refuse rather than silently mark emanations as 'timeout' before they ran."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    out = mgr.handle({"action": "emanate", "timeout": 2,
+                      "tasks": [{"task": "x", "tools": ["read"]}]})
+    assert out["status"] == "error"
+    assert "timeout" in out["message"]
+    assert "5" in out["message"]

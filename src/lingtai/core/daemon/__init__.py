@@ -101,6 +101,7 @@ def get_schema(lang: str = "en") -> dict:
             "last": {
                 "type": "integer",
                 "minimum": 1,
+                "maximum": 1000,
                 "description": t(lang, "daemon.last"),
             },
             "truncate": {
@@ -115,7 +116,7 @@ def get_schema(lang: str = "en") -> dict:
             },
             "timeout": {
                 "type": "number",
-                "minimum": 1,
+                "minimum": 5,
                 "description": t(lang, "daemon.timeout"),
             },
         },
@@ -162,8 +163,8 @@ class DaemonManager:
         elif action == "check":
             return self._handle_check(
                 args.get("id", ""),
-                last=int(args.get("last", 20)),
-                truncate=int(args.get("truncate", 500)),
+                last=args.get("last", 20),
+                truncate=args.get("truncate", 500),
             )
         elif action == "reclaim":
             return self._handle_reclaim()
@@ -281,7 +282,10 @@ class DaemonManager:
         for name, kwargs in resolved.items():
             if name in _GROUPS:
                 for sub in _GROUPS[name]:
-                    expanded[sub] = kwargs if isinstance(kwargs, dict) else {}
+                    # Each group member gets its own kwargs copy — if a
+                    # capability's setup() ever pops or mutates its kwargs
+                    # in place, sibling members must not be corrupted.
+                    expanded[sub] = dict(kwargs) if isinstance(kwargs, dict) else {}
             else:
                 expanded[name] = kwargs
 
@@ -507,9 +511,13 @@ class DaemonManager:
             except (TypeError, ValueError):
                 return {"status": "error",
                         "message": f"timeout must be a positive number (got {timeout!r})"}
-            if to <= 0:
+            # Floor at 5s — the watchdog ticks at 1s granularity and the
+            # OS scheduler may delay the watchdog thread's first run, so a
+            # sub-5s timeout can fire before any emanation thread starts and
+            # mark them as 'timeout' without ever running.
+            if to < 5:
                 return {"status": "error",
-                        "message": f"timeout must be > 0 (got {to})"}
+                        "message": f"timeout must be ≥ 5 seconds (got {to})"}
             effective_timeout = min(to, self._timeout)
         else:
             effective_timeout = self._timeout
@@ -725,7 +733,12 @@ class DaemonManager:
         self._log("daemon_ask", em_id=em_id, message_length=len(message))
         return {"status": "sent", "id": em_id}
 
-    def _handle_check(self, em_id: str, last: int = 20, truncate: int = 500) -> dict:
+    # Hard cap on `last` to bound memory in case events.jsonl has grown large
+    # (long-running emanations under the new 3600s timeout default can write
+    # thousands of events). Beyond this an agent should read the file directly.
+    _CHECK_LAST_MAX = 1000
+
+    def _handle_check(self, em_id: str, last=20, truncate=500) -> dict:
         """Read-only progress tail for one emanation.
 
         Returns a snapshot of daemon.json plus the last N events from
@@ -733,6 +746,26 @@ class DaemonManager:
         coordination with the run thread (atomic writes + append-only JSONL
         guarantee a consistent view).
         """
+        # Validate and coerce — the LLM may pass non-numeric strings;
+        # reject cleanly rather than letting int() raise to the dispatcher.
+        try:
+            last = int(last)
+        except (TypeError, ValueError):
+            return {"status": "error",
+                    "message": f"last must be a positive integer (got {last!r})"}
+        try:
+            truncate = int(truncate)
+        except (TypeError, ValueError):
+            return {"status": "error",
+                    "message": f"truncate must be a non-negative integer (got {truncate!r})"}
+        if last < 1:
+            return {"status": "error", "message": f"last must be ≥ 1 (got {last})"}
+        if truncate < 0:
+            return {"status": "error", "message": f"truncate must be ≥ 0 (got {truncate})"}
+        # Cap last to prevent self-DoS — readlines() loads the whole file
+        # before slicing, so an unbounded last would read all of events.jsonl.
+        last = min(last, self._CHECK_LAST_MAX)
+
         entry = self._emanations.get(em_id)
         if not entry:
             return {"status": "error", "message": f"Unknown emanation: {em_id}"}
