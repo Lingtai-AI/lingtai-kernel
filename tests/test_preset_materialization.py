@@ -87,7 +87,7 @@ def test_materialize_substitutes_llm_and_capabilities(tmp_path, monkeypatch):
             },
         },
     })
-    wd = _make_workdir(tmp_path, active_preset="minimax",
+    wd = _make_workdir(tmp_path, active_preset=str(plib / "minimax.json"),
                        presets_path=str(plib))
     monkeypatch.setenv("MINIMAX_API_KEY", "sk-test")
 
@@ -110,7 +110,8 @@ def test_materialize_no_preset_field_unchanged(tmp_path):
 def test_materialize_unknown_preset_returns_none_and_logs(tmp_path):
     """Active preset that doesn't exist → _read_init returns None and logs."""
     plib = _make_preset_lib(tmp_path, {})
-    wd = _make_workdir(tmp_path, active_preset="ghost", presets_path=str(plib))
+    wd = _make_workdir(tmp_path, active_preset=str(plib / "ghost.json"),
+                       presets_path=str(plib))
     a = _make_probe_agent(wd)
     data = a._read_init()
     assert data is None
@@ -135,7 +136,7 @@ def test_materialize_default_presets_path(tmp_path, monkeypatch):
             "capabilities": {"file": {}},
         },
     }))
-    wd = _make_workdir(tmp_path, active_preset="deepseek")  # no presets_path
+    wd = _make_workdir(tmp_path, active_preset="~/.lingtai-tui/presets/deepseek.json")
     a = _make_probe_agent(wd)
     data = a._read_init()
     assert data is not None
@@ -166,9 +167,9 @@ def test_materialize_relative_presets_path_resolves_against_workdir(tmp_path, mo
             "agent_name": "alice",
             "language": "en",
             "preset": {
-                "path": "./my_presets",  # RELATIVE to agent workdir
-                "active": "local",
-                "default": "local",
+                "path": "./my_presets",  # used only for listing; load uses active path
+                "active": "./my_presets/local.json",  # RELATIVE to agent workdir
+                "default": "./my_presets/local.json",
             },
             "llm": {"provider": "PLACEHOLDER", "model": "PLACEHOLDER",
                     "api_key": None, "api_key_env": "P1KEY"},
@@ -197,9 +198,10 @@ def test_materialize_relative_presets_path_resolves_against_workdir(tmp_path, mo
 
 
 def test_materialize_omitted_path_falls_back_to_default(tmp_path, monkeypatch):
-    """preset block without path falls back to ~/.lingtai-tui/presets."""
+    """preset block uses a `~/...` style active path resolved via $HOME."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
     monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
     plib = fake_home / ".lingtai-tui" / "presets"
     plib.mkdir(parents=True)
@@ -223,8 +225,8 @@ def test_materialize_omitted_path_falls_back_to_default(tmp_path, monkeypatch):
             "agent_name": "alice",
             "language": "en",
             "preset": {
-                "active": "fallback",  # path omitted → falls back to default
-                "default": "fallback",
+                "active": "~/.lingtai-tui/presets/fallback.json",
+                "default": "~/.lingtai-tui/presets/fallback.json",
             },
             "llm": {"provider": "PLACEHOLDER", "model": "PLACEHOLDER",
                     "api_key": None, "api_key_env": "P2KEY"},
@@ -271,7 +273,7 @@ def test_materialize_picks_up_context_limit_from_legacy_layout(tmp_path, monkeyp
             },
         },
     })
-    wd = _make_workdir(tmp_path, active_preset="narrow",
+    wd = _make_workdir(tmp_path, active_preset=str(plib / "narrow.json"),
                        presets_path=str(plib))
     monkeypatch.setenv("PKEY", "sk-test")
 
@@ -305,7 +307,7 @@ def test_materialize_picks_up_context_limit_from_llm_block(tmp_path, monkeypatch
             },
         },
     })
-    wd = _make_workdir(tmp_path, active_preset="narrow",
+    wd = _make_workdir(tmp_path, active_preset=str(plib / "narrow.json"),
                        presets_path=str(plib))
     monkeypatch.setenv("PKEY", "sk-test")
 
@@ -334,7 +336,8 @@ def test_materialize_inherit_expansion_runs(tmp_path, monkeypatch):
         },
     })
     monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
-    wd = _make_workdir(tmp_path, active_preset="smart", presets_path=str(plib))
+    wd = _make_workdir(tmp_path, active_preset=str(plib / "smart.json"),
+                       presets_path=str(plib))
     a = _make_probe_agent(wd)
     data = a._read_init()
     caps = data["manifest"]["capabilities"]

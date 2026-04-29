@@ -299,10 +299,14 @@ def _make_test_agent_for_presets(tmp_path, presets_path=None, active_preset=None
     _perform_refresh are intentionally left as the BaseAgent defaults; tests
     monkeypatch them to observe call patterns.
 
+    active_preset / default_preset: stem names; the helper resolves them to
+    full paths under `presets_path` (or stores them verbatim when no
+    presets_path is given — useful for tests that won't actually load the file).
     default_preset: if provided, writes manifest.preset.default to this value
     (instead of mirroring active_preset).
     """
     import json
+    from pathlib import Path as _P
     wd = tmp_path / "test"
     wd.mkdir(exist_ok=True)
     manifest = {
@@ -315,9 +319,21 @@ def _make_test_agent_for_presets(tmp_path, presets_path=None, active_preset=None
         "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 50,
         "admin": {}, "streaming": False,
     }
+
+    def _to_path(stem):
+        if not stem:
+            return stem
+        # If already a path-form (contains slash or .json/.jsonc), pass through.
+        if "/" in stem or stem.endswith((".json", ".jsonc")):
+            return stem
+        if presets_path is not None:
+            return str(_P(presets_path) / f"{stem}.json")
+        return stem
+
     if active_preset:
-        resolved_default = default_preset if default_preset is not None else active_preset
-        preset_block: dict = {"active": active_preset, "default": resolved_default}
+        active_value = _to_path(active_preset)
+        default_value = _to_path(default_preset if default_preset is not None else active_preset)
+        preset_block: dict = {"active": active_value, "default": default_value}
         if presets_path:
             preset_block["path"] = str(presets_path)
         manifest["preset"] = preset_block
@@ -432,16 +448,19 @@ def test_presets_action_lists_full_library(tmp_path):
     result = agent._intrinsics["system"]({"action": "presets"})
 
     assert result["status"] == "ok"
-    assert result["active"] == "alpha"
+    # In the path-as-name model, `active` and entry names are full paths.
+    alpha_path = str(plib / "alpha.json")
+    beta_path = str(plib / "beta.json")
+    assert result["active"] == alpha_path
     names = [p["name"] for p in result["available"]]
-    assert names == ["alpha", "beta"]   # alphabetically sorted
+    assert sorted(names) == sorted([alpha_path, beta_path])
 
-    alpha = next(p for p in result["available"] if p["name"] == "alpha")
+    alpha = next(p for p in result["available"] if p["name"] == alpha_path)
     assert alpha["description"] == "alpha desc"
     assert alpha["llm"] == {"provider": "p1", "model": "m1"}
     assert "vision" in alpha["capabilities"]
 
-    beta = next(p for p in result["available"] if p["name"] == "beta")
+    beta = next(p for p in result["available"] if p["name"] == beta_path)
     assert beta["description"] == {"summary": "structured", "gains": ["a"]}
 
     for entry in result["available"]:
@@ -718,14 +737,16 @@ def test_presets_action_includes_connectivity(tmp_path, monkeypatch):
 
     assert result["status"] == "ok"
     by_name = {p["name"]: p for p in result["available"]}
+    alpha_path = str(plib / "alpha.json")
+    beta_path = str(plib / "beta.json")
 
     # alpha — has credentials, mocked probe succeeds → ok
-    assert by_name["alpha"]["connectivity"]["status"] == "ok"
-    assert by_name["alpha"]["connectivity"]["latency_ms"] == 42
+    assert by_name[alpha_path]["connectivity"]["status"] == "ok"
+    assert by_name[alpha_path]["connectivity"]["latency_ms"] == 42
 
     # beta — no credentials → no_credentials, no network call
-    assert by_name["beta"]["connectivity"]["status"] == "no_credentials"
-    assert by_name["beta"]["connectivity"]["latency_ms"] is None
+    assert by_name[beta_path]["connectivity"]["status"] == "no_credentials"
+    assert by_name[beta_path]["connectivity"]["latency_ms"] is None
 
 
 def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch):
@@ -752,5 +773,6 @@ def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch
     result = agent._intrinsics["system"]({"action": "presets"})
 
     by_name = {p["name"]: p for p in result["available"]}
-    assert by_name["broken"]["connectivity"]["status"] == "unreachable"
-    assert "DNS fail" in by_name["broken"]["connectivity"]["error"]
+    broken_path = str(plib / "broken.json")
+    assert by_name[broken_path]["connectivity"]["status"] == "unreachable"
+    assert "DNS fail" in by_name[broken_path]["connectivity"]["error"]

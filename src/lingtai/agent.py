@@ -531,7 +531,7 @@ class Agent(BaseAgent):
         import json
         from .init_schema import validate_init
         from .config_resolve import resolve_paths
-        from .presets import load_preset, expand_inherit, default_presets_path, resolve_presets_path
+        from .presets import load_preset, expand_inherit
 
         init_path = self._working_dir / "init.json"
         if not init_path.is_file():
@@ -545,13 +545,14 @@ class Agent(BaseAgent):
 
         # Materialize active preset, if any, BEFORE validation so the manifest
         # the schema validates is the fully-resolved one the agent will run on.
+        # The active value is the preset's path (~/foo.json, ./presets/foo.json,
+        # or absolute) — load_preset resolves it against working_dir.
         manifest = data.get("manifest")
         preset_block = manifest.get("preset") if isinstance(manifest, dict) else None
         if isinstance(preset_block, dict) and preset_block.get("active"):
             preset_name = preset_block["active"]
-            presets_path = resolve_presets_path(manifest, self._working_dir)
             try:
-                preset = load_preset(presets_path, preset_name)
+                preset = load_preset(preset_name, working_dir=self._working_dir)
             except (KeyError, ValueError) as e:
                 self._log("refresh_init_error",
                           error=f"preset {preset_name!r} unloadable: {e}")
@@ -589,29 +590,28 @@ class Agent(BaseAgent):
     def _activate_preset(self, name: str) -> None:
         """Substitute a preset's llm + capabilities into init.json on disk.
 
-        Reads the named preset from `manifest.preset.path` (default
-        ~/.lingtai-tui/presets/), substitutes its `manifest.llm` and
+        `name` is the preset's path (absolute, ~-prefixed, or relative to
+        working_dir). Substitutes the file's `manifest.llm` and
         `manifest.capabilities` into the agent's init.json, sets
-        `manifest.preset.active = name`, and writes atomically.
+        `manifest.preset.active = name` (storing the path string verbatim —
+        no canonicalization), and writes atomically.
 
         Other manifest fields are preserved.
 
         Raises:
-            KeyError: the named preset does not exist
-            ValueError: the preset file is malformed
+            KeyError: the preset file does not exist
+            ValueError: the preset file is malformed or the name is invalid
             OSError: the on-disk write failed (init.json untouched)
         """
         import json
         import os
-        from .presets import load_preset, resolve_presets_path
+        from .presets import load_preset
 
         init_path = self._working_dir / "init.json"
         data = json.loads(init_path.read_text(encoding="utf-8"))
         manifest = data.setdefault("manifest", {})
 
-        presets_path = resolve_presets_path(manifest, self._working_dir)
-
-        preset = load_preset(presets_path, name)  # raises KeyError / ValueError
+        preset = load_preset(name, working_dir=self._working_dir)
         preset_manifest = preset.get("manifest", {})
 
         preset_llm = dict(preset_manifest.get("llm") or manifest.get("llm") or {})

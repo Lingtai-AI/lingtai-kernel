@@ -38,8 +38,8 @@ def _make_workdir_and_lib(tmp_path: Path) -> tuple[Path, Path]:
             "language": "en",
             "preset": {
                 "path": str(plib),
-                "active": "deepseek",
-                "default": "deepseek",
+                "active": str(plib / "deepseek.json"),
+                "default": str(plib / "deepseek.json"),
             },
             "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
                     "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
@@ -74,22 +74,24 @@ def _make_probe_agent(wd: Path):
 def test_activate_preset_substitutes_llm_and_capabilities(tmp_path):
     wd, plib = _make_workdir_and_lib(tmp_path)
     a = _make_probe_agent(wd)
-    a._activate_preset("minimax")
+    minimax_path = str(plib / "minimax.json")
+    deepseek_path = str(plib / "deepseek.json")
+    a._activate_preset(minimax_path)
 
     # init.json on disk now reflects minimax
     data = json.loads((wd / "init.json").read_text())
     assert data["manifest"]["llm"]["provider"] == "minimax"
     assert data["manifest"]["llm"]["model"] == "MiniMax-M2.7-highspeed"
     assert "vision" in data["manifest"]["capabilities"]
-    assert data["manifest"]["preset"]["active"] == "minimax"
-    assert data["manifest"]["preset"]["default"] == "deepseek"  # original default preserved
+    assert data["manifest"]["preset"]["active"] == minimax_path
+    assert data["manifest"]["preset"]["default"] == deepseek_path  # original default preserved
 
 
 def test_activate_preset_preserves_other_manifest_fields(tmp_path):
     """admin, soul, stamina, agent_name, etc. survive the swap."""
     wd, plib = _make_workdir_and_lib(tmp_path)
     a = _make_probe_agent(wd)
-    a._activate_preset("minimax")
+    a._activate_preset(str(plib / "minimax.json"))
 
     data = json.loads((wd / "init.json").read_text())
     m = data["manifest"]
@@ -106,7 +108,7 @@ def test_activate_preset_unknown_raises_key_error(tmp_path):
     a = _make_probe_agent(wd)
 
     with pytest.raises(KeyError, match="ghost"):
-        a._activate_preset("ghost")
+        a._activate_preset(str(plib / "ghost.json"))
 
     # Disk is unchanged
     assert (wd / "init.json").read_text() == original
@@ -126,16 +128,17 @@ def test_activate_preset_atomic_write(tmp_path, monkeypatch):
     monkeypatch.setattr("os.replace", failing_replace)
 
     with pytest.raises(OSError, match="disk full"):
-        a._activate_preset("minimax")
+        a._activate_preset(str(plib / "minimax.json"))
 
     # init.json on disk is the original
     assert (wd / "init.json").read_text() == original
 
 
 def test_activate_preset_uses_default_path_when_unset(tmp_path, monkeypatch):
-    """If init.json has active_preset but no presets_path, default applies."""
+    """A `~/...` style preset path is resolved via $HOME at load time."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
     monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
     plib = fake_home / ".lingtai-tui" / "presets"
     plib.mkdir(parents=True)
@@ -149,16 +152,15 @@ def test_activate_preset_uses_default_path_when_unset(tmp_path, monkeypatch):
         },
     }))
 
-    # Build workdir without preset.path (path omitted → uses default ~/.lingtai-tui/presets)
     wd = tmp_path / "agent"
     wd.mkdir()
     init = {
         "manifest": {
             "agent_name": "alice", "language": "en",
             "preset": {
-                "active": "deepseek",
-                "default": "deepseek",
-                # no "path" — falls back to ~/.lingtai-tui/presets
+                "active": "~/.lingtai-tui/presets/deepseek.json",
+                "default": "~/.lingtai-tui/presets/deepseek.json",
+                # no "path" — only used for listing, not for loading
             },
             "llm": {"provider": "x", "model": "x", "api_key": None,
                     "api_key_env": "X"},
@@ -170,7 +172,7 @@ def test_activate_preset_uses_default_path_when_unset(tmp_path, monkeypatch):
     }
     (wd / "init.json").write_text(json.dumps(init))
     a = _make_probe_agent(wd)
-    a._activate_preset("minimax")
+    a._activate_preset("~/.lingtai-tui/presets/minimax.json")
 
     data = json.loads((wd / "init.json").read_text())
     assert data["manifest"]["llm"]["provider"] == "minimax"

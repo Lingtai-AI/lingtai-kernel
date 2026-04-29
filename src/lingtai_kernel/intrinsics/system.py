@@ -152,25 +152,16 @@ def _check_context_fits(agent, preset_name: str) -> tuple:
     """Read the target preset's context_limit and verify the agent's current
     context usage fits.
 
+    `preset_name` is a path string (~/foo.json, ./foo.json, or absolute).
+
     Returns (fits, error_message, log_extra). When fits=True, message is None.
     When fits=False, returns a user-facing error message and a dict of fields
     for the preset_swap_refused_oversize log event.
     """
-    import json
-    from pathlib import Path
-    from lingtai.presets import load_preset, preset_context_limit, resolve_presets_path
+    from lingtai.presets import load_preset, preset_context_limit
 
     try:
-        init_path = agent._working_dir / "init.json"
-        raw = json.loads(init_path.read_text(encoding="utf-8"))
-    except Exception:
-        return True, None, None  # can't read init — let activate_preset handle it
-
-    manifest = raw.get("manifest", {})
-    presets_path = resolve_presets_path(manifest, agent._working_dir)
-
-    try:
-        preset = load_preset(presets_path, preset_name)
+        preset = load_preset(preset_name, working_dir=agent._working_dir)
     except (KeyError, ValueError):
         return True, None, None  # let activate_preset surface the error
 
@@ -265,7 +256,13 @@ def _refresh(agent, args: dict) -> dict:
 
 
 def _presets(agent, args: dict) -> dict:
-    """List available presets in the agent's library, with active marker.
+    """List available presets in the agent's libraries, with active marker.
+
+    Each preset's `name` is its **path** (~/.lingtai-tui/presets/foo.json
+    style when under $HOME, otherwise absolute) — that's the same string an
+    agent passes to `system(action='refresh', preset=...)` to swap. Two
+    libraries each containing `cheap.json` appear as two distinct entries
+    with different paths — no collisions, no shadowing.
 
     For each preset, includes a `connectivity` field reporting whether the
     preset's LLM endpoint is reachable RIGHT NOW. Probes run in parallel.
@@ -288,9 +285,10 @@ def _presets(agent, args: dict) -> dict:
 
     available = []
     connectivity_specs = []
+    # Sorted by display path for stable ordering.
     for name in sorted(discover_presets(presets_path).keys()):
         try:
-            preset = load_preset(presets_path, name)
+            preset = load_preset(name, working_dir=agent._working_dir)
         except (KeyError, ValueError):
             continue  # malformed presets are silently skipped from listing
         pm = preset.get("manifest", {})

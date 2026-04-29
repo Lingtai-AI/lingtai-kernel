@@ -543,7 +543,8 @@ def test_discover_presets_triggers_migration(tmp_path):
 
     found = discover_presets(plib)
 
-    assert "x" in found
+    # Listing keys are full path strings now; the file's path is the identity.
+    assert any(k.endswith("x.json") for k in found)
     after = _read(p)
     assert after["manifest"]["llm"]["context_limit"] == 4321
     assert "context_limit" not in after["manifest"]
@@ -564,5 +565,7 @@ def test_discover_presets_excludes_kernel_meta_file(tmp_path):
     assert (plib / meta_filename()).exists()
 
     found = discover_presets(plib)
-    assert set(found.keys()) == {"real"}
-    assert "_kernel_meta" not in found
+    # Exactly one preset surfaced — `real.json` — and the meta file is hidden.
+    assert len(found) == 1
+    assert next(iter(found.keys())).endswith("real.json")
+    assert all("_kernel_meta" not in k for k in found)

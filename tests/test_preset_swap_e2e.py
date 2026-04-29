@@ -86,7 +86,9 @@ def test_e2e_boot_with_alpha_then_swap_to_beta(tmp_path, monkeypatch):
     plib = tmp_path / "presets"
     _build_lib(plib)
     wd = tmp_path / "agent"
-    _build_workdir(wd, plib, "alpha")
+    alpha_path = str(plib / "alpha.json")
+    beta_path = str(plib / "beta.json")
+    _build_workdir(wd, plib, alpha_path)
     monkeypatch.setenv("P1KEY", "sk-test")
     monkeypatch.setenv("P2KEY", "sk-test")
 
@@ -101,7 +103,7 @@ def test_e2e_boot_with_alpha_then_swap_to_beta(tmp_path, monkeypatch):
     assert data1["manifest"]["agent_name"] == "test"
 
     # Swap to beta
-    agent._activate_preset("beta")
+    agent._activate_preset(beta_path)
 
     # Re-read: beta materialized, identity preserved
     data2 = agent._read_init()
@@ -113,8 +115,8 @@ def test_e2e_boot_with_alpha_then_swap_to_beta(tmp_path, monkeypatch):
     assert data2["manifest"]["admin"]["karma"] is True  # admin preserved
     assert data2["manifest"]["soul"]["delay"] == 120  # soul preserved
     assert data2["manifest"]["stamina"] == 3600  # stamina preserved
-    assert data2["manifest"]["preset"]["active"] == "beta"
-    assert data2["manifest"]["preset"]["default"] == "alpha"  # original default preserved
+    assert data2["manifest"]["preset"]["active"] == beta_path
+    assert data2["manifest"]["preset"]["default"] == alpha_path  # original default preserved
 
 
 def test_e2e_swap_to_unknown_preserves_init(tmp_path, monkeypatch):
@@ -122,14 +124,14 @@ def test_e2e_swap_to_unknown_preserves_init(tmp_path, monkeypatch):
     plib = tmp_path / "presets"
     _build_lib(plib)
     wd = tmp_path / "agent"
-    _build_workdir(wd, plib, "alpha")
+    _build_workdir(wd, plib, str(plib / "alpha.json"))
     monkeypatch.setenv("P1KEY", "sk-test")
 
     original = (wd / "init.json").read_text()
     agent = _make_probe(wd)
 
     with pytest.raises(KeyError):
-        agent._activate_preset("ghost")
+        agent._activate_preset(str(plib / "ghost.json"))
 
     assert (wd / "init.json").read_text() == original
 
@@ -163,8 +165,8 @@ def test_e2e_inherit_resolves_after_swap(tmp_path, monkeypatch):
             "language": "en",
             "preset": {
                 "path": str(plib),
-                "active": "smart",
-                "default": "smart",
+                "active": str(plib / "smart.json"),
+                "default": str(plib / "smart.json"),
             },
             "llm": {"provider": "PLACEHOLDER", "model": "PLACEHOLDER",
                     "api_key": None, "api_key_env": "PLACEHOLDER"},

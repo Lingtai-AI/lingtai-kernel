@@ -1,44 +1,98 @@
 """Preset library — atomic {llm, capabilities} bundles for agent runtime swap.
 
-A preset lives as a single JSON or JSONC file in `manifest.preset.path` (or
-the default `~/.lingtai-tui/presets/` when path is omitted). The filename
-stem is the preset's discovery name (e.g. `cheap.json` → `"cheap"`). The
-kernel reads the file's `manifest.llm` and `manifest.capabilities` and
-substitutes them into the running agent's manifest at boot time or on swap.
+A preset lives as a single JSON or JSONC file anywhere on disk. The preset's
+**name is its path** — there is no separate "stem" identity. Names accepted
+by `load_preset` and stored in `manifest.preset.active` / `default` may be:
 
-`manifest.preset.path` may be a single string or a list of strings. With a
-list, libraries layer in order — the first path that contains a given preset
-name wins, and `discover_presets` unions across all paths (with collisions
-resolved first-path-wins). When `path` is omitted or empty, the kernel falls
-back to the per-machine default library at ~/.lingtai-tui/presets/.
+- absolute (`/Users/me/.lingtai-tui/presets/cheap.json`)
+- home-relative (`~/.lingtai-tui/presets/cheap.json`)
+- working-dir-relative (`./presets/cheap.json`)
+
+The kernel `expanduser`s and resolves at read time only — what you wrote is
+what's stored. There is **no canonicalization on write** and no implicit
+search path: if `active` says `~/foo.json`, that exact file is loaded.
+
+`manifest.preset.path` is a list of library *directories* used purely for
+**listing** (the `system(action='presets')` enumeration and the TUI library
+screen). It is not a resolver — two libraries can each contain a `cheap.json`
+and they appear as two distinct entries in the listing, identified by their
+full paths. No shadowing, no collisions, no ambiguity.
 
 This module owns:
-- `discover_presets`: list available presets across one or more folders
-- `load_preset`: read + validate one preset (searches paths in order)
+- `discover_presets`: enumerate preset *paths* across one or more directories
+- `load_preset`: read + validate one preset by path
 - `expand_inherit`: resolve `"provider": "inherit"` sentinels against main LLM
-- `default_presets_path`: the TUI's per-machine library at ~/.lingtai-tui/presets/
-- `resolve_presets_path`: resolve manifest.preset.path against working_dir
-  (always returns a list[Path], even for the singleton case)
+- `default_presets_path`: the per-machine library at ~/.lingtai-tui/presets/
+- `resolve_presets_path`: resolve manifest.preset.path entries to list[Path]
+- `home_shortened`: render an absolute path with `~/...` when under $HOME
 
-The TUI's existing schema is `{name, description, manifest: {...}}`. The kernel
-adopts it unchanged. The `description` field may be a plain string or a
-structured object — both are surfaced verbatim to the agent.
+The on-disk shape is `{name, description, manifest: {...}}` (with optional
+`tags`). The `description` field may be a plain string or a structured
+object — both are surfaced verbatim to the agent.
 """
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
 
 def default_presets_path() -> Path:
-    """The TUI's per-machine preset library."""
+    """The per-machine preset library directory."""
     return Path.home() / ".lingtai-tui" / "presets"
 
 
+def home_shortened(path: Path | str) -> str:
+    """Render a path with `~/...` shorthand when it lives under $HOME.
+
+    This is a *display* helper — the kernel's canonical form is whatever the
+    operator wrote. Use this in listings and logs for readable output.
+
+    Returns:
+        ``~/.lingtai-tui/...`` style when the resolved path is under
+        ``Path.home()``; otherwise the absolute string form. Never raises —
+        falls back to ``str(path)`` if anything is unresolvable.
+    """
+    try:
+        p = Path(path).expanduser()
+        if not p.is_absolute():
+            return str(path)
+        home = Path.home()
+        try:
+            rel = p.relative_to(home)
+            return str(Path("~") / rel)
+        except ValueError:
+            return str(p)
+    except (TypeError, ValueError, OSError):
+        return str(path)
+
+
+def resolve_preset_name(name: str, working_dir: Path) -> Path:
+    """Resolve a preset name (path string) to an absolute Path.
+
+    Accepts the three input forms — absolute, ~-prefixed, working-dir-relative —
+    and returns an absolute Path with `~` expanded. Does NOT resolve symlinks
+    or canonicalize: the returned path matches what the user wrote.
+
+    Args:
+        name: the preset path as a string. Must be non-empty.
+        working_dir: directory to resolve relative paths against.
+
+    Raises:
+        ValueError: name is empty or not a string.
+    """
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"preset name must be a non-empty string, got {name!r}")
+    p = Path(name).expanduser()
+    if p.is_absolute():
+        return p
+    return (working_dir / p).resolve()
+
+
 def resolve_presets_path(manifest: dict, working_dir: Path) -> list[Path]:
-    """Resolve manifest.preset.path against working_dir.
+    """Resolve manifest.preset.path entries to absolute Paths.
 
     Returns a list[Path] in declared order. The schema accepts either a
     single string or a list of strings; both are normalized to a list here.
@@ -70,10 +124,7 @@ def resolve_presets_path(manifest: dict, working_dir: Path) -> list[Path]:
 
 
 def _normalize_paths(presets_path: Path | str | list[Path | str]) -> list[Path]:
-    """Coerce the discover/load argument to a list[Path].
-
-    Accepts a single Path/str or a list of Path/str. Empty list returns [].
-    """
+    """Coerce the discover argument to a list[Path]. Empty list returns []."""
     if isinstance(presets_path, (str, Path)):
         return [Path(presets_path)]
     return [Path(p) for p in presets_path]
@@ -82,15 +133,19 @@ def _normalize_paths(presets_path: Path | str | list[Path | str]) -> list[Path]:
 def discover_presets(
     presets_path: Path | str | list[Path | str],
 ) -> dict[str, Path]:
-    """Return a mapping of preset name → file path for top-level *.json[c] files.
+    """Enumerate preset files across one or more library directories.
 
-    Accepts a single directory or a list of directories. With a list, paths
-    are scanned in order and unioned; on name collision the earlier path
-    wins (and a warning is logged). Nonexistent directories in the list are
-    silently skipped — they're not an error.
+    Returns a mapping of **path-string → Path** for top-level *.json[c] files.
+    The key is the absolute path string (with `~/...` shortening when under
+    $HOME) — agents and UIs can pass it straight back to `load_preset`.
 
-    The preset name is the filename stem (e.g. `cheap.json` → `"cheap"`).
-    Subdirectories and non-JSON files are ignored.
+    Multiple libraries are scanned in declared order. Because the key is a
+    full path, two libraries each containing `cheap.json` appear as two
+    distinct entries — no collisions, no shadowing. Duplicate path entries
+    (e.g. the same directory listed twice) collapse naturally because their
+    files resolve to the same absolute path.
+
+    Nonexistent directories are silently skipped — they're not an error.
 
     Triggers any pending kernel-side preset migrations against each path
     before listing — see lingtai_kernel.migrate. Migrations are idempotent
@@ -114,143 +169,116 @@ def discover_presets(
                 continue
             if entry.name == skip:
                 continue
-            if entry.stem in out:
-                existing = out[entry.stem]
-                if existing.parent != entry.parent:
-                    log.warning(
-                        "preset name %r found in multiple libraries: %r (used) and %r (shadowed)",
-                        entry.stem, str(existing), str(entry),
-                    )
-                    # Earlier path wins; skip this entry.
-                    continue
-                log.warning(
-                    "preset stem collision: %r and %r — load_preset will use .json first",
-                    str(existing), str(entry),
-                )
-                # If we already have a .json entry, keep it. Otherwise the new one wins.
-                if existing.suffix == ".json":
-                    continue
-            out[entry.stem] = entry
+            key = home_shortened(entry)
+            # Same physical file from a duplicated path entry: harmless overwrite.
+            out[key] = entry
     return out
 
 
 def load_preset(
-    presets_path: Path | str | list[Path | str],
     name: str,
+    working_dir: Path | None = None,
 ) -> dict:
-    """Load and validate a single preset by name.
+    """Load and validate a preset by **path name**.
 
     Args:
-        presets_path: directory or list of directories to search. With a
-            list, paths are tried in order — the first path containing the
-            preset wins. Missing directories in the list are skipped.
-        name: the preset's filename stem (without extension)
+        name: the preset's path. Accepts:
+            - absolute: `/Users/me/.lingtai-tui/presets/cheap.json`
+            - home-relative: `~/.lingtai-tui/presets/cheap.json`
+            - working-dir-relative: `./presets/cheap.json` (requires working_dir)
+            Both `.json` and `.jsonc` extensions are accepted; the name MUST
+            include the extension — there is no implicit extension probing.
+        working_dir: directory to resolve relative names against. Required
+            iff `name` is relative. Pass `Path.cwd()` for one-off scripts.
 
     Returns:
         The parsed preset dict with shape {name, description, manifest: {...}}.
 
     Raises:
-        KeyError: the preset file does not exist in any path
-        ValueError: the file is malformed or missing required fields
+        KeyError: the file does not exist.
+        ValueError: the name is malformed, the file is malformed, or
+            required fields are missing.
     """
     from .config_resolve import load_jsonc
     from lingtai_kernel.migrate import run_migrations
 
-    paths = _normalize_paths(presets_path)
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"preset name must be a non-empty string, got {name!r}")
 
-    # Search in order. Run kernel migrations on each existing path so
-    # legacy on-disk shapes are normalized before validation. This is
-    # idempotent and process-cached (shared with discover_presets).
-    file_path: Path | None = None
-    matched_root: Path | None = None
-    for p in paths:
-        if p.is_dir():
-            run_migrations(p)
-        for ext in ("json", "jsonc"):
-            candidate = p / f"{name}.{ext}"
-            if candidate.is_file():
-                file_path = candidate
-                matched_root = p
-                break
-        if file_path is not None:
-            break
+    p = Path(name).expanduser()
+    if not p.is_absolute():
+        if working_dir is None:
+            raise ValueError(
+                f"preset name {name!r} is relative but no working_dir provided"
+            )
+        p = (working_dir / p).resolve()
 
-    if file_path is None or matched_root is None:
-        raise KeyError(f"preset not found: {name!r} in {[str(p) for p in paths]}")
-
-    # Boundary check: refuse names that escape the matched library.
-    # An agent passing "../../../etc/passwd" would otherwise let load_preset
-    # follow that path out of the library.
-    try:
-        resolved = file_path.resolve()
-        root = matched_root.resolve()
-    except OSError as e:
-        raise KeyError(f"preset path resolution failed for {name!r}: {e}") from e
-    if not str(resolved).startswith(str(root) + "/") and resolved.parent != root:
-        raise KeyError(
-            f"preset name {name!r} escapes presets directory {matched_root}"
+    if p.suffix not in (".json", ".jsonc"):
+        raise ValueError(
+            f"preset name {name!r}: must end in .json or .jsonc"
         )
 
+    if not p.is_file():
+        raise KeyError(f"preset not found: {name!r} (resolved to {p})")
+
+    # Run kernel migrations on the containing directory so legacy on-disk
+    # shapes are normalized before validation. Idempotent and process-cached.
+    if p.parent.is_dir():
+        run_migrations(p.parent)
+
     try:
-        data = load_jsonc(file_path)
+        data = load_jsonc(p)
     except Exception as e:
-        raise ValueError(f"failed to parse preset {name!r} ({file_path}): {e}") from e
+        raise ValueError(f"failed to parse preset {name!r} ({p}): {e}") from e
 
     if not isinstance(data, dict):
-        raise ValueError(f"preset {name!r} ({file_path}): expected object, got {type(data).__name__}")
+        raise ValueError(f"preset {name!r} ({p}): expected object, got {type(data).__name__}")
 
     manifest = data.get("manifest")
     if not isinstance(manifest, dict):
-        raise ValueError(f"preset {name!r} ({file_path}): missing or invalid 'manifest' object")
+        raise ValueError(f"preset {name!r} ({p}): missing or invalid 'manifest' object")
 
     llm = manifest.get("llm")
     if not isinstance(llm, dict):
-        raise ValueError(f"preset {name!r} ({file_path}): missing or invalid 'manifest.llm' object")
+        raise ValueError(f"preset {name!r} ({p}): missing or invalid 'manifest.llm' object")
 
     if not llm.get("provider") or not llm.get("model"):
-        raise ValueError(f"preset {name!r} ({file_path}): manifest.llm requires non-empty 'provider' and 'model'")
+        raise ValueError(f"preset {name!r} ({p}): manifest.llm requires non-empty 'provider' and 'model'")
 
-    # context_limit is a property of the model and lives inside manifest.llm.
-    # The kernel migration system relocated any old root-level placements
-    # before we got here (see lingtai_kernel.migrate.m001), so the only
-    # presets that still have it at the root are ambiguous (both locations
-    # set, which the migration explicitly skips) or hand-edited regressions.
-    # Reject either case with a pointed error.
+    # context_limit lives inside manifest.llm. Migration m001 relocated any
+    # legacy root-level placements; presets that still have it at the root
+    # are ambiguous (migration explicitly skips both-locations) or hand-edited
+    # regressions. Reject either case with a pointed error.
     if "context_limit" in manifest:
         raise ValueError(
-            f"preset {name!r} ({file_path}): context_limit must live inside "
+            f"preset {name!r} ({p}): context_limit must live inside "
             f"manifest.llm, not at manifest root — move it under llm and retry"
         )
     ctx_limit = llm.get("context_limit")
     if ctx_limit is not None and not isinstance(ctx_limit, int):
         raise ValueError(
-            f"preset {name!r} ({file_path}): context_limit must be an integer (got {type(ctx_limit).__name__})"
+            f"preset {name!r} ({p}): context_limit must be an integer (got {type(ctx_limit).__name__})"
         )
 
     caps = manifest.get("capabilities", {})
     if not isinstance(caps, dict):
-        raise ValueError(f"preset {name!r} ({file_path}): manifest.capabilities must be an object")
+        raise ValueError(f"preset {name!r} ({p}): manifest.capabilities must be an object")
 
     # Optional top-level `tags` field — list of namespaced strings like
     # "tier:4" or "specialty:code". Used by agents (and the TUI) to pick
     # presets by category. The first namespace shipped is "tier:",
     # whose vocabulary is the numeric strings 1|2|3|4|5 (higher = better;
-    # see TIER_VALUES below) — and the procedures.md daemon-selection
-    # guidance for when to reach for which tier.
+    # see TIER_VALUES below).
     tags = data.get("tags", [])
     if not isinstance(tags, list):
         raise ValueError(
-            f"preset {name!r} ({file_path}): 'tags' must be a list of strings"
+            f"preset {name!r} ({p}): 'tags' must be a list of strings"
         )
     for i, tag in enumerate(tags):
         if not isinstance(tag, str):
             raise ValueError(
-                f"preset {name!r} ({file_path}): tags[{i}] must be a string (got {type(tag).__name__})"
+                f"preset {name!r} ({p}): tags[{i}] must be a string (got {type(tag).__name__})"
             )
-
-    internal_name = data.get("name")
-    if internal_name and internal_name != name:
-        log.warning("preset name mismatch: file %s has internal name %r", file_path, internal_name)
 
     return data
 
@@ -266,8 +294,7 @@ def load_preset(
 # The first namespace introduced is `tier:`, a five-rung cost/quality ladder
 # stored as plain numeric strings 1..5 — higher is better. The TUI renders
 # these as star icons (★ through ★★★★★). Agents read tags via
-# `system(action='presets')` and pick presets accordingly; the default
-# procedures.md gives guidance for daemon-spawn decisions.
+# `system(action='presets')` and pick presets accordingly.
 #
 # Future namespaces (specialty, modality, context-class) follow the same
 # `<namespace>:<value>` pattern so callers can filter by `t.startswith("X:")`.
@@ -287,7 +314,7 @@ def preset_tags(preset: dict) -> list[str]:
 
 
 def preset_tier(preset: dict) -> str | None:
-    """Return the preset's tier value (e.g. 'opus') or None.
+    """Return the preset's tier value (e.g. '4') or None.
 
     Reads the first `tier:*` tag — multiple tier tags on one preset is
     nonsensical, so the helper trusts the first.

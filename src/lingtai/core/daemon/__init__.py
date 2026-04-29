@@ -537,13 +537,10 @@ class DaemonManager:
                                  max=self._max_emanations)}
 
         # Pre-flight: resolve any per-task presets BEFORE scheduling.
-        # If any preset is invalid, refuse the whole batch.
-        from lingtai.presets import load_preset, resolve_presets_path
+        # If any preset is invalid, refuse the whole batch. Presets are
+        # identified by path (~/foo.json, ./foo.json, or absolute).
+        from lingtai.presets import load_preset
         from lingtai.preset_connectivity import check_connectivity
-
-        parent_manifest_raw = self._agent._read_init()
-        parent_manifest = (parent_manifest_raw or {}).get("manifest", {})
-        presets_path = resolve_presets_path(parent_manifest, self._agent._working_dir)
 
         resolved_presets: list[dict | None] = []  # one entry per task — None means inherit
         for spec in tasks:
@@ -553,7 +550,7 @@ class DaemonManager:
                 continue
             # Validate preset exists and is loadable
             try:
-                preset = load_preset(presets_path, preset_name)
+                preset = load_preset(preset_name, working_dir=self._agent._working_dir)
             except (KeyError, ValueError) as e:
                 return {"status": "error",
                         "message": f"preset {preset_name!r} unloadable: {e}"}

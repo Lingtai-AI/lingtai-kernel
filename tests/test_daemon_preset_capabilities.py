@@ -259,9 +259,10 @@ def test_emanate_with_preset_instantiates_caps_for_emanation(tmp_path,
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
+    thinker_path = str(presets_dir / "thinker.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "scan files", "tools": ["file"], "preset": "thinker"},
+            {"task": "scan files", "tools": ["file"], "preset": thinker_path},
         ]})
 
     assert result["status"] == "dispatched", result.get("message")
@@ -284,9 +285,10 @@ def test_emanate_preset_unknown_capability_refuses_batch(tmp_path, monkeypatch):
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
+    broken_path = str(presets_dir / "broken.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "x", "tools": ["read"], "preset": "broken"},
+            {"task": "x", "tools": ["read"], "preset": broken_path},
         ]})
 
     assert result["status"] == "error"
@@ -312,9 +314,10 @@ def test_emanate_preset_does_not_pollute_parent_tool_registry(tmp_path,
     pre_handlers = set(agent._tool_handlers.keys())
     pre_schemas = {s.name for s in agent._tool_schemas}
 
+    thinker_path = str(presets_dir / "thinker.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "x", "tools": ["file"], "preset": "thinker"},
+            {"task": "x", "tools": ["file"], "preset": thinker_path},
         ]})
     assert result["status"] == "dispatched"
 
