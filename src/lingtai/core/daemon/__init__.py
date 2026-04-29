@@ -78,6 +78,16 @@ def get_schema(lang: str = "en") -> dict:
                 "minimum": 0,
                 "description": t(lang, "daemon.truncate"),
             },
+            "max_turns": {
+                "type": "integer",
+                "minimum": 1,
+                "description": t(lang, "daemon.max_turns"),
+            },
+            "timeout": {
+                "type": "number",
+                "minimum": 1,
+                "description": t(lang, "daemon.timeout"),
+            },
         },
         "required": ["action"],
     }
@@ -110,7 +120,11 @@ class DaemonManager:
     def handle(self, args: dict) -> dict:
         action = args.get("action")
         if action == "emanate":
-            return self._handle_emanate(args.get("tasks", []))
+            return self._handle_emanate(
+                args.get("tasks", []),
+                max_turns=args.get("max_turns"),
+                timeout=args.get("timeout"),
+            )
         elif action == "list":
             return self._handle_list()
         elif action == "ask":
@@ -192,7 +206,8 @@ class DaemonManager:
                        task: str,
                        cancel_event: threading.Event,
                        timeout_event: threading.Event | None = None,
-                       preset_llm: dict | None = None) -> str:
+                       preset_llm: dict | None = None,
+                       max_turns: int | None = None) -> str:
         """Run a single emanation's tool loop. Called in a worker thread.
 
         run_dir is the DaemonRunDir constructed in _handle_emanate. All
@@ -260,7 +275,8 @@ class DaemonManager:
             turns = 0
             run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
 
-            while response.tool_calls and turns < self._max_turns:
+            effective_max_turns = max_turns if max_turns is not None else self._max_turns
+            while response.tool_calls and turns < effective_max_turns:
                 if cancel_event.is_set():
                     return _exit_cancelled()
 
@@ -336,9 +352,40 @@ class DaemonManager:
             entry["followup_buffer"] = ""
         return text or None
 
-    def _handle_emanate(self, tasks: list[dict]) -> dict:
+    def _handle_emanate(self, tasks: list[dict],
+                        max_turns: int | None = None,
+                        timeout: float | None = None) -> dict:
         if not tasks:
             return {"status": "error", "message": "No tasks provided"}
+
+        # Per-batch limit overrides — capped at the manager's ceilings.
+        # Author-set ceilings (self._max_turns, self._timeout) are the upper
+        # bounds; the agent picks within them. None means "use ceiling".
+        if max_turns is not None:
+            try:
+                mt = int(max_turns)
+            except (TypeError, ValueError):
+                return {"status": "error",
+                        "message": f"max_turns must be a positive integer (got {max_turns!r})"}
+            if mt <= 0:
+                return {"status": "error",
+                        "message": f"max_turns must be ≥ 1 (got {mt})"}
+            effective_max_turns = min(mt, self._max_turns)
+        else:
+            effective_max_turns = self._max_turns
+
+        if timeout is not None:
+            try:
+                to = float(timeout)
+            except (TypeError, ValueError):
+                return {"status": "error",
+                        "message": f"timeout must be a positive number (got {timeout!r})"}
+            if to <= 0:
+                return {"status": "error",
+                        "message": f"timeout must be > 0 (got {to})"}
+            effective_timeout = min(to, self._timeout)
+        else:
+            effective_timeout = self._timeout
 
         # Clear completed emanations and stale pools
         self._emanations = {k: v for k, v in self._emanations.items()
@@ -434,8 +481,8 @@ class DaemonManager:
                     task=spec["task"],
                     tools=spec["tools"],
                     model=effective_model,
-                    max_turns=self._max_turns,
-                    timeout_s=self._timeout,
+                    max_turns=effective_max_turns,
+                    timeout_s=effective_timeout,
                     parent_addr=parent_addr,
                     parent_pid=parent_pid,
                     system_prompt=system_prompt,
@@ -453,6 +500,7 @@ class DaemonManager:
                 em_id, run_dir, schemas, dispatch,
                 spec["task"], cancel_event, timeout_event,
                 resolved["llm"] if resolved else None,
+                effective_max_turns,
             )
             future.add_done_callback(
                 lambda f, eid=em_id, task=spec["task"]:
@@ -472,7 +520,7 @@ class DaemonManager:
         # Start watchdog — sets timeout_event AND cancel_event when timer fires
         watchdog = threading.Thread(
             target=self._watchdog,
-            args=(cancel_event, timeout_event, self._timeout),
+            args=(cancel_event, timeout_event, effective_timeout),
             daemon=True,
         )
         watchdog.start()
