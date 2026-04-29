@@ -29,7 +29,6 @@ _BUILTIN: dict[str, str] = {
     # Optional/multimodal capabilities (this package)
     "vision": ".vision",
     "web_search": ".web_search",
-    "web_read": ".web_read",
 }
 
 # Group names that expand to multiple capabilities.
@@ -89,7 +88,6 @@ def get_all_providers() -> dict[str, dict]:
         "codex": "lingtai.core.codex",
         "library": "lingtai.core.library",
         "vision": ".vision",
-        "web_read": ".web_read",
         "avatar": "lingtai.core.avatar",
         "daemon": "lingtai.core.daemon",
     }

@@ -12,7 +12,7 @@ def test_get_all_providers_returns_all_capabilities():
     result = get_all_providers()
     expected = {
         "file", "email", "bash", "web_search", "psyche", "codex", "library",
-        "vision", "web_read", "avatar", "daemon",
+        "vision", "avatar", "daemon",
     }
     assert expected == set(result.keys())
 
