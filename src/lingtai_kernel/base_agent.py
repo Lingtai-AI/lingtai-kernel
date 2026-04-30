@@ -1,6 +1,8 @@
 """
 BaseAgent — generic agent kernel with intrinsic tools and capability dispatch.
 
+Anatomy leaf: docs/plans/drafts/2026-04-30-anatomy-tree/leaves/core/agent-state-machine/
+
 Key concepts:
     - **5-state lifecycle**: ACTIVE, IDLE, STUCK, ASLEEP, SUSPENDED.
     - **Persistent LLM session**: each agent keeps its chat session across messages.
@@ -711,12 +713,18 @@ class BaseAgent:
     def _heartbeat_loop(self) -> None:
         """Beat every 1 second. AED if agent is STUCK."""
         while self._heartbeat_thread is not None and not self._shutdown.is_set():
+            # time.time() (wall clock), not time.monotonic().  This is
+            # deliberate: heartbeat is written to a file and read by
+            # handshake.is_alive() in a DIFFERENT process.  monotonic()
+            # anchors are per-process and meaningless across PIDs — only
+            # wall-clock timestamps survive the IPC boundary.  NTP jumps
+            # are acceptable given the 2.0s liveness threshold.
             self._heartbeat = time.time()
 
             # Write heartbeat file in ALL living states (everything except SUSPENDED)
             try:
                 hb_file = self._working_dir / ".agent.heartbeat"
-                hb_file.write_text(str(self._heartbeat))
+                hb_file.write_text(str(self._heartbeat), encoding="utf-8")
             except OSError:
                 pass
 

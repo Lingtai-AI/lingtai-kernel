@@ -2,6 +2,8 @@
 
 Used by FilesystemMailService (mail delivery), system intrinsic (karma/nirvana
 actions), and lingtai's cpr logic.
+
+Anatomy leaf: docs/plans/drafts/2026-04-30-anatomy-tree/leaves/core/network-discovery/
 """
 from __future__ import annotations
 
@@ -49,7 +51,7 @@ def is_alive(path: str | Path, threshold: float = 2.0) -> bool:
     if not hb.is_file():
         return False
     try:
-        ts = float(hb.read_text().strip())
+        ts = float(hb.read_text(encoding="utf-8").strip())
     except (ValueError, OSError):
         return False
     return time.time() - ts < threshold

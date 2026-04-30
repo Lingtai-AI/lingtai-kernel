@@ -243,12 +243,13 @@ class AvatarManager:
             parent_working_dir=parent._working_dir,
         )
         (avatar_working_dir / "init.json").write_text(
-            json.dumps(avatar_init, indent=2, ensure_ascii=False)
+            json.dumps(avatar_init, indent=2, ensure_ascii=False),
+            encoding="utf-8"
         )
 
         # Drop the spawn prompt as a `.prompt` signal file — the avatar's
         # kernel watcher consumes it on first poll and delivers it once.
-        (avatar_working_dir / ".prompt").write_text(first_prompt)
+        (avatar_working_dir / ".prompt").write_text(first_prompt, encoding="utf-8")
 
         # Launch as detached process and wait briefly for the child to either
         # write its handshake (.agent.heartbeat) or exit. If the child exits
