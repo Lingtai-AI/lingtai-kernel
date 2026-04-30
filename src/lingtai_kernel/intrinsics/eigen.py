@@ -157,7 +157,10 @@ def _context_molt(agent, args: dict) -> dict:
     # consume a molt. Walk the live interface, harvest LingTai-issued ids
     # from tool_result content, and confirm every requested id is present.
     iface_pre = agent._chat.interface
-    keep_pairs: list[tuple] = []  # list of (tool_call_block, tool_result_block)
+    # Pairs are replayed in the order the agent listed them — the agent
+    # chose that order for a reason (chronological, by relevance, leading
+    # with the punchline, etc.) and the kernel does not second-guess it.
+    keep_pairs: list[tuple] = []  # list of (call_block, result_block) in agent-listed order
     if keep_tool_calls:
         requested = set(keep_tool_calls)
         # First pass: find tool_results whose content carries a matching
