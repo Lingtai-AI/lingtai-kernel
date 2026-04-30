@@ -160,6 +160,7 @@ class Agent(BaseAgent):
         import shutil
         import lingtai.capabilities as caps_pkg
         import lingtai.core as core_pkg
+        import lingtai.intrinsic_skills as skills_pkg
 
         library_dir = self._working_dir / ".library"
         intrinsic_dir = library_dir / "intrinsic"
@@ -182,10 +183,27 @@ class Agent(BaseAgent):
                 if src.is_dir():
                     shutil.copytree(src, intrinsic_dir / subdir / entry.name)
 
+        def install_skills_from(pkg, subdir: str) -> None:
+            """Install standalone skill bundles (no companion code, no manual/ wrapper).
+
+            Each ``<pkg>/<entry>/`` directory IS the skill — copied verbatim into
+            ``intrinsic/<subdir>/<entry>/``. Used for documentation-only skills
+            like ``lingtai-anatomy`` that don't belong to any single tool.
+            """
+            pkg_file = getattr(pkg, "__file__", None)
+            if not pkg_file:
+                return
+            pkg_root = Path(pkg_file).parent
+            for entry in sorted(pkg_root.iterdir()):
+                if not entry.is_dir() or entry.name.startswith("_"):
+                    continue
+                shutil.copytree(entry, intrinsic_dir / subdir / entry.name)
+
         # core/ and capabilities/ both install into intrinsic/capabilities/ —
         # agents see one flat capability namespace.
         install_from(core_pkg, "capabilities")
         install_from(caps_pkg, "capabilities")
+        install_skills_from(skills_pkg, "capabilities")
 
         # If the library capability is loaded, re-run its reconcile now that
         # the manuals are on disk — so the injected catalog reflects them on

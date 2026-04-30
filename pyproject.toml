@@ -23,6 +23,7 @@ dependencies = [
     "ddgs>=7.0",
     "trafilatura>=2.0",
     "filelock>=3.0",
+    "pyyaml>=6.0",
     # Curated MCP servers (formerly bundled in lingtai.addons; v0.7.3 split
     # into separate sibling repos and PyPI packages). Required so
     # `pip install lingtai` ships the same capability surface as previous
@@ -49,6 +50,7 @@ lingtai = [
     "core/*/manual/**/*",
     "capabilities/*/*.json",
     "capabilities/*/manual/**/*",
+    "intrinsic_skills/*/**/*",
 ]
 
 [tool.pytest.ini_options]
