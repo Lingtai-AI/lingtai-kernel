@@ -1,0 +1,25 @@
+{
+  "_mailbox_id": "a3f7c2e1-9b4d-4a6e-8f12-3d5e7a9b0c1d",
+  "from": "draft-pilot-leaf",
+  "to": ["draft-pilot-leaf"],
+  "cc": [],
+  "subject": "Memory anchor: test self-send",
+  "message": "This is a self-sent message created for anatomy verification. It should land directly in inbox/ without going through the polling listener.",
+  "type": "normal",
+  "received_at": "2026-04-30T07:26:00Z",
+  "attachments": [],
+  "identity": {
+    "agent_id": "20260430-072637-dbdd",
+    "agent_name": "draft-pilot-leaf",
+    "nickname": null,
+    "address": "draft-pilot-leaf",
+    "created_at": "2026-04-30T07:26:37Z",
+    "started_at": "2026-04-30T07:26:37Z",
+    "admin": {},
+    "language": "wen",
+    "stamina": 36000,
+    "state": "idle",
+    "soul_delay": 120,
+    "molt_count": 0
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "manifest": {
+    "agent_name": "conductor",
+    "language": "en",
+    "preset": {
+      "default": "conductor-default",
+      "active": "conductor-default"
+    },
+    "capabilities": [
+      ["glob", {}],
+      ["read", {}],
+      ["write", {}],
+      ["edit", {}],
+      ["bash", { "yolo": false }],
+      ["avatar", {}],
+      ["email", {}],
+      ["system", {}],
+      ["daemon", {}],
+      ["psyche", {}]
+    ],
+    "soul_delay": 0
+  },
+  "_comments": {
+    "preset": "Conductor doesn't need heavy reasoning. A fast, cheap model (tier:2 or tier:3) suffices — it's mostly orchestrating spawns, polling files, and formatting markdown. The avatars it spawns are the ones doing real verification work.",
+    "soul_delay": "Set to 0 — conductor doesn't need introspection. It's a task runner, not a reflective agent.",
+    "capabilities": [
+      "glob  — discover test.md files across the anatomy tree",
+      "read  — read test.md files, parse frontmatter, read avatar results",
+      "write — generate rollup INDEX.md and archive copies",
+      "edit  — minor adjustments to generated files",
+      "bash  — filesystem ops for cleanup (mv avatar workdirs)",
+      "avatar — spawn shallow avatars for each test scenario (the core mechanism)",
+      "email — inter-agent comms: receive completion signals from avatars, escalate failures",
+      "system — show (monitor own resources), nap (wait between polls)",
+      "daemon — optional: can use daemons for parallel aggregation if needed",
+      "psyche — pad management for tracking run state across turns"
+    ],
+    "missing_capabilities": [
+      "web_search — not needed for test orchestration",
+      "codex — conductor is ephemeral, doesn't accumulate knowledge",
+      "library — conductor doesn't author skills"
+    ]
+  }
+}
