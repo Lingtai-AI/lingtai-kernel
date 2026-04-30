@@ -296,7 +296,9 @@ class DaemonRunDir:
     # ------------------------------------------------------------------
 
     def append_tokens(self, *, input: int, output: int,
-                     thinking: int, cached: int) -> None:
+                     thinking: int, cached: int,
+                     model: str | None = None,
+                     endpoint: str | None = None) -> None:
         """Record per-call token usage to both ledgers.
 
         Daemon's own logs/token_ledger.jsonl gets an untagged entry (the
@@ -305,6 +307,11 @@ class DaemonRunDir:
         decompose, while existing sum_token_ledger callers continue to count
         daemon spend in the parent's lifetime totals (they only read the
         numeric fields).
+
+        ``model`` and ``endpoint`` (if provided) are written as first-class
+        attribution fields on both ledgers — the daemon may use a different
+        model/provider than the parent, so per-entry tagging is required for
+        multi-provider cost analytics.
 
         Skips both writes if all four values are zero — avoids ledger noise
         from LLM calls that returned no usage.
@@ -331,6 +338,7 @@ class DaemonRunDir:
                 self.token_ledger_path,
                 input=input, output=output,
                 thinking=thinking, cached=cached,
+                model=model, endpoint=endpoint,
             ),
         )
 
@@ -341,6 +349,7 @@ class DaemonRunDir:
                 self._parent_token_ledger,
                 input=input, output=output,
                 thinking=thinking, cached=cached,
+                model=model, endpoint=endpoint,
                 extra={"source": "daemon", "em_id": self._handle,
                        "run_id": self._run_id},
             ),

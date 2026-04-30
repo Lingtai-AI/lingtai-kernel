@@ -141,3 +141,63 @@ def test_extra_cannot_override_required_fields(tmp_path):
     entry = json.loads(path.read_text().splitlines()[0])
     assert entry["input"] == 10
     assert entry["ts"] != "fake"
+
+
+def test_append_with_model_and_endpoint(tmp_path):
+    """`model` and `endpoint` kwargs are written as first-class fields."""
+    path = tmp_path / "ledger.jsonl"
+    append_token_entry(
+        path,
+        input=10, output=5, thinking=2, cached=1,
+        model="claude-opus-4-7",
+        endpoint="https://api.anthropic.com",
+    )
+    entry = json.loads(path.read_text().splitlines()[0])
+    assert entry["model"] == "claude-opus-4-7"
+    assert entry["endpoint"] == "https://api.anthropic.com"
+    assert entry["input"] == 10
+
+
+def test_model_and_endpoint_omitted_when_none(tmp_path):
+    """When model/endpoint are None, the keys are not written (avoid noisy nulls)."""
+    path = tmp_path / "ledger.jsonl"
+    append_token_entry(path, input=10, output=5, thinking=2, cached=1)
+    entry = json.loads(path.read_text().splitlines()[0])
+    assert "model" not in entry
+    assert "endpoint" not in entry
+
+
+def test_model_overrides_extra(tmp_path):
+    """Top-level model/endpoint kwargs win over keys in extra."""
+    path = tmp_path / "ledger.jsonl"
+    append_token_entry(
+        path,
+        input=10, output=5, thinking=2, cached=1,
+        model="real-model",
+        endpoint="https://real.example",
+        extra={"model": "fake-model", "endpoint": "https://fake.example"},
+    )
+    entry = json.loads(path.read_text().splitlines()[0])
+    assert entry["model"] == "real-model"
+    assert entry["endpoint"] == "https://real.example"
+
+
+def test_model_endpoint_do_not_break_summing(tmp_path):
+    """sum_token_ledger ignores model/endpoint — totals unaffected."""
+    path = tmp_path / "ledger.jsonl"
+    append_token_entry(
+        path, input=10, output=5, thinking=2, cached=1,
+        model="m1", endpoint="https://a.example",
+    )
+    append_token_entry(
+        path, input=20, output=8, thinking=3, cached=4,
+        model="m2", endpoint="https://b.example",
+    )
+    totals = sum_token_ledger(path)
+    assert totals == {
+        "input_tokens": 30,
+        "output_tokens": 13,
+        "thinking_tokens": 5,
+        "cached_tokens": 5,
+        "api_calls": 2,
+    }

@@ -17,17 +17,26 @@ def append_token_entry(
     output: int,
     thinking: int,
     cached: int,
+    model: str | None = None,
+    endpoint: str | None = None,
     extra: dict | None = None,
 ) -> None:
     """Append one token usage entry to the ledger.
 
     Creates parent directories and the file if they don't exist.
 
+    `model` and `endpoint` are first-class attribution fields written to the
+    top level of the entry when provided. They identify which model produced
+    the tokens and which API endpoint (base_url) served the call — useful for
+    cost analytics across providers and for distinguishing the soul session
+    from the main agent session.
+
     `extra` is an optional dict of additional fields merged into the entry.
-    Required fields (ts/input/output/thinking/cached) take precedence — if a
-    caller passes `extra={"input": 999}`, the explicit input value still wins.
-    Used by the daemon capability to tag entries with source/em_id/run_id
-    so the parent's ledger preserves per-daemon attribution.
+    Required fields (ts/input/output/thinking/cached/model/endpoint) take
+    precedence — if a caller passes `extra={"input": 999}`, the explicit
+    input value still wins. Used by the daemon capability to tag entries
+    with source/em_id/run_id so the parent's ledger preserves per-daemon
+    attribution.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -41,6 +50,10 @@ def append_token_entry(
         "thinking": thinking,
         "cached": cached,
     })
+    if model is not None:
+        entry["model"] = model
+    if endpoint is not None:
+        entry["endpoint"] = endpoint
     with open(path, "a") as f:
         f.write(json.dumps(entry) + "\n")
 

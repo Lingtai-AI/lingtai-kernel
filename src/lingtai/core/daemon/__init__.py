@@ -388,6 +388,8 @@ class DaemonManager:
             tracked=False,
         )
 
+        endpoint = getattr(service, "_base_url", None)
+
         def _accum(resp):
             if resp.usage is None:
                 return
@@ -397,6 +399,8 @@ class DaemonManager:
                 output=u.output_tokens,
                 thinking=u.thinking_tokens,
                 cached=u.cached_tokens,
+                model=effective_model,
+                endpoint=endpoint,
             )
 
         try:

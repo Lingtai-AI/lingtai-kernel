@@ -241,10 +241,15 @@ def _write_soul_tokens(agent, response) -> None:
     try:
         from ..token_ledger import append_token_entry
         ledger_path = agent._working_dir / "logs" / "token_ledger.jsonl"
+        soul = getattr(agent, "_soul_session", None)
+        model = getattr(soul, "_model", None) or getattr(agent.service, "model", None)
+        endpoint = getattr(agent.service, "_base_url", None)
         append_token_entry(
             ledger_path,
             input=u.input_tokens, output=u.output_tokens,
             thinking=u.thinking_tokens, cached=u.cached_tokens,
+            model=model, endpoint=endpoint,
+            extra={"source": "soul"},
         )
     except Exception:
         pass

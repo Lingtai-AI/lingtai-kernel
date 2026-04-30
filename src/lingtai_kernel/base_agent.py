@@ -1695,12 +1695,16 @@ class BaseAgent:
         if usage is not None:
             try:
                 ledger_path = self._working_dir / "logs" / "token_ledger.jsonl"
+                model = getattr(self._session, "_model", None) or getattr(self.service, "model", None)
+                endpoint = getattr(self.service, "_base_url", None)
                 append_token_entry(
                     ledger_path,
                     input=usage.input_tokens,
                     output=usage.output_tokens,
                     thinking=usage.thinking_tokens,
                     cached=usage.cached_tokens,
+                    model=model,
+                    endpoint=endpoint,
                 )
             except Exception as e:
                 logger.warning(f"[{self.agent_name}] Failed to append token ledger: {e}")
