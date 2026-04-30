@@ -42,7 +42,7 @@ def setup(agent: "BaseAgent") -> None:
             path = str(agent._working_dir / path)
         try:
             agent._file_io.write(path, content)
-            return {"status": "ok", "path": path, "bytes": len(content)}
+            return {"status": "ok", "path": path, "bytes": len(content.encode("utf-8"))}
         except Exception as e:
             return {"error": f"Cannot write {path}: {e}"}
 

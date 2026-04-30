@@ -41,7 +41,6 @@ def get_schema(lang: str = "en") -> dict:
             },
             "action": {
                 "type": "string",
-                "enum": ["update", "load", "edit", "append", "molt"],
                 "description": t(lang, "psyche.action"),
             },
             "content": {
@@ -59,6 +58,32 @@ def get_schema(lang: str = "en") -> dict:
             },
         },
         "required": ["object", "action"],
+        "allOf": [
+            {
+                "if": {"properties": {"object": {"const": "lingtai"}}},
+                "then": {
+                    "properties": {
+                        "action": {"enum": ["update", "load"]},
+                    },
+                },
+            },
+            {
+                "if": {"properties": {"object": {"const": "pad"}}},
+                "then": {
+                    "properties": {
+                        "action": {"enum": ["edit", "load", "append"]},
+                    },
+                },
+            },
+            {
+                "if": {"properties": {"object": {"const": "context"}}},
+                "then": {
+                    "properties": {
+                        "action": {"enum": ["molt"]},
+                    },
+                },
+            },
+        ],
     }
 
 

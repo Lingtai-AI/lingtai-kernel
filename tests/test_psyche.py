@@ -318,8 +318,19 @@ def test_psyche_schema_has_correct_objects():
 def test_psyche_schema_has_correct_actions():
     from lingtai.core.psyche import get_schema
     SCHEMA = get_schema("en")
-    actions = SCHEMA["properties"]["action"]["enum"]
-    assert set(actions) == {"update", "load", "edit", "append", "molt"}
+    # Top-level action has no enum (constrained conditionally per object).
+    assert "enum" not in SCHEMA["properties"]["action"]
+    # Verify allOf constraints carry the correct per-object action sets.
+    action_sets = {}
+    for rule in SCHEMA["allOf"]:
+        obj = rule["if"]["properties"]["object"]["const"]
+        acts = set(rule["then"]["properties"]["action"]["enum"])
+        action_sets[obj] = acts
+    assert action_sets == {
+        "lingtai": {"update", "load"},
+        "pad": {"edit", "load", "append"},
+        "context": {"molt"},
+    }
 
 
 def test_psyche_schema_has_files_field():
