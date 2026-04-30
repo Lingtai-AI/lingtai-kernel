@@ -1764,6 +1764,7 @@ class BaseAgent:
                     "uptime_seconds": round(uptime, 1),
                     "stamina": self._config.stamina,
                     "stamina_left": round(stamina_left, 1) if stamina_left is not None else None,
+                    "state": self._state.value,
                 },
                 keys=("current_time", "started_at", "uptime_seconds", "stamina", "stamina_left"),
             ),

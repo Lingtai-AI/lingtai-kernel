@@ -37,13 +37,13 @@ def setup(agent: "BaseAgent") -> None:
         path = args.get("file_path", "")
         content = args.get("content", "")
         if not path:
-            return {"error": "file_path is required"}
+            return {"status": "error", "message": "file_path is required"}
         if not Path(path).is_absolute():
             path = str(agent._working_dir / path)
         try:
             agent._file_io.write(path, content)
             return {"status": "ok", "path": path, "bytes": len(content.encode("utf-8"))}
         except Exception as e:
-            return {"error": f"Cannot write {path}: {e}"}
+            return {"status": "error", "message": f"Cannot write {path}: {e}"}
 
     agent.add_tool("write", schema=get_schema(lang), handler=handle_write, description=get_description(lang))

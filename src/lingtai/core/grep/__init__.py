@@ -39,7 +39,7 @@ def setup(agent: "BaseAgent") -> None:
     def handle_grep(args: dict) -> dict:
         pattern = args.get("pattern", "")
         if not pattern:
-            return {"error": "pattern is required"}
+            return {"status": "error", "message": "pattern is required"}
         search_path = args.get("path", str(agent._working_dir))
         if not Path(search_path).is_absolute():
             search_path = str(agent._working_dir / search_path)
@@ -64,6 +64,6 @@ def setup(agent: "BaseAgent") -> None:
             truncated = raw_truncated
             return {"matches": matches, "count": len(matches), "truncated": truncated}
         except Exception as e:
-            return {"error": f"Grep failed: {e}"}
+            return {"status": "error", "message": f"Grep failed: {e}"}
 
     agent.add_tool("grep", schema=get_schema(lang), handler=handle_grep, description=get_description(lang))

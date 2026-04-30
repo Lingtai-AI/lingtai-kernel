@@ -36,7 +36,7 @@ def setup(agent: "BaseAgent") -> None:
     def handle_glob(args: dict) -> dict:
         pattern = args.get("pattern", "")
         if not pattern:
-            return {"error": "pattern is required"}
+            return {"status": "error", "message": "pattern is required"}
         search_dir = args.get("path", str(agent._working_dir))
         if not Path(search_dir).is_absolute():
             search_dir = str(agent._working_dir / search_dir)
@@ -44,6 +44,6 @@ def setup(agent: "BaseAgent") -> None:
             matches = agent._file_io.glob(pattern, root=search_dir)
             return {"matches": matches, "count": len(matches)}
         except Exception as e:
-            return {"error": f"Glob failed: {e}"}
+            return {"status": "error", "message": f"Glob failed: {e}"}
 
     agent.add_tool("glob", schema=get_schema(lang), handler=handle_glob, description=get_description(lang))

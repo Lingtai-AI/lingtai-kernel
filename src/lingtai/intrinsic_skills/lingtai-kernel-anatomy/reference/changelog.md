@@ -14,6 +14,28 @@
 
 ---
 
+## 2026-04-30 — `.status.json` adds `runtime.state` field; file-tool error format unified
+
+### What changed
+
+Two related kernel hygiene fixes shipped together:
+
+- **`.status.json` schema gains `runtime.state`** — `agent.status()` now returns the agent's lifecycle state (`active` / `idle` / `asleep` / `stuck` / `suspended`) alongside `stamina_left` etc. Previously the field was only in `_build_manifest()` (`.agent.json`). Now both files agree. Consumers reading `.status.json` (portal, external monitors, `system("show")` callers) see one new key; nothing breaks.
+- **File-tool error shape unified to `{"status": "error", "message": ...}`** — `read` already used this shape; `write`, `edit`, `glob`, `grep` now match (12 sites). Side benefit: `tool_executor.py:194,380` checks `result.get("status") == "error"` to populate `collected_errors`. Before this change, file-tool failures were silently dropped from kernel-level error tracking. Fixed.
+
+### Why
+
+C1 — agents calling `system("show")` couldn't tell whether they were `idle` vs `active`, so they couldn't reason about their own lifecycle state. Real-world consequence for agents that branch on "am I currently the focus or am I in idle/asleep mode?"
+
+C2 — the format inconsistency was nominally cosmetic but masked a real functional bug: `tool_executor` only counted errors with `status="error"`, so write/edit/glob/grep failures never reached `collected_errors`. Format unification restored error tracking.
+
+### Source
+
+- `lingtai_kernel/base_agent.py:1767` — added `"state": self._state.value` to `status()` runtime dict
+- `lingtai/core/{write,edit,glob,grep}/__init__.py` — 12 error-return sites converted from `{"error": ...}` to `{"status": "error", "message": ...}`
+
+---
+
 ## 2026-04-30 — `lingtai-anatomy` renamed to `lingtai-kernel-anatomy`; umbrella `lingtai-anatomy` reserved for TUI-side anatomy
 
 ### What changed
@@ -77,7 +99,7 @@ The kernel's `_parse_frontmatter` (`lingtai/core/library/__init__.py`) was upgra
 
 ### Impact
 
-- **Agents:** New flow for media generation is `mmx music generate --prompt … --out …` (or `image`, `video`, `speech`) instead of `mcp__MiniMax-Media__music_generation` tool calls. The MCP route still works — see `lingtai-mcp` skill — but the CLI is preferred (first-party, simpler, no per-tool MCP registration).
+- **Agents:** New flow for media generation is `mmx music generate --prompt … --out …` (or `image`, `video`, `speech`) instead of `mcp__MiniMax-Media__music_generation` tool calls. The MCP route still works — see `mcp-manual` skill (kernel `mcp` capability) — but the CLI is preferred (first-party, simpler, no per-tool MCP registration).
 - **Vision:** The `vision` skill's Path 2 now mentions both routes. The CLI gives ad-hoc shell access (`mmx vision …`); the MCP `understand_image` tool remains the right shape when an agent needs vision as a tool call inside a longer reasoning loop.
 - **Frontmatter parsing:** Skills authoring multi-line YAML descriptions now actually reach the agent. Existing skills using single-line descriptions continue to parse identically.
 

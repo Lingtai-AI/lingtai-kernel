@@ -38,7 +38,7 @@ def setup(agent: "BaseAgent") -> None:
     def handle_edit(args: dict) -> dict:
         path = args.get("file_path", "")
         if not path:
-            return {"error": "file_path is required"}
+            return {"status": "error", "message": "file_path is required"}
         if not Path(path).is_absolute():
             path = str(agent._working_dir / path)
         old = args.get("old_string", "")
@@ -47,14 +47,14 @@ def setup(agent: "BaseAgent") -> None:
         try:
             content = agent._file_io.read(path)
         except FileNotFoundError:
-            return {"error": f"File not found: {path}"}
+            return {"status": "error", "message": f"File not found: {path}"}
         except Exception as e:
-            return {"error": f"Cannot read {path}: {e}"}
+            return {"status": "error", "message": f"Cannot read {path}: {e}"}
         count = content.count(old)
         if count == 0:
-            return {"error": f"old_string not found in {path}"}
+            return {"status": "error", "message": f"old_string not found in {path}"}
         if count > 1 and not replace_all:
-            return {"error": f"old_string found {count} times — use replace_all=true or provide more context"}
+            return {"status": "error", "message": f"old_string found {count} times — use replace_all=true or provide more context"}
         if replace_all:
             updated = content.replace(old, new)
         else:
@@ -62,7 +62,7 @@ def setup(agent: "BaseAgent") -> None:
         try:
             agent._file_io.write(path, updated)
         except Exception as e:
-            return {"error": f"Cannot write {path}: {e}"}
+            return {"status": "error", "message": f"Cannot write {path}: {e}"}
         return {"status": "ok", "replacements": count if replace_all else 1}
 
     agent.add_tool("edit", schema=get_schema(lang), handler=handle_edit, description=get_description(lang))
