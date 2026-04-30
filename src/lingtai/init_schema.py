@@ -125,9 +125,19 @@ def validate_init(data: dict) -> list[str]:
             raise ValueError(f"manifest.preset.default: expected str, got {type(preset['default']).__name__}")
         allowed = preset.get("allowed")
         if allowed is None:
+            # The legacy `path` field was retired in the path→allowed
+            # redesign. If we see it, this init.json predates m029; point
+            # the operator at the migration so they don't have to guess.
+            hint = ""
+            if "path" in preset:
+                hint = (
+                    " — this init.json predates the path→allowed schema; "
+                    "run `lingtai-tui` once on the project so migration m029 "
+                    "rewrites manifest.preset.path into manifest.preset.allowed"
+                )
             raise ValueError(
                 "manifest.preset.allowed is required when manifest.preset is set "
-                "(list of preset paths this agent may use at runtime)"
+                "(list of preset paths this agent may use at runtime)" + hint
             )
         if not isinstance(allowed, list):
             raise ValueError(

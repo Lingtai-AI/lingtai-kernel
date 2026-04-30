@@ -689,8 +689,12 @@ class Agent(BaseAgent):
         allowed = preset_block.get("allowed")
         if not isinstance(allowed, list):
             preset_block["allowed"] = [name]
+            self._log("preset_allowed_widened", name=name,
+                      reason="allowed_field_initialized")
         elif name not in allowed:
             preset_block["allowed"] = [*allowed, name]
+            self._log("preset_allowed_widened", name=name,
+                      reason="direct_activate_bypassed_gate")
 
         # Atomic write
         tmp = init_path.with_suffix(".json.tmp")

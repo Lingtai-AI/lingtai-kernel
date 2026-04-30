@@ -510,3 +510,18 @@ def test_preset_block_old_path_field_warns_as_unknown():
     }
     warnings = validate_init(data)
     assert any("unknown field in manifest.preset: path" in w for w in warnings)
+
+
+def test_preset_block_unmigrated_init_points_at_m029():
+    """When an init.json predates m029 (has `path` but no `allowed`),
+    the schema error must point the operator at the migration so they
+    don't have to guess what to do."""
+    data = _valid_init()
+    data["manifest"]["preset"] = {
+        "active": "minimax",
+        "default": "minimax",
+        "path": "~/.lingtai-tui/presets",
+    }
+    with pytest.raises(ValueError, match="m029") as exc_info:
+        validate_init(data)
+    assert "lingtai-tui" in str(exc_info.value)

@@ -405,6 +405,27 @@ def test_refresh_with_unauthorized_preset_returns_error(tmp_path, monkeypatch):
     assert perform_calls == []  # refresh NOT triggered
 
 
+def test_preset_ref_in_normalizes_tilde_and_absolute(tmp_path, monkeypatch):
+    """`_preset_ref_in` must treat `~/...` and the equivalent absolute
+    path as the same preset, in both directions — otherwise the
+    allowed-gate refuses legitimate swaps when path forms diverge."""
+    from pathlib import Path
+    from lingtai_kernel.intrinsics.system import _preset_ref_in
+    # Path.expanduser() reads $HOME — point it at a tempdir we can resolve.
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    # Use the resolved absolute path so macOS's /private/var/... symlink
+    # prefix doesn't cause a spurious mismatch.
+    abs_path = str((home / "presets" / "alpha.json").resolve())
+    tilde = "~/presets/alpha.json"
+    assert _preset_ref_in(tilde, [abs_path])
+    assert _preset_ref_in(abs_path, [tilde])
+    assert _preset_ref_in(tilde, [tilde])
+    assert not _preset_ref_in(tilde, ["/other/foo.json"])
+    assert not _preset_ref_in("", [tilde])
+
+
 def test_refresh_with_known_preset_calls_activate_then_perform(tmp_path, monkeypatch):
     """system(action='refresh', preset='minimax') calls _activate_preset then _perform_refresh."""
     agent = _make_test_agent_for_presets(tmp_path)

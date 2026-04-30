@@ -148,6 +148,36 @@ def _nap(agent, args: dict) -> dict:
 # refresh
 # ---------------------------------------------------------------------------
 
+def _preset_ref_in(name: str, refs: list) -> bool:
+    """Membership test on a list of preset path strings, normalized so
+    `~/...` and the equivalent absolute path compare equal.
+
+    Used by the `_refresh` allowed-gate so an agent passing the form it
+    received from `_presets` (home-shortened) is not refused when the
+    on-disk `allowed` entry was written in absolute form, or vice versa.
+    """
+    if not isinstance(name, str) or not name:
+        return False
+    from pathlib import Path
+    try:
+        target = Path(name).expanduser().resolve(strict=False)
+    except (OSError, RuntimeError):
+        target = None
+    for ref in refs:
+        if not isinstance(ref, str):
+            continue
+        if ref == name:
+            return True
+        if target is None:
+            continue
+        try:
+            if Path(ref).expanduser().resolve(strict=False) == target:
+                return True
+        except (OSError, RuntimeError):
+            continue
+    return False
+
+
 def _check_context_fits(agent, preset_name: str) -> tuple:
     """Read the target preset's context_limit and verify the agent's current
     context usage fits.
@@ -222,6 +252,12 @@ def _refresh(agent, args: dict) -> dict:
         # Guard: refuse swap if the requested preset is not in the agent's
         # `allowed` list. Authorization is declared up front in init.json;
         # runtime is not allowed to silently broaden it.
+        #
+        # Path matching is normalized so `~/foo.json` and the absolute
+        # form of the same path compare equal. Without this, an agent
+        # that received a preset name from `_presets` (which renders with
+        # `home_shortened`) would be refused if the on-disk `allowed`
+        # entry was written in absolute form (or vice versa).
         try:
             import json as _json
             init_path = agent._working_dir / "init.json"
@@ -230,7 +266,7 @@ def _refresh(agent, args: dict) -> dict:
             allowed = preset_block.get("allowed") if isinstance(preset_block, dict) else None
         except Exception:
             allowed = None
-        if isinstance(allowed, list) and preset_name not in allowed:
+        if isinstance(allowed, list) and not _preset_ref_in(preset_name, allowed):
             agent._log("preset_swap_refused_unauthorized",
                        requested=preset_name)
             return {
