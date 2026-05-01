@@ -270,6 +270,13 @@ class BaseAgent:
         # into the wire chat at safe boundaries. Soul flow is the first user.
         self._tc_inbox: TCInbox = TCInbox()
 
+        # Tracks the most recent in-history call_id for each "single-slot"
+        # source. When a tc_inbox item with replace_in_history=True drains,
+        # the prior pair (if any) is removed from ChatInterface.entries
+        # before the new one is appended. Cleared on molt (the wire chat is
+        # rebuilt; nothing tracked survives).
+        self._appendix_ids_by_source: dict[str, str] = {}
+
         # Lifecycle
         self._shutdown = threading.Event()
         self._asleep = threading.Event()   # set when entering ASLEEP; cleared on wake
@@ -698,8 +705,17 @@ class BaseAgent:
         if not items:
             return
         for item in items:
+            if getattr(item, "replace_in_history", False):
+                # Single-slot semantics: remove any prior pair of the same
+                # source from chat history before appending the new one.
+                prior_id = self._appendix_ids_by_source.get(item.source)
+                if prior_id is not None:
+                    iface.remove_pair_by_call_id(prior_id)
+                self._appendix_ids_by_source.pop(item.source, None)
             iface.add_assistant_message(content=[item.call])
             iface.add_tool_results([item.result])
+            if getattr(item, "replace_in_history", False):
+                self._appendix_ids_by_source[item.source] = item.call.id
         self._save_chat_history()
         self._log(
             "tc_inbox_drain",

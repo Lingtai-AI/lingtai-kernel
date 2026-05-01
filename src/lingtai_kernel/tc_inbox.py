@@ -42,6 +42,11 @@ class InvoluntaryToolCall:
     source: str               # e.g. "soul.flow", "system.wakeup"
     enqueued_at: float        # time.time() at enqueue
     coalesce: bool = False    # if True, replace prior item with same source
+    # If True, the drain side also enforces a single-slot invariant in the
+    # wire chat itself: any prior pair of the same source already spliced
+    # into ChatInterface.entries is removed before this item is appended.
+    # Used by soul flow to keep at most one consultation pair in history.
+    replace_in_history: bool = False
 
 
 class TCInbox:

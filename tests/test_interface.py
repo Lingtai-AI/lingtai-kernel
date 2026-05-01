@@ -65,3 +65,94 @@ def test_pop_orphan_tool_call_noop_on_empty():
     removed = iface.pop_orphan_tool_call()
 
     assert removed is False
+
+
+# ---------------------------------------------------------------------------
+# remove_pair_by_call_id — strict-shape removal of a synthesized pair
+# ---------------------------------------------------------------------------
+
+
+def _seed_strict_pair(iface: ChatInterface, call_id: str, name: str = "soul",
+                      args: dict | None = None, content=None) -> None:
+    """Append the canonical strict (assistant{tool_call}, user{tool_result})
+    pair shape that remove_pair_by_call_id is meant to recognize."""
+    iface.add_assistant_message([
+        ToolCallBlock(id=call_id, name=name, args=args or {"action": "flow"}),
+    ])
+    iface.add_tool_results([
+        ToolResultBlock(id=call_id, name=name, content=content or {"voice": "x"}),
+    ])
+
+
+def test_remove_pair_by_call_id_strict_match():
+    iface = ChatInterface()
+    iface.add_system("sys")
+    iface.add_user_message("hi")
+    iface.add_assistant_message([TextBlock(text="ok")])
+    _seed_strict_pair(iface, "tc_a")
+    iface.add_user_message("more")
+
+    n_before = len(iface.entries)
+    removed = iface.remove_pair_by_call_id("tc_a")
+    assert removed is True
+    assert len(iface.entries) == n_before - 2
+    # The surrounding entries are preserved.
+    assert iface.entries[-1].role == "user"
+    assert iface.entries[-1].content[0].text == "more"
+
+
+def test_remove_pair_by_call_id_returns_false_when_missing():
+    iface = ChatInterface()
+    iface.add_system("sys")
+    iface.add_user_message("hi")
+    iface.add_assistant_message([TextBlock(text="ok")])
+
+    n_before = len(iface.entries)
+    removed = iface.remove_pair_by_call_id("tc_missing")
+    assert removed is False
+    assert len(iface.entries) == n_before
+
+
+def test_remove_pair_by_call_id_refuses_mixed_assistant_content():
+    """Strict match: an assistant entry containing tool_call PLUS another
+    block (e.g. a TextBlock) is NOT a synthesized appendix pair, so refuse
+    to remove it. Protects normal tool-call history from accidental id
+    collisions with appendix mechanisms."""
+    iface = ChatInterface()
+    iface.add_system("sys")
+    iface.add_user_message("hi")
+    # Mixed assistant: text + tool_call (a real model emission shape).
+    iface.add_assistant_message([
+        TextBlock(text="thinking aloud"),
+        ToolCallBlock(id="tc_real", name="bash", args={"cmd": "ls"}),
+    ])
+    iface.add_tool_results([
+        ToolResultBlock(id="tc_real", name="bash", content="file.txt"),
+    ])
+
+    n_before = len(iface.entries)
+    removed = iface.remove_pair_by_call_id("tc_real")
+    assert removed is False
+    assert len(iface.entries) == n_before
+
+
+def test_remove_pair_by_call_id_only_first_match():
+    """Pair may appear at most once for the soul-flow use case, but defend
+    against duplicates: only the first match is removed. (Caller can call
+    again to remove subsequent matches if desired.)"""
+    iface = ChatInterface()
+    _seed_strict_pair(iface, "tc_a")
+    iface.add_user_message("between")
+    _seed_strict_pair(iface, "tc_a")
+
+    n_before = len(iface.entries)
+    removed = iface.remove_pair_by_call_id("tc_a")
+    assert removed is True
+    assert len(iface.entries) == n_before - 2
+    # A second matching pair survives — caller can remove it explicitly.
+    assert iface.remove_pair_by_call_id("tc_a") is True
+
+
+def test_remove_pair_by_call_id_empty_interface():
+    iface = ChatInterface()
+    assert iface.remove_pair_by_call_id("tc_x") is False

@@ -510,6 +510,41 @@ class ChatInterface:
             return self._append("user", leftover)
         return last_touched_entry  # type: ignore[return-value]
 
+    def remove_pair_by_call_id(self, call_id: str) -> bool:
+        """Remove a strict ``(assistant{tool_call}, user{tool_result})`` pair.
+
+        Scans for an assistant entry whose content is exactly one
+        ``ToolCallBlock`` with the given ``call_id``, immediately followed
+        by a user entry whose content is exactly one ``ToolResultBlock``
+        with the same id. Removes both entries and returns True. Returns
+        False if no such strict pair exists.
+
+        The strict-shape requirement (each entry contains exactly one
+        block of the expected type) is intentional: this helper exists
+        to maintain the single-slot invariant for synthesized appendix
+        pairs (soul flow), which always have exactly that shape. Refusing
+        to operate on mixed-content entries protects regular tool-call
+        history from being corrupted by accidental id collisions.
+        """
+        for i in range(len(self._entries) - 1):
+            a = self._entries[i]
+            u = self._entries[i + 1]
+            if a.role != "assistant" or u.role != "user":
+                continue
+            if len(a.content) != 1 or len(u.content) != 1:
+                continue
+            cblock = a.content[0]
+            rblock = u.content[0]
+            if not isinstance(cblock, ToolCallBlock):
+                continue
+            if not isinstance(rblock, ToolResultBlock):
+                continue
+            if cblock.id != call_id or rblock.id != call_id:
+                continue
+            del self._entries[i:i + 2]
+            return True
+        return False
+
     # -- Query methods --------------------------------------------------------
 
     def conversation_entries(self) -> list[InterfaceEntry]:
