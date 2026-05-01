@@ -25,20 +25,31 @@ def make_mock_service():
 # ---------------------------------------------------------------------------
 
 
-def test_eigen_in_all_intrinsics():
-    assert "eigen" in ALL_INTRINSICS
+def test_psyche_in_all_intrinsics():
+    assert "psyche" in ALL_INTRINSICS
     assert "pad" not in ALL_INTRINSICS
-    info = ALL_INTRINSICS["eigen"]
+    info = ALL_INTRINSICS["psyche"]
     mod = info["module"]
     schema = mod.get_schema()
-    assert "edit" in schema["properties"]["action"]["enum"]
-    assert "load" in schema["properties"]["action"]["enum"]
-    assert "molt" in schema["properties"]["action"]["enum"]
+    # Schema uses allOf per-object action constraints, not a flat action.enum.
+    pad_actions = next(
+        rule["then"]["properties"]["action"]["enum"]
+        for rule in schema["allOf"]
+        if rule["if"]["properties"]["object"]["const"] == "pad"
+    )
+    context_actions = next(
+        rule["then"]["properties"]["action"]["enum"]
+        for rule in schema["allOf"]
+        if rule["if"]["properties"]["object"]["const"] == "context"
+    )
+    assert "edit" in pad_actions
+    assert "load" in pad_actions
+    assert "molt" in context_actions
 
 
-def test_eigen_wired_in_agent(tmp_path):
+def test_psyche_wired_in_agent(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    assert "eigen" in agent._intrinsics
+    assert "psyche" in agent._intrinsics
     assert "pad" not in agent._intrinsics
     agent.stop(timeout=1.0)
 
@@ -116,7 +127,7 @@ def test_existing_system_files_not_overwritten(tmp_path):
 def test_pad_edit(tmp_path):
     """Edit should write content to disk without injecting into prompt."""
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    result = agent._intrinsics["eigen"]({"object": "pad", "action": "edit", "content": "hello world"})
+    result = agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "hello world"})
     assert result["status"] == "ok"
     assert result["size_bytes"] == len("hello world".encode())
     pad_file = agent.working_dir / "system" / "pad.md"
@@ -130,7 +141,7 @@ def test_pad_edit_then_load(tmp_path):
     agent.start()
     try:
         # edit writes content and auto-loads into prompt manager
-        result = agent._intrinsics["eigen"]({"object": "pad", "action": "edit", "content": "important fact"})
+        result = agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "important fact"})
         assert result["status"] == "ok"
 
         # Verify file was written
@@ -142,7 +153,7 @@ def test_pad_edit_then_load(tmp_path):
         assert "important fact" in section
 
         # Second load call should not detect new changes (file unchanged)
-        result = agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
+        result = agent._intrinsics["psyche"]({"object": "pad", "action": "load"})
         assert result["status"] == "ok"
         # changed=False because file was already committed by edit's internal load
     finally:
@@ -155,7 +166,7 @@ def test_pad_load(tmp_path):
     try:
         pad_file = agent.working_dir / "system" / "pad.md"
         pad_file.write_text("# Pad\n\nimportant fact\n")
-        result = agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
+        result = agent._intrinsics["psyche"]({"object": "pad", "action": "load"})
         assert result["status"] == "ok"
         section = agent._prompt_manager.read_section("pad")
         assert "important fact" in section
@@ -167,11 +178,11 @@ def test_pad_load_empty_removes_section(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
-        agent._intrinsics["eigen"]({"object": "pad", "action": "edit", "content": "some content"})
-        agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
+        agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "some content"})
+        agent._intrinsics["psyche"]({"object": "pad", "action": "load"})
         assert agent._prompt_manager.read_section("pad") is not None
-        agent._intrinsics["eigen"]({"object": "pad", "action": "edit", "content": ""})
-        agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
+        agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": ""})
+        agent._intrinsics["psyche"]({"object": "pad", "action": "load"})
         section = agent._prompt_manager.read_section("pad")
         assert section is None or section.strip() == ""
     finally:
@@ -182,8 +193,8 @@ def test_pad_load_no_change_no_commit(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
-        agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
-        result = agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
+        agent._intrinsics["psyche"]({"object": "pad", "action": "load"})
+        result = agent._intrinsics["psyche"]({"object": "pad", "action": "load"})
         assert result["status"] == "ok"
     finally:
         agent.stop()
@@ -191,7 +202,7 @@ def test_pad_load_no_change_no_commit(tmp_path):
 
 def test_pad_unknown_action(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    result = agent._intrinsics["eigen"]({"object": "pad", "action": "diff"})
+    result = agent._intrinsics["psyche"]({"object": "pad", "action": "diff"})
     assert "error" in result
     agent.stop(timeout=1.0)
 
@@ -204,7 +215,7 @@ def test_pad_creates_files_if_missing(tmp_path):
         system_dir = agent.working_dir / "system"
         if system_dir.exists():
             shutil.rmtree(system_dir)
-        result = agent._intrinsics["eigen"]({"object": "pad", "action": "edit", "content": "test"})
+        result = agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "test"})
         assert result["status"] == "ok"
         assert (agent.working_dir / "system" / "pad.md").is_file()
     finally:

@@ -134,9 +134,6 @@ class BaseAgent:
         # MailService: None means mail intrinsic disabled
         self._mail_service = mail_service
 
-        # Set by psyche capability to prevent stop() from overwriting pad.md
-        self._eigen_owns_pad = False
-
         # Covenant, principle, procedures, brief, and pad file paths
         system_dir = self._working_dir / "system"
         pad_file = system_dir / "pad.md"
@@ -313,6 +310,12 @@ class BaseAgent:
             logger_fn=self._log,
             build_system_batches_fn=self._build_system_prompt_batches,
         )
+
+        # Boot the psyche intrinsic — load lingtai+pad into prompt, register
+        # post-molt reload. Must run AFTER _session is set up because pad/lingtai
+        # load triggers _flush_system_prompt which reads _session.
+        from .intrinsics import psyche as _psyche
+        _psyche.boot(self)
 
     # ------------------------------------------------------------------
     # Intrinsic wiring
@@ -515,13 +518,8 @@ class BaseAgent:
             except Exception:
                 pass
 
-        # Persist pad from prompt manager to file
-        if not self._eigen_owns_pad:
-            pad_content = self._prompt_manager.read_section("pad") or ""
-            pad_file = self._working_dir / "system" / "pad.md"
-            if pad_file.is_file() or pad_content:
-                pad_file.parent.mkdir(exist_ok=True)
-                pad_file.write_text(pad_content)
+        # Pad is disk-authoritative — psyche._pad_edit writes it on every edit.
+        # No need to flush from prompt manager state at stop().
 
         # Persist final state and release lock
         self._workdir.write_manifest(self._build_manifest())
@@ -859,8 +857,8 @@ class BaseAgent:
                 except OSError:
                     pass
                 try:
-                    from .intrinsics import eigen as _eigen
-                    _eigen.context_forget(self, source=source)
+                    from .intrinsics import psyche as _psyche
+                    _psyche.context_forget(self, source=source)
                     self._log("clear_received", source=source)
                 except Exception as clear_err:
                     logger.error(
@@ -1271,8 +1269,8 @@ class BaseAgent:
         meta = build_meta(self)
 
         # Molt pressure — warn agent when context is getting full
-        # Needs eigen intrinsic (always present) or psyche capability to self-molt
-        has_molt = "eigen" in self._intrinsics or self.has_capability("psyche")
+        # Needs the psyche intrinsic to self-molt (always present after collapse)
+        has_molt = "psyche" in self._intrinsics
         pressure = self._session.get_context_pressure()
 
         # Hard ceiling — unconditional force-wipe regardless of warning count.
@@ -1282,8 +1280,8 @@ class BaseAgent:
         if pressure >= self._config.molt_hard_ceiling and has_molt:
             lang = self._config.language
             self._log("auto_forget", reason="hard ceiling", pressure=pressure, ceiling=self._config.molt_hard_ceiling)
-            from .intrinsics import eigen as _eigen
-            _eigen.context_forget(self)
+            from .intrinsics import psyche as _psyche
+            _psyche.context_forget(self)
             self._session._compaction_warnings = 0
             content = f"{_t(lang, 'system.molt_wiped')}\n\n{content}"
         elif pressure >= self._config.molt_pressure and has_molt:
@@ -1295,8 +1293,8 @@ class BaseAgent:
             if warnings > max_warnings:
                 # Auto-forget — agent ignored all warnings
                 self._log("auto_forget", reason=f"ignored {max_warnings} molt warnings", pressure=pressure)
-                from .intrinsics import eigen as _eigen
-                _eigen.context_forget(self)
+                from .intrinsics import psyche as _psyche
+                _psyche.context_forget(self)
                 self._session._compaction_warnings = 0
                 content = f"{_t(lang, 'system.molt_wiped')}\n\n{content}"
             else:
@@ -1436,7 +1434,7 @@ class BaseAgent:
         if tc.name in self._intrinsics:
             # Inject the wire tool_use_id so intrinsics that need to locate
             # their own ToolCallBlock in the live interface (notably
-            # eigen._context_molt) can find it. Intrinsics that don't care
+            # psyche._context_molt) can find it. Intrinsics that don't care
             # simply ignore the field.
             args = dict(tc.args or {})
             args["_tc_id"] = tc.id
@@ -1625,8 +1623,8 @@ class BaseAgent:
     def override_intrinsic(self, name: str) -> Callable[[dict], dict]:
         """Remove an intrinsic and return its handler for delegation.
 
-        Called by capabilities that upgrade an intrinsic (email → mail,
-        psyche → eigen). Must be called before start() (tool surface sealed).
+        Called by capabilities that upgrade an intrinsic (e.g. email → mail).
+        Must be called before start() (tool surface sealed).
 
         Returns the original handler so the capability can delegate to it.
         """

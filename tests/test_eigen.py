@@ -21,27 +21,27 @@ def make_mock_service():
 # ---------------------------------------------------------------------------
 
 
-def test_eigen_pad_edit(tmp_path):
+def test_psyche_pad_edit(tmp_path):
     """eigen pad edit writes to system/pad.md."""
     agent = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    result = agent._intrinsics["eigen"]({"object": "pad", "action": "edit", "content": "hello world"})
+    result = agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "hello world"})
     assert result["status"] == "ok"
     pad_path = agent._working_dir / "system" / "pad.md"
     assert pad_path.read_text() == "hello world"
     agent.stop(timeout=1.0)
 
 
-def test_eigen_pad_edit_empty_clears(tmp_path):
-    """eigen pad edit with empty content clears pad file."""
+def test_psyche_pad_edit_empty_clears(tmp_path):
+    """psyche pad edit with explicit content='' clears the pad file."""
     agent = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
     # First write something
-    agent._intrinsics["eigen"]({"object": "pad", "action": "edit", "content": "data"})
-    # Then clear it
-    result = agent._intrinsics["eigen"]({"object": "pad", "action": "edit"})
+    agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "data"})
+    # Then clear it (must pass content="" — empty args alone is rejected)
+    result = agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": ""})
     assert result["status"] == "ok"
     pad_path = agent._working_dir / "system" / "pad.md"
     assert pad_path.read_text() == ""
@@ -53,7 +53,7 @@ def test_eigen_pad_edit_empty_clears(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_eigen_pad_load(tmp_path):
+def test_psyche_pad_load(tmp_path):
     """eigen pad load injects into system prompt."""
     agent = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
@@ -65,7 +65,7 @@ def test_eigen_pad_load(tmp_path):
         system_dir.mkdir(exist_ok=True)
         (system_dir / "pad.md").write_text("loaded content")
 
-        result = agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
+        result = agent._intrinsics["psyche"]({"object": "pad", "action": "load"})
         assert result["status"] == "ok"
         section = agent._prompt_manager.read_section("pad")
         assert "loaded content" in section
@@ -73,14 +73,14 @@ def test_eigen_pad_load(tmp_path):
         agent.stop()
 
 
-def test_eigen_pad_load_empty(tmp_path):
+def test_psyche_pad_load_empty(tmp_path):
     """eigen pad load with empty file deletes section."""
     agent = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
     agent.start()
     try:
-        result = agent._intrinsics["eigen"]({"object": "pad", "action": "load"})
+        result = agent._intrinsics["psyche"]({"object": "pad", "action": "load"})
         assert result["status"] == "ok"
         section = agent._prompt_manager.read_section("pad")
         assert section is None or section.strip() == ""
@@ -93,7 +93,7 @@ def test_eigen_pad_load_empty(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_eigen_molt_uses_summary(tmp_path):
+def test_psyche_molt_uses_summary(tmp_path):
     """molt wipes context and re-injects agent's summary."""
     from lingtai_kernel.llm.interface import ChatInterface, TextBlock
 
@@ -130,12 +130,12 @@ def test_eigen_molt_uses_summary(tmp_path):
         agent._session._chat.interface.add_assistant_message([
             ToolCallBlock(
                 id=molt_wire_id,
-                name="eigen",
+                name="psyche",
                 args={"object": "context", "action": "molt", "summary": molt_summary},
             ),
         ])
 
-        result = agent._intrinsics["eigen"]({
+        result = agent._intrinsics["psyche"]({
             "object": "context",
             "action": "molt",
             "summary": molt_summary,
@@ -155,12 +155,12 @@ def test_eigen_molt_uses_summary(tmp_path):
         agent.stop()
 
 
-def test_eigen_molt_rejects_empty_summary(tmp_path):
+def test_psyche_molt_rejects_empty_summary(tmp_path):
     """molt with empty summary returns error — agent must write a real briefing."""
     agent = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    result = agent._intrinsics["eigen"]({
+    result = agent._intrinsics["psyche"]({
         "object": "context", "action": "molt", "summary": "",
     })
     assert "error" in result
@@ -168,12 +168,12 @@ def test_eigen_molt_rejects_empty_summary(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_eigen_molt_rejects_missing_summary(tmp_path):
+def test_psyche_molt_rejects_missing_summary(tmp_path):
     """molt without summary arg returns error."""
     agent = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    result = agent._intrinsics["eigen"]({"object": "context", "action": "molt"})
+    result = agent._intrinsics["psyche"]({"object": "context", "action": "molt"})
     assert "error" in result
     assert "required" in result["error"].lower()
     agent.stop(timeout=1.0)
@@ -181,10 +181,16 @@ def test_eigen_molt_rejects_missing_summary(tmp_path):
 
 def test_eigen_schema_has_context_molt(tmp_path):
     """Schema exposes context/molt/summary for agent-callable molt."""
-    from lingtai_kernel.intrinsics.eigen import get_schema
+    from lingtai_kernel.intrinsics.psyche import get_schema
     s = get_schema("en")
     assert "context" in s["properties"]["object"]["enum"]
-    assert "molt" in s["properties"]["action"]["enum"]
+    # action enum is per-object via allOf, not a flat enum
+    context_actions = next(
+        rule["then"]["properties"]["action"]["enum"]
+        for rule in s["allOf"]
+        if rule["if"]["properties"]["object"]["const"] == "context"
+    )
+    assert "molt" in context_actions
     assert "summary" in s["properties"]
 
 
@@ -196,7 +202,7 @@ def test_eigen_schema_has_context_molt(tmp_path):
 def test_eigen_forget_wipes_context(tmp_path):
     """context_forget nuclear wipes the session."""
     from lingtai_kernel.llm.interface import ChatInterface, TextBlock
-    from lingtai_kernel.intrinsics.eigen import context_forget
+    from lingtai_kernel.intrinsics.psyche import context_forget
 
     svc = make_mock_service()
 
@@ -237,7 +243,7 @@ def test_eigen_unknown_object(tmp_path):
     agent = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    result = agent._intrinsics["eigen"]({"object": "bogus", "action": "edit"})
+    result = agent._intrinsics["psyche"]({"object": "bogus", "action": "edit"})
     assert "error" in result
     agent.stop(timeout=1.0)
 
@@ -246,7 +252,7 @@ def test_eigen_unknown_action(tmp_path):
     agent = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    result = agent._intrinsics["eigen"]({"object": "pad", "action": "bogus"})
+    result = agent._intrinsics["psyche"]({"object": "pad", "action": "bogus"})
     assert "error" in result
     agent.stop(timeout=1.0)
 
@@ -256,7 +262,7 @@ def test_eigen_is_intrinsic_not_pad(tmp_path):
     agent = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    assert "eigen" in agent._intrinsics
+    assert "psyche" in agent._intrinsics
     assert "pad" not in agent._intrinsics
     agent.stop(timeout=1.0)
 
@@ -269,7 +275,7 @@ def test_eigen_name_sets_agent_name(tmp_path):
     """eigen name action sets agent true name."""
     agent = BaseAgent(service=make_mock_service(), working_dir=tmp_path / "test")
     assert agent.agent_name is None
-    result = agent._intrinsics["eigen"]({"object": "name", "action": "set", "content": "悟空"})
+    result = agent._intrinsics["psyche"]({"object": "name", "action": "set", "content": "悟空"})
     assert result["status"] == "ok"
     assert result["name"] == "悟空"
     assert agent.agent_name == "悟空"
@@ -279,7 +285,7 @@ def test_eigen_name_sets_agent_name(tmp_path):
 def test_eigen_name_rejects_second_set(tmp_path):
     """eigen name action fails if already named."""
     agent = BaseAgent(service=make_mock_service(), working_dir=tmp_path / "test", agent_name="alice")
-    result = agent._intrinsics["eigen"]({"object": "name", "action": "set", "content": "bob"})
+    result = agent._intrinsics["psyche"]({"object": "name", "action": "set", "content": "bob"})
     assert "error" in result
     assert agent.agent_name == "alice"  # unchanged
     agent.stop(timeout=1.0)
@@ -288,7 +294,7 @@ def test_eigen_name_rejects_second_set(tmp_path):
 def test_eigen_name_rejects_empty(tmp_path):
     """eigen name action fails with empty name."""
     agent = BaseAgent(service=make_mock_service(), working_dir=tmp_path / "test")
-    result = agent._intrinsics["eigen"]({"object": "name", "action": "set", "content": ""})
+    result = agent._intrinsics["psyche"]({"object": "name", "action": "set", "content": ""})
     assert "error" in result
     assert agent.agent_name is None  # still unnamed
     agent.stop(timeout=1.0)
@@ -341,12 +347,12 @@ def test_snapshot_written_on_agent_molt(tmp_path):
         molt_summary = "Briefing: completed task X, next is Y."
         iface.add_assistant_message([
             ToolCallBlock(
-                id=molt_id, name="eigen",
+                id=molt_id, name="psyche",
                 args={"object": "context", "action": "molt", "summary": molt_summary},
             ),
         ])
 
-        result = agent._intrinsics["eigen"]({
+        result = agent._intrinsics["psyche"]({
             "object": "context", "action": "molt",
             "summary": molt_summary, "_tc_id": molt_id,
         })
@@ -381,7 +387,7 @@ def test_snapshot_written_on_system_forget(tmp_path):
     """System-initiated context_forget also writes a snapshot, source != 'agent'."""
     import json
     from lingtai_kernel.llm.interface import TextBlock
-    from lingtai_kernel.intrinsics.eigen import context_forget
+    from lingtai_kernel.intrinsics.psyche import context_forget
 
     agent = _agent_with_session(tmp_path)
     try:
@@ -411,7 +417,7 @@ def test_snapshot_written_on_system_forget(tmp_path):
 
 def test_snapshot_filename_uses_molt_count(tmp_path):
     """Successive molts produce successive molt_count values in filenames."""
-    from lingtai_kernel.intrinsics.eigen import context_forget
+    from lingtai_kernel.intrinsics.psyche import context_forget
 
     agent = _agent_with_session(tmp_path)
     try:
@@ -436,7 +442,7 @@ def test_snapshot_filename_uses_molt_count(tmp_path):
 def test_snapshot_helper_swallows_failures(tmp_path):
     """_write_molt_snapshot is best-effort — it returns None on any failure
     rather than propagating, so a broken disk can't block a molt."""
-    from lingtai_kernel.intrinsics import eigen
+    from lingtai_kernel.intrinsics import psyche
 
     # Block the snapshots dir by planting a file where its parent should be.
     (tmp_path / "history").write_text("blocker — not a directory")
@@ -446,7 +452,7 @@ def test_snapshot_helper_swallows_failures(tmp_path):
     broken_agent._agent_id = "x"
     broken_agent._agent_name = "x"
 
-    result = eigen._write_molt_snapshot(
+    result = psyche._write_molt_snapshot(
         broken_agent, MagicMock(),
         before_tokens=100, summary="x", source="agent", molt_count=1,
     )

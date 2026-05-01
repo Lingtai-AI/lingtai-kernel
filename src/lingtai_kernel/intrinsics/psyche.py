@@ -1,9 +1,10 @@
-"""Eigen intrinsic — bare essentials of agent self.
+"""Psyche intrinsic — bare essentials of agent self.
 
 Objects:
-    pad — edit/load system/pad.md (agent's working notes)
+    pad — edit/load system/pad.md (agent's working notes), append pinned files
     context — molt (shed context, keep a briefing)
     name — set true name (once), set/clear nickname
+    lingtai — update/load system/lingtai.md (covenant + character → covenant section)
 
 Internal:
     _context_molt — the shed-and-reload machinery (archive chat_history,
@@ -21,10 +22,14 @@ Internal:
         the pre-molt ChatInterface to <workdir>/history/snapshots/. Each
         snapshot is a discrete file so it can later be loaded as cached
         substrate for past-self consultation.
+    boot — boot-time hook: load lingtai + pad into prompt, register
+        post-molt reload. Called from base_agent.__init__ after intrinsics
+        are wired.
 """
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,26 +66,6 @@ def _write_molt_snapshot(
     whose only ToolCallBlock has this id is dropped from the serialized
     interface. Used by the agent-initiated molt path where the molt's
     own tool_call already sits in the tail entry of iface_pre.
-
-    Notes for the future consultation layer
-    ---------------------------------------
-    Snapshots are model-agnostic: the consulting LLM is chosen at read
-    time, independent of whatever provider/model produced the snapshot.
-    Snapshots can therefore be larger than a given consultant's context
-    window (e.g. a 1M-token Gemini molt consulted by a 200k-window
-    Sonnet). The rule when loading is:
-
-      budget = consulting_model.context_window * 0.8
-      if before_tokens <= budget: load full
-      else: tail-trim to budget (keep the system entry + the most recent
-            entries that fit; older entries fall off the front)
-
-    The 0.8 factor is headroom for the cue prompt, response space, and
-    tokenizer drift between providers. No skip threshold — the past
-    self degrades gracefully into "recent context with frozen system
-    prompt + tool schema," which still produces useful hooks for
-    events it can still see and honestly stays silent about events it
-    can't.
     """
     try:
         snapshots_dir = agent._working_dir / "history" / "snapshots"
@@ -127,7 +112,7 @@ def _write_molt_snapshot(
 
 def get_description(lang: str = "en") -> str:
     from ..i18n import t
-    return t(lang, "eigen.description")
+    return t(lang, "psyche.description")
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -137,79 +122,178 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "object": {
                 "type": "string",
-                "enum": ["pad", "context", "name"],
-                "description": t(lang, "eigen.object_description"),
+                "enum": ["pad", "context", "name", "lingtai"],
+                "description": t(lang, "psyche.object_description"),
             },
             "action": {
                 "type": "string",
-                "enum": ["edit", "load", "molt", "set", "nickname"],
-                "description": t(lang, "eigen.action_description"),
+                "description": t(lang, "psyche.action_description"),
             },
             "content": {
                 "type": "string",
-                "description": t(lang, "eigen.content_description"),
+                "description": t(lang, "psyche.content_description"),
+            },
+            "files": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": t(lang, "psyche.files_description"),
             },
             "summary": {
                 "type": "string",
-                "description": t(lang, "eigen.summary_description"),
+                "description": t(lang, "psyche.summary_description"),
             },
             "keep_tool_calls": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": t(lang, "eigen.keep_tool_calls_description"),
+                "description": t(lang, "psyche.keep_tool_calls_description"),
             },
         },
         "required": ["object", "action"],
+        "allOf": [
+            {"if": {"properties": {"object": {"const": "lingtai"}}},
+             "then": {"properties": {"action": {"enum": ["update", "load"]}}}},
+            {"if": {"properties": {"object": {"const": "pad"}}},
+             "then": {"properties": {"action": {"enum": ["edit", "load", "append"]}}}},
+            {"if": {"properties": {"object": {"const": "context"}}},
+             "then": {"properties": {"action": {"enum": ["molt"]}}}},
+            {"if": {"properties": {"object": {"const": "name"}}},
+             "then": {"properties": {"action": {"enum": ["set", "nickname"]}}}},
+        ],
     }
 
 
+_VALID_ACTIONS: dict[str, set[str]] = {
+    "lingtai": {"update", "load"},
+    "pad": {"edit", "load", "append"},
+    "context": {"molt"},
+    "name": {"set", "nickname"},
+}
+
+
 def handle(agent, args: dict) -> dict:
-    """Handle eigen tool — pad, context, and name."""
+    """Handle psyche tool — dispatch to (object, action) handler."""
     obj = args.get("object", "")
     action = args.get("action", "")
 
-    if obj == "pad":
-        if action == "edit":
-            return _pad_edit(agent, args)
-        elif action == "load":
-            return _pad_load(agent, args)
-        else:
-            return {"error": f"Unknown pad action: {action}. Use edit or load."}
-    elif obj == "context":
-        if action == "molt":
-            return _context_molt(agent, args)
-        else:
-            return {"error": f"Unknown context action: {action}. Use molt."}
-    elif obj == "name":
-        if action == "set":
-            return _name_set(agent, args)
-        elif action == "nickname":
-            return _name_nickname(agent, args)
-        else:
-            return {"error": f"Unknown name action: {action}. Use set (true name) or nickname."}
+    valid = _VALID_ACTIONS.get(obj)
+    if valid is None:
+        return {
+            "error": f"Unknown object: {obj!r}. "
+                     f"Must be one of: {', '.join(sorted(_VALID_ACTIONS))}."
+        }
+    if action not in valid:
+        return {
+            "error": f"Invalid action {action!r} for {obj}. "
+                     f"Valid actions: {', '.join(sorted(valid))}."
+        }
+
+    method_name = f"_{obj}_{action}"
+    method = globals().get(method_name)
+    if method is None:
+        return {"error": f"Internal: handler {method_name} not found."}
+    return method(agent, args)
+
+
+# ---------------------------------------------------------------------------
+# Lingtai (identity/character) actions
+# ---------------------------------------------------------------------------
+
+
+def _lingtai_update(agent, args: dict) -> dict:
+    """Write content to system/lingtai.md and auto-load into system prompt."""
+    content = args.get("content", "")
+    system_dir = agent._working_dir / "system"
+    system_dir.mkdir(exist_ok=True)
+    lingtai_path = system_dir / "lingtai.md"
+    lingtai_path.write_text(content)
+
+    agent._log("psyche_lingtai_update", length=len(content))
+
+    _lingtai_load(agent, {})
+    return {"status": "ok", "path": str(lingtai_path)}
+
+
+def _lingtai_load(agent, _args: dict) -> dict:
+    """Combine system/covenant.md + system/lingtai.md and write to covenant prompt section."""
+    system_dir = agent._working_dir / "system"
+    covenant_path = system_dir / "covenant.md"
+    lingtai_path = system_dir / "lingtai.md"
+
+    covenant = covenant_path.read_text() if covenant_path.is_file() else ""
+    character = lingtai_path.read_text() if lingtai_path.is_file() else ""
+
+    parts = [p for p in [covenant, character] if p.strip()]
+    combined = "\n\n".join(parts)
+
+    if combined.strip():
+        agent._prompt_manager.write_section(
+            "covenant", combined, protected=True,
+        )
     else:
-        return {"error": f"Unknown object: {obj}. Use pad, context, or name."}
+        agent._prompt_manager.delete_section("covenant")
+    agent._token_decomp_dirty = True
+    agent._flush_system_prompt()
+
+    agent._log("psyche_lingtai_load", size_bytes=len(combined.encode("utf-8")))
+
+    return {
+        "status": "ok",
+        "size_bytes": len(combined.encode("utf-8")),
+        "content_preview": combined[:200],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Pad actions — edit (with optional files=), load (with append-files layering), append
+# ---------------------------------------------------------------------------
 
 
 def _pad_edit(agent, args: dict) -> dict:
-    """Write content to system/pad.md and auto-load into system prompt."""
+    """Write content + optional file imports to pad.md and reload prompt.
+
+    To clear the pad explicitly, pass content="" (i.e. include the key).
+    Calling edit with no content key and no files is rejected — that's
+    almost always an LLM mistake.
+    """
+    if "content" not in args and not args.get("files"):
+        return {"error": "Provide content (use empty string to clear), files, or both."}
+
     content = args.get("content", "")
+    files = args.get("files") or []
+
+    parts = [content] if content else []
+
+    not_found: list[str] = []
+    for i, fpath in enumerate(files, start=1):
+        if os.path.isabs(fpath):
+            resolved = Path(fpath)
+        else:
+            resolved = agent._working_dir / fpath
+        if not resolved.is_file():
+            not_found.append(fpath)
+            continue
+        file_content = resolved.read_text()
+        parts.append(f"[file-{i}]\n{file_content}")
+
+    if not_found:
+        return {"error": f"Files not found: {', '.join(not_found)}"}
+
+    combined = "\n\n".join(parts)
 
     system_dir = agent._working_dir / "system"
     system_dir.mkdir(exist_ok=True)
     pad_path = system_dir / "pad.md"
-    pad_path.write_text(content)
+    pad_path.write_text(combined)
 
-    agent._log("eigen_pad_edit", length=len(content))
+    agent._log("psyche_pad_edit", length=len(combined), files=len(files))
 
-    # Auto-load into system prompt
     _pad_load(agent, {})
 
-    return {"status": "ok", "path": str(pad_path), "size_bytes": len(content.encode("utf-8"))}
+    return {"status": "ok", "path": str(pad_path), "size_bytes": len(combined.encode("utf-8"))}
 
 
 def _pad_load(agent, args: dict) -> dict:
-    """Load system/pad.md into the system prompt."""
+    """Load system/pad.md + appended reference files into the prompt."""
     system_dir = agent._working_dir / "system"
     system_dir.mkdir(exist_ok=True)
     pad_path = system_dir / "pad.md"
@@ -223,17 +307,150 @@ def _pad_load(agent, args: dict) -> dict:
         agent._prompt_manager.write_section("pad", content)
     else:
         agent._prompt_manager.delete_section("pad")
+
+    # Append-files layering — pinned read-only reference appended to pad section
+    append_files = _load_append_list(agent)
+    append_meta: dict = {}
+    if append_files:
+        append_content, not_found = _read_append_content(agent, append_files)
+        if append_content:
+            existing = agent._prompt_manager.read_section("pad") or ""
+            combined = existing + "\n\n---\n# 📎 Reference (read-only)\n\n" + append_content
+            agent._prompt_manager.write_section("pad", combined)
+        if not_found:
+            append_meta["append_not_found"] = not_found
+        append_meta["append_files"] = append_files
+        append_meta["append_count"] = len(append_files)
+
     agent._token_decomp_dirty = True
     agent._flush_system_prompt()
 
-    agent._log("eigen_pad_load", size_bytes=size_bytes)
+    agent._log("psyche_pad_load", size_bytes=size_bytes)
 
-    return {
+    result: dict = {
         "status": "ok",
         "path": str(pad_path),
         "size_bytes": size_bytes,
         "content_preview": content[:200],
     }
+    result.update(append_meta)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Pad append — pin files as read-only reference
+# ---------------------------------------------------------------------------
+
+_APPEND_LIST_PATH = "system/pad_append.json"
+_APPEND_TOKEN_LIMIT = 100_000
+
+
+def _append_list_file(agent) -> Path:
+    return agent._working_dir / _APPEND_LIST_PATH
+
+
+def _load_append_list(agent) -> list[str]:
+    """Read the persisted append file list (empty list if missing)."""
+    path = _append_list_file(agent)
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text())
+        if isinstance(data, list):
+            return [str(p) for p in data]
+    except (json.JSONDecodeError, OSError):
+        pass
+    return []
+
+
+def _save_append_list(agent, files: list[str]) -> None:
+    """Persist the append file list to disk."""
+    path = _append_list_file(agent)
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(files, ensure_ascii=False))
+
+
+def _resolve_path(agent, fpath: str) -> Path:
+    if os.path.isabs(fpath):
+        return Path(fpath)
+    return agent._working_dir / fpath
+
+
+def _read_append_content(agent, files: list[str]) -> tuple[str, list[str]]:
+    """Read all append files. Returns (combined content, not_found list)."""
+    parts: list[str] = []
+    not_found: list[str] = []
+    for fpath in files:
+        resolved = _resolve_path(agent, fpath)
+        if not resolved.is_file():
+            not_found.append(fpath)
+            continue
+        parts.append(f"[append: {fpath}]\n{resolved.read_text()}")
+    return "\n\n".join(parts), not_found
+
+
+def _is_text_file(path: Path, sample_size: int = 8192) -> bool:
+    """Check if a file is a text file by reading the first chunk."""
+    try:
+        chunk = path.read_bytes()[:sample_size]
+    except OSError:
+        return False
+    if b"\x00" in chunk:
+        return False
+    try:
+        chunk.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
+def _pad_append(agent, args: dict) -> dict:
+    """Set the list of files pinned as read-only pad reference.
+
+    Pass files=[] to clear. Persisted to system/pad_append.json.
+    Automatically reloads pad after updating the list. Only text files
+    are accepted.
+    """
+    files = args.get("files")
+    if files is None:
+        # No files param — return current list
+        current = _load_append_list(agent)
+        return {"status": "ok", "files": current, "count": len(current)}
+
+    not_found: list[str] = []
+    not_text: list[str] = []
+    for fpath in files:
+        resolved = _resolve_path(agent, fpath)
+        if not resolved.is_file():
+            not_found.append(fpath)
+        elif not _is_text_file(resolved):
+            not_text.append(fpath)
+    if not_found:
+        return {"error": f"Files not found: {', '.join(not_found)}"}
+    if not_text:
+        return {"error": f"Only text files are accepted. Binary files: {', '.join(not_text)}"}
+
+    if files:
+        from ..token_counter import count_tokens
+        combined, _ = _read_append_content(agent, files)
+        tokens = count_tokens(combined)
+        if tokens > _APPEND_TOKEN_LIMIT:
+            return {
+                "error": f"Append files total {tokens:,} tokens, "
+                         f"exceeding the {_APPEND_TOKEN_LIMIT:,} token limit. "
+                         f"Reduce the number or size of files.",
+            }
+
+    _save_append_list(agent, files)
+    _pad_load(agent, {})
+
+    action = "cleared" if not files else "set"
+    return {"status": "ok", "action": action, "files": files, "count": len(files)}
+
+
+# ---------------------------------------------------------------------------
+# Context actions — molt
+# ---------------------------------------------------------------------------
 
 
 def _context_molt(agent, args: dict) -> dict:
@@ -315,14 +532,9 @@ def _context_molt(agent, args: dict) -> dict:
     # Validate keep-list BEFORE any state mutation so a typo doesn't
     # consume a molt. Walk the live interface, harvest LingTai-issued ids
     # from tool_result content, and confirm every requested id is present.
-    # Pairs are replayed in the order the agent listed them — the agent
-    # chose that order for a reason (chronological, by relevance, leading
-    # with the punchline, etc.) and the kernel does not second-guess it.
     keep_pairs: list[tuple] = []  # list of (call_block, result_block) in agent-listed order
     if keep_tool_calls:
         requested = set(keep_tool_calls)
-        # First pass: find tool_results whose content carries a matching
-        # _tool_call_id, capture the wire id (provider's tool_use_id).
         provider_id_for_lingtai: dict[str, str] = {}
         result_for_provider_id: dict[str, object] = {}
         for entry in iface_pre.entries:
@@ -347,18 +559,11 @@ def _context_molt(agent, args: dict) -> dict:
                 "unmatched_ids": unmatched,
                 "matched_count": len(provider_id_for_lingtai),
             }
-        # Second pass: for each matched provider id, find the corresponding
-        # tool_call (assistant) block. tool_use and tool_result share the
-        # same id on the wire — that's the pairing key.
         call_for_provider_id: dict[str, object] = {}
         for entry in iface_pre.entries:
             for block in entry.content:
                 if isinstance(block, ToolCallBlock) and block.id in result_for_provider_id:
                     call_for_provider_id[block.id] = block
-        # Refuse if any matched result lacks its companion call block (could
-        # happen if enforce_tool_pairing earlier stripped a call from a
-        # non-tail assistant entry while the result survived). Better to
-        # fail loudly than silently drop a pair the agent asked to keep.
         missing_calls = [
             lt_id for lt_id in keep_tool_calls
             if call_for_provider_id.get(provider_id_for_lingtai[lt_id]) is None
@@ -372,7 +577,6 @@ def _context_molt(agent, args: dict) -> dict:
                 ),
                 "missing_call_ids": missing_calls,
             }
-        # Build the pair list in the order the agent requested.
         for lt_id in keep_tool_calls:
             pid = provider_id_for_lingtai[lt_id]
             keep_pairs.append((call_for_provider_id[pid], result_for_provider_id[pid]))
@@ -380,12 +584,7 @@ def _context_molt(agent, args: dict) -> dict:
     before_tokens = iface_pre.estimate_context_tokens()
 
     # Snapshot the pre-molt interface to a discrete file so future
-    # past-self consultation can load it as cached substrate. Best-effort —
-    # a failed snapshot must not block the molt. The molt's own tool_call
-    # is excluded: a snapshot represents the agent's mind right before it
-    # decided to shed, not the shedding act itself. Use the about-to-be
-    # molt_count (current+1) so the snapshot's filename matches the molt
-    # it captures.
+    # past-self consultation can load it as cached substrate. Best-effort.
     _write_molt_snapshot(
         agent, iface_pre,
         before_tokens=before_tokens,
@@ -407,8 +606,7 @@ def _context_molt(agent, args: dict) -> dict:
     agent._molt_count += 1
     agent._workdir.write_manifest(agent._build_manifest())
 
-    # Archive the pre-molt chat history:
-    #   chat_history.jsonl (current molt) → chat_history_archive.jsonl (all past molts)
+    # Archive the pre-molt chat history.
     history_dir = agent._working_dir / "history"
     history_dir.mkdir(exist_ok=True)
     current_path = history_dir / "chat_history.jsonl"
@@ -437,38 +635,31 @@ def _context_molt(agent, args: dict) -> dict:
 
     iface = agent._session._chat.interface
 
-    # Replay kept tool-call pairs first — chronologically these are older
-    # than the molt itself, so they belong before the molt's assistant entry.
-    # The wire ids carry over so any provider that pairs by id stays
-    # consistent with its own transcript invariants.
+    # Replay kept tool-call pairs first (older than the molt itself).
     for call_block, result_block in keep_pairs:
         iface.add_assistant_message(content=[call_block])
         iface.add_tool_results([result_block])
 
     # Replay the molt's own tool_call as the LAST assistant entry. The
-    # matching tool_result will be appended by the standard return path
-    # (ToolExecutor.make_tool_result_fn → session.send → adapter calls
-    # iface.add_tool_results), pairing by the same wire id we just kept.
+    # matching tool_result will be appended by the standard return path.
     iface.add_assistant_message(content=[molt_call_block])
 
     after_tokens = iface.estimate_context_tokens()
 
     agent._log(
-        "eigen_molt",
+        "psyche_molt",
         before_tokens=before_tokens,
         after_tokens=after_tokens,
         molt_count=agent._molt_count,
         kept_tool_calls=len(keep_pairs),
     )
 
-    # The faint-memory result. Spare on purpose: the briefing the agent
-    # wrote is already visible in its own ToolCallBlock args, so the
-    # result here is just the shape of what was lost and where to recover.
+    # The faint-memory result.
     from ..i18n import t
     lang = agent._config.language
     return {
         "status": "ok",
-        "note": t(lang, "eigen.molt_result_note"),
+        "note": t(lang, "psyche.molt_result_note"),
         "molt_count": agent._molt_count,
         "tokens_before": before_tokens,
         "tokens_after": after_tokens,
@@ -477,6 +668,11 @@ def _context_molt(agent, args: dict) -> dict:
         "archive_path": str(archive_path.relative_to(agent._working_dir))
             if archive_path.exists() else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Name actions
+# ---------------------------------------------------------------------------
 
 
 def _name_set(agent, args: dict) -> dict:
@@ -496,6 +692,11 @@ def _name_nickname(agent, args: dict) -> dict:
     nickname = args.get("content", "").strip()
     agent.set_nickname(nickname)
     return {"status": "ok", "nickname": nickname or None}
+
+
+# ---------------------------------------------------------------------------
+# System-initiated molt
+# ---------------------------------------------------------------------------
 
 
 def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) -> dict:
@@ -518,29 +719,20 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
     """
     import uuid
     from ..i18n import t
-    from ..llm.interface import ToolCallBlock, ToolResultBlock
 
     lang = agent._config.language
     if source == "warning_ladder":
-        summary = t(lang, "eigen.context_forget_summary")
+        summary = t(lang, "psyche.context_forget_summary")
     elif source == "aed":
-        summary = t(lang, "eigen.context_forget_summary_aed").replace("{attempts}", str(attempts))
+        summary = t(lang, "psyche.context_forget_summary_aed").replace("{attempts}", str(attempts))
     else:
-        summary = t(lang, "eigen.context_forget_summary_signal").replace("{source}", source)
+        summary = t(lang, "psyche.context_forget_summary_signal").replace("{source}", source)
 
     if agent._chat is None:
         return {"error": "No active chat session to molt."}
 
-    # Mint a synthesized wire id. Prefix conveys the system origin without
-    # confusing wire-format-strict providers (they accept any opaque id
-    # that is consistent across the matching tool_use/tool_result pair).
     synth_id = f"toolu_synth_{uuid.uuid4().hex[:16]}"
-
-    # Synthesize the assistant's tool_call. The agent will see this on the
-    # next turn the same way it sees its own past tool calls. ``psyche`` is
-    # the agent-facing tool name in the wrapper layer; pure-kernel agents
-    # see ``eigen`` instead, so pick whichever is registered.
-    tool_name = "psyche" if "psyche" in agent._intrinsics else "eigen"
+    tool_name = "psyche"
     synth_call = ToolCallBlock(
         id=synth_id,
         name=tool_name,
@@ -556,10 +748,6 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
     iface_pre = agent._chat.interface
     before_tokens = iface_pre.estimate_context_tokens()
 
-    # Snapshot the pre-molt interface. System-initiated path: the
-    # synthesized molt call hasn't been spliced into iface_pre yet (it's
-    # built above and added to the *fresh* interface below), so no
-    # trailing-call exclusion is needed.
     _write_molt_snapshot(
         agent, iface_pre,
         before_tokens=before_tokens,
@@ -603,14 +791,13 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
     agent._session.ensure_session()
     iface = agent._session._chat.interface
 
-    # Replay the synthesized molt pair as the opening of the fresh session.
     iface.add_assistant_message(content=[synth_call])
 
     after_tokens = iface.estimate_context_tokens()
 
     result_dict = {
         "status": "ok",
-        "note": t(lang, "eigen.molt_result_note"),
+        "note": t(lang, "psyche.molt_result_note"),
         "molt_count": agent._molt_count,
         "tokens_before": before_tokens,
         "tokens_after": after_tokens,
@@ -626,7 +813,7 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
     ])
 
     agent._log(
-        "eigen_molt",
+        "psyche_molt",
         before_tokens=before_tokens,
         after_tokens=after_tokens,
         molt_count=agent._molt_count,
@@ -636,3 +823,20 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
     )
 
     return result_dict
+
+
+# ---------------------------------------------------------------------------
+# Boot hook — replaces wrapper's setup()
+# ---------------------------------------------------------------------------
+
+
+def boot(agent) -> None:
+    """Boot-time hook: load lingtai + pad into the prompt, register post-molt
+    reload. Called from base_agent.__init__ after intrinsics are wired."""
+    _pad_load(agent, {})
+    _lingtai_load(agent, {})
+    if not hasattr(agent, "_post_molt_hooks"):
+        agent._post_molt_hooks = []
+    agent._post_molt_hooks.append(
+        lambda: (_lingtai_load(agent, {}), _pad_load(agent, {}))
+    )

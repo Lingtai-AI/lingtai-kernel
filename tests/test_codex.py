@@ -42,12 +42,12 @@ def test_codex_manager_accessible(tmp_path):
 
 
 def test_codex_independent_of_psyche(tmp_path):
-    """Codex can be used without psyche — eigen stays intact."""
+    """Codex is a separate capability; psyche is always-on as intrinsic."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities=["codex"],
     )
-    assert "eigen" in agent._intrinsics
+    assert "psyche" in agent._intrinsics
     assert "codex" in agent._tool_handlers
     agent.stop(timeout=1.0)
 
@@ -302,10 +302,9 @@ def test_export_to_pad_edit_workflow(tmp_path):
     """Full workflow: codex export → psyche pad.edit with files."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["codex", "psyche"],
+        capabilities=["codex"],
     )
     lib = agent.get_capability("codex")
-    psy = agent.get_capability("psyche")
 
     r = lib.handle({
         "action": "submit", "title": "Key Finding",
@@ -313,7 +312,7 @@ def test_export_to_pad_edit_workflow(tmp_path):
     })
     export_result = lib.handle({"action": "export", "ids": [r["id"]]})
 
-    pad_result = psy.handle({
+    pad_result = agent._intrinsics["psyche"]({
         "object": "pad", "action": "edit",
         "content": "My working notes.",
         "files": export_result["files"],

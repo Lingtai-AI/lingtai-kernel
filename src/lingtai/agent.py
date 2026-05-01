@@ -70,6 +70,12 @@ class Agent(BaseAgent):
                     expanded_dict[name] = cap_kwargs
             capabilities = expanded_dict
 
+        # Backwards-compat: psyche moved from capability to intrinsic.
+        # Silently drop "psyche" entries in legacy init.json files; the kernel
+        # always provides it as an intrinsic.
+        if capabilities and "psyche" in capabilities:
+            capabilities = {n: kw for n, kw in capabilities.items() if n != "psyche"}
+
         # Track for avatar replay
         self._capabilities: list[tuple[str, dict]] = []
         self._capability_managers: dict[str, Any] = {}
@@ -761,7 +767,6 @@ class Agent(BaseAgent):
         self._wire_intrinsics()
 
         # Reset capability-owned flags
-        self._eigen_owns_pad = False
         self._mailbox_name = "mail box"
         self._mailbox_tool = "mail"
         if hasattr(self, "_post_molt_hooks"):
@@ -827,6 +832,11 @@ class Agent(BaseAgent):
         # rules, pad, comment) from init.json and disk.
         self._reload_prompt_sections(data)
 
+        # Re-boot psyche so lingtai.md gets layered onto covenant section and
+        # the post-molt hook is re-registered on the cleared hook list.
+        from lingtai_kernel.intrinsics import psyche as _psyche
+        _psyche.boot(self)
+
         # Decompress addons BEFORE capability setup so the `mcp` capability
         # sees the populated registry on its first reconcile.
         addons = data.get("addons") or []
@@ -850,6 +860,9 @@ class Agent(BaseAgent):
                 else:
                     expanded[name] = cap_kwargs
             capabilities = expanded
+            # Backwards-compat: psyche is now an intrinsic, drop legacy entries.
+            if "psyche" in capabilities:
+                capabilities = {n: kw for n, kw in capabilities.items() if n != "psyche"}
             for name, cap_kwargs in capabilities.items():
                 try:
                     self._setup_capability(name, **cap_kwargs)

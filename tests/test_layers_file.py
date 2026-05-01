@@ -132,10 +132,10 @@ def test_base_agent_has_no_file_intrinsics(tmp_path):
 
 
 def test_base_agent_kernel_only(tmp_path):
-    """BaseAgent should have exactly 4 intrinsics: mail, system, eigen, soul."""
+    """BaseAgent should have exactly 4 intrinsics: mail, system, psyche, soul."""
     from lingtai_kernel.base_agent import BaseAgent
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    assert set(agent._intrinsics.keys()) == {"mail", "system", "eigen", "soul"}
+    assert set(agent._intrinsics.keys()) == {"mail", "system", "psyche", "soul"}
     agent.stop(timeout=1.0)
 
 

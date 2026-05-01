@@ -294,8 +294,7 @@ def test_compaction_resets_warning_counter(tmp_path):
             ),
         ])
 
-        mgr = agent.get_capability("psyche")
-        result = mgr.handle({
+        result = agent._intrinsics["psyche"]({
             "object": "context",
             "action": "molt",
             "summary": molt_summary,

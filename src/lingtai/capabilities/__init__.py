@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 # relative names.
 _BUILTIN: dict[str, str] = {
     # Always-on floor (lingtai.core)
-    "psyche": "lingtai.core.psyche",
     "codex": "lingtai.core.codex",
     "bash": "lingtai.core.bash",
     "avatar": "lingtai.core.avatar",
@@ -85,7 +84,6 @@ def get_all_providers() -> dict[str, dict]:
         "email": "lingtai.core.email",
         "bash": "lingtai.core.bash",
         "web_search": ".web_search",
-        "psyche": "lingtai.core.psyche",
         "codex": "lingtai.core.codex",
         "library": "lingtai.core.library",
         "vision": ".vision",

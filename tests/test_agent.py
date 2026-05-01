@@ -54,11 +54,11 @@ def test_intrinsics_enabled_by_default(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert "mail" in agent._intrinsics
     assert "system" in agent._intrinsics
-    assert "eigen" in agent._intrinsics
+    assert "psyche" in agent._intrinsics
     # File I/O is now a capability, not intrinsic
     assert "read" not in agent._intrinsics
     assert "write" not in agent._intrinsics
-    assert len(agent._intrinsics) == 4  # mail, system, eigen, soul
+    assert len(agent._intrinsics) == 4  # mail, system, psyche, soul
 
 
 # ---------------------------------------------------------------------------
@@ -441,14 +441,17 @@ def test_agent_creates_lock_file(tmp_path):
     assert (agent.working_dir / ".agent.lock").is_file()
 
 
-def test_agent_stop_persists_pad(tmp_path):
+def test_agent_pad_persists_via_edit(tmp_path):
+    """Pad is disk-authoritative — psyche(pad, edit) writes pad.md immediately."""
     agent = BaseAgent(
         service=make_mock_service(), agent_name="alice", working_dir=tmp_path / "test", pad="initial",
     )
-    agent._prompt_manager.write_section("pad", "updated knowledge")
-    agent.stop()
+    agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "updated knowledge"})
     pad_file = agent.working_dir / "system" / "pad.md"
     assert pad_file.is_file()
+    assert pad_file.read_text() == "updated knowledge"
+    agent.stop()
+    # Survives stop()
     assert pad_file.read_text() == "updated knowledge"
 
 
