@@ -292,3 +292,165 @@ def test_eigen_name_rejects_empty(tmp_path):
     assert "error" in result
     assert agent.agent_name is None  # still unnamed
     agent.stop(timeout=1.0)
+
+
+# ---------------------------------------------------------------------------
+# Molt snapshots — discrete pre-molt interface dumps for past-self consultation
+# ---------------------------------------------------------------------------
+
+
+def _agent_with_session(tmp_path):
+    """Build a BaseAgent with a mock session that uses a real ChatInterface
+    so molt code can actually walk and serialize entries. Returns the agent;
+    caller is responsible for stop()."""
+    from lingtai_kernel.llm.interface import ChatInterface
+
+    svc = make_mock_service()
+
+    def fake_create_session(**kwargs):
+        mock_chat = MagicMock()
+        iface = ChatInterface()
+        iface.add_system("You are helpful.")
+        mock_chat.interface = iface
+        mock_chat.context_window.return_value = 100_000
+        return mock_chat
+
+    svc.create_session.side_effect = fake_create_session
+
+    agent = BaseAgent(
+        service=svc, agent_name="snapshot-test", working_dir=tmp_path / "snapshot-test",
+    )
+    agent.start()
+    return agent
+
+
+def test_snapshot_written_on_agent_molt(tmp_path):
+    """Agent-initiated molt drops a discrete snapshot file under history/snapshots/."""
+    import json
+    from lingtai_kernel.llm.interface import TextBlock, ToolCallBlock
+
+    agent = _agent_with_session(tmp_path)
+    try:
+        agent._session.ensure_session()
+        iface = agent._session._chat.interface
+        iface.add_user_message("Hello")
+        iface.add_assistant_message([TextBlock(text="Hi.")])
+
+        # The molt's own tool_call lives in the tail entry pre-molt.
+        molt_id = "toolu_test_snapshot_agent"
+        molt_summary = "Briefing: completed task X, next is Y."
+        iface.add_assistant_message([
+            ToolCallBlock(
+                id=molt_id, name="eigen",
+                args={"object": "context", "action": "molt", "summary": molt_summary},
+            ),
+        ])
+
+        result = agent._intrinsics["eigen"]({
+            "object": "context", "action": "molt",
+            "summary": molt_summary, "_tc_id": molt_id,
+        })
+        assert result["status"] == "ok"
+
+        snapshots_dir = agent._working_dir / "history" / "snapshots"
+        files = sorted(snapshots_dir.glob("snapshot_*_*.json"))
+        assert len(files) == 1, f"expected 1 snapshot, found {files}"
+        # Filename uses molt_count (1 — first molt) as the leading number.
+        assert files[0].name.startswith("snapshot_1_"), files[0].name
+
+        payload = json.loads(files[0].read_text())
+        assert payload["schema_version"] == 1
+        assert payload["molt_count"] == 1
+        assert payload["molt_summary"] == molt_summary
+        assert payload["molt_source"] == "agent"
+        assert payload["before_tokens"] > 0
+        assert payload["agent_name"] == "snapshot-test"
+        assert isinstance(payload["interface"], list)
+        # The molt's own tool_call must NOT be present in the snapshot —
+        # snapshots represent the mind right before the molt, not the molt act.
+        for entry in payload["interface"]:
+            for block in entry.get("content", []):
+                if block.get("type") == "tool_call":
+                    assert block.get("id") != molt_id, \
+                        "snapshot must not contain the molt's own tool_call"
+    finally:
+        agent.stop()
+
+
+def test_snapshot_written_on_system_forget(tmp_path):
+    """System-initiated context_forget also writes a snapshot, source != 'agent'."""
+    import json
+    from lingtai_kernel.llm.interface import TextBlock
+    from lingtai_kernel.intrinsics.eigen import context_forget
+
+    agent = _agent_with_session(tmp_path)
+    try:
+        agent._session.ensure_session()
+        iface = agent._session._chat.interface
+        iface.add_user_message("test")
+        iface.add_assistant_message([TextBlock(text="response")])
+
+        result = context_forget(agent, source="warning_ladder")
+        assert result["status"] == "ok"
+
+        snapshots_dir = agent._working_dir / "history" / "snapshots"
+        files = sorted(snapshots_dir.glob("snapshot_*_*.json"))
+        assert len(files) == 1
+        payload = json.loads(files[0].read_text())
+        assert payload["molt_source"] == "warning_ladder"
+        assert payload["molt_count"] == 1
+        # System-initiated path: no agent tool_call exists pre-molt, so the
+        # whole interface is captured. No exclusion needed.
+        assert isinstance(payload["interface"], list)
+        assert any(
+            entry.get("role") == "user" for entry in payload["interface"]
+        )
+    finally:
+        agent.stop()
+
+
+def test_snapshot_filename_uses_molt_count(tmp_path):
+    """Successive molts produce successive molt_count values in filenames."""
+    from lingtai_kernel.intrinsics.eigen import context_forget
+
+    agent = _agent_with_session(tmp_path)
+    try:
+        agent._session.ensure_session()
+        agent._session._chat.interface.add_user_message("turn 1")
+        context_forget(agent, source="warning_ladder")
+
+        agent._session.ensure_session()
+        agent._session._chat.interface.add_user_message("turn 2")
+        context_forget(agent, source="aed", attempts=3)
+
+        snapshots_dir = agent._working_dir / "history" / "snapshots"
+        files = sorted(snapshots_dir.glob("snapshot_*_*.json"))
+        assert len(files) == 2
+        # First has molt_count=1, second has molt_count=2.
+        assert files[0].name.startswith("snapshot_1_")
+        assert files[1].name.startswith("snapshot_2_")
+    finally:
+        agent.stop()
+
+
+def test_snapshot_helper_swallows_failures(tmp_path):
+    """_write_molt_snapshot is best-effort — it returns None on any failure
+    rather than propagating, so a broken disk can't block a molt."""
+    from lingtai_kernel.intrinsics import eigen
+
+    # Block the snapshots dir by planting a file where its parent should be.
+    (tmp_path / "history").write_text("blocker — not a directory")
+
+    broken_agent = MagicMock()
+    broken_agent._working_dir = tmp_path
+    broken_agent._agent_id = "x"
+    broken_agent._agent_name = "x"
+
+    result = eigen._write_molt_snapshot(
+        broken_agent, MagicMock(),
+        before_tokens=100, summary="x", source="agent", molt_count=1,
+    )
+    assert result is None  # swallowed, returned None
+    # And a log call was attempted (best-effort — agent._log is a MagicMock
+    # so it accepts anything).
+    broken_agent._log.assert_called()

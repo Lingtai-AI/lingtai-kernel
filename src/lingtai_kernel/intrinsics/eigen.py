@@ -17,10 +17,112 @@ Internal:
     context_forget — system-initiated molt, called by base_agent after the
         warning ladder is exhausted. Synthesizes a ToolCallBlock + matching
         ToolResultBlock and replays both into the fresh session directly.
+    _write_molt_snapshot — write a per-molt machine-loadable snapshot of
+        the pre-molt ChatInterface to <workdir>/history/snapshots/. Each
+        snapshot is a discrete file so it can later be loaded as cached
+        substrate for past-self consultation.
 """
 from __future__ import annotations
 
+import json
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
 from ..llm.interface import ToolCallBlock, ToolResultBlock
+
+
+SNAPSHOT_SCHEMA_VERSION = 1
+
+
+def _write_molt_snapshot(
+    agent,
+    iface_pre,
+    *,
+    before_tokens: int,
+    summary: str,
+    source: str,
+    molt_count: int,
+    exclude_trailing_call_id: str | None = None,
+) -> Path | None:
+    """Serialize the pre-molt ChatInterface to a discrete snapshot file.
+
+    The snapshot is the substrate a future "past self" consultation can
+    load — full message history at the moment the agent decided to molt,
+    minus the molt's own tool_call (which is meta about the molting
+    process, not part of the past self's mind). Returns the snapshot
+    path on success, or None if the write failed (best-effort — a
+    failed snapshot must not block the molt itself).
+
+    Filename: snapshot_<molt_count>_<unix_ts>.json — molt_count first
+    so directory listings sort chronologically without parsing.
+
+    ``exclude_trailing_call_id``: if set, the trailing assistant entry
+    whose only ToolCallBlock has this id is dropped from the serialized
+    interface. Used by the agent-initiated molt path where the molt's
+    own tool_call already sits in the tail entry of iface_pre.
+
+    Notes for the future consultation layer
+    ---------------------------------------
+    Snapshots are model-agnostic: the consulting LLM is chosen at read
+    time, independent of whatever provider/model produced the snapshot.
+    Snapshots can therefore be larger than a given consultant's context
+    window (e.g. a 1M-token Gemini molt consulted by a 200k-window
+    Sonnet). The rule when loading is:
+
+      budget = consulting_model.context_window * 0.8
+      if before_tokens <= budget: load full
+      else: tail-trim to budget (keep the system entry + the most recent
+            entries that fit; older entries fall off the front)
+
+    The 0.8 factor is headroom for the cue prompt, response space, and
+    tokenizer drift between providers. No skip threshold — the past
+    self degrades gracefully into "recent context with frozen system
+    prompt + tool schema," which still produces useful hooks for
+    events it can still see and honestly stays silent about events it
+    can't.
+    """
+    try:
+        snapshots_dir = agent._working_dir / "history" / "snapshots"
+        snapshots_dir.mkdir(parents=True, exist_ok=True)
+
+        entries = iface_pre.to_dict()
+        if exclude_trailing_call_id and entries:
+            tail = entries[-1]
+            if tail.get("role") == "assistant":
+                content = tail.get("content") or []
+                if (
+                    len(content) == 1
+                    and content[0].get("type") == "tool_call"
+                    and content[0].get("id") == exclude_trailing_call_id
+                ):
+                    entries = entries[:-1]
+
+        unix_ts = int(time.time())
+        path = snapshots_dir / f"snapshot_{molt_count}_{unix_ts}.json"
+
+        payload = {
+            "schema_version": SNAPSHOT_SCHEMA_VERSION,
+            "molt_count": molt_count,
+            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "before_tokens": before_tokens,
+            "agent_name": getattr(agent, "agent_name", None),
+            "agent_id": getattr(agent, "_agent_id", None),
+            "molt_summary": summary,
+            "molt_source": source,
+            "interface": entries,
+        }
+
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+        return path
+    except Exception as e:
+        try:
+            agent._log("snapshot_write_failed", error=str(e))
+        except Exception:
+            pass
+        return None
 
 
 def get_description(lang: str = "en") -> str:
@@ -277,6 +379,22 @@ def _context_molt(agent, args: dict) -> dict:
 
     before_tokens = iface_pre.estimate_context_tokens()
 
+    # Snapshot the pre-molt interface to a discrete file so future
+    # past-self consultation can load it as cached substrate. Best-effort —
+    # a failed snapshot must not block the molt. The molt's own tool_call
+    # is excluded: a snapshot represents the agent's mind right before it
+    # decided to shed, not the shedding act itself. Use the about-to-be
+    # molt_count (current+1) so the snapshot's filename matches the molt
+    # it captures.
+    _write_molt_snapshot(
+        agent, iface_pre,
+        before_tokens=before_tokens,
+        summary=summary,
+        source="agent",
+        molt_count=agent._molt_count + 1,
+        exclude_trailing_call_id=tc_id,
+    )
+
     # Wipe context
     agent._session._chat = None
     agent._session._interaction_id = None
@@ -435,7 +553,21 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
         },
     )
 
-    before_tokens = agent._chat.interface.estimate_context_tokens()
+    iface_pre = agent._chat.interface
+    before_tokens = iface_pre.estimate_context_tokens()
+
+    # Snapshot the pre-molt interface. System-initiated path: the
+    # synthesized molt call hasn't been spliced into iface_pre yet (it's
+    # built above and added to the *fresh* interface below), so no
+    # trailing-call exclusion is needed.
+    _write_molt_snapshot(
+        agent, iface_pre,
+        before_tokens=before_tokens,
+        summary=summary,
+        source=source,
+        molt_count=agent._molt_count + 1,
+        exclude_trailing_call_id=None,
+    )
 
     # Wipe context
     agent._session._chat = None
