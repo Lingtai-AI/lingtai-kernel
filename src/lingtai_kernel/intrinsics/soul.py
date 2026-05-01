@@ -1,15 +1,22 @@
 """Soul intrinsic — the agent's inner voice.
 
 Two modes:
-    flow    — persistent mirrored chat. Agent's diary becomes soul's input,
-              soul's response becomes agent's input. Shares the principle
-              section of the system prompt. Automatic, continuous.
+    flow    — past-self consultation appendix. Every ``_soul_delay`` seconds,
+              fires M=1+K parallel LLM calls (1 stepped-back read of the
+              current chat as "insights", K random past-snapshot
+              consultations sampled from history/snapshots/). Voices bundle
+              into one synthetic (assistant{tool_call}, user{tool_result})
+              pair with action="flow"; the pair is enqueued on tc_inbox
+              with replace_in_history=True so the drain side enforces a
+              single-slot invariant in chat history. The pair drifts
+              naturally through the prompt cache as the agent's own turns
+              accumulate after it. Mechanical — agent cannot invoke
+              manually.
     inquiry — sync mirror session. Clones conversation (text+thinking only),
               sends question, returns answer in tool result. On-demand.
 
 Actions:
     inquiry — ask yourself a question, get the answer in the tool result
-    delay   — adjust the idle wait before flow fires
 """
 from __future__ import annotations
 
@@ -26,32 +33,27 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["inquiry", "flow", "delay"],
+                "enum": ["inquiry", "flow"],
                 "description": t(lang, "soul.action_description"),
             },
             "inquiry": {
                 "type": "string",
                 "description": t(lang, "soul.inquiry_description"),
             },
-            "delay": {
-                "type": "number",
-                "description": t(lang, "soul.delay_description"),
-            },
         },
         "required": ["action"],
     }
 
 
-_MIN_DELAY = 1.0
-
-
 def handle(agent, args: dict) -> dict:
-    """Handle soul tool — inquiry/flow/delay.
+    """Handle soul tool — inquiry only (flow is mechanical, agent cannot
+    invoke it manually).
 
-    flow is mechanically triggered — fires every ``_soul_delay`` seconds on
-    a wall clock. Manual invocation is rejected so the action stays honest
-    about its involuntary nature; agents control cadence via delay, on-demand
-    reflection via inquiry.
+    flow fires automatically every ``_soul_delay`` seconds on a wall clock
+    via the soul timer. Each fire runs past-self consultation (M=1+K
+    parallel LLM calls) and lands a single soul.flow pair in chat history,
+    replacing any prior one. Cadence is configured via
+    manifest.config.soul_delay (seconds); not runtime-tunable by the agent.
     """
     action = args.get("action", "")
 
@@ -60,7 +62,7 @@ def handle(agent, args: dict) -> dict:
             "error": (
                 f"soul flow fires automatically every {agent._soul_delay}s. "
                 "It cannot be invoked manually. Use inquiry for on-demand "
-                "reflection, or adjust delay to control flow cadence."
+                "reflection."
             ),
         }
 
@@ -81,23 +83,8 @@ def handle(agent, args: dict) -> dict:
             agent._log("soul_inquiry_done")
             return {"status": "ok", "voice": "(silence)"}
 
-    elif action == "delay":
-        delay = args.get("delay")
-        try:
-            delay = float(delay)
-        except (TypeError, ValueError):
-            return {"error": "delay must be a number."}
-        if delay < _MIN_DELAY:
-            return {"error": f"delay must be >= {_MIN_DELAY} seconds."}
-
-        old = agent._soul_delay
-        agent._soul_delay = delay
-        agent._log("soul_delay", old=old, new=delay)
-        agent._workdir.write_manifest(agent._build_manifest())
-        return {"status": "ok", "delay": delay}
-
     else:
-        return {"error": f"Unknown soul action: {action}. Use inquiry or delay (flow is mechanical)."}
+        return {"error": f"Unknown soul action: {action}. Use inquiry (flow is mechanical)."}
 
 
 def _send_with_timeout(agent, session, content: str):
@@ -130,41 +117,6 @@ def _send_with_timeout(agent, session, content: str):
     return result_box[0] if result_box else None
 
 
-def _collect_new_diary(agent) -> str:
-    """Collect the agent's diary since the last soul whisper.
-
-    Includes assistant text (narration) and thinking blocks. The soul
-    needs both the agent's inner reasoning and its outward narration
-    to reflect meaningfully.
-
-    Uses agent._soul_cursor to track how far we've read.
-    Returns squashed text of all new diary entries, or empty string.
-    """
-    from ..llm.interface import TextBlock, ThinkingBlock
-
-    if agent._chat is None:
-        return ""
-
-    entries = agent._chat.interface.entries
-    cursor = getattr(agent, "_soul_cursor", 0)
-    parts: list[str] = []
-
-    for i in range(cursor, len(entries)):
-        entry = entries[i]
-        if entry.role != "assistant":
-            continue
-        for block in entry.content:
-            if isinstance(block, ThinkingBlock) and block.text:
-                parts.append(f"[thinking] {block.text}")
-            elif isinstance(block, TextBlock) and block.text:
-                parts.append(block.text)
-
-    # Update cursor to current end
-    agent._soul_cursor = len(entries)
-
-    return "\n\n".join(parts)
-
-
 def _build_soul_system_prompt(agent) -> str:
     """Build the soul session's system prompt."""
     custom = getattr(agent, "_soul_flow_prompt", "")
@@ -174,90 +126,17 @@ def _build_soul_system_prompt(agent) -> str:
     return t(agent._config.language, "soul.system_prompt")
 
 
-def _soul_history_path(agent):
-    """Path to the soul session's persisted history."""
-    return agent._working_dir / "history" / "soul_history.jsonl"
-
-
-def _soul_cursor_path(agent):
-    """Path to the soul cursor file."""
-    return agent._working_dir / "history" / "soul_cursor.json"
-
-
-def _save_soul_session(agent) -> None:
-    """Persist soul session history and cursor to disk."""
-    session = getattr(agent, "_soul_session", None)
-    if session is None:
-        return
-    try:
-        import json
-        entries = session.interface.to_dict()
-        path = _soul_history_path(agent)
-        path.parent.mkdir(exist_ok=True)
-        lines = [json.dumps(entry, ensure_ascii=False) for entry in entries]
-        path.write_text("\n".join(lines) + "\n")
-        # Cursor saved separately — changes independently (e.g. on molt)
-        _soul_cursor_path(agent).write_text(
-            json.dumps({"cursor": getattr(agent, "_soul_cursor", 0)})
-        )
-    except Exception:
-        pass  # best-effort — snapshot will catch it
-
-
-def _ensure_soul_session(agent):
-    """Get or create the persistent soul mirror session."""
-    if getattr(agent, "_soul_session", None) is not None:
-        return agent._soul_session
-
-    system_prompt = _build_soul_system_prompt(agent)
-
-    # Try to restore from disk
-    interface = None
-    path = _soul_history_path(agent)
-    if path.is_file():
-        try:
-            import json
-            from ..llm.interface import ChatInterface
-            messages = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-            if messages:
-                interface = ChatInterface.from_dict(messages)
-        except Exception:
-            interface = None  # start fresh
-    # Restore cursor from separate file
-    cursor_path = _soul_cursor_path(agent)
-    if cursor_path.is_file():
-        try:
-            import json
-            agent._soul_cursor = json.loads(cursor_path.read_text()).get("cursor", 0)
-        except Exception:
-            pass
-
-    try:
-        agent._soul_session = agent.service.create_session(
-            system_prompt=system_prompt,
-            tools=None,
-            model=agent._config.model or agent.service.model,
-            thinking="high",
-            tracked=False,
-            interface=interface,
-        )
-    except Exception as e:
-        agent._log("soul_whisper_error", error=f"Failed to create soul session: {e}")
-        agent._soul_session = None
-
-    return agent._soul_session
-
-
 def _write_soul_tokens(agent, response) -> None:
-    """Append soul session token usage to the agent's ledger."""
+    """Append a soul-tagged token-ledger entry for a consultation or
+    inquiry LLM call. Best-effort — failures are silently swallowed so
+    a ledger hiccup does not break the cadence."""
     u = response.usage
     if not (u.input_tokens or u.output_tokens or u.thinking_tokens or u.cached_tokens):
         return
     try:
         from ..token_ledger import append_token_entry
         ledger_path = agent._working_dir / "logs" / "token_ledger.jsonl"
-        soul = getattr(agent, "_soul_session", None)
-        model = getattr(soul, "_model", None) or getattr(agent.service, "model", None)
+        model = getattr(agent.service, "model", None)
         endpoint = getattr(agent.service, "_base_url", None)
         append_token_entry(
             ledger_path,
@@ -268,117 +147,6 @@ def _write_soul_tokens(agent, response) -> None:
         )
     except Exception:
         pass
-
-
-def soul_flow(agent) -> dict | None:
-    """Flow mode — persistent mirrored chat.
-
-    Agent's diary → squashed into one message → sent to the soul session.
-    Soul responds → injected into agent's inbox as plain text.
-
-    The soul session persists across cycles. It shares the principle
-    section of the system prompt but has no tools, no covenant, no identity.
-    """
-    # Collect new diary entries since last whisper
-    diary = _collect_new_diary(agent)
-
-    if not diary:
-        return None  # nothing to reflect on
-
-    session = _ensure_soul_session(agent)
-    if session is None:
-        return None
-
-    response = _send_with_timeout(agent, session, diary)
-    if not response or not response.text:
-        return None
-
-    _write_soul_tokens(agent, response)
-
-    # Gradual forgetting — drop oldest entries when over budget
-    _trim_soul_session(agent)
-
-    return {
-        "prompt": diary,
-        "voice": response.text,
-        "thinking": response.thoughts or [],
-    }
-
-
-def enqueue_flow_voice(agent, voice: str, thinking: list) -> None:
-    """Build a synthetic (call, result) pair for a soul flow voice and
-    enqueue it on the agent's involuntary tool-call inbox.
-
-    Coalesces with prior unspliced flow pairs (source="soul.flow"): if the
-    agent has been busy and multiple flows fired without draining, only the
-    most recent voice survives.
-
-    The call args carry only ``action="flow"`` — that alone tells the agent
-    "this was the involuntary flow action, not the agent-initiated inquiry
-    action." No ``trigger`` field needed; the action enum is the type.
-    """
-    import secrets
-    import time
-    from ..llm.interface import ToolCallBlock, ToolResultBlock
-    from ..tc_inbox import InvoluntaryToolCall
-
-    tc_id = f"tc_{int(time.time())}_{secrets.token_hex(2)}"
-    call = ToolCallBlock(id=tc_id, name="soul", args={"action": "flow"})
-    payload: dict = {"status": "ok", "voice": voice}
-    if thinking:
-        payload["thinking"] = thinking
-    result_block = ToolResultBlock(id=tc_id, name="soul", content=payload)
-    agent._tc_inbox.enqueue(InvoluntaryToolCall(
-        call=call,
-        result=result_block,
-        source="soul.flow",
-        enqueued_at=time.time(),
-        coalesce=True,
-    ))
-
-
-def _trim_soul_session(agent) -> None:
-    """Drop oldest conversation entries if soul session exceeds token budget.
-
-    The soul gradually forgets — old exchanges fade while recent ones remain.
-    Entries are dropped one at a time from the front (oldest first),
-    preserving the system prompt entry.
-    """
-    session = getattr(agent, "_soul_session", None)
-    if session is None:
-        return
-
-    limit = agent._config.soul_context_limit
-    if limit <= 0:
-        return
-
-    iface = session.interface
-    tokens = iface.estimate_context_tokens()
-
-    while tokens > limit:
-        # Find first non-system entry to drop
-        dropped = False
-        for i, entry in enumerate(iface.entries):
-            if entry.role != "system":
-                iface._entries.pop(i)
-                dropped = True
-                break
-        if not dropped:
-            break  # only system entries left
-        tokens = iface.estimate_context_tokens()
-
-
-def reset_soul_session(agent) -> None:
-    """Reset the soul's diary cursor after molt.
-
-    The soul session itself is NOT reset — the soul's inner conversation
-    persists across molts. Only the cursor resets so the soul re-reads
-    the agent's post-molt diary from the beginning.
-    """
-    agent._soul_cursor = 0
-    # Persist the reset cursor immediately — prevents desync if crash
-    # occurs between molt and next soul whisper
-    _save_soul_session(agent)
 
 
 def soul_inquiry(agent, question: str) -> dict | None:

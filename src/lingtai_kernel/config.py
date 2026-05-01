@@ -33,7 +33,6 @@ class AgentConfig:
     molt_hard_ceiling: float = 0.95  # unconditional auto-wipe threshold — if pressure ≥ this, force-wipe next turn regardless of warning count
     molt_prompt: str = ""  # user-provided instruction for how to prepare for molt
     ensure_ascii: bool = False  # JSON output: False = readable unicode, True = \uXXXX escapes
-    soul_context_limit: int = 200_000  # max tokens for soul session; oldest entries dropped when exceeded
     insights_interval: int = 0  # turns between auto-insights; 0 = off
     consultation_interval: int = 0  # turns between past-self consultation fires; 0 = off
     consultation_past_count: int = 2  # K random past-snapshot consultations per fire (M = 1 insights + K)

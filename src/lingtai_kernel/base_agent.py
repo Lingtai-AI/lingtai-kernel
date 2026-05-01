@@ -683,10 +683,11 @@ class BaseAgent:
         tc_inbox with replace_in_history=True. Splicing into the wire
         chat happens at the next safe boundary in _drain_tc_inbox.
 
-        This replaces the legacy diary+mirror-session whisper. The old
-        soul_flow / _ensure_soul_session / _trim_soul_session machinery
-        in intrinsics/soul.py is no longer reached from the hot path
-        but is left in the module for now (dead but inert).
+        This replaced the legacy diary+mirror-session whisper. That old
+        machinery (soul_flow, _ensure_soul_session, _trim_soul_session,
+        _collect_new_diary, _save_soul_session, reset_soul_session,
+        enqueue_flow_voice) was deleted from intrinsics/soul.py during
+        the consultation tear-down.
         """
         self._soul_timer = None
         try:

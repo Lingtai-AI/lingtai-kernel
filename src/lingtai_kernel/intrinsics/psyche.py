@@ -679,9 +679,12 @@ def _context_molt(agent, args: dict) -> dict:
     except OSError:
         pass
 
-    # Reset soul mirror session
-    from .soul import reset_soul_session
-    reset_soul_session(agent)
+    # Drop appendix tracking — the wire chat is rebuilt from scratch
+    # below, so any prior soul.flow pair indexed by call_id is gone.
+    # Next consultation fire will append a fresh pair without trying to
+    # remove a stale one.
+    if hasattr(agent, "_appendix_ids_by_source"):
+        agent._appendix_ids_by_source.clear()
 
     # Post-molt hooks — reload character/pad into prompt manager BEFORE new session
     for cb in getattr(agent, "_post_molt_hooks", []):
@@ -852,8 +855,8 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
     except OSError:
         pass
 
-    from .soul import reset_soul_session
-    reset_soul_session(agent)
+    if hasattr(agent, "_appendix_ids_by_source"):
+        agent._appendix_ids_by_source.clear()
 
     for cb in getattr(agent, "_post_molt_hooks", []):
         try:
