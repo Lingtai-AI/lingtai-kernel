@@ -117,13 +117,71 @@ def _send_with_timeout(agent, session, content: str):
     return result_box[0] if result_box else None
 
 
-def _build_soul_system_prompt(agent) -> str:
-    """Build the soul session's system prompt."""
+def _build_soul_system_prompt(agent, kind: str = "inquiry") -> str:
+    """Build the soul session's system prompt.
+
+    kind:
+        "inquiry"  — synchronous mirror session (soul_inquiry). Frames the
+                     consultee as a deep copy of the current agent answering
+                     a question.
+        "insights" — current-self consultation voice in soul flow. Explains
+                     the soul-flow mechanism and asks for stepped-back
+                     observations on the agent's own recent diary.
+        "past"     — past-self consultation voice. Explains the role: the
+                     consultee is a frozen past life of this agent, being
+                     handed the future self's diary as a cue.
+
+    A non-empty ``agent._soul_flow_prompt`` overrides every kind — operator
+    escape hatch for custom personas.
+    """
     custom = getattr(agent, "_soul_flow_prompt", "")
     if custom:
         return custom
     from ..i18n import t
-    return t(agent._config.language, "soul.system_prompt")
+    key = {
+        "insights": "soul.system_prompt_insights",
+        "past":     "soul.system_prompt_past",
+    }.get(kind, "soul.system_prompt")
+    return t(agent._config.language, key)
+
+
+def _render_current_diary(agent) -> str:
+    """Concatenate the agent's diary entries from logs/events.jsonl.
+
+    Diary is the agent's free-text output across turns — logged via
+    ``self._log("diary", text=response.text)`` in the runtime loop. Each
+    entry is one turn. Entries are bounded by molt cadence (a molt resets
+    the chat and starts a new diary stream), so the cumulative length is
+    self-limited; we don't cap it explicitly here. The window-fit step
+    further down applies a token budget at the seeded-interface level,
+    not the cue.
+
+    Returns a single string with paragraph-break separators, or empty
+    string if the log is missing/unreadable/empty.
+    """
+    import json
+    log_path = agent._working_dir / "logs" / "events.jsonl"
+    if not log_path.is_file():
+        return ""
+    parts: list[str] = []
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if rec.get("type") != "diary":
+                    continue
+                text = rec.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+    except Exception:
+        return ""
+    return "\n\n".join(parts)
 
 
 def _write_soul_tokens(agent, response) -> None:
@@ -222,17 +280,27 @@ def soul_inquiry(agent, question: str) -> dict | None:
 
 def _load_snapshot_interface(path):
     """Load a snapshot file written by psyche._write_molt_snapshot and
-    return its frozen ChatInterface, or None on any failure.
+    return a tools-stripped ``ChatInterface``, or None on any failure.
 
     Schema check: payload must carry an integer ``schema_version`` and
     a list ``interface`` of entry dicts compatible with
     ``ChatInterface.from_dict``. Any failure (missing file, bad JSON,
     schema mismatch, malformed entries) returns None — the caller skips
     that snapshot and proceeds with whatever else loaded.
+
+    Tool stripping: the consultation session is tools-less, so all
+    ``ToolCallBlock`` and ``ToolResultBlock`` entries are filtered out.
+    Only ``TextBlock`` and ``ThinkingBlock`` survive. Entries that become
+    empty after stripping are skipped entirely. System entries are
+    preserved (they carry the past self's frozen system prompt).
     """
     import json
     from pathlib import Path
-    from ..llm.interface import ChatInterface
+    from ..llm.interface import (
+        ChatInterface,
+        TextBlock,
+        ThinkingBlock,
+    )
 
     try:
         p = Path(path)
@@ -247,7 +315,32 @@ def _load_snapshot_interface(path):
         entries = payload.get("interface")
         if not isinstance(entries, list):
             return None
-        return ChatInterface.from_dict(entries)
+        loaded = ChatInterface.from_dict(entries)
+    except Exception:
+        return None
+
+    # Strip every tool block from the loaded interface. Walk entries,
+    # keep only TextBlock+ThinkingBlock content for non-system entries,
+    # drop entries that empty out. System entries pass through verbatim
+    # (their content is text/thinking already, and they carry the past
+    # self's frozen system prompt that anchors the consultation).
+    #
+    # Round-trip via entry.to_dict() so id/timestamp/etc. are preserved
+    # (ChatInterface.from_dict requires those keys). For non-system entries
+    # we replace the "content" list with the stripped block dicts.
+    stripped_dicts: list[dict] = []
+    for entry in loaded.entries:
+        d = entry.to_dict()
+        if entry.role == "system":
+            stripped_dicts.append(d)
+            continue
+        kept_blocks = [b for b in entry.content if isinstance(b, (TextBlock, ThinkingBlock))]
+        if not kept_blocks:
+            continue
+        d["content"] = [b.to_dict() for b in kept_blocks]
+        stripped_dicts.append(d)
+    try:
+        return ChatInterface.from_dict(stripped_dicts)
     except Exception:
         return None
 
@@ -341,19 +434,49 @@ def _fit_interface_to_window(iface, target_tokens: int):
     return ChatInterface.from_dict(final_dicts)
 
 
+def _kind_for_source(source: str) -> str:
+    """Map a consultation source label to its prompt kind."""
+    if source == "insights":
+        return "insights"
+    return "past"
+
+
+def _build_consultation_cue(agent, kind: str, diary: str) -> str:
+    """Localized cue prompt for a consultation voice.
+
+    insights — current self stepping back to look at its own diary.
+    past     — past self handed the future self's diary as context.
+
+    Both kinds inject the diary at ``{diary}``. If the diary is empty
+    (no diary entries logged yet), the cue still works — the placeholder
+    becomes "(no diary yet)" for legibility.
+    """
+    from ..i18n import t
+    key = (
+        "soul.consultation_cue_insights"
+        if kind == "insights"
+        else "soul.consultation_cue_past"
+    )
+    template = t(agent._config.language, key)
+    body = diary if diary else "(no diary yet)"
+    try:
+        return template.format(diary=body)
+    except Exception:
+        # If the i18n string lacks {diary} for some reason, append the
+        # diary block manually rather than failing the whole consultation.
+        return f"{template}\n\n{body}"
+
+
 def _run_consultation(agent, iface, source: str) -> dict | None:
     """Run one consultation against a seeded ChatInterface.
 
-    Creates a one-shot tools-less session over the given interface,
-    sends a minimal placeholder cue, and returns
-    ``{"voice": str, "thinking": list, "source": source}`` or None on
-    any failure (load issue, timeout, empty response).
+    Creates a one-shot tools-less session over the given interface and
+    sends a kind-specific cue:
+      - insights: stepped-back read of the current self's diary
+      - past:     past self being handed the future self's diary
 
-    The cue prompt is intentionally minimal at this stage — the real cue
-    that surfaces the agent's recent context to past selves is a
-    separate prompt-engineering ticket. For the mechanical scaffold,
-    "What do you notice? Speak freely." is enough to get a substantive
-    response.
+    Returns ``{"source": source, "voice": str, "thinking": list}`` or
+    None on any failure (load issue, timeout, empty response).
 
     Window-fit happens here: tail-trim to 0.8 × the consulting model's
     context window. The consulting model is the same model that runs the
@@ -382,7 +505,8 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
     if not fitted.entries:
         return None
 
-    system_prompt = _build_soul_system_prompt(agent)
+    kind = _kind_for_source(source)
+    system_prompt = _build_soul_system_prompt(agent, kind=kind)
     system_prompt += "\n\nYou have no tools. Respond with plain text only. Never output tool calls or XML tags."
 
     try:
@@ -401,7 +525,8 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
             pass
         return None
 
-    cue = "What do you notice? Speak freely."
+    diary = _render_current_diary(agent)
+    cue = _build_consultation_cue(agent, kind, diary)
     response = _send_with_timeout(agent, session, cue)
     if not response or not response.text:
         return None
@@ -533,17 +658,23 @@ def _run_consultation_batch(agent) -> list[dict]:
     return voices
 
 
-def build_consultation_pair(agent, voices: list[dict]):
+def build_consultation_pair(agent, voices: list[dict], tc_id: str | None = None):
     """Build a synthetic (ToolCallBlock, ToolResultBlock) pair carrying
     the bundled consultation voices. The result content includes an
     appendix_note framing the voices as advisory and ephemeral.
+
+    ``tc_id`` may be supplied by the caller — useful when the fire layer
+    wants the chat-history call_id to match the soul_flow.jsonl fire_id
+    (cross-reference between logs and chat). If omitted, a fresh id is
+    generated.
     """
     import secrets
     import time
     from ..llm.interface import ToolCallBlock, ToolResultBlock
     from ..i18n import t as _t
 
-    tc_id = f"tc_{int(time.time())}_{secrets.token_hex(2)}"
+    if not tc_id:
+        tc_id = f"tc_{int(time.time())}_{secrets.token_hex(2)}"
     call = ToolCallBlock(id=tc_id, name="soul", args={"action": "flow"})
 
     # Strip the thinking block from the wire payload — it inflates tokens

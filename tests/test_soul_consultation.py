@@ -720,3 +720,296 @@ class TestRehydrateAppendixTracking:
 
         agent._rehydrate_appendix_tracking()
         assert agent._appendix_ids_by_source["soul.flow"] == "tc_first"
+
+
+# ---------------------------------------------------------------------------
+# _render_current_diary — concatenate diary entries from events.jsonl
+# ---------------------------------------------------------------------------
+
+
+class TestRenderCurrentDiary:
+
+    def _write_events(self, workdir: Path, records: list[dict]) -> None:
+        log_dir = workdir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        path = log_dir / "events.jsonl"
+        with open(path, "w", encoding="utf-8") as f:
+            for r in records:
+                f.write(json.dumps(r) + "\n")
+
+    def test_returns_empty_when_no_log(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        assert _render_current_diary(agent) == ""
+
+    def test_returns_empty_when_log_has_no_diary(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        self._write_events(tmp_path, [
+            {"type": "boot", "ts": 1},
+            {"type": "tool_call", "name": "psyche"},
+        ])
+        assert _render_current_diary(agent) == ""
+
+    def test_concatenates_diary_entries_in_order(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        self._write_events(tmp_path, [
+            {"type": "diary", "text": "first turn thoughts"},
+            {"type": "boot", "ts": 1},
+            {"type": "diary", "text": "second turn thoughts"},
+            {"type": "diary", "text": "third turn thoughts"},
+        ])
+        out = _render_current_diary(agent)
+        assert "first turn thoughts" in out
+        assert "second turn thoughts" in out
+        assert "third turn thoughts" in out
+        # Order preserved, with paragraph break separator.
+        assert out.index("first") < out.index("second") < out.index("third")
+        assert "\n\n" in out
+
+    def test_skips_blank_and_non_string_text(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        self._write_events(tmp_path, [
+            {"type": "diary", "text": "valid"},
+            {"type": "diary", "text": "   "},   # whitespace only — skip
+            {"type": "diary", "text": None},     # not a string — skip
+            {"type": "diary"},                    # missing text — skip
+            {"type": "diary", "text": "second valid"},
+        ])
+        out = _render_current_diary(agent)
+        assert "valid" in out
+        assert "second valid" in out
+        # Whitespace-only entry should not contribute its blanks
+        assert out.count("\n\n") == 1   # only one separator between two entries
+
+    def test_tolerates_malformed_lines(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "events.jsonl", "w", encoding="utf-8") as f:
+            f.write('{"type": "diary", "text": "good"}\n')
+            f.write("not json at all\n")
+            f.write("\n")
+            f.write('{"type": "diary", "text": "still good"}\n')
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        out = _render_current_diary(agent)
+        assert "good" in out
+        assert "still good" in out
+
+
+# ---------------------------------------------------------------------------
+# _load_snapshot_interface tool stripping — past selves see no tools
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotToolStripping:
+
+    def test_strips_tool_call_and_tool_result_blocks(self, tmp_path):
+        # Build a snapshot with mixed content: text, thinking, tool_call,
+        # tool_result. After load, only text+thinking should survive.
+        iface = ChatInterface()
+        iface.add_system("frozen sys")
+        iface.add_user_message("a question from user")
+        iface.add_assistant_message([
+            ThinkingBlock(text="reasoning"),
+            TextBlock(text="I'll call a tool"),
+            ToolCallBlock(id="tc_1", name="psyche", args={"action": "show"}),
+        ])
+        iface.add_tool_results([
+            ToolResultBlock(id="tc_1", name="psyche", content="result"),
+        ])
+        iface.add_assistant_message([TextBlock(text="final answer")])
+        path = _write_snapshot(tmp_path, molt_count=1, unix_ts=1, entries=iface.to_dict())
+
+        loaded = _load_snapshot_interface(path)
+        assert loaded is not None
+
+        # Walk every block; should be none of ToolCallBlock or ToolResultBlock.
+        all_blocks = []
+        for entry in loaded.entries:
+            all_blocks.extend(entry.content)
+        for block in all_blocks:
+            assert not isinstance(block, ToolCallBlock), \
+                f"ToolCallBlock leaked through strip: {block}"
+            assert not isinstance(block, ToolResultBlock), \
+                f"ToolResultBlock leaked through strip: {block}"
+
+    def test_drops_entries_that_empty_after_strip(self, tmp_path):
+        # User entry that is purely a tool_result has nothing left after
+        # stripping — it must be dropped, not kept as an empty user entry
+        # (which would be a malformed wire shape).
+        iface = ChatInterface()
+        iface.add_system("frozen sys")
+        iface.add_user_message("question")
+        iface.add_assistant_message([
+            TextBlock(text="calling"),
+            ToolCallBlock(id="tc_1", name="psyche", args={}),
+        ])
+        # User entry that's only a tool_result — strip it down to nothing
+        iface.add_tool_results([
+            ToolResultBlock(id="tc_1", name="psyche", content="data"),
+        ])
+        path = _write_snapshot(tmp_path, molt_count=1, unix_ts=1, entries=iface.to_dict())
+
+        loaded = _load_snapshot_interface(path)
+        assert loaded is not None
+
+        # No empty entries should remain.
+        for entry in loaded.entries:
+            assert len(entry.content) > 0, f"empty entry survived: {entry}"
+
+    def test_preserves_system_entry(self, tmp_path):
+        iface = ChatInterface()
+        iface.add_system("THE FROZEN SYSTEM PROMPT")
+        iface.add_user_message("hi")
+        iface.add_assistant_message([TextBlock(text="hello back")])
+        path = _write_snapshot(tmp_path, molt_count=1, unix_ts=1, entries=iface.to_dict())
+
+        loaded = _load_snapshot_interface(path)
+        assert loaded is not None
+        sys_entries = [e for e in loaded.entries if e.role == "system"]
+        assert len(sys_entries) == 1
+        assert sys_entries[0].content[0].text == "THE FROZEN SYSTEM PROMPT"
+
+    def test_keeps_thinking_blocks(self, tmp_path):
+        iface = ChatInterface()
+        iface.add_system("sys")
+        iface.add_user_message("question")
+        iface.add_assistant_message([
+            ThinkingBlock(text="careful reasoning"),
+            TextBlock(text="answer"),
+        ])
+        path = _write_snapshot(tmp_path, molt_count=1, unix_ts=1, entries=iface.to_dict())
+
+        loaded = _load_snapshot_interface(path)
+        assert loaded is not None
+        all_blocks = [b for e in loaded.entries for b in e.content]
+        assert any(isinstance(b, ThinkingBlock) for b in all_blocks)
+
+
+# ---------------------------------------------------------------------------
+# _kind_for_source / _build_consultation_cue / dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestKindDispatch:
+
+    def test_insights_source_maps_to_insights_kind(self):
+        from lingtai_kernel.intrinsics.soul import _kind_for_source
+        assert _kind_for_source("insights") == "insights"
+
+    def test_snapshot_source_maps_to_past_kind(self):
+        from lingtai_kernel.intrinsics.soul import _kind_for_source
+        assert _kind_for_source("snapshot:snapshot_3_1735") == "past"
+
+    def test_other_source_maps_to_past(self):
+        from lingtai_kernel.intrinsics.soul import _kind_for_source
+        # Defaults to past for unknown labels — past is the more general
+        # frame and the safer default.
+        assert _kind_for_source("anything else") == "past"
+
+
+class TestBuildConsultationCue:
+
+    def test_insights_cue_includes_diary(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _build_consultation_cue
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        cue = _build_consultation_cue(agent, "insights", "I built X today.")
+        assert "I built X today." in cue
+        # Insights cue should not frame as "your future self"
+        assert "future self" not in cue.lower()
+
+    def test_past_cue_includes_diary_and_future_self_frame(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _build_consultation_cue
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        cue = _build_consultation_cue(agent, "past", "I built X today.")
+        assert "I built X today." in cue
+        assert "future self" in cue.lower()
+
+    def test_empty_diary_uses_placeholder(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _build_consultation_cue
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        cue = _build_consultation_cue(agent, "past", "")
+        assert "no diary yet" in cue
+
+    def test_zh_cue_renders(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _build_consultation_cue
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        agent._config.language = "zh"
+        cue = _build_consultation_cue(agent, "past", "今日做了 X。")
+        assert "今日做了 X。" in cue
+        assert "未来" in cue   # zh-localized "future self" framing
+
+    def test_wen_cue_renders(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _build_consultation_cue
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        agent._config.language = "wen"
+        cue = _build_consultation_cue(agent, "past", "今日造 X。")
+        assert "今日造 X。" in cue
+
+
+class TestRunConsultationDispatchesByKind:
+    """Confirms _run_consultation picks the right system prompt and cue
+    based on the source label. Mocks the LLM session so we can read what
+    was sent."""
+
+    def _run(self, tmp_path, source: str):
+        from lingtai_kernel.intrinsics.soul import _run_consultation
+
+        agent = _FakeAgent(tmp_path)
+        # Seed a tiny diary
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "events.jsonl", "w") as f:
+            f.write(json.dumps({"type": "diary", "text": "DIARY MARKER"}) + "\n")
+
+        captured = {}
+
+        class _MockResponse:
+            text = "voice text"
+            thoughts = []
+            class _Usage:
+                input_tokens = 0
+                output_tokens = 0
+                thinking_tokens = 0
+                cached_tokens = 0
+            usage = _Usage()
+
+        class _MockSession:
+            def send(self, content):
+                captured["sent_content"] = content
+                return _MockResponse()
+
+        def _create_session(*, system_prompt, **kw):
+            captured["system_prompt"] = system_prompt
+            return _MockSession()
+
+        agent.service.create_session.side_effect = _create_session
+
+        iface = ChatInterface()
+        iface.add_system("frozen sys")
+        iface.add_user_message("frozen user")
+        iface.add_assistant_message([TextBlock(text="frozen reply")])
+
+        result = _run_consultation(agent, iface, source)
+        return captured, result
+
+    def test_past_dispatch_uses_past_prompt_and_cue(self, tmp_path):
+        captured, result = self._run(tmp_path, "snapshot:snapshot_3_1735")
+        assert result is not None
+        assert "DIARY MARKER" in captured["sent_content"]
+        # past system prompt should mention molt/past life
+        assert "past life" in captured["system_prompt"].lower()
+        # cue should call out future self
+        assert "future self" in captured["sent_content"].lower()
+
+    def test_insights_dispatch_uses_insights_prompt(self, tmp_path):
+        captured, result = self._run(tmp_path, "insights")
+        assert result is not None
+        assert "DIARY MARKER" in captured["sent_content"]
+        # insights prompt frames as "soul flow voice"
+        assert "soul flow" in captured["system_prompt"].lower()
+        # insights cue should not frame as future-self letter
+        assert "future self" not in captured["sent_content"].lower()
