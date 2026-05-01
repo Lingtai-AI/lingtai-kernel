@@ -365,3 +365,151 @@ def test_stop_does_not_overwrite_pad_md(tmp_path):
     pad_file.write_text("previous session pad")
     agent.stop()
     assert pad_file.read_text() == "previous session pad"
+
+
+# ---------------------------------------------------------------------------
+# Molt summary persistence (system/summaries/)
+# ---------------------------------------------------------------------------
+
+
+def test_molt_writes_summary_file_for_agent_path(tmp_path):
+    """Agent-initiated molt persists summary to system/summaries/ with source=agent."""
+    from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
+
+    svc = make_mock_service()
+
+    def fake_create_session(**kwargs):
+        mock_chat = MagicMock()
+        iface = ChatInterface()
+        iface.add_system("You are helpful.")
+        mock_chat.interface = iface
+        mock_chat.context_window.return_value = 100_000
+        return mock_chat
+
+    svc.create_session.side_effect = fake_create_session
+
+    agent = Agent(service=svc, agent_name="test", working_dir=tmp_path / "test")
+    agent.start()
+    try:
+        agent._session.ensure_session()
+        agent._session._chat.interface.add_user_message("Hello")
+        agent._session._chat.interface.add_assistant_message([TextBlock(text="Hi.")])
+
+        molt_id = "toolu_test_summary_001"
+        molt_summary = "Worked on dataset Z analysis. Found anomaly in column foo."
+        agent._session._chat.interface.add_assistant_message([
+            ToolCallBlock(
+                id=molt_id,
+                name="psyche",
+                args={"object": "context", "action": "molt", "summary": molt_summary},
+            ),
+        ])
+
+        result = _call(agent, {
+            "object": "context",
+            "action": "molt",
+            "summary": molt_summary,
+            "_tc_id": molt_id,
+        })
+
+        assert result["status"] == "ok"
+        assert result.get("summary_path") is not None
+
+        summary_file = agent._working_dir / result["summary_path"]
+        assert summary_file.is_file()
+        content = summary_file.read_text()
+        # Frontmatter present
+        assert content.startswith("---\n")
+        assert "molt_count: 1" in content
+        assert "source: agent" in content
+        assert "tokens_shed:" in content
+        # Summary body present after frontmatter
+        assert molt_summary in content
+    finally:
+        agent.stop()
+
+
+def test_context_forget_writes_summary_file_for_system_path(tmp_path):
+    """System-initiated molt also persists summary; source field reflects trigger."""
+    from lingtai_kernel.llm.interface import ChatInterface, TextBlock
+    from lingtai_kernel.intrinsics.psyche import context_forget
+
+    svc = make_mock_service()
+
+    def fake_create_session(**kwargs):
+        mock_chat = MagicMock()
+        iface = ChatInterface()
+        iface.add_system("You are helpful.")
+        mock_chat.interface = iface
+        mock_chat.context_window.return_value = 100_000
+        return mock_chat
+
+    svc.create_session.side_effect = fake_create_session
+
+    agent = Agent(service=svc, agent_name="test", working_dir=tmp_path / "test")
+    agent.start()
+    try:
+        agent._session.ensure_session()
+        agent._session._chat.interface.add_user_message("Hello")
+        agent._session._chat.interface.add_assistant_message([TextBlock(text="Hi.")])
+
+        result = context_forget(agent, source="warning_ladder")
+        assert result.get("status") == "ok"
+        assert result.get("summary_path") is not None
+
+        summary_file = agent._working_dir / result["summary_path"]
+        assert summary_file.is_file()
+        content = summary_file.read_text()
+        assert "source: warning_ladder" in content
+        assert "molt_count: 1" in content
+    finally:
+        agent.stop()
+
+
+def test_summary_write_failure_does_not_block_molt(tmp_path, monkeypatch):
+    """If summary write fails, molt still completes; summary_path is None."""
+    from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
+    from lingtai_kernel.intrinsics import psyche as psyche_mod
+
+    monkeypatch.setattr(psyche_mod, "_write_molt_summary", lambda *a, **kw: None)
+
+    svc = make_mock_service()
+
+    def fake_create_session(**kwargs):
+        mock_chat = MagicMock()
+        iface = ChatInterface()
+        iface.add_system("You are helpful.")
+        mock_chat.interface = iface
+        mock_chat.context_window.return_value = 100_000
+        return mock_chat
+
+    svc.create_session.side_effect = fake_create_session
+
+    agent = Agent(service=svc, agent_name="test", working_dir=tmp_path / "test")
+    agent.start()
+    try:
+        agent._session.ensure_session()
+        agent._session._chat.interface.add_user_message("Hello")
+        agent._session._chat.interface.add_assistant_message([TextBlock(text="Hi.")])
+
+        molt_id = "toolu_test_failguard_001"
+        agent._session._chat.interface.add_assistant_message([
+            ToolCallBlock(
+                id=molt_id, name="psyche",
+                args={"object": "context", "action": "molt", "summary": "test"},
+            ),
+        ])
+
+        result = _call(agent, {
+            "object": "context",
+            "action": "molt",
+            "summary": "test",
+            "_tc_id": molt_id,
+        })
+
+        # Molt succeeded
+        assert result["status"] == "ok"
+        # But summary_path is None (write was forced to fail)
+        assert result.get("summary_path") is None
+    finally:
+        agent.stop()

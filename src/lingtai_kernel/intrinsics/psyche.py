@@ -40,6 +40,66 @@ from ..llm.interface import ToolCallBlock, ToolResultBlock
 SNAPSHOT_SCHEMA_VERSION = 1
 
 
+def _write_molt_summary(
+    agent,
+    *,
+    summary: str,
+    source: str,
+    molt_count: int,
+    before_tokens: int,
+    after_tokens: int,
+) -> Path | None:
+    """Persist the molt summary to system/summaries/ as a durable retrospective.
+
+    Best-effort — a failed write must not block the molt. Returns the path
+    on success, or None if the write failed.
+
+    Filename: molt_<molt_count>_<unix_ts>.md — molt_count first so directory
+    listings sort chronologically without parsing.
+
+    Format: a small YAML-ish frontmatter block followed by the summary prose.
+    Frontmatter is human-readable (so `cat` is useful) and machine-parseable
+    (any future digest-injection layer can split on the leading `---`).
+
+    Complementary to `history/snapshots/snapshot_<count>_<ts>.json`:
+    - snapshot = frozen substrate (full ChatInterface for past-self consultation)
+    - summary  = curated retrospective (agent-authored prose)
+    Both share molt_count so they can be paired by index.
+    """
+    try:
+        summaries_dir = agent._working_dir / "system" / "summaries"
+        summaries_dir.mkdir(parents=True, exist_ok=True)
+
+        unix_ts = int(time.time())
+        path = summaries_dir / f"molt_{molt_count}_{unix_ts}.md"
+
+        created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        agent_name = getattr(agent, "agent_name", None) or ""
+
+        frontmatter = (
+            "---\n"
+            f"molt_count: {molt_count}\n"
+            f"created_at: {created_at}\n"
+            f"source: {source}\n"
+            f"agent_name: {agent_name}\n"
+            f"before_tokens: {before_tokens}\n"
+            f"after_tokens: {after_tokens}\n"
+            f"tokens_shed: {max(0, before_tokens - after_tokens)}\n"
+            "---\n\n"
+        )
+
+        tmp = path.with_suffix(".md.tmp")
+        tmp.write_text(frontmatter + summary, encoding="utf-8")
+        tmp.replace(path)
+        return path
+    except Exception as e:
+        try:
+            agent._log("summary_write_failed", error=str(e))
+        except Exception:
+            pass
+        return None
+
+
 def _write_molt_snapshot(
     agent,
     iface_pre,
@@ -654,6 +714,17 @@ def _context_molt(agent, args: dict) -> dict:
         kept_tool_calls=len(keep_pairs),
     )
 
+    # Persist the agent's retrospective to system/summaries/. Best-effort —
+    # a failed write surfaces as summary_path=None but does not block the molt.
+    summary_path = _write_molt_summary(
+        agent,
+        summary=summary,
+        source="agent",
+        molt_count=agent._molt_count,
+        before_tokens=before_tokens,
+        after_tokens=after_tokens,
+    )
+
     # The faint-memory result.
     from ..i18n import t
     lang = agent._config.language
@@ -667,6 +738,8 @@ def _context_molt(agent, args: dict) -> dict:
         "kept_tool_calls": len(keep_pairs),
         "archive_path": str(archive_path.relative_to(agent._working_dir))
             if archive_path.exists() else None,
+        "summary_path": str(summary_path.relative_to(agent._working_dir))
+            if summary_path is not None else None,
     }
 
 
@@ -795,6 +868,18 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
 
     after_tokens = iface.estimate_context_tokens()
 
+    # Persist the system-authored summary to system/summaries/. Best-effort —
+    # source field captures origin (warning_ladder / aed / signal name) so
+    # readers can filter out non-agent-authored entries.
+    summary_path = _write_molt_summary(
+        agent,
+        summary=summary,
+        source=source,
+        molt_count=agent._molt_count,
+        before_tokens=before_tokens,
+        after_tokens=after_tokens,
+    )
+
     result_dict = {
         "status": "ok",
         "note": t(lang, "psyche.molt_result_note"),
@@ -805,6 +890,8 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
         "kept_tool_calls": 0,
         "archive_path": str(archive_path.relative_to(agent._working_dir))
             if archive_path.exists() else None,
+        "summary_path": str(summary_path.relative_to(agent._working_dir))
+            if summary_path is not None else None,
         "_initiator": "system",
         "_source": source,
     }
