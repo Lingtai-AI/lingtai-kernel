@@ -58,8 +58,8 @@ def test_mail_send_passes_attachments(tmp_path):
     attachment = tmp_path / "file.png"
     attachment.write_bytes(b"PNG_DATA")
 
-    # Call the mail handler directly
-    result = agent._intrinsics["mail"]({
+    # Call the email handler directly (mail intrinsic was renamed in 0.7.5)
+    result = agent._intrinsics["email"]({
         "action": "send",
         "address": str(tmp_path / "other"),
         "message": "here is a file",

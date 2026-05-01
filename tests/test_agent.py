@@ -52,13 +52,13 @@ def test_base_agent_file_io_defaults_to_none(tmp_path):
 
 def test_intrinsics_enabled_by_default(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    assert "mail" in agent._intrinsics
+    assert "email" in agent._intrinsics
     assert "system" in agent._intrinsics
     assert "psyche" in agent._intrinsics
     # File I/O is now a capability, not intrinsic
     assert "read" not in agent._intrinsics
     assert "write" not in agent._intrinsics
-    assert len(agent._intrinsics) == 4  # mail, system, psyche, soul
+    assert len(agent._intrinsics) == 4  # email, system, psyche, soul
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +192,8 @@ def test_mail_inbox_wiring(tmp_path):
     assert not agent.inbox.empty()
     msg = agent.inbox.get_nowait()
     assert msg.sender == "system"
-    assert "mail box" in msg.content
-    assert 'mail(action=' in msg.content
+    assert "email box" in msg.content
+    assert 'email(action=' in msg.content
 
 
 def test_mail_start_wires_listener(tmp_path):
@@ -241,15 +241,16 @@ def test_mail_read_by_id(tmp_path):
         "message": "first",
         "received_at": "2026-03-18T10:00:00Z",
     }))
-    result = agent._intrinsics["mail"]({"action": "read", "id": [msg_id]})
-    assert len(result["messages"]) == 1
-    assert result["messages"][0]["message"] == "first"
+    # Use email intrinsic (was mail) — schema renamed `id` to `email_id`.
+    result = agent._intrinsics["email"]({"action": "read", "email_id": [msg_id]})
+    assert len(result["emails"]) == 1
+    assert result["emails"][0]["message"] == "first"
 
 
 def test_mail_read_no_ids_returns_error(tmp_path):
-    """mail read without id should return an error."""
+    """email read without email_id should return an error."""
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    result = agent._intrinsics["mail"]({"action": "read"})
+    result = agent._intrinsics["email"]({"action": "read"})
     assert "error" in result
 
 

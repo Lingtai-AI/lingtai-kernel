@@ -18,7 +18,6 @@ _BUILTIN: dict[str, str] = {
     "bash": "lingtai.core.bash",
     "avatar": "lingtai.core.avatar",
     "daemon": "lingtai.core.daemon",
-    "email": "lingtai.core.email",
     "library": "lingtai.core.library",
     "mcp": "lingtai.core.mcp",
     "read": "lingtai.core.read",
@@ -81,7 +80,6 @@ def get_all_providers() -> dict[str, dict]:
     """
     _USER_FACING: dict[str, str] = {
         "file": "lingtai.core.read",
-        "email": "lingtai.core.email",
         "bash": "lingtai.core.bash",
         "web_search": ".web_search",
         "codex": "lingtai.core.codex",

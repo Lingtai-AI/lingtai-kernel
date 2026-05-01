@@ -247,10 +247,12 @@ class BaseAgent:
         self._nap_wake_reason = ""  # why the nap was woken
 
         # Mailbox identity — capabilities override these to change notification text.
-        # _mailbox_name: human label ("mail box", "email box", "gmail box")
-        # _mailbox_tool: tool name for check/read instructions ("mail", "email", "gmail")
-        self._mailbox_name = "mail box"
-        self._mailbox_tool = "mail"
+        # _mailbox_name: human label ("email box", "gmail box")
+        # _mailbox_tool: tool name for check/read instructions ("email", "gmail")
+        # email.boot() overrides these to "email box"/"email" during construction;
+        # MCP-provided mailbox listeners (gmail, telegram, etc) override further.
+        self._mailbox_name = "email box"
+        self._mailbox_tool = "email"
 
         # Non-intrinsic tool handlers (capabilities, MCP, add_tool)
         self._tool_handlers: dict[str, Callable[[dict], dict]] = {}
@@ -316,6 +318,11 @@ class BaseAgent:
         # load triggers _flush_system_prompt which reads _session.
         from .intrinsics import psyche as _psyche
         _psyche.boot(self)
+
+        # Boot the email intrinsic — instantiate EmailManager, set mailbox
+        # fields, start the scheduler thread.
+        from .intrinsics import email as _email
+        _email.boot(self)
 
     # ------------------------------------------------------------------
     # Intrinsic wiring
@@ -542,7 +549,7 @@ class BaseAgent:
         Capabilities configure ``_mailbox_name`` and ``_mailbox_tool``
         to change the notification text (e.g. "email box" / "email").
         """
-        from .intrinsics.mail import _new_mailbox_id
+        from .intrinsics.email import _new_mailbox_id
 
         email_id = payload.get("_mailbox_id") or _new_mailbox_id()
         address = payload.get("from", "unknown")
@@ -1573,8 +1580,11 @@ class BaseAgent:
         return data
 
     def mail(self, address: str, message: str, subject: str = "") -> dict:
-        """Send a message to another agent (public API). Requires MailService."""
-        return self._intrinsics["mail"]({"action": "send", "address": address, "message": message, "subject": subject})
+        """Send a message to another agent (public API). Requires MailService.
+
+        Routes through the email intrinsic (renamed from mail in 0.7.5).
+        """
+        return self._intrinsics["email"]({"action": "send", "address": address, "message": message, "subject": subject})
 
     def has_capability(self, name: str) -> bool:
         """Check if a capability is registered. Subclasses override."""

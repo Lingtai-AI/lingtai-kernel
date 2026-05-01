@@ -15,7 +15,8 @@ from lingtai_kernel.message import Message, MSG_REQUEST, MSG_USER_INPUT
 from .capabilities import setup_capability
 from .core.bash import BashManager
 from .core.avatar import AvatarManager
-from .core.email import EmailManager
+# EmailManager is now exported by the kernel intrinsic; re-export for backwards compat.
+from lingtai_kernel.intrinsics.email import EmailManager
 
 # Services
 from .services.file_io import FileIOService, LocalFileIOService, GrepMatch

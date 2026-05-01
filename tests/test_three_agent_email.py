@@ -48,12 +48,11 @@ def _make_agent(name: str, base_dir: Path):
         service=_make_mock_service(),
         agent_name=name,
         working_dir=base_dir / name,
-        capabilities=["email"],
     )
     # Wire up mail service after construction (needs working_dir from agent)
     mail_svc = FilesystemMailService(working_dir=agent.working_dir)
     agent._mail_service = mail_svc
-    mgr = agent.get_capability("email")
+    mgr = agent._email_manager
     return agent, mgr
 
 

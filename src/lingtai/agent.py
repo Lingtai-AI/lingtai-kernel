@@ -70,11 +70,6 @@ class Agent(BaseAgent):
                     expanded_dict[name] = cap_kwargs
             capabilities = expanded_dict
 
-        # Backwards-compat: psyche moved from capability to intrinsic.
-        # Silently drop "psyche" entries in legacy init.json files; the kernel
-        # always provides it as an intrinsic.
-        if capabilities and "psyche" in capabilities:
-            capabilities = {n: kw for n, kw in capabilities.items() if n != "psyche"}
 
         # Track for avatar replay
         self._capabilities: list[tuple[str, dict]] = []
@@ -766,9 +761,9 @@ class Agent(BaseAgent):
         self._intrinsics.clear()
         self._wire_intrinsics()
 
-        # Reset capability-owned flags
-        self._mailbox_name = "mail box"
-        self._mailbox_tool = "mail"
+        # Reset capability-owned flags (email.boot below resets to "email box"/"email")
+        self._mailbox_name = "email box"
+        self._mailbox_tool = "email"
         if hasattr(self, "_post_molt_hooks"):
             self._post_molt_hooks.clear()
 
@@ -837,6 +832,12 @@ class Agent(BaseAgent):
         from lingtai_kernel.intrinsics import psyche as _psyche
         _psyche.boot(self)
 
+        # Re-boot email so a fresh EmailManager + scheduler thread are wired.
+        # The previous manager's scheduler thread is daemon and was abandoned
+        # by the _intrinsics.clear() above; this starts a clean one.
+        from lingtai_kernel.intrinsics import email as _email
+        _email.boot(self)
+
         # Decompress addons BEFORE capability setup so the `mcp` capability
         # sees the populated registry on its first reconcile.
         addons = data.get("addons") or []
@@ -860,9 +861,6 @@ class Agent(BaseAgent):
                 else:
                     expanded[name] = cap_kwargs
             capabilities = expanded
-            # Backwards-compat: psyche is now an intrinsic, drop legacy entries.
-            if "psyche" in capabilities:
-                capabilities = {n: kw for n, kw in capabilities.items() if n != "psyche"}
             for name, cap_kwargs in capabilities.items():
                 try:
                     self._setup_capability(name, **cap_kwargs)
