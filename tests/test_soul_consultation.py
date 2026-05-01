@@ -593,6 +593,230 @@ class TestRunConsultationFire:
         assert "consultation_fire_error" in events
 
 
+# ---------------------------------------------------------------------------
+# soul_flow.jsonl schema (schema_version=2) — fire + voice records
+# ---------------------------------------------------------------------------
+
+
+class TestSoulFlowPersistenceSchema:
+    """End-to-end: drive _run_consultation_fire with a mocked batch, inspect
+    the on-disk records in logs/soul_flow.jsonl."""
+
+    def _make_real_agent(self, tmp_path):
+        from lingtai_kernel import BaseAgent
+        svc = MagicMock(); svc.model = "test-model"
+        agent = BaseAgent(
+            service=svc,
+            agent_name="t",
+            working_dir=tmp_path / "agent",
+        )
+        return agent
+
+    def _read_records(self, agent) -> list[dict]:
+        path = agent._working_dir / "logs" / "soul_flow.jsonl"
+        if not path.is_file():
+            return []
+        out = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                out.append(json.loads(line))
+        return out
+
+    def _seed_diary(self, agent, *texts: str) -> None:
+        log_dir = agent._working_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "events.jsonl", "w", encoding="utf-8") as f:
+            for t in texts:
+                f.write(json.dumps({"type": "diary", "text": t}) + "\n")
+
+    def test_writes_fire_and_voice_records_with_linked_fire_id(self, tmp_path):
+        agent = self._make_real_agent(tmp_path)
+        self._seed_diary(agent, "did X", "noticed Y")
+
+        voices = [
+            {"source": "insights", "voice": "step back: Z",
+             "thinking": [{"text": "considering"}]},
+            {"source": "snapshot:snapshot_3_1735", "voice": "I tried that once",
+             "thinking": []},
+        ]
+        with patch(
+            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            return_value=voices,
+        ):
+            agent._run_consultation_fire()
+
+        records = self._read_records(agent)
+        assert len(records) == 3, f"expected 1 fire + 2 voices, got {len(records)}"
+
+        fires = [r for r in records if r["kind"] == "fire"]
+        voice_recs = [r for r in records if r["kind"] == "voice"]
+        assert len(fires) == 1
+        assert len(voice_recs) == 2
+
+        fire = fires[0]
+        assert fire["schema_version"] == 2
+        assert fire["fire_id"].startswith("fire_")
+        assert fire["tc_id"] == fire["fire_id"]
+        assert fire["outcome"] == "ok"
+        assert "did X" in fire["diary"] and "noticed Y" in fire["diary"]
+        assert set(fire["sources"]) == {"insights", "snapshot:snapshot_3_1735"}
+        assert "ts" in fire and fire["ts"].endswith("Z")
+
+        # All voice records link back to the same fire_id.
+        for v in voice_recs:
+            assert v["fire_id"] == fire["fire_id"]
+            assert v["schema_version"] == 2
+            assert "ts" in v and v["ts"].endswith("Z")
+            assert v["consultation_kind"] in ("insights", "past")
+
+        # consultation_kind matches source type.
+        by_src = {v["source"]: v for v in voice_recs}
+        assert by_src["insights"]["consultation_kind"] == "insights"
+        assert by_src["insights"]["voice"] == "step back: Z"
+        assert by_src["insights"]["thinking"] == [{"text": "considering"}]
+        assert by_src["snapshot:snapshot_3_1735"]["consultation_kind"] == "past"
+        assert by_src["snapshot:snapshot_3_1735"]["thinking"] == []
+
+    def test_empty_fire_still_writes_fire_record_with_empty_outcome(self, tmp_path):
+        agent = self._make_real_agent(tmp_path)
+        self._seed_diary(agent, "stuck thinking")
+
+        with patch(
+            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            return_value=[],
+        ):
+            agent._run_consultation_fire()
+
+        records = self._read_records(agent)
+        assert len(records) == 1
+        fire = records[0]
+        assert fire["kind"] == "fire"
+        assert fire["outcome"] == "empty"
+        assert fire["sources"] == []
+        # Diary still captured even when no voices came back.
+        assert "stuck thinking" in fire["diary"]
+        # No tc_inbox enqueue happens on empty fires.
+        assert len(agent._tc_inbox) == 0
+
+    def test_synthetic_pair_call_id_matches_fire_id(self, tmp_path):
+        """The chat-side call_id and the soul_flow.jsonl fire_id are the
+        same string — that's what makes cross-referencing trivial."""
+        agent = self._make_real_agent(tmp_path)
+        self._seed_diary(agent, "diary text")
+
+        with patch(
+            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            return_value=[{"source": "insights", "voice": "v", "thinking": []}],
+        ):
+            agent._run_consultation_fire()
+
+        records = self._read_records(agent)
+        fire = next(r for r in records if r["kind"] == "fire")
+
+        # The pair landed on tc_inbox; pull it out and check its call.id
+        assert len(agent._tc_inbox) == 1
+        items = agent._tc_inbox.drain()
+        assert items[0].call.id == fire["fire_id"]
+        assert items[0].result.id == fire["fire_id"]
+
+    def test_fire_record_written_even_on_exception(self, tmp_path):
+        agent = self._make_real_agent(tmp_path)
+        self._seed_diary(agent, "before crash")
+
+        with patch(
+            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            side_effect=RuntimeError("boom from batch"),
+        ):
+            agent._run_consultation_fire()  # must not raise
+
+        records = self._read_records(agent)
+        assert len(records) == 1
+        fire = records[0]
+        assert fire["kind"] == "fire"
+        assert fire["outcome"] == "error"
+        assert "boom from batch" in fire["error"]
+        # No voices on a hard-crash fire.
+        assert "fire_id" in fire
+
+    def test_diary_empty_still_recorded(self, tmp_path):
+        agent = self._make_real_agent(tmp_path)
+        # No events.jsonl — diary will be empty string.
+
+        with patch(
+            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            return_value=[{"source": "insights", "voice": "v", "thinking": []}],
+        ):
+            agent._run_consultation_fire()
+
+        records = self._read_records(agent)
+        fire = next(r for r in records if r["kind"] == "fire")
+        assert fire["diary"] == ""
+        # Voice record still produced.
+        voices = [r for r in records if r["kind"] == "voice"]
+        assert len(voices) == 1
+
+    def test_appends_across_multiple_fires(self, tmp_path):
+        agent = self._make_real_agent(tmp_path)
+        self._seed_diary(agent, "d1")
+
+        with patch(
+            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            return_value=[{"source": "insights", "voice": "v1", "thinking": []}],
+        ):
+            agent._run_consultation_fire()
+            # Drain so the second fire doesn't coalesce in tc_inbox terms
+            # (it would still write its own log records regardless).
+            agent._tc_inbox.drain()
+        with patch(
+            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            return_value=[{"source": "snapshot:s1", "voice": "v2", "thinking": []}],
+        ):
+            agent._run_consultation_fire()
+
+        records = self._read_records(agent)
+        # 2 fires + 2 voices.
+        assert len(records) == 4
+        fires = [r for r in records if r["kind"] == "fire"]
+        assert len(fires) == 2
+        # Each fire gets a distinct id.
+        assert fires[0]["fire_id"] != fires[1]["fire_id"]
+
+
+class TestPersistSoulEntryUnchanged:
+    """Inquiry path still uses the legacy schema — make sure we didn't break it."""
+
+    def _make_real_agent(self, tmp_path):
+        from lingtai_kernel import BaseAgent
+        svc = MagicMock(); svc.model = "test-model"
+        agent = BaseAgent(
+            service=svc,
+            agent_name="t",
+            working_dir=tmp_path / "agent",
+        )
+        return agent
+
+    def test_inquiry_persistence_writes_legacy_shape(self, tmp_path):
+        agent = self._make_real_agent(tmp_path)
+        agent._persist_soul_entry(
+            {"prompt": "what should I do?", "voice": "rest", "thinking": []},
+            mode="inquiry",
+            source="agent",
+        )
+        path = agent._working_dir / "logs" / "soul_inquiry.jsonl"
+        assert path.is_file()
+        rec = json.loads(path.read_text().strip())
+        assert rec["mode"] == "inquiry"
+        assert rec["source"] == "agent"
+        assert rec["prompt"] == "what should I do?"
+        assert rec["voice"] == "rest"
+        assert rec["thinking"] == []
+        assert "ts" in rec
+        # Legacy shape: no kind/schema_version/fire_id fields.
+        assert "kind" not in rec
+        assert "schema_version" not in rec
+
+
 class TestRehydrateAppendixTracking:
 
     def _make_real_agent(self, tmp_path):

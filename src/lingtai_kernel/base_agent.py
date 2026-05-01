@@ -740,8 +740,10 @@ class BaseAgent:
     def _persist_soul_entry(self, result: dict, mode: str = "flow", source: str = "agent") -> None:
         """Append a soul entry to the appropriate log file.
 
-        Flow entries go to logs/soul_flow.jsonl.
-        Inquiry entries go to logs/soul_inquiry.jsonl.
+        NOTE: This is the inquiry-path persistence helper. Flow entries
+        use the new schema written by ``_append_soul_flow_record`` instead.
+        ``mode`` defaults to ``"flow"`` for backward compatibility but
+        production callers should pass ``mode="inquiry"`` explicitly.
         """
         from datetime import datetime, timezone
         filename = f"soul_{mode}.jsonl"
@@ -757,6 +759,24 @@ class BaseAgent:
         }, ensure_ascii=False)
         with open(soul_file, "a") as f:
             f.write(entry + "\n")
+
+    def _append_soul_flow_record(self, record: dict) -> None:
+        """Append one record to logs/soul_flow.jsonl.
+
+        Records carry a ``kind`` field — currently ``"fire"`` (one per
+        consultation attempt, with the diary cue and source list) or
+        ``"voice"`` (one per surviving voice, with the voice text and
+        thinking blocks). Both link via ``fire_id`` so a single fire's
+        full trace can be reconstructed by grepping that id.
+
+        Schema is owned by the kernel; consumers (TUI panels, future
+        analytics) should branch on ``kind`` and ``schema_version``.
+        Best-effort — IO errors are swallowed by the caller.
+        """
+        soul_file = self._working_dir / "logs" / "soul_flow.jsonl"
+        soul_file.parent.mkdir(exist_ok=True)
+        with open(soul_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def _run_inquiry(self, question: str, source: str = "agent") -> None:
         """Run soul.inquiry and log result as insight event."""
@@ -793,23 +813,96 @@ class BaseAgent:
         thread.start()
 
     def _run_consultation_fire(self) -> None:
-        """Run one consultation batch. On success, enqueue a single
-        synthetic pair on tc_inbox with replace_in_history=True so the
-        drain side enforces the single-slot invariant in chat history.
+        """Run one consultation batch and persist the result.
 
-        Best-effort: errors are logged and swallowed; consultation does
-        not block the agent loop."""
+        Side effects:
+          - logs/events.jsonl: ``consultation_fire`` / ``consultation_fire_empty``
+            / ``consultation_fire_error`` summary events keyed by ``fire_id``.
+          - logs/soul_flow.jsonl (schema_version=2): one ``fire`` record
+            per attempt — even on empty/error — carrying the diary cue,
+            source list, and outcome. Plus one ``voice`` record per
+            surviving voice with the voice text and thinking blocks. All
+            linked by ``fire_id``.
+          - logs/token_ledger.jsonl: per-LLM-call entries tagged
+            ``source: "soul"`` (written by ``_write_soul_tokens`` inside
+            ``_run_consultation``).
+          - logs/chat_history.jsonl: rewritten when the drain splices the
+            synthetic pair into the wire chat (handled in ``_drain_tc_inbox``).
+          - tc_inbox: one item enqueued (only if voices_received > 0),
+            coalesced by ``source="soul.flow"``. The synthetic pair's
+            call_id matches the ``fire_id`` so consumers can cross-ref
+            soul_flow.jsonl and chat_history.jsonl on the same id.
+
+        Best-effort: any failure (LLM, persist, splice) is logged to
+        events.jsonl and swallowed; consultation does not block the agent
+        loop. The cadence keeps firing on its own perpetual schedule.
+        """
+        from datetime import datetime, timezone
+        import secrets
+
+        fire_id = f"fire_{int(time.time())}_{secrets.token_hex(2)}"
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
         try:
             from .intrinsics.soul import (
+                _kind_for_source,
+                _render_current_diary,
                 _run_consultation_batch,
                 build_consultation_pair,
             )
             from .tc_inbox import InvoluntaryToolCall
+
+            diary = _render_current_diary(self)
             voices = _run_consultation_batch(self)
+
+            sources = [v.get("source", "unknown") for v in voices]
+            outcome = "ok" if voices else "empty"
+
+            # Fire record — written before voice records so a partial
+            # crash still leaves a "we tried" trace on disk.
+            try:
+                self._append_soul_flow_record({
+                    "kind": "fire",
+                    "schema_version": 2,
+                    "ts": ts,
+                    "fire_id": fire_id,
+                    "tc_id": fire_id,                 # synthetic pair reuses fire_id
+                    "diary": diary,
+                    "sources": sources,
+                    "outcome": outcome,
+                })
+            except Exception as e:
+                self._log("soul_flow_persist_error", phase="fire",
+                          fire_id=fire_id, error=str(e)[:200])
+
+            # Per-voice records.
+            for v in voices:
+                try:
+                    src = v.get("source", "unknown")
+                    self._append_soul_flow_record({
+                        "kind": "voice",
+                        "schema_version": 2,
+                        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "fire_id": fire_id,
+                        "source": src,
+                        "consultation_kind": _kind_for_source(src),
+                        "voice": v.get("voice", ""),
+                        "thinking": v.get("thinking", []),
+                    })
+                except Exception as e:
+                    self._log(
+                        "soul_flow_persist_error",
+                        phase="voice",
+                        fire_id=fire_id,
+                        source=v.get("source", "unknown"),
+                        error=str(e)[:200],
+                    )
+
             if not voices:
-                self._log("consultation_fire_empty")
+                self._log("consultation_fire_empty", fire_id=fire_id)
                 return
-            call, result = build_consultation_pair(self, voices)
+
+            call, result = build_consultation_pair(self, voices, tc_id=fire_id)
             self._tc_inbox.enqueue(InvoluntaryToolCall(
                 call=call,
                 result=result,
@@ -820,11 +913,29 @@ class BaseAgent:
             ))
             self._log(
                 "consultation_fire",
+                fire_id=fire_id,
                 count=len(voices),
-                sources=[v["source"] for v in voices],
+                sources=sources,
             )
         except Exception as e:
-            self._log("consultation_fire_error", error=str(e)[:200])
+            self._log("consultation_fire_error",
+                      fire_id=fire_id, error=str(e)[:200])
+            # Try to leave a fire record marking the error so the log
+            # doesn't go silent on hard failures.
+            try:
+                self._append_soul_flow_record({
+                    "kind": "fire",
+                    "schema_version": 2,
+                    "ts": ts,
+                    "fire_id": fire_id,
+                    "tc_id": fire_id,
+                    "diary": "",
+                    "sources": [],
+                    "outcome": "error",
+                    "error": str(e)[:500],
+                })
+            except Exception:
+                pass
 
     def _rehydrate_appendix_tracking(self) -> None:
         """Scan rehydrated chat history for an existing soul.flow synthetic
