@@ -40,6 +40,7 @@ from .prompt import build_system_prompt, build_system_prompt_batches
 from .meta_block import build_meta, render_meta
 from .time_veil import now_iso, scrub_time_fields
 from .session import SessionManager
+from .tc_inbox import TCInbox
 from .tool_executor import ToolExecutor
 from .token_ledger import append_token_entry, sum_token_ledger
 from .types import UnknownToolError
@@ -263,8 +264,12 @@ class BaseAgent:
         self._intrinsics: dict[str, Callable[[dict], dict]] = {}
         self._wire_intrinsics()
 
-        # Inbox
+        # Inbox — text-channel notifications (mail, daemon, user input)
         self.inbox: queue.Queue[Message] = queue.Queue()
+
+        # Involuntary tool-call inbox — synthetic (call, result) pairs spliced
+        # into the wire chat at safe boundaries. Soul flow is the first user.
+        self._tc_inbox: TCInbox = TCInbox()
 
         # Lifecycle
         self._shutdown = threading.Event()
@@ -479,6 +484,8 @@ class BaseAgent:
         )
         self._thread.start()
         self._start_heartbeat()
+        # Soul cadence runs perpetually from boot — independent of state.
+        self._start_soul_timer()
 
     def _reset_uptime(self) -> None:
         """Reset the uptime anchor for stamina tracking (used on wake from asleep)."""
@@ -592,25 +599,34 @@ class BaseAgent:
         self.inbox.put(msg)
 
     def _set_state(self, new_state: AgentState, reason: str = "") -> None:
-        """Transition to a new state."""
+        """Transition to a new state.
+
+        State no longer drives the soul cadence timer — the timer runs
+        perpetually on a wall clock (started at boot, cancelled at
+        shutdown / sleep). Only the idle event flag is updated here.
+        """
         old = self._state
         if old == new_state:
             return
         self._state = new_state
         if new_state == AgentState.ACTIVE:
             self._idle.clear()
-            self._cancel_soul_timer()
         else:
             self._idle.set()
-            if new_state == AgentState.IDLE:
-                self._start_soul_timer()
         self._log("agent_state", old=old.value, new=new_state.value, reason=reason)
         self._workdir.write_manifest(self._build_manifest())
 
     def _start_soul_timer(self) -> None:
-        """Start the soul delay timer for flow or pending inquiry."""
-        if not self._soul_oneshot and self._soul_delay > self._config.stamina:
-            return  # delay exceeds stamina — effectively disabled
+        """Start the soul cadence timer.
+
+        Runs perpetually — fires every ``_soul_delay`` seconds regardless of
+        agent state, reschedules itself in the timer callback. Stops only on
+        shutdown or when explicitly cancelled (e.g. when entering ASLEEP).
+
+        The cadence model means soul flow surfaces on a wall clock, not when
+        the agent goes idle. Busy agents still get reflection; rest is no
+        longer a precondition for the inner voice.
+        """
         if self._shutdown.is_set():
             return
         self._cancel_soul_timer()
@@ -631,21 +647,60 @@ class BaseAgent:
         self._nap_wake.set()
 
     def _soul_whisper(self) -> None:
-        """Called by soul timer — flow mode only. Inquiry is sync via tool handler."""
+        """Cadence timer callback. Runs the soul LLM call in this background
+        thread, enqueues the resulting (call, result) pair on the involuntary
+        tool-call inbox, and reschedules itself.
+
+        The LLM call runs here so the main thread isn't blocked. The pair is
+        spliced into the wire chat by ``_drain_tc_inbox`` at the next safe
+        boundary — possibly after multiple cadence fires, in which case the
+        coalesce flag means only the latest voice survives.
+        """
         self._soul_timer = None
         try:
-            from .intrinsics.soul import soul_flow, _save_soul_session
+            from .intrinsics.soul import soul_flow, _save_soul_session, enqueue_flow_voice
             result = soul_flow(self)
-            if result:
+            if result and result.get("voice"):
                 voice = result["voice"]
                 self._log("soul_whisper", length=len(voice))
                 self._persist_soul_entry(result)
                 _save_soul_session(self)
-                prefix = _t(self._config.language, "soul.flow_prefix")
-                msg = _make_message(MSG_REQUEST, "soul", f"{prefix} {voice}")
-                self.inbox.put(msg)
+                enqueue_flow_voice(self, voice, result.get("thinking", []))
         except Exception as e:
             self._log("soul_whisper_error", error=str(e))
+        finally:
+            # Perpetual cadence — reschedule unless shutting down
+            self._start_soul_timer()
+
+    def _drain_tc_inbox(self) -> None:
+        """Splice queued involuntary tool-call pairs into the wire chat.
+
+        Called at safe boundaries — top of ``_handle_request``, before the
+        next ``send()`` composes its payload. The wire chat is in a clean
+        state at that point: previous turn fully landed, next turn not yet
+        constructed.
+
+        Skips silently if the chat isn't ready (None during early boot, or
+        has unanswered tool_calls). Items remain queued for the next safe
+        boundary; the cadence keeps firing regardless.
+        """
+        if self._chat is None:
+            return
+        iface = self._chat.interface
+        if iface.has_pending_tool_calls():
+            return
+        items = self._tc_inbox.drain()
+        if not items:
+            return
+        for item in items:
+            iface.add_assistant_message(content=[item.call])
+            iface.add_tool_results([item.result])
+        self._save_chat_history()
+        self._log(
+            "tc_inbox_drain",
+            count=len(items),
+            sources=[i.source for i in items],
+        )
 
     def _persist_soul_entry(self, result: dict, mode: str = "flow", source: str = "agent") -> None:
         """Append a soul entry to the appropriate log file.
@@ -1190,6 +1245,11 @@ class BaseAgent:
 
     def _handle_request(self, msg: Message) -> None:
         """Send request to LLM, process response with tool calls."""
+        # Splice any queued involuntary tool-call pairs (soul flow, etc.)
+        # into the wire chat before composing this turn's payload. Safe
+        # boundary — the previous turn has fully landed.
+        self._drain_tc_inbox()
+
         max_calls, dup_free, dup_hard = self._get_guard_limits()
         guard = LoopGuard(
             max_total_calls=max_calls,

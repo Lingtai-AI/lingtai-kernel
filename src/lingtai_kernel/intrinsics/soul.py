@@ -26,7 +26,7 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["inquiry", "delay"],
+                "enum": ["inquiry", "flow", "delay"],
                 "description": t(lang, "soul.action_description"),
             },
             "inquiry": {
@@ -46,8 +46,23 @@ _MIN_DELAY = 1.0
 
 
 def handle(agent, args: dict) -> dict:
-    """Handle soul tool — inquiry/delay."""
+    """Handle soul tool — inquiry/flow/delay.
+
+    flow is mechanically triggered — fires every ``_soul_delay`` seconds on
+    a wall clock. Manual invocation is rejected so the action stays honest
+    about its involuntary nature; agents control cadence via delay, on-demand
+    reflection via inquiry.
+    """
     action = args.get("action", "")
+
+    if action == "flow":
+        return {
+            "error": (
+                f"soul flow fires automatically every {agent._soul_delay}s. "
+                "It cannot be invoked manually. Use inquiry for on-demand "
+                "reflection, or adjust delay to control flow cadence."
+            ),
+        }
 
     if action == "inquiry":
         inquiry = args.get("inquiry", "")
@@ -82,7 +97,7 @@ def handle(agent, args: dict) -> dict:
         return {"status": "ok", "delay": delay}
 
     else:
-        return {"error": f"Unknown soul action: {action}. Use inquiry or delay."}
+        return {"error": f"Unknown soul action: {action}. Use inquiry or delay (flow is mechanical)."}
 
 
 def _send_with_timeout(agent, session, content: str):
@@ -288,6 +303,38 @@ def soul_flow(agent) -> dict | None:
         "voice": response.text,
         "thinking": response.thoughts or [],
     }
+
+
+def enqueue_flow_voice(agent, voice: str, thinking: list) -> None:
+    """Build a synthetic (call, result) pair for a soul flow voice and
+    enqueue it on the agent's involuntary tool-call inbox.
+
+    Coalesces with prior unspliced flow pairs (source="soul.flow"): if the
+    agent has been busy and multiple flows fired without draining, only the
+    most recent voice survives.
+
+    The call args carry only ``action="flow"`` — that alone tells the agent
+    "this was the involuntary flow action, not the agent-initiated inquiry
+    action." No ``trigger`` field needed; the action enum is the type.
+    """
+    import secrets
+    import time
+    from ..llm.interface import ToolCallBlock, ToolResultBlock
+    from ..tc_inbox import InvoluntaryToolCall
+
+    tc_id = f"tc_{int(time.time())}_{secrets.token_hex(2)}"
+    call = ToolCallBlock(id=tc_id, name="soul", args={"action": "flow"})
+    payload: dict = {"status": "ok", "voice": voice}
+    if thinking:
+        payload["thinking"] = thinking
+    result_block = ToolResultBlock(id=tc_id, name="soul", content=payload)
+    agent._tc_inbox.enqueue(InvoluntaryToolCall(
+        call=call,
+        result=result_block,
+        source="soul.flow",
+        enqueued_at=time.time(),
+        coalesce=True,
+    ))
 
 
 def _trim_soul_session(agent) -> None:

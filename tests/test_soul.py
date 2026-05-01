@@ -64,6 +64,13 @@ class TestSoulHandle:
         result = soul.handle(agent, {"action": "on"})
         assert "error" in result
 
+    def test_flow_action_rejected_manually(self):
+        """flow fires mechanically — agent cannot invoke it directly."""
+        agent = _make_mock_agent()
+        result = soul.handle(agent, {"action": "flow"})
+        assert "error" in result
+        assert "cannot be invoked manually" in result["error"]
+
     def test_inquiry_works_with_large_delay(self):
         """Inquiry is independent of soul_delay value."""
         agent = _make_mock_agent()
@@ -209,60 +216,14 @@ class TestSoulTimer:
         assert agent._soul_oneshot is False
         assert agent._soul_timer is None
 
-    def test_soul_effectively_disabled_when_delay_exceeds_stamina(self, tmp_path):
-        """soul_delay > stamina means flow is effectively off."""
-        from lingtai_kernel import BaseAgent
-        agent = BaseAgent(
-            service=make_mock_service(),
-            agent_name="test",
-            config=AgentConfig(soul_delay=99999.0, stamina=100.0),
-            working_dir=tmp_path / "test_agent",
-        )
-        assert agent._soul_delay == 99999.0
+    def test_soul_timer_runs_perpetual_regardless_of_state(self, tmp_path):
+        """Timer is no longer state-gated — runs from boot perpetually.
 
-    def test_soul_timer_starts_on_idle_when_flow_enabled(self, tmp_path):
-        from lingtai_kernel import BaseAgent, AgentState
-        agent = BaseAgent(
-            service=make_mock_service(),
-            agent_name="test",
-            working_dir=tmp_path / "test_agent",
-        )
-        agent._soul_delay = 1.0
-        agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.IDLE, reason="done")
-        assert agent._soul_timer is not None
-        assert agent._soul_timer.is_alive()
-        agent._soul_timer.cancel()
-
-    def test_soul_timer_does_not_start_when_delay_exceeds_stamina(self, tmp_path):
-        from lingtai_kernel import BaseAgent, AgentState
-        agent = BaseAgent(
-            service=make_mock_service(),
-            agent_name="test",
-            config=AgentConfig(soul_delay=99999.0, stamina=100.0),
-            working_dir=tmp_path / "test_agent",
-        )
-        agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.IDLE, reason="done")
-        assert agent._soul_timer is None
-
-    def test_soul_timer_starts_on_idle_for_inquiry(self, tmp_path):
-        """Inquiry fires timer even when soul_delay exceeds stamina."""
-        from lingtai_kernel import BaseAgent, AgentState
-        agent = BaseAgent(
-            service=make_mock_service(),
-            agent_name="test",
-            config=AgentConfig(soul_delay=99999.0, stamina=100.0),
-            working_dir=tmp_path / "test_agent",
-        )
-        agent._soul_oneshot = True
-        agent._soul_prompt = "Am I stuck?"
-        agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.IDLE, reason="done")
-        assert agent._soul_timer is not None
-        agent._soul_timer.cancel()
-
-    def test_soul_timer_cancelled_on_wake(self, tmp_path):
+        Cadence model: soul flow fires every _soul_delay seconds on a wall
+        clock, independent of ACTIVE/IDLE transitions. The timer is started
+        explicitly via _start_soul_timer() (called by start() at boot, and
+        rescheduled in _soul_whisper finally).
+        """
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
             service=make_mock_service(),
@@ -270,10 +231,34 @@ class TestSoulTimer:
             working_dir=tmp_path / "test_agent",
         )
         agent._soul_delay = 300.0
+        # State transitions must NOT touch the timer anymore.
         agent._set_state(AgentState.ACTIVE, reason="test")
+        assert agent._soul_timer is None  # not started by state alone
         agent._set_state(AgentState.IDLE, reason="done")
+        assert agent._soul_timer is None  # idle no longer kicks the timer
+
+        # Explicit start (the path normally taken by start() at boot).
+        agent._start_soul_timer()
         assert agent._soul_timer is not None
+        assert agent._soul_timer.is_alive()
+
+        # Going active does NOT cancel the timer — it keeps cadence.
         agent._set_state(AgentState.ACTIVE, reason="new mail")
+        assert agent._soul_timer is not None
+
+        agent._cancel_soul_timer()
+
+    def test_soul_timer_not_started_when_shutdown(self, tmp_path):
+        """Timer respects shutdown — _start_soul_timer is a no-op when _shutdown is set."""
+        from lingtai_kernel import BaseAgent
+        agent = BaseAgent(
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=tmp_path / "test_agent",
+        )
+        agent._soul_delay = 1.0
+        agent._shutdown.set()
+        agent._start_soul_timer()
         assert agent._soul_timer is None
 
     def test_soul_delay_from_config(self, tmp_path):
@@ -302,15 +287,14 @@ class TestSoulTimer:
 class TestSoulCleanup:
 
     def test_stop_cancels_soul_timer(self, tmp_path):
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
         )
         agent._soul_delay = 300.0
-        agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.IDLE, reason="done")
+        agent._start_soul_timer()  # explicit start (boot path)
         assert agent._soul_timer is not None
         agent.stop()
         assert agent._soul_timer is None
@@ -318,9 +302,15 @@ class TestSoulCleanup:
 
 class TestSoulIntegration:
 
-    def test_flow_injects_inner_voice_into_inbox(self, tmp_path):
-        """Flow mode: timer fires, whisper runs, inbox gets message."""
-        from lingtai_kernel import BaseAgent, AgentState
+    def test_flow_enqueues_synthetic_pair_on_tc_inbox(self, tmp_path):
+        """Flow whisper fires → synthetic (call, result) pair lands on tc_inbox.
+
+        Replaces the old inbox-injection contract. The voice is no longer a
+        plain user-role text message with [soul flow] prefix; it's a real
+        soul(action='flow') tool call + result pair queued for splice into
+        the wire chat at the next safe boundary.
+        """
+        from lingtai_kernel import BaseAgent
         from lingtai_kernel.llm.interface import ChatInterface, TextBlock
 
         svc = make_mock_service()
@@ -343,32 +333,43 @@ class TestSoulIntegration:
         mock_soul_response = MagicMock()
         mock_soul_response.text = "Have you considered the energy implications?"
         mock_soul_response.thoughts = ["The user asked about quantum computing..."]
+        # Token usage on the response (consumed by _write_soul_tokens)
+        mock_soul_response.usage.input_tokens = 0
+        mock_soul_response.usage.output_tokens = 0
+        mock_soul_response.usage.thinking_tokens = 0
+        mock_soul_response.usage.cached_tokens = 0
         mock_soul_session.send.return_value = mock_soul_response
+        # Token estimate on the soul session's interface (consumed by _trim_soul_session).
+        # Default soul_context_limit is 200_000 — return well below it so trim is a no-op.
+        mock_soul_session.interface.estimate_context_tokens.return_value = 100
         svc.create_session.return_value = mock_soul_session
 
         agent._soul_delay = 0.1
+        agent._start_soul_timer()
 
-        agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.IDLE, reason="done")
-
+        # Wait for the timer to fire and the pair to land on tc_inbox.
         deadline = time.monotonic() + 2.0
-        while agent.inbox.empty() and time.monotonic() < deadline:
+        while len(agent._tc_inbox) == 0 and time.monotonic() < deadline:
             time.sleep(0.05)
+        # Cancel the perpetual timer so it doesn't keep firing during the test.
+        agent._cancel_soul_timer()
 
-        assert not agent.inbox.empty()
-        msg = agent.inbox.get_nowait()
-        assert "energy implications" in msg.content
-        assert msg.sender == "soul"
+        assert len(agent._tc_inbox) >= 1
+        items = agent._tc_inbox.drain()
+        item = items[-1]  # latest (coalesced) survives
+        assert item.source == "soul.flow"
+        assert item.coalesce is True
+        assert item.call.name == "soul"
+        assert item.call.args == {"action": "flow"}
+        assert item.result.id == item.call.id
+        assert item.result.content["voice"] == "Have you considered the energy implications?"
 
-        # Verify soul.jsonl was written with prompt, thinking, voice
-        import json
-        soul_file = agent.working_dir / "logs" / "soul.jsonl"
-        assert soul_file.is_file()
-        entry = json.loads(soul_file.read_text().strip())
-        assert entry["voice"] == "Have you considered the energy implications?"
+        # Inbox stays clean — soul flow no longer rides the text channel.
+        assert agent.inbox.empty()
 
-    def test_empty_whisper_does_not_inject(self, tmp_path):
-        from lingtai_kernel import BaseAgent, AgentState
+    def test_empty_whisper_does_not_enqueue(self, tmp_path):
+        """No diary → soul_flow returns None → nothing on tc_inbox."""
+        from lingtai_kernel import BaseAgent
 
         svc = make_mock_service()
         agent = BaseAgent(
@@ -377,15 +378,15 @@ class TestSoulIntegration:
             working_dir=tmp_path / "test_agent",
         )
         agent._soul_delay = 0.1
-
-        agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.IDLE, reason="done")
-
+        agent._start_soul_timer()
         time.sleep(0.3)
+        agent._cancel_soul_timer()
+        assert len(agent._tc_inbox) == 0
         assert agent.inbox.empty()
 
     def test_soul_timer_not_started_during_shutdown(self, tmp_path):
-        from lingtai_kernel import BaseAgent, AgentState
+        """_start_soul_timer is a no-op when _shutdown is set."""
+        from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
             agent_name="test",
@@ -393,6 +394,5 @@ class TestSoulIntegration:
         )
         agent._soul_delay = 1.0
         agent._shutdown.set()
-        agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._set_state(AgentState.IDLE, reason="done")
+        agent._start_soul_timer()
         assert agent._soul_timer is None
