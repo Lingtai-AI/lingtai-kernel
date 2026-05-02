@@ -182,8 +182,6 @@ def _handle_config(agent, args: dict) -> dict:
             }
         old_values["consultation_interval"] = int(getattr(agent._config, "consultation_interval", 0))
         agent._config.consultation_interval = v
-        # Reset the per-turn counter so the new interval starts cleanly.
-        agent._consultation_turn_counter = 0
         new_values["consultation_interval"] = v
 
     if "consultation_past_count" in provided:

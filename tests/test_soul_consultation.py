@@ -490,54 +490,12 @@ class TestBuildConsultationPair:
 # ---------------------------------------------------------------------------
 
 
-class TestMaybeFireConsultation:
-
-    def _make_real_agent(self, tmp_path, *, interval: int):
-        """Build a real BaseAgent so we exercise the actual cadence path."""
-        from lingtai_kernel import BaseAgent
-        svc = MagicMock(); svc.model = "test-model"
-        agent = BaseAgent(
-            service=svc,
-            agent_name="t",
-            working_dir=tmp_path / "agent",
-        )
-        agent._config.consultation_interval = interval
-        return agent
-
-    def test_zero_interval_disables(self, tmp_path):
-        agent = self._make_real_agent(tmp_path, interval=0)
-        agent._maybe_fire_consultation()
-        agent._maybe_fire_consultation()
-        agent._maybe_fire_consultation()
-        # Counter never moved.
-        assert agent._consultation_turn_counter == 0
-
-    def test_negative_interval_disables(self, tmp_path):
-        agent = self._make_real_agent(tmp_path, interval=-1)
-        agent._maybe_fire_consultation()
-        assert agent._consultation_turn_counter == 0
-
-    def test_fires_every_n_turns(self, tmp_path):
-        agent = self._make_real_agent(tmp_path, interval=3)
-        with patch.object(agent, "_run_consultation_fire") as mock_fire:
-            for _ in range(8):
-                agent._maybe_fire_consultation()
-        # interval=3 → fires on turns 3 and 6 → 2 fires
-        # (each fire spawns a daemon thread that calls _run_consultation_fire)
-        # Wait briefly for threads to call the method.
-        import threading
-        for t in threading.enumerate():
-            if t.name.startswith("consult-"):
-                t.join(timeout=2.0)
-        assert mock_fire.call_count == 2
-
-    def test_does_not_fire_on_first_turn(self, tmp_path):
-        agent = self._make_real_agent(tmp_path, interval=5)
-        with patch.object(agent, "_run_consultation_fire") as mock_fire:
-            agent._maybe_fire_consultation()
-        # First call: counter goes to 1, no fire.
-        assert agent._consultation_turn_counter == 1
-        assert mock_fire.call_count == 0
+# TestMaybeFireConsultation: removed 2026-05-02 with the in-memory
+# turn-counter. The cadence is now derived from token_ledger.jsonl
+# (count of source="main" entries, mod consultation_interval), so unit
+# tests would need to fake-write ledger lines on disk to exercise it —
+# more setup than signal. Behavior is observed in live agent runs
+# instead.
 
 
 class TestPostLlmCallHook:
@@ -578,9 +536,9 @@ class TestPostLlmCallHook:
         events = [e for e, _ in agent.logged]
         assert "post_llm_call_error" in events
 
-    def test_default_interval_is_forty(self):
+    def test_default_interval_is_twenty(self):
         from lingtai_kernel.config import AgentConfig
-        assert AgentConfig().consultation_interval == 40
+        assert AgentConfig().consultation_interval == 20
 
     def test_default_past_count_is_two(self):
         from lingtai_kernel.config import AgentConfig
@@ -1341,7 +1299,7 @@ class TestRunConsultationDispatchesByKind:
 class _ConfigFakeAgent(_FakeAgent):
     """Extension of _FakeAgent with the attributes _handle_config touches:
     _soul_delay, _config.consultation_interval, _config.consultation_past_count,
-    _consultation_turn_counter, _shutdown (Event), _start_soul_timer (callback).
+    _shutdown (Event), _start_soul_timer (callback).
     Tracks whether the timer was restarted."""
 
     def __init__(self, tmp_path, *, initial_delay=120.0, shutdown=False,
@@ -1350,7 +1308,6 @@ class _ConfigFakeAgent(_FakeAgent):
         self._soul_delay = float(initial_delay)
         self._config.consultation_interval = initial_interval
         self._config.consultation_past_count = initial_past_count
-        self._consultation_turn_counter = 7
         import threading
         self._shutdown = threading.Event()
         if shutdown:
@@ -1386,8 +1343,6 @@ class TestSoulConfig:
         assert result["old"]["consultation_interval"] == 40
         assert result["new"]["consultation_interval"] == 80
         assert agent._config.consultation_interval == 80
-        # Counter resets so the new interval starts cleanly.
-        assert agent._consultation_turn_counter == 0
         # delay untouched -> no timer restart
         assert agent.timer_restart_count == 0
 

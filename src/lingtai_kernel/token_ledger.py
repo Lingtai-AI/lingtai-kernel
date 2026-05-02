@@ -58,6 +58,43 @@ def append_token_entry(
         f.write(json.dumps(entry) + "\n")
 
 
+def count_main_api_calls(path: Path | str) -> int:
+    """Count ledger entries tagged ``source="main"``.
+
+    Used as the canonical "main-chat LLM calls so far" signal — drives
+    past-self consultation cadence (``consultation_interval``). Reading
+    the ledger is the single source of truth: an in-memory turn counter
+    drifts whenever an involuntary tool-call splice (mail, MCP
+    notifications, soul-flow's own appendix landing) calls a
+    "post-LLM-call" hook, which is wrong because those splices are not
+    main-chat turns. The ledger is already tagged at write time
+    (``source="main"`` for ``_session.send`` from the main loop,
+    ``source="soul"`` for soul consultation fan-out), so counting
+    matching entries is unambiguous.
+
+    Untagged entries (older agents whose ledger predates the source
+    tag) are treated as "not main" and skipped — conservative drift,
+    same as starting fresh.
+
+    Returns 0 if the file is missing.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return 0
+    n = 0
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("source") == "main":
+            n += 1
+    return n
+
+
 def sum_token_ledger(path: Path | str) -> dict:
     """Sum all entries in the token ledger.
 

@@ -42,7 +42,7 @@ from .time_veil import now_iso, scrub_time_fields
 from .session import SessionManager
 from .tc_inbox import TCInbox
 from .tool_executor import ToolExecutor
-from .token_ledger import append_token_entry, sum_token_ledger
+from .token_ledger import append_token_entry, count_main_api_calls, sum_token_ledger
 from .types import UnknownToolError
 
 logger = get_logger()
@@ -399,12 +399,6 @@ class BaseAgent:
         self._soul_oneshot = False    # True during pending inquiry
         self._soul_timer: threading.Timer | None = None
         self._insight_turn_counter: int = 0
-        # Past-self consultation cadence — separate counter from
-        # insights_interval (operator-facing) so the two cadences stay
-        # independent. Fires every consultation_interval turns; result is
-        # a single soul.flow synthetic pair spliced via tc_inbox with
-        # replace_in_history=True.
-        self._consultation_turn_counter: int = 0
 
         # Heartbeat — always-on health monitor
         self._heartbeat: float = 0.0
@@ -1019,12 +1013,21 @@ class BaseAgent:
             self._log("post_llm_call_error", error=str(e)[:200])
 
     def _maybe_fire_consultation(self) -> None:
-        """Increment the consultation counter; if it hits cadence, kick off
-        the consultation batch in a daemon thread. Non-blocking.
+        """If the main-chat LLM call count hits the consultation cadence,
+        kick off a fire in a daemon thread. Non-blocking.
 
-        Cadence is set by ``config.consultation_interval`` (LLM calls
-        between fires). 0 disables the turn-count trigger; the wall-clock
-        timer (``_soul_delay``) keeps running independently.
+        Cadence is set by ``config.consultation_interval`` (main-chat LLM
+        calls between fires). 0 disables the turn-count trigger; the
+        wall-clock timer (``_soul_delay``) keeps running independently.
+
+        Counts ``source="main"`` entries in ``logs/token_ledger.jsonl`` —
+        the canonical receipt for main-chat LLM round-trips. Fires when
+        ``count > 0 and count % interval == 0``. Reading the ledger
+        avoids the parallel-counter drift that came from involuntary
+        tool-call splices (mail, MCP notifications, soul-flow's own
+        appendix landing) ticking a shared "post-LLM-call" counter — the
+        ledger is tagged at write time, so consultation/inquiry fan-out
+        calls (``source="soul"``) structurally cannot pollute the count.
 
         Both cadences enqueue onto ``tc_inbox`` with ``coalesce=True``
         keyed by ``source="soul.flow"``, so rapid double-fires collapse
@@ -1035,10 +1038,10 @@ class BaseAgent:
         interval = int(getattr(self._config, "consultation_interval", 0))
         if interval <= 0:
             return
-        self._consultation_turn_counter += 1
-        if self._consultation_turn_counter < interval:
+        ledger_path = self._working_dir / "logs" / "token_ledger.jsonl"
+        count = count_main_api_calls(ledger_path)
+        if count == 0 or count % interval != 0:
             return
-        self._consultation_turn_counter = 0
         thread = threading.Thread(
             target=self._run_consultation_fire,
             daemon=True,
@@ -1939,9 +1942,17 @@ class BaseAgent:
                     self._log("tc_wake_dispatch", source=item.source, call_id=item.call.id)
                     response = self._session.send([item.result])
                     self._last_usage = response.usage
-                    self._post_llm_call()
-                    self._save_chat_history()
-                    self._process_response(response)
+                    # Tag the ledger entry source="tc_wake" — an involuntary
+                    # tool-call splice (mail/MCP notification/soul-flow
+                    # appendix) is not a main-chat turn, so consultation
+                    # cadence (which counts source="main" ledger entries)
+                    # must not see it. Deliberately NOT calling
+                    # _post_llm_call() either: that hook is reserved for
+                    # genuine main-chat round-trips. Tokens still land in
+                    # the ledger — they're real spend — just under a
+                    # different source tag.
+                    self._save_chat_history(ledger_source="tc_wake")
+                    self._process_response(response, ledger_source="tc_wake")
                 except Exception as splice_err:
                     # Synthesize placeholder tool_results for any orphaned
                     # tool_calls left on the wire by the partial splice
@@ -1988,10 +1999,16 @@ class BaseAgent:
     # Response processing
     # ------------------------------------------------------------------
 
-    def _process_response(self, response: LLMResponse) -> dict:
+    def _process_response(self, response: LLMResponse, *, ledger_source: str = "main") -> dict:
         """Handle tool calls and collect text output.
 
         Returns a result dict: {"text": ..., "failed": ..., "errors": [...]}.
+
+        ``ledger_source`` propagates to ``_save_chat_history`` for any
+        tool-loop continuation LLM round-trips so cadence-counting
+        treats them the same as the call that triggered this loop.
+        Default ``"main"``; set to ``"tc_wake"`` when this method is
+        invoked from an involuntary splice path.
         """
         # Clear any stale cancel event from a previous silence.
         self._cancel_event.clear()
@@ -2058,8 +2075,9 @@ class BaseAgent:
 
             response = self._session.send(tool_results)
             self._last_usage = response.usage
-            self._post_llm_call()
-            self._save_chat_history()
+            if ledger_source == "main":
+                self._post_llm_call()
+            self._save_chat_history(ledger_source=ledger_source)
 
         final_text = "\n".join(collected_text_parts)
         has_errors = bool(collected_errors)
@@ -2388,11 +2406,18 @@ class BaseAgent:
         """Restore cumulative token counters from a saved session."""
         self._session.restore_token_state(state)
 
-    def _save_chat_history(self) -> None:
+    def _save_chat_history(self, *, ledger_source: str = "main") -> None:
         """Write chat history and token usage to disk (no git commit).
 
         Called after every completed interaction for crash resilience.
         Git commits are handled by the periodic snapshot system.
+
+        ``ledger_source`` tags any token-ledger entry written for the
+        most recent LLM round-trip. Default ``"main"`` covers the bulk
+        of callers (real user/system text turns, ``_process_response``'s
+        tool-loop continuations). Set to ``"tc_wake"`` from involuntary
+        splice paths so consultation cadence — which counts ``"main"``
+        ledger entries — does not double-count splices as main turns.
         """
         history_dir = self._working_dir / "history"
         history_dir.mkdir(exist_ok=True)
@@ -2431,7 +2456,7 @@ class BaseAgent:
                     cached=usage.cached_tokens,
                     model=model,
                     endpoint=endpoint,
-                    extra={"source": "main"},
+                    extra={"source": ledger_source},
                 )
             except Exception as e:
                 logger.warning(f"[{self.agent_name}] Failed to append token ledger: {e}")
