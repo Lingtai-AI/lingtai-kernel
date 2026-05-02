@@ -1047,15 +1047,15 @@ class BaseAgent:
             # Wake the run loop so it picks the queued pair out of tc_inbox
             # and drives it through _session.send([result]). Without this,
             # an idle agent blocks on inbox.get() and the pair only lands
-            # when external mail happens to arrive. The MSG_SOUL_WAKE
-            # message is a sentinel — _handle_soul_wake reads tc_inbox for
+            # when external mail happens to arrive. The MSG_TC_WAKE
+            # message is a sentinel — _handle_tc_wake reads tc_inbox for
             # the actual payload, the message itself carries no content.
             try:
                 wake_msg = _make_message(MSG_TC_WAKE, "system", "")
                 self.inbox.put(wake_msg)
                 self._wake_nap("soul_flow_fired")
             except Exception as e:
-                self._log("soul_wake_post_error",
+                self._log("tc_wake_post_error",
                           fire_id=fire_id, error=str(e)[:200])
         except Exception as e:
             self._log("consultation_fire_error",
@@ -1797,7 +1797,7 @@ class BaseAgent:
                 self._save_chat_history()
                 self._process_response(response)
         except Exception as e:
-            self._log("soul_wake_error", error=str(e)[:300])
+            self._log("tc_wake_error", error=str(e)[:300])
 
     def _get_guard_limits(self) -> tuple[int, int, int]:
         """Return (max_total_calls, dup_free_passes, dup_hard_block).
