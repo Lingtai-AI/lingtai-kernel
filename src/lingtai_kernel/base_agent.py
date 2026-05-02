@@ -277,6 +277,14 @@ class BaseAgent:
         # rebuilt; nothing tracked survives).
         self._appendix_ids_by_source: dict[str, str] = {}
 
+        # Map from external ref_id (e.g. mail_id) to the notif_id of a
+        # currently-pending system_notification pair. Populated by
+        # _enqueue_system_notification when source="email"; consumed by
+        # email._read post-action hook (auto-dismiss). Voluntary
+        # system(action="dismiss") in intrinsics/system.py also reverse-
+        # looks up via this dict to keep it in sync. Cleared on molt.
+        self._pending_mail_notifications: dict[str, str] = {}
+
         # Lifecycle
         self._shutdown = threading.Event()
         self._asleep = threading.Event()   # set when entering ASLEEP; cleared on wake
@@ -610,6 +618,88 @@ class BaseAgent:
     def log(self, event_type: str, **fields) -> None:
         """Write a structured event to the agent's event log."""
         self._log(event_type, **fields)
+
+    def _enqueue_system_notification(
+        self, *, source: str, ref_id: str, body: str
+    ) -> str:
+        """Synthesize a ``system(action="notification")`` tool-call pair and
+        enqueue it on ``tc_inbox`` for splicing at the next safe boundary.
+
+        Drains via ``_drain_tc_inbox`` (busy path) or ``_handle_tc_wake``
+        (idle path). Each notification is its own pair (no coalescing),
+        append-only (``replace_in_history=False``); dismissal is voluntary
+        (agent calls ``system(action="dismiss", ids=[...])``) or action-
+        coupled (``email.read`` auto-dismisses for ``source="email"``).
+
+        Args:
+            source: "email", "email.bounce", "daemon", "mcp.<name>", etc.
+                Opaque to the kernel except for the "email" auto-dismiss
+                hook in ``intrinsics.email._read``.
+            ref_id: External reference (mail_id for email arrival, the
+                bounced message id for bounce, etc.).
+            body: The localized prose that becomes the ``ToolResultBlock``
+                content (what the LLM reads).
+
+        Returns:
+            The ``notif_id`` (stable, agent-facing handle) — callers that
+            need to record a ref_id-to-notif_id mapping use this.
+        """
+        import secrets
+        from datetime import datetime, timezone
+        from .llm.interface import ToolCallBlock, ToolResultBlock
+        from .tc_inbox import InvoluntaryToolCall
+        from .message import _make_message, MSG_TC_WAKE
+
+        notif_id = f"notif_{int(time.time()*1000):x}_{secrets.token_hex(3)}"
+        call_id = f"sn_{int(time.time()*1000):x}_{secrets.token_hex(2)}"
+        received_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        call = ToolCallBlock(
+            id=call_id,
+            name="system",
+            args={
+                "action": "notification",
+                "notif_id": notif_id,
+                "source": source,
+                "ref_id": ref_id,
+                "received_at": received_at,
+            },
+        )
+        result = ToolResultBlock(id=call_id, name="system", content=body)
+        item = InvoluntaryToolCall(
+            call=call,
+            result=result,
+            source=f"system.notification:{notif_id}",
+            enqueued_at=time.time(),
+            coalesce=False,
+            replace_in_history=False,
+        )
+        self._tc_inbox.enqueue(item)
+
+        # Track for action-coupled auto-dismiss (email source only).
+        if source == "email":
+            self._pending_mail_notifications[ref_id] = notif_id
+
+        self._log(
+            "system_notification_enqueued",
+            notif_id=notif_id,
+            call_id=call_id,
+            source=source,
+            ref_id=ref_id,
+        )
+        self._wake_nap("system_notification_enqueued")
+        try:
+            wake_msg = _make_message(MSG_TC_WAKE, "system", "")
+            self.inbox.put(wake_msg)
+        except Exception as e:
+            self._log(
+                "tc_wake_post_error",
+                source=source,
+                ref_id=ref_id,
+                error=str(e)[:200],
+            )
+
+        return notif_id
 
     def notify(self, sender: str, text: str) -> None:
         """Put a system notification into the agent's inbox.
