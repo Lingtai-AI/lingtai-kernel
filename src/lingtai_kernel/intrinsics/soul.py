@@ -156,16 +156,75 @@ def _handle_set_delay(agent, args: dict) -> dict:
     except Exception as e:
         agent._log("soul_set_delay_restart_failed", error=str(e)[:200])
 
-    agent._log(
-        "soul_set_delay",
-        old_delay=old_delay,
-        new_delay=new_delay,
-    )
+    # Persist to init.json so the new cadence survives reboot. The
+    # in-memory _soul_delay update above is the source of truth at
+    # runtime; this rewrite makes it the source of truth at boot too.
+    # Best-effort: a write failure leaves the runtime state intact, only
+    # the persistent record reverts on next reboot — log and move on.
+    persist_error = _persist_soul_delay(agent, new_delay)
+
+    log_kw = {"old_delay": old_delay, "new_delay": new_delay}
+    if persist_error:
+        log_kw["persist_error"] = persist_error
+    agent._log("soul_set_delay", **log_kw)
+
     return {
         "status": "ok",
         "old_delay_seconds": old_delay,
         "new_delay_seconds": new_delay,
     }
+
+
+def _persist_soul_delay(agent, new_delay: float) -> str | None:
+    """Write the new soul_delay into manifest.soul.delay in init.json.
+
+    Atomic via temp-file-then-rename. Returns ``None`` on success, or a
+    short error string on failure (caller logs it; runtime state is
+    unaffected).
+    """
+    import json
+    import os
+    from pathlib import Path
+
+    init_path: Path = agent._working_dir / "init.json"
+    try:
+        with init_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return f"init.json not found at {init_path}"
+    except Exception as e:
+        return f"failed to read init.json: {e!s}"[:200]
+
+    if not isinstance(data, dict):
+        return "init.json root is not an object"
+    manifest = data.setdefault("manifest", {})
+    if not isinstance(manifest, dict):
+        return "manifest is not an object"
+    soul_block = manifest.get("soul")
+    if not isinstance(soul_block, dict):
+        soul_block = {}
+        manifest["soul"] = soul_block
+    soul_block["delay"] = new_delay
+
+    # Atomic write — temp file in the same directory, then rename.
+    tmp_path = init_path.with_suffix(init_path.suffix + ".tmp")
+    try:
+        with tmp_path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass  # not all filesystems support fsync; the rename below is the durable barrier
+        os.replace(tmp_path, init_path)
+        return None
+    except Exception as e:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return f"failed to write init.json: {e!s}"[:200]
 
 
 def _send_with_timeout(agent, session, content: str):
