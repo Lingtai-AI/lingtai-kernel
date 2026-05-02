@@ -936,11 +936,22 @@ class BaseAgent:
                 coalesce=True,
                 replace_in_history=True,
             ))
+            # Inline voice text so the TUI can render the fire from a single
+            # event without cross-referencing soul_flow.jsonl. Strip thinking
+            # blocks (those live in soul_flow.jsonl for retrospective inspection)
+            # and keep just (source, voice) — same shape the synthetic chat
+            # appendix carries.
+            voices_inline = [
+                {"source": v.get("source", "unknown"), "voice": v.get("voice", "")}
+                for v in voices
+                if v.get("voice")
+            ]
             self._log(
                 "consultation_fire",
                 fire_id=fire_id,
                 count=len(voices),
                 sources=sources,
+                voices=voices_inline,
             )
 
             # Wake the run loop so it picks the queued pair out of tc_inbox
