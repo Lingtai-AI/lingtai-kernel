@@ -578,9 +578,9 @@ class TestPostLlmCallHook:
         events = [e for e, _ in agent.logged]
         assert "post_llm_call_error" in events
 
-    def test_default_interval_is_ten(self):
+    def test_default_interval_is_twenty(self):
         from lingtai_kernel.config import AgentConfig
-        assert AgentConfig().consultation_interval == 10
+        assert AgentConfig().consultation_interval == 20
 
     def test_default_past_count_is_two(self):
         from lingtai_kernel.config import AgentConfig
