@@ -904,12 +904,20 @@ class BaseAgent:
         state at that point: previous turn fully landed, next turn not yet
         constructed.
 
-        Skips silently if the chat isn't ready (None during early boot, or
-        has unanswered tool_calls). Items remain queued for the next safe
-        boundary; the cadence keeps firing regardless.
+        Skips silently if the chat has unanswered tool_calls. Items remain
+        queued for the next safe boundary; the cadence keeps firing regardless.
+
+        Lazily creates the chat session if it's None (post-refresh, or a
+        brand-new agent that hasn't processed its first request). Without
+        this, the busy path would livelock alongside ``_handle_tc_wake``
+        in the post-refresh asleep cycle.
         """
         if self._chat is None:
-            return
+            try:
+                self._session.ensure_session()
+            except Exception:
+                # Session creation failed; let the next safe boundary retry.
+                return
         iface = self._chat.interface
         if iface.has_pending_tool_calls():
             return
@@ -1857,12 +1865,28 @@ class BaseAgent:
             self._log("tc_wake_noop", reason="tc_inbox_empty")
             return
         if self._chat is None:
-            # Brand-new agent — chat session not yet created. Re-enqueue
-            # so the next external message can drain at a safe boundary.
-            for item in items:
-                self._tc_inbox.enqueue(item)
-            self._log("tc_wake_noop", reason="chat_not_ready")
-            return
+            # Chat session not yet created. This happens after refresh (which
+            # tears down _session.chat) or on a brand-new agent that hasn't
+            # processed its first request. Lazily create the session here so
+            # we can splice; otherwise we livelock — every soul-flow tick
+            # posts MSG_TC_WAKE which lands here, bails with "chat_not_ready",
+            # and re-enqueues forever (each tick adds a fresh pair to the
+            # queue but nothing ever drains them). ensure_session is
+            # idempotent and safe to call from the run-loop thread.
+            try:
+                self._session.ensure_session()
+            except Exception as e:
+                # Session creation failed (e.g. LLM service down). Re-enqueue
+                # so a future safe boundary can retry, log the cause for
+                # operator triage, and bail this attempt.
+                for item in items:
+                    self._tc_inbox.enqueue(item)
+                self._log(
+                    "tc_wake_noop",
+                    reason="ensure_session_failed",
+                    error=str(e)[:300],
+                )
+                return
         iface = self._chat.interface
         if iface.has_pending_tool_calls():
             # Mid-pair on the wire — can't splice safely. Re-enqueue and bail.
