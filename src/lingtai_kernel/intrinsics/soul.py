@@ -1,24 +1,32 @@
 """Soul intrinsic — the agent's inner voice.
 
-Two modes:
-    flow    — past-self consultation appendix. Every ``_soul_delay`` seconds,
-              fires M=1+K parallel LLM calls (1 stepped-back read of the
-              current chat as "insights", K random past-snapshot
-              consultations sampled from history/snapshots/). Voices bundle
-              into one synthetic (assistant{tool_call}, user{tool_result})
-              pair with action="flow"; the pair is enqueued on tc_inbox
-              with replace_in_history=True so the drain side enforces a
-              single-slot invariant in chat history. The pair drifts
-              naturally through the prompt cache as the agent's own turns
-              accumulate after it. Mechanical — agent cannot invoke
-              manually.
-    inquiry — sync mirror session. Clones conversation (text+thinking only),
-              sends question, returns answer in tool result. On-demand.
-
-Actions:
-    inquiry — ask yourself a question, get the answer in the tool result
+Three actions:
+    flow      — past-self consultation appendix. Every ``_soul_delay`` seconds,
+                fires M=1+K parallel LLM calls (1 stepped-back read of the
+                current chat as "insights", K random past-snapshot
+                consultations sampled from history/snapshots/). Voices bundle
+                into one synthetic (assistant{tool_call}, user{tool_result})
+                pair with action="flow"; the pair is enqueued on tc_inbox
+                with replace_in_history=True so the drain side enforces a
+                single-slot invariant in chat history. The pair drifts
+                naturally through the prompt cache as the agent's own turns
+                accumulate after it. Mechanical — agent cannot invoke
+                manually.
+    inquiry   — sync mirror session. Clones conversation (text+thinking only),
+                sends question, returns answer in tool result. On-demand.
+    set_delay — adjust the wall-clock cadence at which flow fires. Agent-
+                tunable: if the agent finds flow too noisy (or too quiet) it
+                can raise/lower the delay. Cancels and restarts the live timer
+                with the new value.
 """
 from __future__ import annotations
+
+
+# Lower bound on agent-set soul delay. Below this, the consultation cost
+# (M parallel LLM calls per fire) dominates the agent's own turns. The
+# bound is conservative — the wall clock can fire mid-turn and there's
+# no hard rate limit beyond this on the consultation side.
+SOUL_DELAY_MIN_SECONDS = 30.0
 
 
 def get_description(lang: str = "en") -> str:
@@ -33,12 +41,17 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["inquiry", "flow"],
+                "enum": ["inquiry", "flow", "set_delay"],
                 "description": t(lang, "soul.action_description"),
             },
             "inquiry": {
                 "type": "string",
                 "description": t(lang, "soul.inquiry_description"),
+            },
+            "delay_seconds": {
+                "type": "number",
+                "minimum": SOUL_DELAY_MIN_SECONDS,
+                "description": t(lang, "soul.delay_seconds_description"),
             },
         },
         "required": ["action"],
@@ -46,14 +59,15 @@ def get_schema(lang: str = "en") -> dict:
 
 
 def handle(agent, args: dict) -> dict:
-    """Handle soul tool — inquiry only (flow is mechanical, agent cannot
-    invoke it manually).
+    """Handle soul tool — inquiry and set_delay are agent-invocable; flow
+    is mechanical and fires on a wall-clock timer (cannot be invoked
+    manually).
 
-    flow fires automatically every ``_soul_delay`` seconds on a wall clock
-    via the soul timer. Each fire runs past-self consultation (M=1+K
-    parallel LLM calls) and lands a single soul.flow pair in chat history,
-    replacing any prior one. Cadence is configured via
-    manifest.config.soul_delay (seconds); not runtime-tunable by the agent.
+    flow fires automatically every ``_soul_delay`` seconds via the soul
+    timer. Each fire runs past-self consultation (M=1+K parallel LLM calls)
+    and lands a single soul.flow pair in chat history, replacing any prior
+    one. Initial cadence comes from manifest.soul.delay (seconds); the
+    agent can adjust it at runtime via action='set_delay'.
     """
     action = args.get("action", "")
 
@@ -62,7 +76,7 @@ def handle(agent, args: dict) -> dict:
             "error": (
                 f"soul flow fires automatically every {agent._soul_delay}s. "
                 "It cannot be invoked manually. Use inquiry for on-demand "
-                "reflection."
+                "reflection, or set_delay to change the cadence."
             ),
         }
 
@@ -83,8 +97,75 @@ def handle(agent, args: dict) -> dict:
             agent._log("soul_inquiry_done")
             return {"status": "ok", "voice": "(silence)"}
 
-    else:
-        return {"error": f"Unknown soul action: {action}. Use inquiry (flow is mechanical)."}
+    if action == "set_delay":
+        return _handle_set_delay(agent, args)
+
+    return {
+        "error": (
+            f"Unknown soul action: {action}. Use inquiry, set_delay, "
+            "or wait for flow (mechanical)."
+        )
+    }
+
+
+def _handle_set_delay(agent, args: dict) -> dict:
+    """Handle action='set_delay' — adjust the soul cadence wall clock.
+
+    Validates the requested delay against ``SOUL_DELAY_MIN_SECONDS``,
+    updates ``agent._soul_delay``, and restarts the live timer so the
+    next fire happens on the new schedule. The previously-pending fire
+    (if any) is cancelled — a too-short delay won't snap to "fire now",
+    it just means the next scheduled fire is sooner than the old one
+    would have been.
+
+    Returns a status dict containing the old and new delays so the agent
+    sees what changed.
+    """
+    raw = args.get("delay_seconds")
+    if raw is None:
+        return {"error": "delay_seconds is required for action='set_delay'."}
+    try:
+        new_delay = float(raw)
+    except (TypeError, ValueError):
+        return {
+            "error": (
+                f"delay_seconds must be a number, got {type(raw).__name__}."
+            ),
+        }
+    if new_delay != new_delay:  # NaN check
+        return {"error": "delay_seconds must be a finite number, got NaN."}
+    if new_delay < SOUL_DELAY_MIN_SECONDS:
+        return {
+            "error": (
+                f"delay_seconds must be at least {SOUL_DELAY_MIN_SECONDS}s "
+                f"(got {new_delay}). Below this, consultation cost dominates "
+                "the main agent loop."
+            ),
+        }
+
+    old_delay = float(agent._soul_delay)
+    agent._soul_delay = new_delay
+
+    # Restart the wall-clock timer if it's running. _start_soul_timer
+    # cancels the existing timer first, so this is the safe call. Skip
+    # if shutdown has been signalled — _start_soul_timer no-ops in that
+    # case anyway, but the explicit guard avoids a stale log entry.
+    try:
+        if not agent._shutdown.is_set():
+            agent._start_soul_timer()
+    except Exception as e:
+        agent._log("soul_set_delay_restart_failed", error=str(e)[:200])
+
+    agent._log(
+        "soul_set_delay",
+        old_delay=old_delay,
+        new_delay=new_delay,
+    )
+    return {
+        "status": "ok",
+        "old_delay_seconds": old_delay,
+        "new_delay_seconds": new_delay,
+    }
 
 
 def _send_with_timeout(agent, session, content: str):

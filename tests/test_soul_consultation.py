@@ -1331,3 +1331,138 @@ class TestRunConsultationDispatchesByKind:
         assert "soul flow" in captured["system_prompt"].lower()
         # insights cue should not frame as future-self letter
         assert "future self" not in captured["sent_content"].lower()
+
+
+# ---------------------------------------------------------------------------
+# action='set_delay' — agent-tunable soul cadence
+# ---------------------------------------------------------------------------
+
+
+class _SetDelayFakeAgent(_FakeAgent):
+    """Extension of _FakeAgent with the attributes _handle_set_delay
+    touches: _soul_delay (read+written), _shutdown (Event), and
+    _start_soul_timer (callback). Tracks whether the timer was restarted."""
+
+    def __init__(self, tmp_path, *, initial_delay=120.0, shutdown=False):
+        super().__init__(tmp_path)
+        self._soul_delay = float(initial_delay)
+        import threading
+        self._shutdown = threading.Event()
+        if shutdown:
+            self._shutdown.set()
+        self.timer_restart_count = 0
+
+    def _start_soul_timer(self):
+        self.timer_restart_count += 1
+
+
+class TestSoulSetDelay:
+
+    def test_set_delay_updates_soul_delay_and_restarts_timer(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import handle
+        agent = _SetDelayFakeAgent(tmp_path, initial_delay=120.0)
+
+        result = handle(agent, {"action": "set_delay", "delay_seconds": 600})
+
+        assert result["status"] == "ok"
+        assert result["old_delay_seconds"] == 120.0
+        assert result["new_delay_seconds"] == 600.0
+        assert agent._soul_delay == 600.0
+        assert agent.timer_restart_count == 1
+        # logged
+        assert any(ev == "soul_set_delay" for ev, _ in agent.logged)
+
+    def test_set_delay_rejects_below_minimum(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import (
+            handle,
+            SOUL_DELAY_MIN_SECONDS,
+        )
+        agent = _SetDelayFakeAgent(tmp_path, initial_delay=120.0)
+
+        result = handle(agent, {
+            "action": "set_delay",
+            "delay_seconds": SOUL_DELAY_MIN_SECONDS - 1,
+        })
+
+        assert "error" in result
+        assert agent._soul_delay == 120.0  # unchanged
+        assert agent.timer_restart_count == 0  # timer not touched
+
+    def test_set_delay_accepts_exactly_minimum(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import (
+            handle,
+            SOUL_DELAY_MIN_SECONDS,
+        )
+        agent = _SetDelayFakeAgent(tmp_path, initial_delay=120.0)
+
+        result = handle(agent, {
+            "action": "set_delay",
+            "delay_seconds": SOUL_DELAY_MIN_SECONDS,
+        })
+
+        assert result["status"] == "ok"
+        assert agent._soul_delay == SOUL_DELAY_MIN_SECONDS
+
+    def test_set_delay_requires_delay_seconds(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import handle
+        agent = _SetDelayFakeAgent(tmp_path, initial_delay=120.0)
+
+        result = handle(agent, {"action": "set_delay"})
+
+        assert "error" in result
+        assert agent._soul_delay == 120.0
+        assert agent.timer_restart_count == 0
+
+    def test_set_delay_rejects_non_numeric(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import handle
+        agent = _SetDelayFakeAgent(tmp_path, initial_delay=120.0)
+
+        result = handle(agent, {
+            "action": "set_delay",
+            "delay_seconds": "fast",
+        })
+
+        assert "error" in result
+        assert agent._soul_delay == 120.0
+        assert agent.timer_restart_count == 0
+
+    def test_set_delay_rejects_nan(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import handle
+        agent = _SetDelayFakeAgent(tmp_path, initial_delay=120.0)
+
+        result = handle(agent, {
+            "action": "set_delay",
+            "delay_seconds": float("nan"),
+        })
+
+        assert "error" in result
+        assert agent._soul_delay == 120.0
+
+    def test_set_delay_skips_timer_restart_when_shutdown(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import handle
+        agent = _SetDelayFakeAgent(tmp_path, initial_delay=120.0, shutdown=True)
+
+        result = handle(agent, {"action": "set_delay", "delay_seconds": 300})
+
+        # Value still updates so the next boot picks up the new delay.
+        assert result["status"] == "ok"
+        assert agent._soul_delay == 300.0
+        # But timer is NOT restarted while shutdown is signalled.
+        assert agent.timer_restart_count == 0
+
+    def test_set_delay_in_schema_enum(self):
+        from lingtai_kernel.intrinsics.soul import get_schema
+        schema = get_schema("en")
+        assert "set_delay" in schema["properties"]["action"]["enum"]
+        assert "delay_seconds" in schema["properties"]
+        assert schema["properties"]["delay_seconds"]["type"] == "number"
+        assert schema["properties"]["delay_seconds"]["minimum"] == 30.0
+
+    def test_unknown_action_still_errors(self, tmp_path):
+        # Regression guard — error message updated to mention set_delay,
+        # but unknown actions must still error.
+        from lingtai_kernel.intrinsics.soul import handle
+        agent = _SetDelayFakeAgent(tmp_path)
+        result = handle(agent, {"action": "bogus"})
+        assert "error" in result
+        assert "bogus" in result["error"]
