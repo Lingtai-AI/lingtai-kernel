@@ -9,29 +9,24 @@ and every tool result.
 
 Channel encoding:
 - Tool-result channel: `stamp_meta` flattens the dict into the result dict
-  as-is. The LLM sees structured JSON (e.g. ``result["context"]["usage"]``,
-  ``result["notifications"]``).
+  as-is. The LLM sees structured JSON (e.g. ``result["context"]["usage"]``).
 - Text-input channel: `render_meta` formats the same dict into a prose
   prefix line. Inbox content is NOT rendered here — it lives in the
   user-turn body, drained by ``_concat_queued_messages`` upstream.
 
-Inbox drain policy:
-- ``build_meta(agent, drain_inbox=True)`` consumes ``agent.inbox`` and
-  stores the full message contents in ``meta["notifications"]`` (a list of
-  strings, in FIFO order). Used by the tool-result ``meta_fn``.
-- ``build_meta(agent)`` (drain_inbox=False, default) leaves inbox alone.
-  Used by the text-input prefix path; inbox is drained by the outer loop's
-  ``_concat_queued_messages`` into the user-turn message body.
+As of 2026-05-02, the meta block no longer carries inbox-drained
+notifications. System-source notifications (mail arrival, bounce, future
+MCP events) are now delivered as synthetic system(action="notification")
+tool-call pairs spliced via tc_inbox; see
+docs/plans/2026-05-02-system-notification-as-tool-call.md.
 """
 from __future__ import annotations
-
-import queue
 
 from .i18n import t as _t
 from .time_veil import now_iso
 
 
-def build_meta(agent, *, drain_inbox: bool = False) -> dict:
+def build_meta(agent) -> dict:
     """Return the current meta-data snapshot for the agent.
 
     Respects ``agent._config.time_awareness`` / ``timezone_awareness``
@@ -46,17 +41,11 @@ def build_meta(agent, *, drain_inbox: bool = False) -> dict:
                 "history_tokens": int,   # conversation history
                 "usage": float,          # fraction of context window used
             },
-            "notifications": [...],      # absent when inbox empty / not drained
         }
 
     Sentinel handling: when token decomposition has not yet run, the
     ``context`` sub-object is still emitted but with ``-1`` / ``-1.0``
     values so callers can render "unknown" without ambiguity.
-
-    When ``drain_inbox=True`` and ``agent.inbox`` is non-empty, every
-    queued message is consumed and its content joins ``meta["notifications"]``
-    (full content, no truncation, no newline flattening — JSON channel can
-    carry it). When ``drain_inbox=False`` (default), inbox is left alone.
     """
     meta: dict = {}
     ts = now_iso(agent)
@@ -139,41 +128,7 @@ def build_meta(agent, *, drain_inbox: bool = False) -> dict:
             "usage": -1.0,
         }
 
-    if drain_inbox:
-        drained = _drain_inbox(agent)
-        if drained:
-            meta["notifications"] = drained
-
     return meta
-
-
-def _drain_inbox(agent) -> list[str]:
-    """Consume ``agent.inbox`` and return each message's content as a string.
-
-    Returns an empty list when the agent has no inbox or the inbox is empty.
-    Empty-content messages are preserved as empty strings — the count and
-    ordering of inbox messages is information the agent may want.
-
-    Full content per message — no truncation, no newline flattening. The
-    JSON channel can carry it.
-
-    Robust against agents without ``.inbox`` (legacy/test stand-ins): returns
-    [] in that case.
-    """
-    inbox = getattr(agent, "inbox", None)
-    if inbox is None:
-        return []
-
-    drained: list[str] = []
-    while True:
-        try:
-            m = inbox.get_nowait()
-        except queue.Empty:
-            break
-        content = getattr(m, "content", "")
-        text = content if isinstance(content, str) else str(content)
-        drained.append(text)
-    return drained
 
 
 def render_meta(agent, meta: dict) -> str:
@@ -185,10 +140,6 @@ def render_meta(agent, meta: dict) -> str:
     Composes the existing ``system.current_time`` template plus a context
     fragment via ``system.context_breakdown`` (or ``system.context_unknown``
     when the session has not yet computed its token decomposition).
-
-    Inbox notifications are intentionally not rendered here — they live in
-    the user-turn body (drained by ``_concat_queued_messages`` upstream)
-    or in the tool-result JSON (drained by the tool-result ``meta_fn``).
     """
     if not meta:
         return ""

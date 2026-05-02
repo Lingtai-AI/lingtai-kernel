@@ -1657,7 +1657,7 @@ class BaseAgent:
             known_tools=set(self._intrinsics) | set(self._tool_handlers),
             parallel_safe_tools=self._PARALLEL_SAFE_TOOLS,
             logger_fn=self._log,
-            meta_fn=lambda: build_meta(self, drain_inbox=True),
+            meta_fn=lambda: build_meta(self),
         )
         content = self._pre_request(msg)
         meta = build_meta(self)
@@ -1784,7 +1784,7 @@ class BaseAgent:
                 known_tools=set(self._intrinsics) | set(self._tool_handlers),
                 parallel_safe_tools=self._PARALLEL_SAFE_TOOLS,
                 logger_fn=self._log,
-                meta_fn=lambda: build_meta(self, drain_inbox=True),
+                meta_fn=lambda: build_meta(self),
             )
             for item in items:
                 if getattr(item, "replace_in_history", False):
