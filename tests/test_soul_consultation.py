@@ -540,6 +540,53 @@ class TestMaybeFireConsultation:
         assert mock_fire.call_count == 0
 
 
+class TestPostLlmCallHook:
+    """The LLM-call hot path must invoke _post_llm_call after every
+    successful response so the turn-count cadence ticks correctly."""
+
+    def _make_real_agent(self, tmp_path, *, interval: int):
+        from lingtai_kernel import BaseAgent
+        svc = MagicMock(); svc.model = "test-model"
+        agent = BaseAgent(
+            service=svc,
+            agent_name="t",
+            working_dir=tmp_path / "agent",
+        )
+        agent._config.consultation_interval = interval
+        return agent
+
+    def test_post_llm_call_invokes_maybe_fire(self, tmp_path):
+        agent = self._make_real_agent(tmp_path, interval=10)
+        with patch.object(agent, "_maybe_fire_consultation") as m:
+            agent._post_llm_call()
+        assert m.call_count == 1
+
+    def test_post_llm_call_swallows_exceptions(self, tmp_path):
+        agent = self._make_real_agent(tmp_path, interval=10)
+        agent.logged = []
+        original_log = agent._log
+        def capture_log(event, **kw):
+            agent.logged.append((event, kw))
+            return original_log(event, **kw)
+        agent._log = capture_log
+
+        with patch.object(
+            agent, "_maybe_fire_consultation",
+            side_effect=RuntimeError("boom"),
+        ):
+            agent._post_llm_call()  # must not raise
+        events = [e for e, _ in agent.logged]
+        assert "post_llm_call_error" in events
+
+    def test_default_interval_is_ten(self):
+        from lingtai_kernel.config import AgentConfig
+        assert AgentConfig().consultation_interval == 10
+
+    def test_default_past_count_is_two(self):
+        from lingtai_kernel.config import AgentConfig
+        assert AgentConfig().consultation_past_count == 2
+
+
 class TestRunConsultationFire:
 
     def _make_real_agent(self, tmp_path):

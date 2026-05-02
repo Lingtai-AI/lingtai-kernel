@@ -795,9 +795,34 @@ class BaseAgent:
     # Past-self consultation — soul flow as appendix tool-call pair
     # ------------------------------------------------------------------
 
+    def _post_llm_call(self) -> None:
+        """Post-call hook — runs after every successful main-chat LLM
+        response. Owns turn-driven cadence work that should tick once
+        per LLM call, independent of the wall-clock soul timer.
+
+        Currently delegates to ``_maybe_fire_consultation`` (turn-count
+        cadence for past-self consultation). Errors are logged and
+        swallowed; this hook must never break the main loop.
+        """
+        try:
+            self._maybe_fire_consultation()
+        except Exception as e:
+            self._log("post_llm_call_error", error=str(e)[:200])
+
     def _maybe_fire_consultation(self) -> None:
         """Increment the consultation counter; if it hits cadence, kick off
-        the consultation batch in a daemon thread. Non-blocking."""
+        the consultation batch in a daemon thread. Non-blocking.
+
+        Cadence is set by ``config.consultation_interval`` (LLM calls
+        between fires). 0 disables the turn-count trigger; the wall-clock
+        timer (``_soul_delay``) keeps running independently.
+
+        Both cadences enqueue onto ``tc_inbox`` with ``coalesce=True``
+        keyed by ``source="soul.flow"``, so rapid double-fires collapse
+        to one queued pair (latest wins). The expensive M=1+K LLM fan-out
+        still runs per fire — coalescing only deduplicates the visible
+        artifact in chat history.
+        """
         interval = int(getattr(self._config, "consultation_interval", 0))
         if interval <= 0:
             return
@@ -1567,6 +1592,7 @@ class BaseAgent:
         self._log("text_input", text=content)
         response = self._session.send(content)
         self._last_usage = response.usage
+        self._post_llm_call()
         self._save_chat_history()
         result = self._process_response(response)
         self._post_request(msg, result)
@@ -1653,6 +1679,7 @@ class BaseAgent:
 
             response = self._session.send(tool_results)
             self._last_usage = response.usage
+            self._post_llm_call()
             self._save_chat_history()
 
         final_text = "\n".join(collected_text_parts)
