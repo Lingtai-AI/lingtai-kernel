@@ -25,7 +25,7 @@ from typing import Any, Callable
 from .config import AgentConfig
 from .state import AgentState
 from .workdir import WorkingDir
-from .message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT, MSG_SOUL_WAKE
+from .message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT, MSG_TC_WAKE
 from .intrinsics import ALL_INTRINSICS
 from .prompt import SystemPromptManager
 from .llm import (
@@ -1051,7 +1051,7 @@ class BaseAgent:
             # message is a sentinel — _handle_soul_wake reads tc_inbox for
             # the actual payload, the message itself carries no content.
             try:
-                wake_msg = _make_message(MSG_SOUL_WAKE, "system", "")
+                wake_msg = _make_message(MSG_TC_WAKE, "system", "")
                 self.inbox.put(wake_msg)
                 self._wake_nap("soul_flow_fired")
             except Exception as e:
@@ -1623,8 +1623,8 @@ class BaseAgent:
         """Route message by type. Subclasses may override for routing."""
         if msg.type in (MSG_REQUEST, MSG_USER_INPUT):
             self._handle_request(msg)
-        elif msg.type == MSG_SOUL_WAKE:
-            self._handle_soul_wake(msg)
+        elif msg.type == MSG_TC_WAKE:
+            self._handle_tc_wake(msg)
         else:
             logger.warning(f"[{self.agent_name}] Unknown message type: {msg.type}")
 
@@ -1714,15 +1714,14 @@ class BaseAgent:
         result = self._process_response(response)
         self._post_request(msg, result)
 
-    def _handle_soul_wake(self, msg: Message) -> None:
-        """Process queued soul.flow involuntary tool-calls by driving the
-        synthetic (call, result) pairs through the LLM as if the tools just
-        returned — no fake user prompt.
+    def _handle_tc_wake(self, msg: Message) -> None:
+        """Process queued involuntary tool-call pairs by driving them
+        through the LLM as if the tools just returned — no fake user prompt.
 
-        Triggered by ``MSG_SOUL_WAKE``, posted to inbox by
-        ``_run_consultation_fire`` after it enqueues the synthetic pair.
+        Triggered by ``MSG_TC_WAKE``, posted to inbox by producers that
+        enqueue items on ``tc_inbox`` (soul flow, system notifications).
         Without this wake, an idle agent would block on ``inbox.get()``
-        indefinitely and the queued pair would only land when an external
+        indefinitely and queued pairs would only land when an external
         message happened to arrive.
 
         Wire-level mechanics per item:
@@ -1747,21 +1746,21 @@ class BaseAgent:
         """
         items = self._tc_inbox.drain()
         if not items:
-            self._log("soul_wake_noop", reason="tc_inbox_empty")
+            self._log("tc_wake_noop", reason="tc_inbox_empty")
             return
         if self._chat is None:
             # Brand-new agent — chat session not yet created. Re-enqueue
             # so the next external message can drain at a safe boundary.
             for item in items:
                 self._tc_inbox.enqueue(item)
-            self._log("soul_wake_noop", reason="chat_not_ready")
+            self._log("tc_wake_noop", reason="chat_not_ready")
             return
         iface = self._chat.interface
         if iface.has_pending_tool_calls():
             # Mid-pair on the wire — can't splice safely. Re-enqueue and bail.
             for item in items:
                 self._tc_inbox.enqueue(item)
-            self._log("soul_wake_noop", reason="pending_tool_calls")
+            self._log("tc_wake_noop", reason="pending_tool_calls")
             return
 
         try:
@@ -1791,7 +1790,7 @@ class BaseAgent:
                     self._appendix_ids_by_source[item.source] = item.call.id
                 self._save_chat_history()
 
-                self._log("soul_wake_dispatch", source=item.source, call_id=item.call.id)
+                self._log("tc_wake_dispatch", source=item.source, call_id=item.call.id)
                 response = self._session.send([item.result])
                 self._last_usage = response.usage
                 self._post_llm_call()
