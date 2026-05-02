@@ -2235,8 +2235,14 @@ class BaseAgent:
             "stamina": self._config.stamina,
             "state": self._state.value,
             "soul_delay": self._soul_delay,
+            "soul_voice": getattr(self._config, "soul_voice", "inner"),
             "molt_count": self._molt_count,
         }
+        # Custom voice prompt is only meaningful when voice == "custom".
+        # Surface it so /kanban (and any consumer reading .agent.json)
+        # can show the active prompt without calling soul(action='voice').
+        if data["soul_voice"] == "custom":
+            data["soul_voice_prompt"] = getattr(self._config, "soul_voice_prompt", "") or ""
         if self._mail_service is not None and self._mail_service.address:
             data["address"] = self._mail_service.address
         return data

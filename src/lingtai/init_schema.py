@@ -27,7 +27,12 @@ TOP_KNOWN: set[str] = {
     "principle", "principle_file", "covenant", "covenant_file",
     "procedures", "procedures_file", "brief", "brief_file",
     "pad", "pad_file", "prompt", "prompt_file",
-    "soul", "soul_file", "comment", "comment_file",
+    "comment", "comment_file",
+    # "soul" / "soul_file" — retired in v0.7.6. The soul-flow voice is
+    # now owned by the agent via soul(action='voice') and stored under
+    # manifest.soul.{voice,voice_prompt}. Existing init.json files
+    # carrying these top-level fields will emit "unknown field" warnings
+    # until a host migration cleans them up.
 }
 
 MANIFEST_REQUIRED: dict[str, type | tuple[type, ...]] = {

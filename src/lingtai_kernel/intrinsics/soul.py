@@ -523,15 +523,7 @@ def _build_soul_system_prompt(agent, kind: str = "inquiry") -> str:
       - ``soul_voice == "custom"`` → use ``_config.soul_voice_prompt`` verbatim
       - any other profile name    → look up ``soul.voice.<name>.prompt`` from i18n
       - missing/empty profile     → fall back to "inner"
-
-    Legacy ``agent._soul_flow_prompt`` operator override (if set) still
-    wins over voice profile — kept for backward compatibility with hosts
-    that injected a persona before the voice action existed.
     """
-    custom_legacy = getattr(agent, "_soul_flow_prompt", "")
-    if custom_legacy and kind in ("insights", "past"):
-        return custom_legacy
-
     from ..i18n import t
     if kind == "inquiry":
         return t(agent._config.language, "soul.system_prompt")
