@@ -115,7 +115,8 @@ class TestSystemIntrinsicKarma:
     def test_nirvana_with_nirvana_admin(self, tmp_path):
         target_dir = tmp_path / "target"
         target_dir.mkdir()
-        (target_dir / ".agent.json").write_text('{"agent_id": "t1"}')
+        # admin={} so is_human returns False; no heartbeat file → is_alive returns False
+        (target_dir / ".agent.json").write_text('{"agent_id": "t1", "admin": {}}')
 
         sender_base = tmp_path / "sender"
         sender_base.mkdir()
