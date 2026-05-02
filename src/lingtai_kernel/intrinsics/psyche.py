@@ -685,6 +685,13 @@ def _context_molt(agent, args: dict) -> dict:
     # remove a stale one.
     if hasattr(agent, "_appendix_ids_by_source"):
         agent._appendix_ids_by_source.clear()
+    # Pre-molt notification pointers don't survive the wire rebuild — clear
+    # the pending-mail-notification dict and discard any queued (not-yet-
+    # spliced) tc_inbox items so neither leaks into the post-molt wire.
+    if hasattr(agent, "_pending_mail_notifications"):
+        agent._pending_mail_notifications.clear()
+    if hasattr(agent, "_tc_inbox"):
+        agent._tc_inbox.drain()
 
     # Post-molt hooks — reload character/pad into prompt manager BEFORE new session
     for cb in getattr(agent, "_post_molt_hooks", []):
@@ -857,6 +864,13 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
 
     if hasattr(agent, "_appendix_ids_by_source"):
         agent._appendix_ids_by_source.clear()
+    # Pre-molt notification pointers don't survive the wire rebuild — clear
+    # the pending-mail-notification dict and discard any queued (not-yet-
+    # spliced) tc_inbox items so neither leaks into the post-molt wire.
+    if hasattr(agent, "_pending_mail_notifications"):
+        agent._pending_mail_notifications.clear()
+    if hasattr(agent, "_tc_inbox"):
+        agent._tc_inbox.drain()
 
     for cb in getattr(agent, "_post_molt_hooks", []):
         try:
