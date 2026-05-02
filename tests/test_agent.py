@@ -181,7 +181,7 @@ def test_mail_to_bad_address(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_mail_inbox_wiring(tmp_path):
-    """_on_mail_received should notify agent inbox."""
+    """_on_mail_received should enqueue a system_notification tool-call pair on tc_inbox."""
     agent = BaseAgent(service=make_mock_service(), agent_name="receiver", working_dir=tmp_path / "test")
     agent._on_mail_received({
         "_mailbox_id": "test-id-123",
@@ -189,11 +189,20 @@ def test_mail_inbox_wiring(tmp_path):
         "to": "127.0.0.1:8301",
         "message": "inbox test",
     })
-    assert not agent.inbox.empty()
-    msg = agent.inbox.get_nowait()
-    assert msg.sender == "system"
-    assert "email box" in msg.content
-    assert 'email(action=' in msg.content
+    # Mail arrival now flows through tc_inbox as a synthetic system(action="notification")
+    # pair, not via MSG_REQUEST on the text inbox. The plain inbox still receives
+    # an MSG_TC_WAKE sentinel to wake the run loop.
+    items = agent._tc_inbox.drain()
+    assert len(items) == 1
+    item = items[0]
+    assert item.call.name == "system"
+    assert item.call.args["action"] == "notification"
+    assert item.call.args["source"] == "email"
+    assert item.call.args["ref_id"] == "test-id-123"
+    assert "email box" in item.result.content
+    assert 'email(action=' in item.result.content
+    # Pending mail map records the email_id -> notif_id mapping for auto-dismiss.
+    assert agent._pending_mail_notifications.get("test-id-123") == item.call.args["notif_id"]
 
 
 def test_mail_start_wires_listener(tmp_path):
@@ -255,18 +264,23 @@ def test_mail_read_no_ids_returns_error(tmp_path):
 
 
 def test_mail_received_full_content_in_notification(tmp_path):
-    """_on_mail_received should include preview and subject in notification."""
+    """_on_mail_received should include preview and subject in the synthesized
+    system_notification tool-result body."""
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent._on_mail_received({
         "from": "sender",
         "subject": "test subject",
         "message": "full body content here",
     })
-    msg = agent.inbox.get_nowait()
-    assert "full body content here" in msg.content
-    assert "test subject" in msg.content
-    assert msg.sender == "system"
-    assert "mail box" in msg.content
+    # Notification body now lives in the ToolResultBlock content of a tc_inbox item,
+    # not in a plain MSG_REQUEST on the text inbox.
+    items = agent._tc_inbox.drain()
+    assert len(items) == 1
+    body = items[0].result.content
+    assert "full body content here" in body
+    assert "test subject" in body
+    assert "mail box" in body
+    assert items[0].call.args["source"] == "email"
 
 
 # ---------------------------------------------------------------------------

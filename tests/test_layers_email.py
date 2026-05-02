@@ -58,7 +58,7 @@ def test_email_intrinsic_registers_tool(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_email_receive_notification(tmp_path):
-    """Incoming mail should send notification to agent inbox."""
+    """Incoming mail should enqueue a system_notification tool-call pair on tc_inbox."""
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent._on_mail_received({
         "_mailbox_id": "abc123",
@@ -67,18 +67,27 @@ def test_email_receive_notification(tmp_path):
         "subject": "hi",
         "message": "body",
     })
-    assert not agent.inbox.empty()
-    notification = agent.inbox.get_nowait()
-    assert notification.sender == "system"
-    assert "email box" in notification.content
-    assert 'email(action=' in notification.content
+    # Notification body now lives in the tc_inbox tool-result, not in a text-channel
+    # MSG_REQUEST. The plain inbox still receives an MSG_TC_WAKE sentinel.
+    items = agent._tc_inbox.drain()
+    assert len(items) == 1
+    item = items[0]
+    assert item.call.args["action"] == "notification"
+    assert item.call.args["source"] == "email"
+    assert item.call.args["ref_id"] == "abc123"
+    assert "email box" in item.result.content
+    assert 'email(action=' in item.result.content
 
 
 def test_email_receive_fallback_id(tmp_path):
     """Notification should work even without _mailbox_id."""
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent._on_mail_received({"from": "sender", "message": "body"})
-    assert not agent.inbox.empty()
+    # tc_inbox carries the synthetic notification pair; a fresh notif/email_id was
+    # generated since the payload omitted _mailbox_id.
+    items = agent._tc_inbox.drain()
+    assert len(items) == 1
+    assert items[0].call.args["source"] == "email"
 
 
 def test_email_receive_via_agent(tmp_path):
@@ -91,7 +100,9 @@ def test_email_receive_via_agent(tmp_path):
         "subject": "hi",
         "message": "body",
     })
-    assert not agent.inbox.empty()
+    items = agent._tc_inbox.drain()
+    assert len(items) == 1
+    assert items[0].call.args["ref_id"] == "xyz"
 
 
 # ---------------------------------------------------------------------------

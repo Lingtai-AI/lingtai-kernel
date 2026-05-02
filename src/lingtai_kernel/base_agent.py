@@ -599,8 +599,15 @@ class BaseAgent:
         )
 
         self._log("mail_received", address=address, name=name, subject=subject, message=message)
-        msg = _make_message(MSG_REQUEST, "system", notification)
-        self.inbox.put(msg)
+        # Route the arrival as a synthetic system(action="notification") pair
+        # via tc_inbox. Replaces the older MSG_REQUEST text-channel delivery.
+        # email_id is the stable mail_id used for action-coupled dismissal in
+        # intrinsics/email._read.
+        self._enqueue_system_notification(
+            source="email",
+            ref_id=email_id,
+            body=notification,
+        )
 
     # ------------------------------------------------------------------
     # Public addon API
