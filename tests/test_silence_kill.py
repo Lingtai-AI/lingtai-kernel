@@ -97,7 +97,7 @@ def test_sequential_execution_stops_on_cancel(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent._cancel_event.set()
 
-    tc = ToolCall(name="system", args={"action": "show"}, id="tc1")
+    tc = ToolCall(name="system", args={"action": "nap", "seconds": 0}, id="tc1")
     guard = LoopGuard(max_total_calls=10)
 
     executor = ToolExecutor(

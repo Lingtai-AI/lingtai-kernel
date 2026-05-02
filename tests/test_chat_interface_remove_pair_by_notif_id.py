@@ -58,7 +58,7 @@ def test_remove_pair_by_notif_id_skips_non_matching_args_action():
         ToolCallBlock(
             id="call_001",
             name="system",
-            args={"action": "show"},  # not a notification
+            args={"action": "nap"},  # not a notification
         )
     ])
     chat.add_tool_results([

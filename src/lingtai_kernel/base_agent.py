@@ -49,6 +49,102 @@ logger = get_logger()
 
 
 # ---------------------------------------------------------------------------
+# Identity prompt section (curated prose)
+# ---------------------------------------------------------------------------
+
+
+def _format_stamina(seconds: float) -> str:
+    """Render stamina capacity as a human-friendly duration string."""
+    if seconds <= 0:
+        return "no fixed limit"
+    hours = seconds / 3600
+    if hours >= 1:
+        return f"{hours:.1f}h" if hours != int(hours) else f"{int(hours)}h"
+    minutes = seconds / 60
+    return f"{int(minutes)}min"
+
+
+def _build_identity_section(manifest_data: dict, mailbox_name: str | None = None) -> str:
+    """Render the agent's identity as curated prose for the system prompt.
+
+    Stable across turns (no transient runtime state) so it sits in the
+    cacheable prefix without invalidating cache. The `state` field is
+    explicitly omitted upstream — it changes every turn.
+
+    Returns a markdown paragraph. Empty/missing fields are silently
+    omitted so the prose stays clean for minimal manifests.
+    """
+    name = manifest_data.get("agent_name") or "(unnamed)"
+    nickname = manifest_data.get("nickname") or ""
+    agent_id = manifest_data.get("agent_id") or ""
+    address = manifest_data.get("address") or ""
+    created = manifest_data.get("created_at") or ""
+    started = manifest_data.get("started_at") or ""
+    admin = manifest_data.get("admin") or {}
+    stamina = manifest_data.get("stamina") or 0
+    soul_delay = manifest_data.get("soul_delay")
+    molt_count = manifest_data.get("molt_count", 0)
+
+    lines: list[str] = []
+
+    # Lead — name, nickname, id, address.
+    lead = f"You are **{name}**"
+    if nickname:
+        lead += f" — \"{nickname}\""
+    if agent_id:
+        lead += f" (id `{agent_id}`)"
+    lead += "."
+    lines.append(lead)
+    if address:
+        lines.append(f"Your address is `{address}`.")
+
+    # Origins — birth, awakening, molts.
+    origins: list[str] = []
+    if created:
+        origins.append(f"born {created}")
+    if started:
+        origins.append(f"woken {started} for this session")
+    if origins:
+        lines.append("You were " + ", ".join(origins) + ".")
+    if molt_count > 0:
+        lines.append(
+            f"You have undergone {molt_count} molt"
+            f"{'s' if molt_count != 1 else ''} since birth."
+        )
+
+    # Admin role.
+    if admin:
+        flags = [k for k, v in admin.items() if v]
+        if flags:
+            if "nirvana" in flags:
+                lines.append(
+                    "You hold both **karma** and **nirvana** privileges — "
+                    "you can manage and destroy other agents in this network."
+                )
+            elif "karma" in flags:
+                lines.append(
+                    "You hold **karma** privilege — "
+                    "you can lull / suspend / cpr / clear other agents."
+                )
+            else:
+                lines.append(f"You hold admin flags: {', '.join(flags)}.")
+
+    # Resources.
+    if stamina:
+        lines.append(
+            f"Each session lasts up to {_format_stamina(stamina)} "
+            "of work before rest. Your `stamina_left_seconds` "
+            "appears on every tool result."
+        )
+    if soul_delay is not None:
+        lines.append(f"Your soul flow fires {soul_delay}s after you go idle.")
+    if mailbox_name:
+        lines.append(f"You receive messages via {mailbox_name}.")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # BaseAgent
 # ---------------------------------------------------------------------------
 
@@ -231,16 +327,18 @@ class BaseAgent:
         manifest_data = self._build_manifest()
         self._workdir.write_manifest(manifest_data)
 
-        # Auto-inject identity into system prompt from manifest.
-        # The `state` field is runtime-transient (idle/active flips every turn)
-        # and its appearance inside the cacheable system-prompt prefix would
-        # break the cache every time the state changes. It stays on disk
-        # (.agent.json) and in .status.json for the TUI; agents that need
-        # their own state should call status() at runtime.
-        import json as _json
-        prompt_identity = {k: v for k, v in manifest_data.items() if k != "state"}
+        # Auto-inject identity into system prompt from manifest, rendered as
+        # curated prose. Transient runtime fields (`state`) are excluded so
+        # the section sits in the cacheable prefix without breaking cache
+        # every turn. The full manifest including `state` stays on disk
+        # (.agent.json) and in .status.json for the TUI.
         self._prompt_manager.write_section(
-            "identity", _json.dumps(prompt_identity, indent=2, ensure_ascii=False), protected=True
+            "identity",
+            _build_identity_section(
+                manifest_data,
+                mailbox_name=getattr(self, "_mailbox_name", None),
+            ),
+            protected=True,
         )
 
         self._nap_wake = threading.Event()  # signalled to wake nap early
@@ -451,10 +549,13 @@ class BaseAgent:
         """
         manifest_data = self._build_manifest()
         self._workdir.write_manifest(manifest_data)
-        import json as _json
-        prompt_identity = {k: v for k, v in manifest_data.items() if k != "state"}
         self._prompt_manager.write_section(
-            "identity", _json.dumps(prompt_identity, indent=2, ensure_ascii=False), protected=True
+            "identity",
+            _build_identity_section(
+                manifest_data,
+                mailbox_name=getattr(self, "_mailbox_name", None),
+            ),
+            protected=True,
         )
 
     # ------------------------------------------------------------------
@@ -2238,7 +2339,7 @@ class BaseAgent:
             self._workdir.write_manifest(self._build_manifest())
         except Exception as e:
             logger.warning(f"[{self.agent_name}] Failed to update manifest: {e}")
-        # Write .status.json — live runtime snapshot (same as system("show"))
+        # Write .status.json — live runtime snapshot consumed by TUI/portal
         try:
             (self._working_dir / ".status.json").write_text(
                 json.dumps(self.status(), ensure_ascii=False, indent=2)
@@ -2271,7 +2372,7 @@ class BaseAgent:
     # ------------------------------------------------------------------
 
     def status(self) -> dict:
-        """Return live runtime status — written to .status.json, returned by system("show").
+        """Return live runtime status — written to .status.json on each turn for TUI/portal.
 
         Contains identity, runtime metrics, and token/context usage.
         Must only be called after _session exists (not during __init__).

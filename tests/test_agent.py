@@ -328,7 +328,7 @@ def test_execute_single_tool_intrinsic(tmp_path):
     # Replace the system intrinsic with a mock
     agent._intrinsics["system"] = lambda args: {"status": "ok", "time": "12:00"}
 
-    tc = ToolCall(name="system", args={"action": "show"})
+    tc = ToolCall(name="system", args={"action": "nap", "seconds": 0})
     result = agent._dispatch_tool(tc)
     assert result["status"] == "ok"
 

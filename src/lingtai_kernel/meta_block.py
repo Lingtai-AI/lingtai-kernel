@@ -22,6 +22,8 @@ docs/plans/2026-05-02-system-notification-as-tool-call.md.
 """
 from __future__ import annotations
 
+import time as _time
+
 from .i18n import t as _t
 from .time_veil import now_iso
 
@@ -35,17 +37,20 @@ def build_meta(agent) -> dict:
     Shape::
 
         {
-            "current_time": "<iso>",     # absent when time-blind
+            "current_time": "<iso>",         # absent when time-blind
             "context": {
-                "system_tokens": int,    # sys prompt + tools schema
-                "history_tokens": int,   # conversation history
-                "usage": float,          # fraction of context window used
+                "system_tokens": int,        # sys prompt + tools schema
+                "history_tokens": int,       # conversation history
+                "usage": float,              # fraction of context window used
             },
+            "stamina_left_seconds": float,   # session time remaining; -1 if unstarted
         }
 
     Sentinel handling: when token decomposition has not yet run, the
     ``context`` sub-object is still emitted but with ``-1`` / ``-1.0``
-    values so callers can render "unknown" without ambiguity.
+    values so callers can render "unknown" without ambiguity. Same
+    convention for ``stamina_left_seconds`` — ``-1`` means the agent
+    hasn't called ``start()`` yet (no uptime anchor).
     """
     meta: dict = {}
     ts = now_iso(agent)
@@ -127,6 +132,18 @@ def build_meta(agent) -> dict:
             "history_tokens": -1,
             "usage": -1.0,
         }
+
+    # Stamina — transient runtime resource, can't sit in the cached system
+    # prompt. Surface here so the agent sees how much session time it has
+    # left on every tool result, alongside context.usage. Sentinel -1 when
+    # the agent hasn't started yet (uptime_anchor unset).
+    uptime_anchor = getattr(agent, "_uptime_anchor", None)
+    stamina = getattr(getattr(agent, "_config", None), "stamina", None)
+    if uptime_anchor is not None and stamina is not None:
+        uptime = _time.monotonic() - uptime_anchor
+        meta["stamina_left_seconds"] = round(max(0.0, stamina - uptime), 1)
+    else:
+        meta["stamina_left_seconds"] = -1
 
     return meta
 

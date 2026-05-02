@@ -49,17 +49,21 @@ def test_system_wired_in_agent(tmp_path):
     assert "system" in agent._intrinsics
 
 
+
+
 # ---------------------------------------------------------------------------
-# show action
+# agent.status() — internal Python API; writes .status.json for TUI/portal.
+# The LLM-callable system(action="show") was removed; identity now ships in
+# the cached system prompt and stamina ships on every tool result via meta.
+# These tests cover the status() shape contract that TUI/portal depend on.
 # ---------------------------------------------------------------------------
 
 
-def test_system_show_returns_identity(tmp_path):
+def test_status_returns_identity(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="alice", working_dir=tmp_path / "test")
     agent.start()
     try:
-        result = agent._intrinsics["system"]({"action": "show"})
-        assert result["status"] == "ok"
+        result = agent.status()
         identity = result["identity"]
         assert identity["agent_name"] == "alice"
         assert "test" in identity["address"]
@@ -68,12 +72,12 @@ def test_system_show_returns_identity(tmp_path):
         agent.stop()
 
 
-def test_system_show_returns_runtime(tmp_path):
+def test_status_returns_runtime(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
         time.sleep(0.1)
-        result = agent._intrinsics["system"]({"action": "show"})
+        result = agent.status()
         runtime = result["runtime"]
         assert "T" in runtime["started_at"]
         assert runtime["uptime_seconds"] >= 0.05
@@ -81,12 +85,12 @@ def test_system_show_returns_runtime(tmp_path):
         agent.stop()
 
 
-def test_system_show_returns_state(tmp_path):
-    """C1 fix: status() exposes runtime.state so agents know their lifecycle phase."""
+def test_status_returns_state(tmp_path):
+    """status() exposes runtime.state so the TUI knows the lifecycle phase."""
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
-        result = agent._intrinsics["system"]({"action": "show"})
+        result = agent.status()
         runtime = result["runtime"]
         assert "state" in runtime, "runtime.state missing — C1 regression"
         assert runtime["state"] in ("active", "idle", "asleep", "stuck", "suspended"), \
@@ -106,11 +110,11 @@ def test_status_dict_state_matches_agent_state(tmp_path):
         agent.stop()
 
 
-def test_system_show_returns_tokens(tmp_path):
+def test_status_returns_tokens(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
-        result = agent._intrinsics["system"]({"action": "show"})
+        result = agent.status()
         tokens = result["tokens"]
         assert "input_tokens" in tokens
         assert "output_tokens" in tokens
@@ -124,7 +128,7 @@ def test_system_show_returns_tokens(tmp_path):
         agent.stop()
 
 
-def test_system_show_with_mail_service(tmp_path):
+def test_status_with_mail_service(tmp_path):
     mock_mail = MagicMock()
     mock_mail.address = "127.0.0.1:8301"
     agent = BaseAgent(
@@ -134,18 +138,26 @@ def test_system_show_with_mail_service(tmp_path):
     )
     agent.start()
     try:
-        result = agent._intrinsics["system"]({"action": "show"})
+        result = agent.status()
         assert result["identity"]["mail_address"] == "127.0.0.1:8301"
     finally:
         agent.stop()
 
 
-def test_system_show_context_null_without_session(tmp_path):
+def test_status_context_null_without_session(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    result = agent._intrinsics["system"]({"action": "show"})
+    result = agent.status()
     ctx = result["tokens"]["context"]
     assert ctx["window_size"] is None
     assert ctx["usage_pct"] is None
+
+
+def test_system_show_action_rejected(tmp_path):
+    """system(action='show') was removed; calling it must error, not silently no-op."""
+    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    result = agent._intrinsics["system"]({"action": "show"})
+    assert result["status"] == "error"
+    assert "Unknown system action" in result["message"]
 
 
 # ---------------------------------------------------------------------------

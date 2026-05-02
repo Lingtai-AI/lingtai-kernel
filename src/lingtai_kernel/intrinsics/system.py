@@ -1,7 +1,6 @@
 """System intrinsic — runtime, lifecycle, and synchronization.
 
 Actions (voluntary, agent-callable):
-    show      — display agent identity, runtime, and resource usage
     nap       — pause execution; wakes on incoming message or timeout
     refresh   — stop, reload MCP servers and config from working dir, restart
     sleep     — self only, go to sleep (no karma needed)
@@ -19,6 +18,13 @@ Action (involuntary, kernel-synthesized only — NOT callable by the agent):
                    future MCP listener events. Spliced into the wire chat
                    via tc_inbox. The public ``handle()`` dispatch rejects
                    this action with an error message.
+
+Identity, runtime, and stamina state surface via other channels:
+    - identity prompt section — every turn, cached prefix
+    - meta line `context.{system,history}_tokens` + `stamina_left_seconds`
+      on every tool result and text input
+    - `.status.json` — written by the kernel; read with read({"path": ".status.json"})
+      when the agent wants the deep dive
 """
 from __future__ import annotations
 
@@ -39,7 +45,7 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["show", "nap", "refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear", "nirvana", "presets", "dismiss"],
+                "enum": ["nap", "refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear", "nirvana", "presets", "dismiss"],
                 "description": t(lang, "system_tool.action_description"),
             },
             "seconds": {
@@ -74,7 +80,7 @@ def get_schema(lang: str = "en") -> dict:
 
 def handle(agent, args: dict) -> dict:
     """Handle system tool — runtime, lifecycle, synchronization."""
-    action = args.get("action", "show")
+    action = args.get("action")
     # Belt-and-suspenders: 'notification' is kernel-synthesized only.
     # Even if the LLM hallucinates this action, refuse to dispatch.
     if action == "notification":
@@ -88,7 +94,6 @@ def handle(agent, args: dict) -> dict:
             ),
         }
     handler = {
-        "show": _show,
         "nap": _nap,
         "refresh": _refresh,
         "sleep": _sleep,
@@ -104,16 +109,6 @@ def handle(agent, args: dict) -> dict:
     if handler is None:
         return {"status": "error", "message": f"Unknown system action: {action}"}
     return handler(agent, args)
-
-
-# ---------------------------------------------------------------------------
-# show
-# ---------------------------------------------------------------------------
-
-def _show(agent, args: dict) -> dict:
-    result = agent.status()
-    result["status"] = "ok"
-    return result
 
 
 # ---------------------------------------------------------------------------
