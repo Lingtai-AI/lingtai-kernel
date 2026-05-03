@@ -817,7 +817,6 @@ class Agent(BaseAgent):
         self._config = AgentConfig(
             stamina=m.get("stamina", 86400.0),
             soul_delay=soul.get("delay", 300.0),
-            consultation_interval=soul.get("consultation_interval", 20),
             consultation_past_count=soul.get("consultation_past_count", 2),
             soul_voice=soul.get("voice", "inner"),
             soul_voice_prompt=soul.get("voice_prompt", ""),

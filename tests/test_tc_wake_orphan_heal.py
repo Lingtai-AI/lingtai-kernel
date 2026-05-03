@@ -63,8 +63,8 @@ class _StubSession:
         if self.raise_on_send is not None:
             raise self.raise_on_send
         # Successful path: return a stub LLMResponse-like object. The real
-        # response object has .usage and is consumed by _post_llm_call /
-        # _process_response; in tests where send doesn't raise we never
+        # response object has .usage and is consumed by _process_response;
+        # in tests where send doesn't raise we never
         # reach those, so a minimal object is fine.
 
         class _StubResponse:

@@ -182,7 +182,6 @@ def validate_init(data: dict) -> list[str]:
     if soul is not None:
         _optional_keys(soul, {
             "delay": (int, float),
-            "consultation_interval": int,
             "consultation_past_count": int,
             "voice": str,
             "voice_prompt": str,

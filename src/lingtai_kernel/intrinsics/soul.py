@@ -12,11 +12,11 @@ Three actions:
               cannot invoke manually.
     inquiry — sync mirror session. Clones conversation (text+thinking only),
               sends question, returns answer in tool result. On-demand.
-    config  — adjust soul flow knobs. Accepts any subset of three optional
-              fields: delay_seconds (wall-clock cadence), consultation_interval
-              (turn-counter cadence), consultation_past_count (K, number of
-              past-self voices per fire). Updates live state, restarts the
-              wall-clock timer if delay changed, persists to init.json.
+    config  — adjust soul flow knobs. Accepts any subset of two optional
+              fields: delay_seconds (wall-clock cadence), consultation_past_count
+              (K, number of past-self voices per fire). Updates live state,
+              restarts the wall-clock timer if delay changed, persists to
+              init.json.
 """
 from __future__ import annotations
 
@@ -24,9 +24,6 @@ from __future__ import annotations
 # Lower bound on agent-set soul delay. Below this, the consultation cost
 # (M parallel LLM calls per fire) dominates the agent's own turns.
 SOUL_DELAY_MIN_SECONDS = 30.0
-# Lower bound on turn-counter cadence — below this, every few turns triggers
-# a fire and consultation cost dominates work. 0 disables the turn counter.
-CONSULTATION_INTERVAL_MIN = 5
 # Bounds on K — past-self voice count per fire. 0 = insights-only fires;
 # 5 caps M=6 LLM calls per fire (cost + chat-history bloat).
 CONSULTATION_PAST_COUNT_MIN = 0
@@ -65,11 +62,6 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "number",
                 "minimum": SOUL_DELAY_MIN_SECONDS,
                 "description": t(lang, "soul.delay_seconds_description"),
-            },
-            "consultation_interval": {
-                "type": "integer",
-                "minimum": 0,
-                "description": t(lang, "soul.consultation_interval_description"),
             },
             "consultation_past_count": {
                 "type": "integer",
@@ -141,24 +133,22 @@ def handle(agent, args: dict) -> dict:
 def _handle_config(agent, args: dict) -> dict:
     """Handle action='config' — adjust soul flow knobs.
 
-    Accepts any subset of: delay_seconds, consultation_interval,
-    consultation_past_count. Validates each provided field, updates live
-    state, restarts the wall-clock timer if delay changed, persists to
-    init.json. Returns old and new values for every field that was
-    actually changed (untouched fields are absent from the response).
+    Accepts any subset of: delay_seconds, consultation_past_count.
+    Validates each provided field, updates live state, restarts the
+    wall-clock timer if delay changed, persists to init.json. Returns
+    old and new values for every field that was actually changed
+    (untouched fields are absent from the response).
     """
     provided: dict = {}
     if "delay_seconds" in args:
         provided["delay_seconds"] = args["delay_seconds"]
-    if "consultation_interval" in args:
-        provided["consultation_interval"] = args["consultation_interval"]
     if "consultation_past_count" in args:
         provided["consultation_past_count"] = args["consultation_past_count"]
     if not provided:
         return {
             "error": (
                 "config requires at least one of: delay_seconds, "
-                "consultation_interval, consultation_past_count."
+                "consultation_past_count."
             ),
         }
 
@@ -184,26 +174,6 @@ def _handle_config(agent, args: dict) -> dict:
         old_values["delay_seconds"] = float(agent._soul_delay)
         agent._soul_delay = v
         new_values["delay_seconds"] = v
-
-    if "consultation_interval" in provided:
-        raw = provided["consultation_interval"]
-        try:
-            v = int(raw)
-        except (TypeError, ValueError):
-            return {"error": f"consultation_interval must be an integer, got {type(raw).__name__}."}
-        if v < 0:
-            return {"error": f"consultation_interval must be >= 0 (got {v})."}
-        if v > 0 and v < CONSULTATION_INTERVAL_MIN:
-            return {
-                "error": (
-                    f"consultation_interval must be 0 (off) or >= "
-                    f"{CONSULTATION_INTERVAL_MIN} (got {v}). Below the floor, "
-                    "fires would dominate the agent's main work."
-                ),
-            }
-        old_values["consultation_interval"] = int(getattr(agent._config, "consultation_interval", 0))
-        agent._config.consultation_interval = v
-        new_values["consultation_interval"] = v
 
     if "consultation_past_count" in provided:
         raw = provided["consultation_past_count"]
@@ -361,7 +331,6 @@ def _persist_soul_config(agent, new_values: dict) -> str | None:
 
     Maps:
       - delay_seconds            -> manifest.soul.delay
-      - consultation_interval    -> manifest.soul.consultation_interval
       - consultation_past_count  -> manifest.soul.consultation_past_count
 
     Atomic via temp-file-then-rename. Returns ``None`` on success, or a
@@ -393,8 +362,6 @@ def _persist_soul_config(agent, new_values: dict) -> str | None:
 
     if "delay_seconds" in new_values:
         soul_block["delay"] = new_values["delay_seconds"]
-    if "consultation_interval" in new_values:
-        soul_block["consultation_interval"] = new_values["consultation_interval"]
     if "consultation_past_count" in new_values:
         soul_block["consultation_past_count"] = new_values["consultation_past_count"]
 

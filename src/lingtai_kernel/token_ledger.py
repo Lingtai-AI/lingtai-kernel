@@ -61,8 +61,8 @@ def append_token_entry(
 def count_main_api_calls(path: Path | str) -> int:
     """Count ledger entries tagged ``source="main"``.
 
-    Used as the canonical "main-chat LLM calls so far" signal — drives
-    past-self consultation cadence (``consultation_interval``). Reading
+    Used as the canonical "main-chat LLM calls so far" signal — a useful
+    diagnostic helper. Reading
     the ledger is the single source of truth: an in-memory turn counter
     drifts whenever an involuntary tool-call splice (mail, MCP
     notifications, soul-flow's own appendix landing) calls a

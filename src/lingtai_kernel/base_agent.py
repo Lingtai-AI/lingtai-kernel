@@ -42,7 +42,7 @@ from .time_veil import now_iso, scrub_time_fields
 from .session import SessionManager
 from .tc_inbox import TCInbox
 from .tool_executor import ToolExecutor
-from .token_ledger import append_token_entry, count_main_api_calls, sum_token_ledger
+from .token_ledger import append_token_entry, sum_token_ledger
 from .types import UnknownToolError
 
 logger = get_logger()
@@ -614,7 +614,8 @@ class BaseAgent:
         )
         self._thread.start()
         self._start_heartbeat()
-        # Soul cadence runs perpetually from boot — independent of state.
+        # Boot state is IDLE (fire-eligible) — start the timer here. Subsequent
+        # state transitions are managed by _set_state.
         self._start_soul_timer()
 
     def _reset_uptime(self) -> None:
@@ -815,9 +816,11 @@ class BaseAgent:
     def _set_state(self, new_state: AgentState, reason: str = "") -> None:
         """Transition to a new state.
 
-        State no longer drives the soul cadence timer — the timer runs
-        perpetually on a wall clock (started at boot, cancelled at
-        shutdown / sleep). Only the idle event flag is updated here.
+        Drives the soul cadence timer: the timer runs only when the agent
+        is in a fire-eligible state (ACTIVE / IDLE). Entering STUCK,
+        ASLEEP, or SUSPENDED cancels it outright; returning to ACTIVE or
+        IDLE starts a fresh ``soul_delay``-second timer. No pause/resume
+        semantics — recovery time anchors the next fire.
         """
         old = self._state
         if old == new_state:
@@ -827,19 +830,32 @@ class BaseAgent:
             self._idle.clear()
         else:
             self._idle.set()
+
+        fire_eligible = {AgentState.ACTIVE, AgentState.IDLE}
+        was_eligible = old in fire_eligible
+        is_eligible = new_state in fire_eligible
+        if was_eligible and not is_eligible:
+            # Leaving fire-eligible — cancel any pending timer.
+            self._cancel_soul_timer()
+        elif is_eligible and not was_eligible:
+            # Returning to fire-eligible — start a fresh timer.
+            self._start_soul_timer()
+
         self._log("agent_state", old=old.value, new=new_state.value, reason=reason)
         self._workdir.write_manifest(self._build_manifest())
 
     def _start_soul_timer(self) -> None:
         """Start the soul cadence timer.
 
-        Runs perpetually — fires every ``_soul_delay`` seconds regardless of
-        agent state, reschedules itself in the timer callback. Stops only on
-        shutdown or when explicitly cancelled (e.g. when entering ASLEEP).
+        Runs only while the agent is fire-eligible (ACTIVE or IDLE).
+        Cancelled by _set_state on entry to STUCK / ASLEEP / SUSPENDED;
+        restarted by _set_state on return to ACTIVE / IDLE. Reschedules
+        itself in the timer callback (also gated on fire-eligibility).
 
-        The cadence model means soul flow surfaces on a wall clock, not when
-        the agent goes idle. Busy agents still get reflection; rest is no
-        longer a precondition for the inner voice.
+        The cadence model means soul flow surfaces on a wall clock, not
+        when the agent goes idle. Busy agents still get reflection; rest
+        is not a precondition for the inner voice. But agents in failure
+        or hibernation get no cadence — recovery anchors a fresh interval.
         """
         if self._shutdown.is_set():
             return
@@ -864,34 +880,27 @@ class BaseAgent:
         """Cadence timer callback. Fires past-self consultation on the
         soul_delay wall clock, then reschedules itself.
 
-        The consultation runs inline on this timer thread (already a
-        daemon) — _run_consultation_fire spawns its own M parallel
-        worker threads internally and joins them with a barrier, so this
-        method blocks until they finish. Reschedule happens in the
-        finally clause so the cadence keeps running even on errors.
+        Only fires under ACTIVE or IDLE. The timer is normally cancelled
+        on entry to STUCK/ASLEEP/SUSPENDED via _set_state, so the state
+        check here is defensive — it catches the narrow race between the
+        timer firing on its own thread and a concurrent state transition
+        on the run-loop thread.
 
-        The work itself is delegated to _run_consultation_fire which
-        builds the synthetic (call, result) pair and enqueues it on
-        tc_inbox with replace_in_history=True. Splicing into the wire
-        chat happens at the next safe boundary in _drain_tc_inbox.
-
-        This replaced the legacy diary+mirror-session whisper. That old
-        machinery (soul_flow, _ensure_soul_session, _trim_soul_session,
-        _collect_new_diary, _save_soul_session, reset_soul_session,
-        enqueue_flow_voice) was deleted from intrinsics/soul.py during
-        the consultation tear-down.
+        Reschedules itself only when fire-eligible. Recovery from STUCK
+        or wake-from-ASLEEP starts a fresh timer via _set_state, so the
+        finally clause does not need to reschedule unconditionally.
         """
         self._soul_timer = None
         try:
-            if self._state in (AgentState.ASLEEP, AgentState.SUSPENDED):
-                self._log("soul_whisper_skipped", reason=self._state.value)
-            else:
+            if self._state in (AgentState.ACTIVE, AgentState.IDLE):
                 self._run_consultation_fire()
+            else:
+                self._log("soul_whisper_skipped", reason=self._state.value)
         except Exception as e:
             self._log("soul_whisper_error", error=str(e))
         finally:
-            # Perpetual cadence — reschedule unless shutting down
-            self._start_soul_timer()
+            if self._state in (AgentState.ACTIVE, AgentState.IDLE):
+                self._start_soul_timer()
 
     def _drain_tc_inbox(self) -> None:
         """Splice queued involuntary tool-call pairs into the wire chat.
@@ -997,57 +1006,6 @@ class BaseAgent:
     # ------------------------------------------------------------------
     # Past-self consultation — soul flow as appendix tool-call pair
     # ------------------------------------------------------------------
-
-    def _post_llm_call(self) -> None:
-        """Post-call hook — runs after every successful main-chat LLM
-        response. Owns turn-driven cadence work that should tick once
-        per LLM call, independent of the wall-clock soul timer.
-
-        Currently delegates to ``_maybe_fire_consultation`` (turn-count
-        cadence for past-self consultation). Errors are logged and
-        swallowed; this hook must never break the main loop.
-        """
-        try:
-            self._maybe_fire_consultation()
-        except Exception as e:
-            self._log("post_llm_call_error", error=str(e)[:200])
-
-    def _maybe_fire_consultation(self) -> None:
-        """If the main-chat LLM call count hits the consultation cadence,
-        kick off a fire in a daemon thread. Non-blocking.
-
-        Cadence is set by ``config.consultation_interval`` (main-chat LLM
-        calls between fires). 0 disables the turn-count trigger; the
-        wall-clock timer (``_soul_delay``) keeps running independently.
-
-        Counts ``source="main"`` entries in ``logs/token_ledger.jsonl`` —
-        the canonical receipt for main-chat LLM round-trips. Fires when
-        ``count > 0 and count % interval == 0``. Reading the ledger
-        avoids the parallel-counter drift that came from involuntary
-        tool-call splices (mail, MCP notifications, soul-flow's own
-        appendix landing) ticking a shared "post-LLM-call" counter — the
-        ledger is tagged at write time, so consultation/inquiry fan-out
-        calls (``source="soul"``) structurally cannot pollute the count.
-
-        Both cadences enqueue onto ``tc_inbox`` with ``coalesce=True``
-        keyed by ``source="soul.flow"``, so rapid double-fires collapse
-        to one queued pair (latest wins). The expensive M=1+K LLM fan-out
-        still runs per fire — coalescing only deduplicates the visible
-        artifact in chat history.
-        """
-        interval = int(getattr(self._config, "consultation_interval", 0))
-        if interval <= 0:
-            return
-        ledger_path = self._working_dir / "logs" / "token_ledger.jsonl"
-        count = count_main_api_calls(ledger_path)
-        if count == 0 or count % interval != 0:
-            return
-        thread = threading.Thread(
-            target=self._run_consultation_fire,
-            daemon=True,
-            name=f"consult-{self.agent_name or self._working_dir.name}",
-        )
-        thread.start()
 
     def _run_consultation_fire(self) -> None:
         """Run one consultation batch and persist the result.
@@ -1831,7 +1789,6 @@ class BaseAgent:
         self._log("text_input", text=content)
         response = self._session.send(content)
         self._last_usage = response.usage
-        self._post_llm_call()
         self._save_chat_history()
         result = self._process_response(response)
         self._post_request(msg, result)
@@ -1944,11 +1901,7 @@ class BaseAgent:
                     self._last_usage = response.usage
                     # Tag the ledger entry source="tc_wake" — an involuntary
                     # tool-call splice (mail/MCP notification/soul-flow
-                    # appendix) is not a main-chat turn, so consultation
-                    # cadence (which counts source="main" ledger entries)
-                    # must not see it. Deliberately NOT calling
-                    # _post_llm_call() either: that hook is reserved for
-                    # genuine main-chat round-trips. Tokens still land in
+                    # appendix) is not a main-chat turn. Tokens still land in
                     # the ledger — they're real spend — just under a
                     # different source tag.
                     self._save_chat_history(ledger_source="tc_wake")
@@ -2075,8 +2028,6 @@ class BaseAgent:
 
             response = self._session.send(tool_results)
             self._last_usage = response.usage
-            if ledger_source == "main":
-                self._post_llm_call()
             self._save_chat_history(ledger_source=ledger_source)
 
         final_text = "\n".join(collected_text_parts)

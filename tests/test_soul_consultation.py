@@ -485,64 +485,15 @@ class TestBuildConsultationPair:
 
 
 # ---------------------------------------------------------------------------
-# BaseAgent: _maybe_fire_consultation, _run_consultation_fire,
+# BaseAgent: _run_consultation_fire,
 # _rehydrate_appendix_tracking
 # ---------------------------------------------------------------------------
 
 
-# TestMaybeFireConsultation: removed 2026-05-02 with the in-memory
-# turn-counter. The cadence is now derived from token_ledger.jsonl
-# (count of source="main" entries, mod consultation_interval), so unit
-# tests would need to fake-write ledger lines on disk to exercise it —
-# more setup than signal. Behavior is observed in live agent runs
-# instead.
-
-
-class TestPostLlmCallHook:
-    """The LLM-call hot path must invoke _post_llm_call after every
-    successful response so the turn-count cadence ticks correctly."""
-
-    def _make_real_agent(self, tmp_path, *, interval: int):
-        from lingtai_kernel import BaseAgent
-        svc = MagicMock(); svc.model = "test-model"
-        agent = BaseAgent(
-            service=svc,
-            agent_name="t",
-            working_dir=tmp_path / "agent",
-        )
-        agent._config.consultation_interval = interval
-        return agent
-
-    def test_post_llm_call_invokes_maybe_fire(self, tmp_path):
-        agent = self._make_real_agent(tmp_path, interval=10)
-        with patch.object(agent, "_maybe_fire_consultation") as m:
-            agent._post_llm_call()
-        assert m.call_count == 1
-
-    def test_post_llm_call_swallows_exceptions(self, tmp_path):
-        agent = self._make_real_agent(tmp_path, interval=10)
-        agent.logged = []
-        original_log = agent._log
-        def capture_log(event, **kw):
-            agent.logged.append((event, kw))
-            return original_log(event, **kw)
-        agent._log = capture_log
-
-        with patch.object(
-            agent, "_maybe_fire_consultation",
-            side_effect=RuntimeError("boom"),
-        ):
-            agent._post_llm_call()  # must not raise
-        events = [e for e, _ in agent.logged]
-        assert "post_llm_call_error" in events
-
-    def test_default_interval_is_twenty(self):
-        from lingtai_kernel.config import AgentConfig
-        assert AgentConfig().consultation_interval == 20
-
-    def test_default_past_count_is_two(self):
-        from lingtai_kernel.config import AgentConfig
-        assert AgentConfig().consultation_past_count == 2
+# TestMaybeFireConsultation: removed 2026-05-02 with the turn-count cadence.
+# Soul flow now fires exclusively on a wall-clock timer via _set_state
+# cancel/restart mechanics. See _set_state and _soul_whisper for the new
+# single-trigger design.
 
 
 class TestRunConsultationFire:
@@ -1293,21 +1244,20 @@ class TestRunConsultationDispatchesByKind:
 
 
 # ---------------------------------------------------------------------------
-# action='config' — agent-tunable soul cadence (delay + interval + K)
+# action='config' — agent-tunable soul cadence (delay + K)
 # ---------------------------------------------------------------------------
 
 
 class _ConfigFakeAgent(_FakeAgent):
     """Extension of _FakeAgent with the attributes _handle_config touches:
-    _soul_delay, _config.consultation_interval, _config.consultation_past_count,
+    _soul_delay, _config.consultation_past_count,
     _shutdown (Event), _start_soul_timer (callback).
     Tracks whether the timer was restarted."""
 
     def __init__(self, tmp_path, *, initial_delay=120.0, shutdown=False,
-                 initial_interval=40, initial_past_count=2):
+                 initial_past_count=2):
         super().__init__(tmp_path)
         self._soul_delay = float(initial_delay)
-        self._config.consultation_interval = initial_interval
         self._config.consultation_past_count = initial_past_count
         import threading
         self._shutdown = threading.Event()
@@ -1334,19 +1284,6 @@ class TestSoulConfig:
         assert agent.timer_restart_count == 1
         assert any(ev == "soul_config" for ev, _ in agent.logged)
 
-    def test_config_updates_consultation_interval(self, tmp_path):
-        from lingtai_kernel.intrinsics.soul import handle
-        agent = _ConfigFakeAgent(tmp_path, initial_interval=40)
-
-        result = handle(agent, {"action": "config", "consultation_interval": 80})
-
-        assert result["status"] == "ok"
-        assert result["old"]["consultation_interval"] == 40
-        assert result["new"]["consultation_interval"] == 80
-        assert agent._config.consultation_interval == 80
-        # delay untouched -> no timer restart
-        assert agent.timer_restart_count == 0
-
     def test_config_updates_consultation_past_count(self, tmp_path):
         from lingtai_kernel.intrinsics.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_past_count=2)
@@ -1361,23 +1298,20 @@ class TestSoulConfig:
     def test_config_accepts_multiple_fields_at_once(self, tmp_path):
         from lingtai_kernel.intrinsics.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_delay=120.0,
-                                  initial_interval=40, initial_past_count=2)
+                                  initial_past_count=2)
 
         result = handle(agent, {
             "action": "config",
             "delay_seconds": 300,
-            "consultation_interval": 60,
             "consultation_past_count": 1,
         })
 
         assert result["status"] == "ok"
         assert result["new"] == {
             "delay_seconds": 300.0,
-            "consultation_interval": 60,
             "consultation_past_count": 1,
         }
         assert agent._soul_delay == 300.0
-        assert agent._config.consultation_interval == 60
         assert agent._config.consultation_past_count == 1
         assert agent.timer_restart_count == 1  # delay changed
 
@@ -1457,40 +1391,6 @@ class TestSoulConfig:
         assert agent._soul_delay == 300.0
         assert agent.timer_restart_count == 0
 
-    def test_config_consultation_interval_zero_disables(self, tmp_path):
-        from lingtai_kernel.intrinsics.soul import handle
-        agent = _ConfigFakeAgent(tmp_path, initial_interval=40)
-
-        # 0 = off, valid
-        result = handle(agent, {"action": "config", "consultation_interval": 0})
-        assert result["status"] == "ok"
-        assert agent._config.consultation_interval == 0
-
-    def test_config_rejects_consultation_interval_below_floor(self, tmp_path):
-        from lingtai_kernel.intrinsics.soul import (
-            handle, CONSULTATION_INTERVAL_MIN,
-        )
-        agent = _ConfigFakeAgent(tmp_path, initial_interval=40)
-
-        # 1..MIN-1 should fail (0 is valid as "off")
-        result = handle(agent, {
-            "action": "config",
-            "consultation_interval": CONSULTATION_INTERVAL_MIN - 1,
-        })
-        assert "error" in result
-        assert agent._config.consultation_interval == 40
-
-    def test_config_rejects_negative_consultation_interval(self, tmp_path):
-        from lingtai_kernel.intrinsics.soul import handle
-        agent = _ConfigFakeAgent(tmp_path, initial_interval=40)
-
-        result = handle(agent, {
-            "action": "config",
-            "consultation_interval": -1,
-        })
-        assert "error" in result
-        assert agent._config.consultation_interval == 40
-
     def test_config_rejects_past_count_above_max(self, tmp_path):
         from lingtai_kernel.intrinsics.soul import (
             handle, CONSULTATION_PAST_COUNT_MAX,
@@ -1521,12 +1421,11 @@ class TestSoulConfig:
         assert "config" in schema["properties"]["action"]["enum"]
         # set_delay removed from enum
         assert "set_delay" not in schema["properties"]["action"]["enum"]
-        # All three knobs present in schema
+        # Both knobs present in schema
         assert "delay_seconds" in schema["properties"]
         assert schema["properties"]["delay_seconds"]["type"] == "number"
         assert schema["properties"]["delay_seconds"]["minimum"] == 30.0
-        assert "consultation_interval" in schema["properties"]
-        assert schema["properties"]["consultation_interval"]["type"] == "integer"
+        assert "consultation_interval" not in schema["properties"]
         assert "consultation_past_count" in schema["properties"]
         assert schema["properties"]["consultation_past_count"]["type"] == "integer"
 

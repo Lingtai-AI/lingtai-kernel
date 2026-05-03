@@ -107,14 +107,12 @@ class TestSoulSchema:
 
     def test_schema_config_properties_present(self):
         # config parameters — delay_seconds (number, min 30s),
-        # consultation_interval (integer, 0 or >=5), consultation_past_count
-        # (integer, [0, 5]).
+        # consultation_past_count (integer, [0, 5]).
         schema = soul.get_schema("en")
         assert "delay_seconds" in schema["properties"]
         assert schema["properties"]["delay_seconds"]["type"] == "number"
         assert schema["properties"]["delay_seconds"]["minimum"] == 30.0
-        assert "consultation_interval" in schema["properties"]
-        assert schema["properties"]["consultation_interval"]["type"] == "integer"
+        assert "consultation_interval" not in schema["properties"]
         assert "consultation_past_count" in schema["properties"]
         assert schema["properties"]["consultation_past_count"]["type"] == "integer"
 
