@@ -205,6 +205,76 @@ def _from_openai_block(b: dict) -> ContentBlock:
 
 
 # ---------------------------------------------------------------------------
+# OpenAI Responses API (input items)
+# ---------------------------------------------------------------------------
+
+
+def to_responses_input(iface: ChatInterface) -> list[dict]:
+    """Convert canonical interface to OpenAI Responses API ``input`` items.
+
+    System entries are excluded (the Responses API takes the system prompt
+    via the ``instructions`` kwarg, not as an input item).
+
+    Item shapes per the Responses API:
+      * user text       -> ``{"role": "user", "content": <str>}``
+      * assistant text  -> ``{"role": "assistant", "content": <str>}``
+      * assistant call  -> ``{"type": "function_call", "call_id", "name", "arguments": <json-str>}``
+      * tool result     -> ``{"type": "function_call_output", "call_id", "output": <str>}``
+
+    Used by stateless Responses sessions (e.g. Codex) that must replay the
+    full conversation each turn instead of relying on ``previous_response_id``.
+    """
+    items: list[dict] = []
+    for entry in iface.entries:
+        if entry.role == "system":
+            continue
+        if entry.role == "user":
+            if entry.content and isinstance(entry.content[0], ToolResultBlock):
+                for block in entry.content:
+                    if isinstance(block, ToolResultBlock):
+                        output = (
+                            block.content
+                            if isinstance(block.content, str)
+                            else json.dumps(block.content, default=str)
+                        )
+                        items.append({
+                            "type": "function_call_output",
+                            "call_id": block.id,
+                            "output": output,
+                        })
+            else:
+                text_parts = [
+                    b.text for b in entry.content if isinstance(b, TextBlock)
+                ]
+                items.append({
+                    "role": "user",
+                    "content": "\n".join(text_parts) if text_parts else "",
+                })
+        elif entry.role == "assistant":
+            text_parts: list[str] = []
+            tool_calls: list[dict] = []
+            for block in entry.content:
+                if isinstance(block, TextBlock):
+                    text_parts.append(block.text)
+                elif isinstance(block, ToolCallBlock):
+                    tool_calls.append({
+                        "type": "function_call",
+                        "call_id": block.id,
+                        "name": block.name,
+                        "arguments": json.dumps(block.args),
+                    })
+                # ThinkingBlocks dropped: the Responses API expects encrypted
+                # reasoning items, which we don't carry through the canonical
+                # interface. Stateless replay simply omits past reasoning.
+            if text_parts:
+                joined = "\n".join(text_parts)
+                if joined:
+                    items.append({"role": "assistant", "content": joined})
+            items.extend(tool_calls)
+    return items
+
+
+# ---------------------------------------------------------------------------
 # Gemini (Interactions API TurnParam format)
 # ---------------------------------------------------------------------------
 

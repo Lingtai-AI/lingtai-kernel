@@ -27,7 +27,7 @@ from lingtai_kernel.llm.base import (
 from lingtai_kernel.llm.interface import ToolResultBlock
 from lingtai.llm.base import LLMAdapter
 from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
-from ..interface_converters import to_openai
+from ..interface_converters import to_openai, to_responses_input
 from lingtai_kernel.llm.streaming import StreamingAccumulator
 
 logger = get_logger()
@@ -1239,72 +1239,133 @@ class CodexResponsesSession(OpenAIResponsesSession):
         return self.send_stream(message, on_chunk=None)
 
     def send_stream(self, message, on_chunk=None) -> LLMResponse:
-        input_items = self._convert_input(message)
+        # Codex's backend is stateless — no previous_response_id, so the full
+        # conversation must ride along on every request. Record the new
+        # message into the canonical interface, then build wire input from
+        # the entire interface (mirrors OpenAIChatSession.send's contract).
+        if isinstance(message, str):
+            self._interface.add_user_message(message)
+        elif isinstance(message, list):
+            # ToolResultBlock list, the canonical kernel shape coming back
+            # from ToolExecutor via _make_tool_result_fn.
+            if message and all(isinstance(b, ToolResultBlock) for b in message):
+                self._interface.add_tool_results(message)
+            else:
+                # Pre-built wire dicts (legacy / tests). Fall back to the
+                # parent's converter so behavior matches what callers
+                # passing dicts expect.
+                pass
+        elif isinstance(message, dict):
+            pass
+        else:
+            raise TypeError(f"Unsupported message type: {type(message)}")
 
-        kwargs: dict[str, Any] = {
-            "model": self._model,
-            "input": input_items,
-            "stream": True,
-            "store": False,
-            **self._extra_kwargs,
-        }
-        if self._instructions:
-            kwargs["instructions"] = self._instructions
-        if self._tools:
-            kwargs["tools"] = self._tools
-            if self._tool_choice:
-                kwargs["tool_choice"] = self._tool_choice
-        # Deliberately omit previous_response_id — backend is stateless.
-        if self._compact_threshold:
-            kwargs["context_management"] = [
-                {"type": "compaction", "compact_threshold": self._compact_threshold}
-            ]
+        try:
+            self._interface.enforce_tool_pairing()
+            input_items = to_responses_input(self._interface)
+            # If the caller passed pre-built wire dicts (not str / not
+            # ToolResultBlock list), append them after the replay so the
+            # behavior is additive rather than dropped.
+            if isinstance(message, dict):
+                input_items.append(message)
+            elif isinstance(message, list) and not (
+                message and all(isinstance(b, ToolResultBlock) for b in message)
+            ):
+                for item in self._convert_input(message):
+                    input_items.append(item)
 
-        acc = StreamingAccumulator()
-        response_id = None
-        usage = UsageMetadata()
+            kwargs: dict[str, Any] = {
+                "model": self._model,
+                "input": input_items,
+                "stream": True,
+                "store": False,
+                **self._extra_kwargs,
+            }
+            if self._instructions:
+                kwargs["instructions"] = self._instructions
+            if self._tools:
+                kwargs["tools"] = self._tools
+                if self._tool_choice:
+                    kwargs["tool_choice"] = self._tool_choice
+            # Deliberately omit previous_response_id — backend is stateless.
+            if self._compact_threshold:
+                kwargs["context_management"] = [
+                    {"type": "compaction", "compact_threshold": self._compact_threshold}
+                ]
 
-        stream = self._client.responses.create(**kwargs)
-        for event in stream:
-            if event.type == "response.output_text.delta":
-                acc.add_text(event.delta)
-                if on_chunk:
-                    on_chunk(event.delta)
-            elif event.type == "response.function_call_arguments.delta":
-                acc.add_tool_args(event.delta)
-            elif event.type == "response.output_item.added":
-                if getattr(event.item, "type", None) == "function_call":
-                    acc.start_tool(id=event.item.call_id, name=event.item.name)
-            elif event.type == "response.output_item.done":
-                if getattr(event.item, "type", None) == "function_call":
-                    acc.finish_tool()
-            elif event.type == "response.completed":
-                response_id = event.response.id
-                if event.response.usage:
-                    cached = getattr(event.response.usage, "input_tokens_details", None)
-                    cached_tokens = (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
-                    usage = UsageMetadata(
-                        input_tokens=getattr(event.response.usage, "input_tokens", 0) or 0,
-                        output_tokens=getattr(event.response.usage, "output_tokens", 0) or 0,
-                        thinking_tokens=getattr(
-                            event.response.usage, "output_tokens_details", None
+            acc = StreamingAccumulator()
+            response_id = None
+            usage = UsageMetadata()
+
+            stream = self._client.responses.create(**kwargs)
+            for event in stream:
+                if event.type == "response.output_text.delta":
+                    acc.add_text(event.delta)
+                    if on_chunk:
+                        on_chunk(event.delta)
+                elif event.type == "response.function_call_arguments.delta":
+                    acc.add_tool_args(event.delta)
+                elif event.type == "response.output_item.added":
+                    if getattr(event.item, "type", None) == "function_call":
+                        acc.start_tool(id=event.item.call_id, name=event.item.name)
+                elif event.type == "response.output_item.done":
+                    if getattr(event.item, "type", None) == "function_call":
+                        acc.finish_tool()
+                elif event.type == "response.completed":
+                    response_id = event.response.id
+                    if event.response.usage:
+                        cached = getattr(event.response.usage, "input_tokens_details", None)
+                        cached_tokens = (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
+                        usage = UsageMetadata(
+                            input_tokens=getattr(event.response.usage, "input_tokens", 0) or 0,
+                            output_tokens=getattr(event.response.usage, "output_tokens", 0) or 0,
+                            thinking_tokens=getattr(
+                                event.response.usage, "output_tokens_details", None
+                            )
+                            and getattr(
+                                event.response.usage.output_tokens_details,
+                                "reasoning_tokens",
+                                0,
+                            )
+                            or 0,
+                            cached_tokens=cached_tokens,
                         )
-                        and getattr(
-                            event.response.usage.output_tokens_details,
-                            "reasoning_tokens",
-                            0,
-                        )
-                        or 0,
-                        cached_tokens=cached_tokens,
-                    )
+        except Exception:
+            # Revert the trailing user entry we just added so the next retry
+            # doesn't double-record it. Mirrors OpenAIChatSession.send's
+            # error path. ToolResultBlock entries also revert — the executor
+            # will re-supply them when AED rebuilds the loop.
+            self._interface.drop_trailing(lambda e: e.role == "user")
+            raise
+
+        result = acc.finalize(usage=usage)
+
+        # Record assistant response into the interface so it rides along on
+        # the next request. Without this, the stateless backend would never
+        # see the assistant's own prior turns.
+        blocks: list = []
+        if result.text:
+            blocks.append(TextBlock(text=result.text))
+        for tc in result.tool_calls:
+            blocks.append(ToolCallBlock(id=tc.id, name=tc.name, args=tc.args))
+        if not blocks:
+            blocks.append(TextBlock(text=""))
+        self._interface.add_assistant_message(
+            blocks,
+            model=self._model,
+            provider="codex",
+            usage={
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "thinking_tokens": usage.thinking_tokens,
+            },
+        )
 
         # Stateless: don't persist the response_id beyond this single turn.
         # Stored only as a transient debug aid; never threaded into the next
-        # request. (Parent class assigns to self._response_id and reads it
-        # in send/send_stream — we override both, so the assignment here is
-        # informational only.)
+        # request.
         self._response_id = response_id
-        return acc.finalize(usage=usage)
+        return result
 
 
 class CodexOpenAIAdapter(OpenAIAdapter):
