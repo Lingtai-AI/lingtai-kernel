@@ -52,15 +52,15 @@ def register_all_adapters() -> None:
     LLMService.register_adapter("custom", _custom)
 
     def _codex(*, model=None, defaults=None, **kw):
-        from .openai.adapter import OpenAIAdapter
+        from .openai.adapter import CodexOpenAIAdapter
         from lingtai.auth.codex import CodexTokenManager
         kw.pop("model", None)
         kw.pop("api_key", None)  # ignore env-resolved key
         kw.pop("base_url", None)  # we set our own
         mgr = CodexTokenManager()
-        adapter = OpenAIAdapter(
+        adapter = CodexOpenAIAdapter(
             api_key=mgr.get_access_token(),
-            base_url="https://chatgpt.com/backend-api",
+            base_url="https://chatgpt.com/backend-api/codex",
             use_responses=True,
             force_responses=True,
         )

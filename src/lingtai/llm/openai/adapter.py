@@ -55,6 +55,40 @@ def _build_tools(schemas: list[FunctionSchema] | None) -> list[dict] | None:
     ]
 
 
+# Top-level JSON-Schema combinators that the Responses API rejects on
+# function-tool `parameters`. Allowed inside individual properties, just
+# not as a top-level key. Scrubbing is shallow on purpose — we only
+# remove these when they appear at the schema root.
+_RESPONSES_DISALLOWED_TOP_LEVEL = ("allOf", "oneOf", "anyOf", "not", "enum")
+
+
+def _build_responses_tools(schemas: list[FunctionSchema] | None) -> list[dict] | None:
+    """Convert FunctionSchema list to Responses API tool format.
+
+    Responses uses a flat shape (`type: function`, fields hoisted) instead
+    of Chat Completions' nested `{type: function, function: {...}}`. Also
+    scrubs top-level JSON-Schema combinators that the Responses API
+    rejects on tool parameters; combinators inside individual properties
+    are left alone.
+    """
+    if not schemas:
+        return None
+    tools = []
+    for s in schemas:
+        params = dict(s.parameters or {})
+        for key in _RESPONSES_DISALLOWED_TOP_LEVEL:
+            params.pop(key, None)
+        tools.append(
+            {
+                "type": "function",
+                "name": s.name,
+                "description": s.description,
+                "parameters": params,
+            }
+        )
+    return tools
+
+
 def _parse_tool_calls(raw_tool_calls) -> list[ToolCall]:
     """Parse OpenAI tool calls into our ToolCall dataclass."""
     if not raw_tool_calls:
@@ -1008,7 +1042,7 @@ class OpenAIAdapter(LLMAdapter):
             interface = ChatInterface()
             interface.add_system(system_prompt, tools=FunctionSchema.list_to_dicts(tools))
 
-        openai_tools = _build_tools(tools)
+        openai_tools = _build_responses_tools(tools)
         tool_choice: str | None = None
         if force_tool_call and openai_tools:
             tool_choice = "required"
@@ -1026,7 +1060,11 @@ class OpenAIAdapter(LLMAdapter):
             }
 
         if thinking != "default":
-            extra_kwargs["reasoning_effort"] = "high" if thinking == "high" else "low"
+            # Responses API takes `reasoning: { effort: ... }`, not the
+            # Chat Completions SDK's flat `reasoning_effort`. Sending the
+            # wrong shape silently drops the field on the OpenAI Responses
+            # endpoint and 400s on Codex's `/backend-api/codex/responses`.
+            extra_kwargs["reasoning"] = {"effort": "high" if thinking == "high" else "low"}
 
         # Get compact threshold from config
         compact_threshold = None
@@ -1177,3 +1215,150 @@ class OpenAIAdapter(LLMAdapter):
     def client(self):
         """Escape hatch — the underlying ``openai.OpenAI`` client."""
         return self._client
+
+
+# ---------------------------------------------------------------------------
+# CodexResponsesSession — stateless variant for ChatGPT-OAuth backend
+# ---------------------------------------------------------------------------
+
+
+class CodexResponsesSession(OpenAIResponsesSession):
+    """Stateless Responses session for Codex's `/backend-api/codex/responses`.
+
+    Differences from the parent:
+      * `previous_response_id` is never sent — Codex's backend doesn't
+        persist turns server-side. The full input must be carried each
+        request by the caller (interface layer accumulates messages).
+      * `store=False` is forced — same reason.
+      * Streaming is forced (`stream=True` on send/send_stream alike) —
+        non-streaming Codex requests return data the SDK can't unmarshal.
+    """
+
+    def send(self, message) -> LLMResponse:
+        # Force the streaming path — Codex doesn't serve non-streaming JSON.
+        return self.send_stream(message, on_chunk=None)
+
+    def send_stream(self, message, on_chunk=None) -> LLMResponse:
+        input_items = self._convert_input(message)
+
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "input": input_items,
+            "stream": True,
+            "store": False,
+            **self._extra_kwargs,
+        }
+        if self._instructions:
+            kwargs["instructions"] = self._instructions
+        if self._tools:
+            kwargs["tools"] = self._tools
+            if self._tool_choice:
+                kwargs["tool_choice"] = self._tool_choice
+        # Deliberately omit previous_response_id — backend is stateless.
+        if self._compact_threshold:
+            kwargs["context_management"] = [
+                {"type": "compaction", "compact_threshold": self._compact_threshold}
+            ]
+
+        acc = StreamingAccumulator()
+        response_id = None
+        usage = UsageMetadata()
+
+        stream = self._client.responses.create(**kwargs)
+        for event in stream:
+            if event.type == "response.output_text.delta":
+                acc.add_text(event.delta)
+                if on_chunk:
+                    on_chunk(event.delta)
+            elif event.type == "response.function_call_arguments.delta":
+                acc.add_tool_args(event.delta)
+            elif event.type == "response.output_item.added":
+                if getattr(event.item, "type", None) == "function_call":
+                    acc.start_tool(id=event.item.call_id, name=event.item.name)
+            elif event.type == "response.output_item.done":
+                if getattr(event.item, "type", None) == "function_call":
+                    acc.finish_tool()
+            elif event.type == "response.completed":
+                response_id = event.response.id
+                if event.response.usage:
+                    cached = getattr(event.response.usage, "input_tokens_details", None)
+                    cached_tokens = (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
+                    usage = UsageMetadata(
+                        input_tokens=getattr(event.response.usage, "input_tokens", 0) or 0,
+                        output_tokens=getattr(event.response.usage, "output_tokens", 0) or 0,
+                        thinking_tokens=getattr(
+                            event.response.usage, "output_tokens_details", None
+                        )
+                        and getattr(
+                            event.response.usage.output_tokens_details,
+                            "reasoning_tokens",
+                            0,
+                        )
+                        or 0,
+                        cached_tokens=cached_tokens,
+                    )
+
+        # Stateless: don't persist the response_id beyond this single turn.
+        # Stored only as a transient debug aid; never threaded into the next
+        # request. (Parent class assigns to self._response_id and reads it
+        # in send/send_stream — we override both, so the assignment here is
+        # informational only.)
+        self._response_id = response_id
+        return acc.finalize(usage=usage)
+
+
+class CodexOpenAIAdapter(OpenAIAdapter):
+    """OpenAIAdapter variant that builds CodexResponsesSession instead of the
+    standard server-stateful OpenAIResponsesSession.
+
+    Use this with `provider=codex` only. Always set `use_responses=True,
+    force_responses=True, base_url='https://chatgpt.com/backend-api/codex'`.
+    """
+
+    def _create_responses_session(
+        self,
+        model: str,
+        system_prompt: str,
+        tools: list[FunctionSchema] | None = None,
+        json_schema: dict | None = None,
+        force_tool_call: bool = False,
+        interface: ChatInterface | None = None,
+        thinking: str = "default",
+    ) -> CodexResponsesSession:
+        if interface is None:
+            interface = ChatInterface()
+            interface.add_system(system_prompt, tools=FunctionSchema.list_to_dicts(tools))
+
+        openai_tools = _build_responses_tools(tools)
+        tool_choice: str | None = None
+        if force_tool_call and openai_tools:
+            tool_choice = "required"
+
+        extra_kwargs: dict[str, Any] = {}
+
+        if json_schema is not None:
+            extra_kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": json_schema.get("title", "response"),
+                    "strict": True,
+                    "schema": json_schema,
+                },
+            }
+
+        if thinking != "default":
+            extra_kwargs["reasoning"] = {"effort": "high" if thinking == "high" else "low"}
+
+        # Codex's backend doesn't accept context_management compaction —
+        # leave compact_threshold unset.
+        return CodexResponsesSession(
+            client=self._client,
+            model=model,
+            instructions=system_prompt,
+            tools=openai_tools,
+            tool_choice=tool_choice,
+            extra_kwargs=extra_kwargs,
+            previous_response_id=None,
+            compact_threshold=None,
+            interface=interface,
+        )
