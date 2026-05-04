@@ -181,28 +181,37 @@ def test_mail_to_bad_address(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_mail_inbox_wiring(tmp_path):
-    """_on_mail_received should enqueue a system_notification tool-call pair on tc_inbox."""
+    """_on_mail_received should enqueue an email.unread digest pair on tc_inbox."""
     agent = BaseAgent(service=make_mock_service(), agent_name="receiver", working_dir=tmp_path / "test")
+    # Persist a message to the inbox so _render_unread_digest can find it
+    from lingtai_kernel.intrinsics.email.primitives import _persist_to_inbox
+    msg_id = _persist_to_inbox(agent, {
+        "from": "127.0.0.1:9999",
+        "to": "127.0.0.1:8301",
+        "message": "inbox test",
+        "subject": "test",
+    })
     agent._on_mail_received({
-        "_mailbox_id": "test-id-123",
+        "_mailbox_id": msg_id,
         "from": "127.0.0.1:9999",
         "to": "127.0.0.1:8301",
         "message": "inbox test",
     })
-    # Mail arrival now flows through tc_inbox as a synthetic system(action="notification")
-    # pair, not via MSG_REQUEST on the text inbox. The plain inbox still receives
+    # Mail arrival now flows through tc_inbox as a synthetic email(action="unread")
+    # digest pair, coalescing + replace_in_history. The plain inbox still receives
     # an MSG_TC_WAKE sentinel to wake the run loop.
     items = agent._tc_inbox.drain()
     assert len(items) == 1
     item = items[0]
-    assert item.call.name == "system"
-    assert item.call.args["action"] == "notification"
-    assert item.call.args["source"] == "email"
-    assert item.call.args["ref_id"] == "test-id-123"
-    assert "email box" in item.result.content
-    assert 'email(action=' in item.result.content
-    # Pending mail map records the email_id -> notif_id mapping for auto-dismiss.
-    assert agent._pending_mail_notifications.get("test-id-123") == item.call.args["notif_id"]
+    assert item.call.name == "email"
+    assert item.call.args["action"] == "unread"
+    assert "count" in item.call.args
+    assert "received_at" in item.call.args
+    assert item.source == "email.unread"
+    assert item.coalesce is True
+    assert item.replace_in_history is True
+    # The digest body contains the message content
+    assert "inbox test" in item.result.content
 
 
 def test_mail_start_wires_listener(tmp_path):
@@ -264,23 +273,29 @@ def test_mail_read_no_ids_returns_error(tmp_path):
 
 
 def test_mail_received_full_content_in_notification(tmp_path):
-    """_on_mail_received should include preview and subject in the synthesized
-    system_notification tool-result body."""
+    """_on_mail_received should include the message in the unread digest."""
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    # Persist a message to the inbox so _render_unread_digest can find it
+    from lingtai_kernel.intrinsics.email.primitives import _persist_to_inbox
+    _persist_to_inbox(agent, {
+        "from": "sender",
+        "subject": "test subject",
+        "message": "full body content here",
+    })
     agent._on_mail_received({
         "from": "sender",
         "subject": "test subject",
         "message": "full body content here",
     })
-    # Notification body now lives in the ToolResultBlock content of a tc_inbox item,
-    # not in a plain MSG_REQUEST on the text inbox.
+    # Notification body now lives in the ToolResultBlock content of a tc_inbox
+    # email.unread digest pair.
     items = agent._tc_inbox.drain()
     assert len(items) == 1
     body = items[0].result.content
+    assert items[0].call.name == "email"
+    assert items[0].call.args["action"] == "unread"
     assert "full body content here" in body
     assert "test subject" in body
-    assert "mail box" in body
-    assert items[0].call.args["source"] == "email"
 
 
 # ---------------------------------------------------------------------------

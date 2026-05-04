@@ -40,7 +40,6 @@ class _StubAgent:
     """Minimal subset of BaseAgent attributes touched by the dismiss path."""
     _tc_inbox: TCInbox = field(default_factory=TCInbox)
     _session: _StubSession = field(default=None)
-    _pending_mail_notifications: dict[str, str] = field(default_factory=dict)
     _logs: list[tuple[str, dict]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -84,7 +83,6 @@ def test_arrival_then_voluntary_dismiss():
     agent = _StubAgent()
     item = _make_email_notification("notif_a", "mail_001")
     agent._tc_inbox.enqueue(item)
-    agent._pending_mail_notifications["mail_001"] = "notif_a"
 
     # Splice (simulate _drain_tc_inbox)
     drained = agent._tc_inbox.drain()
@@ -96,57 +94,50 @@ def test_arrival_then_voluntary_dismiss():
     res = sys_intrinsic._dismiss(agent, {"ids": ["notif_a"]})
     assert res["results"] == {"notif_a": "dismissed"}
     assert len(agent._session.chat.interface.conversation_entries()) == 0
-    assert agent._pending_mail_notifications == {}
 
 
 def test_arrival_then_email_read_auto_dismiss():
-    """Simulate the email._read post-action hook: pop pending dict, call
-    system._dismiss with the notif_id."""
+    """Auto-dismiss path removed — email arrivals now use single-slot unread-digest.
+    This test verifies that the old auto-dismiss flow is no longer present:
+    email.read does NOT call system._dismiss for mail notifications."""
     agent = _StubAgent()
     item = _make_email_notification("notif_b", "mail_002")
     agent._tc_inbox.enqueue(item)
-    agent._pending_mail_notifications["mail_002"] = "notif_b"
     drained = agent._tc_inbox.drain()
     for it in drained:
         _splice_pair(agent, it)
 
-    # Mimic email._read: agent reads mail_002
-    notif_id = agent._pending_mail_notifications.pop("mail_002", None)
-    assert notif_id == "notif_b"
-    res = sys_intrinsic._dismiss(agent, {"ids": [notif_id], "_invoked_by": "email.read"})
-    assert res["results"] == {"notif_b": "dismissed"}
-    assert len(agent._session.chat.interface.conversation_entries()) == 0
+    # Old code would pop _pending_mail_notifications and call _dismiss.
+    # New code does neither — no auto-dismiss path exists.
+    # Verify the pair is still in chat (NOT dismissed by read).
+    assert len(agent._session.chat.interface.conversation_entries()) == 2
 
 
 def test_check_does_not_dismiss():
-    """email.check is NOT supposed to auto-dismiss. We assert here that the
-    pending dict and chat survive a no-op flow (i.e. nothing pops/clears
-    pending notifications when the agent only "glances" via check)."""
+    """email.check is NOT supposed to auto-dismiss. The notification pair
+    persists in chat regardless of check calls."""
     agent = _StubAgent()
     item = _make_email_notification("notif_c", "mail_003")
     agent._tc_inbox.enqueue(item)
-    agent._pending_mail_notifications["mail_003"] = "notif_c"
     drained = agent._tc_inbox.drain()
     for it in drained:
         _splice_pair(agent, it)
 
-    # Simulate check: it does NOT touch _pending_mail_notifications.
-    # No code is invoked; we just assert the state stays put.
-    assert agent._pending_mail_notifications == {"mail_003": "notif_c"}
+    # Simulate check: it does NOT touch notifications at all.
+    # The pair stays in chat.
     assert len(agent._session.chat.interface.conversation_entries()) == 2
 
 
 def test_race_dismiss_before_splice():
-    """Mail arrives → enqueue → BEFORE drain, agent reads X → dismiss removes
+    """Mail arrives → enqueue → BEFORE drain, agent voluntary dismiss removes
     the pair from tc_inbox. The pair never lands in chat."""
     agent = _StubAgent()
     item = _make_email_notification("notif_d", "mail_004")
     agent._tc_inbox.enqueue(item)
-    agent._pending_mail_notifications["mail_004"] = "notif_d"
     # Do NOT splice yet — race condition.
 
-    notif_id = agent._pending_mail_notifications.pop("mail_004", None)
-    res = sys_intrinsic._dismiss(agent, {"ids": [notif_id]})
+    # Dismiss directly by notif_id (no _pending_mail_notifications lookup needed)
+    res = sys_intrinsic._dismiss(agent, {"ids": ["notif_d"]})
     assert res["results"] == {"notif_d": "dismissed"}
     # Queue is empty AFTER dismiss; chat was never written.
     assert len(agent._tc_inbox) == 0
@@ -154,8 +145,8 @@ def test_race_dismiss_before_splice():
 
 
 def test_multiple_arrivals_dismiss_one_keep_others():
-    """Three mails arrive; agent reads only mail_005. Other two notifications
-    persist."""
+    """Three notifications arrive; agent dismisses only one. Other two
+    notifications persist."""
     agent = _StubAgent()
     items = [
         _make_email_notification("notif_e", "mail_005"),
@@ -164,24 +155,17 @@ def test_multiple_arrivals_dismiss_one_keep_others():
     ]
     for it in items:
         agent._tc_inbox.enqueue(it)
-        agent._pending_mail_notifications[
-            it.call.args["ref_id"]
-        ] = it.call.args["notif_id"]
 
     drained = agent._tc_inbox.drain()
     for it in drained:
         _splice_pair(agent, it)
     assert len(agent._session.chat.interface.conversation_entries()) == 6  # 3 pairs
 
-    # Read mail_005
-    notif_id = agent._pending_mail_notifications.pop("mail_005", None)
-    sys_intrinsic._dismiss(agent, {"ids": [notif_id], "_invoked_by": "email.read"})
+    # Dismiss one
+    sys_intrinsic._dismiss(agent, {"ids": ["notif_e"]})
 
     # Two pairs remain.
     assert len(agent._session.chat.interface.conversation_entries()) == 4
-    assert agent._pending_mail_notifications == {
-        "mail_006": "notif_f", "mail_007": "notif_g",
-    }
 
 
 def test_bounce_persists_until_voluntary_dismiss():
@@ -207,14 +191,10 @@ def test_bounce_persists_until_voluntary_dismiss():
         source=f"system.notification:{notif_id}",
         enqueued_at=0.0, coalesce=False, replace_in_history=False,
     )
-    # Bounce: not added to _pending_mail_notifications (only "email" source is).
     agent._tc_inbox.enqueue(item)
     drained = agent._tc_inbox.drain()
     for it in drained:
         _splice_pair(agent, it)
-
-    # Bounce is NOT in pending dict (no auto-dismiss hook).
-    assert agent._pending_mail_notifications == {}
 
     # Voluntary dismiss works.
     res = sys_intrinsic._dismiss(agent, {"ids": [notif_id]})

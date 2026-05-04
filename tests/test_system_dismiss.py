@@ -46,7 +46,6 @@ class _StubSession:
 class _StubAgent:
     _tc_inbox: TCInbox = field(default_factory=TCInbox)
     _session: _StubSession = field(default=None)  # set in __post_init__
-    _pending_mail_notifications: dict[str, str] = field(default_factory=dict)
     _logs: list[tuple[str, dict]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -76,8 +75,6 @@ def _enqueue_notification(agent: _StubAgent, notif_id: str, ref_id: str = "mail_
     result = ToolResultBlock(id=call_id, name="system", content="...")
     agent._session.chat.interface.add_assistant_message(content=[call])
     agent._session.chat.interface.add_tool_results([result])
-    if source == "email":
-        agent._pending_mail_notifications[ref_id] = notif_id
     return call_id
 
 
@@ -88,7 +85,6 @@ def test_dismiss_removes_from_chat():
     assert res["status"] == "ok"
     assert res["results"] == {"notif_xxx": "dismissed"}
     assert len(agent._session.chat.interface.conversation_entries()) == 0
-    assert "mail_a" not in agent._pending_mail_notifications
 
 
 def test_dismiss_only_in_queue_not_chat():
@@ -111,12 +107,10 @@ def test_dismiss_only_in_queue_not_chat():
         source="system.notification:notif_yyy",
         enqueued_at=0.0, coalesce=False, replace_in_history=False,
     ))
-    agent._pending_mail_notifications["mail_b"] = "notif_yyy"
 
     res = sys_intrinsic._dismiss(agent, {"ids": ["notif_yyy"]})
     assert res["results"] == {"notif_yyy": "dismissed"}
     assert len(agent._tc_inbox) == 0
-    assert "mail_b" not in agent._pending_mail_notifications
 
 
 def test_dismiss_unknown_id_returns_not_found():
@@ -137,7 +131,6 @@ def test_dismiss_mixed_ids():
         "notif_b": "dismissed",
     }
     assert len(agent._session.chat.interface.conversation_entries()) == 0
-    assert agent._pending_mail_notifications == {}
 
 
 def test_dismiss_empty_list_errors():
