@@ -1113,6 +1113,103 @@ class TestRenderCurrentDiary:
         assert "HUGE" in out
         assert out.startswith("[now: ")
 
+    def test_render_includes_thinking_entries_with_kind_tag(self, tmp_path):
+        """Thinking and diary are siblings in events.jsonl. The cue mixes
+        both — thinking is the inner monologue that explains the *why*
+        behind the diary's externalized declaration. Each entry is tagged
+        with its kind so the consultation voice can tell them apart."""
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        self._write_events(tmp_path, [
+            {"type": "thinking", "text": "weighing options", "ts": 1_700_000_000},
+            {"type": "diary", "text": "decided to act", "ts": 1_700_000_001},
+            {"type": "tool_call", "ts": 1_700_000_002},  # not a cue type
+            {"type": "thinking", "text": "no luck, retry", "ts": 1_700_000_003},
+        ])
+        out = _render_current_diary(agent)
+        assert "weighing options" in out
+        assert "decided to act" in out
+        assert "no luck, retry" in out
+        # Type tags appear on each entry's header line
+        assert " thinking\nweighing options" in out
+        assert " diary\ndecided to act" in out
+        assert " thinking\nno luck, retry" in out
+        # Chronological ordering preserved across mixed kinds
+        assert out.index("weighing") < out.index("decided") < out.index("no luck")
+
+    def test_render_reverse_seek_matches_forward_under_cap(self, tmp_path):
+        """Reverse-seek + substring-prefilter should produce the same cue
+        a forward scan would. The append-only JSONL invariant + UTF-8
+        \\n-safety make the byte-level reverse read correct.
+
+        Build a log with non-ASCII text (Chinese, emoji, ligatures), noise
+        events that don't match the cue types, blank lines, and assert the
+        rendered output contains every cue entry in chronological order."""
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
+        records = []
+        ts0 = 1_700_000_000
+        for i in range(20):
+            records.append({"type": "tool_call", "name": "bash" * 20, "ts": ts0 + 3 * i})
+            records.append({
+                "type": "diary",
+                "text": f"日记{i} — 中文与 emoji 🌙 entry-{i}",
+                "ts": ts0 + 3 * i + 1,
+            })
+            records.append({
+                "type": "thinking",
+                "text": f"reasoning {i} ✱ ligatures ﬁ",
+                "ts": ts0 + 3 * i + 2,
+            })
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        self._write_events(tmp_path, records)
+        out = _render_current_diary(agent)
+        for i in range(20):
+            assert f"日记{i}" in out
+            assert f"reasoning {i}" in out
+            assert f"emoji 🌙 entry-{i}" in out
+            assert f"ligatures ﬁ" in out
+        # noise types must not appear as their own entries
+        assert " tool_call\n" not in out
+        # ordering across both kinds
+        assert out.index("日记0") < out.index("日记1") < out.index("日记19")
+        assert out.index("reasoning 0") < out.index("reasoning 19")
+
+    def test_render_reverse_seek_chunk_boundary_safety(self, tmp_path):
+        """Force the reverse-seek to cross many chunk boundaries by writing
+        a log larger than _REVERSE_READ_CHUNK. Every cue entry should still
+        be picked up correctly, with no truncated/missing entries from
+        chunk-edge JSON splits."""
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
+        from lingtai_kernel.intrinsics.soul.consultation import _REVERSE_READ_CHUNK
+        # Each cue entry plus padding noise — ensure total bytes > 4 chunks
+        records = []
+        ts0 = 1_700_000_000
+        # 200 cue entries with long padding text so the file grows past
+        # multiple chunk boundaries
+        padding = "padding-x " * 100
+        for i in range(200):
+            records.append({
+                "type": "diary" if i % 2 == 0 else "thinking",
+                "text": f"E{i:03d} {padding}",
+                "ts": ts0 + i,
+            })
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        self._write_events(tmp_path, records)
+        # Sanity: file is multi-chunk
+        log_size = (tmp_path / "logs" / "events.jsonl").stat().st_size
+        assert log_size > _REVERSE_READ_CHUNK * 2
+        out = _render_current_diary(agent)
+        # Every entry that fits under the cap must appear; entries are
+        # tail-trimmed under _DIARY_CUE_TOKEN_CAP, but no entry that
+        # appears should be partial.
+        seen_ids = []
+        for i in range(200):
+            if f"E{i:03d}" in out:
+                seen_ids.append(i)
+        assert seen_ids, "no entries kept"
+        # Kept entries must be a contiguous tail slice (chronological)
+        assert seen_ids == list(range(seen_ids[0], 200))
+
 
 # ---------------------------------------------------------------------------
 # _load_snapshot_interface verbatim substrate

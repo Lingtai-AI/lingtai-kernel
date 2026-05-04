@@ -66,14 +66,80 @@ def _send_with_timeout(agent, session, content: "str | list"):
     return result_box[0] if result_box else None
 
 
+_CUE_EVENT_TYPES = ("diary", "thinking")
+
+# Substring tokens we look for in raw bytes before paying json.loads cost.
+# Lines without any of these can be skipped without parsing — non-cue events
+# dominate the log (~95% in practice) and JSON parsing is the hot cost.
+_CUE_EVENT_TYPES_BYTES = tuple(f'"{t}"'.encode("utf-8") for t in _CUE_EVENT_TYPES)
+
+# Reverse-seek chunk size for tail-reading events.jsonl. 64 KB is enough to
+# hold ~150 typical events; we keep reading backward only until the cue
+# token budget is satisfied.
+_REVERSE_READ_CHUNK = 64 * 1024
+
+
+def _iter_lines_reverse(path):
+    """Yield decoded lines from a file in reverse order, tail-first.
+
+    Reads fixed-size byte chunks from the end of the file. The append-only
+    JSONL invariant (every record is one JSON object + ``\\n``) guarantees
+    splitting on ``b'\\n'`` produces complete lines, with at most one
+    partial line at the front of each chunk that carries over to the next
+    earlier chunk.
+
+    UTF-8 safe: ``\\n`` (0x0A) cannot appear inside a multi-byte UTF-8
+    sequence, so byte-splitting on ``\\n`` and then decoding each piece is
+    correct.
+
+    Yields stripped, non-empty UTF-8 strings.
+    """
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        pos = f.tell()
+        carry = b""
+        while pos > 0:
+            read_size = min(_REVERSE_READ_CHUNK, pos)
+            pos -= read_size
+            f.seek(pos)
+            chunk = f.read(read_size) + carry
+            lines = chunk.split(b"\n")
+            # First element may be a partial line (chunk boundary inside a
+            # JSON record); save it for the next earlier chunk. When pos==0
+            # the partial leading element is actually the file's first
+            # complete record (no earlier chunk to merge with), so emit it.
+            if pos > 0:
+                carry = lines[0]
+                tail = lines[1:]
+            else:
+                carry = b""
+                tail = lines
+            for raw in reversed(tail):
+                if not raw:
+                    continue
+                try:
+                    yield raw.decode("utf-8").strip()
+                except UnicodeDecodeError:
+                    continue
+
+
 def _render_current_diary(agent) -> str:
-    """Build the diary cue: time-anchored recent thoughts, tail-capped.
+    """Build the cue: time-anchored recent diary AND thinking entries,
+    tail-capped.
 
     The cue is the *spark* that triggers the past-self consultation — small
-    relative to the chat substrate. Each entry carries an absolute
-    [HH:MM:SS] timestamp; a [now: HH:MM:SS] header at the top lets the
-    reader compute recency. Total cue is tail-trimmed to fit under
-    ``_DIARY_CUE_TOKEN_CAP`` tokens.
+    relative to the chat substrate. We mix diary (externalized declarations)
+    and thinking (inner monologue) because thinking entries explain the
+    *why* behind diary entries that sit next to them in time, and the
+    consultation voice benefits from both. Each entry carries an absolute
+    [HH:MM:SS] timestamp and a type tag (``diary`` or ``thinking``); a
+    [now: HH:MM:SS] header at the top lets the reader compute recency.
+    Total cue is tail-trimmed to fit under ``_DIARY_CUE_TOKEN_CAP``
+    tokens.
+
+    Reads the log in reverse from the tail, stops once the token budget
+    is satisfied. Cost is O(recent cue entries), not O(file size). See
+    lingtai-kernel#6.
 
     Returns empty string if the log is missing/unreadable/empty.
     """
@@ -85,46 +151,46 @@ def _render_current_diary(agent) -> str:
     if not log_path.is_file():
         return ""
 
-    formatted: list[str] = []
-    try:
-        with open(log_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except Exception:
-                    continue
-                if rec.get("type") != "diary":
-                    continue
-                text = rec.get("text")
-                ts = rec.get("ts")
-                if not isinstance(text, str) or not text.strip():
-                    continue
-                if not isinstance(ts, (int, float)):
-                    continue
-                ts_str = datetime.fromtimestamp(float(ts)).strftime("%H:%M:%S")
-                formatted.append(f"[{ts_str}]\n{text.strip()}")
-    except Exception:
-        return ""
-
-    if not formatted:
-        return ""
-
     now_str = datetime.now().strftime("%H:%M:%S")
     header = f"[now: {now_str}]"
 
-    kept: list[str] = []
+    kept_reverse: list[str] = []
     running = count_tokens(header) + 2
-    for entry in reversed(formatted):
-        cost = count_tokens(entry) + 2
-        if kept and running + cost > _DIARY_CUE_TOKEN_CAP:
-            break
-        kept.append(entry)
-        running += cost
-    kept.reverse()
 
+    try:
+        for line in _iter_lines_reverse(log_path):
+            if not line:
+                continue
+            raw = line.encode("utf-8")
+            if not any(tok in raw for tok in _CUE_EVENT_TYPES_BYTES):
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            kind = rec.get("type")
+            if kind not in _CUE_EVENT_TYPES:
+                continue
+            text = rec.get("text")
+            ts = rec.get("ts")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            if not isinstance(ts, (int, float)):
+                continue
+            ts_str = datetime.fromtimestamp(float(ts)).strftime("%H:%M:%S")
+            entry = f"[{ts_str}] {kind}\n{text.strip()}"
+            cost = count_tokens(entry) + 2
+            if kept_reverse and running + cost > _DIARY_CUE_TOKEN_CAP:
+                break
+            kept_reverse.append(entry)
+            running += cost
+    except Exception:
+        return ""
+
+    if not kept_reverse:
+        return ""
+
+    kept = list(reversed(kept_reverse))
     return header + "\n\n" + "\n\n".join(kept)
 
 
