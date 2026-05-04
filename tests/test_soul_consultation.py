@@ -14,9 +14,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lingtai_kernel.intrinsics.soul import (
+    _DIARY_CUE_TOKEN_CAP,
     _fit_interface_to_window,
     _list_snapshot_paths,
     _load_snapshot_interface,
+    _render_current_diary,
     _run_consultation,
     _run_consultation_batch,
     build_consultation_pair,
@@ -463,10 +465,11 @@ class TestRunConsultationRedirectLoop:
         blocks = result["blocks"]
         assert isinstance(blocks[0], ToolCallBlock)
         assert isinstance(blocks[1], ToolResultBlock)
-        # Refusal content is the full consultation system prompt — re-grounds
-        # the model in its role on every refused call rather than just scolding.
+        # Refusal content acknowledges receipt (so the model knows the
+        # recommendation landed and doesn't retry the same call) and
+        # re-grounds with the full system prompt.
+        assert "recorded as a recommendation" in blocks[1].content
         assert "chat below is your context" in blocks[1].content
-        assert "do not call tools" in blocks[1].content.lower()
         assert isinstance(blocks[2], TextBlock)
         assert isinstance(sent[1], list)
         assert isinstance(sent[1][0], ToolResultBlock)
@@ -503,11 +506,132 @@ class TestRunConsultationRedirectLoop:
         assert len([b for b in result["blocks"] if isinstance(b, ToolCallBlock)]) == _CONSULTATION_MAX_ROUNDS
         assert len([b for b in result["blocks"] if isinstance(b, ToolResultBlock)]) == _CONSULTATION_MAX_ROUNDS
 
-    def test_consultation_no_diary_cue(self, tmp_path):
+    def test_consultation_no_diary_cue_past_bails(self, tmp_path):
+        # Past branch needs the diary as the spark — empty diary means
+        # nothing to react to, so bail.
+        agent = _FakeAgent(tmp_path)
+        iface = ChatInterface(); iface.add_user_message("substrate")
+        assert _run_consultation(agent, iface, "snapshot:foo") is None
+        assert agent.service.create_session.called
+
+    def test_consultation_no_diary_cue_insights_bails(self, tmp_path):
+        # After the raw-diary refactor, insights no longer bypasses the
+        # diary check.  No spark = no consultation for any source.
         agent = _FakeAgent(tmp_path)
         iface = ChatInterface(); iface.add_user_message("substrate")
         assert _run_consultation(agent, iface, "insights") is None
         assert agent.service.create_session.called
+
+    def test_consultation_spark_is_raw_diary(self, tmp_path):
+        """The spark sent to session.send() is the raw diary cue, not a
+        wrapped/localized version from _build_consultation_cue."""
+        from lingtai_kernel.llm.base import LLMResponse
+
+        agent = _FakeAgent(tmp_path)
+        self._seed_diary(tmp_path, text="MEANINGFUL DIARY TEXT")
+
+        sent = []
+
+        class _MockSession:
+            def __init__(self, interface):
+                self.interface = interface
+
+            def send(self, content):
+                sent.append(content)
+                self.interface.add_user_message(content)
+                self.interface.add_assistant_message([TextBlock(text="done")])
+                return LLMResponse(text="done")
+
+        agent.service.create_session.side_effect = lambda *, interface, **kw: _MockSession(interface)
+        iface = ChatInterface(); iface.add_user_message("substrate")
+        _run_consultation(agent, iface, "insights")
+
+        assert sent  # at least one send happened
+        spark = sent[0]
+        assert isinstance(spark, str)
+        assert "MEANINGFUL DIARY TEXT" in spark
+        # The spark starts with the [now: ...] header from _render_current_diary
+        assert spark.startswith("[now:")
+
+
+# ---------------------------------------------------------------------------
+# _render_current_diary
+# ---------------------------------------------------------------------------
+
+
+class TestRenderCurrentDiary:
+
+    def _write_events(self, tmp_path: Path, records: list[dict]) -> None:
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "events.jsonl", "w", encoding="utf-8") as f:
+            for rec in records:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    def test_render_diary_format(self, tmp_path):
+        """Test [now: HH:MM:SS] header, per-entry [HH:MM:SS] prefix,
+        and chronological order of kept entries."""
+        agent = _FakeAgent(tmp_path)
+        # Three entries with known Unix timestamps
+        self._write_events(tmp_path, [
+            {"type": "diary", "text": "first thought", "ts": 1_700_000_100},
+            {"type": "diary", "text": "second thought", "ts": 1_700_000_200},
+            {"type": "diary", "text": "third thought", "ts": 1_700_000_300},
+        ])
+        result = _render_current_diary(agent)
+        assert result, "should return non-empty"
+        lines = result.split("\n")
+        # First line: [now: HH:MM:SS]
+        assert lines[0].startswith("[now:")
+        assert lines[0].endswith("]")
+        # Entries in chronological order (oldest kept first)
+        idx_first = result.index("first thought")
+        idx_second = result.index("second thought")
+        idx_third = result.index("third thought")
+        assert idx_first < idx_second < idx_third
+        # Each entry has a [HH:MM:SS] timestamp prefix on its own line
+        # (format: "[HH:MM:SS] diary\n<thought text>")
+        import re
+        ts_lines = re.findall(r"^\[\d{2}:\d{2}:\d{2}\] diary$", result, re.MULTILINE)
+        assert len(ts_lines) == 3
+
+    def test_render_diary_tail_cap(self, tmp_path):
+        """Write enough entries to exceed 10K tokens; assert the cue is
+        under the cap, most recent entries are preserved, oldest dropped."""
+        agent = _FakeAgent(tmp_path)
+        # ~30 tokens per entry × 500 entries ≈ 15K tokens → some must be trimmed
+        records = []
+        for i in range(500):
+            records.append({
+                "type": "diary",
+                "text": f"diary entry number {i} with some filler words to pad the length out a bit",
+                "ts": 1_700_000_000 + i,
+            })
+        self._write_events(tmp_path, records)
+        result = _render_current_diary(agent)
+        assert result
+        from lingtai_kernel.token_counter import count_tokens
+        token_count = count_tokens(result)
+        assert token_count <= _DIARY_CUE_TOKEN_CAP, (
+            f"cue is {token_count} tokens, exceeds cap of {_DIARY_CUE_TOKEN_CAP}"
+        )
+        # Most recent entries must be present
+        assert "diary entry number 499" in result
+        assert "diary entry number 498" in result
+        # Oldest must be dropped
+        assert "diary entry number 0" not in result
+
+    def test_render_diary_single_oversized_entry(self, tmp_path):
+        """One entry exceeding 10K tokens; still returned (prefer one
+        oversized entry to empty cue)."""
+        agent = _FakeAgent(tmp_path)
+        giant_text = "word " * 5000  # ~5000 tokens
+        self._write_events(tmp_path, [
+            {"type": "diary", "text": giant_text, "ts": 1_700_000_999},
+        ])
+        result = _render_current_diary(agent)
+        assert result
+        assert giant_text.strip() in result
 
 
 # ---------------------------------------------------------------------------
@@ -1358,13 +1482,19 @@ class TestKindDispatch:
 
 class TestBuildConsultationCue:
 
-    def test_insights_cue_includes_diary(self, tmp_path):
+    def test_insights_cue_does_not_inject_diary(self, tmp_path):
+        # The insights branch consultation runs against the live chat
+        # interface, which already contains the diary entries verbatim.
+        # Re-injecting them as the spark would be duplicative — the cue
+        # is just a step-back nudge.
         from lingtai_kernel.intrinsics.soul import _build_consultation_cue
         agent = _FakeAgent(tmp_path, with_chat=False)
         cue = _build_consultation_cue(agent, "insights", "I built X today.")
-        assert "I built X today." in cue
+        assert "I built X today." not in cue
         # Insights cue should not frame as "your future self"
         assert "future self" not in cue.lower()
+        # But it should nudge the model to step back from its own context.
+        assert "step back" in cue.lower()
 
     def test_past_cue_includes_diary_and_future_self_frame(self, tmp_path):
         from lingtai_kernel.intrinsics.soul import _build_consultation_cue
@@ -1396,8 +1526,10 @@ class TestBuildConsultationCue:
 
 
 class TestRunConsultationDispatchesByKind:
-    """Confirms _run_consultation uses one consultation prompt and sends the
-    diary cue verbatim regardless of source label."""
+    """Confirms _run_consultation uses one consultation prompt and sends a
+    kind-appropriate spark: past gets the diary as future-self framing,
+    insights gets a step-back nudge without the diary text (substrate
+    already contains it)."""
 
     def _run(self, tmp_path, source: str):
         from lingtai_kernel.intrinsics.soul import _run_consultation
@@ -1441,19 +1573,23 @@ class TestRunConsultationDispatchesByKind:
     def test_past_dispatch_uses_past_cue(self, tmp_path):
         captured, result = self._run(tmp_path, "snapshot:snapshot_3_1735")
         assert result is not None
+        # After the raw-diary refactor, the spark is the raw diary cue
+        # from _render_current_diary — not wrapped by _build_consultation_cue.
         assert "DIARY MARKER" in captured["sent_content"]
+        assert captured["sent_content"].startswith("[now:")
         assert "chat below is your context" in captured["system_prompt"].lower()
         assert captured["tools"] == [{"name": "bash", "description": "run shell", "parameters": {"type": "object"}}]
-        # cue is the raw diary, not a future-self wrapper
-        assert "future self" not in captured["sent_content"].lower()
 
-    def test_insights_dispatch_uses_insights_cue(self, tmp_path):
+    def test_insights_dispatch_uses_raw_diary(self, tmp_path):
         captured, result = self._run(tmp_path, "insights")
         assert result is not None
+        # After the raw-diary refactor, the spark is the raw diary cue
+        # for ALL sources (insights included) — no special "step-back"
+        # wrapper. The diary text is verbatim in the spark.
         assert "DIARY MARKER" in captured["sent_content"]
+        assert captured["sent_content"].startswith("[now:")
         assert "chat below is your context" in captured["system_prompt"].lower()
         assert captured["tools"] == [{"name": "bash", "description": "run shell", "parameters": {"type": "object"}}]
-        assert "future self" not in captured["sent_content"].lower()
 
 
 # ---------------------------------------------------------------------------

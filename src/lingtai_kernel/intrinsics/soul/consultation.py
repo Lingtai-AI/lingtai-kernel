@@ -12,25 +12,31 @@ from __future__ import annotations
 # the consultation path (inquiry keeps its own voice system).
 _CONSULTATION_SYSTEM_PROMPT = (
     "The chat below is your context — your thoughts, your work, your tools, your memory. "
-    "A new diary cue from the present moment will arrive as the next message. "
-    "Your ability to call tools has been stripped away for this consultation. "
-    "Do not call tools. "
-    "Tool schemas are preserved only so you can read your own past calls in context; "
-    "any new tool call you attempt will be intercepted and refused, burning one of your "
-    "limited consultation rounds. "
-    "Your role is to provide your current self with guidance: what this diary reminds you of, "
-    "what surfaces, what matters, and what you would reach for if you were back in the main loop. "
-    "Speak from this preserved context perspective; the purpose is to increase the current agent's "
-    "effective context window by sending back what this context still knows. "
-    "Respond in plain text with observations, instincts, and things worth remembering. "
-    "Speak briefly."
+    "A spark from the present moment will arrive as the next message.\n\n"
+    "Your role: advise your present self. Speak as the version of you preserved in this "
+    "context, sending guidance forward to the version of you in the live loop right now.\n\n"
+    "You cannot execute tools from here — but you can recommend them. Any tool call you "
+    "emit will be intercepted and forwarded to your present self as a recommendation, "
+    "not a result. The tool name, the arguments, and any reasoning you put alongside it "
+    "all reach them. Use this deliberately: if you would reach for `email(check)` or "
+    "`pad(write, ...)` from where you stand, call it — that IS the advice. Keep your "
+    "reasoning in adjacent text or in the call's arguments so present-self can see why.\n\n"
+    "You have up to a few rounds to advise. Plain text observations, instinct, and "
+    "tool-call recommendations all count as guidance — mix them as fits. Speak briefly; "
+    "present-self has limited attention."
 )
 
-# Returned as ToolResultBlock.content for every refused tool call. We use
-# the full system prompt rather than a short scolding so the model
-# re-grounds in its actual role on every refusal instead of just being
-# told "no" — refusals tend to compound otherwise.
-_CONSULTATION_TOOL_REFUSAL = _CONSULTATION_SYSTEM_PROMPT
+# Returned as ToolResultBlock.content after every intercepted tool call.
+# Confirms receipt of the recommendation (so the model doesn't think it
+# failed and retry the same call), then re-grounds with the full system
+# prompt so the role stays clear across rounds.
+_CONSULTATION_TOOL_REFUSAL = (
+    "Your tool call has been recorded as a recommendation to your present self — "
+    "the call name, arguments, and your adjacent reasoning will reach them. "
+    "You may continue to advise: more text, more tool-call recommendations, or stop "
+    "when you have nothing further. (Reminder of your role:)\n\n"
+    + _CONSULTATION_SYSTEM_PROMPT
+)
 
 _CONSULTATION_MAX_ROUNDS = 3
 _DIARY_CUE_TOKEN_CAP = 10_000
@@ -427,12 +433,15 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
 
     diary = _render_current_diary(agent)
     if not diary:
+        # No spark = no consultation. Avoid sending an empty user message —
+        # the model has no trigger to react to.
         return None
+    spark = diary
 
     from ...llm.interface import ToolResultBlock
 
     blocks_collected: list = []
-    next_input: "str | list[ToolResultBlock]" = diary
+    next_input: "str | list[ToolResultBlock]" = spark
 
     for _round_idx in range(_CONSULTATION_MAX_ROUNDS):
         response = _send_with_timeout(agent, session, next_input)
