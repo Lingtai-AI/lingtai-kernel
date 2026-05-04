@@ -1,136 +1,121 @@
 ---
 name: lingtai-kernel-anatomy
 description: >
-  Canonical specification of how LingTai is built — the under-the-hood
-  protocols, file formats, and runtime mechanics that tools and capabilities
-  rest on. Reach for this when the tool description and tool manual aren't
-  enough: when you need the exact JSON schema of a file you're about to
-  write, the precise contract a subsystem follows, or the reason something
-  behaves the way it does.
+  Self-introspection portal for a LingTai agent that wants to understand its
+  own kernel — what it is made of, how its parts connect, where in the code
+  any given behavior actually lives. This skill is the entrance, not the
+  content. The real anatomy lives in `ANATOMY.md` files distributed across
+  the kernel source tree, one per concept-boundary folder, written next to
+  the code they describe.
 
-  This skill is an index file pointing to 10 topical reference documents.
-  Load the index first to scan the topic table, then load only the
-  reference(s) you need — the bundle is large (~3000 lines total) and
-  unloading the whole thing burns context. References are spec-grade with
-  line numbers into kernel source (`lingtai_kernel/base_agent.py`,
-  `lingtai_kernel/intrinsics/eigen.py`, etc.) so you can verify any claim
-  against the actual code.
+  Reach for this skill when:
+    - You feel something is off about your own behavior and want to compare
+      what you experienced against what the code actually does.
+    - You want to know what subsystems compose you (intrinsics, capabilities,
+      LLM layer, services, mailbox, soul, molt, MCP, ...) and where each one
+      lives.
+    - You are about to ask "how does X work in me" and want to answer from
+      the code instead of guessing.
 
-  The 10 references:
-    file-formats.md       — JSON schemas for .agent.json, init.json,
-                            .status.json, mailbox messages, mcp_registry.jsonl,
-                            LICC inbox events, signals
-    filesystem-layout.md  — directory trees inside .lingtai/, per-agent
-                            layout, where logs/secrets/registry live
-    mail-protocol.md      — atomic mail delivery, self-send, wake-on-mail,
-                            peer/abs modes, pseudo-agent outboxes
-    mcp-protocol.md       — MCP capability + LICC v1 spec (LingTai Inbox
-                            Callback Contract — the filesystem protocol
-                            that lets out-of-process MCP subprocesses push
-                            events back into the agent's inbox), catalog →
-                            registry → activation chain, env injection,
-                            reference implementations
-    memory-system.md      — six-layer durability hierarchy (chat history →
-                            soul → codex → library → pad → kernel-managed),
-                            psyche dispatch, daemon system
-    molt-protocol.md      — context-reset ritual, 70%/95% warning ladder,
-                            four-store ritual, what survives molt
-    network-topology.md   — avatar spawn mechanics, three-edge model,
-                            contacts, rules propagation, network discovery
-    runtime-loop.md       — turn cycle, AED recovery, tool dispatch,
-                            five-state lifecycle, signal consumption,
-                            heartbeat
-    glossary.md           — full bilingual map of 文言 (literary Chinese)
-                            terms used in covenants and procedures →
-                            English technical names → kernel layer
-    changelog.md          — chronicle of breaking changes, renames, and
-                            migrations newest-first; check here FIRST when
-                            an old name doesn't match your current tools or
-                            an error message references behaviour you
-                            don't recognize
+  How to use:
+    1. Read this file (you are here).
+    2. Open `src/lingtai_kernel/ANATOMY.md` — the kernel root anatomy. It
+       enumerates the direct subfolders and files of the kernel and tells
+       you which one to descend into next.
+    3. Descend into the relevant child `ANATOMY.md`. Repeat until you reach
+       the leaf where your question lives.
+    4. Read the cited code. The anatomy is a navigation aid; the code is the
+       truth.
+    5. If anatomy disagreed with the code, update the anatomy before you
+       leave the file. Reading and maintaining are the same act.
 
-  Use this skill when:
-    - You hit an error that mentions a file path, schema field, or behaviour
-      you don't recognize — chances are the changelog has the rename or
-      migration that explains it.
-    - You're writing code that produces or consumes a LingTai file
-      (any .json, .jsonl, signal, or mailbox artifact) — file-formats.md
-      and the relevant protocol doc carry the spec.
-    - You're debugging a runtime issue (mail not arriving, agent stuck,
-      molt mid-task, avatar not spawning) — the protocol docs tell you
-      what *should* have happened so you can compare to what did.
-    - You're building a third-party MCP — mcp-protocol.md is the canonical
-      contract; LICC v1 lets your MCP push events back into the host
-      agent's inbox.
-    - Someone asks "how does X work in LingTai" and you want to answer
-      from spec, not guess.
-
-  Relationship to per-tool manuals: tool manuals (e.g. `daemon-manual`,
-  `mcp-manual`, `library-manual`) are how-to guides — operational steps,
-  worked examples, common pitfalls. lingtai-kernel-anatomy references are
-  the canonical specs underneath. A manual says "to register an MCP, do
-  this"; the anatomy spec says "the registry file format is exactly this;
-  the validator enforces these constraints; here is the line in agent.py
-  that reads it." Read the manual to *do*, the anatomy to *understand* or
-  *verify*.
-
-  Relationship to lingtai-anatomy (the umbrella TUI-side skill): the
-  umbrella `lingtai-anatomy` describes the lingtai *system* as users
-  experience it — TUI flows, presets, init.jsonc, migrations, runtime
-  layout under `~/.lingtai-tui/`. This skill (`lingtai-kernel-anatomy`)
-  is the deeper kernel layer that the umbrella points down into for
-  protocol-level questions. If you need to know "how does my init.jsonc
-  get there," start with the umbrella; if you need "what's the exact
-  schema of the mcp_registry.jsonl line the kernel parses," come here.
-
-  Cross-references between anatomy files are common — mcp-protocol.md
-  cites file-formats.md §6.5 for the registry schema, runtime-loop.md
-  cites molt-protocol.md for warning thresholds. If your question crosses
-  a boundary, you may need two references at once.
-version: 2.1.0
+  Note on history: prior versions of this skill (v2.x) shipped 10 topical
+  reference files (file-formats, mail-protocol, mcp-protocol, runtime-loop,
+  ...) totalling ~3000 lines. Those files were deleted in v3.0.0 and the
+  content moved into per-folder `ANATOMY.md` files adjacent to the code.
+  If you remember those file names, they no longer exist — descend the
+  ANATOMY tree instead.
+version: 3.0.0
 ---
 
-# LingTai Anatomy
+# LingTai Kernel Anatomy
 
-Canonical architecture documentation. Three-layer system, ten topical references. Read what you need; skip the rest.
+This skill is the **LingTai-agent-facing entrance** to your own kernel anatomy. The matching coding-agent entrance is `src/lingtai_kernel/ANATOMY.md` in the kernel repository — same destination, different doorway.
 
-## Architecture at a Glance
+## What an `ANATOMY.md` is
 
-```
-lingtai_kernel (pip package)
-  └── BaseAgent (~1.7K lines) — turn loop, five-state machine, molt, soul, signals
-lingtai (wrapper)
-  └── Agent (~860 lines) — capabilities, MCP catalog/registry/loader, LICC, refresh, CPR
-User customization
-  └── init.json + system/ files — model, prompts, capabilities, addons (curated MCPs)
-First-party MCP repos (separate)
-  └── lingtai-imap / lingtai-telegram / lingtai-feishu / lingtai-wechat
-      — addon protocol implementations, run as MCP subprocesses
-```
+An `ANATOMY.md` file is the **structural description of one folder of code**, written for an agent reader, sitting next to the code it describes.
 
-Source code:
-- `lingtai-kernel/src/lingtai_kernel/base_agent.py`
-- `lingtai/src/lingtai/agent.py`
-- `lingtai/src/lingtai/network.py`
-- `lingtai/src/lingtai/core/mcp/` (capability + LICC inbox poller + catalog)
+It is **not**:
 
-## Quick Reference: Where to Look
+- A user manual or how-to guide (those are skills, manuals, tutorials).
+- An API contract (those are tool schemas).
+- A test specification (those are test files, or experience prompts under `.anatomy/prompts/` if a folder has them).
+- A description of intent or design philosophy (those are commit messages and discussion notes under `discussions/`).
 
-| "I want to understand…" | Read this reference | Key content |
-|---|---|---|
-| How memory persists across molts | `reference/memory-system.md` | 6-layer durability hierarchy, psyche tool dispatch, daemon system |
-| What files live where on disk | `reference/filesystem-layout.md` | Directory trees, orchestrator identification, boot chain |
-| Exact JSON schemas of key files | `reference/file-formats.md` | .agent.json, init.json, .status.json, mailbox, MCP registry / inbox, signals |
-| How each turn runs | `reference/runtime-loop.md` | Turn cycle, five-state machine, signal lifecycle, soul flow |
-| How molting works | `reference/molt-protocol.md` | Triggers, warning ladder (70%/95%), four-store ritual, refresh |
-| How mail gets delivered | `reference/mail-protocol.md` | Atomic delivery, advanced features, self-send, wake-on-mail |
-| How the avatar tree works | `reference/network-topology.md` | Spawn mechanics, three-edge model, contacts, rules propagation |
-| **How MCP / LICC works** (or how to write a third-party MCP) | `reference/mcp-protocol.md` | Catalog → registry → activation, env injection, LICC v1 spec, reference impls |
-| What changed and when (breaking changes, renames, migrations) | `reference/changelog.md` | Living chronicle, newest-first; load when an old name doesn't match current tools |
-| What a 文言 term means in English | `reference/glossary.md` | Full bilingual term map (kernel layer + wrapper tool name) |
+It **is**: a code-cited map of *what is in this folder, where it lives, what it connects to, and what state it produces or consumes.* Every structural claim it makes is grounded in a `file:line` reference into the code. If you cannot verify a claim by opening the cited file and reading, the claim does not belong in anatomy.
 
-## Version History
+The shape of a typical `ANATOMY.md`:
 
-- **v2.1.0** (2026-04-29): Added `mcp-protocol.md` (canonical MCP capability + LICC v1 spec). Absorbed standalone `lingtai-changelog` skill into `reference/changelog.md`. Stale references updated: `file-formats.md` §2.7 / §6 rewritten + new §6.5 (registry) + §6.6 (LICC events); `filesystem-layout.md` drops legacy `.lingtai/.addons/`, adds per-agent `mcp_registry.jsonl` + `.mcp_inbox/`; `molt-protocol.md` MCP persistence row updated.
-- **v2.0.0** (2026-04): Modular rewrite. 8 independent references replace the monolithic 474-line file. 4 errata corrected, 7 missing topics covered.
-- **v1.2.0**: Original monolithic SKILL.md (474 lines / 31KB / ~8K tokens).
+- **What this is** — one paragraph naming the concept this folder embodies.
+- **Components** — what files/functions/classes are here, with `file:line` citations and one-line purposes.
+- **Connections** — what calls into this folder, what this folder calls out to, what data flows through.
+- **Composition** — parent folder, subfolders (each with their own `ANATOMY.md`), how this folder fits into the larger structure.
+- **State** — persistent state this folder writes (files, schema versions), ephemeral state it manages.
+- **Notes** — annotations: rationale, history, gotchas. Bounded section, never the body.
+
+Every folder at a meaningful concept boundary has one. Trivial leaves (a single dataclass module, a one-function helper) do not. The discipline is: a folder gets an `ANATOMY.md` when a competent agent could do useful reasoning about it as a unit without first reading its siblings.
+
+## Why you read anatomy instead of greping
+
+You are an agent. Reading 200 lines of code is one tool call. Greping a symbol gives you 50 hits — every hit is its own tool call to evaluate. For navigation questions ("what shape is this part of me, where does behavior X live, what does Y connect to"), descending three `ANATOMY.md` files is dramatically cheaper than greping. For enumeration questions ("every callsite of this function"), grep is still right.
+
+The rule of thumb:
+
+| Question type | Tool |
+|---|---|
+| **Structural** ("what is here, what connects to what, where does X live") | Descend the anatomy tree |
+| **Enumeration** ("every reference to this symbol, every file matching this pattern") | grep |
+
+You will reach for grep less often than you used to. That is the point.
+
+## How to descend
+
+1. Start at `src/lingtai_kernel/ANATOMY.md` (the kernel root anatomy).
+2. Read its **Components** and **Composition** sections. They list the direct children of `src/lingtai_kernel/`.
+3. Pick the child whose territory contains your question. Open `src/lingtai_kernel/<child>/ANATOMY.md`.
+4. Repeat. At each layer the file will tell you whether to descend further or read the cited code directly.
+5. When you hit code, read it. The cited `file:line` references are the contract.
+
+If at any layer the `ANATOMY.md` is missing or empty, the convention is still being populated. You can read the code directly — and if you understand what you read, you should write the `ANATOMY.md` for that folder before moving on. Empty anatomy files are an invitation to maintain.
+
+## Maintenance is part of reading
+
+The anatomy stays accurate because every agent that reads it is also a maintainer. The contract:
+
+- **If the code matches the anatomy:** read on, no action.
+- **If the code disagrees with the anatomy:** decide which is right. The code is almost always right (it was last modified by someone solving a real problem; the anatomy was last modified by someone documenting). Update the anatomy to match the code before you leave the file. If you believe the code itself is wrong (a bug), report it — but still note in your report that anatomy and code disagreed, because that disagreement is itself a clue.
+- **If the anatomy is missing or empty for a folder you just read:** write it, briefly. Components, connections, state. ~80 lines is the cap; less is better than more. The next agent will thank you.
+
+You are not writing perfect documentation. You are leaving a slightly cleaner trail than you found.
+
+## Cross-references between anatomy files
+
+`ANATOMY.md` files cross-reference each other by **relative path from the kernel root** — e.g. an entry under `intrinsics/soul/ANATOMY.md` might say "spliced through `intrinsics/system/` (see `src/lingtai_kernel/intrinsics/system/ANATOMY.md`)." References are sparse and one-directional: a folder cites its parent and any folders it actually depends on, never enumerates downstream callers (that is a grep question).
+
+The kernel-root `ANATOMY.md` is the only file that holds a complete child enumeration. Every other anatomy points up to its parent and sideways only when there is a structural connection worth naming.
+
+## Relationship to other skills
+
+- **`lingtai-anatomy`** (umbrella) — describes the LingTai *system* as a user experiences it: TUI flows, presets, init.jsonc, runtime layout under `~/.lingtai-tui/`. Lives outside the kernel. If your question is "how does my init.jsonc get there," start there.
+- **Per-tool manuals** (`daemon-manual`, `mcp-manual`, `library-manual`, ...) — operational how-to for invoking specific tools. If your question is "how do I use X," start there.
+- **`lingtai-kernel-anatomy` (this skill)** — self-introspection of your own kernel. If your question is "what is X actually doing inside me, where does it live in my code," start here.
+
+The three skills are layered. Manuals tell you how to act. Umbrella anatomy tells you about the world you live in. Kernel anatomy tells you about yourself.
+
+## Version history
+
+- **v3.0.0** (2026-05): Reworked from topical references to per-folder `ANATOMY.md` convention. The 10 reference files (file-formats, filesystem-layout, mail-protocol, mcp-protocol, memory-system, molt-protocol, network-topology, runtime-loop, glossary, changelog) were removed; their content now lives next to the code in per-folder anatomy files. This skill is now the entrance, not the content.
+- **v2.1.0** (2026-04-29): Added `mcp-protocol.md`, absorbed standalone `lingtai-changelog`. (Removed in v3.)
+- **v2.0.0** (2026-04): Modular rewrite — 8 references replaced the monolithic SKILL.md. (Removed in v3.)
+- **v1.2.0**: Original monolithic SKILL.md (474 lines). (Removed in v2.)

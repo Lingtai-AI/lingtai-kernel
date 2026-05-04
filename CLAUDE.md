@@ -17,6 +17,25 @@ This repo contains both packages, published as a single `lingtai` PyPI package:
 
 The kernel must never import from `lingtai` — the dependency is strictly one-directional.
 
+## Anatomy navigation
+
+This repo follows a per-folder `ANATOMY.md` convention. **Use anatomy as your navigator instead of greping for structural questions.**
+
+- **Coding-agent entrance:** [`src/lingtai_kernel/ANATOMY.md`](src/lingtai_kernel/ANATOMY.md). Start here. It enumerates the kernel's direct children and tells you which subfolder to descend into.
+- **LingTai-agent entrance** (same content, different doorway, used when the agent introspects its own kernel): the `lingtai-kernel-anatomy` skill at `src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md`.
+- **Per-folder anatomies:** every concept-boundary folder has (or will eventually have) its own `ANATOMY.md` describing what's in that folder, where state lives, what connects to what, with `file:line` citations into the code. The code is the truth; anatomy is the navigation aid.
+
+How to use it as a coding agent:
+
+1. **Structural question** ("where does X live, what shape is this part of the kernel, what does Y connect to") → descend the anatomy tree, top-down. Three reads will usually take you deeper than fifty grep hits.
+2. **Enumeration question** ("every callsite of this function, every file matching this pattern") → grep is still right.
+3. **If anatomy disagrees with the code:** the code is almost always correct. Update the anatomy to match before you leave the file. Reading and maintaining anatomy are the same act.
+4. **If anatomy is missing for a folder you just understood:** write it. Components, connections, state. ~80 lines cap; less is better. The next agent will thank you.
+
+The convention exists because grep is full-text-search, and full-text-search is the wrong primitive for understanding architecture. Agents read whole files cheaply; the navigation pattern that pays off for agents is depth-first traversal of structural maps, not breadth-first symbol search. Reach for grep when you've already located the right region and need to enumerate within it.
+
+The much older monolithic prose in this `CLAUDE.md` (the Architecture / Key Modules / Intrinsics sections below) predates this convention. Treat it as a fallback when anatomy is incomplete; over time it will shrink as content migrates into per-folder `ANATOMY.md` files.
+
 ## Build & Test
 
 ```bash
