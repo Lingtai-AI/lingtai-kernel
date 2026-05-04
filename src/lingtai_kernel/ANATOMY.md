@@ -8,9 +8,9 @@ The minimal agent runtime: turn loop, lifecycle, signal consumption, tool dispat
 
 ## Components
 
-The kernel root holds the coordinator (`base_agent.py`) plus a flat collection of supporting modules. Most are self-contained leaves; subfolders are concept-boundary units with their own anatomy.
+The kernel root holds the coordinator (`base_agent/`) plus a flat collection of supporting modules. Most are self-contained leaves; subfolders are concept-boundary units with their own anatomy.
 
-- `base_agent.py` — `BaseAgent`, the kernel coordinator (~2400 lines). Turn loop, 5-state lifecycle, signal consumption, tool dispatch, intrinsic wiring, mailbox glue, soul/molt orchestration. The single largest file in the kernel.
+- `base_agent/` — `BaseAgent`, the kernel coordinator (package of 7 modules). `__init__.py` defines `BaseAgent` (~550 lines: constructor, properties, state machine, hooks, cross-cutting stubs, pass-throughs to submodules). Submodules: `lifecycle.py` (start/stop/heartbeat/signals/refresh), `turn.py` (main loop/message dispatch/AED/response processing), `soul_flow.py` (soul timer/drain/consultation fire/persist), `tools.py` (tool schemas/dispatch/registry), `identity.py` (naming/manifest/status), `prompt.py` (system prompt building/flushing), `messaging.py` (mail/notifications/outbound). See `base_agent/ANATOMY.md`.
 - `session.py` — `SessionManager`. LLM session lifecycle, token bookkeeping, chat history persistence, AED (auto-error-recovery) retry path.
 - `tool_executor.py` — `ToolExecutor`. Synchronous tool dispatch, reasoning-parameter injection, timing, error capture.
 - `tool_timing.py` — small helper for tool execution timing records.
@@ -40,6 +40,7 @@ The kernel root holds the coordinator (`base_agent.py`) plus a flat collection o
 
 This file is the top of the kernel anatomy tree. Each subfolder below has its own `ANATOMY.md` — descend into the one that holds your question.
 
+- [`base_agent/`](base_agent/ANATOMY.md) — `BaseAgent` class (the kernel coordinator). 7 submodules: identity, lifecycle, turn, soul_flow, tools, prompt, messaging.
 - [`intrinsics/`](intrinsics/ANATOMY.md) — kernel-built-in tools. Four intrinsics: `system`, `psyche`, `soul`, `email`. Always present, never removable.
 - [`llm/`](llm/ANATOMY.md) — LLM service ABC, adapter registry, chat interface, streaming protocol. Provider adapters live in the wrapper package, not here.
 - [`services/`](services/ANATOMY.md) — kernel-side service implementations: filesystem mailbox (`mail.py`), JSONL event log (`logging.py`).
@@ -57,9 +58,8 @@ The kernel only writes inside the agent's working directory (`<workdir>/`). Per-
 - `logs/token_ledger.jsonl` — per-call token usage.
 - `mailbox/{inbox,outbox,sent}/` — filesystem mailbox.
 - `.agent.json`, `.agent.heartbeat`, `.status.json` — manifest, liveness signal, runtime snapshot.
-- Signal files (`.prompt`, `.inquiry`, `.sleep`, `.suspend`, `.clear`, `.rules`) — consumed by `base_agent.py` heartbeat ticks.
+- Signal files (`.prompt`, `.inquiry`, `.sleep`, `.suspend`, `.clear`, `.rules`) — consumed by `base_agent/lifecycle.py` heartbeat ticks.
 
 ## Notes
 
 - **The anatomy tree is being populated.** Every existing subfolder anatomy is listed in Composition; deeper anatomies will appear as agents do work in those folders. When you do work in a folder that lacks one, write it before leaving — see the convention skill for the writing checklist.
-- **`base_agent.py` is the single largest unmapped surface.** At ~2400 lines spanning multiple cross-cutting concerns, it is the next natural refactor candidate (mirroring how `intrinsics/soul.py` became a package). Until that refactor, the bullet above is the only navigation aid for `base_agent.py`.

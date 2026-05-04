@@ -595,15 +595,23 @@ def test_base_agent_has_no_non_kernel_imports():
     import lingtai_kernel
     from pathlib import Path
     kernel_dir = Path(lingtai_kernel.__file__).parent
-    source = (kernel_dir / "base_agent.py").read_text()
-    tree = ast.parse(source)
+    # After the package refactor, base_agent is a directory (package).
+    # Scan all .py files in the package.
+    base_agent_dir = kernel_dir / "base_agent"
+    if base_agent_dir.is_dir():
+        sources = list(base_agent_dir.glob("*.py"))
+    else:
+        sources = [kernel_dir / "base_agent.py"]
 
     non_kernel = {"services.file_io", "services.mcp", "services.vision", "services.websearch",
                   "services.tts", "services.image_gen", "services.transcription", "services.music_gen",
                   "capabilities", "addons", "agent"}
 
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                for nk in non_kernel:
-                    assert nk not in node.module, f"base_agent.py imports from non-kernel: {node.module}"
+    for source_path in sources:
+        source = source_path.read_text()
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    for nk in non_kernel:
+                        assert nk not in node.module, f"{source_path.name} imports from non-kernel: {node.module}"

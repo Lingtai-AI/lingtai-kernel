@@ -1,0 +1,916 @@
+"""
+BaseAgent — generic agent kernel with intrinsic tools and capability dispatch.
+
+Key concepts:
+    - **5-state lifecycle**: ACTIVE, IDLE, STUCK, ASLEEP, SUSPENDED.
+    - **Persistent LLM session**: each agent keeps its chat session across messages.
+    - **2-layer tool dispatch**: intrinsics (built-in) + capability handlers.
+    - **Opaque context**: the host app can pass any context object — the agent
+      stores it but never introspects it.
+    - **4 optional services**: LLM, FileIO, Mail, Logging —
+      missing service auto-disables the intrinsics it backs.
+"""
+
+from __future__ import annotations
+
+import json
+import queue
+import threading
+import time
+from pathlib import Path
+from typing import Any, Callable
+
+from ..config import AgentConfig
+from ..state import AgentState
+from ..workdir import WorkingDir
+from ..message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT, MSG_TC_WAKE
+from ..intrinsics import ALL_INTRINSICS
+from ..prompt import SystemPromptManager
+from ..llm import (
+    FunctionSchema,
+    LLMService,
+    ToolCall,
+)
+from ..i18n import t as _t
+from ..logging import get_logger
+from ..loop_guard import LoopGuard
+from ..prompt import build_system_prompt, build_system_prompt_batches
+from ..meta_block import build_meta, render_meta
+from ..time_veil import now_iso, scrub_time_fields
+from ..session import SessionManager
+from ..tc_inbox import TCInbox
+from ..tool_executor import ToolExecutor
+from ..token_ledger import append_token_entry, sum_token_ledger
+from ..types import UnknownToolError
+
+logger = get_logger()
+
+
+# ---------------------------------------------------------------------------
+# Identity prompt section (curated prose)
+# ---------------------------------------------------------------------------
+
+
+def _format_stamina(seconds: float) -> str:
+    """Render stamina capacity as a human-friendly duration string."""
+    if seconds <= 0:
+        return "no fixed limit"
+    hours = seconds / 3600
+    if hours >= 1:
+        return f"{hours:.1f}h" if hours != int(hours) else f"{int(hours)}h"
+    minutes = seconds / 60
+    return f"{int(minutes)}min"
+
+
+def _build_identity_section(manifest_data: dict, mailbox_name: str | None = None) -> str:
+    """Render the agent's identity as curated prose for the system prompt.
+
+    Stable across turns (no transient runtime state) so it sits in the
+    cacheable prefix without invalidating cache. The `state` field is
+    explicitly omitted upstream — it changes every turn.
+
+    Returns a markdown paragraph. Empty/missing fields are silently
+    omitted so the prose stays clean for minimal manifests.
+    """
+    name = manifest_data.get("agent_name") or "(unnamed)"
+    nickname = manifest_data.get("nickname") or ""
+    agent_id = manifest_data.get("agent_id") or ""
+    address = manifest_data.get("address") or ""
+    created = manifest_data.get("created_at") or ""
+    started = manifest_data.get("started_at") or ""
+    admin = manifest_data.get("admin") or {}
+    stamina = manifest_data.get("stamina") or 0
+    soul_delay = manifest_data.get("soul_delay")
+    molt_count = manifest_data.get("molt_count", 0)
+
+    lines: list[str] = []
+
+    # Lead — name, nickname, id, address.
+    lead = f"You are **{name}**"
+    if nickname:
+        lead += f" — \"{nickname}\""
+    if agent_id:
+        lead += f" (id `{agent_id}`)"
+    lead += "."
+    lines.append(lead)
+    if address:
+        lines.append(f"Your address is `{address}`.")
+
+    # Origins — birth, awakening, molts.
+    origins: list[str] = []
+    if created:
+        origins.append(f"born {created}")
+    if started:
+        origins.append(f"woken {started} for this session")
+    if origins:
+        lines.append("You were " + ", ".join(origins) + ".")
+    if molt_count > 0:
+        lines.append(
+            f"You have undergone {molt_count} molt"
+            f"{'s' if molt_count != 1 else ''} since birth."
+        )
+
+    # Admin role.
+    if admin:
+        flags = [k for k, v in admin.items() if v]
+        if flags:
+            if "nirvana" in flags:
+                lines.append(
+                    "You hold both **karma** and **nirvana** privileges — "
+                    "you can manage and destroy other agents in this network."
+                )
+            elif "karma" in flags:
+                lines.append(
+                    "You hold **karma** privilege — "
+                    "you can lull / suspend / cpr / clear other agents."
+                )
+            else:
+                lines.append(f"You hold admin flags: {', '.join(flags)}.")
+
+    # Resources.
+    if stamina:
+        lines.append(
+            f"Each session lasts up to {_format_stamina(stamina)} "
+            "of work before rest. Your `stamina_left_seconds` "
+            "appears on every tool result."
+        )
+    if soul_delay is not None:
+        lines.append(f"Your soul flow fires {soul_delay}s after you go idle.")
+    if mailbox_name:
+        lines.append(f"You receive messages via {mailbox_name}.")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# BaseAgent
+# ---------------------------------------------------------------------------
+
+
+class BaseAgent:
+    """Generic research agent with intrinsic tools and MCP tool dispatch.
+
+    Services (all optional):
+        - ``service`` (LLMService): The brain — thinking, generating text.
+        - ``file_io`` (FileIOService): File access — backs read/edit/write/glob/grep.
+        - ``mail_service`` (MailService): Message transport — backs mail intrinsic.
+
+    Missing service = intrinsics backed by it are auto-disabled.
+
+    Subclasses customize behavior via:
+        - ``_pre_request(msg)`` — transform message before LLM send
+        - ``_post_request(msg, result)`` — side effects after LLM responds
+        - ``_handle_message(msg)`` — message routing (must call super for processing)
+        - ``_get_guard_limits()`` — per-agent loop guard limits
+        - ``_PARALLEL_SAFE_TOOLS`` — set of tool names safe for concurrent execution
+    """
+
+    agent_type: str = ""
+
+    # Tools safe for concurrent execution
+    _PARALLEL_SAFE_TOOLS: set[str] = set()
+
+    # Inbox polling interval (seconds)
+    _inbox_timeout: float = 1.0
+
+    def __init__(
+        self,
+        service: LLMService,
+        *,
+        agent_name: str | None = None,
+        working_dir: str | Path,
+        file_io: Any | None = None,
+        mail_service: Any | None = None,
+        config: AgentConfig | None = None,
+        context: Any = None,
+        admin: dict | None = None,
+        streaming: bool = False,
+        covenant: str = "",
+        principle: str = "",
+        procedures: str = "",
+        brief: str = "",
+        pad: str = "",
+        comment: str = "",
+    ):
+        self.agent_name = agent_name  # true name (真名) — immutable once set
+        self.nickname: str | None = None  # mutable alias (别名)
+        self.service = service
+        self._config = config or AgentConfig()
+        self._context = context
+        self._admin = admin or {}
+        self._cancel_event = threading.Event()
+        self._state = AgentState.IDLE
+        self._started_at: str = ""
+        self._last_usage = None  # UsageMetadata from last LLM call, for ledger
+        self._created_at: str = ""
+        self._uptime_anchor: float | None = None  # set in start(), None means not started
+
+        # Working directory (caller-owned path)
+        self._workdir = WorkingDir(working_dir)
+        self._working_dir = self._workdir.path
+
+        # LoggingService: always JSONL in working dir
+        from ..services.logging import JSONLLoggingService
+        log_dir = self._working_dir / "logs"
+        log_dir.mkdir(exist_ok=True)
+        self._log_service = JSONLLoggingService(
+            log_dir / "events.jsonl",
+            ensure_ascii=self._config.ensure_ascii,
+        )
+
+        # Acquire working directory lock (10s grace for prior process cleanup)
+        self._workdir.acquire_lock(timeout=10)
+
+        # --- Wire services ---
+        # FileIOService: optional, provided by Agent or host
+        self._file_io = file_io
+
+        # MailService: None means mail intrinsic disabled
+        self._mail_service = mail_service
+
+        # Covenant, principle, procedures, brief, and pad file paths
+        system_dir = self._working_dir / "system"
+        pad_file = system_dir / "pad.md"
+        covenant_file = system_dir / "covenant.md"
+        principle_file = system_dir / "principle.md"
+        procedures_file = system_dir / "procedures.md"
+        brief_file = system_dir / "brief.md"
+
+        system_dir.mkdir(exist_ok=True)
+
+        # Covenant: constructor value wins, then fall back to file on disk
+        if covenant:
+            covenant_file.write_text(covenant)
+        elif covenant_file.is_file():
+            covenant = covenant_file.read_text()
+
+        # Principle: constructor value wins, then fall back to file on disk
+        if principle:
+            principle_file.write_text(principle)
+        elif principle_file.is_file():
+            principle = principle_file.read_text()
+
+        # Procedures: same pattern as covenant/principle
+        if procedures:
+            procedures_file.write_text(procedures)
+        elif procedures_file.is_file():
+            procedures = procedures_file.read_text()
+
+        # Brief: externally-maintained context (written by secretary agent).
+        if brief and not brief_file.is_file():
+            brief_file.write_text(brief)
+        elif brief_file.is_file():
+            brief = brief_file.read_text()
+
+        # Pad: constructor value seeds the file if it doesn't exist
+        if pad and not pad_file.is_file():
+            pad_file.write_text(pad)
+
+        # Auto-load pad from file into prompt manager
+        loaded_pad = ""
+        if pad_file.is_file():
+            loaded_pad = pad_file.read_text()
+
+        # System prompt manager
+        self._prompt_manager = SystemPromptManager()
+        if principle:
+            self._prompt_manager.write_section("principle", principle, protected=True)
+        if covenant:
+            self._prompt_manager.write_section("covenant", covenant, protected=True)
+        if procedures:
+            self._prompt_manager.write_section("procedures", procedures, protected=True)
+        if brief:
+            self._prompt_manager.write_section("brief", brief, protected=True)
+        # Load existing rules from system/rules.md (survives molts, refreshes, and resumes)
+        rules_md = system_dir / "rules.md"
+        if rules_md.is_file():
+            try:
+                rules_content = rules_md.read_text().strip()
+                if rules_content:
+                    self._prompt_manager.write_section("rules", rules_content, protected=True)
+            except OSError:
+                pass
+        if loaded_pad.strip():
+            self._prompt_manager.write_section("pad", loaded_pad)
+        if comment:
+            self._prompt_manager.write_section("comment", comment)
+
+        # Soul delay — needed before manifest build
+        self._soul_delay = max(1.0, self._config.soul_delay)
+
+        # Agent ID, created_at, and molt_count — persistent state restored
+        from datetime import datetime, timezone
+        import secrets
+        existing = self._workdir.read_full_manifest()
+        self._agent_id: str = existing.get("agent_id", "")
+        self._created_at: str = existing.get("created_at", "")
+        self._molt_count: int = existing.get("molt_count", 0)
+        if not self._agent_id or not self._created_at:
+            now = datetime.now(timezone.utc)
+            if not self._agent_id:
+                self._agent_id = now.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
+            if not self._created_at:
+                self._created_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Write manifest — identity + construction recipe (no runtime state)
+        self._started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        from .identity import _build_manifest
+        manifest_data = _build_manifest(self)
+        self._workdir.write_manifest(manifest_data)
+
+        # Auto-inject identity into system prompt from manifest
+        self._prompt_manager.write_section(
+            "identity",
+            _build_identity_section(
+                manifest_data,
+                mailbox_name=getattr(self, "_mailbox_name", None),
+            ),
+            protected=True,
+        )
+
+        self._nap_wake = threading.Event()  # signalled to wake nap early
+        self._nap_wake_reason = ""  # why the nap was woken
+
+        # Mailbox identity — capabilities override these to change notification text.
+        self._mailbox_name = "email box"
+        self._mailbox_tool = "email"
+
+        # Non-intrinsic tool handlers (capabilities, MCP, add_tool)
+        self._tool_handlers: dict[str, Callable[[dict], dict]] = {}
+        self._tool_schemas: list[FunctionSchema] = []
+
+        # --- Wire intrinsic tools ---
+        self._intrinsics: dict[str, Callable[[dict], dict]] = {}
+        self._wire_intrinsics()
+
+        # Inbox — text-channel notifications (mail, daemon, user input)
+        self.inbox: queue.Queue[Message] = queue.Queue()
+
+        # Involuntary tool-call inbox
+        self._tc_inbox: TCInbox = TCInbox()
+
+        # Tracks the most recent in-history call_id for each "single-slot" source.
+        self._appendix_ids_by_source: dict[str, str] = {}
+
+        # Map from external ref_id to notif_id of pending system_notification pair.
+        self._pending_mail_notifications: dict[str, str] = {}
+
+        # Lifecycle
+        self._shutdown = threading.Event()
+        self._asleep = threading.Event()   # set when entering ASLEEP; cleared on wake
+        self._thread: threading.Thread | None = None
+        self._idle = threading.Event()
+        self._idle.set()
+        self._state = AgentState.IDLE
+        self._sealed = False
+
+        # Soul — inner voice
+        self._soul_prompt = ""       # non-empty during inquiry
+        self._soul_oneshot = False    # True during pending inquiry
+        self._soul_timer: threading.Timer | None = None
+        self._insight_turn_counter: int = 0
+
+        # Heartbeat — always-on health monitor
+        self._heartbeat: float = 0.0
+        self._heartbeat_thread: threading.Thread | None = None
+        self._aed_start: float | None = None
+
+        # Snapshot — periodic git commits (Time Machine)
+        self._last_snapshot: float = 0.0
+        self._last_gc: float = 0.0
+
+        # Auto-fallback state
+        self._preset_fallback_attempted = False
+
+        # Session manager — LLM session, token tracking, compaction
+        self._session = SessionManager(
+            llm_service=service,
+            config=self._config,
+            agent_name=agent_name,
+            streaming=streaming,
+            build_system_prompt_fn=self._build_system_prompt,
+            build_tool_schemas_fn=self._build_tool_schemas,
+            logger_fn=self._log,
+            build_system_batches_fn=self._build_system_prompt_batches,
+        )
+
+        # Boot the psyche intrinsic
+        from ..intrinsics import psyche as _psyche
+        _psyche.boot(self)
+
+        # Boot the email intrinsic
+        from ..intrinsics import email as _email
+        _email.boot(self)
+
+    # ------------------------------------------------------------------
+    # Intrinsic wiring
+    # ------------------------------------------------------------------
+
+    def _wire_intrinsics(self) -> None:
+        """Wire kernel intrinsic tool handlers."""
+        for name, info in ALL_INTRINSICS.items():
+            handle_fn = info["module"].handle
+            self._intrinsics[name] = lambda args, fn=handle_fn: fn(self, args)
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def is_idle(self) -> bool:
+        return self._idle.is_set()
+
+    @property
+    def state(self) -> AgentState:
+        return self._state
+
+    @property
+    def agent_id(self) -> str:
+        """Permanent birth certificate — never changes across restarts or moves."""
+        return self._agent_id
+
+    @property
+    def working_dir(self) -> Path:
+        """The agent's working directory."""
+        return self._workdir.path
+
+    @property
+    def _chat(self) -> Any:
+        """Proxy to SessionManager's chat session."""
+        return self._session.chat
+
+    @_chat.setter
+    def _chat(self, value: Any) -> None:
+        self._session.chat = value
+
+    @property
+    def _streaming(self) -> bool:
+        """Proxy to SessionManager's streaming flag."""
+        return self._session.streaming
+
+    @property
+    def _token_decomp_dirty(self) -> bool:
+        """Proxy to SessionManager's token decomp dirty flag."""
+        return self._session.token_decomp_dirty
+
+    @_token_decomp_dirty.setter
+    def _token_decomp_dirty(self, value: bool) -> None:
+        self._session.token_decomp_dirty = value
+
+    @property
+    def _interaction_id(self) -> str | None:
+        """Proxy to SessionManager's interaction ID."""
+        return self._session.interaction_id
+
+    @_interaction_id.setter
+    def _interaction_id(self, value: str | None) -> None:
+        self._session.interaction_id = value
+
+    @property
+    def _intermediate_text_streamed(self) -> bool:
+        """Proxy to SessionManager's intermediate text streamed flag."""
+        return self._session.intermediate_text_streamed
+
+    @_intermediate_text_streamed.setter
+    def _intermediate_text_streamed(self, value: bool) -> None:
+        self._session.intermediate_text_streamed = value
+
+    # ------------------------------------------------------------------
+    # Naming (pass-throughs to identity.py)
+    # ------------------------------------------------------------------
+
+    def set_name(self, name: str) -> None:
+        from .identity import _set_name
+        _set_name(self, name)
+
+    def set_nickname(self, nickname: str) -> None:
+        from .identity import _set_nickname
+        _set_nickname(self, nickname)
+
+    def _update_identity(self) -> None:
+        from .identity import _update_identity
+        _update_identity(self)
+
+    # ------------------------------------------------------------------
+    # Lifecycle (pass-throughs to lifecycle.py + direct methods)
+    # ------------------------------------------------------------------
+
+    def start(self) -> None:
+        """Start the agent's main loop thread."""
+        from .lifecycle import _start
+        _start(self)
+
+    def _reset_uptime(self) -> None:
+        """Reset the uptime anchor for stamina tracking."""
+        from .lifecycle import _reset_uptime
+        _reset_uptime(self)
+
+    def stop(self, timeout: float = 5.0) -> None:
+        """Signal shutdown and wait for the agent thread to exit."""
+        from .lifecycle import _stop
+        _stop(self, timeout)
+
+    def _set_state(self, new_state: AgentState, reason: str = "") -> None:
+        """Transition to a new state.
+
+        Drives the soul cadence timer: the timer runs only when the agent
+        is in a fire-eligible state (ACTIVE / IDLE). Entering STUCK,
+        ASLEEP, or SUSPENDED cancels it outright; returning to ACTIVE or
+        IDLE starts a fresh ``soul_delay``-second timer.
+        """
+        from .soul_flow import _start_soul_timer, _cancel_soul_timer
+
+        old = self._state
+        if old == new_state:
+            return
+        self._state = new_state
+        if new_state == AgentState.ACTIVE:
+            self._idle.clear()
+        else:
+            self._idle.set()
+
+        fire_eligible = {AgentState.ACTIVE, AgentState.IDLE}
+        was_eligible = old in fire_eligible
+        is_eligible = new_state in fire_eligible
+        if was_eligible and not is_eligible:
+            _cancel_soul_timer(self)
+        elif is_eligible and not was_eligible:
+            _start_soul_timer(self)
+
+        self._log("agent_state", old=old.value, new=new_state.value, reason=reason)
+        self._workdir.write_manifest(self._build_manifest())
+
+    def _wake_nap(self, reason: str) -> None:
+        """Signal the nap to wake up with a given reason."""
+        self._nap_wake_reason = reason
+        self._nap_wake.set()
+
+    def _log(self, event_type: str, **fields) -> None:
+        """Write a structured event to the logging service, if configured."""
+        if self._log_service:
+            self._log_service.log({
+                "type": event_type,
+                "address": self._working_dir.name,
+                "agent_name": self.agent_name,
+                "ts": time.time(),
+                **fields,
+            })
+
+    def wake(self, reason: str) -> None:
+        """Wake the agent from nap. Call when external input arrives."""
+        self._wake_nap(reason)
+
+    def log(self, event_type: str, **fields) -> None:
+        """Write a structured event to the agent's event log."""
+        self._log(event_type, **fields)
+
+    # ------------------------------------------------------------------
+    # Public addon API (pass-throughs)
+    # ------------------------------------------------------------------
+
+    def _on_mail_received(self, payload: dict) -> None:
+        from .messaging import _on_mail_received
+        _on_mail_received(self, payload)
+
+    def _on_normal_mail(self, payload: dict) -> None:
+        from .messaging import _on_normal_mail
+        _on_normal_mail(self, payload)
+
+    def _enqueue_system_notification(self, *, source: str, ref_id: str, body: str) -> str:
+        from .messaging import _enqueue_system_notification
+        return _enqueue_system_notification(self, source=source, ref_id=ref_id, body=body)
+
+    def notify(self, sender: str, text: str) -> None:
+        from .messaging import _notify
+        _notify(self, sender, text)
+
+    # ------------------------------------------------------------------
+    # Soul (pass-throughs to soul_flow.py)
+    # ------------------------------------------------------------------
+
+    def _start_soul_timer(self) -> None:
+        from .soul_flow import _start_soul_timer
+        _start_soul_timer(self)
+
+    def _cancel_soul_timer(self) -> None:
+        from .soul_flow import _cancel_soul_timer
+        _cancel_soul_timer(self)
+
+    def _soul_whisper(self) -> None:
+        from .soul_flow import _soul_whisper
+        _soul_whisper(self)
+
+    def _drain_tc_inbox(self) -> None:
+        from .soul_flow import _drain_tc_inbox
+        _drain_tc_inbox(self)
+
+    def _persist_soul_entry(self, result: dict, mode: str = "flow", source: str = "agent") -> None:
+        from .soul_flow import _persist_soul_entry
+        _persist_soul_entry(self, result, mode=mode, source=source)
+
+    def _append_soul_flow_record(self, record: dict) -> None:
+        from .soul_flow import _append_soul_flow_record
+        _append_soul_flow_record(self, record)
+
+    def _run_inquiry(self, question: str, source: str = "agent") -> None:
+        from .soul_flow import _run_inquiry
+        _run_inquiry(self, question, source=source)
+
+    def _flatten_v3_for_pair(self, voice: dict) -> dict:
+        from .soul_flow import _flatten_v3_for_pair
+        return _flatten_v3_for_pair(self, voice)
+
+    def _run_consultation_fire(self) -> None:
+        from .soul_flow import _run_consultation_fire
+        _run_consultation_fire(self)
+
+    def _rehydrate_appendix_tracking(self) -> None:
+        from .soul_flow import _rehydrate_appendix_tracking
+        _rehydrate_appendix_tracking(self)
+
+    # ------------------------------------------------------------------
+    # Heartbeat (pass-throughs to lifecycle.py)
+    # ------------------------------------------------------------------
+
+    def _start_heartbeat(self) -> None:
+        from .lifecycle import _start_heartbeat
+        _start_heartbeat(self)
+
+    def _stop_heartbeat(self) -> None:
+        from .lifecycle import _stop_heartbeat
+        _stop_heartbeat(self)
+
+    def _heartbeat_loop(self) -> None:
+        from .lifecycle import _heartbeat_loop
+        _heartbeat_loop(self)
+
+    # ------------------------------------------------------------------
+    # Main loop (pass-throughs to turn.py)
+    # ------------------------------------------------------------------
+
+    def _run_loop(self) -> None:
+        from .turn import _run_loop
+        _run_loop(self)
+
+    def _concat_queued_messages(self, msg: Message) -> Message:
+        from .turn import _concat_queued_messages
+        return _concat_queued_messages(self, msg)
+
+    def _handle_message(self, msg: Message) -> None:
+        from .turn import _handle_message
+        _handle_message(self, msg)
+
+    def _handle_request(self, msg: Message) -> None:
+        from .turn import _handle_request
+        _handle_request(self, msg)
+
+    def _handle_tc_wake(self, msg: Message) -> None:
+        from .turn import _handle_tc_wake
+        _handle_tc_wake(self, msg)
+
+    def _get_guard_limits(self) -> tuple[int, int, int]:
+        from .turn import _get_guard_limits
+        return _get_guard_limits(self)
+
+    def _process_response(self, response, *, ledger_source: str = "main") -> dict:
+        from .turn import _process_response
+        return _process_response(self, response, ledger_source=ledger_source)
+
+    # ------------------------------------------------------------------
+    # Refresh / preset (pass-throughs to lifecycle.py)
+    # ------------------------------------------------------------------
+
+    def _perform_refresh(self) -> None:
+        from .lifecycle import _perform_refresh
+        _perform_refresh(self)
+
+    def _activate_preset(self, name: str) -> None:
+        """Swap to a named preset — override in subclasses that support presets.
+
+        BaseAgent raises NotImplementedError; Agent (lingtai.agent) overrides
+        this with the real implementation.
+        """
+        raise NotImplementedError(
+            f"_activate_preset not supported on {type(self).__name__}"
+        )
+
+    def _can_fallback_preset(self) -> bool:
+        from .lifecycle import _can_fallback_preset
+        return _can_fallback_preset(self)
+
+    def _activate_default_preset(self) -> None:
+        """Override hook — Agent subclass implements via _activate_preset(default).
+        BaseAgent stub raises NotImplementedError."""
+        raise NotImplementedError(
+            "_activate_default_preset must be implemented by Agent subclass"
+        )
+
+    def _build_launch_cmd(self) -> list[str] | None:
+        """Return the command to relaunch this agent. Override in subclasses."""
+        return None
+
+    # ------------------------------------------------------------------
+    # Tool dispatch (pass-throughs to tools.py)
+    # ------------------------------------------------------------------
+
+    def _dispatch_tool(self, tc: ToolCall) -> dict:
+        from .tools import _dispatch_tool
+        return _dispatch_tool(self, tc)
+
+    def _refresh_tool_inventory_section(self) -> None:
+        from .tools import _refresh_tool_inventory_section
+        _refresh_tool_inventory_section(self)
+
+    def _build_tool_schemas(self) -> list[FunctionSchema]:
+        from .tools import _build_tool_schemas
+        return _build_tool_schemas(self)
+
+    def has_capability(self, name: str) -> bool:
+        from .tools import _has_capability
+        return _has_capability(self, name)
+
+    def add_tool(
+        self,
+        name: str,
+        *,
+        schema: dict | None = None,
+        handler: Callable[[dict], dict] | None = None,
+        description: str = "",
+        system_prompt: str = "",
+    ) -> None:
+        from .tools import _add_tool
+        _add_tool(self, name, schema=schema, handler=handler, description=description, system_prompt=system_prompt)
+
+    def remove_tool(self, name: str) -> None:
+        from .tools import _remove_tool
+        _remove_tool(self, name)
+
+    def override_intrinsic(self, name: str) -> Callable[[dict], dict]:
+        from .tools import _override_intrinsic
+        return _override_intrinsic(self, name)
+
+    # ------------------------------------------------------------------
+    # Prompt (pass-throughs to prompt.py)
+    # ------------------------------------------------------------------
+
+    def _build_system_prompt(self) -> str:
+        from .prompt import _build_system_prompt
+        return _build_system_prompt(self)
+
+    def _build_system_prompt_batches(self) -> list[str]:
+        from .prompt import _build_system_prompt_batches
+        return _build_system_prompt_batches(self)
+
+    def _flush_system_prompt(self) -> None:
+        from .prompt import _flush_system_prompt
+        _flush_system_prompt(self)
+
+    def update_system_prompt(
+        self, section: str, content: str, *, protected: bool = False
+    ) -> None:
+        from .prompt import _update_system_prompt
+        _update_system_prompt(self, section, content, protected=protected)
+
+    def _check_rules_file(self) -> None:
+        from .lifecycle import _check_rules_file
+        _check_rules_file(self)
+
+    # ------------------------------------------------------------------
+    # Identity / status (pass-throughs to identity.py)
+    # ------------------------------------------------------------------
+
+    def _build_manifest(self) -> dict:
+        from .identity import _build_manifest
+        return _build_manifest(self)
+
+    def status(self) -> dict:
+        from .identity import _status
+        return _status(self)
+
+    # ------------------------------------------------------------------
+    # Messaging (pass-throughs)
+    # ------------------------------------------------------------------
+
+    def mail(self, address: str, message: str, subject: str = "") -> dict:
+        from .messaging import _mail
+        return _mail(self, address, message, subject)
+
+    def send(self, content: str | dict, sender: str = "user") -> None:
+        from .messaging import _send
+        _send(self, content, sender)
+
+    # ------------------------------------------------------------------
+    # Session persistence (delegates to SessionManager)
+    # ------------------------------------------------------------------
+
+    def get_token_usage(self) -> dict:
+        """Return token usage summary (delegates to SessionManager)."""
+        if not hasattr(self, "_session"):
+            return {
+                "input_tokens": 0, "output_tokens": 0,
+                "thinking_tokens": 0, "cached_tokens": 0,
+                "total_tokens": 0, "api_calls": 0,
+                "ctx_system_tokens": 0, "ctx_tools_tokens": 0,
+                "ctx_history_tokens": 0, "ctx_total_tokens": 0,
+            }
+        return self._session.get_token_usage()
+
+    def get_chat_state(self) -> dict:
+        """Serialize current chat session for persistence."""
+        return self._session.get_chat_state()
+
+    def restore_chat(self, state: dict) -> None:
+        """Restore or create a chat session from saved state."""
+        self._session.restore_chat(state)
+
+    def restore_token_state(self, state: dict) -> None:
+        """Restore cumulative token counters from a saved session."""
+        self._session.restore_token_state(state)
+
+    def _save_chat_history(self, *, ledger_source: str = "main") -> None:
+        """Write chat history and token usage to disk (no git commit).
+
+        Called after every completed interaction for crash resilience.
+        Git commits are handled by the periodic snapshot system.
+
+        ``ledger_source`` tags any token-ledger entry written for the
+        most recent LLM round-trip. Default ``"main"`` covers the bulk
+        of callers. Set to ``"tc_wake"`` from involuntary splice paths
+        so consultation cadence does not double-count splices as main turns.
+        """
+        history_dir = self._working_dir / "history"
+        history_dir.mkdir(exist_ok=True)
+        try:
+            state = self.get_chat_state()
+            if state and state.get("messages"):
+                lines = [json.dumps(entry, ensure_ascii=False) for entry in state["messages"]]
+                (history_dir / "chat_history.jsonl").write_text("\n".join(lines) + "\n")
+        except Exception as e:
+            logger.warning(f"[{self.agent_name}] Failed to save chat history: {e}")
+        # Update .agent.json with current state
+        try:
+            self._workdir.write_manifest(self._build_manifest())
+        except Exception as e:
+            logger.warning(f"[{self.agent_name}] Failed to update manifest: {e}")
+        # Write .status.json — live runtime snapshot consumed by TUI/portal
+        try:
+            (self._working_dir / ".status.json").write_text(
+                json.dumps(self.status(), ensure_ascii=False, indent=2)
+            )
+        except Exception as e:
+            logger.warning(f"[{self.agent_name}] Failed to write .status.json: {e}")
+        # Append per-call token usage to ledger
+        usage, self._last_usage = self._last_usage, None
+        if usage is not None:
+            try:
+                ledger_path = self._working_dir / "logs" / "token_ledger.jsonl"
+                model = getattr(self._session, "_model", None) or getattr(self.service, "model", None)
+                endpoint = getattr(self.service, "_base_url", None)
+                append_token_entry(
+                    ledger_path,
+                    input=usage.input_tokens,
+                    output=usage.output_tokens,
+                    thinking=usage.thinking_tokens,
+                    cached=usage.cached_tokens,
+                    model=model,
+                    endpoint=endpoint,
+                    extra={"source": ledger_source},
+                )
+            except Exception as e:
+                logger.warning(f"[{self.agent_name}] Failed to append token ledger: {e}")
+
+    # ------------------------------------------------------------------
+    # Hooks (overridable by subclasses)
+    # ------------------------------------------------------------------
+
+    def _cpr_agent(self, address: str) -> "BaseAgent | None":
+        """Resuscitate a suspended agent at *address*.
+
+        Returns the resuscitated agent, or None if not supported.
+        Override in subclasses (e.g. lingtai's Agent) to provide
+        full reconstruction from persisted working dir state.
+        """
+        return None
+
+    def _pre_request(self, msg: Message) -> str:
+        """Transform message content before sending to LLM.
+
+        Returns the content string to send.
+        """
+        return msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
+
+    def _post_request(self, msg: Message, result: dict) -> None:
+        """Called after _process_response.
+
+        Override in subclasses for post-processing.
+        """
+
+    def _on_tool_result_hook(
+        self, tool_name: str, tool_args: dict, result: dict
+    ) -> str | None:
+        """Hook called after each tool execution.
+
+        If this returns a non-None string, the current request processing
+        returns immediately with that string as the result text.
+        """
+        return None
