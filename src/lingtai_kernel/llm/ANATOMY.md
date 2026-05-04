@@ -20,7 +20,7 @@ Provider-agnostic LLM protocol layer. This folder defines the canonical chat log
 - `base_agent.py` imports kernel LLM types for service injection, tool execution, and synthetic history repair (`base_agent.py:31-35`, `base_agent.py:752`, `base_agent.py:1012`, `base_agent.py:1208`).
 - `session.py` imports `ChatSession`, `FunctionSchema`, `LLMResponse`, and `LLMService` to own session lifecycle and token/context bookkeeping (`session.py:12-17`).
 - `tool_executor.py` consumes `ToolCall` (`tool_executor.py:8`); `tc_inbox.py` consumes `ToolCallBlock`/`ToolResultBlock` for synthetic pairs (`tc_inbox.py:33`).
-- `intrinsics/psyche.py` and `intrinsics/soul.py` use canonical blocks/interfaces for molt replay and soul-flow consultation (`intrinsics/psyche.py:37`, `intrinsics/soul.py:618`, `intrinsics/soul.py:732`, `intrinsics/soul.py:895`, `intrinsics/soul.py:1036`).
+- `intrinsics/psyche.py` and `intrinsics/soul/` use canonical blocks/interfaces for molt replay and soul-flow consultation (`intrinsics/psyche.py:37`, `intrinsics/soul/inquiry.py:15`, `intrinsics/soul/consultation.py:196`, `intrinsics/soul/consultation.py:359`, `intrinsics/soul/consultation.py:499`).
 - Outbound from this folder is minimal: `ChatInterface.estimate_context_tokens()` lazy-imports `token_counter.count_tokens` (`llm/interface.py:764`).
 - Wrapper boundary: `src/lingtai/llm/service.py` provides the concrete `LLMService` subclass (`src/lingtai/llm/service.py:25`); wrapper adapters import kernel types, but the kernel does not import the wrapper.
 
