@@ -7,7 +7,7 @@ import pytest
 
 from lingtai_kernel.base_agent import BaseAgent
 from lingtai.agent import Agent
-from lingtai_kernel.message import Message, _make_message, MSG_REQUEST
+from lingtai_kernel.message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT, MSG_TC_WAKE
 from lingtai_kernel.state import AgentState
 from lingtai_kernel.types import UnknownToolError
 from lingtai_kernel.config import AgentConfig
@@ -562,6 +562,103 @@ def test_concat_preserves_first_sender(tmp_path):
     assert "task for you" in result.content
     assert "mail box" in result.content
     assert result.sender == "alice"
+
+
+def test_concat_does_not_absorb_tc_wake(tmp_path):
+    """A queued MSG_TC_WAKE must not be absorbed into a merged MSG_REQUEST.
+
+    Regression: previously, _concat_queued_messages drained ALL queued
+    messages regardless of type and merged their (often empty) content
+    into a new MSG_REQUEST. A MSG_TC_WAKE (empty content, signal-only)
+    queued behind a MSG_REQUEST would be silently consumed and the
+    tc_inbox drain handler would never fire — mail notifications stayed
+    queued indefinitely behind long-running tasks.
+    """
+    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    text_msg = _make_message(MSG_REQUEST, "user", "do the thing")
+    wake_msg = _make_message(MSG_TC_WAKE, "system", "")
+    agent.inbox.put(text_msg)
+    agent.inbox.put(wake_msg)
+
+    first = agent.inbox.get()
+    result = agent._concat_queued_messages(first)
+
+    assert result.type == MSG_REQUEST
+    assert "do the thing" in result.content
+    # The wake message must still be in the inbox for separate dispatch.
+    assert not agent.inbox.empty()
+    survivor = agent.inbox.get_nowait()
+    assert survivor.type == MSG_TC_WAKE
+    assert agent.inbox.empty()
+
+
+def test_concat_passes_through_tc_wake_first(tmp_path):
+    """When the dequeued message is itself MSG_TC_WAKE, return it as-is.
+
+    The handler dispatch (turn.py) routes by type after concat; if a
+    TC_WAKE arrives first, it must reach _handle_tc_wake unchanged so
+    the involuntary tool-call pairs get spliced into the wire chat.
+    """
+    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    wake_msg = _make_message(MSG_TC_WAKE, "system", "")
+    text_msg = _make_message(MSG_REQUEST, "user", "request behind wake")
+    agent.inbox.put(wake_msg)
+    agent.inbox.put(text_msg)
+
+    first = agent.inbox.get()
+    result = agent._concat_queued_messages(first)
+
+    # The wake passes through untouched.
+    assert result is first
+    assert result.type == MSG_TC_WAKE
+    # The text request remains queued for its own iteration.
+    assert not agent.inbox.empty()
+    next_msg = agent.inbox.get_nowait()
+    assert next_msg.type == MSG_REQUEST
+    assert "request behind wake" in next_msg.content
+
+
+def test_concat_merges_user_input_with_request(tmp_path):
+    """MSG_USER_INPUT and MSG_REQUEST are both text-bearing and should
+    concatenate together — they used to under the type-blind logic, and
+    must continue to under the type-aware logic.
+    """
+    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    msg1 = _make_message(MSG_USER_INPUT, "user", "first")
+    msg2 = _make_message(MSG_REQUEST, "system", "second")
+    agent.inbox.put(msg1)
+    agent.inbox.put(msg2)
+
+    first = agent.inbox.get()
+    result = agent._concat_queued_messages(first)
+    assert "first" in result.content
+    assert "second" in result.content
+    assert agent.inbox.empty()
+
+
+def test_concat_preserves_multiple_non_text_messages(tmp_path):
+    """Multiple non-text messages queued behind a MSG_REQUEST must all
+    survive in their original order so each gets its own dispatch.
+    """
+    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    text_msg = _make_message(MSG_REQUEST, "user", "main request")
+    wake1 = _make_message(MSG_TC_WAKE, "system", "")
+    wake2 = _make_message(MSG_TC_WAKE, "system", "")
+    agent.inbox.put(text_msg)
+    agent.inbox.put(wake1)
+    agent.inbox.put(wake2)
+
+    first = agent.inbox.get()
+    result = agent._concat_queued_messages(first)
+
+    assert result.type == MSG_REQUEST
+    assert "main request" in result.content
+    # Both wakes should have survived, in original order.
+    survivor1 = agent.inbox.get_nowait()
+    survivor2 = agent.inbox.get_nowait()
+    assert survivor1.type == MSG_TC_WAKE
+    assert survivor2.type == MSG_TC_WAKE
+    assert agent.inbox.empty()
 
 
 # ---------------------------------------------------------------------------

@@ -266,20 +266,42 @@ def _run_loop(agent) -> None:
         break
 
 
-def _concat_queued_messages(agent, msg: Message) -> Message:
-    """Drain any additional queued messages and concatenate into one.
+_TEXT_MSG_TYPES = (MSG_REQUEST, MSG_USER_INPUT)
 
-    If nothing else is queued, returns the original message unchanged.
-    Otherwise, joins all message contents with blank lines and returns
-    a new merged message.
+
+def _concat_queued_messages(agent, msg: Message) -> Message:
+    """Drain queued same-type text messages and concatenate into one.
+
+    Only consumes additional messages of MSG_REQUEST or MSG_USER_INPUT
+    (text-bearing types) — and only when ``msg`` itself is one of those.
+    Other message types (notably MSG_TC_WAKE) are put back into the
+    inbox so the run loop processes them in their own iteration with
+    their own dispatch path. Without this filter, an empty-content
+    MSG_TC_WAKE queued behind a MSG_REQUEST would be silently absorbed
+    into the merged request, and the tc_inbox drain handler would never
+    fire — mail notifications would stay queued indefinitely.
+
+    If nothing same-type is queued, returns the original message
+    unchanged. Otherwise, joins all same-type contents with blank lines
+    and returns a new merged message.
     """
+    if msg.type not in _TEXT_MSG_TYPES:
+        return msg
+
     extra: list[Message] = []
+    putback: list[Message] = []
     while True:
         try:
             queued = agent.inbox.get_nowait()
         except queue.Empty:
             break
-        extra.append(queued)
+        if queued.type in _TEXT_MSG_TYPES:
+            extra.append(queued)
+        else:
+            putback.append(queued)
+
+    for held in putback:
+        agent.inbox.put_nowait(held)
 
     if not extra:
         return msg
