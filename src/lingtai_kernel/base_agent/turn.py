@@ -22,7 +22,7 @@ logger = get_logger()
 def _run_loop(agent) -> None:
     """Wait for messages, process them. Agent persists between messages."""
     from ..state import AgentState
-    from .soul_flow import _cancel_soul_timer
+    from ..intrinsics.soul.flow import _cancel_soul_timer
 
     while True:
         while not agent._shutdown.is_set():
@@ -121,7 +121,7 @@ def _run_loop(agent) -> None:
                 if agent._insight_turn_counter >= agent._config.insights_interval:
                     agent._insight_turn_counter = 0
                     from ..i18n import t as _ti
-                    from .soul_flow import _run_inquiry
+                    from ..intrinsics.soul.inquiry import _run_inquiry
                     _run_inquiry(
                         agent,
                         _ti(agent._config.language, "insight.auto_question"),

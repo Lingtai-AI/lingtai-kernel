@@ -14,7 +14,7 @@ import threading
 
 def _start(agent) -> None:
     """Start the agent's main loop thread."""
-    from .soul_flow import _start_soul_timer, _rehydrate_appendix_tracking
+    from ..intrinsics.soul.flow import _start_soul_timer, _rehydrate_appendix_tracking
     from ..token_ledger import sum_token_ledger
 
     agent._sealed = True
@@ -83,7 +83,7 @@ def _reset_uptime(agent) -> None:
 
 def _stop(agent, timeout: float = 5.0) -> None:
     """Signal shutdown and wait for the agent thread to exit."""
-    from .soul_flow import _cancel_soul_timer
+    from ..intrinsics.soul.flow import _cancel_soul_timer
 
     agent._log("agent_stop")
     _stop_heartbeat(agent)
@@ -143,7 +143,7 @@ def _stop_heartbeat(agent) -> None:
 def _heartbeat_loop(agent) -> None:
     """Beat every 1 second. AED if agent is STUCK."""
     from ..state import AgentState
-    from .soul_flow import _run_inquiry
+    from ..intrinsics.soul.inquiry import _run_inquiry
 
     while agent._heartbeat_thread is not None and not agent._shutdown.is_set():
         # time.time() (wall clock), not time.monotonic(). Deliberate:

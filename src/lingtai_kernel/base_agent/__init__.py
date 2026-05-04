@@ -518,7 +518,7 @@ class BaseAgent:
         ASLEEP, or SUSPENDED cancels it outright; returning to ACTIVE or
         IDLE starts a fresh ``soul_delay``-second timer.
         """
-        from .soul_flow import _start_soul_timer, _cancel_soul_timer
+        from ..intrinsics.soul.flow import _start_soul_timer, _cancel_soul_timer
 
         old = self._state
         if old == new_state:
@@ -589,43 +589,54 @@ class BaseAgent:
     # ------------------------------------------------------------------
 
     def _start_soul_timer(self) -> None:
-        from .soul_flow import _start_soul_timer
+        from ..intrinsics.soul.flow import _start_soul_timer
         _start_soul_timer(self)
 
     def _cancel_soul_timer(self) -> None:
-        from .soul_flow import _cancel_soul_timer
+        from ..intrinsics.soul.flow import _cancel_soul_timer
         _cancel_soul_timer(self)
 
     def _soul_whisper(self) -> None:
-        from .soul_flow import _soul_whisper
+        from ..intrinsics.soul.flow import _soul_whisper
         _soul_whisper(self)
 
     def _drain_tc_inbox(self) -> None:
-        from .soul_flow import _drain_tc_inbox
-        _drain_tc_inbox(self)
+        """Splice queued involuntary tool-call pairs at a safe boundary."""
+        if self._chat is None:
+            try:
+                self._session.ensure_session()
+            except Exception:
+                return
+        result = self._tc_inbox.drain_into(
+            self._chat.interface,
+            self._appendix_ids_by_source,
+        )
+        if result.count > 0:
+            self._log("tc_inbox_drain", count=result.count, sources=result.sources)
+            self._save_chat_history()
 
     def _persist_soul_entry(self, result: dict, mode: str = "flow", source: str = "agent") -> None:
-        from .soul_flow import _persist_soul_entry
+        from ..intrinsics.soul.flow import _persist_soul_entry
         _persist_soul_entry(self, result, mode=mode, source=source)
 
     def _append_soul_flow_record(self, record: dict) -> None:
-        from .soul_flow import _append_soul_flow_record
+        from ..intrinsics.soul.flow import _append_soul_flow_record
         _append_soul_flow_record(self, record)
 
     def _run_inquiry(self, question: str, source: str = "agent") -> None:
-        from .soul_flow import _run_inquiry
+        from ..intrinsics.soul.inquiry import _run_inquiry
         _run_inquiry(self, question, source=source)
 
     def _flatten_v3_for_pair(self, voice: dict) -> dict:
-        from .soul_flow import _flatten_v3_for_pair
+        from ..intrinsics.soul.flow import _flatten_v3_for_pair
         return _flatten_v3_for_pair(self, voice)
 
     def _run_consultation_fire(self) -> None:
-        from .soul_flow import _run_consultation_fire
+        from ..intrinsics.soul.flow import _run_consultation_fire
         _run_consultation_fire(self)
 
     def _rehydrate_appendix_tracking(self) -> None:
-        from .soul_flow import _rehydrate_appendix_tracking
+        from ..intrinsics.soul.flow import _rehydrate_appendix_tracking
         _rehydrate_appendix_tracking(self)
 
     # ------------------------------------------------------------------

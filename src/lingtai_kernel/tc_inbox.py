@@ -34,6 +34,18 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class DrainResult:
+    """Result of a TCInbox.drain_into() call."""
+    drained: bool  # True if drain happened or queue was empty; False if blocked
+    count: int = 0
+    sources: list = None  # list[str] — default_factory below
+
+    def __post_init__(self):
+        if self.sources is None:
+            self.sources = []
+
+
+@dataclass
 class InvoluntaryToolCall:
     """One synthetic tool-call pair queued for splicing into the wire chat."""
 
@@ -76,6 +88,52 @@ class TCInbox:
             items = self._items
             self._items = []
         return items
+
+    def drain_into(
+        self,
+        interface,
+        appendix_tracker: dict[str, str],
+    ) -> DrainResult:
+        """Splice queued items into the wire chat at a safe boundary.
+
+        Returns a DrainResult indicating whether a drain happened and
+        what was drained. If the interface still has pending tool-calls,
+        returns DrainResult(drained=False) — caller should retry at the
+        next safe boundary.
+
+        For each drained item:
+          - If item.replace_in_history is True, look up appendix_tracker
+            for a prior call_id under item.source and remove that pair
+            from interface.entries first.
+          - Append the (call, result) pair to interface.
+          - If item.replace_in_history is True, record item.call.id in
+            appendix_tracker under item.source.
+
+        Caller is responsible for save_chat_history after this returns.
+        """
+        if interface.has_pending_tool_calls():
+            return DrainResult(drained=False)
+
+        items = self.drain()
+        if not items:
+            return DrainResult(drained=True, count=0, sources=[])
+
+        for item in items:
+            if getattr(item, "replace_in_history", False):
+                prior_id = appendix_tracker.get(item.source)
+                if prior_id is not None:
+                    interface.remove_pair_by_call_id(prior_id)
+                appendix_tracker.pop(item.source, None)
+            interface.add_assistant_message(content=[item.call])
+            interface.add_tool_results([item.result])
+            if getattr(item, "replace_in_history", False):
+                appendix_tracker[item.source] = item.call.id
+
+        return DrainResult(
+            drained=True,
+            count=len(items),
+            sources=[i.source for i in items],
+        )
 
     def remove_by_notif_id(self, notif_id: str) -> bool:
         """Remove a queued notification item by its ``call.args.notif_id``.

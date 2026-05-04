@@ -1,4 +1,4 @@
-"""Soul inquiry — synchronous mirror session.
+"""Soul inquiry — synchronous mirror session + inquiry runner.
 
 Clones the agent's conversation (text + thinking only, no tool calls/results),
 sends a one-shot question, returns the answer. One-shot per invocation.
@@ -59,3 +59,18 @@ def soul_inquiry(agent, question: str) -> dict | None:
         "voice": response.text,
         "thinking": response.thoughts or [],
     }
+
+
+def _run_inquiry(agent, question: str, source: str = "agent") -> None:
+    """Run soul.inquiry and log result as insight event."""
+    from .flow import _persist_soul_entry
+
+    try:
+        result = soul_inquiry(agent, question)
+        if result:
+            agent._log("insight", text=result["voice"], question=question, source=source)
+            _persist_soul_entry(agent, result, mode="inquiry", source=source)
+        else:
+            agent._log("insight", text="(silence)", question=question, source=source)
+    except Exception as e:
+        agent._log("insight_error", error=str(e)[:200], question=question)

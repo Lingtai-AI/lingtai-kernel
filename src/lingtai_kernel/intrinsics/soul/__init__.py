@@ -59,7 +59,17 @@ from .consultation import (
 )
 
 # Re-export inquiry
-from .inquiry import soul_inquiry
+from .inquiry import soul_inquiry, _run_inquiry
+
+# Re-export flow (soul cadence, fire, persistence, appendix tracking)
+from .flow import (
+    _start_soul_timer,
+    _cancel_soul_timer,
+    _soul_whisper,
+    _persist_soul_entry,
+    _run_consultation_fire,
+    _rehydrate_appendix_tracking,
+)
 
 
 def get_description(lang: str = "en") -> str:

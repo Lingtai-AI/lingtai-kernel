@@ -1,7 +1,14 @@
-"""Soul flow — kernel-side glue for the soul-flow mechanism.
+"""Soul flow — cadence timer, consultation fire, persistence, appendix tracking.
 
-Timer management, fire callback, tc_inbox drain, persistence helpers,
-consultation fire orchestration, and appendix rehydration.
+This module owns the mechanical soul-flow pipeline: timer management,
+consultation fire orchestration, persistence helpers, and appendix
+rehydration. It does NOT own the splice protocol (that lives in
+tc_inbox.TCInbox.drain_into) or on-demand inquiry (that lives in
+inquiry.py).
+
+The kernel calls into this module at lifecycle moments:
+  - _start_soul_timer / _cancel_soul_timer: from _set_state and lifecycle events
+  - _rehydrate_appendix_tracking: from chat-history rehydration on startup
 """
 from __future__ import annotations
 
@@ -43,7 +50,7 @@ def _soul_whisper(agent) -> None:
     on entry to STUCK/ASLEEP/SUSPENDED via _set_state, so the state
     check here is defensive.
     """
-    from ..state import AgentState
+    from ...state import AgentState
 
     agent._soul_timer = None
     try:
@@ -56,41 +63,6 @@ def _soul_whisper(agent) -> None:
     finally:
         if agent._state in (AgentState.ACTIVE, AgentState.IDLE):
             _start_soul_timer(agent)
-
-
-def _drain_tc_inbox(agent) -> None:
-    """Splice queued involuntary tool-call pairs into the wire chat.
-
-    Called at safe boundaries — top of ``_handle_request``, before the
-    next ``send()`` composes its payload.
-    """
-    if agent._chat is None:
-        try:
-            agent._session.ensure_session()
-        except Exception:
-            return
-    iface = agent._chat.interface
-    if iface.has_pending_tool_calls():
-        return
-    items = agent._tc_inbox.drain()
-    if not items:
-        return
-    for item in items:
-        if getattr(item, "replace_in_history", False):
-            prior_id = agent._appendix_ids_by_source.get(item.source)
-            if prior_id is not None:
-                iface.remove_pair_by_call_id(prior_id)
-            agent._appendix_ids_by_source.pop(item.source, None)
-        iface.add_assistant_message(content=[item.call])
-        iface.add_tool_results([item.result])
-        if getattr(item, "replace_in_history", False):
-            agent._appendix_ids_by_source[item.source] = item.call.id
-    agent._save_chat_history()
-    agent._log(
-        "tc_inbox_drain",
-        count=len(items),
-        sources=[i.source for i in items],
-    )
 
 
 def _persist_soul_entry(agent, result: dict, mode: str = "flow", source: str = "agent") -> None:
@@ -120,23 +92,9 @@ def _append_soul_flow_record(agent, record: dict) -> None:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def _run_inquiry(agent, question: str, source: str = "agent") -> None:
-    """Run soul.inquiry and log result as insight event."""
-    try:
-        from ..intrinsics.soul import soul_inquiry
-        result = soul_inquiry(agent, question)
-        if result:
-            agent._log("insight", text=result["voice"], question=question, source=source)
-            _persist_soul_entry(agent, result, mode="inquiry", source=source)
-        else:
-            agent._log("insight", text="(silence)", question=question, source=source)
-    except Exception as e:
-        agent._log("insight_error", error=str(e)[:200], question=question)
-
-
 def _flatten_v3_for_pair(agent, voice: dict) -> dict:
     """Bridge v3 consultation blocks to the legacy appendix renderer."""
-    from ..llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
+    from ...llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
 
     voice_text_parts: list[str] = []
     thinking_parts: list[str] = []
@@ -173,18 +131,18 @@ def _run_consultation_fire(agent) -> None:
     """
     from datetime import datetime, timezone
     import secrets as _secrets
-    from ..message import _make_message, MSG_TC_WAKE
+    from ...message import _make_message, MSG_TC_WAKE
 
     fire_id = f"fire_{int(time.time())}_{_secrets.token_hex(2)}"
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     try:
-        from ..intrinsics.soul import (
+        from .consultation import (
             _render_current_diary,
             _run_consultation_batch,
             build_consultation_pair,
         )
-        from ..tc_inbox import InvoluntaryToolCall
+        from ...tc_inbox import InvoluntaryToolCall
 
         diary = _render_current_diary(agent)
         voices = _run_consultation_batch(agent)
@@ -298,7 +256,7 @@ def _rehydrate_appendix_tracking(agent) -> None:
         iface = agent._chat.interface
     except Exception:
         return
-    from ..llm.interface import ToolCallBlock, ToolResultBlock
+    from ...llm.interface import ToolCallBlock, ToolResultBlock
     entries = iface.entries
     for i in range(len(entries) - 1):
         a = entries[i]

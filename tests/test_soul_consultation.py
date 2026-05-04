@@ -596,7 +596,7 @@ class TestRunConsultationFire:
     def test_empty_voices_is_noop(self, tmp_path):
         agent = self._make_real_agent(tmp_path)
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[],
         ):
             agent._run_consultation_fire()
@@ -605,7 +605,7 @@ class TestRunConsultationFire:
     def test_voices_enqueue_replace_in_history_item(self, tmp_path):
         agent = self._make_real_agent(tmp_path)
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[{"source": "insights", "blocks": [TextBlock(text="hello")]}],
         ):
             agent._run_consultation_fire()
@@ -626,7 +626,7 @@ class TestRunConsultationFire:
         agent._log = capture_log
 
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             side_effect=RuntimeError("boom"),
         ):
             agent._run_consultation_fire()  # should not raise
@@ -685,7 +685,7 @@ class TestSoulFlowPersistenceSchema:
             ]},
         ]
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=voices,
         ):
             agent._run_consultation_fire()
@@ -731,7 +731,7 @@ class TestSoulFlowPersistenceSchema:
         self._seed_diary(agent, "stuck thinking")
 
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[],
         ):
             agent._run_consultation_fire()
@@ -754,7 +754,7 @@ class TestSoulFlowPersistenceSchema:
         self._seed_diary(agent, "diary text")
 
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[{"source": "insights", "blocks": [TextBlock(text="v")]}],
         ):
             agent._run_consultation_fire()
@@ -773,7 +773,7 @@ class TestSoulFlowPersistenceSchema:
         self._seed_diary(agent, "before crash")
 
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             side_effect=RuntimeError("boom from batch"),
         ):
             agent._run_consultation_fire()  # must not raise
@@ -792,7 +792,7 @@ class TestSoulFlowPersistenceSchema:
         # No events.jsonl — diary will be empty string.
 
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[{"source": "insights", "blocks": [TextBlock(text="v")]}],
         ):
             agent._run_consultation_fire()
@@ -809,7 +809,7 @@ class TestSoulFlowPersistenceSchema:
         self._seed_diary(agent, "d1")
 
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[{"source": "insights", "blocks": [TextBlock(text="v1")]}],
         ):
             agent._run_consultation_fire()
@@ -817,7 +817,7 @@ class TestSoulFlowPersistenceSchema:
             # (it would still write its own log records regardless).
             agent._tc_inbox.drain()
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[{"source": "snapshot:s1", "blocks": [TextBlock(text="v2")]}],
         ):
             agent._run_consultation_fire()
