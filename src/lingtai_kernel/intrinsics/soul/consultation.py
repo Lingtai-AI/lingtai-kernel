@@ -13,16 +13,35 @@ from __future__ import annotations
 _CONSULTATION_SYSTEM_PROMPT = (
     "The chat below is your context — your thoughts, your work, your tools, your memory. "
     "A new diary cue from the present moment will arrive as the next message. "
-    "React to it. What does it remind you of? What surfaces? What would you reach for? "
-    "Tool schemas are preserved so you can read your own past calls in context, "
-    "but any new tool call you attempt will be intercepted and refused. "
-    "Respond in plain text — observations, instincts, things worth remembering. "
+    "Your ability to call tools has been stripped away for this consultation. "
+    "Do not call tools. Do not call tools. Do not call tools. "
+    "Your role is to provide your current self with guidance: what this diary reminds you of, "
+    "what surfaces, what matters, and what you would reach for if you were back in the main loop. "
+    "Tool schemas are preserved only so you can read your own past calls in context; "
+    "any new tool call you attempt will be intercepted and refused. "
+    "Respond in plain text with observations, instincts, and things worth remembering. "
+    "Your ability to call tools has been stripped away for this consultation. "
+    "Do not call tools. Do not call tools. Do not call tools. "
+    "Your role is to provide your current self with guidance: what this diary reminds you of, "
+    "what surfaces, what matters, and what you would reach for if you were back in the main loop. "
+    "Tool schemas are preserved only so you can read your own past calls in context; "
+    "any new tool call you attempt will be intercepted and refused. "
+    "Respond in plain text with observations, instincts, and things worth remembering. "
+    "Your ability to call tools has been stripped away for this consultation. "
+    "Do not call tools. Do not call tools. Do not call tools. "
+    "Your role is to provide your current self with guidance: what this diary reminds you of, "
+    "what surfaces, what matters, and what you would reach for if you were back in the main loop. "
+    "Tool schemas are preserved only so you can read your own past calls in context; "
+    "any new tool call you attempt will be intercepted and refused. "
+    "Respond in plain text with observations, instincts, and things worth remembering. "
     "Speak briefly."
 )
 
 _CONSULTATION_TOOL_REFUSAL = (
-    "Consultation mode: tool calls are intercepted, not executed. "
-    "Respond in plain text — observations, instincts, things worth remembering."
+    "Consultation mode: your ability to call tools has been stripped away. "
+    "Do not call tools. Do not call tools. Do not call tools. "
+    "Your role is to provide your current self with guidance. "
+    "Respond in plain text with observations, instincts, and things worth remembering."
 )
 
 _CONSULTATION_MAX_ROUNDS = 3
