@@ -133,6 +133,13 @@ def _soul_fire_allowed(agent) -> bool:
 def _run_consultation_fire(agent) -> None:
     """Run one consultation batch and persist the result.
 
+    Gates on ``agent._soul_fire_lock`` (try-acquire, non-blocking). If the
+    lock is held — meaning another fire is already running, whether
+    timer-fired or voluntarily triggered — this call silently skips.
+    Voluntary callers that want to surface "ongoing" to the agent should
+    check the lock themselves before invoking; this function is a
+    last-line gate so concurrent fires can't corrupt tc_inbox state.
+
     Side effects: logs/events.jsonl, logs/soul_flow.jsonl,
     logs/token_ledger.jsonl, tc_inbox.
     """
@@ -142,6 +149,11 @@ def _run_consultation_fire(agent) -> None:
 
     if not _soul_fire_allowed(agent):
         agent._log("consultation_skipped_state", state=agent._state.value)
+        return
+
+    lock = getattr(agent, "_soul_fire_lock", None)
+    if lock is not None and not lock.acquire(blocking=False):
+        agent._log("consultation_skipped_inflight")
         return
 
     fire_id = f"fire_{int(time.time())}_{_secrets.token_hex(2)}"
@@ -259,6 +271,13 @@ def _run_consultation_fire(agent) -> None:
             })
         except Exception:
             pass
+    finally:
+        if lock is not None:
+            try:
+                lock.release()
+            except RuntimeError:
+                # Lock was never acquired by this thread — defensive guard.
+                pass
 
 
 def _rehydrate_appendix_tracking(agent) -> None:

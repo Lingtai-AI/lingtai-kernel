@@ -117,18 +117,48 @@ def get_schema(lang: str = "en") -> dict:
 
 
 def handle(agent, args: dict) -> dict:
-    """Handle soul tool — inquiry and config are agent-invocable; flow
-    is mechanical and fires on a wall-clock timer (cannot be invoked
-    manually).
+    """Handle soul tool — inquiry, config, voice are agent-invocable.
+    Flow is invocable too, but the call returns immediately with a
+    synthesized success result; the actual voices arrive shortly as a
+    separate involuntary soul(action='flow') pair through tc_inbox.
     """
     action = args.get("action", "")
 
     if action == "flow":
+        # Voluntary trigger: try-acquire the fire lock non-blocking. If
+        # held, another fire is already in flight (timer-fired or a prior
+        # voluntary call) — refuse so the agent isn't surprised by a
+        # silent no-op. If free, release immediately and kick off the
+        # real fire on a daemon thread; _run_consultation_fire will
+        # re-acquire under the same gate.
+        lock = getattr(agent, "_soul_fire_lock", None)
+        if lock is not None:
+            if not lock.acquire(blocking=False):
+                agent._log("soul_flow_voluntary_rejected", reason="ongoing")
+                return {"error": "soul flow ongoing, request rejected"}
+            lock.release()
+
+        import threading
+        from .flow import _run_consultation_fire
+
+        def _fire():
+            try:
+                _run_consultation_fire(agent)
+            except Exception as e:
+                try:
+                    agent._log("soul_flow_voluntary_error", error=str(e)[:200])
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_fire, daemon=True, name="soul-flow-voluntary")
+        t.start()
+        agent._log("soul_flow_voluntary_triggered")
         return {
-            "error": (
-                f"soul flow fires automatically every {agent._soul_delay}s. "
-                "It cannot be invoked manually. Use inquiry for on-demand "
-                "reflection, or config to change the cadence."
+            "status": "ok",
+            "message": (
+                "Soul flow triggered. Voices will arrive shortly as a "
+                "separate soul(action='flow') tool-call pair appended to "
+                "your chat history (replacing any prior soul-flow pair)."
             ),
         }
 
