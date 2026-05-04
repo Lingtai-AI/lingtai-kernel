@@ -139,18 +139,74 @@ def test_instantiate_preset_capabilities_returns_schemas_and_handlers(tmp_path):
         assert name in handlers, f"{name} handler missing"
 
 
-def test_instantiate_unknown_capability_raises_value_error(tmp_path):
+def test_instantiate_skips_unknown_capability_names(tmp_path):
+    """Unknown names (not in _BUILTIN, not a group, not blacklisted) are
+    skipped with a log entry. Behavior changed in the lingtai #29 fix —
+    previously these raised ValueError and aborted the whole batch.
+    Rationale: the TUI preset wizard sometimes writes intrinsic names
+    (email, psyche, ...) into manifest.capabilities. Aborting on unknown
+    names made full user presets unusable as daemon presets. Real config
+    bugs in *known* capabilities still raise; see
+    test_instantiate_still_raises_on_broken_known_capability."""
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
+    schemas, handlers = mgr._instantiate_preset_capabilities(
+        {"nonsense_capability": {}, "read": {}},
+        {"provider": "mock", "model": "mock"},
+    )
+    assert "nonsense_capability" not in schemas
+    assert "read" in schemas
+
+
+def test_instantiate_skips_intrinsic_names_in_capabilities(tmp_path):
+    """email/psyche/system/soul in manifest.capabilities are intrinsics, not
+    capabilities — the daemon must skip them silently (not abort the batch).
+    Mirrors the main Agent.__init__ tolerance for legacy/wizard-written
+    presets that mix intrinsic names into the capabilities map.
+    See lingtai #29."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    schemas, handlers = mgr._instantiate_preset_capabilities(
+        {
+            "read": {},
+            "write": {},
+            "email": {},      # intrinsic — should skip
+            "psyche": {},     # intrinsic (also blacklisted) — should skip
+            "system": {},     # intrinsic — should skip
+            "soul": {},       # intrinsic — should skip
+        },
+        {"provider": "mock", "model": "mock"},
+    )
+    assert "read" in schemas
+    assert "write" in schemas
+    assert "email" not in schemas
+    assert "psyche" not in schemas
+    assert "system" not in schemas
+    assert "soul" not in schemas
+
+
+def test_instantiate_still_raises_on_broken_known_capability(tmp_path, monkeypatch):
+    """A KNOWN capability that fails inside its setup() must still abort the
+    batch — we only tolerate UNKNOWN names. This guards against the lingtai
+    #29 fix swallowing real config bugs (e.g. malformed provider for
+    web_search)."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    def boom(target, name, **kwargs):
+        raise ValueError("simulated broken setup")
+
+    monkeypatch.setattr("lingtai.capabilities.setup_capability", boom)
     try:
         mgr._instantiate_preset_capabilities(
-            {"nonsense_capability": {}},
+            {"read": {}},  # known capability — should propagate the failure
             {"provider": "mock", "model": "mock"},
         )
     except ValueError as e:
-        assert "nonsense_capability" in str(e)
+        assert "read" in str(e)
+        assert "simulated broken setup" in str(e)
     else:
-        raise AssertionError("expected ValueError")
+        raise AssertionError("expected ValueError for broken known capability")
 
 
 def test_instantiate_skips_blacklisted_capabilities(tmp_path):
@@ -285,28 +341,68 @@ def test_emanate_with_preset_instantiates_caps_for_emanation(tmp_path,
     assert len(list(daemons_dir.iterdir())) == 1
 
 
-def test_emanate_preset_unknown_capability_refuses_batch(tmp_path, monkeypatch):
+def test_emanate_preset_with_intrinsics_dispatches(tmp_path, monkeypatch):
+    """End-to-end: preset whose manifest.capabilities mixes intrinsic names
+    (email/psyche) with real capabilities should dispatch successfully —
+    the intrinsic names are skipped, the real capabilities form the
+    sandbox, and tools the agent requested resolve from that sandbox.
+
+    This is the lingtai #29 repro: the TUI wizard writes 'email' into
+    user presets, and the daemon used to refuse the whole batch on it."""
     import lingtai.preset_connectivity as preset_connectivity
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
-    _write_preset(presets_dir, "broken",
-                  capabilities={"nonsense_capability_xyz": {}})
+    _write_preset(presets_dir, "wizard_style",
+                  capabilities={
+                      "read": {},
+                      "write": {},
+                      "email": {},      # intrinsic in capabilities map
+                      "psyche": {},     # intrinsic + blacklisted
+                  })
 
     agent = _make_agent(tmp_path, ["daemon"], presets_dir=presets_dir)
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
-    broken_path = str(presets_dir / "broken.json")
+    preset_path = str(presets_dir / "wizard_style.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "x", "tools": ["read"], "preset": broken_path},
+            {"task": "x", "tools": ["read"], "preset": preset_path},
+        ]})
+
+    assert result["status"] == "dispatched", \
+        f"expected dispatched, got {result!r}"
+    assert result["count"] == 1
+
+
+def test_emanate_preset_request_for_skipped_intrinsic_tool_fails(tmp_path, monkeypatch):
+    """If the agent asks for a tool that only an intrinsic would have
+    provided (e.g. 'email'), the batch fails at the tool-surface check —
+    not at preset instantiation. The error names the unknown tool, not
+    the skipped capability. This guards against intrinsics silently
+    becoming available through the daemon back door."""
+    import lingtai.preset_connectivity as preset_connectivity
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    presets_dir = tmp_path / "presets"
+    presets_dir.mkdir()
+    _write_preset(presets_dir, "wizard_style",
+                  capabilities={"read": {}, "email": {}})
+
+    agent = _make_agent(tmp_path, ["daemon"], presets_dir=presets_dir)
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    preset_path = str(presets_dir / "wizard_style.json")
+    with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
+        result = mgr.handle({"action": "emanate", "tasks": [
+            {"task": "x", "tools": ["email"], "preset": preset_path},
         ]})
 
     assert result["status"] == "error"
-    assert "broken" in result["message"]
-    assert "nonsense_capability_xyz" in result["message"]
+    assert "email" in result["message"]
 
 
 def test_emanate_preset_does_not_pollute_parent_tool_registry(tmp_path,

@@ -264,7 +264,7 @@ class DaemonManager:
         (``_handle_emanate``) converts that into a tool-level error and
         refuses the whole batch.
         """
-        from ...capabilities import setup_capability, _GROUPS
+        from ...capabilities import setup_capability, _GROUPS, _BUILTIN
         from ...presets import expand_inherit
 
         # Resolve provider:"inherit" sentinels against the preset's LLM
@@ -292,6 +292,19 @@ class DaemonManager:
         collector = _ToolCollector(self._agent)
         for name, kwargs in expanded.items():
             if name in EMANATION_BLACKLIST:
+                continue
+            # Tolerate non-capability names (intrinsics like 'email', 'psyche',
+            # 'system', 'soul' — kernel always-on, not composable). The TUI
+            # preset wizard writes these into manifest.capabilities and the
+            # main Agent.__init__ tolerates them via try/except (agent.py:91-94);
+            # the daemon sandbox must replicate that tolerance or "full" user
+            # presets become unusable as daemon presets. See lingtai #29.
+            if name not in _BUILTIN:
+                self._log(
+                    "daemon_preset_capability_skipped",
+                    capability=name,
+                    reason="not a composable capability (intrinsic or unknown)",
+                )
                 continue
             if not isinstance(kwargs, dict):
                 kwargs = {}
