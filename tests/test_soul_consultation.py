@@ -295,7 +295,7 @@ class TestVerbatimCurrentChatForInsights:
         ])
 
         captured = {}
-        with patch("lingtai_kernel.intrinsics.soul._run_consultation") as mock_run:
+        with patch("lingtai_kernel.intrinsics.soul.consultation._run_consultation") as mock_run:
             def fake_run(_agent, passed_iface, source):
                 captured["iface"] = passed_iface
                 return {"source": source, "blocks": [TextBlock(text="ok")]}
@@ -325,7 +325,7 @@ class TestRunConsultationBatch:
     def test_empty_pool_runs_only_insights(self, tmp_path):
         agent = _FakeAgent(tmp_path)
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation"
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation"
         ) as mock_run:
             mock_run.return_value = {
                 "source": "insights",
@@ -345,7 +345,7 @@ class TestRunConsultationBatch:
             _write_snapshot(tmp_path, molt_count=i + 1, unix_ts=1700000000 + i)
 
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation"
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation"
         ) as mock_run:
             def fake_run(_agent, _iface, source):
                 return {"source": source, "blocks": [TextBlock(text=f"v from {source}")]}
@@ -367,7 +367,7 @@ class TestRunConsultationBatch:
             _write_snapshot(tmp_path, molt_count=i + 1, unix_ts=1700000000 + i)
 
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation"
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation"
         ) as mock_run:
             mock_run.return_value = {"source": "insights", "blocks": [TextBlock(text="v")]}
             voices = _run_consultation_batch(agent)
@@ -382,7 +382,7 @@ class TestRunConsultationBatch:
             _write_snapshot(tmp_path, molt_count=i + 1, unix_ts=1700000000 + i)
 
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation"
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation"
         ) as mock_run:
             # First call (insights) succeeds, the snapshot calls fail.
             def maybe_fail(_agent, _iface, source):
@@ -401,7 +401,7 @@ class TestRunConsultationBatch:
             _write_snapshot(tmp_path, molt_count=i + 1, unix_ts=1700000000 + i)
 
         with patch(
-            "lingtai_kernel.intrinsics.soul._run_consultation"
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation"
         ) as mock_run:
             def maybe_raise(_agent, _iface, source):
                 if source == "insights":

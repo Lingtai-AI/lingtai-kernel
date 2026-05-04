@@ -7,7 +7,7 @@ Kernel-built-in tools. Every intrinsic is a flat Python module with the same pub
 - `intrinsics/__init__.py` — imports the four modules and exposes the registry consumed by `BaseAgent` (`intrinsics/__init__.py:8-15`).
 - `intrinsics/system.py` — runtime/lifecycle control. Its schema enumerates agent-callable actions (`nap`, `refresh`, `sleep`, `lull`, `interrupt`, `suspend`, `cpr`, `clear`, `nirvana`, `presets`, `dismiss`) (`intrinsics/system.py:41-78`); `handle()` rejects kernel-only `notification` and dispatches through a handler map (`intrinsics/system.py:81-111`). Karma and nirvana gates are declared near the action helpers (`intrinsics/system.py:424-428`).
 - `intrinsics/psyche.py` — durable self and context management. It writes molt snapshots with `SNAPSHOT_SCHEMA_VERSION = 1` (`intrinsics/psyche.py:40`, `intrinsics/psyche.py:103-164`), schemas four objects (`lingtai`, `pad`, `context`, `name`) (`intrinsics/psyche.py:178-220`), routes by `(object, action)` (`intrinsics/psyche.py:233-254`), performs agent-initiated molt in `_context_molt()` (`intrinsics/psyche.py:516-753`), system-forced molt in `context_forget()` (`intrinsics/psyche.py:785-929`), and boot-loads lingtai+pad (`intrinsics/psyche.py:937-945`).
-- `intrinsics/soul.py` — inner voice and mechanical soul-flow. `handle()` allows `inquiry`, `config`, and `voice`, while refusing manual `flow` (`intrinsics/soul.py:104-148`). Config persists cadence and past-self count (`intrinsics/soul.py:151-236`); voice profiles persist built-in/custom prompt selection (`intrinsics/soul.py:239-344`). Inquiry clones text+thinking and sends a one-shot mirror question (`intrinsics/soul.py:612-662`). Flow loads current chat/snapshots, fits substrate to the context window, sends a diary cue, intercepts attempted tool calls, and returns block payloads (`intrinsics/soul.py:683-801`, `intrinsics/soul.py:837-1021`); `build_consultation_pair()` packages voices as a synthetic `soul(action="flow")` pair (`intrinsics/soul.py:1024-1056`).
+- `intrinsics/soul/` — inner voice and mechanical soul-flow. A package of four modules; see `intrinsics/soul/ANATOMY.md`. `__init__.py` re-exports the public intrinsic surface (`get_schema`, `get_description`, `handle`) plus all names consumed by `base_agent.py` and tests so that `from .intrinsics.soul import X` paths are unchanged.
 - `intrinsics/email.py` — filesystem mailbox intrinsic. Its module docstring defines the mailbox layout (`intrinsics/email.py:7-13`). `EmailManager` owns tool dispatch and scheduling (`intrinsics/email.py:490`, `intrinsics/email.py:639-1514`); module-level `handle()` delegates to the manager (`intrinsics/email.py:1505-1515`); `boot()` installs the manager and starts the scheduler (`intrinsics/email.py:1517-1530`). Lower-level helpers persist inbox/outbox records and hand off delivery to `_mailman()` (`intrinsics/email.py:191-298`).
 
 ## Connections
@@ -21,7 +21,7 @@ Kernel-built-in tools. Every intrinsic is a flat Python module with the same pub
 ## Composition
 
 - **Parent:** `src/lingtai_kernel/` (see `src/lingtai_kernel/ANATOMY.md`).
-- **Subfolders:** none. Although the human task named `intrinsics/soul/`, `intrinsics/system/`, `intrinsics/psyche/`, and `intrinsics/email/` as concept boundaries, the code is currently a flat folder of four modules.
+- **Subfolders:** `soul/` is now a package (4 modules, see its ANATOMY.md). `system.py`, `psyche.py`, and `email.py` remain flat files.
 - **Siblings:** `llm/` for canonical block/session types, `services/` for mailbox/logging service implementations, and `i18n/` for localized strings.
 
 ## State
@@ -33,6 +33,6 @@ Kernel-built-in tools. Every intrinsic is a flat Python module with the same pub
 
 ## Notes
 
-- There are no per-intrinsic subdirectories today. Creating `intrinsics/soul/ANATOMY.md` would be a placeholder detached from code; the honest boundary is this folder plus its four large modules.
-- `soul.py` is large because it contains both agent-callable inquiry/config/voice actions and the mechanical consultation pipeline; the latter connects snapshots, diary logs, LLM sessions, and `tc_inbox` synthetic pairs.
+- `soul/` is the first per-intrinsic subdirectory; `system.py`, `psyche.py`, and `email.py` remain flat files today.
+- `soul.py` was split into a package because it contained both agent-callable inquiry/config/voice actions and the mechanical consultation pipeline; the latter connects snapshots, diary logs, LLM sessions, and `tc_inbox` synthetic pairs. See `intrinsics/soul/ANATOMY.md` for the internal layout.
 - Intrinsics are kernel primitives, not optional capabilities. Capabilities may wrap/override them via `BaseAgent.override_intrinsic()` (`base_agent.py:2285-2295`).
