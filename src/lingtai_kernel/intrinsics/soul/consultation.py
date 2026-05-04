@@ -14,43 +14,23 @@ _CONSULTATION_SYSTEM_PROMPT = (
     "The chat below is your context — your thoughts, your work, your tools, your memory. "
     "A new diary cue from the present moment will arrive as the next message. "
     "Your ability to call tools has been stripped away for this consultation. "
-    "Do not call tools. Do not call tools. Do not call tools. "
+    "Do not call tools. "
+    "Tool schemas are preserved only so you can read your own past calls in context; "
+    "any new tool call you attempt will be intercepted and refused, burning one of your "
+    "limited consultation rounds. "
     "Your role is to provide your current self with guidance: what this diary reminds you of, "
     "what surfaces, what matters, and what you would reach for if you were back in the main loop. "
     "Speak from this preserved context perspective; the purpose is to increase the current agent's "
     "effective context window by sending back what this context still knows. "
-    "Tool schemas are preserved only so you can read your own past calls in context; "
-    "any new tool call you attempt will be intercepted and refused. "
-    "Respond in plain text with observations, instincts, and things worth remembering. "
-    "Your ability to call tools has been stripped away for this consultation. "
-    "Do not call tools. Do not call tools. Do not call tools. "
-    "Your role is to provide your current self with guidance: what this diary reminds you of, "
-    "what surfaces, what matters, and what you would reach for if you were back in the main loop. "
-    "Speak from this preserved context perspective; the purpose is to increase the current agent's "
-    "effective context window by sending back what this context still knows. "
-    "Tool schemas are preserved only so you can read your own past calls in context; "
-    "any new tool call you attempt will be intercepted and refused. "
-    "Respond in plain text with observations, instincts, and things worth remembering. "
-    "Your ability to call tools has been stripped away for this consultation. "
-    "Do not call tools. Do not call tools. Do not call tools. "
-    "Your role is to provide your current self with guidance: what this diary reminds you of, "
-    "what surfaces, what matters, and what you would reach for if you were back in the main loop. "
-    "Speak from this preserved context perspective; the purpose is to increase the current agent's "
-    "effective context window by sending back what this context still knows. "
-    "Tool schemas are preserved only so you can read your own past calls in context; "
-    "any new tool call you attempt will be intercepted and refused. "
     "Respond in plain text with observations, instincts, and things worth remembering. "
     "Speak briefly."
 )
 
-_CONSULTATION_TOOL_REFUSAL = (
-    "Consultation mode: your ability to call tools has been stripped away. "
-    "Do not call tools. Do not call tools. Do not call tools. "
-    "Your role is to provide your current self with guidance. "
-    "Speak from this preserved context perspective to increase the current agent's "
-    "effective context window. "
-    "Respond in plain text with observations, instincts, and things worth remembering."
-)
+# Returned as ToolResultBlock.content for every refused tool call. We use
+# the full system prompt rather than a short scolding so the model
+# re-grounds in its actual role on every refusal instead of just being
+# told "no" — refusals tend to compound otherwise.
+_CONSULTATION_TOOL_REFUSAL = _CONSULTATION_SYSTEM_PROMPT
 
 _CONSULTATION_MAX_ROUNDS = 3
 _DIARY_CUE_TOKEN_CAP = 10_000

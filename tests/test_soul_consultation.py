@@ -463,7 +463,10 @@ class TestRunConsultationRedirectLoop:
         blocks = result["blocks"]
         assert isinstance(blocks[0], ToolCallBlock)
         assert isinstance(blocks[1], ToolResultBlock)
-        assert blocks[1].content.startswith("Consultation mode")
+        # Refusal content is the full consultation system prompt — re-grounds
+        # the model in its role on every refused call rather than just scolding.
+        assert "chat below is your context" in blocks[1].content
+        assert "do not call tools" in blocks[1].content.lower()
         assert isinstance(blocks[2], TextBlock)
         assert isinstance(sent[1], list)
         assert isinstance(sent[1][0], ToolResultBlock)
