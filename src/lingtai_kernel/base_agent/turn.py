@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import queue
+import threading
 import time
 
 from ..message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT, MSG_TC_WAKE
@@ -17,6 +18,63 @@ from ..meta_block import build_meta, render_meta
 from ..time_veil import now_iso
 
 logger = get_logger()
+
+# LLM hang watchdog threshold (seconds). If session.send() blocks for
+# this long, the agent transitions to STUCK and a signal file is written.
+_LLM_HANG_THRESHOLD_SECONDS = 120.0
+_LLM_SLOW_THRESHOLD_SECONDS = 60.0
+
+
+def _on_llm_hang(agent) -> None:
+    """Watchdog callback: LLM has been unresponsive for too long."""
+    from .state import AgentState
+
+    agent._log("llm_hang_detected",
+               seconds=_LLM_HANG_THRESHOLD_SECONDS,
+               state=agent._state.value)
+
+    # Write signal file for TUI visibility
+    try:
+        hang_file = agent._working_dir / ".llm_hang"
+        import json as _json
+        hang_file.write_text(_json.dumps({
+            "detected_at": time.time(),
+            "threshold_seconds": _LLM_HANG_THRESHOLD_SECONDS,
+        }), encoding="utf-8")
+    except OSError:
+        pass
+
+    # Transition to STUCK if not already in a terminal state
+    if agent._state not in (AgentState.STUCK, AgentState.ASLEEP, AgentState.SUSPENDED):
+        agent._set_state(AgentState.STUCK, reason="LLM API unresponsive")
+
+
+def _send_with_watchdog(agent, content):
+    """Wrap session.send with a hang watchdog.
+
+    Used by both _handle_request and _handle_tc_wake. Arms a background
+    timer; if session.send() blocks past the threshold, the timer fires
+    and transitions the agent to STUCK with a signal file. The timer is
+    cancelled in the finally block when send returns (whether success or
+    failure).
+    """
+    hang_timer = threading.Timer(
+        _LLM_HANG_THRESHOLD_SECONDS,
+        _on_llm_hang,
+        args=(agent,),
+    )
+    hang_timer.daemon = True
+    hang_timer.start()
+    try:
+        return agent._session.send(content)
+    finally:
+        hang_timer.cancel()
+        # Clean up signal file if it exists (hang was transient or resolved)
+        try:
+            hang_file = agent._working_dir / ".llm_hang"
+            hang_file.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _run_loop(agent) -> None:
@@ -237,7 +295,7 @@ def _handle_request(agent, msg: Message) -> None:
     if prefix:
         content = f"{prefix}\n\n{content}"
     agent._log("text_input", text=content)
-    response = agent._session.send(content)
+    response = _send_with_watchdog(agent, content)
     agent._last_usage = response.usage
     agent._save_chat_history()
     result = _process_response(agent, response)
@@ -302,7 +360,7 @@ def _handle_tc_wake(agent, msg: Message) -> None:
                 agent._save_chat_history()
 
                 agent._log("tc_wake_dispatch", source=item.source, call_id=item.call.id)
-                response = agent._session.send([item.result])
+                response = _send_with_watchdog(agent, [item.result])
                 agent._last_usage = response.usage
                 agent._save_chat_history(ledger_source="tc_wake")
                 _process_response(agent, response, ledger_source="tc_wake")
