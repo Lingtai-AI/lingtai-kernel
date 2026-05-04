@@ -372,13 +372,24 @@ def test_snapshot_written_on_agent_molt(tmp_path):
         assert payload["before_tokens"] > 0
         assert payload["agent_name"] == "snapshot-test"
         assert isinstance(payload["interface"], list)
-        # The molt's own tool_call must NOT be present in the snapshot —
-        # snapshots represent the mind right before the molt, not the molt act.
+        # The molt's own tool_call IS preserved (history fidelity), but
+        # must be closed with a synthetic tool_result so the snapshot is
+        # self-contained and sendable.
+        molt_call_found = False
+        molt_result_found = False
         for entry in payload["interface"]:
             for block in entry.get("content", []):
-                if block.get("type") == "tool_call":
-                    assert block.get("id") != molt_id, \
-                        "snapshot must not contain the molt's own tool_call"
+                if block.get("type") == "tool_call" and block.get("id") == molt_id:
+                    molt_call_found = True
+                if (block.get("type") == "tool_result"
+                        and block.get("id") == molt_id):
+                    content = block.get("content", {})
+                    if isinstance(content, str) and "[synthesized]" in content:
+                        molt_result_found = True
+                    elif isinstance(content, dict) and "error" in content:
+                        molt_result_found = True
+        assert molt_call_found, "molt tool_call must be preserved in snapshot"
+        assert molt_result_found, "molt tool_call must be closed with a synthetic result"
     finally:
         agent.stop()
 

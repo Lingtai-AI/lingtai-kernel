@@ -75,6 +75,54 @@ def _write_molt_summary(
         return None
 
 
+def _close_orphan_tool_calls(iface) -> int:
+    """Close unanswered tool_calls with synthetic failure results.
+
+    Appends synthetic ``ToolResultBlock`` entries for any ``ToolCallBlock``
+    that lacks a matching ``ToolResultBlock`` in the interface.  The
+    synthetic result signals that the tool call was in-flight when the
+    session ended (e.g. the agent molted or the system forced a reset).
+
+    Operates on the **live** ``ChatInterface`` object (mutates in place)
+    so callers should invoke this *before* ``to_dict()``.
+
+    Returns the number of orphan calls closed.
+    """
+    from ...llm.interface import ToolCallBlock, ToolResultBlock
+
+    if not iface.entries:
+        return 0
+
+    # Collect all tool_call ids that already have results.
+    answered_ids: set[str] = set()
+    all_calls: dict[str, ToolCallBlock] = {}  # id -> block
+
+    for entry in iface.entries:
+        for b in entry.content:
+            if isinstance(b, ToolResultBlock):
+                answered_ids.add(b.id)
+            elif isinstance(b, ToolCallBlock):
+                all_calls[b.id] = b
+
+    # Find orphans — tool_calls without results.
+    unanswered = [tc for tc in all_calls.values() if tc.id not in answered_ids]
+    if not unanswered:
+        return 0
+
+    refusal_blocks = [
+        ToolResultBlock(
+            id=tc.id,
+            name=tc.name,
+            content="[synthesized] tool call did not complete before molt — no result was produced.",
+            synthesized=True,
+        )
+        for tc in unanswered
+    ]
+
+    iface.add_tool_results(refusal_blocks)
+    return len(unanswered)
+
+
 def _write_molt_snapshot(
     agent,
     iface_pre,
@@ -83,40 +131,34 @@ def _write_molt_snapshot(
     summary: str,
     source: str,
     molt_count: int,
-    exclude_trailing_call_id: str | None = None,
 ) -> Path | None:
     """Serialize the pre-molt ChatInterface to a discrete snapshot file.
 
     The snapshot is the substrate a future "past self" consultation can
-    load — full message history at the moment the agent decided to molt,
-    minus the molt's own tool_call (which is meta about the molting
-    process, not part of the past self's mind). Returns the snapshot
-    path on success, or None if the write failed (best-effort — a
-    failed snapshot must not block the molt itself).
+    load — full message history at the moment the agent decided to molt.
+    Unanswered tool_calls are closed with synthetic failure results so
+    the snapshot is self-contained: every tool_call has a matching
+    tool_result, and the LLM protocol is satisfied when the snapshot is
+    later loaded as consultation substrate.
+
+    Returns the snapshot path on success, or None if the write failed
+    (best-effort — a failed snapshot must not block the molt itself).
 
     Filename: snapshot_<molt_count>_<unix_ts>.json — molt_count first
     so directory listings sort chronologically without parsing.
 
-    ``exclude_trailing_call_id``: if set, the trailing assistant entry
-    whose only ToolCallBlock has this id is dropped from the serialized
-    interface. Used by the agent-initiated molt path where the molt's
-    own tool_call already sits in the tail entry of iface_pre.
+    ``agent``: may be None for standalone use; only affects metadata fields.
     """
     try:
-        snapshots_dir = agent._working_dir / "history" / "snapshots"
+        snapshots_dir = agent._working_dir / "history" / "snapshots" if agent else Path(".")
         snapshots_dir.mkdir(parents=True, exist_ok=True)
 
+        # Close orphan tool_calls before serializing.
+        closed = _close_orphan_tool_calls(iface_pre)
+        if closed > 0 and agent:
+            agent._log("snapshot_orphan_tool_calls_closed", count=closed)
+
         entries = iface_pre.to_dict()
-        if exclude_trailing_call_id and entries:
-            tail = entries[-1]
-            if tail.get("role") == "assistant":
-                content = tail.get("content") or []
-                if (
-                    len(content) == 1
-                    and content[0].get("type") == "tool_call"
-                    and content[0].get("id") == exclude_trailing_call_id
-                ):
-                    entries = entries[:-1]
 
         unix_ts = int(time.time())
         path = snapshots_dir / f"snapshot_{molt_count}_{unix_ts}.json"
@@ -126,8 +168,8 @@ def _write_molt_snapshot(
             "molt_count": molt_count,
             "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "before_tokens": before_tokens,
-            "agent_name": getattr(agent, "agent_name", None),
-            "agent_id": getattr(agent, "_agent_id", None),
+            "agent_name": getattr(agent, "agent_name", None) if agent else None,
+            "agent_id": getattr(agent, "_agent_id", None) if agent else None,
             "molt_summary": summary,
             "molt_source": source,
             "interface": entries,
@@ -139,7 +181,8 @@ def _write_molt_snapshot(
         return path
     except Exception as e:
         try:
-            agent._log("snapshot_write_failed", error=str(e))
+            if agent:
+                agent._log("snapshot_write_failed", error=str(e))
         except Exception:
             pass
         return None

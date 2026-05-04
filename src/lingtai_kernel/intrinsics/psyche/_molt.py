@@ -150,6 +150,8 @@ def _context_molt(agent, args: dict) -> dict:
 
     # Snapshot the pre-molt interface to a discrete file so future
     # past-self consultation can load it as cached substrate. Best-effort.
+    # Orphan tool_calls (including the molt's own) are closed with
+    # synthetic failure results inside _write_molt_snapshot.
     from . import _write_molt_snapshot
     _write_molt_snapshot(
         agent, iface_pre,
@@ -157,7 +159,6 @@ def _context_molt(agent, args: dict) -> dict:
         summary=summary,
         source="agent",
         molt_count=agent._molt_count + 1,
-        exclude_trailing_call_id=tc_id,
     )
 
     # Wipe context
@@ -344,7 +345,6 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
         summary=summary,
         source=source,
         molt_count=agent._molt_count + 1,
-        exclude_trailing_call_id=None,
     )
 
     # Wipe context
