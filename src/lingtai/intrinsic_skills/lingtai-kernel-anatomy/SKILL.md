@@ -1,46 +1,44 @@
 ---
 name: lingtai-kernel-anatomy
 description: >
-  Self-introspection portal for a LingTai agent that wants to understand its
-  own kernel — what it is made of, how its parts connect, where in the code
-  any given behavior actually lives. This skill is the entrance, not the
-  content. The real anatomy lives in `ANATOMY.md` files distributed across
-  the kernel source tree, one per concept-boundary folder, written next to
-  the code they describe.
+  The canonical convention for `ANATOMY.md` files in the LingTai kernel — what
+  an anatomy is, why it exists, how to read it, how to write one, and how to
+  maintain it across refactors. The kernel itself is mapped by a tree of
+  `ANATOMY.md` files rooted at `src/lingtai_kernel/ANATOMY.md`. This skill is
+  the convention; those files are the content.
 
   Reach for this skill when:
-    - You feel something is off about your own behavior and want to compare
-      what you experienced against what the code actually does.
-    - You want to know what subsystems compose you (intrinsics, capabilities,
-      LLM layer, services, mailbox, soul, molt, MCP, ...) and where each one
-      lives.
-    - You are about to ask "how does X work in me" and want to answer from
-      the code instead of guessing.
+    - You are about to read kernel code and want to navigate by structure
+      instead of grep — descend the tree starting at the kernel-root anatomy.
+    - You are about to write or update an `ANATOMY.md` and need to know the
+      template, the citation rules, and the maintenance discipline.
+    - Something feels off about your own behavior and you want to compare it
+      against what the code actually does — descend the tree to the relevant
+      folder, then read the cited code.
 
   How to use:
-    1. Read this file (you are here).
-    2. Open `src/lingtai_kernel/ANATOMY.md` — the kernel root anatomy. It
-       enumerates the direct subfolders and files of the kernel and tells
-       you which one to descend into next.
-    3. Descend into the relevant child `ANATOMY.md`. Repeat until you reach
-       the leaf where your question lives.
-    4. Read the cited code. The anatomy is a navigation aid; the code is the
-       truth.
-    5. If anatomy disagreed with the code, update the anatomy before you
-       leave the file. Reading and maintaining are the same act.
+    1. Read this file once — you are learning the convention.
+    2. Open `src/lingtai_kernel/ANATOMY.md` — that is the kernel-root anatomy
+       (which itself is just-an-anatomy of `src/lingtai_kernel/`). Use its
+       Components and Composition sections to find the subfolder whose
+       anatomy holds your question.
+    3. Descend. At each layer the anatomy points either further down the
+       tree or directly at code via `file:line` citations.
+    4. Read the cited code. The anatomy is the navigation aid; the code is
+       the truth.
+    5. If anatomy disagreed with code, update the anatomy before you leave
+       the file. Reading and maintaining are the same act.
 
-  Note on history: prior versions of this skill (v2.x) shipped 10 topical
-  reference files (file-formats, mail-protocol, mcp-protocol, runtime-loop,
-  ...) totalling ~3000 lines. Those files were deleted in v3.0.0 and the
-  content moved into per-folder `ANATOMY.md` files adjacent to the code.
-  If you remember those file names, they no longer exist — descend the
-  ANATOMY tree instead.
-version: 3.0.0
+  Note on history: prior versions of this skill (v2.x, v3.0.x) shipped
+  topical reference files or framed the kernel-root anatomy as a separate
+  "doorway." Both are gone. There is one canonical convention (this file)
+  and one tree of anatomies (rooted at `src/lingtai_kernel/ANATOMY.md`).
+version: 4.0.0
 ---
 
-# LingTai Kernel Anatomy
+# LingTai Kernel Anatomy — the Convention
 
-This skill is the **LingTai-agent-facing entrance** to your own kernel anatomy. The matching coding-agent entrance is `src/lingtai_kernel/ANATOMY.md` in the kernel repository — same destination, different doorway.
+This skill is the canonical convention for `ANATOMY.md` files in the LingTai kernel. It is read by every agent — LingTai or coding — that wants to navigate or modify the kernel. It is not the content; the content lives next to the code in `ANATOMY.md` files distributed across the kernel source tree.
 
 ## What an `ANATOMY.md` is
 
@@ -50,72 +48,93 @@ It is **not**:
 
 - A user manual or how-to guide (those are skills, manuals, tutorials).
 - An API contract (those are tool schemas).
-- A test specification (those are test files, or experience prompts under `.anatomy/prompts/` if a folder has them).
-- A description of intent or design philosophy (those are commit messages and discussion notes under `discussions/`).
+- A design or rationale document (those live in `discussions/` or commit messages).
+- A test specification (those are test files).
 
-It **is**: a code-cited map of *what is in this folder, where it lives, what it connects to, and what state it produces or consumes.* Every structural claim it makes is grounded in a `file:line` reference into the code. If you cannot verify a claim by opening the cited file and reading, the claim does not belong in anatomy.
+It **is**: a code-cited map of *what is in this folder, how the parts connect, and where state lives.* Every structural claim is grounded in a `file:line` reference into the code. If a claim cannot point at a line that says what it claims, the claim does not belong in anatomy.
 
-The shape of a typical `ANATOMY.md`:
+A folder gets an `ANATOMY.md` when **a competent agent could do useful reasoning about the folder as a unit without first reading its siblings.** Trivial leaves (a single dataclass module, a one-function helper) do not. The kernel-root anatomy is the only file that holds a complete child enumeration; every other anatomy maps just its own folder.
 
-- **What this is** — one paragraph naming the concept this folder embodies.
-- **Components** — what files/functions/classes are here, with `file:line` citations and one-line purposes.
-- **Connections** — what calls into this folder, what this folder calls out to, what data flows through.
-- **Composition** — parent folder, subfolders (each with their own `ANATOMY.md`), how this folder fits into the larger structure.
-- **State** — persistent state this folder writes (files, schema versions), ephemeral state it manages.
-- **Notes** — annotations: rationale, history, gotchas. Bounded section, never the body.
+## The 6-section template
 
-Every folder at a meaningful concept boundary has one. Trivial leaves (a single dataclass module, a one-function helper) do not. The discipline is: a folder gets an `ANATOMY.md` when a competent agent could do useful reasoning about it as a unit without first reading its siblings.
+Every `ANATOMY.md` — including the kernel-root anatomy — follows the same shape:
 
-## Why you read anatomy instead of greping
+1. **What this is** — one paragraph naming the concept this folder embodies.
+2. **Components** — files / functions / classes here, with `file:line` citations and one-line purposes.
+3. **Connections** — what calls in, what this folder calls out, what data flows through.
+4. **Composition** — parent folder, subfolders (each linked to its own `ANATOMY.md`), siblings if structurally relevant.
+5. **State** — persistent state this folder writes (files, schema versions), ephemeral state it manages.
+6. **Notes** — bounded section for rationale, history, gotchas not visible in code.
 
-You are an agent. Reading 200 lines of code is one tool call. Greping a symbol gives you 50 hits — every hit is its own tool call to evaluate. For navigation questions ("what shape is this part of me, where does behavior X live, what does Y connect to"), descending three `ANATOMY.md` files is dramatically cheaper than greping. For enumeration questions ("every callsite of this function"), grep is still right.
+~80 lines is the cap; less is better. If a folder needs more, it is probably two folders.
 
-The rule of thumb:
+## Use anatomy as navigator, not grep
+
+You are an agent. Reading 200 lines of code is one tool call; greping a symbol gives you 50 hits each costing their own evaluation. For **structural** questions (what shape is this part of the kernel, where does behavior X live, what does Y connect to) descend `ANATOMY.md` files top-down — three reads will usually take you deeper than fifty grep hits. For **enumeration** questions (every callsite of this function, every file matching this pattern) grep is still right.
 
 | Question type | Tool |
 |---|---|
-| **Structural** ("what is here, what connects to what, where does X live") | Descend the anatomy tree |
-| **Enumeration** ("every reference to this symbol, every file matching this pattern") | grep |
+| Structural | Descend the anatomy tree |
+| Enumeration | grep |
 
-You will reach for grep less often than you used to. That is the point.
+The descent: start at `src/lingtai_kernel/ANATOMY.md`, read its Components and Composition, pick the subfolder whose territory contains your question, open its anatomy, repeat. At each layer the anatomy will tell you whether to descend further or read the cited code directly.
 
-## How to descend
+## Writing checklist
 
-1. Start at `src/lingtai_kernel/ANATOMY.md` (the kernel root anatomy).
-2. Read its **Components** and **Composition** sections. They list the direct children of `src/lingtai_kernel/`.
-3. Pick the child whose territory contains your question. Open `src/lingtai_kernel/<child>/ANATOMY.md`.
-4. Repeat. At each layer the file will tell you whether to descend further or read the cited code directly.
-5. When you hit code, read it. The cited `file:line` references are the contract.
+When you write or update an `ANATOMY.md`, every one of these must be true before you commit. They exist because we have already seen each one fail in practice.
 
-If at any layer the `ANATOMY.md` is missing or empty, the convention is still being populated. You can read the code directly — and if you understand what you read, you should write the `ANATOMY.md` for that folder before moving on. Empty anatomy files are an invitation to maintain.
+- **Every named symbol in Components has a `file:line` citation.** "loads snapshots (`_load_snapshot_interface`)" is not enough; "loads snapshots (`consultation.py:147`)" is. Without citations, the next agent grepping for the symbol gains nothing from the anatomy.
+- **Citations are line ranges, not paragraphs.** Prefer `file.py:123-156` over a vague "see file.py". Prefer single-line citations only for one-line landmarks (constants, single-line helpers).
+- **Every citation has been verified.** Open the cited line. Confirm it still says what the anatomy claims. Citations rot fastest after refactors.
+- **Cross-references between anatomies use kernel-root-relative paths.** `src/lingtai_kernel/intrinsics/soul/ANATOMY.md`, not `./ANATOMY.md` or `intrinsics/soul/ANATOMY.md`. The root is the only stable reference frame.
+- **Cross-references are sparse and one-directional.** Cite parent and structural neighbors only — do not enumerate downstream callers (that's a grep question).
+- **No leaf stubs.** Empty placeholder anatomies are clutter. A missing `ANATOMY.md` is an honest signal that the folder hasn't been mapped yet.
+- **No paraphrase.** Anatomy adds shape and connections, not summary. If the code's good naming already says what you're about to write, don't write it.
 
 ## Maintenance is part of reading
 
-The anatomy stays accurate because every agent that reads it is also a maintainer. The contract:
+Every agent that reads anatomy is also a maintainer. The contract:
 
-- **If the code matches the anatomy:** read on, no action.
-- **If the code disagrees with the anatomy:** decide which is right. The code is almost always right (it was last modified by someone solving a real problem; the anatomy was last modified by someone documenting). Update the anatomy to match the code before you leave the file. If you believe the code itself is wrong (a bug), report it — but still note in your report that anatomy and code disagreed, because that disagreement is itself a clue.
-- **If the anatomy is missing or empty for a folder you just read:** write it, briefly. Components, connections, state. ~80 lines is the cap; less is better than more. The next agent will thank you.
+- **Code matches anatomy:** read on, no action.
+- **Code disagrees with anatomy:** the code is almost always right. Update the anatomy to match before you leave the file. If you believe the code itself is wrong, report the bug — and note that anatomy and code disagreed, because that disagreement is itself a clue.
+- **Anatomy missing or empty:** if you understood the folder well enough to do your task, write the anatomy. Components, connections, state. Use the writing checklist above.
 
-You are not writing perfect documentation. You are leaving a slightly cleaner trail than you found.
+## Citation rot during refactors
 
-## Cross-references between anatomy files
+The most common drift mode is **citation rot after a refactor**. When code moves between files, anatomies that cite the old file rot silently — the prose still reads correctly, but the citations point at a line that no longer exists or contains different code.
 
-`ANATOMY.md` files cross-reference each other by **relative path from the kernel root** — e.g. an entry under `intrinsics/soul/ANATOMY.md` might say "spliced through `intrinsics/system/` (see `src/lingtai_kernel/intrinsics/system/ANATOMY.md`)." References are sparse and one-directional: a folder cites its parent and any folders it actually depends on, never enumerates downstream callers (that is a grep question).
+The mechanical rule:
 
-The kernel-root `ANATOMY.md` is the only file that holds a complete child enumeration. Every other anatomy points up to its parent and sideways only when there is a structural connection worth naming.
+> After any commit that touches `git diff --name-only`, search every `ANATOMY.md` for citations of every touched filename and verify each one.
+
+Concretely, if a commit moves `intrinsics/soul.py` → `intrinsics/soul/{config,consultation,inquiry}.py`, then before completing the commit:
+
+1. `grep -rn "intrinsics/soul\.py:" src/lingtai_kernel/**/ANATOMY.md src/lingtai_kernel/ANATOMY.md`
+2. Update every match to the new file location and verified line number.
+3. Repeat for any other file the refactor moved.
+
+This is the discipline `discussions/soul-flow-tool-refusal-patch.md` and the soul package refactor (`ffe42d4`) demonstrated. The first round of citation rot happened because the rule was implicit; making it explicit here is part of the convention.
+
+## The kernel-root anatomy is just an anatomy
+
+The kernel-root `ANATOMY.md` (at `src/lingtai_kernel/ANATOMY.md`) follows the same 6-section template as every other anatomy. It happens to enumerate every direct child of the kernel root in its Components and Composition sections — that's a property of being at the top of the tree, not a special role. There are no "doorways" or "entrances": there is the convention (this skill) and there is the tree of anatomies. The kernel-root anatomy is the top of the tree. That is all.
+
+## When the convention exposes structural pressure
+
+If a single file is large enough to need its own anatomy, that is a refactor signal — not a license to write per-file anatomies. The convention's first useful side effect is that it reveals where a folder's organizational grain doesn't match its conceptual grain. The right response is "make the file smaller (split into a package)" not "invent a parallel doc system that summarizes a too-large file." This is how `intrinsics/soul.py` (1056 lines, four concerns) became `intrinsics/soul/` with four sub-modules and a sub-anatomy.
 
 ## Relationship to other skills
 
-- **`lingtai-anatomy`** (umbrella) — describes the LingTai *system* as a user experiences it: TUI flows, presets, init.jsonc, runtime layout under `~/.lingtai-tui/`. Lives outside the kernel. If your question is "how does my init.jsonc get there," start there.
+- **`lingtai-anatomy`** — describes the LingTai *system* as a user experiences it: TUI flows, presets, init.jsonc, runtime layout under `~/.lingtai-tui/`. Lives outside the kernel. If your question is "how does my init.jsonc get there," start there.
 - **Per-tool manuals** (`daemon-manual`, `mcp-manual`, `library-manual`, ...) — operational how-to for invoking specific tools. If your question is "how do I use X," start there.
-- **`lingtai-kernel-anatomy` (this skill)** — self-introspection of your own kernel. If your question is "what is X actually doing inside me, where does it live in my code," start here.
+- **`lingtai-kernel-anatomy` (this skill)** — the convention behind the kernel anatomy tree. If your question is "what is X actually doing inside me, where does it live in my code," read this once to know the convention, then descend the kernel anatomy tree.
 
 The three skills are layered. Manuals tell you how to act. Umbrella anatomy tells you about the world you live in. Kernel anatomy tells you about yourself.
 
 ## Version history
 
-- **v3.0.0** (2026-05): Reworked from topical references to per-folder `ANATOMY.md` convention. The 10 reference files (file-formats, filesystem-layout, mail-protocol, mcp-protocol, memory-system, molt-protocol, network-topology, runtime-loop, glossary, changelog) were removed; their content now lives next to the code in per-folder anatomy files. This skill is now the entrance, not the content.
+- **v4.0.0** (2026-05): Single canonical entrance. The kernel-root `ANATOMY.md` was reduced to just-an-anatomy of `src/lingtai_kernel/`; the convention text moved entirely into this skill. Added an explicit writing checklist and a citation-rot-during-refactor section after the soul package refactor exposed both as latent gaps.
+- **v3.0.0** (2026-05): Reworked from topical references to per-folder `ANATOMY.md` convention. The 10 reference files (file-formats, filesystem-layout, mail-protocol, mcp-protocol, memory-system, molt-protocol, network-topology, runtime-loop, glossary, changelog) were removed; their content moved next to the code in per-folder anatomy files. Two-entrance framing introduced (deprecated in v4).
 - **v2.1.0** (2026-04-29): Added `mcp-protocol.md`, absorbed standalone `lingtai-changelog`. (Removed in v3.)
 - **v2.0.0** (2026-04): Modular rewrite — 8 references replaced the monolithic SKILL.md. (Removed in v3.)
 - **v1.2.0**: Original monolithic SKILL.md (474 lines). (Removed in v2.)

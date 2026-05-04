@@ -21,16 +21,18 @@ The kernel must never import from `lingtai` — the dependency is strictly one-d
 
 This repo follows a per-folder `ANATOMY.md` convention. **Use anatomy as your navigator instead of greping for structural questions.**
 
-- **Coding-agent entrance:** [`src/lingtai_kernel/ANATOMY.md`](src/lingtai_kernel/ANATOMY.md). Start here. It enumerates the kernel's direct children and tells you which subfolder to descend into.
-- **LingTai-agent entrance** (same content, different doorway, used when the agent introspects its own kernel): the `lingtai-kernel-anatomy` skill at `src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md`.
-- **Per-folder anatomies:** every concept-boundary folder has (or will eventually have) its own `ANATOMY.md` describing what's in that folder, where state lives, what connects to what, with `file:line` citations into the code. The code is the truth; anatomy is the navigation aid.
+- **The convention itself** lives at [`src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md`](src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md) — what an `ANATOMY.md` is, the 6-section template, the writing checklist, the maintenance discipline, the citation-rot rule. Read it once before writing or auditing anatomy.
+- **The kernel anatomy tree** is rooted at [`src/lingtai_kernel/ANATOMY.md`](src/lingtai_kernel/ANATOMY.md) — that file is itself just-an-anatomy of `src/lingtai_kernel/`, following the same 6-section template as every other anatomy. Its Composition section enumerates the direct children. Descend from there.
+
+The two-entrance framing of earlier versions is gone: there is the convention (the skill) and there is the tree (rooted at the kernel-root anatomy). The kernel-root anatomy is the top of the tree, not a doorway.
 
 How to use it as a coding agent:
 
-1. **Structural question** ("where does X live, what shape is this part of the kernel, what does Y connect to") → descend the anatomy tree, top-down. Three reads will usually take you deeper than fifty grep hits.
+1. **Structural question** ("where does X live, what shape is this part of the kernel, what does Y connect to") → descend the anatomy tree, top-down from the kernel-root anatomy. Three reads will usually take you deeper than fifty grep hits.
 2. **Enumeration question** ("every callsite of this function, every file matching this pattern") → grep is still right.
 3. **If anatomy disagrees with the code:** the code is almost always correct. Update the anatomy to match before you leave the file. Reading and maintaining anatomy are the same act.
-4. **If anatomy is missing for a folder you just understood:** write it. Components, connections, state. ~80 lines cap; less is better. The next agent will thank you.
+4. **If anatomy is missing for a folder you just understood:** write it per the convention skill's writing checklist. ~80 lines cap; less is better.
+5. **If you refactor code across files:** every `ANATOMY.md` that cited the moved file may have rotted citations. `grep -rn "<old-file>:" src/lingtai_kernel/**/ANATOMY.md src/lingtai_kernel/ANATOMY.md` and verify each match — citation rot is the single most common drift mode. The convention skill spells out the rule.
 
 The convention exists because grep is full-text-search, and full-text-search is the wrong primitive for understanding architecture. Agents read whole files cheaply; the navigation pattern that pays off for agents is depth-first traversal of structural maps, not breadth-first symbol search. Reach for grep when you've already located the right region and need to enumerate within it.
 
