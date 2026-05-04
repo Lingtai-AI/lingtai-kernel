@@ -27,27 +27,74 @@ _LLM_SLOW_THRESHOLD_SECONDS = 60.0
 
 def _on_llm_hang(agent) -> None:
     """Watchdog callback: LLM has been unresponsive for too long."""
-    from .state import AgentState
+    from ..state import AgentState
 
     agent._log("llm_hang_detected",
                seconds=_LLM_HANG_THRESHOLD_SECONDS,
                state=agent._state.value)
 
-    # Write signal file for TUI visibility
-    try:
-        hang_file = agent._working_dir / ".llm_hang"
-        import json as _json
-        hang_file.write_text(_json.dumps({
-            "detected_at": time.time(),
-            "threshold_seconds": _LLM_HANG_THRESHOLD_SECONDS,
-        }), encoding="utf-8")
-    except OSError:
-        pass
+    # Write signal file for TUI/supervisor visibility.
+    _write_llm_hang_signal(agent)
 
     # Transition to STUCK if not already in a terminal state
     if agent._state not in (AgentState.STUCK, AgentState.ASLEEP, AgentState.SUSPENDED):
         agent._set_state(AgentState.STUCK, reason="LLM API unresponsive")
 
+
+
+
+def _write_llm_hang_signal(agent, **extra) -> None:
+    """Write/update the .llm_hang signal file for TUI/supervisor visibility."""
+    try:
+        hang_file = agent._working_dir / ".llm_hang"
+        payload = {
+            "detected_at": time.time(),
+            "threshold_seconds": _LLM_HANG_THRESHOLD_SECONDS,
+            **extra,
+        }
+        hang_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _llm_hang_signal_exists(agent) -> bool:
+    try:
+        return (agent._working_dir / ".llm_hang").exists()
+    except OSError:
+        return False
+
+
+def _remove_llm_hang_signal(agent) -> None:
+    try:
+        (agent._working_dir / ".llm_hang").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _mark_worker_still_running(agent, err) -> None:
+    """Record that the provider worker survived timeout+grace."""
+    _write_llm_hang_signal(
+        agent,
+        worker_still_running_at=time.time(),
+        error=str(err),
+    )
+
+
+def _handle_worker_still_running(agent, err) -> None:
+    """Fail closed after a provider worker outlives timeout+grace.
+
+    The adapter may still mutate the shared ChatInterface, so do not run AED
+    repair or retry in this process. Leave a .llm_hang signal requiring an
+    explicit refresh before mail can wake the agent into ACTIVE processing.
+    """
+    from ..state import AgentState
+
+    err_desc = str(err) or repr(err)
+    agent._log("llm_worker_still_running", error=err_desc)
+    _mark_worker_still_running(agent, err)
+    agent._set_state(AgentState.STUCK, reason=err_desc)
+    agent._asleep.set()
+    agent._set_state(AgentState.ASLEEP, reason="LLM worker still running; refresh required")
 
 def _send_with_watchdog(agent, content):
     """Wrap session.send with a hang watchdog.
@@ -65,16 +112,22 @@ def _send_with_watchdog(agent, content):
     )
     hang_timer.daemon = True
     hang_timer.start()
+    from ..llm_utils import WorkerStillRunningError
+
+    keep_hang_signal = False
     try:
         return agent._session.send(content)
+    except WorkerStillRunningError as err:
+        keep_hang_signal = True
+        _mark_worker_still_running(agent, err)
+        raise
     finally:
         hang_timer.cancel()
-        # Clean up signal file if it exists (hang was transient or resolved)
-        try:
-            hang_file = agent._working_dir / ".llm_hang"
-            hang_file.unlink(missing_ok=True)
-        except OSError:
-            pass
+        # Clean up signal file only when the send resolved or failed with an
+        # ordinary, settled exception. If the worker is still alive, the
+        # signal remains as a wake-time refresh requirement.
+        if not keep_hang_signal:
+            _remove_llm_hang_signal(agent)
 
 
 def _run_loop(agent) -> None:
@@ -101,6 +154,15 @@ def _run_loop(agent) -> None:
                 if msg is None:
                     break  # shutdown was set — exit inner loop
 
+                if _llm_hang_signal_exists(agent):
+                    agent._log("wake_refused_llm_hang", trigger=msg.type)
+                    agent._asleep.set()
+                    agent._set_state(
+                        AgentState.ASLEEP,
+                        reason="LLM hang signal present; explicit refresh required",
+                    )
+                    continue
+
                 # Wake up
                 agent._asleep.clear()
                 agent._cancel_event.clear()  # clear stale sleep/stamina signal
@@ -120,11 +182,20 @@ def _run_loop(agent) -> None:
             # --- Process with AED (Automatic Error Detection) ---
             sleep_state = AgentState.IDLE
             aed_attempts = 0
+            skip_post_turn_save = False
             while True:
                 try:
                     _handle_message(agent, msg)
                     break  # success (chat saved after each session.send inside)
                 except Exception as e:
+                    from ..llm_utils import WorkerStillRunningError
+
+                    if isinstance(e, WorkerStillRunningError):
+                        _handle_worker_still_running(agent, e)
+                        sleep_state = AgentState.ASLEEP
+                        skip_post_turn_save = True
+                        break
+
                     err_desc = str(e) or repr(e)
                     aed_attempts += 1
 
@@ -171,7 +242,13 @@ def _run_loop(agent) -> None:
 
             if not agent._asleep.is_set():
                 agent._set_state(sleep_state)
-            agent._save_chat_history()
+            if skip_post_turn_save:
+                agent._log(
+                    "chat_history_save_skipped",
+                    reason="worker_still_running_interface_unsafe",
+                )
+            else:
+                agent._save_chat_history()
 
             # Auto-insight: fire after N turns
             if agent._config.insights_interval > 0:

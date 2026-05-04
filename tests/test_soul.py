@@ -213,3 +213,45 @@ class TestSoulTimer:
         assert agent._soul_timer is not None
         agent.stop()
         assert agent._soul_timer is None
+
+
+def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
+    """If the agent becomes STUCK while consultation is running, the late
+    result must not enqueue a TC wake into an unsafe interface window.
+    """
+    from lingtai_kernel.intrinsics.soul import flow
+    from lingtai_kernel.llm.interface import TextBlock
+    from lingtai_kernel.state import AgentState
+
+    agent = MagicMock()
+    agent._state = AgentState.ACTIVE
+    agent._logs = []
+    agent._tc_inbox.enqueue = MagicMock()
+
+    def log(event_type, **fields):
+        agent._logs.append((event_type, fields))
+    agent._log.side_effect = log
+
+    monkeypatch.setattr(flow, "_append_soul_flow_record", MagicMock())
+
+    def fake_batch(_agent):
+        _agent._state = AgentState.STUCK
+        return [{"source": "insights", "blocks": [TextBlock(text="late")]}]
+
+    monkeypatch.setattr(
+        "lingtai_kernel.intrinsics.soul.consultation._render_current_diary",
+        lambda _agent: "diary",
+    )
+    monkeypatch.setattr(
+        "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
+        fake_batch,
+    )
+    monkeypatch.setattr(
+        "lingtai_kernel.intrinsics.soul.consultation.build_consultation_pair",
+        MagicMock(),
+    )
+
+    flow._run_consultation_fire(agent)
+
+    agent._tc_inbox.enqueue.assert_not_called()
+    assert any(name == "consultation_discarded_state" for name, _ in agent._logs)

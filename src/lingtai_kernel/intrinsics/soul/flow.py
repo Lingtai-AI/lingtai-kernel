@@ -55,14 +55,14 @@ def _soul_whisper(agent) -> None:
     agent._soul_timer = None
     try:
         if agent._state in (AgentState.ACTIVE, AgentState.IDLE):
-            _run_consultation_fire(agent)
+            agent._run_consultation_fire()
         else:
             agent._log("soul_whisper_skipped", reason=agent._state.value)
     except Exception as e:
         agent._log("soul_whisper_error", error=str(e))
     finally:
         if agent._state in (AgentState.ACTIVE, AgentState.IDLE):
-            _start_soul_timer(agent)
+            agent._start_soul_timer()
 
 
 def _persist_soul_entry(agent, result: dict, mode: str = "flow", source: str = "agent") -> None:
@@ -123,6 +123,13 @@ def _flatten_v3_for_pair(agent, voice: dict) -> dict:
     }
 
 
+def _soul_fire_allowed(agent) -> bool:
+    """True when soul-flow may inject results into the live agent."""
+    from ...state import AgentState
+
+    return agent._state in (AgentState.ACTIVE, AgentState.IDLE)
+
+
 def _run_consultation_fire(agent) -> None:
     """Run one consultation batch and persist the result.
 
@@ -132,6 +139,10 @@ def _run_consultation_fire(agent) -> None:
     from datetime import datetime, timezone
     import secrets as _secrets
     from ...message import _make_message, MSG_TC_WAKE
+
+    if not _soul_fire_allowed(agent):
+        agent._log("consultation_skipped_state", state=agent._state.value)
+        return
 
     fire_id = f"fire_{int(time.time())}_{_secrets.token_hex(2)}"
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -146,6 +157,11 @@ def _run_consultation_fire(agent) -> None:
 
         diary = _render_current_diary(agent)
         voices = _run_consultation_batch(agent)
+
+        if not _soul_fire_allowed(agent):
+            agent._log("consultation_discarded_state",
+                       fire_id=fire_id, state=agent._state.value)
+            return
 
         sources = [v.get("source", "unknown") for v in voices]
         outcome = "ok" if voices else "empty"

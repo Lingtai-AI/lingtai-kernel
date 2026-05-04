@@ -1,12 +1,16 @@
 """Tests for lingtai.llm_utils."""
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+
+import pytest
 
 from lingtai_kernel.llm_utils import (
+    WorkerStillRunningError,
     track_llm_usage,
     execute_tools_batch,
     send_with_timeout,
     _SubmitFn,
+    _wait_for_worker_settle,
 )
 
 
@@ -191,3 +195,39 @@ def test_send_with_timeout_waits_for_worker_to_settle_after_timeout():
         f"send_with_timeout raised before worker settled: "
         f"t_end={t_end - t_start:.3f}s, settled={worker_settled_at[0] - t_start:.3f}s"
     )
+
+
+def test_wait_for_worker_settle_raises_when_future_still_running(monkeypatch):
+    """A worker that survives settle grace is unsafe for AED retry."""
+    monkeypatch.setattr("lingtai_kernel.llm_utils._WORKER_SETTLE_GRACE", 0.01)
+    future = Future()
+
+    with pytest.raises(WorkerStillRunningError) as exc:
+        _wait_for_worker_settle(future, elapsed=300.0, agent_name="test")
+
+    assert exc.value.elapsed == 300.0
+    assert exc.value.grace == 0.01
+    assert exc.value.agent_name == "test"
+
+
+def test_send_with_timeout_raises_worker_still_running_when_worker_never_settles(monkeypatch):
+    """send_with_timeout propagates WorkerStillRunningError when the worker
+    remains alive past retry_timeout + grace.
+    """
+    import threading
+
+    monkeypatch.setattr("lingtai_kernel.llm_utils._WORKER_SETTLE_GRACE", 0.01)
+    pool = ThreadPoolExecutor(max_workers=1)
+    blocker = threading.Event()
+    chat = _FakeChat(blocker, result=FakeLLMResponse())
+
+    try:
+        with pytest.raises(WorkerStillRunningError):
+            send_with_timeout(
+                chat=chat, message="hi",
+                timeout_pool=pool, retry_timeout=0.01,
+                agent_name="test", logger=None,
+            )
+    finally:
+        blocker.set()
+        pool.shutdown(wait=True)

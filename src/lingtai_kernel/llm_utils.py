@@ -19,9 +19,27 @@ _LLM_WARN_INTERVAL = 20  # log a warning every N seconds while waiting
 # Grace period after retry_timeout expires: the worker's HTTP timeout should
 # fire at the same moment, its except-block runs drop_trailing synchronously,
 # then the future settles. We wait this long for that cleanup to complete
-# before raising TimeoutError to AED. Without the grace, AED races with the
-# worker's in-progress interface mutations.
+# before raising TimeoutError to AED. If the worker is still running after
+# grace, AED must not retry against the shared ChatInterface.
 _WORKER_SETTLE_GRACE = 5.0
+
+
+class WorkerStillRunningError(TimeoutError):
+    """The LLM worker is still alive after the main timeout + settle grace.
+
+    This is stronger than an ordinary provider timeout: the provider adapter
+    may still hold and mutate the shared ChatInterface, so AED must not repair
+    or retry against that interface in-process.
+    """
+
+    def __init__(self, *, elapsed: float, grace: float, agent_name: str):
+        self.elapsed = elapsed
+        self.grace = grace
+        self.agent_name = agent_name
+        super().__init__(
+            f"LLM worker still running after {elapsed:.0f}s + {grace:.0f}s grace; "
+            "ChatInterface is unsafe for AED retry"
+        )
 
 
 def _send(
@@ -61,17 +79,22 @@ def _wait_for_worker_settle(future: Future, elapsed: float, agent_name: str) -> 
     synchronously before we propagate. Without this wait, AED's recovery
     races with the worker's in-progress mutations.
 
-    If the worker is still running after the grace period, log loudly and
-    proceed — something is wedged in the HTTP client and we accept the race
-    rather than block the agent indefinitely. This should be rare.
+    If the worker is still running after the grace period, raise a distinct
+    WorkerStillRunningError. AED must not treat this as an ordinary timeout
+    because the provider worker may still mutate the shared ChatInterface.
     """
     try:
         future.result(timeout=_WORKER_SETTLE_GRACE)
     except TimeoutError:
         _logger.error(
             "[%s] LLM worker thread still running after %.0fs + %.0fs grace — "
-            "interface state may be inconsistent. Investigate: HTTP client stuck?",
+            "interface state may be inconsistent. Refusing AED retry.",
             agent_name, elapsed, _WORKER_SETTLE_GRACE,
+        )
+        raise WorkerStillRunningError(
+            elapsed=elapsed,
+            grace=_WORKER_SETTLE_GRACE,
+            agent_name=agent_name,
         )
     except Exception:
         # Worker raised something other than timeout — that's fine, its
