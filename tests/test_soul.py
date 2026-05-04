@@ -61,12 +61,28 @@ class TestSoulHandle:
         result = soul.handle(agent, {"action": "inquiry", "inquiry": "   "})
         assert "error" in result
 
-    def test_flow_action_rejected_manually(self):
-        """flow fires mechanically — agent cannot invoke it directly."""
+    def test_flow_action_voluntary_succeeds_when_lock_free(self):
+        """Voluntary flow returns ok when no fire is in flight; the real
+        consultation runs on a daemon thread and lands later via tc_inbox."""
         agent = _make_mock_agent()
+        agent._soul_fire_lock = threading.Lock()
         result = soul.handle(agent, {"action": "flow"})
+        assert result.get("status") == "ok"
+        assert "soul flow triggered" in result.get("message", "").lower()
+
+    def test_flow_action_rejected_when_fire_in_flight(self):
+        """Voluntary flow refuses if another fire (timer or prior voluntary)
+        already holds the fire lock."""
+        agent = _make_mock_agent()
+        lock = threading.Lock()
+        lock.acquire()
+        agent._soul_fire_lock = lock
+        try:
+            result = soul.handle(agent, {"action": "flow"})
+        finally:
+            lock.release()
         assert "error" in result
-        assert "cannot be invoked manually" in result["error"]
+        assert "ongoing" in result["error"]
 
     def test_unknown_action_returns_error(self):
         agent = _make_mock_agent()

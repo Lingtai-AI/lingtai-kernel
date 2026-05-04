@@ -764,7 +764,7 @@ def test_emanate_with_preset_validates_preset_exists(tmp_path, monkeypatch):
     """If a per-task preset is specified but doesn't exist in the library,
     refuse THE WHOLE BATCH (no partial emanations)."""
     from unittest.mock import patch
-    import lingtai.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
 
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
@@ -790,7 +790,7 @@ def test_emanate_with_preset_validates_preset_exists(tmp_path, monkeypatch):
 def test_emanate_with_preset_unreachable_refuses(tmp_path, monkeypatch):
     """If the requested preset has connectivity 'unreachable', refuse the emanation."""
     from unittest.mock import patch
-    import lingtai.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
 
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
@@ -839,7 +839,7 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
     """When preset is valid and reachable, emanation is scheduled and
     daemon.json records the preset name + provider + model."""
     from unittest.mock import patch
-    import lingtai.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
 
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()

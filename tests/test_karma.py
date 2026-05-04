@@ -89,7 +89,10 @@ class TestSystemIntrinsicKarma:
     def test_lull_rejects_asleep_target(self, tmp_path):
         target_dir = tmp_path / "target"
         target_dir.mkdir()
-        (target_dir / ".agent.json").write_text('{"agent_id": "t1"}')
+        # admin must be non-null — without it, is_human() returns True and
+        # is_alive() short-circuits to always-alive, defeating the
+        # not-running rejection path.
+        (target_dir / ".agent.json").write_text('{"agent_id": "t1", "admin": {}}')
 
         sender_base = tmp_path / "sender"
         sender_base.mkdir()
@@ -185,7 +188,12 @@ class TestCPRLingtai:
         assert llm_config["provider"] == "mock"
         assert llm_config["model"] == "test-model"
 
-    def test_cpr_agent_hook_returns_agent(self, tmp_path):
+    def test_cpr_agent_hook_returns_truthy(self, tmp_path):
+        """_cpr_agent now launches the target as a detached subprocess and
+        returns a truthy sentinel (not a reconstructed Agent). The test
+        validates the hook fires and yields a non-None signal — actual
+        process spawning is mocked out so no real lingtai child is forked."""
+        import json as _json
         from lingtai.agent import Agent
         from unittest.mock import patch
 
@@ -195,31 +203,42 @@ class TestCPRLingtai:
         svc.model = "test-model"
         svc._base_url = None
 
-        # Create an "asleep" agent — construct, persist, don't start
         agents_dir = tmp_path / "agents"
         agents_dir.mkdir()
         target = Agent(svc, working_dir=agents_dir / "bobbob000001",
                        agent_name="bob")
         target_dir = str(target.working_dir)
 
-        # Create the agent that will perform CPR
+        # _cpr_agent reads init.json before launching; Agent.__init__ doesn't
+        # persist it, so the test stages a minimal one.
+        (target.working_dir / "init.json").write_text(_json.dumps({
+            "manifest": {
+                "agent_name": "bob",
+                "llm": {"provider": "mock", "model": "test-model"},
+            },
+        }))
+
         reviver_dir = tmp_path / "reviver"
         reviver_dir.mkdir()
         reviver = Agent(svc, working_dir=reviver_dir / "admin000001",
                         agent_name="admin", admin={"karma": True})
 
-        # Release the lock on the target (simulate an asleep/dead agent)
         target._workdir.release_lock()
 
-        # Patch LLMService so reconstruction doesn't fail (no adapter registered for "mock")
-        mock_svc = MagicMock()
-        mock_svc.create_session.return_value = MagicMock()
-        mock_svc.provider = "mock"
-        mock_svc.model = "test-model"
-        mock_svc._base_url = None
-
-        with patch("lingtai.agent.LLMService", return_value=mock_svc):
+        # Stub Popen so no real subprocess is forked. Also short-circuit
+        # the venv resolver, which otherwise probes the runtime via
+        # subprocess.run (no real venv available in the test env).
+        # _cpr_agent imports these inside the function body, so the patch
+        # targets the source module rather than lingtai.agent.
+        fake_proc = MagicMock()
+        fake_proc.pid = 99999
+        from pathlib import Path as _Path
+        with patch("subprocess.Popen", return_value=fake_proc), \
+             patch("lingtai.venv_resolve.resolve_venv",
+                   return_value=_Path("/fake/venv")), \
+             patch("lingtai.venv_resolve.venv_python",
+                   return_value="/fake/venv/bin/python"):
             resuscitated = reviver._cpr_agent(target_dir)
 
         assert resuscitated is not None
-        assert resuscitated.agent_name == "bob"
+        assert resuscitated  # truthy sentinel

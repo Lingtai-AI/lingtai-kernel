@@ -1,4 +1,9 @@
-"""Tests for git-controlled agent working directory."""
+"""Tests for git-controlled agent working directory.
+
+Note: ``init_git()`` only fires when snapshots are enabled
+(``AgentConfig.snapshot_interval`` is non-None). These tests construct an
+agent with a snapshot interval set so the git path is exercised.
+"""
 from __future__ import annotations
 
 import subprocess
@@ -7,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai_kernel.base_agent import BaseAgent
+from lingtai_kernel.config import AgentConfig
 
 
 def make_mock_service():
@@ -17,9 +23,16 @@ def make_mock_service():
     return svc
 
 
+def _git_enabled_config() -> AgentConfig:
+    """Config with snapshots on so init_git() is exercised."""
+    return AgentConfig(snapshot_interval=60.0)
+
+
 def test_start_creates_git_repo(tmp_path):
     """agent.start() should git init the working directory."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(service=make_mock_service(), agent_name="test",
+                       working_dir=tmp_path / "test",
+                       config=_git_enabled_config())
     agent.start()
     try:
         git_dir = agent.working_dir / ".git"
@@ -29,24 +42,28 @@ def test_start_creates_git_repo(tmp_path):
 
 
 def test_start_creates_gitignore(tmp_path):
-    """agent.start() should create opt-in .gitignore."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    """agent.start() should create a .gitignore file (Time Machine tracks
+    everything by default — gitignore is intentionally empty)."""
+    agent = BaseAgent(service=make_mock_service(), agent_name="test",
+                       working_dir=tmp_path / "test",
+                       config=_git_enabled_config())
     agent.start()
     try:
         gitignore = agent.working_dir / ".gitignore"
-        assert gitignore.is_file()
-        content = gitignore.read_text()
-        assert "*" in content
-        assert "!.gitignore" in content
-        assert "!system/" in content
-        assert "!system/**" in content
+        assert gitignore.is_file(), ".gitignore should exist after start()"
+        # Empty by design (commit b6b4e58 — track everything, no exceptions).
+        # Re-asserting empty pins the contract; if a future change adds
+        # selective exclusions, this test makes the change explicit.
+        assert gitignore.read_text() == ""
     finally:
         agent.stop()
 
 
 def test_start_creates_system_dir(tmp_path):
     """agent.start() should create system/ directory with covenant.md and pad.md."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(service=make_mock_service(), agent_name="test",
+                       working_dir=tmp_path / "test",
+                       config=_git_enabled_config())
     agent.start()
     try:
         system_dir = agent.working_dir / "system"
@@ -59,7 +76,9 @@ def test_start_creates_system_dir(tmp_path):
 
 def test_start_makes_initial_commit(tmp_path):
     """agent.start() should make an initial git commit."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(service=make_mock_service(), agent_name="test",
+                       working_dir=tmp_path / "test",
+                       config=_git_enabled_config())
     agent.start()
     try:
         result = subprocess.run(
@@ -74,26 +93,29 @@ def test_start_makes_initial_commit(tmp_path):
 
 
 def test_start_skips_git_init_if_git_exists(tmp_path):
-    """If .git already exists, start() should not reinitialize."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    agent.start()
-    result = subprocess.run(
-        ["git", "rev-list", "--count", "HEAD"],
-        cwd=agent.working_dir,
-        capture_output=True, text=True,
-    )
-    initial_commits = int(result.stdout.strip())
+    """If .git already exists, start() should not run git init again.
 
-    # Stop and restart the same agent — git should not re-init
+    This is checked by counting the number of ``init: agent working
+    directory`` commits — there should always be exactly one even after
+    multiple starts. (Periodic Time Machine snapshots may add other
+    commits; those are unrelated to the init-git skip semantics.)
+    """
+    agent = BaseAgent(service=make_mock_service(), agent_name="test",
+                       working_dir=tmp_path / "test",
+                       config=_git_enabled_config())
+    agent.start()
     agent.stop()
     agent.start()
     try:
-        result2 = subprocess.run(
-            ["git", "rev-list", "--count", "HEAD"],
+        result = subprocess.run(
+            ["git", "log", "--oneline", "--grep=init: agent working directory"],
             cwd=agent.working_dir,
             capture_output=True, text=True,
         )
-        resume_commits = int(result2.stdout.strip())
-        assert resume_commits == initial_commits
+        init_commits = [line for line in result.stdout.splitlines() if line.strip()]
+        assert len(init_commits) == 1, (
+            f"init_git should run exactly once; got {len(init_commits)} init commits:\n"
+            f"{result.stdout}"
+        )
     finally:
         agent.stop()

@@ -218,6 +218,9 @@ def test_compaction_warning_injected_at_80_percent(tmp_path):
     agent = _make_agent_with_psyche(tmp_path)
     agent.start()
     try:
+        # Stamp a real int context_limit so build_meta() doesn't fall through
+        # to chat_obj.context_window() (a MagicMock that breaks comparisons).
+        agent._config.context_limit = 100_000
         # Mock session to report 85% context pressure
         agent._session.get_context_pressure = lambda: 0.85
         agent._session._compaction_warnings = 0

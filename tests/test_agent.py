@@ -416,11 +416,14 @@ def test_config_override(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_status(tmp_path):
+    """status() returns a {identity, runtime, tokens} grouped shape.
+    The flat-style fields (agent_name, state, idle) were reorganized into
+    the appropriate sub-dicts; the ``idle`` boolean was retired since
+    callers can derive it from runtime.state == "idle"."""
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     s = agent.status()
-    assert s["agent_name"] == "test"
-    assert s["state"] == "idle"
-    assert s["idle"] is True
+    assert s["identity"]["agent_name"] == "test"
+    assert s["runtime"]["state"] == "idle"
     assert "tokens" in s
 
 

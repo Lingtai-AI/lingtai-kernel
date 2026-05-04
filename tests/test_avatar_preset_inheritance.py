@@ -50,22 +50,21 @@ def test_avatar_inherits_active_preset_and_absolute_path(tmp_path):
     assert "capabilities" not in avatar_init["manifest"]
 
 
-def test_avatar_resolves_relative_presets_path(tmp_path):
-    """If parent's preset.path is relative, avatar gets it resolved to absolute."""
+def test_avatar_resolves_relative_preset_default(tmp_path):
+    """If parent's preset.default is relative, avatar gets it re-rooted
+    against the parent's working_dir (so the avatar can still resolve it
+    from a different cwd)."""
     parent_wd = tmp_path / "parent"
     parent_wd.mkdir()
-    (parent_wd / "presets").mkdir()
-    parent_init = _baseline_parent_init(
-        preset_path="./presets", active_preset="x")
+    parent_init = _baseline_parent_init(active_preset="./presets/x.json")
 
     from lingtai.core.avatar import AvatarManager
     avatar_init = AvatarManager._make_avatar_init(
         parent_init, "child", parent_working_dir=parent_wd)
 
-    preset_path = avatar_init["manifest"]["preset"]["path"]
-    # Must be absolute and point to the parent's presets folder
-    assert Path(preset_path).is_absolute()
-    assert Path(preset_path) == (parent_wd / "presets").resolve()
+    default_path = avatar_init["manifest"]["preset"]["default"]
+    assert Path(default_path).is_absolute()
+    assert Path(default_path) == (parent_wd / "presets" / "x.json").resolve()
 
 
 def test_avatar_no_preset_unchanged(tmp_path):

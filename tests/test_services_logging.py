@@ -138,7 +138,7 @@ class TestBaseAgentLoggingIntegration:
                 name, result, provider=agent._config.provider, **kw
             ),
             guard=guard,
-            known_tools=set(agent._intrinsics) | set(agent._mcp_handlers),
+            known_tools=set(agent._intrinsics) | set(agent._tool_handlers),
             logger_fn=agent._log,
         )
         executor.execute([tc], collected_errors=errors)
@@ -175,7 +175,7 @@ class TestBaseAgentLoggingIntegration:
                 name, result, provider=agent._config.provider, **kw
             ),
             guard=guard,
-            known_tools=set(agent._intrinsics) | set(agent._mcp_handlers),
+            known_tools=set(agent._intrinsics) | set(agent._tool_handlers),
             logger_fn=agent._log,
         )
         executor.execute([tc], collected_errors=errors)

@@ -73,8 +73,12 @@ def validate_init(data: dict) -> list[str]:
         "manifest": dict,
     }, prefix="")
 
-    # Text fields: inline value OR _file path (at least one required)
-    for key in ("principle", "covenant", "pad", "prompt", "soul"):
+    # Text fields: inline value OR _file path (at least one required).
+    # Note: "soul" / "soul_file" was removed in v0.7.6 — the soul-flow
+    # voice lives at manifest.soul.{voice,voice_prompt} now. Existing
+    # init.json files may still carry the legacy fields; they fall
+    # through to the unknown-key warning below rather than raising.
+    for key in ("principle", "covenant", "pad", "prompt"):
         file_key = f"{key}_file"
         has_inline = key in data
         has_file = file_key in data

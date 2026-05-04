@@ -80,26 +80,27 @@ def test_build_agent_constructs_correctly(mock_mail, mock_agent, mock_llm, tmp_p
     data = load_init(tmp_path)
     build_agent(data, tmp_path)
 
-    mock_llm.assert_called_once_with(
-        provider="anthropic",
-        model="test-model",
-        api_key="test-key",
-        base_url=None,
-    )
-    mock_mail.assert_called_once_with(working_dir=tmp_path)
+    mock_llm.assert_called_once()
+    llm_kwargs = mock_llm.call_args.kwargs
+    assert llm_kwargs["provider"] == "anthropic"
+    assert llm_kwargs["model"] == "test-model"
+    assert llm_kwargs["api_key"] == "test-key"
+    assert llm_kwargs["base_url"] is None
+    mock_mail.assert_called_once()
+    assert mock_mail.call_args.kwargs["working_dir"] == tmp_path
     mock_agent.assert_called_once()
     call_kwargs = mock_agent.call_args
     assert call_kwargs.kwargs["agent_name"] == "test-agent"
     assert call_kwargs.kwargs["working_dir"] == tmp_path
     assert call_kwargs.kwargs["streaming"] is False
     # covenant, memory, capabilities, addons no longer passed to constructor —
-    # they are loaded by _perform_refresh() from init.json
+    # they are loaded by _setup_from_init() from init.json
     assert "covenant" not in call_kwargs.kwargs
     assert "pad" not in call_kwargs.kwargs
     assert "capabilities" not in call_kwargs.kwargs
     assert "addons" not in call_kwargs.kwargs
-    # _perform_refresh() is called on the constructed agent
-    mock_agent.return_value._perform_refresh.assert_called_once()
+    # _setup_from_init() is called on the constructed agent
+    mock_agent.return_value._setup_from_init.assert_called_once()
 
 
 # --- env file and env var resolution ---
@@ -173,12 +174,11 @@ def test_build_agent_resolves_api_key_env(mock_mail, mock_agent, mock_llm, tmp_p
     finally:
         os.environ.pop("TEST_LLM_KEY", None)
 
-    mock_llm.assert_called_once_with(
-        provider="anthropic",
-        model="test-model",
-        api_key="env-key-value",
-        base_url=None,
-    )
+    mock_llm.assert_called_once()
+    llm_kwargs = mock_llm.call_args.kwargs
+    assert llm_kwargs["api_key"] == "env-key-value"
+    assert llm_kwargs["provider"] == "anthropic"
+    assert llm_kwargs["model"] == "test-model"
 
 
 @patch("lingtai.cli.LLMService")
@@ -202,12 +202,11 @@ def test_build_agent_env_file_loaded(mock_mail, mock_agent, mock_llm, tmp_path):
     finally:
         os.environ.pop("TEST_ENV_FILE_KEY", None)
 
-    mock_llm.assert_called_once_with(
-        provider="anthropic",
-        model="test-model",
-        api_key="from-file",
-        base_url=None,
-    )
+    mock_llm.assert_called_once()
+    llm_kwargs = mock_llm.call_args.kwargs
+    assert llm_kwargs["api_key"] == "from-file"
+    assert llm_kwargs["provider"] == "anthropic"
+    assert llm_kwargs["model"] == "test-model"
 
 
 # --- addons ---
@@ -217,7 +216,7 @@ def test_build_agent_env_file_loaded(mock_mail, mock_agent, mock_llm, tmp_path):
 @patch("lingtai.cli.Agent")
 @patch("lingtai.cli.FilesystemMailService")
 def test_build_agent_passes_addons(mock_mail, mock_agent, mock_llm, tmp_path):
-    """Addons from init.json are handled by _perform_refresh, not constructor."""
+    """Addons from init.json are handled by _setup_from_init, not constructor."""
     from lingtai.cli import load_init, build_agent
 
     _write_init(tmp_path)
@@ -233,17 +232,17 @@ def test_build_agent_passes_addons(mock_mail, mock_agent, mock_llm, tmp_path):
 
     build_agent(data, tmp_path)
 
-    # Addons no longer passed to constructor — handled by _perform_refresh
+    # Addons no longer passed to constructor — handled by _setup_from_init
     call_kwargs = mock_agent.call_args.kwargs
     assert "addons" not in call_kwargs
-    mock_agent.return_value._perform_refresh.assert_called_once()
+    mock_agent.return_value._setup_from_init.assert_called_once()
 
 
 @patch("lingtai.cli.LLMService")
 @patch("lingtai.cli.Agent")
 @patch("lingtai.cli.FilesystemMailService")
 def test_build_agent_resolves_addon_env(mock_mail, mock_agent, mock_llm, tmp_path):
-    """Addon *_env fields are resolved by _perform_refresh via init.json."""
+    """Addon *_env fields are resolved by _setup_from_init via init.json."""
     from lingtai.cli import load_init, build_agent
 
     _write_init(tmp_path)
@@ -266,16 +265,16 @@ def test_build_agent_resolves_addon_env(mock_mail, mock_agent, mock_llm, tmp_pat
         os.environ.pop("TEST_IMAP_PASS", None)
         os.environ.pop("TEST_TG_TOKEN", None)
 
-    # Addons no longer passed to constructor — handled by _perform_refresh
+    # Addons no longer passed to constructor — handled by _setup_from_init
     assert "addons" not in mock_agent.call_args.kwargs
-    mock_agent.return_value._perform_refresh.assert_called_once()
+    mock_agent.return_value._setup_from_init.assert_called_once()
 
 
 @patch("lingtai.cli.LLMService")
 @patch("lingtai.cli.Agent")
 @patch("lingtai.cli.FilesystemMailService")
 def test_build_agent_no_addons(mock_mail, mock_agent, mock_llm, tmp_path):
-    """No addons field — _perform_refresh handles this gracefully."""
+    """No addons field — _setup_from_init handles this gracefully."""
     from lingtai.cli import load_init, build_agent
 
     _write_init(tmp_path)
@@ -283,4 +282,4 @@ def test_build_agent_no_addons(mock_mail, mock_agent, mock_llm, tmp_path):
     build_agent(data, tmp_path)
 
     assert "addons" not in mock_agent.call_args.kwargs
-    mock_agent.return_value._perform_refresh.assert_called_once()
+    mock_agent.return_value._setup_from_init.assert_called_once()

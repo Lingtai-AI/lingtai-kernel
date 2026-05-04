@@ -1,12 +1,32 @@
 """Tests for .rules signal consumption and system/rules.md persistence."""
 import json
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from lingtai.core.avatar import AvatarManager
 
 import pytest
+
+
+def _fake_launch_return(pid: int = 12345):
+    """Build a (proc, stderr_path) tuple matching ``AvatarManager._launch``'s
+    new signature. The proc.pid attribute is the only field consumers read."""
+    proc = MagicMock()
+    proc.pid = pid
+    proc.poll.return_value = None  # still running
+    return (proc, Path("/tmp/avatar_stderr.log"))
+
+
+@contextmanager
+def _patch_avatar_launch(*, boot_status: str = "ok", boot_error=None):
+    """Context manager: patches both _launch and _wait_for_boot so spawn-path
+    tests don't actually fork a child process. Yields the launch mock so
+    assertion-based tests can inspect call counts / args."""
+    with patch.object(AvatarManager, "_launch", return_value=_fake_launch_return()) as launch_mock, \
+         patch.object(AvatarManager, "_wait_for_boot", return_value=(boot_status, boot_error)):
+        yield launch_mock
 
 
 class TestRulesHeartbeatWatch:
@@ -317,7 +337,7 @@ class TestAvatarRulesAction:
         )
 
         mgr = agent.get_capability("avatar")
-        with patch.object(AvatarManager, "_launch", return_value=12345):
+        with _patch_avatar_launch():
             result = mgr.handle({"name": "child"})
         assert result["status"] == "ok"
         assert result["agent_name"] == "child"
@@ -403,7 +423,7 @@ class TestAutoDistributeAfterSpawn:
         parent, parent_dir = self._setup_spawnable_parent(tmp_path, with_rules=True)
 
         mgr = parent.get_capability("avatar")
-        with patch.object(AvatarManager, "_launch", return_value=12345):
+        with _patch_avatar_launch():
             result = mgr.handle({"name": "child"})
         assert result["status"] == "ok"
 
@@ -417,7 +437,7 @@ class TestAutoDistributeAfterSpawn:
         parent, parent_dir = self._setup_spawnable_parent(tmp_path, with_rules=False)
 
         mgr = parent.get_capability("avatar")
-        with patch.object(AvatarManager, "_launch", return_value=12345):
+        with _patch_avatar_launch():
             result = mgr.handle({"name": "child"})
         assert result["status"] == "ok"
 
@@ -431,7 +451,7 @@ class TestAutoDistributeAfterSpawn:
         parent, parent_dir = self._setup_spawnable_parent(tmp_path, with_rules=True)
 
         mgr = parent.get_capability("avatar")
-        with patch.object(AvatarManager, "_launch", return_value=12345):
+        with _patch_avatar_launch():
             result = mgr.handle({"name": "clone", "type": "deep"})
         assert result["status"] == "ok"
 
@@ -483,7 +503,7 @@ class TestSpawnNameValidation:
         parent, parent_dir = self._spawnable_parent(tmp_path)
         mgr = parent.get_capability("avatar")
 
-        with patch.object(AvatarManager, "_launch", return_value=12345) as launch:
+        with _patch_avatar_launch() as launch:
             result = mgr.handle({"name": bad_name})
 
         assert "error" in result, f"name={bad_name!r} should have been rejected but got {result}"
@@ -508,7 +528,7 @@ class TestSpawnNameValidation:
         parent, parent_dir = self._spawnable_parent(tmp_path)
         mgr = parent.get_capability("avatar")
 
-        with patch.object(AvatarManager, "_launch", return_value=12345):
+        with _patch_avatar_launch():
             result = mgr.handle({"name": good_name})
 
         assert result.get("status") == "ok", f"name={good_name!r} should have been accepted but got {result}"
@@ -521,7 +541,7 @@ class TestSpawnNameValidation:
         parent, parent_dir = self._spawnable_parent(tmp_path)
         mgr = parent.get_capability("avatar")
 
-        with patch.object(AvatarManager, "_launch", return_value=12345):
+        with _patch_avatar_launch():
             # Pass both a safe name and a malicious legacy dir; name wins.
             result = mgr.handle({"name": "safe", "dir": "avatars/evil"})
 

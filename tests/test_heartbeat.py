@@ -23,7 +23,11 @@ class TestHeartbeatInit:
         assert agent._heartbeat_thread is None
         assert agent._aed_start is None
 
-    def test_heartbeat_in_status(self, tmp_path):
+    def test_heartbeat_attribute_present(self, tmp_path):
+        """The agent carries a ``_heartbeat`` float attribute. The
+        live-runtime ``status()`` no longer surfaces it directly — the
+        canonical liveness signal is the ``.agent.heartbeat`` file on
+        disk (consumed by ``handshake.is_alive``)."""
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=make_mock_service(),
@@ -31,9 +35,8 @@ class TestHeartbeatInit:
             working_dir=tmp_path / "test_agent",
         )
         agent._heartbeat = 1234567890.123
-        status = agent.status()
-        assert isinstance(status["heartbeat"], float)
-        assert status["heartbeat"] == 1234567890.123
+        assert isinstance(agent._heartbeat, float)
+        assert agent._heartbeat == 1234567890.123
 
 
 class TestHeartbeatBeating:
@@ -186,7 +189,9 @@ class TestHeartbeatAEDTimeout:
         )
         agent._state = AgentState.ASLEEP
         status = agent.status()
-        assert status["state"] == "asleep"
+        # State now lives under the "runtime" sub-dict (status() was reshaped
+        # to group identity / runtime / tokens cleanly for the TUI).
+        assert status["runtime"]["state"] == "asleep"
 
 
 class TestSleepFile:

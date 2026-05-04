@@ -15,11 +15,33 @@ test_karma.py.
 """
 from __future__ import annotations
 
+import json
 import threading
+from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 from lingtai.agent import Agent
 from lingtai_kernel.base_agent import BaseAgent
+
+
+def _persist_inbox_email(working_dir: Path, *, sender="sender", subject="hi",
+                          message="body", to=None) -> str:
+    """Place an email on disk so _render_unread_digest finds it."""
+    email_id = str(uuid4())
+    msg_dir = working_dir / "mailbox" / "inbox" / email_id
+    msg_dir.mkdir(parents=True, exist_ok=True)
+    data = {
+        "_mailbox_id": email_id,
+        "from": sender,
+        "to": to or ["test"],
+        "subject": subject,
+        "message": message,
+        "received_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    (msg_dir / "message.json").write_text(json.dumps(data, indent=2))
+    return email_id
 
 
 def make_mock_service():
@@ -123,8 +145,9 @@ def test_sequential_execution_stops_on_cancel(tmp_path):
 
 
 def test_normal_email_notifies_inbox(tmp_path):
-    """Normal-type mail should send a notification to agent inbox."""
+    """Normal-type mail should wake the run loop via MSG_TC_WAKE on the agent inbox."""
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    _persist_inbox_email(agent.working_dir, sender="colleague", subject="hello", message="hi there")
     agent._on_mail_received({
         "_mailbox_id": "test123",
         "from": "colleague", "to": "test", "subject": "hello",
@@ -160,6 +183,7 @@ def test_mail_type_silence_treated_as_normal(tmp_path):
     """Sending type='silence' via mail should work like normal mail — no cancel."""
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert not agent._cancel_event.is_set()
+    _persist_inbox_email(agent.working_dir, sender="boss", subject="shh", message="be quiet")
 
     agent._on_mail_received({
         "_mailbox_id": "msg001",
@@ -169,7 +193,7 @@ def test_mail_type_silence_treated_as_normal(tmp_path):
 
     # Must NOT set the cancel event — silence goes through signal files now
     assert not agent._cancel_event.is_set()
-    # Must land in inbox like any normal message
+    # Must wake the run loop via MSG_TC_WAKE
     assert not agent.inbox.empty()
 
 
@@ -177,6 +201,7 @@ def test_mail_type_kill_treated_as_normal(tmp_path):
     """Sending type='kill' via mail should work like normal mail — no shutdown."""
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert not agent._cancel_event.is_set()
+    _persist_inbox_email(agent.working_dir, sender="boss", subject="die", message="terminate")
 
     agent._on_mail_received({
         "_mailbox_id": "msg002",
@@ -186,5 +211,5 @@ def test_mail_type_kill_treated_as_normal(tmp_path):
 
     # Must NOT set cancel or shutdown — kill goes through karma system intrinsic
     assert not agent._cancel_event.is_set()
-    # Must land in inbox like any normal message
+    # Must wake the run loop via MSG_TC_WAKE
     assert not agent.inbox.empty()

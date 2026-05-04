@@ -17,7 +17,14 @@ def test_build_system_prompt_with_sections():
     assert "Remember: user likes concise" in prompt
 
 
-def test_rules_renders_after_covenant_before_tools():
+def test_rules_renders_after_covenant_and_tools():
+    """Section order is grouped by mutation frequency for cache stability:
+    Batch 1 (immovable, prefix-cacheable) — principle, covenant, tools, ...
+    Batch 2 (rarely mutated)              — rules, brief, library, codex, ...
+
+    So both ``covenant`` and ``tools`` precede ``rules`` in the rendered
+    prompt, since adjusting rules at runtime should invalidate as little
+    of the cached prefix as possible."""
     mgr = SystemPromptManager()
     mgr.write_section("covenant", "Be good.", protected=True)
     mgr.write_section("rules", "No deleting files.", protected=True)
@@ -26,7 +33,7 @@ def test_rules_renders_after_covenant_before_tools():
     cov_pos = prompt.index("Be good.")
     rules_pos = prompt.index("No deleting files.")
     tools_pos = prompt.index("Run commands.")
-    assert cov_pos < rules_pos < tools_pos
+    assert cov_pos < tools_pos < rules_pos
 
 
 def test_rules_section_absent_when_empty():

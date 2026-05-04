@@ -58,8 +58,10 @@ def test_email_intrinsic_registers_tool(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_email_receive_notification(tmp_path):
-    """Incoming mail should enqueue a system_notification tool-call pair on tc_inbox."""
+    """Incoming mail should enqueue an email(action='unread') digest pair on tc_inbox."""
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    # Mail must be on disk before the digest renderer runs.
+    _make_inbox_email(agent.working_dir, sender="sender", subject="hi", message="body")
     agent._on_mail_received({
         "_mailbox_id": "abc123",
         "from": "sender",
@@ -67,32 +69,31 @@ def test_email_receive_notification(tmp_path):
         "subject": "hi",
         "message": "body",
     })
-    # Notification body now lives in the tc_inbox tool-result, not in a text-channel
-    # MSG_REQUEST. The plain inbox still receives an MSG_TC_WAKE sentinel.
     items = agent._tc_inbox.drain()
     assert len(items) == 1
     item = items[0]
-    assert item.call.args["action"] == "notification"
-    assert item.call.args["source"] == "email"
-    assert item.call.args["ref_id"] == "abc123"
-    assert "email box" in item.result.content
-    assert 'email(action=' in item.result.content
+    assert item.call.name == "email"
+    assert item.call.args["action"] == "unread"
+    assert item.call.args["count"] == 1
+    assert "received_at" in item.call.args
+    assert "hi" in item.result.content
+    assert "sender" in item.result.content
 
 
 def test_email_receive_fallback_id(tmp_path):
-    """Notification should work even without _mailbox_id."""
+    """Digest should still emit even when arrival payload omits _mailbox_id."""
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    _make_inbox_email(agent.working_dir, sender="sender", subject="(no subj)", message="body")
     agent._on_mail_received({"from": "sender", "message": "body"})
-    # tc_inbox carries the synthetic notification pair; a fresh notif/email_id was
-    # generated since the payload omitted _mailbox_id.
     items = agent._tc_inbox.drain()
     assert len(items) == 1
-    assert items[0].call.args["source"] == "email"
+    assert items[0].source == "email.unread"
 
 
 def test_email_receive_via_agent(tmp_path):
-    """After add_capability('email'), agent._on_mail_received should route to mailbox."""
+    """After add_capability('email'), agent._on_mail_received should rerender the digest."""
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    _make_inbox_email(agent.working_dir, sender="sender", subject="hi", message="body")
     agent._on_mail_received({
         "_mailbox_id": "xyz",
         "from": "sender",
@@ -102,7 +103,8 @@ def test_email_receive_via_agent(tmp_path):
     })
     items = agent._tc_inbox.drain()
     assert len(items) == 1
-    assert items[0].call.args["ref_id"] == "xyz"
+    assert items[0].call.args["action"] == "unread"
+    assert items[0].source == "email.unread"
 
 
 # ---------------------------------------------------------------------------

@@ -12,8 +12,14 @@ from lingtai_kernel.handshake import is_agent, is_alive, manifest
 
 @pytest.fixture
 def agent_dir(tmp_path):
-    """Create a minimal agent working directory."""
-    meta = {"agent_id": "abc123", "agent_name": "test"}
+    """Create a minimal agent working directory.
+
+    The ``admin`` field MUST be non-null — ``is_alive()`` short-circuits
+    True for human pseudo-agents (admin=null), so a manifest without an
+    explicit admin block makes every is_alive call return True regardless
+    of heartbeat state.
+    """
+    meta = {"agent_id": "abc123", "agent_name": "test", "admin": {}}
     (tmp_path / ".agent.json").write_text(json.dumps(meta))
     return tmp_path
 
@@ -52,7 +58,7 @@ def test_is_alive_custom_threshold(agent_dir):
 
 def test_manifest_returns_dict(agent_dir):
     result = manifest(agent_dir)
-    assert result == {"agent_id": "abc123", "agent_name": "test"}
+    assert result == {"agent_id": "abc123", "agent_name": "test", "admin": {}}
 
 
 def test_manifest_missing_file(tmp_path):

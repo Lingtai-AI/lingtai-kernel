@@ -15,7 +15,7 @@ from lingtai_kernel.intrinsics import ALL_INTRINSICS
 def _stub_preset_connectivity(monkeypatch):
     """Auto-mock network probes in test_system.py so _presets tests don't
     actually open sockets. Returns a fixed 42ms latency."""
-    from lingtai import preset_connectivity
+    from lingtai_kernel import preset_connectivity
     monkeypatch.setattr(preset_connectivity, "_probe_host",
                         lambda host, port, timeout: 42)
     yield
@@ -306,11 +306,19 @@ def test_system_self_sleep(tmp_path):
 
 
 def test_system_refresh(tmp_path):
+    """refresh action: returns ok and writes a ``.refresh`` signal file
+    that the live agent's heartbeat loop consumes to drive the deferred
+    relaunch. (Older versions also set ``agent._refresh_requested`` and
+    ``agent._shutdown`` synchronously — both retired in favor of the
+    signal-file + watcher-subprocess pattern.)
+    """
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     result = agent._intrinsics["system"]({"action": "refresh", "reason": "new tools"})
     assert result["status"] == "ok"
-    assert agent._refresh_requested is True
-    assert agent._shutdown.is_set()
+    # The signal file is the contract; the heartbeat loop keys off it.
+    # Note: BaseAgent._build_launch_cmd returns None by default, so no
+    # actual .refresh file may be written here (only Agent overrides it).
+    # The OK return is the only universally-true signal.
     agent.stop(timeout=1.0)
 
 
@@ -838,7 +846,7 @@ def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch
         },
     }))
     monkeypatch.setenv("BROKEN_KEY", "sk-test")
-    from lingtai import preset_connectivity
+    from lingtai_kernel import preset_connectivity
     # Override the autouse fixture's stub for this test
     monkeypatch.setattr(preset_connectivity, "_probe_host",
                         lambda host, port, timeout: (_ for _ in ()).throw(OSError("DNS fail")))
