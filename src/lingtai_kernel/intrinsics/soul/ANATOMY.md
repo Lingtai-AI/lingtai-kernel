@@ -1,5 +1,7 @@
 # intrinsics/soul
 
+> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues (mail or `discussions/<name>-patch.md`); do not silently fix.
+
 Inner voice and mechanical soul-flow. Three agent-callable actions
 (`inquiry`, `config`, `voice`) plus one mechanical action (`flow`) that
 fires on a wall-clock timer.

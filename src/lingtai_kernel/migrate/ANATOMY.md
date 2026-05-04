@@ -1,5 +1,7 @@
 # migrate
 
+> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues (mail or `discussions/<name>-patch.md`); do not silently fix.
+
 Versioned, append-only, forward-only migrations for kernel-managed on-disk preset library state. Each migration is a standalone `m<NNN>_<name>.py` file that rewrites preset `.json`/`.jsonc` files in place to normalize legacy shapes. The on-disk version counter lives in `<presets_dir>/_kernel_meta.json`; a process-level cache prevents re-running within a single process.
 
 ## Components

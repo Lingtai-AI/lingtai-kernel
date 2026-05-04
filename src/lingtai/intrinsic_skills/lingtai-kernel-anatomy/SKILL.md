@@ -28,12 +28,6 @@ description: >
        the truth.
     5. If anatomy disagreed with code, update the anatomy before you leave
        the file. Reading and maintaining are the same act.
-
-  Note on history: prior versions of this skill (v2.x, v3.0.x) shipped
-  topical reference files or framed the kernel-root anatomy as a separate
-  "doorway." Both are gone. There is one canonical convention (this file)
-  and one tree of anatomies (rooted at `src/lingtai_kernel/ANATOMY.md`).
-version: 4.0.0
 ---
 
 # LingTai Kernel Anatomy — the Convention
@@ -99,6 +93,16 @@ Every agent that reads anatomy is also a maintainer. The contract:
 - **Code disagrees with anatomy:** the code is almost always right. Update the anatomy to match before you leave the file. If you believe the code itself is wrong, report the bug — and note that anatomy and code disagreed, because that disagreement is itself a clue.
 - **Anatomy missing or empty:** if you understood the folder well enough to do your task, write the anatomy. Components, connections, state. Use the writing checklist above.
 
+## Who maintains anatomy
+
+There are two kinds of agent that interact with this convention, and they have different obligations:
+
+**Coding agents** (Claude Code, Codex CLI, any agent that edits files and creates commits): you MUST update the relevant `ANATOMY.md` files in the **same commit** as the code change. If a commit moves a function, renames a file, splits a module, or changes a connection between folders, the anatomies that cite that code are part of the diff. Do not split anatomy updates into a follow-up commit — drift starts the moment the code change lands without its anatomy update. Git history is the audit trail; anatomy files do not need their own version-history sections.
+
+**LingTai agents** (the creatures running inside `.lingtai/`): you generally do NOT modify kernel source directly — you propose patches, the human applies them. Your role with anatomy is **to report drift as issues**. When you read anatomy and notice it disagrees with the code, mail the human, or write a `discussions/<name>-patch.md` proposal naming the specific citation that rotted and the correct line. Do not silently fix anatomy in your own working copy without surfacing the drift, because the value of your read-pass is the signal that the drift exists.
+
+The asymmetry exists because coding agents have commit authority and LingTai agents have observation authority. Both are needed; neither replaces the other.
+
 ## Citation rot during refactors
 
 The most common drift mode is **citation rot after a refactor**. When code moves between files, anatomies that cite the old file rot silently — the prose still reads correctly, but the citations point at a line that no longer exists or contains different code.
@@ -130,11 +134,3 @@ If a single file is large enough to need its own anatomy, that is a refactor sig
 - **`lingtai-kernel-anatomy` (this skill)** — the convention behind the kernel anatomy tree. If your question is "what is X actually doing inside me, where does it live in my code," read this once to know the convention, then descend the kernel anatomy tree.
 
 The three skills are layered. Manuals tell you how to act. Umbrella anatomy tells you about the world you live in. Kernel anatomy tells you about yourself.
-
-## Version history
-
-- **v4.0.0** (2026-05): Single canonical entrance. The kernel-root `ANATOMY.md` was reduced to just-an-anatomy of `src/lingtai_kernel/`; the convention text moved entirely into this skill. Added an explicit writing checklist and a citation-rot-during-refactor section after the soul package refactor exposed both as latent gaps.
-- **v3.0.0** (2026-05): Reworked from topical references to per-folder `ANATOMY.md` convention. The 10 reference files (file-formats, filesystem-layout, mail-protocol, mcp-protocol, memory-system, molt-protocol, network-topology, runtime-loop, glossary, changelog) were removed; their content moved next to the code in per-folder anatomy files. Two-entrance framing introduced (deprecated in v4).
-- **v2.1.0** (2026-04-29): Added `mcp-protocol.md`, absorbed standalone `lingtai-changelog`. (Removed in v3.)
-- **v2.0.0** (2026-04): Modular rewrite — 8 references replaced the monolithic SKILL.md. (Removed in v3.)
-- **v1.2.0**: Original monolithic SKILL.md (474 lines). (Removed in v2.)

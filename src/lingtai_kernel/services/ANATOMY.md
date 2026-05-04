@@ -1,5 +1,7 @@
 # services
 
+> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues (mail or `discussions/<name>-patch.md`); do not silently fix.
+
 Kernel-side service ABCs and implementations. Services back cross-cutting kernel concerns without making intrinsics depend directly on one transport: filesystem mail for peer messages and JSONL logging for structured events.
 
 ## Components

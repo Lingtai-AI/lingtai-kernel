@@ -1,5 +1,7 @@
 # llm
 
+> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues (mail or `discussions/<name>-patch.md`); do not silently fix.
+
 Provider-agnostic LLM protocol layer. This folder defines the canonical chat log, normalized response/tool schema types, streaming accumulation, and ABCs the kernel uses; concrete provider adapters live in the wrapper package under `src/lingtai/llm/`.
 
 ## Components

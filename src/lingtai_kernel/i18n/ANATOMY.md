@@ -1,5 +1,7 @@
 # i18n
 
+> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues (mail or `discussions/<name>-patch.md`); do not silently fix.
+
 The kernel's message catalog — a flat key-value string table covering tool descriptions, system notifications, soul prompts, and molt instructions in three locales (en / zh / wen). The sole entry point is `t(lang, key, **kwargs)` which resolves a dotted key against the agent's configured language, falling back to English and then to the raw key itself.
 
 ## Components

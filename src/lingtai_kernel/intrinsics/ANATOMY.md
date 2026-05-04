@@ -1,5 +1,7 @@
 # intrinsics
 
+> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues (mail or `discussions/<name>-patch.md`); do not silently fix.
+
 Kernel-built-in tools. Every intrinsic is a flat Python module with the same public shape: `get_schema(lang)`, `get_description(lang)`, and `handle(agent, args)` (`intrinsics/__init__.py:1-7`). `ALL_INTRINSICS` registers the four always-present modules: `email`, `system`, `psyche`, and `soul` (`intrinsics/__init__.py:8-15`).
 
 ## Components
