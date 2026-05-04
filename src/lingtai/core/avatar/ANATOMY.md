@@ -14,7 +14,7 @@ independent life — its existence does not depend on yours.
 
 ## Components
 
-- `avatar/__init__.py` — the entire capability in a single file. `get_description` (`avatar/__init__.py:49-50`), `get_schema` (`avatar/__init__.py:53-81`), `setup` (`avatar/__init__.py:666-672`). The core class is `AvatarManager` (`avatar/__init__.py:85-664`).
+- `avatar/__init__.py` — the entire capability in a single file. `get_description` (`avatar/__init__.py:49-50`), `get_schema` (`avatar/__init__.py:53-81`), `setup` (`avatar/__init__.py:666-672`). The core class is `AvatarManager` (`avatar/__init__.py:85-665`).
 
 ## Public API
 
