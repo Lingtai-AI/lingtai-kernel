@@ -14,10 +14,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lingtai_kernel.intrinsics.soul import (
-    _clone_current_chat_for_insights,
     _fit_interface_to_window,
     _list_snapshot_paths,
     _load_snapshot_interface,
+    _run_consultation,
     _run_consultation_batch,
     build_consultation_pair,
 )
@@ -41,6 +41,7 @@ class _FakeConfig:
     context_limit = 200_000  # consulted by _run_consultation when no live chat is attached
     retry_timeout = 1.0
     model = None
+    provider = None
 
 
 class _FakeAgent:
@@ -64,7 +65,12 @@ class _FakeAgent:
             ])
             mock_chat = MagicMock()
             mock_chat.interface = iface
+            mock_chat.context_window.return_value = 200_000
             self._chat = mock_chat
+        self._session = MagicMock()
+        self._session._build_tool_schemas_fn.return_value = [
+            {"name": "bash", "description": "run shell", "parameters": {"type": "object"}}
+        ]
         self.logged: list[tuple[str, dict]] = []
 
     def _log(self, event: str, **kw) -> None:
@@ -272,15 +278,14 @@ class TestListSnapshotPaths:
 
 
 # ---------------------------------------------------------------------------
-# _clone_current_chat_for_insights
+# _run_consultation_batch verbatim current-chat clone
 # ---------------------------------------------------------------------------
 
 
-class TestCloneCurrentChatForInsights:
+class TestVerbatimCurrentChatForInsights:
 
-    def test_strips_system_and_tool_blocks(self, tmp_path):
+    def test_current_chat_clone_preserves_tool_blocks(self, tmp_path):
         agent = _FakeAgent(tmp_path)
-        # Augment current chat with a tool pair that should be filtered out.
         iface = agent._chat.interface
         iface.add_assistant_message([
             ToolCallBlock(id="tc1", name="bash", args={"cmd": "ls"}),
@@ -288,31 +293,26 @@ class TestCloneCurrentChatForInsights:
         iface.add_tool_results([
             ToolResultBlock(id="tc1", name="bash", content="files"),
         ])
-        cloned = _clone_current_chat_for_insights(agent)
-        for entry in cloned.entries:
-            assert entry.role != "system"
-            for block in entry.content:
-                assert isinstance(block, (TextBlock, ThinkingBlock))
+
+        captured = {}
+        with patch("lingtai_kernel.intrinsics.soul._run_consultation") as mock_run:
+            def fake_run(_agent, passed_iface, source):
+                captured["iface"] = passed_iface
+                return {"source": source, "blocks": [TextBlock(text="ok")]}
+            mock_run.side_effect = fake_run
+            voices = _run_consultation_batch(agent)
+
+        assert len(voices) == 1
+        cloned = captured["iface"]
+        assert cloned is not iface
+        all_blocks = [b for e in cloned.entries for b in e.content]
+        assert any(isinstance(b, ToolCallBlock) for b in all_blocks)
+        assert any(isinstance(b, ToolResultBlock) for b in all_blocks)
 
     def test_no_chat_returns_empty(self, tmp_path):
         agent = _FakeAgent(tmp_path, with_chat=False)
-        cloned = _clone_current_chat_for_insights(agent)
-        assert len(cloned.entries) == 0
-
-    def test_keeps_thinking_and_text_blocks(self, tmp_path):
-        agent = _FakeAgent(tmp_path)
-        cloned = _clone_current_chat_for_insights(agent)
-        # The fixture seeded an assistant turn with thinking + text.
-        assert any(
-            isinstance(b, ThinkingBlock)
-            for e in cloned.entries
-            for b in e.content
-        )
-        assert any(
-            isinstance(b, TextBlock)
-            for e in cloned.entries
-            for b in e.content
-        )
+        voices = _run_consultation_batch(agent)
+        assert voices == []
 
 
 # ---------------------------------------------------------------------------
@@ -329,8 +329,7 @@ class TestRunConsultationBatch:
         ) as mock_run:
             mock_run.return_value = {
                 "source": "insights",
-                "voice": "the insight voice",
-                "thinking": [],
+                "blocks": [TextBlock(text="the insight voice")],
             }
             voices = _run_consultation_batch(agent)
         assert len(voices) == 1
@@ -349,7 +348,7 @@ class TestRunConsultationBatch:
             "lingtai_kernel.intrinsics.soul._run_consultation"
         ) as mock_run:
             def fake_run(_agent, _iface, source):
-                return {"source": source, "voice": f"v from {source}", "thinking": []}
+                return {"source": source, "blocks": [TextBlock(text=f"v from {source}")]}
             mock_run.side_effect = fake_run
             voices = _run_consultation_batch(agent)
 
@@ -370,7 +369,7 @@ class TestRunConsultationBatch:
         with patch(
             "lingtai_kernel.intrinsics.soul._run_consultation"
         ) as mock_run:
-            mock_run.return_value = {"source": "insights", "voice": "v", "thinking": []}
+            mock_run.return_value = {"source": "insights", "blocks": [TextBlock(text="v")]}
             voices = _run_consultation_batch(agent)
 
         assert mock_run.call_count == 1
@@ -388,7 +387,7 @@ class TestRunConsultationBatch:
             # First call (insights) succeeds, the snapshot calls fail.
             def maybe_fail(_agent, _iface, source):
                 if source == "insights":
-                    return {"source": "insights", "voice": "ok", "thinking": []}
+                    return {"source": "insights", "blocks": [TextBlock(text="ok")]}
                 return None
             mock_run.side_effect = maybe_fail
             voices = _run_consultation_batch(agent)
@@ -406,7 +405,7 @@ class TestRunConsultationBatch:
         ) as mock_run:
             def maybe_raise(_agent, _iface, source):
                 if source == "insights":
-                    return {"source": "insights", "voice": "ok", "thinking": []}
+                    return {"source": "insights", "blocks": [TextBlock(text="ok")]}
                 raise RuntimeError("boom")
             mock_run.side_effect = maybe_raise
             voices = _run_consultation_batch(agent)
@@ -420,6 +419,92 @@ class TestRunConsultationBatch:
         agent = _FakeAgent(tmp_path, with_chat=False)
         voices = _run_consultation_batch(agent)
         assert voices == []
+
+
+class TestRunConsultationRedirectLoop:
+
+    def _seed_diary(self, tmp_path: Path, text: str = "DIARY MARKER") -> None:
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "events.jsonl", "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "diary", "text": text, "ts": 1_700_000_000}) + "\n")
+
+    def test_consultation_redirects_tool_calls(self, tmp_path):
+        from lingtai_kernel.llm.base import LLMResponse, ToolCall
+
+        agent = _FakeAgent(tmp_path)
+        self._seed_diary(tmp_path)
+        sent = []
+
+        class _MockSession:
+            def __init__(self, interface):
+                self.interface = interface
+                self.n = 0
+
+            def send(self, content):
+                sent.append(content)
+                self.n += 1
+                if isinstance(content, str):
+                    self.interface.add_user_message(content)
+                else:
+                    self.interface.add_tool_results(content)
+                if self.n == 1:
+                    block = ToolCallBlock(id="tc_redirect", name="bash", args={"cmd": "ls"})
+                    self.interface.add_assistant_message([block])
+                    return LLMResponse(tool_calls=[ToolCall(name="bash", args={"cmd": "ls"}, id="tc_redirect")])
+                self.interface.add_assistant_message([TextBlock(text="now I speak")])
+                return LLMResponse(text="now I speak")
+
+        agent.service.create_session.side_effect = lambda *, interface, **kw: _MockSession(interface)
+        iface = ChatInterface(); iface.add_user_message("substrate")
+        result = _run_consultation(agent, iface, "insights")
+
+        assert result is not None
+        blocks = result["blocks"]
+        assert isinstance(blocks[0], ToolCallBlock)
+        assert isinstance(blocks[1], ToolResultBlock)
+        assert blocks[1].content.startswith("Consultation mode")
+        assert isinstance(blocks[2], TextBlock)
+        assert isinstance(sent[1], list)
+        assert isinstance(sent[1][0], ToolResultBlock)
+
+    def test_consultation_max_rounds_exhausted(self, tmp_path):
+        from lingtai_kernel.llm.base import LLMResponse, ToolCall
+        from lingtai_kernel.intrinsics.soul import _CONSULTATION_MAX_ROUNDS
+
+        agent = _FakeAgent(tmp_path)
+        self._seed_diary(tmp_path)
+
+        class _MockSession:
+            def __init__(self, interface):
+                self.interface = interface
+                self.n = 0
+
+            def send(self, content):
+                self.n += 1
+                if isinstance(content, str):
+                    self.interface.add_user_message(content)
+                else:
+                    self.interface.add_tool_results(content)
+                tc_id = f"tc_{self.n}"
+                self.interface.add_assistant_message([
+                    ToolCallBlock(id=tc_id, name="bash", args={"round": self.n})
+                ])
+                return LLMResponse(tool_calls=[ToolCall(name="bash", args={"round": self.n}, id=tc_id)])
+
+        agent.service.create_session.side_effect = lambda *, interface, **kw: _MockSession(interface)
+        iface = ChatInterface(); iface.add_user_message("substrate")
+        result = _run_consultation(agent, iface, "insights")
+
+        assert result is not None
+        assert len([b for b in result["blocks"] if isinstance(b, ToolCallBlock)]) == _CONSULTATION_MAX_ROUNDS
+        assert len([b for b in result["blocks"] if isinstance(b, ToolResultBlock)]) == _CONSULTATION_MAX_ROUNDS
+
+    def test_consultation_no_diary_cue(self, tmp_path):
+        agent = _FakeAgent(tmp_path)
+        iface = ChatInterface(); iface.add_user_message("substrate")
+        assert _run_consultation(agent, iface, "insights") is None
+        assert agent.service.create_session.called
 
 
 # ---------------------------------------------------------------------------
@@ -521,7 +606,7 @@ class TestRunConsultationFire:
         agent = self._make_real_agent(tmp_path)
         with patch(
             "lingtai_kernel.intrinsics.soul._run_consultation_batch",
-            return_value=[{"source": "insights", "voice": "hello"}],
+            return_value=[{"source": "insights", "blocks": [TextBlock(text="hello")]}],
         ):
             agent._run_consultation_fire()
         assert len(agent._tc_inbox) == 1
@@ -550,7 +635,7 @@ class TestRunConsultationFire:
 
 
 # ---------------------------------------------------------------------------
-# soul_flow.jsonl schema (schema_version=2) — fire + voice records
+# soul_flow.jsonl schema (schema_version=3) — fire + voice records
 # ---------------------------------------------------------------------------
 
 
@@ -583,18 +668,21 @@ class TestSoulFlowPersistenceSchema:
         log_dir = agent._working_dir / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         with open(log_dir / "events.jsonl", "w", encoding="utf-8") as f:
-            for t in texts:
-                f.write(json.dumps({"type": "diary", "text": t}) + "\n")
+            for i, t in enumerate(texts):
+                f.write(json.dumps({"type": "diary", "text": t, "ts": 1_700_000_000 + i}) + "\n")
 
     def test_writes_fire_and_voice_records_with_linked_fire_id(self, tmp_path):
         agent = self._make_real_agent(tmp_path)
         self._seed_diary(agent, "did X", "noticed Y")
 
         voices = [
-            {"source": "insights", "voice": "step back: Z",
-             "thinking": [{"text": "considering"}]},
-            {"source": "snapshot:snapshot_3_1735", "voice": "I tried that once",
-             "thinking": []},
+            {"source": "insights", "blocks": [
+                ThinkingBlock(text="considering"),
+                TextBlock(text="step back: Z"),
+            ]},
+            {"source": "snapshot:snapshot_3_1735", "blocks": [
+                TextBlock(text="I tried that once"),
+            ]},
         ]
         with patch(
             "lingtai_kernel.intrinsics.soul._run_consultation_batch",
@@ -611,7 +699,7 @@ class TestSoulFlowPersistenceSchema:
         assert len(voice_recs) == 2
 
         fire = fires[0]
-        assert fire["schema_version"] == 2
+        assert fire["schema_version"] == 3
         assert fire["fire_id"].startswith("fire_")
         assert fire["tc_id"] == fire["fire_id"]
         assert fire["outcome"] == "ok"
@@ -622,17 +710,21 @@ class TestSoulFlowPersistenceSchema:
         # All voice records link back to the same fire_id.
         for v in voice_recs:
             assert v["fire_id"] == fire["fire_id"]
-            assert v["schema_version"] == 2
+            assert v["schema_version"] == 3
             assert "ts" in v and v["ts"].endswith("Z")
-            assert v["consultation_kind"] in ("insights", "past")
+            assert "blocks" in v
+            assert "consultation_kind" not in v
+            assert "voice" not in v
+            assert "thinking" not in v
 
-        # consultation_kind matches source type.
         by_src = {v["source"]: v for v in voice_recs}
-        assert by_src["insights"]["consultation_kind"] == "insights"
-        assert by_src["insights"]["voice"] == "step back: Z"
-        assert by_src["insights"]["thinking"] == [{"text": "considering"}]
-        assert by_src["snapshot:snapshot_3_1735"]["consultation_kind"] == "past"
-        assert by_src["snapshot:snapshot_3_1735"]["thinking"] == []
+        assert by_src["insights"]["blocks"] == [
+            {"type": "thinking", "text": "considering"},
+            {"type": "text", "text": "step back: Z"},
+        ]
+        assert by_src["snapshot:snapshot_3_1735"]["blocks"] == [
+            {"type": "text", "text": "I tried that once"},
+        ]
 
     def test_empty_fire_still_writes_fire_record_with_empty_outcome(self, tmp_path):
         agent = self._make_real_agent(tmp_path)
@@ -663,7 +755,7 @@ class TestSoulFlowPersistenceSchema:
 
         with patch(
             "lingtai_kernel.intrinsics.soul._run_consultation_batch",
-            return_value=[{"source": "insights", "voice": "v", "thinking": []}],
+            return_value=[{"source": "insights", "blocks": [TextBlock(text="v")]}],
         ):
             agent._run_consultation_fire()
 
@@ -701,7 +793,7 @@ class TestSoulFlowPersistenceSchema:
 
         with patch(
             "lingtai_kernel.intrinsics.soul._run_consultation_batch",
-            return_value=[{"source": "insights", "voice": "v", "thinking": []}],
+            return_value=[{"source": "insights", "blocks": [TextBlock(text="v")]}],
         ):
             agent._run_consultation_fire()
 
@@ -718,7 +810,7 @@ class TestSoulFlowPersistenceSchema:
 
         with patch(
             "lingtai_kernel.intrinsics.soul._run_consultation_batch",
-            return_value=[{"source": "insights", "voice": "v1", "thinking": []}],
+            return_value=[{"source": "insights", "blocks": [TextBlock(text="v1")]}],
         ):
             agent._run_consultation_fire()
             # Drain so the second fire doesn't coalesce in tc_inbox terms
@@ -726,7 +818,7 @@ class TestSoulFlowPersistenceSchema:
             agent._tc_inbox.drain()
         with patch(
             "lingtai_kernel.intrinsics.soul._run_consultation_batch",
-            return_value=[{"source": "snapshot:s1", "voice": "v2", "thinking": []}],
+            return_value=[{"source": "snapshot:s1", "blocks": [TextBlock(text="v2")]}],
         ):
             agent._run_consultation_fire()
 
@@ -935,10 +1027,10 @@ class TestRenderCurrentDiary:
         from lingtai_kernel.intrinsics.soul import _render_current_diary
         agent = _FakeAgent(tmp_path, with_chat=False)
         self._write_events(tmp_path, [
-            {"type": "diary", "text": "first turn thoughts"},
+            {"type": "diary", "text": "first turn thoughts", "ts": 1_700_000_000},
             {"type": "boot", "ts": 1},
-            {"type": "diary", "text": "second turn thoughts"},
-            {"type": "diary", "text": "third turn thoughts"},
+            {"type": "diary", "text": "second turn thoughts", "ts": 1_700_000_001},
+            {"type": "diary", "text": "third turn thoughts", "ts": 1_700_000_002},
         ])
         out = _render_current_diary(agent)
         assert "first turn thoughts" in out
@@ -952,43 +1044,83 @@ class TestRenderCurrentDiary:
         from lingtai_kernel.intrinsics.soul import _render_current_diary
         agent = _FakeAgent(tmp_path, with_chat=False)
         self._write_events(tmp_path, [
-            {"type": "diary", "text": "valid"},
-            {"type": "diary", "text": "   "},   # whitespace only — skip
-            {"type": "diary", "text": None},     # not a string — skip
+            {"type": "diary", "text": "valid", "ts": 1_700_000_000},
+            {"type": "diary", "text": "   ", "ts": 1_700_000_001},   # whitespace only — skip
+            {"type": "diary", "text": None, "ts": 1_700_000_002},     # not a string — skip
             {"type": "diary"},                    # missing text — skip
-            {"type": "diary", "text": "second valid"},
+            {"type": "diary", "text": "second valid", "ts": 1_700_000_003},
         ])
         out = _render_current_diary(agent)
         assert "valid" in out
         assert "second valid" in out
         # Whitespace-only entry should not contribute its blanks
-        assert out.count("\n\n") == 1   # only one separator between two entries
+        assert out.count("\n\n") == 2   # header separator + one separator between two entries
 
     def test_tolerates_malformed_lines(self, tmp_path):
         from lingtai_kernel.intrinsics.soul import _render_current_diary
         log_dir = tmp_path / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         with open(log_dir / "events.jsonl", "w", encoding="utf-8") as f:
-            f.write('{"type": "diary", "text": "good"}\n')
+            f.write('{"type": "diary", "text": "good", "ts": 1700000000}\n')
             f.write("not json at all\n")
             f.write("\n")
-            f.write('{"type": "diary", "text": "still good"}\n')
+            f.write('{"type": "diary", "text": "still good", "ts": 1700000001}\n')
         agent = _FakeAgent(tmp_path, with_chat=False)
         out = _render_current_diary(agent)
         assert "good" in out
         assert "still good" in out
 
+    def test_render_diary_format_has_now_and_entry_timestamps(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        self._write_events(tmp_path, [
+            {"type": "diary", "text": "first", "ts": 1_700_000_000},
+            {"type": "diary", "text": "second", "ts": 1_700_000_060},
+        ])
+        out = _render_current_diary(agent)
+        assert out.startswith("[now: ")
+        assert "\n\n[" in out
+        assert "first" in out and "second" in out
+        assert out.index("first") < out.index("second")
+
+    def test_render_diary_tail_cap(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _render_current_diary, _DIARY_CUE_TOKEN_CAP
+        from lingtai_kernel.token_counter import count_tokens
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        records = []
+        for i in range(240):
+            records.append({
+                "type": "diary",
+                "text": f"entry-{i} " + ("x " * 240),
+                "ts": 1_700_000_000 + i,
+            })
+        self._write_events(tmp_path, records)
+        out = _render_current_diary(agent)
+        assert count_tokens(out) <= _DIARY_CUE_TOKEN_CAP
+        assert "entry-239" in out
+        assert "entry-0" not in out
+
+    def test_render_diary_single_oversized_entry(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
+        agent = _FakeAgent(tmp_path, with_chat=False)
+        self._write_events(tmp_path, [
+            {"type": "diary", "text": "HUGE " + ("x " * 50_000), "ts": 1_700_000_000},
+        ])
+        out = _render_current_diary(agent)
+        assert "HUGE" in out
+        assert out.startswith("[now: ")
+
 
 # ---------------------------------------------------------------------------
-# _load_snapshot_interface tool stripping — past selves see no tools
+# _load_snapshot_interface verbatim substrate
 # ---------------------------------------------------------------------------
 
 
-class TestSnapshotToolStripping:
+class TestSnapshotVerbatimLoading:
 
-    def test_strips_tool_call_and_tool_result_blocks(self, tmp_path):
+    def test_preserves_tool_call_and_tool_result_blocks(self, tmp_path):
         # Build a snapshot with mixed content: text, thinking, tool_call,
-        # tool_result. After load, only text+thinking should survive.
+        # tool_result. After load, every block survives verbatim.
         iface = ChatInterface()
         iface.add_system("frozen sys")
         iface.add_user_message("a question from user")
@@ -1006,20 +1138,13 @@ class TestSnapshotToolStripping:
         loaded = _load_snapshot_interface(path)
         assert loaded is not None
 
-        # Walk every block; should be none of ToolCallBlock or ToolResultBlock.
-        all_blocks = []
-        for entry in loaded.entries:
-            all_blocks.extend(entry.content)
-        for block in all_blocks:
-            assert not isinstance(block, ToolCallBlock), \
-                f"ToolCallBlock leaked through strip: {block}"
-            assert not isinstance(block, ToolResultBlock), \
-                f"ToolResultBlock leaked through strip: {block}"
+        all_blocks = [b for entry in loaded.entries for b in entry.content]
+        assert any(isinstance(block, ToolCallBlock) for block in all_blocks)
+        assert any(isinstance(block, ToolResultBlock) for block in all_blocks)
 
-    def test_drops_entries_that_empty_after_strip(self, tmp_path):
-        # User entry that is purely a tool_result has nothing left after
-        # stripping — it must be dropped, not kept as an empty user entry
-        # (which would be a malformed wire shape).
+    def test_preserves_tool_result_only_entries(self, tmp_path):
+        # A user entry that is purely a tool_result is legitimate context for
+        # the past-self substrate and must be preserved.
         iface = ChatInterface()
         iface.add_system("frozen sys")
         iface.add_user_message("question")
@@ -1027,7 +1152,6 @@ class TestSnapshotToolStripping:
             TextBlock(text="calling"),
             ToolCallBlock(id="tc_1", name="psyche", args={}),
         ])
-        # User entry that's only a tool_result — strip it down to nothing
         iface.add_tool_results([
             ToolResultBlock(id="tc_1", name="psyche", content="data"),
         ])
@@ -1036,9 +1160,10 @@ class TestSnapshotToolStripping:
         loaded = _load_snapshot_interface(path)
         assert loaded is not None
 
-        # No empty entries should remain.
-        for entry in loaded.entries:
-            assert len(entry.content) > 0, f"empty entry survived: {entry}"
+        assert any(
+            e.role == "user" and all(isinstance(b, ToolResultBlock) for b in e.content)
+            for e in loaded.entries
+        )
 
     def test_preserves_system_entry(self, tmp_path):
         iface = ChatInterface()
@@ -1068,13 +1193,10 @@ class TestSnapshotToolStripping:
         all_blocks = [b for e in loaded.entries for b in e.content]
         assert any(isinstance(b, ThinkingBlock) for b in all_blocks)
 
-    def test_strips_tool_schema_list_from_system_entry(self, tmp_path):
+    def test_preserves_tool_schema_list_from_system_entry(self, tmp_path):
         # Past self had a real tool schema list bound to its system entry.
-        # After thaw, the system entry's text must survive verbatim, but
-        # both the entry-level _tools and the rebuilt interface's
-        # _current_tools must be None — otherwise an adapter could pick
-        # them up and re-emit the past life's tools on the consultation
-        # wire payload.
+        # After thaw, the complete substrate, including schema metadata,
+        # survives verbatim so historic calls/results remain legible.
         frozen_tools = [
             {
                 "name": "psyche",
@@ -1108,12 +1230,8 @@ class TestSnapshotToolStripping:
         sys_loaded = next(e for e in loaded.entries if e.role == "system")
         assert sys_loaded.content[0].text == "FROZEN PROMPT WITH TOOL PROSE"
 
-        # But both the entry-level schema list and the interface-level
-        # current_tools must be wiped.
-        assert sys_loaded._tools is None, \
-            "frozen tool schema list leaked through snapshot thaw"
-        assert loaded.current_tools is None, \
-            "ChatInterface._current_tools leaked through snapshot thaw"
+        assert sys_loaded._tools == frozen_tools
+        assert loaded.current_tools == frozen_tools
 
 
 # ---------------------------------------------------------------------------
@@ -1178,9 +1296,8 @@ class TestBuildConsultationCue:
 
 
 class TestRunConsultationDispatchesByKind:
-    """Confirms _run_consultation picks the right system prompt and cue
-    based on the source label. Mocks the LLM session so we can read what
-    was sent."""
+    """Confirms _run_consultation uses one consultation prompt and sends the
+    diary cue verbatim regardless of source label."""
 
     def _run(self, tmp_path, source: str):
         from lingtai_kernel.intrinsics.soul import _run_consultation
@@ -1190,28 +1307,26 @@ class TestRunConsultationDispatchesByKind:
         log_dir = tmp_path / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         with open(log_dir / "events.jsonl", "w") as f:
-            f.write(json.dumps({"type": "diary", "text": "DIARY MARKER"}) + "\n")
+            f.write(json.dumps({"type": "diary", "text": "DIARY MARKER", "ts": 1700000000}) + "\n")
 
         captured = {}
 
-        class _MockResponse:
-            text = "voice text"
-            thoughts = []
-            class _Usage:
-                input_tokens = 0
-                output_tokens = 0
-                thinking_tokens = 0
-                cached_tokens = 0
-            usage = _Usage()
+        from lingtai_kernel.llm.base import LLMResponse
 
         class _MockSession:
+            def __init__(self, interface):
+                self.interface = interface
+
             def send(self, content):
                 captured["sent_content"] = content
-                return _MockResponse()
+                self.interface.add_user_message(content)
+                self.interface.add_assistant_message([TextBlock(text="voice text")])
+                return LLMResponse(text="voice text")
 
-        def _create_session(*, system_prompt, **kw):
+        def _create_session(*, system_prompt, interface, **kw):
             captured["system_prompt"] = system_prompt
-            return _MockSession()
+            captured["tools"] = kw.get("tools")
+            return _MockSession(interface)
 
         agent.service.create_session.side_effect = _create_session
 
@@ -1227,19 +1342,17 @@ class TestRunConsultationDispatchesByKind:
         captured, result = self._run(tmp_path, "snapshot:snapshot_3_1735")
         assert result is not None
         assert "DIARY MARKER" in captured["sent_content"]
-        # System prompt is now voice-driven (default "inner") and identical
-        # for both kinds — the per-fire cue carries the differentiation.
-        assert "soul" in captured["system_prompt"].lower() or "voice" in captured["system_prompt"].lower()
-        # cue should call out future self
-        assert "future self" in captured["sent_content"].lower()
+        assert "chat below is your context" in captured["system_prompt"].lower()
+        assert captured["tools"] == [{"name": "bash", "description": "run shell", "parameters": {"type": "object"}}]
+        # cue is the raw diary, not a future-self wrapper
+        assert "future self" not in captured["sent_content"].lower()
 
     def test_insights_dispatch_uses_insights_cue(self, tmp_path):
         captured, result = self._run(tmp_path, "insights")
         assert result is not None
         assert "DIARY MARKER" in captured["sent_content"]
-        # Same unified system prompt as past — just check it's non-empty.
-        assert captured["system_prompt"]
-        # insights cue should not frame as future-self letter
+        assert "chat below is your context" in captured["system_prompt"].lower()
+        assert captured["tools"] == [{"name": "bash", "description": "run shell", "parameters": {"type": "object"}}]
         assert "future self" not in captured["sent_content"].lower()
 
 

@@ -38,6 +38,24 @@ SOUL_VOICE_BUILTINS = ("inner", "observer")
 # system-prompt-stuffing as a side channel.
 SOUL_VOICE_PROMPT_MAX = 4000
 
+_CONSULTATION_SYSTEM_PROMPT = (
+    "The chat below is your context — your thoughts, your work, your tools, your memory. "
+    "A new diary cue from the present moment will arrive as the next message. "
+    "React to it. What does it remind you of? What surfaces? What would you reach for? "
+    "Tool schemas are preserved so you can read your own past calls in context, "
+    "but any new tool call you attempt will be intercepted and refused. "
+    "Respond in plain text — observations, instincts, things worth remembering. "
+    "Speak briefly."
+)
+
+_CONSULTATION_TOOL_REFUSAL = (
+    "Consultation mode: tool calls are intercepted, not executed. "
+    "Respond in plain text — observations, instincts, things worth remembering."
+)
+
+_CONSULTATION_MAX_ROUNDS = 3
+_DIARY_CUE_TOKEN_CAP = 10_000
+
 
 def get_description(lang: str = "en") -> str:
     from ..i18n import t
@@ -442,7 +460,7 @@ def _atomic_write_init(init_path, data) -> str | None:
         return f"failed to write init.json: {e!s}"[:200]
 
 
-def _send_with_timeout(agent, session, content: str):
+def _send_with_timeout(agent, session, content: "str | list"):
     """Send with timeout using a daemon thread. Returns response or None.
 
     Uses a daemon thread so it dies with the process — no orphaned threads.
@@ -507,24 +525,25 @@ def _build_soul_system_prompt(agent, kind: str = "inquiry") -> str:
 
 
 def _render_current_diary(agent) -> str:
-    """Concatenate the agent's diary entries from logs/events.jsonl.
+    """Build the diary cue: time-anchored recent thoughts, tail-capped.
 
-    Diary is the agent's free-text output across turns — logged via
-    ``self._log("diary", text=response.text)`` in the runtime loop. Each
-    entry is one turn. Entries are bounded by molt cadence (a molt resets
-    the chat and starts a new diary stream), so the cumulative length is
-    self-limited; we don't cap it explicitly here. The window-fit step
-    further down applies a token budget at the seeded-interface level,
-    not the cue.
+    The cue is the *spark* that triggers the past-self consultation — small
+    relative to the chat substrate. Each entry carries an absolute
+    [HH:MM:SS] timestamp; a [now: HH:MM:SS] header at the top lets the
+    reader compute recency. Total cue is tail-trimmed to fit under
+    ``_DIARY_CUE_TOKEN_CAP`` tokens.
 
-    Returns a single string with paragraph-break separators, or empty
-    string if the log is missing/unreadable/empty.
+    Returns empty string if the log is missing/unreadable/empty.
     """
     import json
+    from datetime import datetime
+    from ..token_counter import count_tokens
+
     log_path = agent._working_dir / "logs" / "events.jsonl"
     if not log_path.is_file():
         return ""
-    parts: list[str] = []
+
+    formatted: list[str] = []
     try:
         with open(log_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -538,11 +557,33 @@ def _render_current_diary(agent) -> str:
                 if rec.get("type") != "diary":
                     continue
                 text = rec.get("text")
-                if isinstance(text, str) and text.strip():
-                    parts.append(text.strip())
+                ts = rec.get("ts")
+                if not isinstance(text, str) or not text.strip():
+                    continue
+                if not isinstance(ts, (int, float)):
+                    continue
+                ts_str = datetime.fromtimestamp(float(ts)).strftime("%H:%M:%S")
+                formatted.append(f"[{ts_str}]\n{text.strip()}")
     except Exception:
         return ""
-    return "\n\n".join(parts)
+
+    if not formatted:
+        return ""
+
+    now_str = datetime.now().strftime("%H:%M:%S")
+    header = f"[now: {now_str}]"
+
+    kept: list[str] = []
+    running = count_tokens(header) + 2
+    for entry in reversed(formatted):
+        cost = count_tokens(entry) + 2
+        if kept and running + cost > _DIARY_CUE_TOKEN_CAP:
+            break
+        kept.append(entry)
+        running += cost
+    kept.reverse()
+
+    return header + "\n\n" + "\n\n".join(kept)
 
 
 def _write_soul_tokens(agent, response) -> None:
@@ -641,40 +682,17 @@ def soul_inquiry(agent, question: str) -> dict | None:
 
 def _load_snapshot_interface(path):
     """Load a snapshot file written by psyche._write_molt_snapshot and
-    return a tools-stripped ``ChatInterface``, or None on any failure.
+    return its verbatim ``ChatInterface``, or None on any failure.
 
-    Schema check: payload must carry an integer ``schema_version`` and
-    a list ``interface`` of entry dicts compatible with
-    ``ChatInterface.from_dict``. Any failure (missing file, bad JSON,
-    schema mismatch, malformed entries) returns None — the caller skips
-    that snapshot and proceeds with whatever else loaded.
-
-    Tool stripping happens at two layers:
-
-    1) Block layer — every ``ToolCallBlock`` and ``ToolResultBlock`` is
-       filtered out of non-system entries. Only ``TextBlock`` and
-       ``ThinkingBlock`` survive; entries that become empty after
-       stripping are dropped. The consultation session is created with
-       ``tools=None``, so leaving these blocks would orphan tool_results
-       and confuse strict providers.
-
-    2) Schema layer — the past self's frozen tool schema list (stored on
-       the system entry as ``_tools`` and surfaced via the rebuilt
-       interface's ``_current_tools``) is zeroed. The system entry's
-       *prose text* is preserved — it describes the past self's identity
-       and what it could do, and that's what we want the past life to
-       remember itself by — but the machine-readable schema list, which
-       adapters would otherwise pick up and send on the wire, is wiped.
-       This guarantees the consultation can never accidentally re-surface
-       the past life's tools.
+    The consultation substrate is the past self's canonical chat. Tool
+    calls/results and frozen tool-schema metadata are intentionally preserved
+    so the model can read its own past work in the same structure it was
+    originally trained to consume. New tool calls in the consultation session
+    are refused at the executor layer by ``_run_consultation``.
     """
     import json
     from pathlib import Path
-    from ..llm.interface import (
-        ChatInterface,
-        TextBlock,
-        ThinkingBlock,
-    )
+    from ..llm.interface import ChatInterface
 
     try:
         p = Path(path)
@@ -689,46 +707,9 @@ def _load_snapshot_interface(path):
         entries = payload.get("interface")
         if not isinstance(entries, list):
             return None
-        loaded = ChatInterface.from_dict(entries)
+        return ChatInterface.from_dict(entries)
     except Exception:
         return None
-
-    # Strip every tool block from the loaded interface. Walk entries,
-    # keep only TextBlock+ThinkingBlock content for non-system entries,
-    # drop entries that empty out. System entries pass through with their
-    # *text* preserved (frozen identity / job description) but their
-    # ``tools`` schema list zeroed — the consultation must never re-emit
-    # the past life's tool schemas on the wire.
-    #
-    # Round-trip via entry.to_dict() so id/timestamp/etc. are preserved
-    # (ChatInterface.from_dict requires those keys). For non-system entries
-    # we replace the "content" list with the stripped block dicts.
-    stripped_dicts: list[dict] = []
-    for entry in loaded.entries:
-        d = entry.to_dict()
-        if entry.role == "system":
-            d.pop("tools", None)  # drop frozen tool schema list
-            stripped_dicts.append(d)
-            continue
-        kept_blocks = [b for b in entry.content if isinstance(b, (TextBlock, ThinkingBlock))]
-        if not kept_blocks:
-            continue
-        d["content"] = [b.to_dict() for b in kept_blocks]
-        stripped_dicts.append(d)
-    try:
-        rebuilt = ChatInterface.from_dict(stripped_dicts)
-    except Exception:
-        return None
-
-    # Defense in depth: ChatInterface.from_dict copies the system entry's
-    # _tools onto iface._current_tools (interface.py:853). We just popped
-    # "tools" from the dict so the entry-level _tools is already None, but
-    # zero current_tools explicitly in case future code paths surface it.
-    rebuilt._current_tools = None
-    for e in rebuilt.entries:
-        if e.role == "system":
-            e._tools = None
-    return rebuilt
 
 
 def _fit_interface_to_window(iface, target_tokens: int):
@@ -854,30 +835,19 @@ def _build_consultation_cue(agent, kind: str, diary: str) -> str:
 
 
 def _run_consultation(agent, iface, source: str) -> dict | None:
-    """Run one consultation against a seeded ChatInterface.
+    """Run one substrate+spark consultation against a seeded ChatInterface.
 
-    Creates a one-shot tools-less session over the given interface and
-    sends a kind-specific cue:
-      - insights: stepped-back read of the current self's diary
-      - past:     past self being handed the future self's diary
+    The seeded interface is cloned verbatim. The present diary cue is sent as
+    the spark. Tool schemas are declared so historic tool calls/results remain
+    structurally legible, but any new tool-call attempts are intercepted with
+    synthetic refusal ``ToolResultBlock``s for up to
+    ``_CONSULTATION_MAX_ROUNDS`` rounds.
 
-    Returns ``{"source": source, "voice": str, "thinking": list}`` or
-    None on any failure (load issue, timeout, empty response).
-
-    Window-fit happens here: tail-trim to 0.8 × the consulting model's
-    context window. The consulting model is the same model that runs the
-    main agent chat (``agent.service``), so the budget is read from the
-    main chat's ``context_window()`` (or ``config.context_limit`` if the
-    user pinned a smaller cap). Same pattern as meta_block.py and
-    session.py use everywhere else in the kernel.
+    Returns ``{"source": source, "blocks": [...]}`` or None on failure/no cue.
     """
     if iface is None or not iface.entries:
         return None
 
-    # Read the consulting model's context window the same way the rest of
-    # the kernel does. If the agent hasn't built its main chat yet (early
-    # boot), conservatively assume 200k — every modern provider supports
-    # at least that and it leaves room for the system prompt + cue.
     window = None
     if getattr(agent, "_chat", None) is not None:
         try:
@@ -886,23 +856,30 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
             window = None
     if window is None:
         window = int(getattr(agent._config, "context_limit", None) or 200_000)
-    target = max(1, int(window * 0.8))
+    target = max(1, int(window * 0.7))
     fitted = _fit_interface_to_window(iface, target)
     if not fitted.entries:
         return None
 
-    kind = _kind_for_source(source)
-    system_prompt = _build_soul_system_prompt(agent, kind=kind)
-    system_prompt += "\n\nYou have no tools. Respond with plain text only. Never output tool calls or XML tags."
+    tool_schemas = None
+    try:
+        tool_schemas = agent._session._build_tool_schemas_fn() or None
+    except Exception as e:
+        try:
+            agent._log("consultation_tool_schema_error", source=source, error=str(e)[:200])
+        except Exception:
+            pass
+        tool_schemas = None
 
     try:
         session = agent.service.create_session(
-            system_prompt=system_prompt,
-            tools=None,
+            system_prompt=_CONSULTATION_SYSTEM_PROMPT,
+            tools=tool_schemas,
             model=agent._config.model or agent.service.model,
             thinking="high",
             tracked=False,
             interface=fitted,
+            provider=agent._config.provider,
         )
     except Exception as e:
         try:
@@ -912,27 +889,54 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
         return None
 
     diary = _render_current_diary(agent)
-    cue = _build_consultation_cue(agent, kind, diary)
-    response = _send_with_timeout(agent, session, cue)
-    if not response or not response.text:
+    if not diary:
         return None
 
-    try:
-        _write_soul_tokens(agent, response)
-    except Exception:
-        pass
+    from ..llm.interface import ToolResultBlock
 
-    return {
-        "source": source,
-        "voice": response.text,
-        "thinking": response.thoughts or [],
-    }
+    blocks_collected: list = []
+    next_input: "str | list[ToolResultBlock]" = diary
+
+    for _round_idx in range(_CONSULTATION_MAX_ROUNDS):
+        response = _send_with_timeout(agent, session, next_input)
+        if response is None:
+            break
+
+        try:
+            _write_soul_tokens(agent, response)
+        except Exception:
+            pass
+
+        try:
+            if session.interface.entries:
+                tail = session.interface.entries[-1]
+                if tail.role == "assistant":
+                    blocks_collected.extend(tail.content)
+        except Exception:
+            pass
+
+        if not getattr(response, "tool_calls", None):
+            break
+
+        refusal_blocks: list[ToolResultBlock] = []
+        for tc in response.tool_calls:
+            rb = ToolResultBlock(
+                id=tc.id,
+                name=tc.name,
+                content=_CONSULTATION_TOOL_REFUSAL,
+            )
+            refusal_blocks.append(rb)
+        blocks_collected.extend(refusal_blocks)
+        next_input = refusal_blocks
+
+    if not blocks_collected:
+        return None
+
+    return {"source": source, "blocks": blocks_collected}
 
 
 def _list_snapshot_paths(agent):
-    """Return a list of pathlib.Path entries for all snapshot files in
-    <workdir>/history/snapshots/, or [] if the directory does not exist."""
-    from pathlib import Path
+    """Return snapshot_*.json files under <workdir>/history/snapshots/."""
     snapshots_dir = agent._working_dir / "history" / "snapshots"
     if not snapshots_dir.is_dir():
         return []
@@ -941,40 +945,6 @@ def _list_snapshot_paths(agent):
     except Exception:
         return []
 
-
-def _clone_current_chat_for_insights(agent):
-    """Build a tools-stripped ChatInterface clone of the agent's current
-    chat. Same pattern as soul_inquiry: keep TextBlock + ThinkingBlock
-    only, skip ToolCallBlock + ToolResultBlock entirely (the consultation
-    session is tools-less).
-    """
-    from ..llm.interface import ChatInterface, TextBlock, ThinkingBlock
-
-    cloned = ChatInterface()
-    if agent._chat is None:
-        return cloned
-
-    for entry in agent._chat.interface.entries:
-        if entry.role == "system":
-            continue
-        stripped = []
-        for block in entry.content:
-            if isinstance(block, (TextBlock, ThinkingBlock)):
-                stripped.append(block)
-        if not stripped:
-            continue
-        if entry.role == "assistant":
-            cloned.add_assistant_message(stripped)
-        else:
-            try:
-                cloned.add_user_blocks(stripped)
-            except Exception:
-                # Pending-tool-call guard tripped on the clone — skip
-                # this entry rather than crash. Should be very rare since
-                # we already stripped tool blocks.
-                continue
-
-    return cloned
 
 
 def _run_consultation_batch(agent) -> list[dict]:
@@ -989,8 +959,15 @@ def _run_consultation_batch(agent) -> list[dict]:
 
     # Build work items.
     work: list[tuple[str, "ChatInterface"]] = []
-    insights_iface = _clone_current_chat_for_insights(agent)
-    if insights_iface.entries:
+    insights_iface = None
+    if getattr(agent, "_chat", None) is not None:
+        try:
+            insights_iface = agent._chat.interface
+            from ..llm.interface import ChatInterface
+            insights_iface = ChatInterface.from_dict(insights_iface.to_dict())
+        except Exception:
+            insights_iface = None
+    if insights_iface is not None and insights_iface.entries:
         work.append(("insights", insights_iface))
 
     # Sample K snapshot paths; load each.
@@ -1040,7 +1017,7 @@ def _run_consultation_batch(agent) -> list[dict]:
     for t in threads:
         t.join(timeout=timeout)
 
-    voices = [r for r in results if r is not None and r.get("voice")]
+    voices = [r for r in results if r is not None and r.get("blocks")]
     return voices
 
 

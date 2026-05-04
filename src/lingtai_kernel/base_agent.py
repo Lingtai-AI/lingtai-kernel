@@ -1007,13 +1007,43 @@ class BaseAgent:
     # Past-self consultation — soul flow as appendix tool-call pair
     # ------------------------------------------------------------------
 
+    def _flatten_v3_for_pair(self, voice: dict) -> dict:
+        """Bridge v3 consultation blocks to the legacy appendix renderer."""
+        from .llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
+
+        voice_text_parts: list[str] = []
+        thinking_parts: list[str] = []
+        tool_attempt_lines: list[str] = []
+
+        for b in voice.get("blocks", []):
+            if isinstance(b, TextBlock):
+                if b.text:
+                    voice_text_parts.append(b.text)
+            elif isinstance(b, ThinkingBlock):
+                if b.text:
+                    thinking_parts.append(b.text)
+            elif isinstance(b, ToolCallBlock):
+                try:
+                    tool_attempt_lines.append(f"Wanted to: {b.name}({b.args})")
+                except Exception:
+                    tool_attempt_lines.append(f"Wanted to: {getattr(b, 'name', 'tool')}")
+
+        if tool_attempt_lines:
+            voice_text_parts.append("\n".join(tool_attempt_lines))
+
+        return {
+            "source": voice.get("source", "unknown"),
+            "voice": "\n".join(part for part in voice_text_parts if part).strip(),
+            "thinking": thinking_parts,
+        }
+
     def _run_consultation_fire(self) -> None:
         """Run one consultation batch and persist the result.
 
         Side effects:
           - logs/events.jsonl: ``consultation_fire`` / ``consultation_fire_empty``
             / ``consultation_fire_error`` summary events keyed by ``fire_id``.
-          - logs/soul_flow.jsonl (schema_version=2): one ``fire`` record
+          - logs/soul_flow.jsonl (schema_version=3): one ``fire`` record
             per attempt — even on empty/error — carrying the diary cue,
             source list, and outcome. Plus one ``voice`` record per
             surviving voice with the voice text and thinking blocks. All
@@ -1040,7 +1070,6 @@ class BaseAgent:
 
         try:
             from .intrinsics.soul import (
-                _kind_for_source,
                 _render_current_diary,
                 _run_consultation_batch,
                 build_consultation_pair,
@@ -1058,7 +1087,7 @@ class BaseAgent:
             try:
                 self._append_soul_flow_record({
                     "kind": "fire",
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "ts": ts,
                     "fire_id": fire_id,
                     "tc_id": fire_id,                 # synthetic pair reuses fire_id
@@ -1074,15 +1103,17 @@ class BaseAgent:
             for v in voices:
                 try:
                     src = v.get("source", "unknown")
+                    blocks_serialized = [
+                        b.to_dict() if hasattr(b, "to_dict") else b
+                        for b in v.get("blocks", [])
+                    ]
                     self._append_soul_flow_record({
                         "kind": "voice",
-                        "schema_version": 2,
+                        "schema_version": 3,
                         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "fire_id": fire_id,
                         "source": src,
-                        "consultation_kind": _kind_for_source(src),
-                        "voice": v.get("voice", ""),
-                        "thinking": v.get("thinking", []),
+                        "blocks": blocks_serialized,
                     })
                 except Exception as e:
                     self._log(
@@ -1097,7 +1128,8 @@ class BaseAgent:
                 self._log("consultation_fire_empty", fire_id=fire_id)
                 return
 
-            call, result = build_consultation_pair(self, voices, tc_id=fire_id)
+            voices_for_pair = [self._flatten_v3_for_pair(v) for v in voices]
+            call, result = build_consultation_pair(self, voices_for_pair, tc_id=fire_id)
             self._tc_inbox.enqueue(InvoluntaryToolCall(
                 call=call,
                 result=result,
@@ -1113,7 +1145,7 @@ class BaseAgent:
             # appendix carries.
             voices_inline = [
                 {"source": v.get("source", "unknown"), "voice": v.get("voice", "")}
-                for v in voices
+                for v in voices_for_pair
                 if v.get("voice")
             ]
             self._log(
@@ -1145,7 +1177,7 @@ class BaseAgent:
             try:
                 self._append_soul_flow_record({
                     "kind": "fire",
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "ts": ts,
                     "fire_id": fire_id,
                     "tc_id": fire_id,
