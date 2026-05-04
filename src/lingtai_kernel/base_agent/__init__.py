@@ -601,18 +601,118 @@ class BaseAgent:
         _soul_whisper(self)
 
     def _drain_tc_inbox(self) -> None:
-        """Splice queued involuntary tool-call pairs at a safe boundary."""
+        """Splice queued involuntary tool-call pairs at a safe boundary.
+
+        Also (re)installs the pre-request drain hook on the active chat
+        session — see :meth:`_install_drain_hook` for the rationale.
+        Called from two paths today: the entry drain at request start
+        (``base_agent/turn.py:_handle_request``) and the dedicated TC
+        wake handler (``_handle_tc_wake``). The pre-request hook itself
+        adds a third path: drain fires once per LLM round-trip inside
+        the tool-call loop, so mail notifications and soul.flow voices
+        splice into the wire mid-task instead of waiting for the outer
+        turn to end.
+        """
         if self._chat is None:
             try:
                 self._session.ensure_session()
             except Exception:
                 return
+        # Idempotent — re-installing the same hook on the same session
+        # is a no-op. Cheap to call on every drain so a session created
+        # via _rebuild_session (AED recovery) gets the hook automatically
+        # without the AED path needing to know about it.
+        self._install_drain_hook()
         result = self._tc_inbox.drain_into(
             self._chat.interface,
             self._appendix_ids_by_source,
         )
         if result.count > 0:
             self._log("tc_inbox_drain", count=result.count, sources=result.sources)
+            self._save_chat_history()
+
+    def _install_drain_hook(self) -> None:
+        """Install the mid-turn tc_inbox drain hook on the active chat session.
+
+        The hook fires inside each adapter's ``send()`` after the message
+        has been committed to the canonical ChatInterface but before the
+        API call — at that moment the wire tail is ``user[tool_results]``
+        or ``user[text]``, so ``has_pending_tool_calls()`` returns False
+        and the splicer can safely append a new ``(call, result)`` pair.
+
+        Wire-state semantic, in two regimes:
+
+        * **Canonical-interface adapters** (anthropic, openai-CC,
+          codex-Responses, deepseek): the hook splices into the same
+          interface the adapter is about to serialize for the wire, so
+          the spliced pair appears in the *current* API request.
+          Mail notifications enqueued during a long bash chain reach
+          the LLM within one tool round.
+
+        * **Server-state adapters** (OpenAIResponsesSession, both
+          GeminiChatSession and InteractionsChatSession): the hook
+          splices into the canonical interface, but the wire payload
+          for the current request is built from server-side state
+          (``previous_response_id`` / ``previous_interaction_id``) or
+          the genai SDK's own chat history. The spliced pair is only
+          visible to the LLM on the *next* turn after the agent
+          re-syncs. The agent-side persistence and inspection paths
+          (chat_history.jsonl, .status.json, /codex view) update
+          immediately either way.
+
+        Subtle semantic for ``replace_in_history=True`` (soul.flow):
+        when the hook fires mid-turn, splicing in a replacement pair
+        removes the prior pair of the same source from the interface.
+        This is *almost* identical to the turn-boundary behavior that
+        already exists today, with one nuance: the LLM's reasoning in
+        the *current* turn was conditioned on a wire that contained
+        the prior pair, but its next API call (or its in-flight
+        reasoning continuation) may serialize a wire that doesn't.
+        For soul.flow's reflective voices this is harmless — they
+        don't drive tool calls and the model isn't building a chain
+        of reasoning that depends on the prior voice's exact text.
+        For any future producer that uses ``replace_in_history=True``
+        with content the agent might cite mid-turn, this is a
+        consideration; flagged here rather than buried in commit
+        history.
+
+        Idempotent: re-assigning the same callable to the same session
+        attribute is a no-op. Called from :meth:`_drain_tc_inbox` so
+        sessions created via ``_rebuild_session`` (AED recovery) pick
+        up the hook on the next drain without a separate code path.
+        """
+        if self._chat is None:
+            return
+        if not hasattr(self._chat, "pre_request_hook"):
+            return
+        # Bind via lambda so the hook captures self, not the chat session.
+        # The drain method itself rebinds to self._chat.interface, so the
+        # hook ignores the interface argument the adapter passes in.
+        self._chat.pre_request_hook = lambda _iface: self._drain_tc_inbox_for_hook()
+
+    def _drain_tc_inbox_for_hook(self) -> None:
+        """Hook-callable variant of _drain_tc_inbox without re-installing.
+
+        The pre-request hook is called from inside an adapter's send(),
+        which means we're already inside a session.send() call. Calling
+        the full _drain_tc_inbox would try to re-install the hook (cheap
+        but pointless) and could in pathological cases recurse if a
+        future producer enqueues during drain. This variant just splices
+        and returns.
+        """
+        if self._chat is None:
+            return
+        result = self._tc_inbox.drain_into(
+            self._chat.interface,
+            self._appendix_ids_by_source,
+        )
+        if result.count > 0:
+            self._log(
+                "tc_inbox_drain",
+                count=result.count,
+                sources=result.sources,
+                from_hook=True,
+            )
             self._save_chat_history()
 
     def _persist_soul_entry(self, result: dict, mode: str = "flow", source: str = "agent") -> None:

@@ -352,6 +352,13 @@ class AnthropicChatSession(ChatSession):
         else:
             raise TypeError(f"Unsupported message type: {type(message)}")
 
+        # Pre-request hook — safe boundary for kernel-side splices (mid-turn
+        # tc_inbox drain). Tail is now user[tool_results] or user[text], so
+        # has_pending_tool_calls() returns False; any (call, result) pair
+        # the hook splices in will be included in this same API request.
+        if self.pre_request_hook is not None:
+            self.pre_request_hook(self._interface)
+
         self._interface.enforce_tool_pairing()
         candidate_msgs = to_anthropic(self._interface)
         clean_messages = _ensure_alternation(candidate_msgs)
@@ -415,6 +422,10 @@ class AnthropicChatSession(ChatSession):
             self._interface.add_tool_results(message)
         else:
             raise TypeError(f"Unsupported message type: {type(message)}")
+
+        # Pre-request hook — see send() above for the contract.
+        if self.pre_request_hook is not None:
+            self.pre_request_hook(self._interface)
 
         # Build ephemeral Anthropic messages from interface
         self._interface.enforce_tool_pairing()

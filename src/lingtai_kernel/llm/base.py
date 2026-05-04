@@ -116,6 +116,32 @@ class ChatSession(ABC):
     _agent_type: str = ""
     _tracked: bool = True
 
+    # Optional pre-request hook fired after the message is committed to the
+    # canonical ChatInterface but before the API call is made. The kernel
+    # installs ``_drain_tc_inbox`` here so involuntary tool-call pairs
+    # (mail notifications, soul.flow voices) splice into the wire chat
+    # mid-turn — between tool rounds within a single _handle_request —
+    # rather than waiting for the outer turn to finish.
+    #
+    # Wire-state contract: at the moment the hook fires, the interface
+    # tail must be ``user[tool_results]`` or ``user[text]`` — i.e.
+    # ``has_pending_tool_calls()`` must return False, so the splicer can
+    # safely append a new ``(call, result)`` pair without violating the
+    # provider's strict pair-validation invariant.
+    #
+    # Sessions that don't use the canonical ChatInterface for wire
+    # serialization (OpenAIResponsesSession, GeminiChatSession via
+    # genai SDK) still call the hook for the agent-side drain, but the
+    # spliced pair is only visible to the LLM on the *next* turn (when
+    # the agent re-syncs from interface). For canonical-interface
+    # adapters (anthropic, openai-CC, codex-Responses, deepseek), the
+    # spliced pair is visible in the same API call as the triggering
+    # tool_results.
+    #
+    # Default ``None`` — adapters that don't install a hook treat the
+    # call as a no-op, preserving the legacy zero-hook behavior.
+    pre_request_hook: "Callable[[ChatInterface], None] | None" = None
+
     @property
     @abstractmethod
     def interface(self) -> ChatInterface:

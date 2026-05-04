@@ -515,6 +515,13 @@ class OpenAIChatSession(ChatSession):
         else:
             raise TypeError(f"Unsupported message type: {type(message)}")
 
+        # 1b. Pre-request hook — kernel-side splice point for mid-turn
+        # tc_inbox drains. Wire tail is user[tool_results] or user[text],
+        # so any (call, result) pair the hook splices is appended at a
+        # safe boundary and rides along on this same API request.
+        if self.pre_request_hook is not None:
+            self.pre_request_hook(self._interface)
+
         # 2. Build ephemeral provider messages from interface — re-runs
         #    inside the overflow-recovery loop so each retry sees the
         #    post-trim canonical interface.
@@ -667,6 +674,10 @@ class OpenAIChatSession(ChatSession):
             self._interface.add_tool_results(message)
         else:
             raise TypeError(f"Unsupported message type: {type(message)}")
+
+        # 1b. Pre-request hook — see send() above for contract.
+        if self.pre_request_hook is not None:
+            self.pre_request_hook(self._interface)
 
         # 2. Build ephemeral provider messages from interface — re-runs
         #    inside the overflow-recovery loop so each retry sees the
@@ -867,6 +878,18 @@ class OpenAIResponsesSession(ChatSession):
 
     def send(self, message) -> LLMResponse:
         """Send a user message (str) or tool results (list of dicts)."""
+        # Pre-request hook — fired for the kernel-side drain. NOTE: this
+        # session uses server-side state (previous_response_id) and does
+        # NOT commit message content to the canonical ChatInterface, so a
+        # pair the hook splices is only visible to the LLM on the *next*
+        # turn (when the interface re-syncs). This is acceptable because
+        # the agent's local view is updated immediately for persistence
+        # and inspection. Most agents using this session use it via Codex
+        # OAuth (CodexResponsesSession), which DOES replay the full
+        # interface and gets same-turn delivery.
+        if self.pre_request_hook is not None:
+            self.pre_request_hook(self._interface)
+
         input_items = self._convert_input(message)
 
         kwargs: dict[str, Any] = {
@@ -893,6 +916,10 @@ class OpenAIResponsesSession(ChatSession):
 
     def send_stream(self, message, on_chunk=None) -> LLMResponse:
         """Send a streaming request."""
+        # Pre-request hook — see send() above for contract + caveat.
+        if self.pre_request_hook is not None:
+            self.pre_request_hook(self._interface)
+
         input_items = self._convert_input(message)
 
         kwargs: dict[str, Any] = {
@@ -1277,6 +1304,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
             pass
         else:
             raise TypeError(f"Unsupported message type: {type(message)}")
+
+        # Pre-request hook — kernel-side splice point. The Codex stateless
+        # path replays the full canonical interface on every request, so
+        # any (call, result) pair the hook splices in is included in the
+        # current request's input items. See OpenAIChatSession.send for
+        # the contract.
+        if self.pre_request_hook is not None:
+            self.pre_request_hook(self._interface)
 
         try:
             self._interface.enforce_tool_pairing()

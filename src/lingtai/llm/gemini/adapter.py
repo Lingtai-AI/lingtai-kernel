@@ -151,6 +151,17 @@ class GeminiChatSession(ChatSession):
 
     def send(self, message) -> LLMResponse:
         """Send a message (text or list of tool-result Parts) and parse the response."""
+        # Pre-request hook — fired for the kernel-side drain. NOTE: this
+        # session delegates wire serialization to the genai SDK's chat
+        # object (server-side / SDK-side state); it does NOT commit
+        # message content to the canonical ChatInterface. A pair the
+        # hook splices is therefore only visible to the LLM on the
+        # *next* turn after the interface re-syncs. The agent-side
+        # drain still happens immediately for local persistence /
+        # inspection.
+        if self.pre_request_hook is not None:
+            self.pre_request_hook(self._interface)
+
         raw = self._chat.send_message(message)
         return _parse_response(raw)
 
@@ -373,6 +384,16 @@ class InteractionsChatSession(ChatSession):
         if isinstance(message, list) and message and isinstance(message[0], ToolResultBlock):
             self._interface.add_tool_results(message)
 
+        # Pre-request hook — fires after canonical interface commit but
+        # BEFORE conversion to wire format / API call. Note that the
+        # Interactions API uses ``previous_interaction_id`` for server-
+        # side history, so a pair the hook splices in won't appear in
+        # the wire request directly — it's recorded in the agent's
+        # canonical interface and visible on subsequent turns. The local
+        # drain (events.jsonl, persistence) happens immediately.
+        if self.pre_request_hook is not None:
+            self.pre_request_hook(self._interface)
+
         converted_input = self._convert_input(message)
 
         # If we have pending seed turns (session resume with history but no
@@ -415,6 +436,10 @@ class InteractionsChatSession(ChatSession):
         # Record tool results in canonical interface (matches Anthropic/OpenAI)
         if isinstance(message, list) and message and isinstance(message[0], ToolResultBlock):
             self._interface.add_tool_results(message)
+
+        # Pre-request hook — see send() above for contract + caveat.
+        if self.pre_request_hook is not None:
+            self.pre_request_hook(self._interface)
 
         converted_input = self._convert_input(message)
 
