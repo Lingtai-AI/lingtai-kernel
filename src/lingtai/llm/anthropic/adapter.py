@@ -19,10 +19,24 @@ from collections.abc import Callable
 from typing import Any
 
 import anthropic
+import httpx
 
 from lingtai_kernel.logging import get_logger
 
 logger = get_logger()
+
+
+def _build_http_timeout(request_timeout: float | None):
+    """Build explicit per-phase HTTP timeout for SDK calls."""
+    if request_timeout is None:
+        return None
+    return httpx.Timeout(
+        connect=min(float(request_timeout), 30.0),
+        read=min(float(request_timeout), 60.0),
+        write=min(float(request_timeout), 30.0),
+        pool=10.0,
+    )
+
 
 from lingtai_kernel.llm.base import (
     ChatSession,
@@ -315,9 +329,9 @@ class AnthropicChatSession(ChatSession):
             if self._tool_choice:
                 kwargs["tool_choice"] = self._tool_choice
         if self._request_timeout is not None:
-            # Per-call HTTP timeout overrides the client-level timeout so this
-            # worker aborts at the same moment as the main-thread watchdog.
-            kwargs["timeout"] = self._request_timeout
+            # Per-call HTTP timeout overrides the client-level timeout. Use
+            # explicit per-phase values so read waits are bounded.
+            kwargs["timeout"] = _build_http_timeout(self._request_timeout)
         return kwargs
 
     def send(self, message) -> LLMResponse:

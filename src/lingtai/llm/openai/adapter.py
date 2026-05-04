@@ -13,6 +13,7 @@ import json
 import uuid
 from typing import Any
 
+import httpx
 import openai
 
 from lingtai_kernel.logging import get_logger
@@ -31,6 +32,23 @@ from ..interface_converters import to_openai, to_responses_input
 from lingtai_kernel.llm.streaming import StreamingAccumulator
 
 logger = get_logger()
+
+
+def _build_http_timeout(request_timeout: float | None):
+    """Build explicit per-phase HTTP timeout for SDK calls.
+
+    The main-thread watchdog controls total wall-clock time. SDK/httpx
+    timeout values are per phase, so cap read waits to keep wedged sockets
+    from occupying the worker indefinitely.
+    """
+    if request_timeout is None:
+        return None
+    return httpx.Timeout(
+        connect=min(float(request_timeout), 30.0),
+        read=min(float(request_timeout), 60.0),
+        write=min(float(request_timeout), 30.0),
+        pool=10.0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +536,7 @@ class OpenAIChatSession(ChatSession):
                 if self._tool_choice:
                     kw["tool_choice"] = self._tool_choice
             if self._request_timeout is not None:
-                kw["timeout"] = self._request_timeout
+                kw["timeout"] = _build_http_timeout(self._request_timeout)
             return kw
 
         # 3. Make the API call (with auto-recovery on context overflow);
@@ -671,7 +689,7 @@ class OpenAIChatSession(ChatSession):
                 if self._tool_choice:
                     kw["tool_choice"] = self._tool_choice
             if self._request_timeout is not None:
-                kw["timeout"] = self._request_timeout
+                kw["timeout"] = _build_http_timeout(self._request_timeout)
             return kw
 
         acc = StreamingAccumulator()
