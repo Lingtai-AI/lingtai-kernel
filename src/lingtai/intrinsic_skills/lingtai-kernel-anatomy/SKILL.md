@@ -93,6 +93,18 @@ Every agent that reads anatomy is also a maintainer. The contract:
 - **Code disagrees with anatomy:** the code is almost always right. Update the anatomy to match before you leave the file. If you believe the code itself is wrong, report the bug — and note that anatomy and code disagreed, because that disagreement is itself a clue.
 - **Anatomy missing or empty:** if you understood the folder well enough to do your task, write the anatomy. Components, connections, state. Use the writing checklist above.
 
+## When a code change requires anatomy updates
+
+The same-commit rule is about structural drift, not busywork. Update relevant `ANATOMY.md` files when a change does any of these:
+
+- Moves, renames, splits, merges, or deletes a file, function, class, or package cited by anatomy.
+- Changes which module owns a behavior, which module calls another, or which folder is the right entry point for a structural question.
+- Adds, removes, or changes persistent state: files written, schema versions, manifest fields, logs, snapshots, queues, locks.
+- Changes lifecycle, message-flow, prompt-routing, tool-routing, or other cross-module connections that anatomy describes.
+- Creates a new folder that a competent agent can reason about as a unit.
+
+Usually no anatomy update is required for local implementation fixes, prompt wording changes, constant value tweaks, test-only edits, formatting, or comments — unless anatomy cites or describes that exact behavior. When unsure, search for citations of the touched filename and verify them; if the prose still points future agents to the right place, leave it alone.
+
 ## Who maintains anatomy
 
 There are two kinds of agent that interact with this convention, and they have different obligations:
@@ -116,6 +128,27 @@ Concretely, if a commit moves `intrinsics/soul.py` → `intrinsics/soul/{config,
 1. `grep -rn "intrinsics/soul\.py:" src/lingtai_kernel/**/ANATOMY.md src/lingtai_kernel/ANATOMY.md`
 2. Update every match to the new file location and verified line number.
 3. Repeat for any other file the refactor moved.
+
+For cheap mechanical checking, scan anatomy citations before commit:
+
+```bash
+python - <<'PY'
+import pathlib, re
+root = pathlib.Path("src/lingtai_kernel")
+for anatomy in root.rglob("ANATOMY.md"):
+    text = anatomy.read_text()
+    for rel, line in re.findall(r"`?([A-Za-z0-9_./-]+\.py):(\d+)", text):
+        path = root / rel if not rel.startswith("src/") else pathlib.Path(rel)
+        if not path.exists():
+            print(f"{anatomy}: missing citation target {rel}:{line}")
+            continue
+        n = len(path.read_text().splitlines())
+        if int(line) > n:
+            print(f"{anatomy}: out-of-range citation {rel}:{line} > {n}")
+PY
+```
+
+This only catches missing files and out-of-range lines. It does not prove semantic correctness; an agent still has to open the cited code and confirm the claim.
 
 This is the discipline `discussions/soul-flow-tool-refusal-patch.md` and the soul package refactor (`ffe42d4`) demonstrated. The first round of citation rot happened because the rule was implicit; making it explicit here is part of the convention.
 
