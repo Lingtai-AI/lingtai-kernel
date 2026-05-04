@@ -110,5 +110,6 @@ Both `send` and `send_stream` revert the interface on API error via `interface.d
 - **Strict alternation**: Anthropic rejects consecutive same-role messages. `_ensure_alternation()` at `adapter.py:201` merges them by combining content lists.
 - **JSON schema enforcement**: Implemented as a synthetic tool with `tool_choice: {"type": "tool", "name": ...}` (`adapter.py:657-668`).
 - **`client` property**: Escape hatch to raw SDK at `adapter.py:758`.
-- **MiniMax inheritance**: `MiniMaxAdapter` subclasses `AnthropicAdapter` directly, overriding only `__init__` to set `base_url`.
-- Git history: 8 commits, active development on caching, timeout, rate gating.
+- **MiniMax inheritance**: `MiniMaxAdapter` subclasses `AnthropicAdapter` directly, overriding only `__init__` to set `base_url`. Inherits the pre-request hook automatically.
+- **Pre-request hook** (`f46b346`): both `send` and `send_stream` fire `self.pre_request_hook(self._interface)` after committing the message but before the API call. The kernel uses this for mid-turn tc_inbox drain — canonical-interface regime, same-turn delivery for spliced pairs. See root `ANATOMY.md` "Drain points".
+- Git history: 9 commits, active development on caching, timeout, rate gating, mid-turn hook.

@@ -66,13 +66,27 @@ Callable from any thread — `tc_inbox` is lock-protected.
 
 ### Queue + drain (`tc_inbox.py`)
 
-`TCInbox` is a thread-safe queue of `InvoluntaryToolCall` items. `_drain_tc_inbox()` (called at every turn boundary, `base_agent/turn.py:311`) splices queued pairs into `chat.interface.entries` only when the wire tail has no unanswered tool_calls — splicing into a mid-pair tail would create an orphan the LLM provider rejects. If the boundary is unsafe, items stay queued and the next turn retries.
+`TCInbox` is a thread-safe queue of `InvoluntaryToolCall` items. `_drain_tc_inbox()` (`base_agent/__init__.py:603`) splices queued pairs into `chat.interface.entries` only when the wire tail has no unanswered tool_calls — splicing into a mid-pair tail would create an orphan the LLM provider rejects. If the boundary is unsafe, items stay queued and the next safe boundary retries.
 
 Two opt-in flags on `InvoluntaryToolCall` for non-notification producers:
 - `coalesce=True` — replace any prior queued item with the same `source` key (latest-wins, used by soul flow so multiple firings during a busy stretch collapse to one reflection).
 - `replace_in_history=True` — also remove the prior pair of the same `source` from `entries` before splicing (single-slot wire history, used by soul consultation).
 
 The notification helper picks `coalesce=False, replace_in_history=False` because every event deserves its own slot. To opt in, build `InvoluntaryToolCall` directly and call `agent._tc_inbox.enqueue(item)` — soul flow does this at `intrinsics/soul/flow.py:216`.
+
+### Drain points (where the splice actually fires)
+
+Three places drain the queue, in order of frequency:
+
+1. **`_handle_request` entry** (`base_agent/turn.py:_handle_request`) — fires once at the start of every outer turn, before the first `session.send()`. Catches items enqueued between the prior turn ending and the new one starting.
+
+2. **Pre-request hook on `ChatSession`** (`llm/base.py:ChatSession.pre_request_hook`) — fires inside every adapter's `send()`, after the message is committed to `interface.entries` but before the API call goes out. Installed by `BaseAgent._install_drain_hook()` (`base_agent/__init__.py`) idempotently from `_drain_tc_inbox`. **This is the mid-turn drain** — it makes mail notifications and soul-flow voices appear within the same tool round-trip they're enqueued during, instead of waiting for the outer turn to end. Two regimes:
+   - **Canonical-interface adapters** (anthropic, openai-CC, codex-Responses, deepseek): same-turn delivery — the spliced pair appears in the same API request as the triggering tool_results.
+   - **Server-state adapters** (`OpenAIResponsesSession`, `GeminiChatSession`, `InteractionsChatSession`): next-turn delivery — the spliced pair is recorded in the canonical interface immediately (so persistence and inspection see it) but only reaches the LLM after the agent re-syncs on the next turn.
+
+3. **`_handle_tc_wake`** (`base_agent/turn.py:_handle_tc_wake`) — fires when the run loop dequeues an `MSG_TC_WAKE` posted by a producer. Has its own drain at the start. Used when the agent is IDLE between turns (no active `_handle_request` to drain via path 1 or 2).
+
+Producers always post `MSG_TC_WAKE` after enqueue (path 3 trigger). On a busy agent in mid-task, the wake message sits in `agent.inbox` until the current `_handle_request` returns — but path 2's hook drains the queue mid-task anyway, so by the time the wake message is processed the queue is usually empty (`tc_wake_noop reason=tc_inbox_empty`).
 
 ### Dismiss path (if your event has lifecycle)
 

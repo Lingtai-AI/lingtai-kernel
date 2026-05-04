@@ -132,4 +132,5 @@ Gemini adapter — `google-genai` SDK with Chat API and Interactions API, thinki
 - **`json_schema` enforcement**: Chat API path sets `response_mime_type="application/json"` + `response_schema` (`adapter.py:727-728`). Interactions API does not support this — falls back to Chat API.
 - **`client` property**: Escape hatch at `adapter.py:879`.
 - **`make_bytes_part`**: Static utility at `adapter.py:874` for binary input (images/documents).
-- Git history: 4 commits.
+- **Pre-request hook** (`f46b346`): all four send paths (`GeminiChatSession.send`, `InteractionsChatSession.send` + `send_stream`) fire `self.pre_request_hook(self._interface)` if installed. **Server-state regime** for both session types — `GeminiChatSession` delegates wire serialization to the genai SDK's chat object; `InteractionsChatSession` uses `previous_interaction_id`. The hook splices into the canonical interface immediately for agent-side persistence/inspection, but spliced pairs only reach the LLM on the next turn after re-sync. See root `ANATOMY.md` "Drain points".
+- Git history: 5 commits.

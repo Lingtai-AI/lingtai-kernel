@@ -8,8 +8,9 @@ Provider-agnostic LLM protocol layer. This folder defines the canonical chat log
 
 - `llm/__init__.py` — public re-export surface for `ChatSession`, `LLMResponse`, `ToolCall`, `FunctionSchema`, and `LLMService` (`llm/__init__.py:2-10`).
 - `llm/base.py` — normalized dataclasses plus `ChatSession` ABC.
-  - `ToolCall`, `UsageMetadata`, `LLMResponse`, and `FunctionSchema` define tool calls, token usage, provider responses, and tool schemas (`llm/base.py:21-88`).
-  - `ChatSession` requires an `interface` property and `send()` accepting text or tool results (`llm/base.py:110-131`), then supplies default helpers for history/state, usage totals, streaming fallback, tool-result commits, tool/system updates, reset, interaction id, and context window (`llm/base.py:133-245`).
+  - `ToolCall`, `UsageMetadata`, `LLMResponse`, and `FunctionSchema` define tool calls, token usage, provider responses, and tool schemas (`llm/base.py:21-103`).
+  - `ChatSession` requires an `interface` property and `send()` accepting text or tool results (`llm/base.py:110-156`), then supplies default helpers for history/state, usage totals, streaming fallback, tool-result commits, tool/system updates, reset, interaction id, and context window (`llm/base.py:158-274`).
+  - **`pre_request_hook`** (`llm/base.py:118-145`) — optional callable adapters fire after committing the message to the canonical `ChatInterface` but before the API call. The kernel installs `BaseAgent._drain_tc_inbox_for_hook` here (via `_install_drain_hook`) to drain the involuntary tool-call inbox mid-turn. Default `None` — adapters that don't install treat the call as a no-op. See root `ANATOMY.md` "Drain points" for the full picture, including the canonical-vs-server-state regime distinction.
 - `llm/interface.py` — canonical conversation representation.
   - Content blocks: `TextBlock`, `ToolCallBlock`, `ToolResultBlock`, `ThinkingBlock`; `ContentBlock` union and `content_block_from_dict()` (`llm/interface.py:34-124`).
   - `InterfaceEntry` is one role+content row with id, role, timestamp, provider metadata, model/provider, usage, and optional tool snapshot (`llm/interface.py:132-190`).
