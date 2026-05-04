@@ -34,6 +34,7 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
 - **Inbound (cross-module):** `EmailManager` is imported by `lingtai/__init__.py:19` for the wrapper re-export.
 - **Outbound:** Depends on `..i18n` (translations), `..message` (message construction), `..time_veil` (timestamp scrubbing), `..token_counter` (budget checks in `_check`), `..state` (via `system` for notification auto-dismiss in `_read`).
 - **Outbound (system dismiss):** `_read()` calls `from .. import system; system._dismiss(...)` to auto-dismiss notification pairs for read mails.
+- **Outbound (notification producer):** Mail arrival surfaces in the agent's wire chat as a synthetic `system(action="notification")` tool-call pair. `base_agent/messaging.py:_on_normal_mail` calls `agent._enqueue_system_notification(source="email", ref_id=mail_id, ...)`; `primitives.py:280` does the same for bounce notifications. See root `ANATOMY.md` "Involuntary tool-call pairs" for the producer contract.
 - **Data flow:** All state lives in the filesystem under `mailbox/`. The `EmailManager` is stateless except for `_last_sent` (duplicate-send guard) and `_scheduler_thread` (background timer).
 
 ## Key invariants

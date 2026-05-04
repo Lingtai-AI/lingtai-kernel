@@ -32,7 +32,7 @@ System intrinsic — runtime, lifecycle, and synchronization. Provides the agent
   - `_clear()` (`karma.py:108-128`) — force a full molt on another agent.
   - `_nirvana()` (`karma.py:131-149`) — permanently destroy an agent's working directory.
 
-- `notification.py` — Notification dismissal.
+- `notification.py` — Notification dismissal. (Producer side lives elsewhere — see root `ANATOMY.md` "Involuntary tool-call pairs". The `system(action="notification")` wire shape is **kernel-synthesized only**; agents cannot construct one. The `notification` action is explicitly blocked in `handle()`.)
   - `_dismiss()` (`notification.py:11-73`) — idempotent removal of notification pairs from both `_tc_inbox` queue and `_session.chat` wire, with reverse-lookup cleanup of `_pending_mail_notifications`.
 
 - `schema.py` — Tool registration.

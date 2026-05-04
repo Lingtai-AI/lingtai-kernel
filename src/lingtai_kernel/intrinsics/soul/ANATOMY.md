@@ -28,7 +28,7 @@ fires on a wall-clock timer.
 
 - `config.py` mutates `init.json` (manifest.soul.*) for cadence and voice config via `_atomic_write_init`.
 - `consultation.py` reads `history/snapshots/snapshot_*.json` and `logs/events.jsonl` for the diary cue, writes token-ledger entries via `_write_soul_tokens`.
-- `flow.py` writes `logs/soul_flow.jsonl` (`soul/flow.py:96-102`) and `logs/soul_inquiry.jsonl` (via `_persist_soul_entry`), enqueues on `tc_inbox` (via `_run_consultation_fire`).
+- `flow.py` writes `logs/soul_flow.jsonl` (`soul/flow.py:96-102`) and `logs/soul_inquiry.jsonl` (via `_persist_soul_entry`), enqueues on `tc_inbox` (via `_run_consultation_fire`). Soul is the **canonical advanced producer** for involuntary tool-call pairs — it builds `InvoluntaryToolCall` directly with `coalesce=True` (latest voice wins when the timer fires repeatedly during a busy stretch) and `replace_in_history=True` (single-slot wire history — the prior pair is removed before the new one is spliced). Simple notification producers (mail, daemon, MCP) use the higher-level `agent._enqueue_system_notification(...)` helper instead. See root `ANATOMY.md` "Involuntary tool-call pairs".
 
 ## Composition
 
