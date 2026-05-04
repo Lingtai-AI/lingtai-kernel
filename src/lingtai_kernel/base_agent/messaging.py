@@ -5,6 +5,7 @@ import time
 
 from ..message import _make_message, MSG_REQUEST, MSG_TC_WAKE
 from ..i18n import t as _t
+from ..time_veil import veil
 
 
 def _on_mail_received(agent, payload: dict) -> None:
@@ -33,9 +34,26 @@ def _on_normal_mail(agent, payload: dict) -> None:
     name = address
     if identity and identity.get("agent_name"):
         name = identity["agent_name"]
-    subject = payload.get("subject", "(no subject)")
+    # Subject: coerce falsy values (empty string, None) to a localized
+    # placeholder. .get(key, default) only fires when the key is missing,
+    # but TUI/portal senders write subject="" — the default never applied.
+    raw_subject = payload.get("subject")
+    if raw_subject:
+        subject = raw_subject
+    else:
+        subject = _t(agent._config.language, "system.new_mail.no_subject")
     message = payload.get("message", "")
-    sent_at = payload.get("sent_at") or payload.get("time") or ""
+    # Timestamp: prefer sent_at (external addons like IMAP populate it),
+    # then legacy `time`, then fall back to received_at — which is always
+    # present (injected by services/mail.py:175 and TUI/portal WriteMail).
+    # Run through veil() so time-blind agents see ''.
+    ts = (
+        payload.get("sent_at")
+        or payload.get("time")
+        or payload.get("received_at")
+        or ""
+    )
+    sent_at = veil(agent, ts)
 
     agent._wake_nap("mail_arrived")
 

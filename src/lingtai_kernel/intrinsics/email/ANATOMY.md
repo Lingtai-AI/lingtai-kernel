@@ -44,3 +44,49 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
 - Schedule status lifecycle: `active` → `inactive` (cancel) or `completed` (all sent). On startup, `_reconcile_schedules_on_startup` flips `active` → `inactive` so schedules don't fire until explicitly reactivated.
 - `_read()` auto-dismisses pending system notification pairs for the mails it successfully reads, via the `system._dismiss` cross-module call.
 - Contact writes use atomic temp-file + `os.replace` to prevent corruption on crash.
+
+## Notification format
+
+When mail arrives, `base_agent/messaging.py:_on_normal_mail` builds a prose
+notification using the `system.new_mail` i18n template and routes it
+through `_enqueue_system_notification` as a synthetic
+`system(action="notification")` tool-call pair. The agent sees both:
+
+- a `ToolCallBlock` with structured args (`notif_id`, `source="email"`,
+  `ref_id=<mail_id>`, `received_at`) — these are what `system(action="dismiss")`
+  consumes; they intentionally do NOT carry source-specific payload, so
+  the same envelope works for daemon, MCP, and other future producers.
+- a `ToolResultBlock` whose `content` is the rendered prose:
+
+```
+[system] New message in {box}.
+  Address: {from}
+  Name: {identity.agent_name | from}
+  Subject: {subject | "(no subject)"}
+  Sent at: {sent_at | time | received_at | ""}
+  {preview}
+The preview above is the COMPLETE message unless it ends with
+"... (N more chars)". Only call {tool}(action="check") when the
+preview is truncated — calling it otherwise is a wasteful duplicate fetch.
+```
+
+Field sources (`base_agent/messaging.py:_on_normal_mail`):
+
+| Template var | Source                                                  |
+|--------------|---------------------------------------------------------|
+| `{box}`      | `agent._mailbox_name` (e.g. "email box")                |
+| `{address}`  | `payload.from`                                          |
+| `{name}`     | `payload.identity.agent_name` ?? `payload.from`         |
+| `{subject}`  | `payload.subject` if truthy, else `system.new_mail.no_subject` |
+| `{sent_at}`  | `payload.sent_at \| time \| received_at \| ""`, run through `time_veil.veil()` |
+| `{preview}`  | First 500 chars of `payload.message`, with `\n` → space |
+| `{tool}`     | `agent._mailbox_tool` (e.g. "email")                    |
+
+Truncation: if `message` exceeds 500 chars, `preview` is the first 500
+with `\n` → space, suffixed with `... (N more chars)` where N is the
+remaining char count. Otherwise the preview IS the full message.
+
+Time-blindness: when `agent._config.time_awareness=False`,
+`time_veil.veil()` blanks `{sent_at}` to `""` regardless of the underlying
+field. The structured `received_at` on the `ToolCallBlock.args` is also
+populated unconditionally (it's metadata, not LLM-visible prose).

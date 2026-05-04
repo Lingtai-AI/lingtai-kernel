@@ -3,6 +3,7 @@
   "system.context_breakdown": "{pct} (sys {sys} + ctx {ctx})",
   "system.context_unknown": "unavailable",
   "system.new_mail": "[system] New message in {box}.\n  Address: {address}\n  Name: {name}\n  Subject: {subject}\n  Sent at: {sent_at}\n  {preview}\nThe preview above is the COMPLETE message unless it ends with \"... (N more chars)\". Only call {tool}(action=\"check\") when the preview is truncated — calling it otherwise is a wasteful duplicate fetch.",
+  "system.new_mail.no_subject": "(no subject)",
   "system.mail_bounce": "[system] Mail delivery failed: {error}\n  To: {address}\n  Subject: {subject}",
   "system.stuck_revive": "[system] LLM call failed at {ts}. You called: {tool_calls}. Retrying.",
   "system.molt_wiped": "[system] Molt complete. Working memory is empty. If you want to retrieve some prior context, check logs/events.jsonl — the file is large, so grep/tail/filter rather than dumping it whole.",
