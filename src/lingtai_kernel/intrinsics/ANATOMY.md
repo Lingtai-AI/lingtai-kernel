@@ -14,9 +14,9 @@ Kernel-built-in tools. Every intrinsic is a flat Python module with the same pub
 
 - `BaseAgent` imports `ALL_INTRINSICS` (`base_agent.py:29`) and binds each module `handle()` in `_wire_intrinsics()` (`base_agent.py:444-448`).
 - Boot hooks are special-cased: `BaseAgent` calls `psyche.boot(self)` and `email.boot(self)` during construction (`base_agent.py:432-438`).
-- Intrinsics depend on sibling kernel services/types: system resolves peers through `handshake.resolve_address` (`intrinsics/system.py:34`); psyche and soul use canonical LLM blocks (`intrinsics/psyche.py:37`, `intrinsics/soul.py:618`); email emits inbox wake messages through `_make_message` (`intrinsics/email.py:36`).
-- Soul consumes psyche state: `_write_molt_snapshot()` writes `history/snapshots/` (`intrinsics/psyche.py:131-164`), and `_load_snapshot_interface()` reads those snapshots as past-self substrate (`intrinsics/soul.py:683-712`).
-- All four modules use `i18n.t()` for localized descriptions and schemas (`intrinsics/system.py:37-42`, `intrinsics/psyche.py:173-179`, `intrinsics/soul.py:60-66`, `intrinsics/email.py:35-41`).
+- Intrinsics depend on sibling kernel services/types: system resolves peers through `handshake.resolve_address` (`intrinsics/system.py:34`); psyche and soul use canonical LLM blocks (`intrinsics/psyche.py:37`, `intrinsics/soul/consultation.py:159`); email emits inbox wake messages through `_make_message` (`intrinsics/email.py:36`).
+- Soul consumes psyche state: `_write_molt_snapshot()` writes `history/snapshots/` (`intrinsics/psyche.py:131-164`), and `_load_snapshot_interface()` reads those snapshots as past-self substrate (`intrinsics/soul/consultation.py:147-177`).
+- All four modules use `i18n.t()` for localized descriptions and schemas (`intrinsics/system.py:37-42`, `intrinsics/psyche.py:173-179`, `intrinsics/soul/__init__.py:65-72`, `intrinsics/email.py:35-41`).
 
 ## Composition
 
@@ -28,7 +28,7 @@ Kernel-built-in tools. Every intrinsic is a flat Python module with the same pub
 
 - `psyche.py` writes `system/lingtai.md`, `system/pad.md`, `system/pad_append.json`, `system/summaries/molt_<count>_<ts>.md`, and `history/snapshots/snapshot_<count>_<ts>.json` (`intrinsics/psyche.py:43-164`, `intrinsics/psyche.py:311-515`).
 - `email.py` writes `mailbox/{inbox,outbox,sent,archive}/<id>/message.json`, `mailbox/read.json`, `mailbox/contacts.json`, and `mailbox/schedules/<id>/schedule.json` (`intrinsics/email.py:7-13`).
-- `soul.py` mutates `init.json` for soul cadence/profile config (`intrinsics/soul.py:347-457`) and writes token-ledger entries for soul LLM calls through `_write_soul_tokens()` (`intrinsics/soul.py:589-609`).
+- `soul/` mutates `init.json` for soul cadence/profile config through `_persist_soul_config` and `_persist_soul_voice` (`intrinsics/soul/config.py:223-307`) and writes token-ledger entries for soul LLM calls through `_write_soul_tokens()` (`intrinsics/soul/consultation.py:124-145`).
 - `system.py` mostly mutates process/lifecycle state; destructive actions can create `.sleep`/`.suspend` signals or remove target working directories through their handlers (`intrinsics/system.py:449-574`).
 
 ## Notes
