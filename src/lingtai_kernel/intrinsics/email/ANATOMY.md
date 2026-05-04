@@ -32,9 +32,9 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
 - **Inbound:** `handle()` is called by the tool dispatcher (via `base_agent._dispatch_tool`). `boot()` is called during agent construction in `base_agent/__init__.py`.
 - **Inbound (cross-module):** `_new_mailbox_id` is imported by `base_agent/messaging.py:28` and `services/mail.py:165` for ID generation.
 - **Inbound (cross-module):** `EmailManager` is imported by `lingtai/__init__.py:19` for the wrapper re-export.
-- **Outbound:** Depends on `..i18n` (translations), `..message` (message construction), `..time_veil` (timestamp scrubbing), `..token_counter` (budget checks in `_check`), `..state` (via `system` for notification auto-dismiss in `_read`).
-- **Outbound (system dismiss):** `_read()` calls `from .. import system; system._dismiss(...)` to auto-dismiss notification pairs for read mails.
-- **Outbound (notification producer):** Mail arrival surfaces in the agent's wire chat as a synthetic `system(action="notification")` tool-call pair. `base_agent/messaging.py:_on_normal_mail` calls `agent._enqueue_system_notification(source="email", ref_id=mail_id, ...)`; `primitives.py:280` does the same for bounce notifications. See root `ANATOMY.md` "Involuntary tool-call pairs" for the producer contract.
+- **Outbound:** Depends on `..i18n` (translations), `..message` (message construction), `..time_veil` (timestamp scrubbing), `..token_counter` (budget checks in `_check`).
+- **Outbound (unread-digest producer):** Mail arrival surfaces in the agent's wire chat as a single coalescing `email(action="unread")` tool-call pair. `base_agent/messaging.py:_on_normal_mail` calls `_rerender_unread_digest(agent)` which uses `primitives.py:_render_unread_digest` to build the digest prose. Uses `coalesce=True, replace_in_history=True, source="email.unread"` — mirrors the soul-flow pattern (single-slot, always reflects latest arrival snapshot, no dismiss path). See root `ANATOMY.md` "Involuntary tool-call pairs" for the producer contract.
+- **Outbound (bounce notification):** `primitives.py:_mailman` enqueues bounce notifications as `system(action="notification", source="email.bounce")` via `_enqueue_system_notification`. These are infrequent, semantically distinct events — not aggregated into the unread digest.
 - **Data flow:** All state lives in the filesystem under `mailbox/`. The `EmailManager` is stateless except for `_last_sent` (duplicate-send guard) and `_scheduler_thread` (background timer).
 
 ## Key invariants
@@ -42,51 +42,35 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
 - `_mailman` runs as a daemon thread per recipient. It waits until `deliver_at`, then dispatches. The outbox entry is written synchronously before the thread starts.
 - `_mailman` with `skip_sent=True` (used by `_send`) deletes the outbox entry instead of moving it to `sent/`, because `_send` writes the `sent/` entry itself.
 - Schedule status lifecycle: `active` → `inactive` (cancel) or `completed` (all sent). On startup, `_reconcile_schedules_on_startup` flips `active` → `inactive` so schedules don't fire until explicitly reactivated.
-- `_read()` auto-dismisses pending system notification pairs for the mails it successfully reads, via the `system._dismiss` cross-module call.
+- `_read()` does NOT auto-dismiss notifications. Email arrivals use the single-slot unread-digest pattern (`email.unread`), so there are no per-mail notification pairs to dismiss.
 - Contact writes use atomic temp-file + `os.replace` to prevent corruption on crash.
 
 ## Notification format
 
-When mail arrives, `base_agent/messaging.py:_on_normal_mail` builds a prose
-notification using the `system.new_mail` i18n template and routes it
-through `_enqueue_system_notification` as a synthetic
-`system(action="notification")` tool-call pair. The agent sees both:
+When mail arrives, `base_agent/messaging.py:_on_normal_mail` calls
+`_rerender_unread_digest(agent)` which builds a digest of all currently
+unread mail using `primitives.py:_render_unread_digest`. The digest is
+enqueued as a single coalescing `email(action="unread")` tool-call pair:
 
-- a `ToolCallBlock` with structured args (`notif_id`, `source="email"`,
-  `ref_id=<mail_id>`, `received_at`) — these are what `system(action="dismiss")`
-  consumes; they intentionally do NOT carry source-specific payload, so
-  the same envelope works for daemon, MCP, and other future producers.
-- a `ToolResultBlock` whose `content` is the rendered prose:
+- `ToolCallBlock` with args: `action="unread"`, `count=<int>`, `received_at=<iso>`
+- `ToolResultBlock` with rendered digest prose (i18n key: `email.unread_digest`)
 
+The pair uses `coalesce=True, replace_in_history=True, source="email.unread"`
+— at most one unread-digest pair in the wire at any time. New arrivals
+replace the prior pair; reads/archives/deletes do NOT trigger rerenders.
+
+Digest prose format (en):
 ```
-[system] New message in {box}.
-  Address: {from}
-  Name: {identity.agent_name | from}
-  Subject: {subject | "(no subject)"}
-  Sent at: {sent_at | time | received_at | ""}
-  {preview}
-The preview above is the COMPLETE message unless it ends with
-"... (N more chars)". Only call {tool}(action="check") when the
-preview is truncated — calling it otherwise is a wasteful duplicate fetch.
+[email] {count} unread message(s) — most recent {recency}.
+
+  1. From {name} ({address}) — {subject}
+     Sent at: {sent_at}
+     {preview}
+
+  2. ...
+(showing first {N_shown} of {N_total})    ← only if N_total > N_shown
 ```
 
-Field sources (`base_agent/messaging.py:_on_normal_mail`):
-
-| Template var | Source                                                  |
-|--------------|---------------------------------------------------------|
-| `{box}`      | `agent._mailbox_name` (e.g. "email box")                |
-| `{address}`  | `payload.from`                                          |
-| `{name}`     | `payload.identity.agent_name` ?? `payload.from`         |
-| `{subject}`  | `payload.subject` if truthy, else `system.new_mail.no_subject` |
-| `{sent_at}`  | `payload.sent_at \| time \| received_at \| ""`, run through `time_veil.veil()` |
-| `{preview}`  | First 500 chars of `payload.message`, with `\n` → space |
-| `{tool}`     | `agent._mailbox_tool` (e.g. "email")                    |
-
-Truncation: if `message` exceeds 500 chars, `preview` is the first 500
-with `\n` → space, suffixed with `... (N more chars)` where N is the
-remaining char count. Otherwise the preview IS the full message.
-
-Time-blindness: when `agent._config.time_awareness=False`,
-`time_veil.veil()` blanks `{sent_at}` to `""` regardless of the underlying
-field. The structured `received_at` on the `ToolCallBlock.args` is also
-populated unconditionally (it's metadata, not LLM-visible prose).
+- **Cap:** max 10 entries (newest-first), 200 chars preview each.
+- **`recency`:** veiled timestamp of newest unread (uses `time_veil.veil()`).
+- **Empty unread set is unreachable** — rerender only fires after arrival.

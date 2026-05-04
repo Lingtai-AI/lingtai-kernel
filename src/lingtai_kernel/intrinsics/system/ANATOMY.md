@@ -33,7 +33,7 @@ System intrinsic — runtime, lifecycle, and synchronization. Provides the agent
   - `_nirvana()` (`karma.py:131-149`) — permanently destroy an agent's working directory.
 
 - `notification.py` — Notification dismissal. (Producer side lives elsewhere — see root `ANATOMY.md` "Involuntary tool-call pairs". The `system(action="notification")` wire shape is **kernel-synthesized only**; agents cannot construct one. The `notification` action is explicitly blocked in `handle()`.)
-  - `_dismiss()` (`notification.py:11-73`) — idempotent removal of notification pairs from both `_tc_inbox` queue and `_session.chat` wire, with reverse-lookup cleanup of `_pending_mail_notifications`.
+  - `_dismiss()` (`notification.py:9-75`) — idempotent removal of notification pairs from both `_tc_inbox` queue and `_session.chat` wire.
 
 - `schema.py` — Tool registration.
   - `get_description()` (`schema.py:6-8`) — returns localized tool description.
@@ -42,7 +42,7 @@ System intrinsic — runtime, lifecycle, and synchronization. Provides the agent
 ## Connections
 
 - **Inbound:** `handle()` is called by the tool dispatcher (via `base_agent._dispatch_tool`).
-- **Inbound (cross-module):** `_dismiss` is called by `email/manager.py:790-791` via `from .. import system as _system; _system._dismiss(...)` — auto-dismisses notification pairs on `email.read`.
+- **Inbound (cross-module):** `_dismiss` is called by the agent itself (voluntary `system(action="dismiss")`) for bounce, soul-consultation, and MCP notifications. Email arrivals no longer use `_dismiss` — they use the single-slot unread-digest pattern instead.
 - **Outbound:** Depends on `...i18n` (translations), `...handshake` (`resolve_address`, `is_agent`, `is_alive`), `...state` (`AgentState`), `lingtai.presets` (preset loading), `lingtai.preset_connectivity` (connectivity probing).
 - **Data flow:** Karma actions write signal files (`.sleep`, `.suspend`, `.interrupt`, `.clear`) into target agent working directories. Preset swap reads/writes `init.json` manifest.
 

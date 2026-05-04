@@ -777,27 +777,6 @@ class EmailManager:
         if errors:
             result["not_found"] = errors
 
-        # Auto-dismiss any pending notifications for mails we just read.
-        dismissed_notif_ids: list[str] = []
-        for entry in results:
-            mail_id = entry.get("id")
-            if not mail_id:
-                continue
-            notif_id = self._agent._pending_mail_notifications.pop(mail_id, None)
-            if notif_id is not None:
-                dismissed_notif_ids.append(notif_id)
-        if dismissed_notif_ids:
-            from .. import system as _system
-            _system._dismiss(
-                self._agent,
-                {"ids": dismissed_notif_ids, "_invoked_by": "email.read"},
-            )
-            for notif_id in dismissed_notif_ids:
-                self._agent._log(
-                    "system_notification_auto_dismissed",
-                    notif_id=notif_id, trigger="email.read",
-                )
-
         return result
 
     def _lookup(self, email_id: str) -> dict | None:

@@ -69,6 +69,16 @@ def handle(agent, args: dict) -> dict:
     Boot must have run first to instantiate the manager. If not (e.g. someone
     calls handle() before boot() in a test harness), return a clear error.
     """
+    action = args.get("action")
+    if action == "unread":
+        return {
+            "status": "error",
+            "message": (
+                "email(action='unread', ...) is reserved for kernel-"
+                "synthesized unread-mail digests and cannot be invoked "
+                "directly. Use email(action='check') to view your inbox."
+            ),
+        }
     mgr = getattr(agent, "_email_manager", None)
     if mgr is None:
         return {"error": "Internal: email manager not initialized. boot() was not called."}

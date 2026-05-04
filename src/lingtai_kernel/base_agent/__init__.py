@@ -352,8 +352,10 @@ class BaseAgent:
         # Tracks the most recent in-history call_id for each "single-slot" source.
         self._appendix_ids_by_source: dict[str, str] = {}
 
-        # Map from external ref_id to notif_id of pending system_notification pair.
-        self._pending_mail_notifications: dict[str, str] = {}
+        # _pending_mail_notifications removed — email arrivals now use
+        # single-slot unread-digest (email.unread) instead of per-arrival
+        # system.notification pairs. Bounce/MCP/soul notifications still
+        # use system.notification but don't need per-ref tracking.
 
         # Lifecycle
         self._shutdown = threading.Event()
@@ -368,6 +370,10 @@ class BaseAgent:
         self._soul_prompt = ""       # non-empty during inquiry
         self._soul_oneshot = False    # True during pending inquiry
         self._soul_timer: threading.Timer | None = None
+        # Held while a soul flow consultation fire is running. Voluntary
+        # soul(action='flow') calls try-acquire non-blocking — if held,
+        # the call is rejected with "soul flow ongoing".
+        self._soul_fire_lock: threading.Lock = threading.Lock()
         self._insight_turn_counter: int = 0
 
         # Heartbeat — always-on health monitor

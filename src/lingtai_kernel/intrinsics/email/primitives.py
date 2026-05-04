@@ -315,3 +315,69 @@ def _preview(body: str, limit: int = 500) -> str:
 def _email_time(e: dict) -> str:
     """Extract the best timestamp from an email dict for filtering."""
     return e.get("received_at") or e.get("sent_at") or e.get("time") or ""
+
+
+# ---------------------------------------------------------------------------
+# Unread digest rendering
+# ---------------------------------------------------------------------------
+
+def _render_unread_digest(agent, *, max_entries: int = 10, preview_chars: int = 200) -> tuple[str, int, str | None]:
+    """Compute and render the current unread mail digest.
+
+    Returns ``(body, count, newest_received_at)``:
+      - ``body`` is the rendered prose for the ToolResultBlock.
+      - ``count`` is total unread count (may exceed ``max_entries``).
+      - ``newest_received_at`` is the ISO timestamp of the most recent
+        unread message, or None if count == 0.
+
+    Caller uses ``count`` to short-circuit (don't enqueue when 0) and
+    ``newest_received_at`` for the call_block args.
+    """
+    from ...i18n import t as _t
+    from ...time_veil import veil
+
+    read_ids = _read_ids(agent)
+    inbox = _list_inbox(agent)  # already newest-first per existing semantics
+    unread = [m for m in inbox if m.get("_mailbox_id") not in read_ids]
+    count = len(unread)
+    if count == 0:
+        return ("", 0, None)
+
+    shown = unread[:max_entries]
+    newest = shown[0]
+    newest_ts = newest.get("received_at") or newest.get("sent_at") or ""
+
+    lang = agent._config.language
+    lines = []
+    for i, m in enumerate(shown, start=1):
+        addr = m.get("from", "unknown")
+        identity = m.get("identity") or {}
+        name = identity.get("agent_name") or addr
+        subj_raw = m.get("subject")
+        subject = subj_raw if subj_raw else _t(lang, "email.unread_digest.no_subject")
+        ts = m.get("sent_at") or m.get("time") or m.get("received_at") or ""
+        sent_at = veil(agent, ts)
+        body = m.get("message", "")
+        if len(body) > preview_chars:
+            preview = body[:preview_chars].replace("\n", " ") + f"... ({len(body) - preview_chars} more chars)"
+        else:
+            preview = body.replace("\n", " ")
+        lines.append(_t(
+            lang, "email.unread_digest.entry",
+            n=i, address=addr, name=name, subject=subject,
+            sent_at=sent_at, preview=preview,
+        ))
+
+    more_line = ""
+    if count > max_entries:
+        more_line = _t(lang, "email.unread_digest.more", shown=max_entries, total=count)
+
+    body = _t(
+        lang, "email.unread_digest",
+        count=count,
+        recency=veil(agent, newest_ts),
+        entries="\n".join(lines),
+        more=more_line,
+        tool=getattr(agent, "_mailbox_tool", "email"),
+    )
+    return (body, count, newest_ts)

@@ -19,10 +19,6 @@ def _dismiss(agent, args: dict) -> dict:
       - ``_session.chat``: in case the pair has been spliced into the wire
     Whichever store holds the pair returns True; the other returns False.
     Both False means the notif_id is unknown — reported as "not_found".
-
-    Also reverse-looks up ``_pending_mail_notifications`` to clear the
-    matching ref_id entry (so a later email.read on that mail won't try
-    to re-dismiss).
     """
     raw_ids = args.get("ids")
     if isinstance(raw_ids, str):
@@ -52,12 +48,6 @@ def _dismiss(agent, args: dict) -> dict:
         removed_from_chat = (
             iface.remove_pair_by_notif_id(notif_id) if iface is not None else False
         )
-
-        # Reverse-lookup: clear any ref_id pointing to this notif_id.
-        for ref_id, queued_notif_id in list(agent._pending_mail_notifications.items()):
-            if queued_notif_id == notif_id:
-                agent._pending_mail_notifications.pop(ref_id, None)
-                break
 
         if removed_from_queue or removed_from_chat:
             results[notif_id] = "dismissed"

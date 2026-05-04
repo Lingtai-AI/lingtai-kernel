@@ -95,13 +95,13 @@ If "the agent acted on this notification → it's no longer relevant," removal h
 - **Still queued** (not yet spliced): `agent._tc_inbox.remove_by_notif_id(notif_id)` — only matches notification-shape items.
 - **Already spliced**: `agent._chat.interface.remove_pair_by_call_id(call_id)`.
 
-Mail does both: `intrinsics/email/manager.py` calls `_system._dismiss(...)` on `email.read` to auto-clear the notification when the agent reads the message.
+Mail does both: bounce notifications still use `system(action="notification")` and remain dismissable via `system(action="dismiss")`. Email arrivals now use the single-slot unread-digest pattern (`email.unread`) — no dismiss needed.
 
 ### Producers in the kernel today
 
 | Producer | Source key | Trigger |
 |---|---|---|
-| Mail arrival | `system.notification:<notif_id>` | `base_agent/messaging.py:_on_normal_mail` |
+| Mail arrival | `email.unread` (coalesce + replace) | `base_agent/messaging.py:_on_normal_mail` |
 | Mail bounce | `system.notification:<notif_id>` | `intrinsics/email/primitives.py:280` |
 | Soul flow | `soul.flow` | `intrinsics/soul/flow.py:216` (uses `coalesce`+`replace_in_history`) |
 

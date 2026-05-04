@@ -192,11 +192,8 @@ def _context_molt(agent, args: dict) -> dict:
     # remove a stale one.
     if hasattr(agent, "_appendix_ids_by_source"):
         agent._appendix_ids_by_source.clear()
-    # Pre-molt notification pointers don't survive the wire rebuild — clear
-    # the pending-mail-notification dict and discard any queued (not-yet-
-    # spliced) tc_inbox items so neither leaks into the post-molt wire.
-    if hasattr(agent, "_pending_mail_notifications"):
-        agent._pending_mail_notifications.clear()
+    # Pre-molt tc_inbox items don't survive the wire rebuild — drain so
+    # they don't leak into the post-molt wire.
     if hasattr(agent, "_tc_inbox"):
         agent._tc_inbox.drain()
 
@@ -371,11 +368,8 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
 
     if hasattr(agent, "_appendix_ids_by_source"):
         agent._appendix_ids_by_source.clear()
-    # Pre-molt notification pointers don't survive the wire rebuild — clear
-    # the pending-mail-notification dict and discard any queued (not-yet-
-    # spliced) tc_inbox items so neither leaks into the post-molt wire.
-    if hasattr(agent, "_pending_mail_notifications"):
-        agent._pending_mail_notifications.clear()
+    # Pre-molt tc_inbox items don't survive the wire rebuild — drain so
+    # they don't leak into the post-molt wire.
     if hasattr(agent, "_tc_inbox"):
         agent._tc_inbox.drain()
 

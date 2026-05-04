@@ -19,63 +19,100 @@ def _on_mail_received(agent, payload: dict) -> None:
 
 
 def _on_normal_mail(agent, payload: dict) -> None:
-    """Handle a normal mail — notify agent via inbox.
+    """Handle a normal mail — rerender the unread digest in the wire chat.
 
     The message is already persisted to mailbox/inbox/ by MailService.
-    This method signals arrival and sends a uniform push notification.
-    Capabilities configure ``_mailbox_name`` and ``_mailbox_tool``
-    to change the notification text (e.g. "email box" / "email").
-    """
-    from ..intrinsics.email import _new_mailbox_id
+    Mail arrival triggers a single splice of an ``email(action="unread")``
+    digest pair (replacing any prior pair for source="email.unread").
+    Reads, archives, and deletes do NOT trigger a rerender — the wire
+    notification is a snapshot of what was unread at the latest arrival,
+    not a live unread mirror. Stale-after-read is acceptable; the agent
+    can call ``email(action="check")`` for a fresh view.
 
-    email_id = payload.get("_mailbox_id") or _new_mailbox_id()
+    Capabilities still set ``_mailbox_name`` / ``_mailbox_tool`` for
+    digest rendering.
+    """
     address = payload.get("from", "unknown")
-    identity = payload.get("identity")
-    name = address
-    if identity and identity.get("agent_name"):
-        name = identity["agent_name"]
-    # Subject: coerce falsy values (empty string, None) to a localized
-    # placeholder. .get(key, default) only fires when the key is missing,
-    # but TUI/portal senders write subject="" — the default never applied.
-    raw_subject = payload.get("subject")
-    if raw_subject:
-        subject = raw_subject
-    else:
-        subject = _t(agent._config.language, "system.new_mail.no_subject")
-    message = payload.get("message", "")
-    # Timestamp: prefer sent_at (external addons like IMAP populate it),
-    # then legacy `time`, then fall back to received_at — which is always
-    # present (injected by services/mail.py:175 and TUI/portal WriteMail).
-    # Run through veil() so time-blind agents see ''.
-    ts = (
-        payload.get("sent_at")
-        or payload.get("time")
-        or payload.get("received_at")
-        or ""
-    )
-    sent_at = veil(agent, ts)
+    subject = payload.get("subject") or "(no subject)"
 
     agent._wake_nap("mail_arrived")
+    agent._log("mail_received", address=address, subject=subject,
+               message=payload.get("message", ""))
 
-    if len(message) > 500:
-        preview = message[:500].replace("\n", " ") + f"... ({len(message) - 500} more chars)"
-    else:
-        preview = message.replace("\n", " ")
-    notification = _t(
-        agent._config.language, "system.new_mail",
-        box=agent._mailbox_name, address=address, name=name, subject=subject,
-        sent_at=sent_at, preview=preview, tool=agent._mailbox_tool,
+    _rerender_unread_digest(agent)
+
+
+def _rerender_unread_digest(agent) -> str | None:
+    """Splice the current-unread digest into the wire chat.
+
+    Computes the unread set, renders the digest prose, builds a synthetic
+    ``email(action="unread")`` tool-call pair, and enqueues it on
+    ``tc_inbox`` with ``coalesce=True, replace_in_history=True`` and
+    ``source="email.unread"``. The drain replaces any prior digest pair
+    in the wire with this one.
+
+    Returns the call_id of the enqueued pair, or None if there's nothing
+    unread (no enqueue happens — caller's responsibility to know whether
+    that means "leave prior digest stale" or "explicitly clear it").
+
+    The current trigger point (``_on_normal_mail``) only fires after a
+    mail has been persisted to the inbox, so by construction count >= 1
+    when this is called from arrival. The ``count == 0`` short-circuit
+    is defensive for future non-arrival callers.
+    """
+    import secrets
+    from datetime import datetime, timezone
+    from ..llm.interface import ToolCallBlock, ToolResultBlock
+    from ..tc_inbox import InvoluntaryToolCall
+    from ..intrinsics.email.primitives import _render_unread_digest
+
+    body, count, newest_ts = _render_unread_digest(agent)
+    if count == 0:
+        return None
+
+    call_id = f"un_{int(time.time()*1000):x}_{secrets.token_hex(2)}"
+    received_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    call = ToolCallBlock(
+        id=call_id,
+        name="email",
+        args={
+            "action": "unread",
+            "count": count,
+            "received_at": received_at,
+        },
+    )
+    result = ToolResultBlock(id=call_id, name="email", content=body)
+    item = InvoluntaryToolCall(
+        call=call,
+        result=result,
+        source="email.unread",
+        enqueued_at=time.time(),
+        coalesce=True,
+        replace_in_history=True,
+    )
+    agent._tc_inbox.enqueue(item)
+
+    agent._log(
+        "email_unread_digest_enqueued",
+        call_id=call_id,
+        count=count,
+        newest_received_at=newest_ts,
     )
 
-    agent._log("mail_received", address=address, name=name, subject=subject, message=message)
-    # Route the arrival as a synthetic system(action="notification") pair
-    # via tc_inbox. Replaces the older MSG_REQUEST text-channel delivery.
-    _enqueue_system_notification(
-        agent,
-        source="email",
-        ref_id=email_id,
-        body=notification,
-    )
+    # Wake the run loop so the digest is drained
+    agent._wake_nap("email_unread_digest_enqueued")
+    try:
+        wake_msg = _make_message(MSG_TC_WAKE, "system", "")
+        agent.inbox.put(wake_msg)
+    except Exception as e:
+        agent._log(
+            "tc_wake_post_error",
+            source="email.unread",
+            error=str(e)[:200],
+        )
+
+    return call_id
 
 
 def _enqueue_system_notification(agent, *, source: str, ref_id: str, body: str) -> str:
@@ -121,10 +158,6 @@ def _enqueue_system_notification(agent, *, source: str, ref_id: str, body: str) 
         replace_in_history=False,
     )
     agent._tc_inbox.enqueue(item)
-
-    # Track for action-coupled auto-dismiss (email source only).
-    if source == "email":
-        agent._pending_mail_notifications[ref_id] = notif_id
 
     agent._log(
         "system_notification_enqueued",
