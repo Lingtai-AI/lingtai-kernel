@@ -825,11 +825,24 @@ class BaseAgent:
             # unblocks the run loop so _handle_tc_wake drives one
             # inference round off the existing wire (no fake user
             # input, no meta prefix).
+            #
+            # If the wire has pending tool_calls left over from an
+            # earlier turn that exited mid-sequence (e.g. AED-exhausted
+            # ASLEEP after a stuck LLM call), `_inject_notification_pair`
+            # would refuse the append to preserve alternation. Heal the
+            # wire first by closing those pending calls with synthetic
+            # error results, then retry. If injection STILL fails after
+            # healing, revert state to ASLEEP so the inbox doesn't
+            # deadlock in IDLE with no MSG_TC_WAKE pending — the next
+            # heartbeat tick will see the same fingerprint and retry.
             self._asleep.clear()
             self._cancel_event.clear()
             self._set_state(AgentState.IDLE, reason="notification_arrival")
             self._reset_uptime()
             inject_ok = self._inject_notification_pair(notifications)
+            if not inject_ok:
+                self._heal_pending_tool_calls(reason="wake_inject_blocked")
+                inject_ok = self._inject_notification_pair(notifications)
             if inject_ok:
                 from ..message import _make_message, MSG_TC_WAKE
                 try:
@@ -838,6 +851,16 @@ class BaseAgent:
                     self._wake_nap("notification_arrival")
                 except Exception:
                     pass
+            else:
+                # Could not inject even after healing — revert to ASLEEP
+                # so state reflects reality. Without this, the agent
+                # would sit in IDLE with no wake message and the run
+                # loop would block on inbox.get() indefinitely.
+                self._asleep.set()
+                self._set_state(
+                    AgentState.ASLEEP,
+                    reason="wake_aborted_inject_failed",
+                )
 
         elif self._state == AgentState.IDLE:
             # Strip + reinject AND post MSG_TC_WAKE.  IDLE is "between
@@ -850,7 +873,14 @@ class BaseAgent:
             # without appending anything: the (call, result) pair we
             # just spliced IS the new turn from the agent's
             # perspective.  No fake user input, no meta prefix.
+            #
+            # Same heal-and-retry as the ASLEEP branch: if the wire
+            # has dangling tool_calls, close them synthetically and
+            # retry, otherwise the IDLE inbox stays dead.
             inject_ok = self._inject_notification_pair(notifications)
+            if not inject_ok:
+                self._heal_pending_tool_calls(reason="idle_inject_blocked")
+                inject_ok = self._inject_notification_pair(notifications)
             if inject_ok:
                 from ..message import _make_message, MSG_TC_WAKE
                 try:
@@ -882,6 +912,40 @@ class BaseAgent:
             AgentState.IDLE, AgentState.ASLEEP
         ):
             self._notification_fp = fp
+
+    def _heal_pending_tool_calls(self, *, reason: str) -> bool:
+        """Close any unanswered tool_calls on the wire with synthetic
+        error results so subsequent appends respect the alternation
+        invariant.
+
+        Used by the notification-sync wake path: if a previous turn
+        exited mid-tool-sequence (AED-exhausted, kernel exception, etc.)
+        and left dangling tool_calls, ``_inject_notification_pair``
+        refuses to append. Without healing, the agent is stuck —
+        notifications keep arriving, the inject keeps failing, and the
+        run loop never gets a MSG_TC_WAKE. Heal once on wake so the
+        retry can succeed.
+
+        Returns True if anything was closed, False if the wire was
+        already clean (or the session isn't ready, in which case there's
+        nothing we can do here).
+        """
+        if self._chat is None:
+            return False
+        iface = self._chat.interface
+        if not iface.has_pending_tool_calls():
+            return False
+        try:
+            iface.close_pending_tool_calls(reason=f"heal:{reason}")
+        except Exception as e:
+            self._log("heal_pending_tool_calls_failed", reason=reason, error=str(e)[:200])
+            return False
+        self._log("heal_pending_tool_calls", reason=reason)
+        try:
+            self._save_chat_history(ledger_source="heal")
+        except Exception:
+            pass
+        return True
 
     def _inject_notification_pair(self, notifications: dict) -> bool:
         """Inject a synthetic (call, result) pair for IDLE / ASLEEP states.
@@ -916,15 +980,22 @@ class BaseAgent:
         if self._chat is None:
             try:
                 self._session.ensure_session()
-            except Exception:
+            except Exception as e:
+                self._log("notification_inject_aborted",
+                          reason="ensure_session_failed", error=str(e)[:200])
                 return False
             if self._chat is None:
+                self._log("notification_inject_aborted",
+                          reason="chat_still_none_after_ensure")
                 return False
 
         iface = self._chat.interface
         # If the wire has unanswered tool_calls, appending a user-role
         # result entry would violate the alternation invariant.  Defer.
         if iface.has_pending_tool_calls():
+            self._log("notification_inject_aborted",
+                      reason="pending_tool_calls",
+                      sources=list(notifications.keys()))
             return False
 
         call_id = f"notif_{int(time.time()*1000):x}_{secrets.token_hex(2)}"

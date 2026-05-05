@@ -160,6 +160,30 @@ def _run_loop(agent) -> None:
             # --- Asleep: soul off, wait for inbox message ---
             if agent._asleep.is_set():
                 _cancel_soul_timer(agent)
+                # Heal any dangling tool_calls on the wire BEFORE going to
+                # sleep. If we sleep with an unanswered tool_call, the next
+                # mail's _inject_notification_pair refuses to append (would
+                # violate alternation invariant) and the agent silently
+                # fails to wake. The chat-saved snapshot must always be
+                # appendable from a fresh wake. Common cause: cancel
+                # mid-batch leaves the just-arrived assistant response
+                # with tool_calls on the wire but no results yet.
+                if (
+                    agent._chat is not None
+                    and agent._chat.interface.has_pending_tool_calls()
+                ):
+                    try:
+                        agent._chat.interface.close_pending_tool_calls(
+                            reason="heal:going_asleep"
+                        )
+                        agent._log("heal_pending_tool_calls", reason="going_asleep")
+                        agent._save_chat_history(ledger_source="heal")
+                    except Exception as e:
+                        agent._log(
+                            "heal_pending_tool_calls_failed",
+                            reason="going_asleep",
+                            error=str(e)[:200],
+                        )
                 agent._log("sleep")
 
                 # Block until a message arrives or shutdown
@@ -691,6 +715,24 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 "failed": False,
                 "errors": [],
             }
+
+        # Mid-batch cancel: a tool we just ran (e.g. system(action="sleep"))
+        # set _cancel_event, meaning the agent has decided to stop this
+        # turn. Commit the tool_results to the wire so the assistant turn
+        # we just sent has matching pairs (no dangling tool_calls), then
+        # return without re-sending to the LLM. Without this, the loop
+        # would call _send_with_watchdog(tool_results) below, get back a
+        # new assistant response with NEW tool_calls, save those to the
+        # wire — and then the cancel check at the top of the next
+        # iteration would return, leaving those new tool_calls dangling.
+        # That broken wire then blocks all future notification injects.
+        if agent._cancel_event.is_set():
+            if tool_results and agent._chat:
+                agent._chat.commit_tool_results(tool_results)
+            agent._cancel_event.clear()
+            agent._log("turn_cancelled_post_tool",
+                       reason="cancel_event_set_after_tool_execute")
+            return {"text": "", "failed": False, "errors": []}
 
         guard.record_calls(len(response.tool_calls))
 
