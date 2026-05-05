@@ -294,6 +294,12 @@ def materialize_active_preset(data: dict, working_dir: Path) -> None:
     ``manifest.llm`` and ``manifest.capabilities`` into ``data["manifest"]``
     so downstream validators and consumers see a fully-resolved manifest.
 
+    Capabilities are wholesale-replaced by the preset (atomic swap is the
+    whole point of presets) with one carve-out: ``library.paths`` from
+    init.json appends to the preset's library paths, deduped, preset
+    defaults first. Library paths are project-truth (where this agent's
+    extra skills live) — swapping presets should not erase them.
+
     Mutates ``data`` in place. No-op when ``manifest.preset.active`` is unset
     or when the manifest already has a literal ``llm`` and no preset block.
 
@@ -346,8 +352,46 @@ def materialize_active_preset(data: dict, working_dir: Path) -> None:
     preset_llm = dict(preset_manifest.get("llm") or manifest.get("llm") or {})
     preset_ctx = preset_llm.pop("context_limit", None)
     manifest["llm"] = preset_llm
-    manifest["capabilities"] = preset_manifest.get(
-        "capabilities", manifest.get("capabilities", {}))
+
+    # Capabilities are wholesale-replaced by the preset (atomic swap is the
+    # whole point of presets). Two carve-outs preserve project-truth across
+    # preset switches:
+    #   - library.paths: extras declared in init.json append to the preset's
+    #     defaults. Library paths are project-truth (where this agent's
+    #     extra skills live), not runtime-tier choices, so swapping presets
+    #     should not erase them.
+    # If you need to add another carve-out, do it here — keep the list short.
+    init_caps = manifest.get("capabilities", {}) if isinstance(
+        manifest.get("capabilities"), dict) else {}
+    init_lib_paths = (
+        init_caps.get("library", {}).get("paths", [])
+        if isinstance(init_caps.get("library"), dict) else []
+    )
+
+    new_caps = preset_manifest.get("capabilities", init_caps)
+    if isinstance(new_caps, dict) and init_lib_paths:
+        # Make sure we have a library entry to merge into. If the preset
+        # didn't enable library, init.json's paths alone are enough to enable it.
+        lib_kwargs = new_caps.get("library", {})
+        if not isinstance(lib_kwargs, dict):
+            lib_kwargs = {}
+        preset_paths = lib_kwargs.get("paths", []) or []
+        # Order: preset paths first (the curated defaults), then init.json
+        # extras unique to it. Dedupe by raw string — `~/foo` and the
+        # absolute form count as different so the user's intent shows up
+        # in info() output verbatim.
+        merged: list[str] = list(preset_paths)
+        seen = set(preset_paths)
+        for p in init_lib_paths:
+            if p not in seen:
+                merged.append(p)
+                seen.add(p)
+        lib_kwargs = dict(lib_kwargs)
+        lib_kwargs["paths"] = merged
+        new_caps = dict(new_caps)
+        new_caps["library"] = lib_kwargs
+
+    manifest["capabilities"] = new_caps
     if preset_ctx is not None:
         manifest["context_limit"] = preset_ctx
 
