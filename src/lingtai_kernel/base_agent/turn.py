@@ -307,9 +307,14 @@ def _concat_queued_messages(agent, msg: Message) -> Message:
         return msg
 
     all_msgs = [msg] + extra
-    parts = [m.content if isinstance(m.content, str) else str(m.content)
-             for m in all_msgs]
-    merged_content = "\n\n".join(parts)
+    parts: list[str] = []
+    for m in all_msgs:
+        if m.content is None:
+            continue  # canonical empty-turn signal — contributes no text
+        s = m.content if isinstance(m.content, str) else str(m.content)
+        if s:
+            parts.append(s)
+    merged_content = "\n\n".join(parts) if parts else None
     merged = _make_message(MSG_REQUEST, msg.sender, merged_content)
     agent._log("messages_concatenated", count=len(all_msgs))
     return merged
@@ -392,7 +397,7 @@ def _handle_request(agent, msg: Message) -> None:
 
     prefix = render_meta(agent, meta)
     if prefix:
-        content = f"{prefix}\n\n{content}"
+        content = f"{prefix}\n\n{content}" if content else prefix
     agent._log("text_input", text=content)
     response = _send_with_watchdog(agent, content)
     agent._last_usage = response.usage

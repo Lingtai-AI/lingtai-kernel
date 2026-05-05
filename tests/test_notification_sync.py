@@ -456,7 +456,7 @@ def _make_chat_stub():
 
 
 def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
-    """IDLE: fingerprint change → MSG_TC_WAKE goes to the inbox.
+    """IDLE: fingerprint change → empty MSG_REQUEST goes to the inbox.
 
     Regression for the IDLE-no-wake bug shipped in d2da97e: the agent
     was IDLE (run loop blocked on inbox.get()), notification was
@@ -464,14 +464,16 @@ def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
     the loop never picked it up.  The agent appeared unresponsive
     even though everything on disk was correct.
 
-    IDLE is "between turns, blocked on inbox" — same wake requirement
-    as ASLEEP, just no state transition.  Only ACTIVE skips the wake
-    (its turn loop will see the next snapshot via
-    ``_inject_notification_meta`` at request-send time).
+    The wake mechanism uses ``MSG_REQUEST`` with ``None`` content.
+    This routes to ``_handle_request`` which prepends meta and drives
+    a real LLM turn — the synthesized notification pair already at the
+    wire tail is observed by the model.  ``MSG_TC_WAKE`` would route
+    to the dormant ``_handle_tc_wake`` and no-op (tc_inbox is always
+    empty post-redesign).
     """
     from lingtai_kernel.base_agent import BaseAgent
     from lingtai_kernel.state import AgentState
-    from lingtai_kernel.message import MSG_TC_WAKE
+    from lingtai_kernel.message import MSG_REQUEST
 
     chat = _make_chat_stub()
 
@@ -513,9 +515,11 @@ def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
 
     # Wire pair injected.
     assert len(agent._chat_stub.interface.entries) == 2
-    # MSG_TC_WAKE in the inbox so the run loop picks it up.
+    # Empty MSG_REQUEST in the inbox so the run loop picks it up and
+    # drives a meta-only turn — the wire pair is observed by the LLM.
     msg = agent.inbox.get_nowait()
-    assert msg.type == MSG_TC_WAKE
+    assert msg.type == MSG_REQUEST
+    assert msg.content is None
 
 
 def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
@@ -902,10 +906,10 @@ def test_inject_notification_meta_strips_old_prefix(tmp_path: Path) -> None:
 
 def test_sync_asleep_wakes_on_change(tmp_path: Path) -> None:
     """Producer publishes while agent is ASLEEP → state transitions to
-    IDLE, pair is injected, MSG_TC_WAKE goes to inbox."""
+    IDLE, pair is injected, empty MSG_REQUEST goes to inbox."""
     from lingtai_kernel.base_agent import BaseAgent
     from lingtai_kernel.state import AgentState
-    from lingtai_kernel.message import MSG_TC_WAKE
+    from lingtai_kernel.message import MSG_REQUEST
 
     chat = _make_chat_stub()
     state_history: list[AgentState] = []
@@ -953,9 +957,10 @@ def test_sync_asleep_wakes_on_change(tmp_path: Path) -> None:
 
     assert agent._state == AgentState.IDLE
     assert AgentState.IDLE in state_history
-    # MSG_TC_WAKE delivered.
+    # Empty MSG_REQUEST delivered — drives a meta-only turn.
     msg = agent.inbox.get_nowait()
-    assert msg.type == MSG_TC_WAKE
+    assert msg.type == MSG_REQUEST
+    assert msg.content is None
     # Wire pair was injected.
     assert len(agent._chat_stub.interface.entries) == 2
 
@@ -1009,3 +1014,76 @@ def test_sync_asleep_no_change_stays_asleep(tmp_path: Path) -> None:
     assert agent._state == AgentState.ASLEEP
     assert agent.inbox.empty()
     assert len(agent._chat_stub.interface.entries) == 0
+
+
+# ---------------------------------------------------------------------------
+# §13.8 — empty-turn contract: MSG_REQUEST(content=None) drives meta-only turn
+# ---------------------------------------------------------------------------
+
+
+def test_pre_request_none_collapses_to_empty_string() -> None:
+    """``BaseAgent._pre_request`` returns ``""`` for ``None`` content.
+
+    Regression for the notification-wake bug: ``_sync_notifications``
+    posts ``MSG_REQUEST`` with ``content=None`` to drive a meta-only
+    turn after splicing a notification pair into the wire.  The legacy
+    fallback (``json.dumps(None)``) returned the literal string
+    ``"null"``, which would land in the LLM's user content.  ``None``
+    must collapse to ``""`` so only the meta prefix reaches the model.
+    """
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.message import _make_message, MSG_REQUEST
+
+    class _Stub(BaseAgent):
+        def __init__(self):
+            pass
+
+    msg_none = _make_message(MSG_REQUEST, "system", None)
+    msg_str = _make_message(MSG_REQUEST, "user", "hello")
+    msg_dict = _make_message(MSG_REQUEST, "system", {"k": "v"})
+
+    stub = _Stub()
+    assert BaseAgent._pre_request(stub, msg_none) == ""
+    assert BaseAgent._pre_request(stub, msg_str) == "hello"
+    # Non-string non-None content still falls back to json.dumps.
+    assert BaseAgent._pre_request(stub, msg_dict) == json.dumps({"k": "v"})
+
+
+def test_concat_queued_messages_drops_none_content() -> None:
+    """``_concat_queued_messages`` skips ``None``-content messages.
+
+    When an empty MSG_REQUEST (the notification wake signal) collides
+    in the inbox with a real text MSG_REQUEST, the empty one must not
+    contribute spurious ``\\n\\n`` separators to the merged content.
+    Two empty messages should merge to a single ``content=None`` so
+    ``_pre_request`` still recognises the empty-turn intent.
+    """
+    import queue
+    from lingtai_kernel.base_agent.turn import _concat_queued_messages
+    from lingtai_kernel.message import _make_message, MSG_REQUEST
+
+    class _Agent:
+        def __init__(self):
+            self.inbox = queue.Queue()
+            self._logs = []
+
+        def _log(self, evt, **fields):
+            self._logs.append((evt, fields))
+
+    agent = _Agent()
+    agent.inbox.put(_make_message(MSG_REQUEST, "user", "world"))
+    agent.inbox.put(_make_message(MSG_REQUEST, "system", None))
+
+    head = _make_message(MSG_REQUEST, "system", None)
+    merged = _concat_queued_messages(agent, head)
+
+    # Only the real "world" survives; the two None-content messages
+    # contribute nothing.
+    assert merged.content == "world"
+
+    # Now the all-empty case: every message is content=None.
+    agent2 = _Agent()
+    agent2.inbox.put(_make_message(MSG_REQUEST, "system", None))
+    head2 = _make_message(MSG_REQUEST, "system", None)
+    merged2 = _concat_queued_messages(agent2, head2)
+    assert merged2.content is None

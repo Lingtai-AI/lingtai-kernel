@@ -767,17 +767,21 @@ class BaseAgent:
            and return — wire now has zero notification blocks.
         3. Otherwise, inject a new block appropriate for current state:
 
-           * IDLE → splice ``(call, result)`` pair.
+           * IDLE → splice ``(call, result)`` pair, post empty
+             ``MSG_REQUEST`` to drive a meta-only turn.
            * ACTIVE → stash JSON body in ``_pending_notification_meta``
              for ``SessionManager.send()`` to pick up.
-           * ASLEEP → wake to IDLE (this is the canonical
-             notification-driven wake), then splice the pair and post
-             ``MSG_TC_WAKE``.
+           * ASLEEP → wake to IDLE, splice the pair, post empty
+             ``MSG_REQUEST`` to drive a meta-only turn.
 
-        ``MSG_TC_WAKE`` fires only on the ASLEEP→IDLE transition.  An
-        IDLE-state strip+reinject does NOT post wake — the agent is
-        already running and will see the new pair on its next request
-        cycle.
+        The wake mechanism uses ``MSG_REQUEST`` with ``None`` content
+        rather than ``MSG_TC_WAKE``.  This drives a real LLM turn whose
+        only payload is the meta prefix — the LLM sees the freshly
+        spliced notification pair at the wire tail and reacts.  The
+        legacy ``_handle_tc_wake`` path drains the dormant ``tc_inbox``
+        queue and would no-op here; ``_handle_request`` with empty
+        content is the canonical "observe wire + meta, take a turn"
+        path.
 
         The fingerprint is committed only when injection succeeds (or
         when in a state that cannot inject — STUCK/SUSPENDED/empty).
@@ -814,40 +818,40 @@ class BaseAgent:
 
         if self._state == AgentState.ASLEEP:
             # Notification arrival wakes the agent, then inject as IDLE.
-            # MSG_TC_WAKE fires only here, on the wake transition.
+            # An empty MSG_REQUEST drives a meta-only turn so the LLM
+            # observes the freshly spliced notification pair.
             self._asleep.clear()
             self._cancel_event.clear()
             self._set_state(AgentState.IDLE, reason="notification_arrival")
             self._reset_uptime()
             inject_ok = self._inject_notification_pair(notifications)
             if inject_ok:
-                from ..message import _make_message, MSG_TC_WAKE
+                from ..message import _make_message, MSG_REQUEST
                 try:
-                    wake_msg = _make_message(MSG_TC_WAKE, "system", "")
+                    wake_msg = _make_message(MSG_REQUEST, "system", None)
                     self.inbox.put(wake_msg)
                     self._wake_nap("notification_arrival")
                 except Exception:
                     pass
 
         elif self._state == AgentState.IDLE:
-            # Strip + reinject AND post MSG_TC_WAKE.  IDLE is "between
-            # turns, run loop blocked on inbox.get()" — without a wake
-            # message the loop sits forever, the wire pair never goes
-            # to the LLM, and the agent appears unresponsive even
+            # Strip + reinject AND drive a meta-only turn.  IDLE is
+            # "between turns, run loop blocked on inbox.get()" — without
+            # a wake message the loop sits forever, the wire pair never
+            # goes to the LLM, and the agent appears unresponsive even
             # though the notification arrived.
             #
-            # Earlier drafts of this code skipped the wake on IDLE→IDLE
-            # under the (wrong) reasoning that the agent was "already
-            # awake."  IDLE is awake-but-parked; only ACTIVE is
-            # awake-and-running.  Both ASLEEP and IDLE need MSG_TC_WAKE
-            # to make progress; only ACTIVE doesn't (its turn loop will
-            # see the next snapshot via _inject_notification_meta at
-            # request-send time).
+            # Posting an empty MSG_REQUEST (vs the legacy MSG_TC_WAKE)
+            # routes through _handle_request, which prepends meta and
+            # sends a real turn.  The synthesized notification pair is
+            # already at the wire tail; the LLM sees it and reacts.
+            # MSG_TC_WAKE would route to _handle_tc_wake which drains
+            # the dormant tc_inbox and no-ops post-redesign.
             inject_ok = self._inject_notification_pair(notifications)
             if inject_ok:
-                from ..message import _make_message, MSG_TC_WAKE
+                from ..message import _make_message, MSG_REQUEST
                 try:
-                    wake_msg = _make_message(MSG_TC_WAKE, "system", "")
+                    wake_msg = _make_message(MSG_REQUEST, "system", None)
                     self.inbox.put(wake_msg)
                     self._wake_nap("notification_sync")
                 except Exception:
@@ -1312,8 +1316,19 @@ class BaseAgent:
         """Transform message content before sending to LLM.
 
         Returns the content string to send.
+
+        ``None`` is the canonical "empty turn" signal — used by
+        ``_sync_notifications`` to wake the agent for a meta-only turn
+        after splicing a notification pair into the wire.  It collapses
+        to ``""`` so the downstream meta-prefix becomes the entire
+        payload.  ``json.dumps(None)`` would yield the string ``"null"``
+        which would land in the LLM's context as user text.
         """
-        return msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
+        if msg.content is None:
+            return ""
+        if isinstance(msg.content, str):
+            return msg.content
+        return json.dumps(msg.content)
 
     def _post_request(self, msg: Message, result: dict) -> None:
         """Called after _process_response.
