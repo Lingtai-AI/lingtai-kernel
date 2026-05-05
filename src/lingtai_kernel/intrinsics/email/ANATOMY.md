@@ -24,7 +24,8 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
   - Action dispatch: `handle` (`manager.py:180-209`).
   - Schedules: `_handle_schedule` (`manager.py:214-224`), `_schedule_create` / `_cancel` / `_reactivate` / `_list` (`manager.py:226-363`), schedule helpers (`manager.py:368-442`), `_scheduler_loop` / `_scheduler_tick` (`manager.py:444-543`).
   - Send: `_send` (`manager.py:548-650`). Dispatches via `_mailman` daemon threads.
-  - CRUD: `_check` (`manager.py:657-699`), `_read` (`manager.py:701-779`), `_reply` (`manager.py:785-807`), `_reply_all` (`manager.py:809-851`), `_search` (`manager.py:853-878`), `_archive` (`manager.py:880-910`), `_delete` (`manager.py:912-942`).
+  - CRUD: `_check` (`manager.py:657-699`), `_read`, `_dismiss`, `_reply`, `_reply_all`, `_search`, `_archive`, `_delete`. `_dismiss` is the lightweight cousin of `_read` — same effect on read state and notification but returns no email bodies; intended for the "I already saw it in the digest" path. All four read-state mutators (`_read`, `_dismiss`, `_archive`, `_delete`) call `EmailManager._rerender_unread_digest()` after the mutation so `.notification/email.json` mirrors the new state.
+  - Notification refresh: `_rerender_unread_digest` (method on `EmailManager`) — lazy-imports the kernel-side helper from `base_agent/messaging.py` and runs it. Centralised here so all read-state mutators share one call site.
   - Contacts: `_contacts_path` / `_load_contacts` / `_save_contacts` / `_contacts` / `_add_contact` / `_remove_contact` / `_edit_contact` (`manager.py:947-1082`).
 
 ## Connections
@@ -42,7 +43,9 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
 - `_mailman` runs as a daemon thread per recipient. It waits until `deliver_at`, then dispatches. The outbox entry is written synchronously before the thread starts.
 - `_mailman` with `skip_sent=True` (used by `_send`) deletes the outbox entry instead of moving it to `sent/`, because `_send` writes the `sent/` entry itself.
 - Schedule status lifecycle: `active` → `inactive` (cancel) or `completed` (all sent). On startup, `_reconcile_schedules_on_startup` flips `active` → `inactive` so schedules don't fire until explicitly reactivated.
-- `_read()` does NOT auto-dismiss notifications. Email arrivals write a single `.notification/email.json` snapshot of the current unread set; reads/archives/deletes do NOT trigger a rerender (the wire is "what was unread at the latest arrival," not "live mirror of unread"). Stale-after-read is acceptable; the agent can call `email(action="check")` for a fresh view, or wait for the next arrival to refresh `email.json`.
+- `.notification/email.json` is a **live mirror** of the current unread set. Any action that mutates the read state — `_read`, `_dismiss`, `_archive`, `_delete` — calls `_rerender_unread_digest(agent)` (lazy import from `base_agent/messaging.py`) so the wire's notification updates on the next heartbeat sync. The earlier "snapshot at last arrival" semantics led to the unread digest carrying mails the agent had already replied to indefinitely.
+- `_dismiss` is the lightweight "mark read without returning content" path — used when the agent already saw the body in the digest preview (≤200 chars renders inline) and just wants to clear the notification entry. Same effect on `read.json` and `.notification/email.json` as `_read`, but no email bodies in the response. Accepts a list (`email_id=[id1, id2, ...]`).
+- The unread-mail notification envelope carries an ``instructions`` field (set by `_rerender_unread_digest`) telling the agent to call `email(action="read", ...)` or `email(action="dismiss", ...)` after handling a mail; until the agent does, the notification keeps reminding them. This is the producer-side directive — generic frontend code does not have to know about email's dismissal contract.
 - Contact writes use atomic temp-file + `os.replace` to prevent corruption on crash.
 
 ## Notification format
@@ -50,7 +53,9 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
 When mail arrives, `base_agent/messaging.py:_on_normal_mail` calls
 `_rerender_unread_digest(agent)` which builds a digest of all currently
 unread mail using `primitives.py:_render_unread_digest`, then submits
-the result via `system.publish_notification` to `.notification/email.json`:
+the result via `system.publish_notification` to `.notification/email.json`.
+The same path runs after `_read` / `_dismiss` / `_archive` / `_delete`
+mutate the read state (each of those calls `EmailManager._rerender_unread_digest()`):
 
 ```json
 {
@@ -58,6 +63,7 @@ the result via `system.publish_notification` to `.notification/email.json`:
   "icon":         "📧",
   "priority":     "normal",
   "published_at": "2026-05-05T03:42:11Z",
+  "instructions": "Each entry above shows the sender, subject, and a preview of up to 200 characters. ... call email(action=\"read\", ...) or email(action=\"dismiss\", ...) ...",
   "data": {
     "count":               3,
     "newest_received_at":  "2026-05-05T03:42:09Z",
@@ -65,6 +71,11 @@ the result via `system.publish_notification` to `.notification/email.json`:
   }
 }
 ```
+
+The ``instructions`` field is the producer-side directive that
+replaces the static-prompt approach: it travels with the payload, so
+each producer owns its own dismissal contract without the kernel
+having to know about it.
 
 The agent reads this through the kernel-injected `system(action="notification")`
 wire pair (see root `ANATOMY.md` "Notifications"); the JSON dict appears

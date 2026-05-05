@@ -1819,3 +1819,131 @@ def test_email_send_plain_string_address_becomes_list(tmp_path):
 
     record = json.loads(sent_files[0].read_text())
     assert record["to"] == ["alice"], f"to field not normalized: {record['to']!r}"
+
+
+# ---------------------------------------------------------------------------
+# dismiss action — mark read without returning content; refreshes the
+# unread digest so .notification/email.json reflects the new state.
+# ---------------------------------------------------------------------------
+
+
+def test_email_dismiss_marks_read_and_returns_no_bodies(tmp_path):
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    mgr = agent._email_manager
+    eid_a = _make_inbox_email(agent.working_dir, message="a")
+    eid_b = _make_inbox_email(agent.working_dir, message="b")
+
+    result = mgr.handle({"action": "dismiss", "email_id": [eid_a, eid_b]})
+
+    assert result["status"] == "ok"
+    assert set(result["dismissed"]) == {eid_a, eid_b}
+    # No bodies returned.
+    assert "emails" not in result
+    # Both are now marked read.
+    check = mgr.handle({"action": "check"})
+    unread_flags = {e["id"]: e["unread"] for e in check["emails"]}
+    assert unread_flags[eid_a] is False
+    assert unread_flags[eid_b] is False
+
+
+def test_email_dismiss_accepts_single_string(tmp_path):
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    mgr = agent._email_manager
+    eid = _make_inbox_email(agent.working_dir, message="m")
+
+    result = mgr.handle({"action": "dismiss", "email_id": eid})
+
+    assert result["dismissed"] == [eid]
+
+
+def test_email_dismiss_unknown_id_goes_to_not_found(tmp_path):
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    mgr = agent._email_manager
+    eid_real = _make_inbox_email(agent.working_dir, message="real")
+
+    result = mgr.handle({"action": "dismiss", "email_id": [eid_real, "nope-xxx"]})
+
+    assert result["dismissed"] == [eid_real]
+    assert result["not_found"] == ["nope-xxx"]
+
+
+def test_email_dismiss_requires_email_id(tmp_path):
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    mgr = agent._email_manager
+
+    result = mgr.handle({"action": "dismiss", "email_id": []})
+
+    assert "error" in result
+
+
+def test_email_dismiss_rerenders_notification(tmp_path):
+    """After dismiss, .notification/email.json reflects the new
+    unread count (or is cleared when count drops to zero)."""
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    mgr = agent._email_manager
+    eid_a = _make_inbox_email(agent.working_dir, message="a")
+    eid_b = _make_inbox_email(agent.working_dir, message="b")
+
+    from lingtai_kernel.base_agent.messaging import _rerender_unread_digest
+    _rerender_unread_digest(agent)
+
+    notif_path = agent.working_dir / ".notification" / "email.json"
+    assert notif_path.exists()
+    payload = json.loads(notif_path.read_text())
+    assert payload["data"]["count"] == 2
+
+    mgr.handle({"action": "dismiss", "email_id": [eid_a]})
+    payload = json.loads(notif_path.read_text())
+    assert payload["data"]["count"] == 1
+
+    mgr.handle({"action": "dismiss", "email_id": [eid_b]})
+    assert not notif_path.exists()
+
+
+def test_email_dismiss_carries_instructions_in_envelope(tmp_path):
+    """The unread-mail notification envelope includes an
+    ``instructions`` field telling the agent to call read or dismiss
+    to clear handled mails."""
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    _make_inbox_email(agent.working_dir, message="m")
+
+    from lingtai_kernel.base_agent.messaging import _rerender_unread_digest
+    _rerender_unread_digest(agent)
+
+    payload = json.loads((agent.working_dir / ".notification" / "email.json").read_text())
+    assert "instructions" in payload
+    text = payload["instructions"]
+    assert "dismiss" in text
+    assert "read" in text
+
+
+def test_email_read_rerenders_notification(tmp_path):
+    """``read`` should also refresh the notification (it marks
+    mail as read just like dismiss does)."""
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    mgr = agent._email_manager
+    eid = _make_inbox_email(agent.working_dir, message="m")
+
+    from lingtai_kernel.base_agent.messaging import _rerender_unread_digest
+    _rerender_unread_digest(agent)
+
+    notif_path = agent.working_dir / ".notification" / "email.json"
+    assert notif_path.exists()
+
+    mgr.handle({"action": "read", "email_id": [eid]})
+    assert not notif_path.exists()
+
+
+def test_email_archive_rerenders_notification(tmp_path):
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    mgr = agent._email_manager
+    eid = _make_inbox_email(agent.working_dir, message="m")
+
+    from lingtai_kernel.base_agent.messaging import _rerender_unread_digest
+    _rerender_unread_digest(agent)
+
+    notif_path = agent.working_dir / ".notification" / "email.json"
+    assert notif_path.exists()
+
+    mgr.handle({"action": "archive", "email_id": [eid]})
+    assert not notif_path.exists()

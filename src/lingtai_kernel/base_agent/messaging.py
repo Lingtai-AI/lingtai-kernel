@@ -75,6 +75,20 @@ def _rerender_unread_digest(agent) -> str | None:
         agent._working_dir, "email",
         header=f"{count} unread email{'s' if count != 1 else ''}",
         icon="📧",
+        instructions=(
+            "Each entry above shows the sender, subject, and a preview "
+            "of up to 200 characters. If a preview ends with "
+            "'... (N more chars)' the message is truncated and you "
+            "must call email(action=\"read\", email_id=[id1, id2, ...]) "
+            "to see the full body. If the preview is short and shows "
+            "the full content, you can skip the read fetch — but you "
+            "still need to clear the notification: call "
+            "email(action=\"dismiss\", email_id=[id1, id2, ...]) with "
+            "the IDs you have handled. Both 'read' and 'dismiss' accept "
+            "a list, so process multiple mails in one call. Until you "
+            "read or dismiss a mail, this notification will keep "
+            "reminding you about it."
+        ),
         data={
             "count": count,
             "newest_received_at": newest_ts,

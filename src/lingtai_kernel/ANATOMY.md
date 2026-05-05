@@ -11,7 +11,7 @@ The minimal agent runtime: turn loop, lifecycle, signal consumption, tool dispat
 The kernel root holds the coordinator (`base_agent/`) plus a flat collection of supporting modules. Most are self-contained leaves; subfolders are concept-boundary units with their own anatomy.
 
 - `base_agent/` — `BaseAgent`, the kernel coordinator (package of 6 modules). `__init__.py` defines `BaseAgent` (~1027 lines: constructor, properties, state machine, hooks, cross-cutting stubs including the `.notification/` sync trio, pass-throughs to submodules). Submodules: `lifecycle.py` (start/stop/heartbeat/signals/refresh — heartbeat tick now also calls `_sync_notifications`), `turn.py` (main loop/message dispatch/AED/response processing), `tools.py` (tool schemas/dispatch/registry), `identity.py` (naming/manifest/status), `prompt.py` (system prompt building/flushing), `messaging.py` (mail/notification producers/outbound). Soul-flow domain logic lives in `intrinsics/soul/flow.py`. See `base_agent/ANATOMY.md`.
-- `notifications.py` — **canonical `.notification/` filesystem helpers** (`fadbabf`/`dda7d8a`). `notification_fingerprint(workdir)` returns the `(name, mtime_ns, size)` triple-tuple used to detect change between heartbeat ticks. `collect_notifications(workdir)` reads every `.notification/*.json` into a dict keyed by stem. `publish(workdir, tool_name, payload)` writes one file atomically (tmp+rename). `clear(workdir, tool_name)` deletes one file (idempotent). `submit(workdir, tool_name, *, data, header, icon, priority)` is the canonical producer-facing helper — wraps `publish` with the standard envelope (header/icon/priority/published_at/data) so producers only supply what is semantically theirs. The `system` intrinsic re-exports `submit` as `publish_notification` and `clear` as `clear_notification`.
+- `notifications.py` — **canonical `.notification/` filesystem helpers** (`fadbabf`/`dda7d8a`). `notification_fingerprint(workdir)` returns the `(name, mtime_ns, size)` triple-tuple used to detect change between heartbeat ticks. `collect_notifications(workdir)` reads every `.notification/*.json` into a dict keyed by stem. `publish(workdir, tool_name, payload)` writes one file atomically (tmp+rename). `clear(workdir, tool_name)` deletes one file (idempotent). `submit(workdir, tool_name, *, data, header, icon, priority, instructions=None)` is the canonical producer-facing helper — wraps `publish` with the standard envelope (header/icon/priority/published_at/data, plus optional top-level `instructions` when the producer supplies one) so producers only supply what is semantically theirs. The `system` intrinsic re-exports `submit` as `publish_notification` and `clear` as `clear_notification`.
 - `session.py` — `SessionManager`. LLM session lifecycle, token bookkeeping, chat history persistence, AED (auto-error-recovery) retry path. Accepts a `notification_inject_fn` callback (wired to `BaseAgent._inject_notification_meta` at construction); called after `_health_check` in `send()` so ACTIVE-state notification meta is prepended to the latest string-content `ToolResultBlock` before the API call goes out.
 - `tool_executor.py` — `ToolExecutor`. Synchronous tool dispatch, reasoning-parameter injection, timing, error capture.
 - `tool_timing.py` — small helper for tool execution timing records.
@@ -73,7 +73,7 @@ Each file is the producer's complete state for that channel — there is no "que
 
 At most ONE `system(action="notification")` pair lives in the wire history at any time. When the kernel detects a fingerprint change, it strips the prior pair (recording its `call_id` in `agent._notification_block_id`) and either reinjects a fresh pair or — if all producer files vanished — leaves the wire empty. Agents observe the **current** notification state, not a history of arrivals. Past arrivals belong in the producer's own logs (e.g. `mailbox/inbox/`, `logs/soul_flow.jsonl`), not in the wire.
 
-### Producer contract — `submit(workdir, tool_name, *, data, header, icon, priority)`
+### Producer contract — `submit(workdir, tool_name, *, data, header, icon, priority, instructions=None)`
 
 In-process producers call **`publish_notification`** (re-exported by the `system` intrinsic from `notifications.submit`) — the canonical helper that wraps `notifications.publish` with the standard envelope:
 
@@ -84,6 +84,11 @@ publish_notification(
     agent._working_dir, "email",
     header=f"{n} unread email{'s' if n != 1 else ''}",
     icon="📧",
+    instructions=(
+        "After handling, call email(action=\"read\", email_id=[...]) "
+        "or email(action=\"dismiss\", email_id=[...]) to clear "
+        "handled mails from this notification."
+    ),
     data={"count": n, "newest_received_at": ts, "digest": body},
 )
 
@@ -92,8 +97,10 @@ clear_notification(agent._working_dir, "email")
 ```
 
 Side effects of `publish_notification`:
-- Writes `.notification/<tool_name>.json` atomically (tmp + rename) with `{header, icon, priority, published_at, data}`.
+- Writes `.notification/<tool_name>.json` atomically (tmp + rename) with `{header, icon, priority, published_at, data}` plus an optional top-level `instructions` field when the producer supplies one.
 - Returns immediately — no enqueue, no wake post. The kernel sync mechanism (next section) handles wire injection.
+
+The optional `instructions` field is the producer-side directive — text describing what the agent must do to dismiss or act on the notification. It rides with the payload so each producer owns its own dismissal contract; generic frontend / kernel code does not need to know per-producer rules. Email uses it for "call read or dismiss to clear"; soul flow leaves it unset (voices are advisory, no dismissal needed); MCP servers can carry their own.
 
 External producers (MCP servers over SSH, separate processes) bypass the helper and write the same envelope directly to `<workdir>/.notification/mcp.<server>.json` using `tmp + rename`. The contract is the filesystem layout, not the Python API.
 

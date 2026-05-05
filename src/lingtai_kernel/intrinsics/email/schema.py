@@ -16,8 +16,8 @@ def get_schema(lang: str = "en") -> dict:
             "action": {
                 "type": "string",
                 "enum": [
-                    "send", "check", "read", "reply", "reply_all", "search",
-                    "archive", "delete",
+                    "send", "check", "read", "dismiss", "reply", "reply_all",
+                    "search", "archive", "delete",
                     "contacts", "add_contact", "remove_contact", "edit_contact",
                 ],
                 "description": t(lang, "email.action"),

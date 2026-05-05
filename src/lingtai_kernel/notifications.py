@@ -114,6 +114,7 @@ def submit(
     header: str,
     icon: str = "🔔",
     priority: str = "normal",
+    instructions: str | None = None,
 ) -> None:
     """Submit a notification with the standard envelope.
 
@@ -137,6 +138,14 @@ def submit(
             common conventions: 📧 (mail), 🌊 (soul), 💬 (chat), …
         priority: ``"low"``, ``"normal"``, or ``"high"``.  Frontends
             may surface high-priority notifications more prominently.
+        instructions: Optional agent-facing directive describing how to
+            dismiss or act on this notification.  Surfaces as a
+            top-level field in the wire JSON so the agent reads it
+            inline with the rest of the envelope.  Producers that
+            require an explicit dismissal action (e.g. email's
+            ``read``) put the instructions here so the directive lives
+            with the payload rather than in a static prompt.  Omit
+            when the notification is purely informational.
 
     External producers that cannot import the kernel (e.g. MCP servers
     over SSH) should use :func:`publish` directly with the same
@@ -148,6 +157,7 @@ def submit(
         submit(agent._working_dir, "email",
                header=f"{n} unread",
                icon="📧",
+               instructions="Call email(action='read', email_id=[...]) to dismiss handled mails.",
                data={"count": n, "previews": [...]})
 
     To clear a notification (e.g. when state empties) call
@@ -164,4 +174,6 @@ def submit(
         ),
         "data": data,
     }
+    if instructions is not None:
+        payload["instructions"] = instructions
     publish(workdir, tool_name, payload)

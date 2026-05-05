@@ -139,6 +139,19 @@ class EmailManager:
         emails.sort(key=_email_time, reverse=True)
         return emails
 
+    def _rerender_unread_digest(self) -> None:
+        """Republish ``.notification/email.json`` per current unread state.
+
+        Called after any read-state mutation (``_read``, ``_reply``,
+        ``_reply_all``, ``_archive``, ``_delete``) so the agent's
+        notification reflects the new state on the next heartbeat
+        sync.  Lazy-imports the function from ``base_agent.messaging``
+        to avoid circular import at module load (intrinsics →
+        base_agent crosses the layering boundary).
+        """
+        from ...base_agent.messaging import _rerender_unread_digest
+        _rerender_unread_digest(self._agent)
+
     def _email_summary(self, e: dict, read_set: set[str] | None = None, truncate: int = 500) -> dict:
         """Build a summary dict from a raw email dict."""
         if read_set is None:
@@ -207,6 +220,8 @@ class EmailManager:
             return self._check(args)
         elif action == "read":
             return self._read(args)
+        elif action == "dismiss":
+            return self._dismiss(args)
         elif action == "reply":
             return self._reply(args)
         elif action == "reply_all":
@@ -736,6 +751,7 @@ class EmailManager:
 
         results = []
         errors = []
+        read_state_changed = False
         for eid in ids:
             if folder:
                 path = self._mailbox_path / folder / eid / "message.json"
@@ -757,6 +773,7 @@ class EmailManager:
                     continue
             if data.get("_folder") == "inbox":
                 _mark_read(self._agent, eid)
+                read_state_changed = True
             entry = {
                 "id": eid,
                 "from": data.get("from", ""),
@@ -773,10 +790,50 @@ class EmailManager:
             self._inject_identity(entry, data)
             results.append(scrub_time_fields(self._agent, entry))
 
+        if read_state_changed:
+            self._rerender_unread_digest()
+
         result = {"status": "ok", "emails": results}
         if errors:
             result["not_found"] = errors
 
+        return result
+
+    def _dismiss(self, args: dict) -> dict:
+        """Mark inbox emails as read without returning their content.
+
+        ``dismiss`` is the lightweight cousin of ``read``: same effect
+        on the unread set and the notification, but no email bodies
+        come back in the result.  Use it when the agent has already
+        seen the content (e.g. via the unread digest) and just wants
+        to clear the notification entry for a list of IDs.
+
+        Returns ``{"status": "ok", "dismissed": [...]}`` with the IDs
+        actually marked.  Non-inbox or missing IDs go into
+        ``not_found`` so the caller can detect partial failures.
+        """
+        ids = args.get("email_id", [])
+        if isinstance(ids, str):
+            ids = [ids]
+        if not ids:
+            return {"error": "email_id is required"}
+
+        dismissed: list[str] = []
+        not_found: list[str] = []
+        for eid in ids:
+            data = self._load_email(eid)
+            if data is None or data.get("_folder") != "inbox":
+                not_found.append(eid)
+                continue
+            _mark_read(self._agent, eid)
+            dismissed.append(eid)
+
+        if dismissed:
+            self._rerender_unread_digest()
+
+        result: dict = {"status": "ok", "dismissed": dismissed}
+        if not_found:
+            result["not_found"] = not_found
         return result
 
     def _lookup(self, email_id: str) -> dict | None:
@@ -908,6 +965,10 @@ class EmailManager:
             read_set = _read_ids(self._agent)
             read_set -= set(archived)
             _save_read_ids(self._agent, read_set)
+            # Archive removes mail from inbox — the unread set shrinks
+            # too.  Rerender so .notification/email.json reflects the
+            # new state on the next heartbeat sync.
+            self._rerender_unread_digest()
 
         result: dict = {"status": "ok", "archived": archived}
         if not_found:
@@ -941,6 +1002,11 @@ class EmailManager:
             read_set = _read_ids(self._agent)
             read_set -= set(deleted)
             _save_read_ids(self._agent, read_set)
+            # Delete from inbox shrinks the unread set the same way
+            # archive does.  Rerender so the wire's notification
+            # updates on the next heartbeat sync.
+            if folder == "inbox":
+                self._rerender_unread_digest()
 
         result: dict = {"status": "ok", "deleted": deleted}
         if not_found:
