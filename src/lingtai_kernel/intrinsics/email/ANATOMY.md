@@ -33,33 +33,45 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
 - **Inbound (cross-module):** `_new_mailbox_id` is imported by `base_agent/messaging.py:28` and `services/mail.py:165` for ID generation.
 - **Inbound (cross-module):** `EmailManager` is imported by `lingtai/__init__.py:19` for the wrapper re-export.
 - **Outbound:** Depends on `..i18n` (translations), `..message` (message construction), `..time_veil` (timestamp scrubbing), `..token_counter` (budget checks in `_check`).
-- **Outbound (unread-digest producer):** Mail arrival surfaces in the agent's wire chat as a single coalescing `email(action="unread")` tool-call pair. `base_agent/messaging.py:_on_normal_mail` calls `_rerender_unread_digest(agent)` which uses `primitives.py:_render_unread_digest` to build the digest prose. Uses `coalesce=True, replace_in_history=True, source="email.unread"` — mirrors the soul-flow pattern (single-slot, always reflects latest arrival snapshot, no dismiss path). See root `ANATOMY.md` "Involuntary tool-call pairs" for the producer contract.
-- **Outbound (bounce notification):** `primitives.py:_mailman` enqueues bounce notifications as `system(action="notification", source="email.bounce")` via `_enqueue_system_notification`. These are infrequent, semantically distinct events — not aggregated into the unread digest.
-- **Data flow:** All state lives in the filesystem under `mailbox/`. The `EmailManager` is stateless except for `_last_sent` (duplicate-send guard) and `_scheduler_thread` (background timer).
+- **Outbound (unread-digest producer):** Mail arrival writes `.notification/email.json` via `publish_notification` (or deletes it via `clear_notification` when count hits 0). `base_agent/messaging.py:_on_normal_mail` calls `_rerender_unread_digest(agent)` (`base_agent/messaging.py:52`) which uses `primitives.py:_render_unread_digest` to build the digest prose, then `system.publish_notification(workdir, "email", header=…, icon="📧", data={count, newest_received_at, digest})`. The kernel's `_sync_notifications` poll picks up the fingerprint change on the next heartbeat tick and updates the wire's `system(action="notification")` block. See root `ANATOMY.md` "Notifications" for the full architecture.
+- **Outbound (bounce notification):** `primitives.py:_mailman` calls `agent._enqueue_system_notification(source="email.bounce", ref_id=msg_id, body=...)` (`primitives.py:280`). The system events producer in `base_agent/messaging.py` merges the bounce into the events list inside `.notification/system.json` (capped at 20 newest) under a per-agent `threading.Lock`. Bounces share `system.json` with daemon notices, MCP-bridged events, and any future kernel events — they are NOT aggregated into the unread digest at `email.json`.
+- **Data flow:** All state lives in the filesystem under `mailbox/` and `.notification/`. The `EmailManager` is stateless except for `_last_sent` (duplicate-send guard) and `_scheduler_thread` (background timer).
 
 ## Key invariants
 
 - `_mailman` runs as a daemon thread per recipient. It waits until `deliver_at`, then dispatches. The outbox entry is written synchronously before the thread starts.
 - `_mailman` with `skip_sent=True` (used by `_send`) deletes the outbox entry instead of moving it to `sent/`, because `_send` writes the `sent/` entry itself.
 - Schedule status lifecycle: `active` → `inactive` (cancel) or `completed` (all sent). On startup, `_reconcile_schedules_on_startup` flips `active` → `inactive` so schedules don't fire until explicitly reactivated.
-- `_read()` does NOT auto-dismiss notifications. Email arrivals use the single-slot unread-digest pattern (`email.unread`), so there are no per-mail notification pairs to dismiss.
+- `_read()` does NOT auto-dismiss notifications. Email arrivals write a single `.notification/email.json` snapshot of the current unread set; reads/archives/deletes do NOT trigger a rerender (the wire is "what was unread at the latest arrival," not "live mirror of unread"). Stale-after-read is acceptable; the agent can call `email(action="check")` for a fresh view, or wait for the next arrival to refresh `email.json`.
 - Contact writes use atomic temp-file + `os.replace` to prevent corruption on crash.
 
 ## Notification format
 
 When mail arrives, `base_agent/messaging.py:_on_normal_mail` calls
 `_rerender_unread_digest(agent)` which builds a digest of all currently
-unread mail using `primitives.py:_render_unread_digest`. The digest is
-enqueued as a single coalescing `email(action="unread")` tool-call pair:
+unread mail using `primitives.py:_render_unread_digest`, then submits
+the result via `system.publish_notification` to `.notification/email.json`:
 
-- `ToolCallBlock` with args: `action="unread"`, `count=<int>`, `received_at=<iso>`
-- `ToolResultBlock` with rendered digest prose (i18n key: `email.unread_digest`)
+```json
+{
+  "header":       "3 unread emails",
+  "icon":         "📧",
+  "priority":     "normal",
+  "published_at": "2026-05-05T03:42:11Z",
+  "data": {
+    "count":               3,
+    "newest_received_at":  "2026-05-05T03:42:09Z",
+    "digest":              "[email] 3 unread message(s) — most recent ..."
+  }
+}
+```
 
-The pair uses `coalesce=True, replace_in_history=True, source="email.unread"`
-— at most one unread-digest pair in the wire at any time. New arrivals
-replace the prior pair; reads/archives/deletes do NOT trigger rerenders.
+The agent reads this through the kernel-injected `system(action="notification")`
+wire pair (see root `ANATOMY.md` "Notifications"); the JSON dict appears
+under the `email` key in the `notifications` map. There is no per-mail
+"notification pair" anymore — the file IS the notification.
 
-Digest prose format (en):
+Digest prose format (en) is what lands in `data.digest`:
 ```
 [email] {count} unread message(s) — most recent {recency}.
 
@@ -73,4 +85,4 @@ Digest prose format (en):
 
 - **Cap:** max 10 entries (newest-first), 200 chars preview each.
 - **`recency`:** veiled timestamp of newest unread (uses `time_veil.veil()`).
-- **Empty unread set is unreachable** — rerender only fires after arrival.
+- **Lifecycle:** `.notification/email.json` is rewritten on every arrival; deleted via `clear_notification` when count hits 0 (the kernel sync then strips the wire's notification block on the next tick). Reads/archives/deletes do NOT trigger a rerender.

@@ -132,9 +132,9 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 - `_session_class` (line 983) — override to inject provider-specific session behavior on the CC path.
 - `_adapter_extra_body()` (line 1166) — override to add `extra_body` JSON fields (e.g. OpenRouter `reasoning: {include: true}`).
 
-### Pre-request hook (mid-turn tc_inbox drain)
+### Pre-request hook (mid-turn tc_inbox drain — dormant)
 
-All four `send` / `send_stream` paths in this file fire `self.pre_request_hook(self._interface)` after committing the message to the canonical interface but before the API call. The kernel installs `BaseAgent._drain_tc_inbox_for_hook` here so involuntary tool-call pairs (mail notifications, soul.flow voices) splice into the wire chat mid-turn instead of waiting for the outer turn to end. Three regimes:
+All four `send` / `send_stream` paths in this file fire `self.pre_request_hook(self._interface)` after committing the message to the canonical interface but before the API call. Historically the kernel installed `BaseAgent._drain_tc_inbox_for_hook` here so involuntary tool-call pairs (mail notifications, soul.flow voices) spliced into the wire chat mid-turn. After the `.notification/` redesign (`fadbabf`/`d2da97e`) the hook is still installed but the queue is always empty in production — the equivalent ACTIVE-state mid-turn injection now happens via `SessionManager.send`'s `notification_inject_fn` callback, which prepends the JSON body onto the latest string-content `ToolResultBlock` before this hook fires. Phase 3 will remove the hook entirely. Three regimes (preserved for historical context and future re-use):
 
 - **`OpenAIChatSession.send` / `send_stream`** — canonical-interface; the hook splices into the same interface that's about to be serialized via `_build_messages()`. Spliced pair appears in this same API request. Same-turn delivery.
 - **`OpenAIResponsesSession.send` / `send_stream`** — server-state via `previous_response_id`; the hook splices into `self._interface` but the wire payload comes from `_convert_input(message)` (just the new input). Spliced pair is recorded in canonical interface immediately for persistence/inspection but only reaches the LLM next turn after re-sync. Documented inline.

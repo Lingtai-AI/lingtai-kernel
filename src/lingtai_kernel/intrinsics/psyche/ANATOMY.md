@@ -28,10 +28,10 @@ Agent identity, working notes, and context lifecycle — the "bare essentials of
   - `_lingtai_load()` (`_lingtai.py:23-54`) — merge `system/covenant.md` + `system/lingtai.md` and write to the protected `covenant` prompt section.
 
 - `_molt.py` — Context molt core, name handlers, and system-initiated molt.
-  - `_context_molt()` (`_molt.py:21-223`) — agent-initiated molt: validates summary & keep_tool_calls, snapshots, archives history, wipes wire session, replays the molt's own ToolCallBlock + kept pairs into the fresh interface. The core of the psyche.
+  - `_context_molt()` (`_molt.py:21-223`) — agent-initiated molt: validates summary & keep_tool_calls, snapshots, archives history, wipes wire session, replays the molt's own ToolCallBlock + kept pairs into the fresh interface. The core of the psyche. **Post-redesign:** also `rmtree`s `.notification/` and resets `agent._notification_fp` / `_notification_block_id` / `_pending_notification_meta` so the next sync sees a fresh empty state. Memory loss includes notification state (the empty window post-molt is intentional). Still calls `agent._tc_inbox.drain()` defensively for pre-redesign items that survived a restart.
   - `_name_set()` (`_molt.py:230-239`) — set the agent's true (immutable) name.
   - `_name_nickname()` (`_molt.py:242-245`) — set or clear the agent's mutable nickname.
-  - `context_forget()` (`_molt.py:252-362`) — system-initiated forced molt: synthesizes a complete ToolCallBlock+ToolResultBlock pair, wipes context, replays them into the fresh interface. Called by `base_agent` when the warning ladder is exhausted or an external `.forget` signal arrives.
+  - `context_forget()` (`_molt.py:252-362`) — system-initiated forced molt: synthesizes a complete ToolCallBlock+ToolResultBlock pair, wipes context, replays them into the fresh interface. Called by `base_agent` when the warning ladder is exhausted or an external `.forget` signal arrives. Same `.notification/` clearing as `_context_molt`.
 
 ## Connections
 
@@ -39,7 +39,7 @@ Agent identity, working notes, and context lifecycle — the "bare essentials of
 - **Inbound (cross-module):** `context_forget` is called by `base_agent/lifecycle.py:235-236` (warning ladder), `base_agent/turn.py:341-342` (AED), and `base_agent/turn.py:353-354` (`.forget` signal).
 - **Inbound (cross-module):** `_write_molt_snapshot` is imported by `intrinsics/soul/consultation.py` for snapshot loading via `_load_snapshot_interface`.
 - **Outbound:** Depends on `..i18n` (translations), `..llm.interface` (`ToolCallBlock`, `ToolResultBlock`), `..token_counter` (token budget checks in `_pad_append`).
-- **Data flow:** All state lives in the filesystem under `system/` (`pad.md`, `lingtai.md`, `covenant.md`, `pad_append.json`, `summaries/`) and `history/` (`chat_history.jsonl`, `chat_history_archive.jsonl`, `snapshots/`).
+- **Data flow:** All state lives in the filesystem under `system/` (`pad.md`, `lingtai.md`, `covenant.md`, `pad_append.json`, `summaries/`) and `history/` (`chat_history.jsonl`, `chat_history_archive.jsonl`, `snapshots/`). The molt path also touches `.notification/` (deletes everything in it) and the agent's notification-tracking attributes.
 
 ## Key invariants
 
