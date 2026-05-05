@@ -19,18 +19,25 @@ def _on_mail_received(agent, payload: dict) -> None:
 
 
 def _on_normal_mail(agent, payload: dict) -> None:
-    """Handle a normal mail — rerender the unread digest in the wire chat.
+    """Handle a normal mail — republish the unread digest to ``.notification/email.json``.
 
     The message is already persisted to mailbox/inbox/ by MailService.
-    Mail arrival triggers a single splice of an ``email(action="unread")``
-    digest pair (replacing any prior pair for source="email.unread").
-    Reads, archives, and deletes do NOT trigger a rerender — the wire
-    notification is a snapshot of what was unread at the latest arrival,
-    not a live unread mirror. Stale-after-read is acceptable; the agent
-    can call ``email(action="check")`` for a fresh view.
+    Mail arrival triggers a fresh write of ``.notification/email.json``;
+    the kernel's notification sync mechanism (see
+    base_agent/__init__.py:_sync_notifications) detects the fingerprint
+    change on the next heartbeat tick and updates the wire's
+    notification block accordingly.
 
-    Capabilities still set ``_mailbox_name`` / ``_mailbox_tool`` for
-    digest rendering.
+    Reads, archives, and deletes do NOT trigger a rerender — the wire
+    notification is a snapshot of what was unread at the latest
+    arrival, not a live unread mirror.  Stale-after-read is acceptable;
+    the agent can call ``email(action="check")`` for a fresh view.
+
+    The ``_wake_nap`` call is preserved for sub-second latency: it
+    nudges the heartbeat loop so notification sync runs within ~1 tick
+    instead of waiting for the next periodic poll.  No ``MSG_TC_WAKE``
+    here — the sync mechanism owns wake transitions; this just shortens
+    the latency on an already-awake agent.
     """
     address = payload.get("from", "unknown")
     subject = payload.get("subject") or "(no subject)"
@@ -43,142 +50,138 @@ def _on_normal_mail(agent, payload: dict) -> None:
 
 
 def _rerender_unread_digest(agent) -> str | None:
-    """Splice the current-unread digest into the wire chat.
+    """Publish (or clear) ``.notification/email.json`` per current unread state.
 
-    Computes the unread set, renders the digest prose, builds a synthetic
-    ``email(action="unread")`` tool-call pair, and enqueues it on
-    ``tc_inbox`` with ``coalesce=True, replace_in_history=True`` and
-    ``source="email.unread"``. The drain replaces any prior digest pair
-    in the wire with this one.
+    Computes the unread set via ``_render_unread_digest``.  When count
+    is positive, writes a structured payload to ``.notification/email.json``
+    with envelope fields (header, icon, priority, published_at) plus a
+    ``data`` field carrying the count, newest-received timestamp, and
+    the rendered digest body.  When count drops to 0, deletes the file
+    so the kernel's sync strips the wire's notification block.
 
-    Returns the call_id of the enqueued pair, or None if there's nothing
-    unread (no enqueue happens — caller's responsibility to know whether
-    that means "leave prior digest stale" or "explicitly clear it").
-
-    The current trigger point (``_on_normal_mail``) only fires after a
-    mail has been persisted to the inbox, so by construction count >= 1
-    when this is called from arrival. The ``count == 0`` short-circuit
-    is defensive for future non-arrival callers.
+    Returns ``"email"`` when published, ``None`` when cleared.  The
+    caller doesn't typically use the return value — the side-effect on
+    ``.notification/`` is the contract.
     """
-    import secrets
     from datetime import datetime, timezone
-    from ..llm.interface import ToolCallBlock, ToolResultBlock
-    from ..tc_inbox import InvoluntaryToolCall
+    from ..notifications import publish, clear
     from ..intrinsics.email.primitives import _render_unread_digest
 
     body, count, newest_ts = _render_unread_digest(agent)
+
     if count == 0:
+        clear(agent._working_dir, "email")
+        agent._log("email_notification_cleared")
         return None
 
-    call_id = f"un_{int(time.time()*1000):x}_{secrets.token_hex(2)}"
-    received_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    call = ToolCallBlock(
-        id=call_id,
-        name="email",
-        args={
-            "action": "unread",
+    payload = {
+        "header": f"{count} unread email{'s' if count != 1 else ''}",
+        "icon": "📧",
+        "priority": "normal",
+        "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "data": {
             "count": count,
-            "received_at": received_at,
+            "newest_received_at": newest_ts,
+            "digest": body,
         },
-    )
-    result = ToolResultBlock(id=call_id, name="email", content=body)
-    item = InvoluntaryToolCall(
-        call=call,
-        result=result,
-        source="email.unread",
-        enqueued_at=time.time(),
-        coalesce=True,
-        replace_in_history=True,
-    )
-    agent._tc_inbox.enqueue(item)
+    }
+    publish(agent._working_dir, "email", payload)
 
     agent._log(
-        "email_unread_digest_enqueued",
-        call_id=call_id,
+        "email_notification_published",
         count=count,
         newest_received_at=newest_ts,
     )
-
-    # Wake the run loop so the digest is drained
-    agent._wake_nap("email_unread_digest_enqueued")
-    try:
-        wake_msg = _make_message(MSG_TC_WAKE, "system", "")
-        agent.inbox.put(wake_msg)
-    except Exception as e:
-        agent._log(
-            "tc_wake_post_error",
-            source="email.unread",
-            error=str(e)[:200],
-        )
-
-    return call_id
+    return "email"
 
 
 def _enqueue_system_notification(agent, *, source: str, ref_id: str, body: str) -> str:
-    """Synthesize a ``system(action="notification")`` tool-call pair and
-    enqueue it on ``tc_inbox`` for splicing at the next safe boundary.
+    """Append a system event to ``.notification/system.json``.
+
+    The system intrinsic owns this single file and multiplexes its
+    event types inside (mail bounces, daemon notices, MCP-bridged
+    events, future kernel events).  Each call merges a new event into
+    the existing list, capped at the 20 most recent entries so a noisy
+    producer can't blow the agent's context window.
+
+    The merge is read-modify-write on the same file, so concurrent
+    arrivals (e.g. a burst of bounces) need a per-agent lock to avoid
+    losing writes.  The lock is created lazily on first use; only
+    ``system.json`` needs it because ``email.json`` and ``soul.json``
+    recompute full state on every publish (no merge).
 
     Args:
         agent: The agent instance.
         source: "email", "email.bounce", "daemon", "mcp.<name>", etc.
         ref_id: External reference (mail_id for email arrival, etc.).
-        body: The localized prose that becomes the ``ToolResultBlock`` content.
+        body: The localized prose for the agent to read.
 
     Returns:
-        The ``notif_id`` (stable, agent-facing handle).
+        An identifier for the event (for logging and back-compat with
+        callers that expected a notif_id; not actually used for any
+        per-id lifecycle under the new model).
     """
     import secrets
+    import threading
     from datetime import datetime, timezone
-    from ..llm.interface import ToolCallBlock, ToolResultBlock
-    from ..tc_inbox import InvoluntaryToolCall
+    from ..notifications import publish, collect_notifications
 
-    notif_id = f"notif_{int(time.time()*1000):x}_{secrets.token_hex(3)}"
-    call_id = f"sn_{int(time.time()*1000):x}_{secrets.token_hex(2)}"
+    event_id = f"evt_{int(time.time()*1000):x}_{secrets.token_hex(2)}"
     received_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    call = ToolCallBlock(
-        id=call_id,
-        name="system",
-        args={
-            "action": "notification",
-            "notif_id": notif_id,
+    # Lazy per-agent lock for the read-modify-write merge.  Stored as
+    # a plain attribute since BaseAgent doesn't declare it (only
+    # `system.json` needs this; other producers don't merge).
+    lock = getattr(agent, "_system_notification_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        agent._system_notification_lock = lock
+
+    with lock:
+        current = collect_notifications(agent._working_dir).get("system", {})
+        events = list(current.get("data", {}).get("events", []))
+
+        events.append({
+            "event_id": event_id,
             "source": source,
             "ref_id": ref_id,
-            "received_at": received_at,
-        },
-    )
-    result = ToolResultBlock(id=call_id, name="system", content=body)
-    item = InvoluntaryToolCall(
-        call=call,
-        result=result,
-        source=f"system.notification:{notif_id}",
-        enqueued_at=time.time(),
-        coalesce=False,
-        replace_in_history=False,
-    )
-    agent._tc_inbox.enqueue(item)
+            "body": body,
+            "at": received_at,
+        })
+        # Cap at the 20 most recent.
+        events = events[-20:]
+
+        payload = {
+            "header": (
+                f"{len(events)} system notification"
+                f"{'s' if len(events) != 1 else ''}"
+            ),
+            "icon": "🔔",
+            "priority": "normal",
+            "published_at": received_at,
+            "data": {"events": events},
+        }
+        publish(agent._working_dir, "system", payload)
 
     agent._log(
-        "system_notification_enqueued",
-        notif_id=notif_id,
-        call_id=call_id,
+        "system_notification_published",
+        event_id=event_id,
         source=source,
         ref_id=ref_id,
     )
-    agent._wake_nap("system_notification_enqueued")
+    # Sub-second sync latency: nudge the heartbeat.  Wake transitions
+    # are owned by the kernel notification sync mechanism.
     try:
-        wake_msg = _make_message(MSG_TC_WAKE, "system", "")
-        agent.inbox.put(wake_msg)
+        agent._wake_nap("system_notification_published")
     except Exception as e:
         agent._log(
-            "tc_wake_post_error",
+            "system_notification_wake_error",
             source=source,
             ref_id=ref_id,
             error=str(e)[:200],
         )
 
-    return notif_id
+    return event_id
 
 
 def _notify(agent, sender: str, text: str) -> None:

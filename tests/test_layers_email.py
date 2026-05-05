@@ -58,7 +58,14 @@ def test_email_intrinsic_registers_tool(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_email_receive_notification(tmp_path):
-    """Incoming mail should enqueue an email(action='unread') digest pair on tc_inbox."""
+    """Incoming mail should publish ``.notification/email.json`` with the
+    current unread digest.  Under the .notification/ filesystem redesign,
+    arrivals no longer enqueue on tc_inbox — the kernel's notification
+    sync mechanism reads the file on its next heartbeat tick and injects
+    the wire pair.
+    """
+    from lingtai_kernel.notifications import collect_notifications
+
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     # Mail must be on disk before the digest renderer runs.
     _make_inbox_email(agent.working_dir, sender="sender", subject="hi", message="body")
@@ -69,29 +76,34 @@ def test_email_receive_notification(tmp_path):
         "subject": "hi",
         "message": "body",
     })
-    items = agent._tc_inbox.drain()
-    assert len(items) == 1
-    item = items[0]
-    assert item.call.name == "email"
-    assert item.call.args["action"] == "unread"
-    assert item.call.args["count"] == 1
-    assert "received_at" in item.call.args
-    assert "hi" in item.result.content
-    assert "sender" in item.result.content
+    # tc_inbox should be empty under the new path.
+    assert len(agent._tc_inbox.drain()) == 0
+    # The notification file carries the digest.
+    out = collect_notifications(agent.working_dir)
+    assert "email" in out
+    assert out["email"]["data"]["count"] == 1
+    digest = out["email"]["data"]["digest"]
+    assert "hi" in digest
+    assert "sender" in digest
 
 
 def test_email_receive_fallback_id(tmp_path):
-    """Digest should still emit even when arrival payload omits _mailbox_id."""
+    """Digest should still publish even when arrival payload omits _mailbox_id."""
+    from lingtai_kernel.notifications import collect_notifications
+
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     _make_inbox_email(agent.working_dir, sender="sender", subject="(no subj)", message="body")
     agent._on_mail_received({"from": "sender", "message": "body"})
-    items = agent._tc_inbox.drain()
-    assert len(items) == 1
-    assert items[0].source == "email.unread"
+    out = collect_notifications(agent.working_dir)
+    assert "email" in out
+    assert out["email"]["data"]["count"] == 1
 
 
 def test_email_receive_via_agent(tmp_path):
-    """After add_capability('email'), agent._on_mail_received should rerender the digest."""
+    """After add_capability('email'), agent._on_mail_received publishes
+    the unread digest to ``.notification/email.json``."""
+    from lingtai_kernel.notifications import collect_notifications
+
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     _make_inbox_email(agent.working_dir, sender="sender", subject="hi", message="body")
     agent._on_mail_received({
@@ -101,10 +113,9 @@ def test_email_receive_via_agent(tmp_path):
         "subject": "hi",
         "message": "body",
     })
-    items = agent._tc_inbox.drain()
-    assert len(items) == 1
-    assert items[0].call.args["action"] == "unread"
-    assert items[0].source == "email.unread"
+    out = collect_notifications(agent.working_dir)
+    assert "email" in out
+    assert out["email"]["data"]["count"] == 1
 
 
 # ---------------------------------------------------------------------------

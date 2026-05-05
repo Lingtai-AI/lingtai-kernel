@@ -145,7 +145,17 @@ def test_sequential_execution_stops_on_cancel(tmp_path):
 
 
 def test_normal_email_notifies_inbox(tmp_path):
-    """Normal-type mail should wake the run loop via MSG_TC_WAKE on the agent inbox."""
+    """Normal-type mail publishes ``.notification/email.json``.
+
+    Under the .notification/ filesystem redesign, mail arrival no longer
+    posts MSG_TC_WAKE to the agent inbox.  Instead it writes the unread
+    digest to ``.notification/email.json`` and calls ``_wake_nap`` to
+    nudge the heartbeat for sub-second sync latency.  The kernel's
+    notification sync mechanism reads the file and injects the wire
+    pair (or wakes the agent if asleep).
+    """
+    from lingtai_kernel.notifications import collect_notifications
+
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     _persist_inbox_email(agent.working_dir, sender="colleague", subject="hello", message="hi there")
     agent._on_mail_received({
@@ -153,7 +163,9 @@ def test_normal_email_notifies_inbox(tmp_path):
         "from": "colleague", "to": "test", "subject": "hello",
         "message": "hi there", "type": "normal",
     })
-    assert not agent.inbox.empty()
+    out = collect_notifications(agent.working_dir)
+    assert "email" in out
+    assert out["email"]["data"]["count"] == 1
     assert not agent._cancel_event.is_set()
 
 
@@ -180,7 +192,10 @@ def test_non_admin_can_send_normal_mail(tmp_path):
 
 
 def test_mail_type_silence_treated_as_normal(tmp_path):
-    """Sending type='silence' via mail should work like normal mail — no cancel."""
+    """type='silence' is treated like normal mail: publishes ``.notification/email.json``,
+    does not set cancel."""
+    from lingtai_kernel.notifications import collect_notifications
+
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert not agent._cancel_event.is_set()
     _persist_inbox_email(agent.working_dir, sender="boss", subject="shh", message="be quiet")
@@ -191,14 +206,19 @@ def test_mail_type_silence_treated_as_normal(tmp_path):
         "message": "be quiet", "type": "silence",
     })
 
-    # Must NOT set the cancel event — silence goes through signal files now
+    # Must NOT set the cancel event — silence goes through signal files now.
     assert not agent._cancel_event.is_set()
-    # Must wake the run loop via MSG_TC_WAKE
-    assert not agent.inbox.empty()
+    # Mail published as normal; the notification sync owns wake.
+    out = collect_notifications(agent.working_dir)
+    assert "email" in out
+    assert out["email"]["data"]["count"] == 1
 
 
 def test_mail_type_kill_treated_as_normal(tmp_path):
-    """Sending type='kill' via mail should work like normal mail — no shutdown."""
+    """type='kill' is treated like normal mail: publishes ``.notification/email.json``,
+    does not set cancel or shutdown."""
+    from lingtai_kernel.notifications import collect_notifications
+
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert not agent._cancel_event.is_set()
     _persist_inbox_email(agent.working_dir, sender="boss", subject="die", message="terminate")
@@ -209,7 +229,8 @@ def test_mail_type_kill_treated_as_normal(tmp_path):
         "message": "terminate", "type": "kill",
     })
 
-    # Must NOT set cancel or shutdown — kill goes through karma system intrinsic
+    # Must NOT set cancel or shutdown — kill goes through karma system intrinsic.
     assert not agent._cancel_event.is_set()
-    # Must wake the run loop via MSG_TC_WAKE
-    assert not agent.inbox.empty()
+    out = collect_notifications(agent.working_dir)
+    assert "email" in out
+    assert out["email"]["data"]["count"] == 1

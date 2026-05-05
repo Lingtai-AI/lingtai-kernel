@@ -1,7 +1,7 @@
 # Implementation Patch: `.notification/` Filesystem Redesign (Phase 1 + Phase 2)
 
-> **Status:** Patch spec.  Initial draft 2026-05-04 by mimo-pro avatar.  Revised 2026-05-05 (claude-opus-4-7) before application — see "Revisions" below.
-> **Scope:** Phase 1 (kernel sync mechanism) + Phase 2 (producer migration). Phase 3 (adapter cleanup) explicitly excluded.
+> **Status:** Phase 1 landed at commit `fadbabf`; Phase 2 landed alongside the test migrations.  Initial spec drafted 2026-05-04 by mimo-pro avatar.  Revised + applied 2026-05-05 (claude-opus-4-7).
+> **Scope:** Phase 1 (kernel sync mechanism) + Phase 2 (producer migration). Phase 3 (adapter cleanup) explicitly excluded — `tc_inbox` and the `pre_request_hook` plumbing remain in place, dormant after Phase 2 because no producer enqueues anymore.
 > **Design doc:** `notification-filesystem-redesign.md`
 > **Patch format:** `soul-flow-tool-refusal-patch.md`
 

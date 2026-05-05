@@ -181,9 +181,18 @@ def test_mail_to_bad_address(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_mail_inbox_wiring(tmp_path):
-    """_on_mail_received should enqueue an email.unread digest pair on tc_inbox."""
+    """_on_mail_received should publish ``.notification/email.json`` with
+    the current unread digest.  Under the .notification/ filesystem
+    redesign, mail arrival no longer enqueues on tc_inbox — the kernel's
+    notification sync mechanism reads the file on its next heartbeat
+    tick and injects the wire pair.  The single-slot replace semantics
+    (``coalesce=True, replace_in_history=True`` under the old model)
+    are now embodied by the filesystem itself: overwriting the file IS
+    the coalesce + replace.
+    """
+    from lingtai_kernel.notifications import collect_notifications
+
     agent = BaseAgent(service=make_mock_service(), agent_name="receiver", working_dir=tmp_path / "test")
-    # Persist a message to the inbox so _render_unread_digest can find it
     from lingtai_kernel.intrinsics.email.primitives import _persist_to_inbox
     msg_id = _persist_to_inbox(agent, {
         "from": "127.0.0.1:9999",
@@ -197,21 +206,14 @@ def test_mail_inbox_wiring(tmp_path):
         "to": "127.0.0.1:8301",
         "message": "inbox test",
     })
-    # Mail arrival now flows through tc_inbox as a synthetic email(action="unread")
-    # digest pair, coalescing + replace_in_history. The plain inbox still receives
-    # an MSG_TC_WAKE sentinel to wake the run loop.
-    items = agent._tc_inbox.drain()
-    assert len(items) == 1
-    item = items[0]
-    assert item.call.name == "email"
-    assert item.call.args["action"] == "unread"
-    assert "count" in item.call.args
-    assert "received_at" in item.call.args
-    assert item.source == "email.unread"
-    assert item.coalesce is True
-    assert item.replace_in_history is True
-    # The digest body contains the message content
-    assert "inbox test" in item.result.content
+    # tc_inbox stays empty under the new path.
+    assert len(agent._tc_inbox.drain()) == 0
+    # The notification file carries the current unread digest.
+    out = collect_notifications(agent.working_dir)
+    assert "email" in out
+    assert out["email"]["data"]["count"] == 1
+    assert "newest_received_at" in out["email"]["data"]
+    assert "inbox test" in out["email"]["data"]["digest"]
 
 
 def test_mail_start_wires_listener(tmp_path):
@@ -273,9 +275,11 @@ def test_mail_read_no_ids_returns_error(tmp_path):
 
 
 def test_mail_received_full_content_in_notification(tmp_path):
-    """_on_mail_received should include the message in the unread digest."""
+    """_on_mail_received should include the message body and subject in
+    the unread digest published to ``.notification/email.json``."""
+    from lingtai_kernel.notifications import collect_notifications
+
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    # Persist a message to the inbox so _render_unread_digest can find it
     from lingtai_kernel.intrinsics.email.primitives import _persist_to_inbox
     _persist_to_inbox(agent, {
         "from": "sender",
@@ -287,15 +291,11 @@ def test_mail_received_full_content_in_notification(tmp_path):
         "subject": "test subject",
         "message": "full body content here",
     })
-    # Notification body now lives in the ToolResultBlock content of a tc_inbox
-    # email.unread digest pair.
-    items = agent._tc_inbox.drain()
-    assert len(items) == 1
-    body = items[0].result.content
-    assert items[0].call.name == "email"
-    assert items[0].call.args["action"] == "unread"
-    assert "full body content here" in body
-    assert "test subject" in body
+    out = collect_notifications(agent.working_dir)
+    assert "email" in out
+    digest = out["email"]["data"]["digest"]
+    assert "full body content here" in digest
+    assert "test subject" in digest
 
 
 # ---------------------------------------------------------------------------

@@ -197,6 +197,26 @@ def _context_molt(agent, args: dict) -> dict:
     if hasattr(agent, "_tc_inbox"):
         agent._tc_inbox.drain()
 
+    # Clear `.notification/` files — molt represents memory loss /
+    # rebirth; previously-published producer state should not survive.
+    # Producers republish on their own cadence after molt.  The temporary
+    # "notification-empty" window post-molt is intentional.
+    import shutil
+    notif_dir = agent._working_dir / ".notification"
+    if notif_dir.is_dir():
+        try:
+            shutil.rmtree(notif_dir)
+        except OSError:
+            pass
+    # Reset notification fingerprint + tracking so the next sync sees a
+    # clean slate.
+    if hasattr(agent, "_notification_fp"):
+        agent._notification_fp = ()
+    if hasattr(agent, "_notification_block_id"):
+        agent._notification_block_id = None
+    if hasattr(agent, "_pending_notification_meta"):
+        agent._pending_notification_meta = None
+
     # Post-molt hooks — reload character/pad into prompt manager BEFORE new session
     for cb in getattr(agent, "_post_molt_hooks", []):
         try:
@@ -372,6 +392,23 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
     # they don't leak into the post-molt wire.
     if hasattr(agent, "_tc_inbox"):
         agent._tc_inbox.drain()
+
+    # Clear `.notification/` files for the same reason as _context_molt:
+    # molt is rebirth, prior producer state is gone.  Producers will
+    # republish on their own cadence after molt.
+    import shutil
+    notif_dir = agent._working_dir / ".notification"
+    if notif_dir.is_dir():
+        try:
+            shutil.rmtree(notif_dir)
+        except OSError:
+            pass
+    if hasattr(agent, "_notification_fp"):
+        agent._notification_fp = ()
+    if hasattr(agent, "_notification_block_id"):
+        agent._notification_block_id = None
+    if hasattr(agent, "_pending_notification_meta"):
+        agent._pending_notification_meta = None
 
     for cb in getattr(agent, "_post_molt_hooks", []):
         try:

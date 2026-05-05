@@ -729,18 +729,30 @@ class TestRunConsultationFire:
             agent._run_consultation_fire()
         assert len(agent._tc_inbox) == 0
 
-    def test_voices_enqueue_replace_in_history_item(self, tmp_path):
+    def test_voices_publish_to_notification_file(self, tmp_path):
+        """Under the .notification/ filesystem redesign, soul flow voices
+        publish to ``.notification/soul.json`` instead of enqueueing on
+        tc_inbox.  The kernel's notification sync mechanism reads the
+        file and injects the wire pair (single-slot replace, by
+        construction of the filesystem write).
+        """
+        from lingtai_kernel.notifications import collect_notifications
+
         agent = self._make_real_agent(tmp_path)
         with patch(
             "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[{"source": "insights", "blocks": [TextBlock(text="hello")]}],
         ):
             agent._run_consultation_fire()
-        assert len(agent._tc_inbox) == 1
-        items = agent._tc_inbox.drain()
-        assert items[0].source == "soul.flow"
-        assert items[0].coalesce is True
-        assert items[0].replace_in_history is True
+        # tc_inbox stays empty under the new path.
+        assert len(agent._tc_inbox) == 0
+        # The soul notification file is published.
+        out = collect_notifications(agent.working_dir)
+        assert "soul" in out
+        voices = out["soul"]["data"]["voices"]
+        assert len(voices) == 1
+        assert voices[0]["source"] == "insights"
+        assert voices[0]["voice"] == "hello"
 
     def test_exception_swallowed_and_logged(self, tmp_path):
         agent = self._make_real_agent(tmp_path)
@@ -875,8 +887,12 @@ class TestSoulFlowPersistenceSchema:
         assert len(agent._tc_inbox) == 0
 
     def test_synthetic_pair_call_id_matches_fire_id(self, tmp_path):
-        """The chat-side call_id and the soul_flow.jsonl fire_id are the
-        same string — that's what makes cross-referencing trivial."""
+        """The notification payload's tc_id and the soul_flow.jsonl
+        fire_id are the same string, so cross-referencing between the
+        wire and the soul-flow log stays trivial under the
+        .notification/ redesign."""
+        from lingtai_kernel.notifications import collect_notifications
+
         agent = self._make_real_agent(tmp_path)
         self._seed_diary(agent, "diary text")
 
@@ -889,11 +905,13 @@ class TestSoulFlowPersistenceSchema:
         records = self._read_records(agent)
         fire = next(r for r in records if r["kind"] == "fire")
 
-        # The pair landed on tc_inbox; pull it out and check its call.id
-        assert len(agent._tc_inbox) == 1
-        items = agent._tc_inbox.drain()
-        assert items[0].call.id == fire["fire_id"]
-        assert items[0].result.id == fire["fire_id"]
+        # tc_inbox stays empty — soul writes to the filesystem now.
+        assert len(agent._tc_inbox) == 0
+        # The published notification carries the same fire_id / tc_id.
+        out = collect_notifications(agent.working_dir)
+        assert "soul" in out
+        assert out["soul"]["data"]["fire_id"] == fire["fire_id"]
+        assert out["soul"]["data"]["tc_id"] == fire["fire_id"]
 
     def test_fire_record_written_even_on_exception(self, tmp_path):
         agent = self._make_real_agent(tmp_path)

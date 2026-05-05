@@ -130,6 +130,43 @@ def _soul_fire_allowed(agent) -> bool:
     return agent._state in (AgentState.ACTIVE, AgentState.IDLE)
 
 
+def _build_soul_notification_payload(
+    agent, voices_for_pair: list[dict], fire_id: str, *, tc_id: str
+) -> dict:
+    """Build the structured JSON payload for ``.notification/soul.json``.
+
+    Each voice carries ``source``, ``voice`` text, and a list of
+    ``thinking`` strings (the v2-compatible flatten produced by
+    ``_flatten_v3_for_pair``).  The envelope adds frontend-friendly
+    fields (header, icon, priority, published_at) plus the fire/tc id
+    so consumers can correlate with the soul flow records on disk.
+    """
+    from datetime import datetime, timezone
+
+    voices_data = []
+    for v in voices_for_pair:
+        entry = {"source": v.get("source", "unknown")}
+        if v.get("voice"):
+            entry["voice"] = v["voice"]
+        if v.get("thinking"):
+            entry["thinking"] = v["thinking"]
+        voices_data.append(entry)
+
+    return {
+        "header": "soul flow",
+        "icon": "🌊",
+        "priority": "normal",
+        "published_at": datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        ),
+        "data": {
+            "fire_id": fire_id,
+            "tc_id": tc_id,
+            "voices": voices_data,
+        },
+    }
+
+
 def _run_consultation_fire(agent) -> None:
     """Run one consultation batch and persist the result.
 
@@ -165,7 +202,7 @@ def _run_consultation_fire(agent) -> None:
             _run_consultation_batch,
             build_consultation_pair,
         )
-        from ...tc_inbox import InvoluntaryToolCall
+        from ...notifications import publish, clear
 
         diary = _render_current_diary(agent)
         voices = _run_consultation_batch(agent)
@@ -220,19 +257,24 @@ def _run_consultation_fire(agent) -> None:
                 )
 
         if not voices:
+            # Nothing to say this fire — clear the file if it exists so
+            # the kernel's notification sync strips any prior wire pair.
+            clear(agent._working_dir, "soul")
             agent._log("consultation_fire_empty", fire_id=fire_id)
             return
 
         voices_for_pair = [_flatten_v3_for_pair(agent, v) for v in voices]
-        call, result = build_consultation_pair(agent, voices_for_pair, tc_id=fire_id)
-        agent._tc_inbox.enqueue(InvoluntaryToolCall(
-            call=call,
-            result=result,
-            source="soul.flow",
-            enqueued_at=time.time(),
-            coalesce=True,
-            replace_in_history=True,
-        ))
+
+        # Publish the soul notification to `.notification/soul.json`.
+        # The kernel's sync mechanism (heartbeat poll) detects the
+        # fingerprint change and injects/replaces the wire pair on the
+        # next tick.  No tc_inbox enqueue, no MSG_TC_WAKE — the sync
+        # owns those state transitions now.
+        soul_payload = _build_soul_notification_payload(
+            agent, voices_for_pair, fire_id, tc_id=fire_id
+        )
+        publish(agent._working_dir, "soul", soul_payload)
+
         voices_inline = [
             {"source": v.get("source", "unknown"), "voice": v.get("voice", "")}
             for v in voices_for_pair
@@ -246,13 +288,14 @@ def _run_consultation_fire(agent) -> None:
             voices=voices_inline,
         )
 
-        # Wake the run loop
+        # Sub-second sync latency: nudge the heartbeat so the next
+        # `_sync_notifications` call runs immediately rather than
+        # waiting for the next periodic tick.  Wake transitions
+        # (ASLEEP→IDLE) are owned by the sync mechanism.
         try:
-            wake_msg = _make_message(MSG_TC_WAKE, "system", "")
-            agent.inbox.put(wake_msg)
             agent._wake_nap("soul_flow_fired")
         except Exception as e:
-            agent._log("tc_wake_post_error",
+            agent._log("soul_flow_wake_error",
                       fire_id=fire_id, error=str(e)[:200])
     except Exception as e:
         agent._log("consultation_fire_error",
