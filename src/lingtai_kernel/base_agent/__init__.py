@@ -830,9 +830,28 @@ class BaseAgent:
                     pass
 
         elif self._state == AgentState.IDLE:
-            # Already awake — strip + reinject only.  No MSG_TC_WAKE: the
-            # agent will observe the new pair on its next request cycle.
+            # Strip + reinject AND post MSG_TC_WAKE.  IDLE is "between
+            # turns, run loop blocked on inbox.get()" — without a wake
+            # message the loop sits forever, the wire pair never goes
+            # to the LLM, and the agent appears unresponsive even
+            # though the notification arrived.
+            #
+            # Earlier drafts of this code skipped the wake on IDLE→IDLE
+            # under the (wrong) reasoning that the agent was "already
+            # awake."  IDLE is awake-but-parked; only ACTIVE is
+            # awake-and-running.  Both ASLEEP and IDLE need MSG_TC_WAKE
+            # to make progress; only ACTIVE doesn't (its turn loop will
+            # see the next snapshot via _inject_notification_meta at
+            # request-send time).
             inject_ok = self._inject_notification_pair(notifications)
+            if inject_ok:
+                from ..message import _make_message, MSG_TC_WAKE
+                try:
+                    wake_msg = _make_message(MSG_TC_WAKE, "system", "")
+                    self.inbox.put(wake_msg)
+                    self._wake_nap("notification_sync")
+                except Exception:
+                    pass
 
         elif self._state == AgentState.ACTIVE:
             # Stash for injection at request-send time (meta on latest

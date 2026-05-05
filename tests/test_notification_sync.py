@@ -401,6 +401,69 @@ def _make_chat_stub():
     return _ChatStub()
 
 
+def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
+    """IDLE: fingerprint change → MSG_TC_WAKE goes to the inbox.
+
+    Regression for the IDLE-no-wake bug shipped in d2da97e: the agent
+    was IDLE (run loop blocked on inbox.get()), notification was
+    injected into the wire, but no wake message went to the inbox so
+    the loop never picked it up.  The agent appeared unresponsive
+    even though everything on disk was correct.
+
+    IDLE is "between turns, blocked on inbox" — same wake requirement
+    as ASLEEP, just no state transition.  Only ACTIVE skips the wake
+    (its turn loop will see the next snapshot via
+    ``_inject_notification_meta`` at request-send time).
+    """
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.state import AgentState
+    from lingtai_kernel.message import MSG_TC_WAKE
+
+    chat = _make_chat_stub()
+
+    class _Agent(BaseAgent):
+        def __init__(self, workdir):
+            self._working_dir = workdir
+            self._state = AgentState.IDLE
+            self._notification_fp = ()
+            self._notification_block_id = None
+            self._pending_notification_meta = None
+            self._chat_stub = chat
+            self._logs = []
+            self.agent_name = "stub"
+            import queue
+            self.inbox = queue.Queue()
+
+        @property
+        def _chat(self):
+            return self._chat_stub
+
+        def _save_chat_history(self, *, ledger_source="main"):
+            pass
+
+        def _log(self, evt, **fields):
+            self._logs.append((evt, fields))
+
+        def _wake_nap(self, *_a, **_kw):
+            pass
+
+        def _set_state(self, *_a, **_kw):
+            pass
+
+        def _reset_uptime(self):
+            pass
+
+    agent = _Agent(tmp_path)
+    publish(tmp_path, "email", {"count": 1})
+    agent._sync_notifications()
+
+    # Wire pair injected.
+    assert len(agent._chat_stub.interface.entries) == 2
+    # MSG_TC_WAKE in the inbox so the run loop picks it up.
+    msg = agent.inbox.get_nowait()
+    assert msg.type == MSG_TC_WAKE
+
+
 def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     """IDLE: fingerprint change → synthetic pair appended; result block
     has synthesized=True and JSON body carries `_synthesized: true`."""
