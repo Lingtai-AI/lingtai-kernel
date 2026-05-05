@@ -82,7 +82,7 @@
   "system_tool.dismiss_description": "已弃——无所效也。返 ok 并附弃语。通知今以「镜照」之模，自 `.notification/<tool>.json` 文映入聊天之史；生产者自管其态，灵不复销。当下之态可经 system(action='notification') 主动而察，或由内核于通知至时所合之对而见。后版当除之。",
   "system_tool.notification_description": "返诸通知频道当下之态，以工具名为键之 JSON 录。所自者：`email`（未阅之要）、`soul`（当下心流之声）、`system`（退书、守护之告、定时之唤）及 `mcp.<server>`（诸 MCP 频道）。内核亦可代汝合此召——主动之召与合成之召返同样之据；合成之召附顶层 `_synthesized: true` 之记并将录纳于 `notifications` 键之下，便汝阅史时辨何为己唤、何为内核所合。其性「替换」也：无事件之史，无销除；状有变则诸生产者各自更其所发之态。",
   "email.unread_digest": "[邮] 未阅之书凡 {count} 封，新者发于 {recency}。\n\n{entries}\n{more}",
-  "email.unread_digest.entry": "  {n}. 自 {name} ({address}) —— {subject}\n     发于：{sent_at}\n     {preview}",
+  "email.unread_digest.entry": "  {n}. 自 {name} ({address}) —— {subject}\n     编号：{id}\n     发于：{sent_at}\n     {preview}",
   "email.unread_digest.more": "（仅显前 {shown} 封，共 {total}）",
   "email.unread_digest.no_subject": "（无题）"
 }

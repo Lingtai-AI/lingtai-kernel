@@ -163,3 +163,30 @@ def test_notification_per_entry_prefers_time_over_received_at(tmp_path):
 
     body, _, _ = _render_unread_digest(agent)
     assert "2026-05-04T08:00:00Z" in body
+
+
+def test_notification_digest_includes_mailbox_id(tmp_path):
+    """Each digest entry exposes the mailbox ID so the agent can pass
+    it to email(action="read"|"dismiss") without a separate check."""
+    agent = _make_agent(tmp_path)
+    eid = _persist_inbox(tmp_path, {
+        "from": "alice",
+        "subject": "ping",
+        "message": "hello",
+        "received_at": "2026-05-04T08:00:00Z",
+    })
+    body, _, _ = _render_unread_digest(agent)
+    assert eid in body, f"ID {eid!r} missing from digest:\n{body}"
+
+
+def test_notification_digest_includes_mailbox_id_zh(tmp_path):
+    """Same for the zh template."""
+    agent = _make_agent(tmp_path, lang="zh")
+    eid = _persist_inbox(tmp_path, {
+        "from": "alice",
+        "subject": "ping",
+        "message": "hello",
+        "received_at": "2026-05-04T08:00:00Z",
+    })
+    body, _, _ = _render_unread_digest(agent)
+    assert eid in body

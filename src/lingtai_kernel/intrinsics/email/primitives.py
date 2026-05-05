@@ -362,10 +362,11 @@ def _render_unread_digest(agent, *, max_entries: int = 10, preview_chars: int = 
             preview = body[:preview_chars].replace("\n", " ") + f"... ({len(body) - preview_chars} more chars)"
         else:
             preview = body.replace("\n", " ")
+        msg_id = m.get("_mailbox_id", "")
         lines.append(_t(
             lang, "email.unread_digest.entry",
             n=i, address=addr, name=name, subject=subject,
-            sent_at=sent_at, preview=preview,
+            sent_at=sent_at, preview=preview, id=msg_id,
         ))
 
     more_line = ""

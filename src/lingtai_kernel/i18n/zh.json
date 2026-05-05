@@ -82,7 +82,7 @@
   "system_tool.dismiss_description": "已弃用——无任何效果。返回 ok 并附弃用说明。通知现以「状态镜像」模式从 `.notification/<tool>.json` 文件投射至聊天历史；生产者管理自身状态，器灵不再销除。当下状态可经由 system(action='notification') 主动查询，或由内核在通知到达时自动合成的调用对而知。未来版本将移除。",
   "system_tool.notification_description": "返回所有通知频道的当前状态，以工具名为键的 JSON 字典。来源包括 `email`（未读摘要）、`soul`（当前心流诸声）、`system`（退信、守护通告、定时唤醒）以及 `mcp.<server>`（各 MCP 频道）。内核也可代你合成此调用——主动调用与合成调用返回相同的数据；合成调用会附顶层 `_synthesized: true` 标记并将字典封入 `notifications` 键之下，便于你阅历史时分辨何为己唤、何为内核所合。语义为「替换式」：无事件历史，无销除；各生产者在状况变化时各自更新已发布之态。",
   "email.unread_digest": "[邮件] 共有 {count} 封未读消息——最近一封于 {recency}。\n\n{entries}\n{more}",
-  "email.unread_digest.entry": "  {n}. 来自 {name} ({address}) —— {subject}\n     发送时间：{sent_at}\n     {preview}",
+  "email.unread_digest.entry": "  {n}. 来自 {name} ({address}) —— {subject}\n     ID：{id}\n     发送时间：{sent_at}\n     {preview}",
   "email.unread_digest.more": "（仅显示前 {shown} 封，共 {total} 封）",
   "email.unread_digest.no_subject": "（无主题）"
 }

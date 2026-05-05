@@ -76,8 +76,10 @@ def _rerender_unread_digest(agent) -> str | None:
         header=f"{count} unread email{'s' if count != 1 else ''}",
         icon="📧",
         instructions=(
-            "Each entry above shows the sender, subject, and a preview "
-            "of up to 200 characters. If a preview ends with "
+            "Each entry above shows its mail ID directly under the "
+            "subject — that's the value you pass to email_id when you "
+            "call read or dismiss. Each entry also shows a preview of "
+            "up to 200 characters. If a preview ends with "
             "'... (N more chars)' the message is truncated and you "
             "must call email(action=\"read\", email_id=[id1, id2, ...]) "
             "to see the full body. If the preview is short and shows "

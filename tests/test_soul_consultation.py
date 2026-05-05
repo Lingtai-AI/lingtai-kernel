@@ -1814,3 +1814,62 @@ class TestSoulConfig:
         assert "error" in result
         assert "config" in result["error"]
         assert agent._soul_delay == 120.0  # state unchanged
+
+
+# ---------------------------------------------------------------------------
+# Soul notification envelope — instructions field framing
+# ---------------------------------------------------------------------------
+
+
+class TestSoulNotificationInstructions:
+    """The soul notification carries an instructions field that frames
+    voices as YOUR own inner monologue (not external messages) and
+    distinguishes insights (current-self) from snapshots (past-self).
+    Regression for the case where an agent mistook a soul voice's
+    narration of 'human pasted my diary' as a fact, when the human
+    had only sent a short email."""
+
+    def _make_real_agent(self, tmp_path):
+        from lingtai_kernel import BaseAgent
+        svc = MagicMock(); svc.model = "test-model"
+        agent = BaseAgent(
+            service=svc,
+            agent_name="t",
+            working_dir=tmp_path / "agent",
+        )
+        return agent
+
+    def _seed_diary(self, agent, *texts: str) -> None:
+        log_dir = agent._working_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "events.jsonl", "w", encoding="utf-8") as f:
+            for i, t in enumerate(texts):
+                f.write(json.dumps({"type": "diary", "text": t, "ts": 1_700_000_000 + i}) + "\n")
+
+    def test_soul_notification_carries_instructions(self, tmp_path):
+        agent = self._make_real_agent(tmp_path)
+        self._seed_diary(agent, "did X")
+
+        voices = [
+            {"source": "insights", "blocks": [TextBlock(text="step back")]},
+        ]
+        with patch(
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
+            return_value=voices,
+        ):
+            agent._run_consultation_fire()
+
+        notif_path = agent._working_dir / ".notification" / "soul.json"
+        assert notif_path.is_file()
+        payload = json.loads(notif_path.read_text())
+        assert "instructions" in payload
+        text = payload["instructions"]
+        # Defines insights vs snapshot sources.
+        assert "insights" in text
+        assert "snapshot" in text
+        # Emphasizes voices are the agent's own monologue, not external.
+        assert "YOUR OWN" in text or "inner monologue" in text
+        # Reaffirms email-as-only-human-channel.
+        assert "email" in text
+        # Tells the agent to verify before acting on narrated events.
+        assert "verify" in text.lower() or "belief" in text.lower()

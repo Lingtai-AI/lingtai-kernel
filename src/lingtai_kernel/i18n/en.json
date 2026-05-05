@@ -82,7 +82,7 @@
   "system_tool.dismiss_description": "DEPRECATED — does nothing. Returns ok with a deprecation note. Notifications are now mirrored from `.notification/<tool>.json` files; producers manage their own state and the agent never dismisses. Read current state via system(action='notification') or via the kernel-synthesized pair the kernel injects on arrivals. Will be removed in a future release.",
   "system_tool.notification_description": "Returns the current state of all notification channels as a JSON dict keyed by tool name. Sources include `email` (unread digest), `soul` (current consultation voices), `system` (mail bounces, daemon notices, scheduled wakes), and `mcp.<server>` (per-MCP channels). The kernel may also synthesize this call on your behalf — voluntary and synthesized calls return the same data; synthesized calls add a top-level `_synthesized: true` flag and wrap the dict under a `notifications` key so you can tell which is which when reading history. Replace-only semantics: there is no event log, no dismiss; each producer updates its own published state when its situation changes.",
   "email.unread_digest": "[email] {count} unread message(s) — most recent {recency}.\n\n{entries}\n{more}",
-  "email.unread_digest.entry": "  {n}. From {name} ({address}) — {subject}\n     Sent at: {sent_at}\n     {preview}",
+  "email.unread_digest.entry": "  {n}. From {name} ({address}) — {subject}\n     ID: {id}\n     Sent at: {sent_at}\n     {preview}",
   "email.unread_digest.more": "(showing first {shown} of {total})",
   "email.unread_digest.no_subject": "(no subject)"
 }
