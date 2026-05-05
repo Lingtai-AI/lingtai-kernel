@@ -99,3 +99,69 @@ def clear(workdir: Path, tool_name: str) -> None:
         target.unlink()
     except (FileNotFoundError, OSError):
         pass
+
+
+# ---------------------------------------------------------------------------
+# Producer-facing helper — the canonical "submit a notification" entry point
+# ---------------------------------------------------------------------------
+
+
+def submit(
+    workdir: Path,
+    tool_name: str,
+    *,
+    data: dict,
+    header: str,
+    icon: str = "🔔",
+    priority: str = "normal",
+) -> None:
+    """Submit a notification with the standard envelope.
+
+    This is the canonical entry point for in-process producers.  It
+    wraps :func:`publish` with the envelope shape documented in the
+    design (``notification-filesystem-redesign.md`` §2.1.3) and stamps
+    ``published_at`` automatically.  Producers supply only what is
+    semantically theirs:
+
+    Args:
+        workdir: The agent's working directory.
+        tool_name: The producer's namespace key — ``email``, ``soul``,
+            ``system``, ``mcp.<server>``, …  This becomes both the file
+            basename (``<tool_name>.json``) AND the dict key the agent
+            sees when it reads ``system(action="notification")``.
+        data: Structured payload the agent will read.  No restrictions
+            on shape — producers decide.
+        header: One-line glanceable summary used by frontends (TUI
+            status bar, portal cards) for compact rendering.
+        icon: Optional glyph for status indicators.  Defaults to 🔔;
+            common conventions: 📧 (mail), 🌊 (soul), 💬 (chat), …
+        priority: ``"low"``, ``"normal"``, or ``"high"``.  Frontends
+            may surface high-priority notifications more prominently.
+
+    External producers that cannot import the kernel (e.g. MCP servers
+    over SSH) should use :func:`publish` directly with the same
+    envelope shape.  The contract is the filesystem layout; this
+    helper is a Python-side ergonomics layer.
+
+    Example::
+
+        submit(agent._working_dir, "email",
+               header=f"{n} unread",
+               icon="📧",
+               data={"count": n, "previews": [...]})
+
+    To clear a notification (e.g. when state empties) call
+    :func:`clear` — there is no separate "submit empty" path.
+    """
+    from datetime import datetime, timezone
+
+    payload = {
+        "header": header,
+        "icon": icon,
+        "priority": priority,
+        "published_at": datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        ),
+        "data": data,
+    }
+    publish(workdir, tool_name, payload)

@@ -53,39 +53,34 @@ def _rerender_unread_digest(agent) -> str | None:
     """Publish (or clear) ``.notification/email.json`` per current unread state.
 
     Computes the unread set via ``_render_unread_digest``.  When count
-    is positive, writes a structured payload to ``.notification/email.json``
-    with envelope fields (header, icon, priority, published_at) plus a
-    ``data`` field carrying the count, newest-received timestamp, and
-    the rendered digest body.  When count drops to 0, deletes the file
-    so the kernel's sync strips the wire's notification block.
+    is positive, submits the digest via ``system.publish_notification``;
+    when count drops to 0, clears the file so the kernel's sync strips
+    the wire's notification block.
 
     Returns ``"email"`` when published, ``None`` when cleared.  The
     caller doesn't typically use the return value — the side-effect on
     ``.notification/`` is the contract.
     """
-    from datetime import datetime, timezone
-    from ..notifications import publish, clear
+    from ..intrinsics.system import publish_notification, clear_notification
     from ..intrinsics.email.primitives import _render_unread_digest
 
     body, count, newest_ts = _render_unread_digest(agent)
 
     if count == 0:
-        clear(agent._working_dir, "email")
+        clear_notification(agent._working_dir, "email")
         agent._log("email_notification_cleared")
         return None
 
-    payload = {
-        "header": f"{count} unread email{'s' if count != 1 else ''}",
-        "icon": "📧",
-        "priority": "normal",
-        "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "data": {
+    publish_notification(
+        agent._working_dir, "email",
+        header=f"{count} unread email{'s' if count != 1 else ''}",
+        icon="📧",
+        data={
             "count": count,
             "newest_received_at": newest_ts,
             "digest": body,
         },
-    }
-    publish(agent._working_dir, "email", payload)
+    )
 
     agent._log(
         "email_notification_published",
@@ -124,7 +119,8 @@ def _enqueue_system_notification(agent, *, source: str, ref_id: str, body: str) 
     import secrets
     import threading
     from datetime import datetime, timezone
-    from ..notifications import publish, collect_notifications
+    from ..notifications import collect_notifications
+    from ..intrinsics.system import publish_notification
 
     event_id = f"evt_{int(time.time()*1000):x}_{secrets.token_hex(2)}"
     received_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -151,17 +147,15 @@ def _enqueue_system_notification(agent, *, source: str, ref_id: str, body: str) 
         # Cap at the 20 most recent.
         events = events[-20:]
 
-        payload = {
-            "header": (
+        publish_notification(
+            agent._working_dir, "system",
+            header=(
                 f"{len(events)} system notification"
                 f"{'s' if len(events) != 1 else ''}"
             ),
-            "icon": "🔔",
-            "priority": "normal",
-            "published_at": received_at,
-            "data": {"events": events},
-        }
-        publish(agent._working_dir, "system", payload)
+            icon="🔔",
+            data={"events": events},
+        )
 
     agent._log(
         "system_notification_published",

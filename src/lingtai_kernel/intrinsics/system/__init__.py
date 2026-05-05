@@ -45,6 +45,19 @@ from .schema import get_description, get_schema  # noqa: F401
 # Notification (dismiss — cross-module import from email/manager.py)
 from .notification import _dismiss  # noqa: F401
 
+# Notification submission — the canonical helper any producer (intrinsic
+# or in-process MCP) can call to surface a notification to the agent.
+# Re-exported here because ``system`` owns the notification surface
+# conceptually: every producer's file is aggregated into a single
+# ``system(action="notification")`` wire pair by the kernel sync.  The
+# function lives in ``lingtai_kernel.notifications`` (single source of
+# truth, accessible to non-intrinsic call sites and external producers
+# that import the module directly).
+from ...notifications import (  # noqa: F401
+    submit as publish_notification,
+    clear as clear_notification,
+)
+
 # Nap
 from .nap import _nap  # noqa: F401
 

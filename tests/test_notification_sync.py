@@ -325,25 +325,79 @@ def test_system_publish_concurrent_no_lost_writes(tmp_path: Path) -> None:
     assert len(event_ids) == n_events  # all distinct
 
 
-def test_soul_publish_payload_shape(tmp_path: Path) -> None:
-    """The soul producer payload helper builds the documented envelope."""
-    from lingtai_kernel.intrinsics.soul.flow import _build_soul_notification_payload
+def test_soul_voices_shape(tmp_path: Path) -> None:
+    """The soul producer's voice-shaping helper trims empty fields."""
+    from lingtai_kernel.intrinsics.soul.flow import _shape_soul_voices
 
     voices = [
         {"source": "warmth", "voice": "remember to rest", "thinking": ["..."]},
         {"source": "doubt", "voice": "are you sure?", "thinking": []},
     ]
-    payload = _build_soul_notification_payload(
-        agent=None, voices_for_pair=voices, fire_id="fire_x", tc_id="tc_x"
-    )
-    assert payload["icon"] == "🌊"
-    assert payload["data"]["fire_id"] == "fire_x"
-    assert payload["data"]["tc_id"] == "tc_x"
-    assert len(payload["data"]["voices"]) == 2
-    assert payload["data"]["voices"][0]["source"] == "warmth"
-    assert payload["data"]["voices"][0]["voice"] == "remember to rest"
+    shaped = _shape_soul_voices(voices)
+    assert len(shaped) == 2
+    assert shaped[0]["source"] == "warmth"
+    assert shaped[0]["voice"] == "remember to rest"
+    assert shaped[0]["thinking"] == ["..."]
+    assert shaped[1]["voice"] == "are you sure?"
     # Empty thinking is omitted from the entry.
-    assert "thinking" not in payload["data"]["voices"][1]
+    assert "thinking" not in shaped[1]
+
+
+# ---------------------------------------------------------------------------
+# §13.6.bis — system.publish_notification (canonical helper)
+# ---------------------------------------------------------------------------
+
+
+def test_submit_writes_envelope(tmp_path: Path) -> None:
+    """``submit`` builds the documented envelope and writes the file."""
+    from lingtai_kernel.notifications import submit
+
+    submit(tmp_path, "demo",
+           header="hello", icon="✨",
+           data={"x": 1, "y": [2, 3]})
+
+    out = collect_notifications(tmp_path)
+    assert "demo" in out
+    payload = out["demo"]
+    assert payload["header"] == "hello"
+    assert payload["icon"] == "✨"
+    assert payload["priority"] == "normal"
+    assert payload["data"] == {"x": 1, "y": [2, 3]}
+    # published_at is stamped, ISO format.
+    assert "published_at" in payload
+    assert payload["published_at"].endswith("Z")
+
+
+def test_submit_priority_override(tmp_path: Path) -> None:
+    from lingtai_kernel.notifications import submit
+
+    submit(tmp_path, "urgent",
+           header="oh no", icon="🚨",
+           priority="high", data={})
+
+    assert collect_notifications(tmp_path)["urgent"]["priority"] == "high"
+
+
+def test_submit_via_system_alias(tmp_path: Path) -> None:
+    """``intrinsics.system.publish_notification`` is the same callable
+    as ``notifications.submit`` — producers can import either."""
+    from lingtai_kernel.intrinsics.system import (
+        publish_notification, clear_notification,
+    )
+    from lingtai_kernel.notifications import submit, clear
+
+    assert publish_notification is submit
+    assert clear_notification is clear
+
+    publish_notification(tmp_path, "via_system",
+                         header="via", icon="🛰",
+                         data={"ok": True})
+    out = collect_notifications(tmp_path)
+    assert out["via_system"]["data"] == {"ok": True}
+
+    clear_notification(tmp_path, "via_system")
+    out = collect_notifications(tmp_path)
+    assert "via_system" not in out
 
 
 # ---------------------------------------------------------------------------

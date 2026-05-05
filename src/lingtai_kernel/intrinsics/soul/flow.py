@@ -130,19 +130,14 @@ def _soul_fire_allowed(agent) -> bool:
     return agent._state in (AgentState.ACTIVE, AgentState.IDLE)
 
 
-def _build_soul_notification_payload(
-    agent, voices_for_pair: list[dict], fire_id: str, *, tc_id: str
-) -> dict:
-    """Build the structured JSON payload for ``.notification/soul.json``.
+def _shape_soul_voices(voices_for_pair: list[dict]) -> list[dict]:
+    """Shape soul voices for the notification payload's ``data.voices``.
 
-    Each voice carries ``source``, ``voice`` text, and a list of
+    Each entry carries ``source``, ``voice`` text, and a list of
     ``thinking`` strings (the v2-compatible flatten produced by
-    ``_flatten_v3_for_pair``).  The envelope adds frontend-friendly
-    fields (header, icon, priority, published_at) plus the fire/tc id
-    so consumers can correlate with the soul flow records on disk.
+    ``_flatten_v3_for_pair``).  Empty fields are omitted so the
+    payload stays compact.
     """
-    from datetime import datetime, timezone
-
     voices_data = []
     for v in voices_for_pair:
         entry = {"source": v.get("source", "unknown")}
@@ -151,20 +146,7 @@ def _build_soul_notification_payload(
         if v.get("thinking"):
             entry["thinking"] = v["thinking"]
         voices_data.append(entry)
-
-    return {
-        "header": "soul flow",
-        "icon": "🌊",
-        "priority": "normal",
-        "published_at": datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        ),
-        "data": {
-            "fire_id": fire_id,
-            "tc_id": tc_id,
-            "voices": voices_data,
-        },
-    }
+    return voices_data
 
 
 def _run_consultation_fire(agent) -> None:
@@ -202,7 +184,7 @@ def _run_consultation_fire(agent) -> None:
             _run_consultation_batch,
             build_consultation_pair,
         )
-        from ...notifications import publish, clear
+        from ..system import publish_notification, clear_notification
 
         diary = _render_current_diary(agent)
         voices = _run_consultation_batch(agent)
@@ -259,21 +241,28 @@ def _run_consultation_fire(agent) -> None:
         if not voices:
             # Nothing to say this fire — clear the file if it exists so
             # the kernel's notification sync strips any prior wire pair.
-            clear(agent._working_dir, "soul")
+            clear_notification(agent._working_dir, "soul")
             agent._log("consultation_fire_empty", fire_id=fire_id)
             return
 
         voices_for_pair = [_flatten_v3_for_pair(agent, v) for v in voices]
 
-        # Publish the soul notification to `.notification/soul.json`.
-        # The kernel's sync mechanism (heartbeat poll) detects the
-        # fingerprint change and injects/replaces the wire pair on the
-        # next tick.  No tc_inbox enqueue, no MSG_TC_WAKE — the sync
-        # owns those state transitions now.
-        soul_payload = _build_soul_notification_payload(
-            agent, voices_for_pair, fire_id, tc_id=fire_id
+        # Publish the soul notification.  The kernel's sync mechanism
+        # (heartbeat poll) detects the fingerprint change and
+        # injects/replaces the wire pair on the next tick.  No
+        # tc_inbox enqueue, no MSG_TC_WAKE — the sync owns those
+        # state transitions now.
+        voices_data = _shape_soul_voices(voices_for_pair)
+        publish_notification(
+            agent._working_dir, "soul",
+            header="soul flow",
+            icon="🌊",
+            data={
+                "fire_id": fire_id,
+                "tc_id": fire_id,
+                "voices": voices_data,
+            },
         )
-        publish(agent._working_dir, "soul", soul_payload)
 
         voices_inline = [
             {"source": v.get("source", "unknown"), "voice": v.get("voice", "")}
