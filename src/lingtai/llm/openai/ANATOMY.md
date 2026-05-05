@@ -132,6 +132,12 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 - `_session_class` (line 983) — override to inject provider-specific session behavior on the CC path.
 - `_adapter_extra_body()` (line 1166) — override to add `extra_body` JSON fields (e.g. OpenRouter `reasoning: {include: true}`).
 
+### `send(None)` contract — continue from wire
+
+All four `send` / `send_stream` paths in this file accept `None` as the "the caller has already staged the canonical interface; just talk to the LLM" signal. This is what `base_agent/turn.py:_handle_tc_wake` calls when `_sync_notifications` has spliced a synthesized `(ToolCallBlock, ToolResultBlock)` pair into the wire — from the LLM's viewpoint the agent appears to have voluntarily called `system(action="notification")` and is now responding to the result, no fake user message and no meta prefix.
+
+Implementation: the input-dispatch ladder at the top of each method tests `if message is None: pass` first, then the existing `str` / `list` branches. The error-path `drop_trailing(lambda e: e.role == "user")` is guarded — `if message is not None: drop_trailing(...)` — so an API failure during a `send(None)` does not corrupt the pre-staged notification pair. `OpenAIResponsesSession._convert_input(None)` returns `[]` so the existing `previous_response_id` chain continues with no new input items; `CodexResponsesSession.send_stream` simply skips the append branch since it replays the full canonical interface on every request anyway.
+
 ### Pre-request hook (mid-turn tc_inbox drain — dormant)
 
 All four `send` / `send_stream` paths in this file fire `self.pre_request_hook(self._interface)` after committing the message to the canonical interface but before the API call. Historically the kernel installed `BaseAgent._drain_tc_inbox_for_hook` here so involuntary tool-call pairs (mail notifications, soul.flow voices) spliced into the wire chat mid-turn. After the `.notification/` redesign (`fadbabf`/`d2da97e`) the hook is still installed but the queue is always empty in production — the equivalent ACTIVE-state mid-turn injection now happens via `SessionManager.send`'s `notification_inject_fn` callback, which prepends the JSON body onto the latest string-content `ToolResultBlock` before this hook fires. Phase 3 will remove the hook entirely. Three regimes (preserved for historical context and future re-use):
@@ -142,4 +148,4 @@ All four `send` / `send_stream` paths in this file fire `self.pre_request_hook(s
 
 ### Git history
 
-16 commits. Key: context overflow recovery (`f65e395`), orphan tool_call guard (`8197fdc`), Codex stateless path (`7e88f47`, `a4bf117`), per-phase HTTP timeout caps (`81b95e2`), `cached_tokens` None coercion (`1e715ab`), `_build_messages` hook refactor (`70c0357`), pre-request hook for mid-turn tc_inbox drain (`f46b346`).
+16 commits. Key: context overflow recovery (`f65e395`), orphan tool_call guard (`8197fdc`), Codex stateless path (`7e88f47`, `a4bf117`), per-phase HTTP timeout caps (`81b95e2`), `cached_tokens` None coercion (`1e715ab`), `_build_messages` hook refactor (`70c0357`), pre-request hook for mid-turn tc_inbox drain (`f46b346`, now dormant), `send(None)` continue-from-wire contract (`f596ec1`).
