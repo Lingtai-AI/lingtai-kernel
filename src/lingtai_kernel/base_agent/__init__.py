@@ -890,6 +890,14 @@ class BaseAgent:
         appends to the wire interface.  Records the call_id for later
         stripping.
 
+        The assistant turn carries a ``TextBlock`` summary alongside the
+        synthetic ``ToolCallBlock`` — e.g. ``"通知至：3 email, 1 soul"`` —
+        which (a) is honest about what's on the wire from the agent's
+        introspective POV and (b) provides substantive prefix novelty
+        that defeats DeepSeek's cache fast-path empty-response failure
+        mode (see deepseek/adapter.py for the protocol-level fix; this
+        is the semantic-layer companion).
+
         The ``ToolResultBlock`` is created with ``synthesized=True``
         (the existing flag the kernel already uses for heal-path
         placeholders).  The result content also carries a top-level
@@ -903,7 +911,7 @@ class BaseAgent:
         change would be silently dropped instead of retried.
         """
         import secrets
-        from ..llm.interface import ToolCallBlock, ToolResultBlock
+        from ..llm.interface import TextBlock, ToolCallBlock, ToolResultBlock
 
         if self._chat is None:
             try:
@@ -923,6 +931,29 @@ class BaseAgent:
         body = {"_synthesized": True, "notifications": notifications}
         content_json = json.dumps(body, indent=2, ensure_ascii=False)
 
+        # Build a per-source summary: "3 email, 1 soul, 0 system".
+        # Counts come from data.count / len(data.events) / len(data.voices)
+        # depending on the producer; fall back to "?" if unparseable.
+        summary_parts = []
+        for source, payload in notifications.items():
+            count = None
+            if isinstance(payload, dict):
+                data = payload.get("data") or {}
+                if isinstance(data, dict):
+                    count = data.get("count")
+                    if count is None and isinstance(data.get("events"), list):
+                        count = len(data["events"])
+                    if count is None and isinstance(data.get("voices"), list):
+                        count = len(data["voices"])
+            summary_parts.append(f"{count if count is not None else '?'} {source}")
+        summary_text = (
+            f"[synthesized — kernel notification sync] "
+            f"通知至：{'，'.join(summary_parts)}。"
+            if summary_parts
+            else "[synthesized — kernel notification sync] 通知至。"
+        )
+
+        text_block = TextBlock(text=summary_text)
         call_block = ToolCallBlock(
             id=call_id,
             name="system",
@@ -935,7 +966,7 @@ class BaseAgent:
             synthesized=True,
         )
 
-        iface.add_assistant_message(content=[call_block])
+        iface.add_assistant_message(content=[text_block, call_block])
         iface.add_tool_results([result_block])
         self._notification_block_id = call_id
         self._save_chat_history(ledger_source="notification_sync")
@@ -943,6 +974,7 @@ class BaseAgent:
             "notification_pair_injected",
             call_id=call_id,
             sources=list(notifications.keys()),
+            summary=summary_text,
         )
         return True
 

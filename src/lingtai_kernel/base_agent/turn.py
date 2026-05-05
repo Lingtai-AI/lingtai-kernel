@@ -25,6 +25,26 @@ _LLM_HANG_THRESHOLD_SECONDS = 120.0
 _LLM_SLOW_THRESHOLD_SECONDS = 60.0
 
 
+class EmptyLLMResponseError(RuntimeError):
+    """The LLM returned a response with no text, no tool_calls, and no thoughts.
+
+    A degenerate response indistinguishable from "task complete" by structure
+    but actually a model failure (heavy context, provider hiccup, mid-tool
+    notification injection confusing the model, etc). Raising this routes the
+    failure into the AED recovery loop in ``_run_loop`` instead of silently
+    transitioning to IDLE and abandoning the in-progress task.
+    """
+
+    def __init__(self, *, ledger_source: str, in_tool_loop: bool):
+        self.ledger_source = ledger_source
+        self.in_tool_loop = in_tool_loop
+        where = "after tool results" if in_tool_loop else "on initial send"
+        super().__init__(
+            f"LLM returned empty response (no text, no tool_calls, no thoughts) "
+            f"{where}; ledger={ledger_source}"
+        )
+
+
 def _on_llm_hang(agent) -> None:
     """Watchdog callback: LLM has been unresponsive for too long."""
     from ..state import AgentState
@@ -352,17 +372,31 @@ def _handle_request(agent, msg: Message) -> None:
     content = agent._pre_request(msg)
     meta = build_meta(agent)
 
-    # Molt pressure — warn agent when context is getting full
+    # Molt pressure — warn agent when context is getting full.
+    #
+    # Hard ceiling and forced-wipe paths still prepend their notice to the
+    # current user message because they are kernel ACTIONS the agent must
+    # see this turn (the wipe already happened; the agent needs to know
+    # working memory just got cleared).
+    #
+    # Graduated warnings (level 1/2/3 below the hard ceiling) are routed
+    # through the .notification/molt.json channel instead of being baked
+    # into user message content. Each level fully replaces the prior file
+    # — same single-slot pattern as soul/email — so the wire only carries
+    # the freshest pressure level. When pressure drops below the warn
+    # threshold the file is cleared so the warning stops re-injecting.
     has_molt = "psyche" in agent._intrinsics
     pressure = agent._session.get_context_pressure()
 
-    # Hard ceiling — unconditional force-wipe
     if pressure >= agent._config.molt_hard_ceiling and has_molt:
+        # Hard ceiling — unconditional force-wipe (action, stays inline).
         lang = agent._config.language
         agent._log("auto_forget", reason="hard ceiling", pressure=pressure, ceiling=agent._config.molt_hard_ceiling)
         from ..intrinsics import psyche as _psyche
+        from ..intrinsics.system import clear_notification
         _psyche.context_forget(agent)
         agent._session._compaction_warnings = 0
+        clear_notification(agent._working_dir, "molt")
         content = f"{_t(lang, 'system.molt_wiped')}\n\n{content}"
     elif pressure >= agent._config.molt_pressure and has_molt:
         max_warnings = agent._config.molt_warnings
@@ -371,12 +405,24 @@ def _handle_request(agent, msg: Message) -> None:
         remaining = max(0, max_warnings - warnings)
         lang = agent._config.language
         if warnings > max_warnings:
-            agent._log("auto_forget", reason=f"ignored {max_warnings} molt warnings", pressure=pressure)
+            # Forced wipe after ignored warnings (action, stays inline).
             from ..intrinsics import psyche as _psyche
+            from ..intrinsics.system import clear_notification
+            agent._log("auto_forget", reason=f"ignored {max_warnings} molt warnings", pressure=pressure)
             _psyche.context_forget(agent)
             agent._session._compaction_warnings = 0
+            clear_notification(agent._working_dir, "molt")
             content = f"{_t(lang, 'system.molt_wiped')}\n\n{content}"
         else:
+            # Graduated warning — publish to .notification/molt.json.
+            # Each call fully replaces the file, so the wire carries
+            # only the current level. _sync_notifications picks up the
+            # fingerprint change on the next heartbeat tick and routes
+            # it through the synthetic-pair injection (same path as
+            # email/soul). The warning thus appears on the *next* turn,
+            # not this one — acceptable tradeoff: the agent has 3+
+            # turns of buffer before forced wipe.
+            from ..intrinsics.system import publish_notification
             level = min(warnings, 3)
             level_prompt = _t(
                 lang,
@@ -388,7 +434,27 @@ def _handle_request(agent, msg: Message) -> None:
                 level_prompt = level_prompt + "\n\n" + _t(lang, "system.molt_procedure")
             molt_prompt = agent._config.molt_prompt or level_prompt
             status = f"[context: {pressure:.0%} | {remaining}/{max_warnings}]"
-            content = f"{molt_prompt}\n{status}\n\n{content}"
+            publish_notification(
+                agent._working_dir, "molt",
+                header=f"context {pressure:.0%}, {remaining}/{max_warnings} turns left",
+                icon=("⚠️" if level >= 2 else "🪶"),
+                priority=("high" if level >= 2 else "normal"),
+                data={
+                    "pressure": pressure,
+                    "level": level,
+                    "warnings": warnings,
+                    "remaining": remaining,
+                    "max_warnings": max_warnings,
+                    "warning_text": molt_prompt,
+                    "status": status,
+                },
+            )
+    else:
+        # Pressure dropped below threshold — clear any stale molt notice
+        # so the wire stops carrying it.
+        if has_molt:
+            from ..intrinsics.system import clear_notification
+            clear_notification(agent._working_dir, "molt")
 
     prefix = render_meta(agent, meta)
     if prefix:
@@ -557,8 +623,33 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
     guard = agent._executor.guard
     collected_text_parts: list[str] = []
     collected_errors: list[str] = []
+    in_tool_loop = False
 
     while True:
+        # Empty-response guard: text + tool_calls + thoughts all empty means
+        # the LLM produced nothing useful. Without this check, the loop would
+        # break on `not response.tool_calls` and return success, abandoning
+        # any in-progress task. Route into AED instead — a session rebuild
+        # plus stuck_revive injection is the right recovery for a degenerate
+        # response (often caused by heavy context or mid-loop notification
+        # injection confusing the model).
+        if (
+            not response.text
+            and not response.tool_calls
+            and not response.thoughts
+        ):
+            agent._log(
+                "empty_llm_response",
+                ledger_source=ledger_source,
+                in_tool_loop=in_tool_loop,
+                output_tokens=response.usage.output_tokens,
+                thinking_tokens=response.usage.thinking_tokens,
+            )
+            raise EmptyLLMResponseError(
+                ledger_source=ledger_source,
+                in_tool_loop=in_tool_loop,
+            )
+
         if response.text:
             collected_text_parts.append(response.text)
             agent._log("diary", text=response.text)
@@ -615,7 +706,8 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             )
             break
 
-        response = agent._session.send(tool_results)
+        in_tool_loop = True
+        response = _send_with_watchdog(agent, tool_results)
         agent._last_usage = response.usage
         agent._save_chat_history(ledger_source=ledger_source)
 

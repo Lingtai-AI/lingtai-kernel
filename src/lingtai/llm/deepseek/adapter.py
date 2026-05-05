@@ -63,14 +63,25 @@ class DeepSeekChatSession(OpenAIChatSession):
         # onward. DeepSeek's server validates that reasoning_content is present
         # on all assistant turns once thinking mode has been invoked by a tool
         # call, even on plain-text replies following the tool loop.
+        #
+        # Per-turn unique tag defeats DeepSeek's cache fast-path. Without it,
+        # a wire with the SAME placeholder string repeated across many
+        # assistant turns triggers the fast-path: the server returns just a
+        # placeholder echo (output_tokens=10, thinking_tokens=10) with no
+        # text and no tool_calls. Empirically (n=20 per condition at 354k
+        # input, 99.5% cache hit): constant placeholder → 65% empty rate;
+        # per-turn unique tag → 0% empty rate. Server still validates field
+        # presence, not content, so any non-empty string is accepted.
         seen_tool_call = False
+        turn_idx = 0
         for msg in messages:
             if msg.get("role") != "assistant":
                 continue
             if msg.get("tool_calls"):
                 seen_tool_call = True
             if seen_tool_call:
-                msg["reasoning_content"] = _REASONING_PLACEHOLDER
+                turn_idx += 1
+                msg["reasoning_content"] = f"{_REASONING_PLACEHOLDER} [turn={turn_idx}]"
         return messages
 
     def send(self, message):
@@ -84,6 +95,9 @@ class DeepSeekChatSession(OpenAIChatSession):
         return response
 
 
+_TURN_TAG_RE = __import__("re").compile(r"^\s*\[turn=\d+\]\s*")
+
+
 def _strip_placeholder_echoes(response) -> None:
     """Strip our placeholder string from the start of each thought.
 
@@ -92,7 +106,8 @@ def _strip_placeholder_echoes(response) -> None:
     next response. Result: thoughts like
         "(reasoning omitted — not preserved across turns)发现 args 检查失败..."
     We chop the placeholder prefix off so the kernel's 'thinking' event log
-    shows just the real reasoning.
+    shows just the real reasoning. Also strips the per-turn `[turn=N]` tag
+    we now append to the placeholder for cache-busting.
 
     Pure-echo responses (where thought == placeholder with no tail) become
     empty strings and are dropped entirely — there's no reasoning to keep.
@@ -103,6 +118,7 @@ def _strip_placeholder_echoes(response) -> None:
     for t in response.thoughts:
         if t and t.startswith(_REASONING_PLACEHOLDER):
             tail = t[len(_REASONING_PLACEHOLDER):].lstrip()
+            tail = _TURN_TAG_RE.sub("", tail)
             if tail:
                 cleaned.append(tail)
         else:
