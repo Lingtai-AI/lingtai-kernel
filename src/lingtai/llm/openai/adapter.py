@@ -498,16 +498,25 @@ class OpenAIChatSession(ChatSession):
         return patched
 
     def send(self, message) -> LLMResponse:
-        """Send a user message (str) or tool results (list of dicts).
+        """Send a user message (str), tool results (list of dicts), or
+        drive the existing wire forward (``None``).
 
         For tool results, ``message`` is a list of ToolResultBlock instances
         built by :meth:`OpenAIAdapter.make_tool_result_message`.
+
+        ``None`` is the "continue from wire" signal — the caller has
+        already appended whatever needs to land (see
+        ``base_agent/turn.py:_handle_tc_wake`` for the notification
+        path).  No input append happens here; the existing wire is
+        sent as-is.
 
         Records user input into the interface BEFORE the API call, then
         reverts on error. On success, records the assistant response.
         """
         # 1. Record user input into interface
-        if isinstance(message, str):
+        if message is None:
+            pass  # wire is already prepared by the caller
+        elif isinstance(message, str):
             self._interface.add_user_message(message)
         elif isinstance(message, list):
             # Tool results — list of ToolResultBlock instances
@@ -554,7 +563,8 @@ class OpenAIChatSession(ChatSession):
         try:
             raw, total_dropped, rounds = self._run_with_overflow_recovery(_do_call)
         except Exception:
-            self._interface.drop_trailing(lambda e: e.role == "user")
+            if message is not None:
+                self._interface.drop_trailing(lambda e: e.role == "user")
             raise
 
         # 3b. If recovery fired (entries were dropped), inject the molt notice.
@@ -662,13 +672,16 @@ class OpenAIChatSession(ChatSession):
         return result
 
     def send_stream(self, message, on_chunk=None) -> LLMResponse:
-        """Send a streaming request.
+        """Send a streaming request.  Same shape as :meth:`send` —
+        ``str`` / ``list`` / ``None`` (continue from wire).
 
         Records user input into the interface BEFORE the API call, then
         reverts on error. On success, records the assistant response.
         """
         # 1. Record user input into interface
-        if isinstance(message, str):
+        if message is None:
+            pass  # wire is already prepared by the caller
+        elif isinstance(message, str):
             self._interface.add_user_message(message)
         elif isinstance(message, list):
             self._interface.add_tool_results(message)
@@ -779,7 +792,8 @@ class OpenAIChatSession(ChatSession):
                             args_delta=(tc.function.arguments if tc.function else None),
                         )
         except Exception:
-            self._interface.drop_trailing(lambda e: e.role == "user")
+            if message is not None:
+                self._interface.drop_trailing(lambda e: e.role == "user")
             raise
 
         # 4. Finalize
@@ -849,7 +863,13 @@ class OpenAIResponsesSession(ChatSession):
         return self._interface
 
     def _convert_input(self, message) -> list[dict]:
-        """Convert messages to Responses API input format."""
+        """Convert messages to Responses API input format.
+
+        ``None`` yields ``[]`` — caller wants the existing
+        ``previous_response_id`` chain to continue with no new input.
+        """
+        if message is None:
+            return []
         if isinstance(message, str):
             return [{"role": "user", "content": message}]
         elif isinstance(message, dict):
@@ -1288,7 +1308,12 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # conversation must ride along on every request. Record the new
         # message into the canonical interface, then build wire input from
         # the entire interface (mirrors OpenAIChatSession.send's contract).
-        if isinstance(message, str):
+        # ``message is None`` is the "continue from wire" signal — the
+        # caller pre-staged the canonical interface (e.g. notification
+        # sync), so we just replay it without any additional append.
+        if message is None:
+            pass
+        elif isinstance(message, str):
             self._interface.add_user_message(message)
         elif isinstance(message, list):
             # ToolResultBlock list, the canonical kernel shape coming back

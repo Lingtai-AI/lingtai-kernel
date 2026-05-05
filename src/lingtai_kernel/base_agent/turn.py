@@ -307,14 +307,9 @@ def _concat_queued_messages(agent, msg: Message) -> Message:
         return msg
 
     all_msgs = [msg] + extra
-    parts: list[str] = []
-    for m in all_msgs:
-        if m.content is None:
-            continue  # canonical empty-turn signal — contributes no text
-        s = m.content if isinstance(m.content, str) else str(m.content)
-        if s:
-            parts.append(s)
-    merged_content = "\n\n".join(parts) if parts else None
+    parts = [m.content if isinstance(m.content, str) else str(m.content)
+             for m in all_msgs]
+    merged_content = "\n\n".join(parts)
     merged = _make_message(MSG_REQUEST, msg.sender, merged_content)
     agent._log("messages_concatenated", count=len(all_msgs))
     return merged
@@ -397,7 +392,7 @@ def _handle_request(agent, msg: Message) -> None:
 
     prefix = render_meta(agent, meta)
     if prefix:
-        content = f"{prefix}\n\n{content}" if content else prefix
+        content = f"{prefix}\n\n{content}"
     agent._log("text_input", text=content)
     response = _send_with_watchdog(agent, content)
     agent._last_usage = response.usage
@@ -407,86 +402,133 @@ def _handle_request(agent, msg: Message) -> None:
 
 
 def _handle_tc_wake(agent, msg: Message) -> None:
-    """Process queued involuntary tool-call pairs by driving them
-    through the LLM as if the tools just returned — no fake user prompt.
+    """Drive one inference round off the existing wire, no append.
+
+    Post-`.notification/`-redesign contract: the run loop receives this
+    message after ``_sync_notifications`` has already spliced a
+    synthesized ``(ToolCallBlock, ToolResultBlock)`` pair into the
+    canonical interface (impersonating a voluntary
+    ``system(action="notification")`` call from the agent's
+    perspective).  This handler's job is to drive the next inference
+    round off that wire — no fake user message, no meta prefix.  From
+    the LLM's viewpoint it is indistinguishable from the agent having
+    voluntarily called the tool itself.
+
+    The legacy ``tc_inbox`` queue is still drained at the top for
+    back-compat (in case anything outside the kernel still enqueues),
+    but the empty-queue path now routes to the wire-drive path instead
+    of no-op-and-return — the previous "tc_inbox_empty" silent
+    no-op was the bug that left spliced notification pairs unread.
     """
     from ..llm import LLMResponse
 
-    items = agent._tc_inbox.drain()
-    if not items:
-        agent._log("tc_wake_noop", reason="tc_inbox_empty")
-        return
     if agent._chat is None:
         try:
             agent._session.ensure_session()
         except Exception as e:
-            for item in items:
-                agent._tc_inbox.enqueue(item)
             agent._log(
                 "tc_wake_noop",
                 reason="ensure_session_failed",
                 error=str(e)[:300],
             )
             return
+
     iface = agent._chat.interface
+    items = agent._tc_inbox.drain()
+
+    # Mid-pair tail — defer.  Re-enqueue any drained legacy items so
+    # the next wake retries them.
     if iface.has_pending_tool_calls():
         for item in items:
             agent._tc_inbox.enqueue(item)
         agent._log("tc_wake_noop", reason="pending_tool_calls")
         return
 
-    try:
-        agent._executor = ToolExecutor(
-            dispatch_fn=agent._dispatch_tool,
-            make_tool_result_fn=lambda name, result, **kw: agent.service.make_tool_result(
-                name, result, provider=agent._config.provider, **kw
-            ),
-            guard=LoopGuard(
-                max_total_calls=agent._config.max_turns,
-                dup_free_passes=2,
-                dup_hard_block=8,
-            ),
-            known_tools=set(agent._intrinsics) | set(agent._tool_handlers),
-            parallel_safe_tools=agent._PARALLEL_SAFE_TOOLS,
-            logger_fn=agent._log,
-            meta_fn=lambda: build_meta(agent),
-        )
-        for idx, item in enumerate(items):
-            try:
-                if getattr(item, "replace_in_history", False):
-                    prior_id = agent._appendix_ids_by_source.get(item.source)
-                    if prior_id is not None:
-                        iface.remove_pair_by_call_id(prior_id)
-                    agent._appendix_ids_by_source.pop(item.source, None)
-                iface.add_assistant_message(content=[item.call])
-                if getattr(item, "replace_in_history", False):
-                    agent._appendix_ids_by_source[item.source] = item.call.id
-                agent._save_chat_history()
+    agent._executor = ToolExecutor(
+        dispatch_fn=agent._dispatch_tool,
+        make_tool_result_fn=lambda name, result, **kw: agent.service.make_tool_result(
+            name, result, provider=agent._config.provider, **kw
+        ),
+        guard=LoopGuard(
+            max_total_calls=agent._config.max_turns,
+            dup_free_passes=2,
+            dup_hard_block=8,
+        ),
+        known_tools=set(agent._intrinsics) | set(agent._tool_handlers),
+        parallel_safe_tools=agent._PARALLEL_SAFE_TOOLS,
+        logger_fn=agent._log,
+        meta_fn=lambda: build_meta(agent),
+    )
 
-                agent._log("tc_wake_dispatch", source=item.source, call_id=item.call.id)
-                response = _send_with_watchdog(agent, [item.result])
-                agent._last_usage = response.usage
-                agent._save_chat_history(ledger_source="tc_wake")
-                _process_response(agent, response, ledger_source="tc_wake")
-            except Exception as splice_err:
-                if iface.has_pending_tool_calls():
-                    iface.close_pending_tool_calls(
-                        reason=f"tc_wake splice failed: {str(splice_err)[:200]}",
-                    )
-                    agent._save_chat_history()
-                agent._log(
-                    "tc_wake_send_error",
-                    source=item.source,
-                    call_id=item.call.id,
-                    error=str(splice_err)[:300],
+    # Legacy tc_inbox path — drained items get spliced and driven the
+    # old way (call appended here, result passed through send).  Empty
+    # in production post-redesign; preserved for back-compat.
+    for idx, item in enumerate(items):
+        try:
+            if getattr(item, "replace_in_history", False):
+                prior_id = agent._appendix_ids_by_source.get(item.source)
+                if prior_id is not None:
+                    iface.remove_pair_by_call_id(prior_id)
+                agent._appendix_ids_by_source.pop(item.source, None)
+            iface.add_assistant_message(content=[item.call])
+            if getattr(item, "replace_in_history", False):
+                agent._appendix_ids_by_source[item.source] = item.call.id
+            agent._save_chat_history()
+
+            agent._log("tc_wake_dispatch", source=item.source, call_id=item.call.id)
+            response = _send_with_watchdog(agent, [item.result])
+            agent._last_usage = response.usage
+            agent._save_chat_history(ledger_source="tc_wake")
+            _process_response(agent, response, ledger_source="tc_wake")
+        except Exception as splice_err:
+            if iface.has_pending_tool_calls():
+                iface.close_pending_tool_calls(
+                    reason=f"tc_wake splice failed: {str(splice_err)[:200]}",
                 )
-                for remaining in items[idx + 1:]:
-                    agent._tc_inbox.enqueue(remaining)
-                raise
+                agent._save_chat_history()
+            agent._log(
+                "tc_wake_send_error",
+                source=item.source,
+                call_id=item.call.id,
+                error=str(splice_err)[:300],
+            )
+            for remaining in items[idx + 1:]:
+                agent._tc_inbox.enqueue(remaining)
+            raise
+
+    # Wire-drive path: notification sync (or anything else that
+    # appends a complete (call, result) pair before posting
+    # MSG_TC_WAKE) leaves the wire ready for inference.  Drive one
+    # round off the existing state — pass None as the message so the
+    # adapter knows to skip the input-append step.
+    #
+    # Guard against stale wakes: only drive the wire when the tail is
+    # a user entry carrying ToolResultBlock(s).  Anything else (empty
+    # interface, tail is assistant text, etc.) means there's nothing
+    # for the LLM to respond to — sending would either error or
+    # produce a redundant continuation.
+    from ..llm.interface import ToolResultBlock
+
+    entries = iface.entries
+    tail_is_tool_result = (
+        bool(entries)
+        and entries[-1].role == "user"
+        and any(isinstance(b, ToolResultBlock) for b in entries[-1].content)
+    )
+    if not tail_is_tool_result:
+        agent._log("tc_wake_noop", reason="wire_not_ready")
+        return
+
+    try:
+        agent._log("tc_wake_continue")
+        response = _send_with_watchdog(agent, None)
+        agent._last_usage = response.usage
+        agent._save_chat_history(ledger_source="tc_wake")
+        _process_response(agent, response, ledger_source="tc_wake")
     except Exception as e:
-        if agent._chat is not None and agent._chat.interface.has_pending_tool_calls():
-            agent._chat.interface.close_pending_tool_calls(
-                reason=f"tc_wake outer-error heal: {str(e)[:200]}",
+        if iface.has_pending_tool_calls():
+            iface.close_pending_tool_calls(
+                reason=f"tc_wake continue heal: {str(e)[:200]}",
             )
             agent._save_chat_history()
         agent._log("tc_wake_error", error=str(e)[:300])

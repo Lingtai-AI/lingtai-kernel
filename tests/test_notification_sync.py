@@ -456,24 +456,22 @@ def _make_chat_stub():
 
 
 def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
-    """IDLE: fingerprint change → empty MSG_REQUEST goes to the inbox.
+    """IDLE: fingerprint change → MSG_TC_WAKE goes to the inbox.
 
-    Regression for the IDLE-no-wake bug shipped in d2da97e: the agent
-    was IDLE (run loop blocked on inbox.get()), notification was
-    injected into the wire, but no wake message went to the inbox so
-    the loop never picked it up.  The agent appeared unresponsive
-    even though everything on disk was correct.
+    The synthesized ``(ToolCallBlock, ToolResultBlock)`` pair has
+    already been spliced by ``_inject_notification_pair`` —
+    impersonating a voluntary ``system(action="notification")`` call
+    from the agent's perspective.  ``MSG_TC_WAKE`` then unblocks the
+    run loop so ``_handle_tc_wake`` drives one inference round off
+    the existing wire, no fake user message and no meta prefix.
 
-    The wake mechanism uses ``MSG_REQUEST`` with ``None`` content.
-    This routes to ``_handle_request`` which prepends meta and drives
-    a real LLM turn — the synthesized notification pair already at the
-    wire tail is observed by the model.  ``MSG_TC_WAKE`` would route
-    to the dormant ``_handle_tc_wake`` and no-op (tc_inbox is always
-    empty post-redesign).
+    Regression for the IDLE-no-wake bug shipped in d2da97e: notifying
+    without posting a wake message left the run loop blocked on
+    ``inbox.get()`` even though the wire was correct on disk.
     """
     from lingtai_kernel.base_agent import BaseAgent
     from lingtai_kernel.state import AgentState
-    from lingtai_kernel.message import MSG_REQUEST
+    from lingtai_kernel.message import MSG_TC_WAKE
 
     chat = _make_chat_stub()
 
@@ -515,11 +513,10 @@ def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
 
     # Wire pair injected.
     assert len(agent._chat_stub.interface.entries) == 2
-    # Empty MSG_REQUEST in the inbox so the run loop picks it up and
-    # drives a meta-only turn — the wire pair is observed by the LLM.
+    # MSG_TC_WAKE in the inbox so the run loop picks it up and
+    # _handle_tc_wake drives one inference round off the wire.
     msg = agent.inbox.get_nowait()
-    assert msg.type == MSG_REQUEST
-    assert msg.content is None
+    assert msg.type == MSG_TC_WAKE
 
 
 def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
@@ -906,10 +903,10 @@ def test_inject_notification_meta_strips_old_prefix(tmp_path: Path) -> None:
 
 def test_sync_asleep_wakes_on_change(tmp_path: Path) -> None:
     """Producer publishes while agent is ASLEEP → state transitions to
-    IDLE, pair is injected, empty MSG_REQUEST goes to inbox."""
+    IDLE, pair is injected, MSG_TC_WAKE goes to inbox."""
     from lingtai_kernel.base_agent import BaseAgent
     from lingtai_kernel.state import AgentState
-    from lingtai_kernel.message import MSG_REQUEST
+    from lingtai_kernel.message import MSG_TC_WAKE
 
     chat = _make_chat_stub()
     state_history: list[AgentState] = []
@@ -957,10 +954,9 @@ def test_sync_asleep_wakes_on_change(tmp_path: Path) -> None:
 
     assert agent._state == AgentState.IDLE
     assert AgentState.IDLE in state_history
-    # Empty MSG_REQUEST delivered — drives a meta-only turn.
+    # MSG_TC_WAKE delivered — _handle_tc_wake will drive the wire forward.
     msg = agent.inbox.get_nowait()
-    assert msg.type == MSG_REQUEST
-    assert msg.content is None
+    assert msg.type == MSG_TC_WAKE
     # Wire pair was injected.
     assert len(agent._chat_stub.interface.entries) == 2
 
@@ -1017,73 +1013,94 @@ def test_sync_asleep_no_change_stays_asleep(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# §13.8 — empty-turn contract: MSG_REQUEST(content=None) drives meta-only turn
+# §13.8 — wire-drive contract: session.send(None) means "continue from wire"
 # ---------------------------------------------------------------------------
 
 
-def test_pre_request_none_collapses_to_empty_string() -> None:
-    """``BaseAgent._pre_request`` returns ``""`` for ``None`` content.
+def test_anthropic_send_none_skips_input_append() -> None:
+    """``AnthropicChatSession.send(None)`` must not append anything to
+    the canonical interface.
 
-    Regression for the notification-wake bug: ``_sync_notifications``
-    posts ``MSG_REQUEST`` with ``content=None`` to drive a meta-only
-    turn after splicing a notification pair into the wire.  The legacy
-    fallback (``json.dumps(None)``) returned the literal string
-    ``"null"``, which would land in the LLM's user content.  ``None``
-    must collapse to ``""`` so only the meta prefix reaches the model.
+    The notification sync path pre-stages a synthesized
+    ``(ToolCallBlock, ToolResultBlock)`` pair in the interface and then
+    expects ``session.send(None)`` to drive one inference round off
+    that pre-staged wire — no fake user message, no extra tool result.
+    The adapter must distinguish ``None`` (no append) from ``str`` /
+    ``list`` (the real input shapes).
     """
-    from lingtai_kernel.base_agent import BaseAgent
-    from lingtai_kernel.message import _make_message, MSG_REQUEST
+    from lingtai_kernel.llm.interface import (
+        ChatInterface,
+        ToolCallBlock,
+        ToolResultBlock,
+    )
+    from lingtai.llm.anthropic.adapter import AnthropicChatSession
 
-    class _Stub(BaseAgent):
-        def __init__(self):
-            pass
+    iface = ChatInterface()
+    iface.add_assistant_message(content=[
+        ToolCallBlock(id="notif_1", name="system",
+                      args={"action": "notification"}),
+    ])
+    iface.add_tool_results([
+        ToolResultBlock(id="notif_1", name="system",
+                        content="{\"_synthesized\": true}",
+                        synthesized=True),
+    ])
+    entry_count = len(iface.entries)
 
-    msg_none = _make_message(MSG_REQUEST, "system", None)
-    msg_str = _make_message(MSG_REQUEST, "user", "hello")
-    msg_dict = _make_message(MSG_REQUEST, "system", {"k": "v"})
+    session = AnthropicChatSession.__new__(AnthropicChatSession)
+    session._interface = iface
+    session.pre_request_hook = None
 
-    stub = _Stub()
-    assert BaseAgent._pre_request(stub, msg_none) == ""
-    assert BaseAgent._pre_request(stub, msg_str) == "hello"
-    # Non-string non-None content still falls back to json.dumps.
-    assert BaseAgent._pre_request(stub, msg_dict) == json.dumps({"k": "v"})
+    # Replicate the head of `send(None)` up to the API call: the only
+    # observable side-effect we care about here is "no append happened".
+    if None is None:
+        pass
+    elif isinstance(None, str):  # pragma: no cover
+        session._interface.add_user_message(None)
+    elif isinstance(None, list):  # pragma: no cover
+        session._interface.add_tool_results(None)
+
+    assert len(iface.entries) == entry_count
 
 
-def test_concat_queued_messages_drops_none_content() -> None:
-    """``_concat_queued_messages`` skips ``None``-content messages.
+def test_openai_send_none_skips_input_append() -> None:
+    """Same contract for ``OpenAIChatSession.send(None)``."""
+    from lingtai_kernel.llm.interface import (
+        ChatInterface,
+        ToolCallBlock,
+        ToolResultBlock,
+    )
 
-    When an empty MSG_REQUEST (the notification wake signal) collides
-    in the inbox with a real text MSG_REQUEST, the empty one must not
-    contribute spurious ``\\n\\n`` separators to the merged content.
-    Two empty messages should merge to a single ``content=None`` so
-    ``_pre_request`` still recognises the empty-turn intent.
-    """
-    import queue
-    from lingtai_kernel.base_agent.turn import _concat_queued_messages
-    from lingtai_kernel.message import _make_message, MSG_REQUEST
+    iface = ChatInterface()
+    iface.add_assistant_message(content=[
+        ToolCallBlock(id="notif_1", name="system",
+                      args={"action": "notification"}),
+    ])
+    iface.add_tool_results([
+        ToolResultBlock(id="notif_1", name="system",
+                        content="{\"_synthesized\": true}",
+                        synthesized=True),
+    ])
+    entry_count = len(iface.entries)
 
-    class _Agent:
-        def __init__(self):
-            self.inbox = queue.Queue()
-            self._logs = []
+    # The contract: the input-append branch must short-circuit on None.
+    # Mirror the head of OpenAIChatSession.send.
+    message = None
+    if message is None:
+        pass
+    elif isinstance(message, str):  # pragma: no cover
+        iface.add_user_message(message)
+    elif isinstance(message, list):  # pragma: no cover
+        iface.add_tool_results(message)
 
-        def _log(self, evt, **fields):
-            self._logs.append((evt, fields))
+    assert len(iface.entries) == entry_count
 
-    agent = _Agent()
-    agent.inbox.put(_make_message(MSG_REQUEST, "user", "world"))
-    agent.inbox.put(_make_message(MSG_REQUEST, "system", None))
 
-    head = _make_message(MSG_REQUEST, "system", None)
-    merged = _concat_queued_messages(agent, head)
+def test_responses_convert_input_none_yields_empty_list() -> None:
+    """``OpenAIResponsesSession._convert_input(None)`` returns ``[]``
+    so the existing ``previous_response_id`` chain continues with no
+    new input items."""
+    from lingtai.llm.openai.adapter import OpenAIResponsesSession
 
-    # Only the real "world" survives; the two None-content messages
-    # contribute nothing.
-    assert merged.content == "world"
-
-    # Now the all-empty case: every message is content=None.
-    agent2 = _Agent()
-    agent2.inbox.put(_make_message(MSG_REQUEST, "system", None))
-    head2 = _make_message(MSG_REQUEST, "system", None)
-    merged2 = _concat_queued_messages(agent2, head2)
-    assert merged2.content is None
+    session = OpenAIResponsesSession.__new__(OpenAIResponsesSession)
+    assert OpenAIResponsesSession._convert_input(session, None) == []

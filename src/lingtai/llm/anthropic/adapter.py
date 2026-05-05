@@ -335,17 +335,25 @@ class AnthropicChatSession(ChatSession):
         return kwargs
 
     def send(self, message) -> LLMResponse:
-        """Send a user message (str) or tool results (list of ToolResultBlock).
+        """Send a user message (str), tool results (list of ToolResultBlock),
+        or drive the existing wire forward (``None``).
 
         For tool results, ``message`` is a list of ToolResultBlock (canonical).
         The message is committed to the interface before the API call; if the
         tail has unanswered tool_calls, add_user_message raises
         PendingToolCallsError (recovery paths must close first). On API error
         the last user entry is reverted via drop_trailing.
+
+        ``None`` is the "continue from wire" signal — caller has already
+        appended whatever needs to land (e.g. a synthesized
+        ``(ToolCallBlock, ToolResultBlock)`` pair from
+        ``_inject_notification_pair``); no input append happens here.
         """
         # Commit to interface first; enforce_tool_pairing() below handles any
         # earlier-history orphans before the API call.
-        if isinstance(message, str):
+        if message is None:
+            pass  # wire is already prepared by the caller
+        elif isinstance(message, str):
             self._interface.add_user_message(message)
         elif isinstance(message, list):
             self._interface.add_tool_results(message)
@@ -367,8 +375,12 @@ class AnthropicChatSession(ChatSession):
         try:
             raw = self._client.messages.create(**kwargs)
         except Exception as api_err:
-            # Revert the interface on error - drop the last user entry
-            self._interface.drop_trailing(lambda e: e.role == "user")
+            # Revert the interface on error - drop the last user entry,
+            # but only when this call appended one.  ``message is None``
+            # means the caller pre-staged the wire and we must not
+            # corrupt it on failure.
+            if message is not None:
+                self._interface.drop_trailing(lambda e: e.role == "user")
             raise
 
         # Parse response and add to interface
@@ -414,8 +426,11 @@ class AnthropicChatSession(ChatSession):
         """Streaming send. User message committed to history only after success."""
         from lingtai_kernel.llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
 
-        # Record user input into interface first
-        if isinstance(message, str):
+        # Record user input into interface first.  ``None`` means the
+        # caller pre-staged the wire (see send() docstring).
+        if message is None:
+            pass
+        elif isinstance(message, str):
             self._interface.add_user_message(message)
         elif isinstance(message, list):
             # list of ToolResultBlock
@@ -469,7 +484,9 @@ class AnthropicChatSession(ChatSession):
                 final_message = stream.get_final_message()
         except Exception:
             # Revert the interface on error — drop the last user entry
-            self._interface.drop_trailing(lambda e: e.role == "user")
+            # only if this call appended one.
+            if message is not None:
+                self._interface.drop_trailing(lambda e: e.role == "user")
             raise
 
         # Extract usage from final message (includes cache metrics)
