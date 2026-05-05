@@ -1017,17 +1017,10 @@ def test_sync_asleep_no_change_stays_asleep(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_anthropic_send_none_skips_input_append() -> None:
-    """``AnthropicChatSession.send(None)`` must not append anything to
-    the canonical interface.
-
-    The notification sync path pre-stages a synthesized
-    ``(ToolCallBlock, ToolResultBlock)`` pair in the interface and then
-    expects ``session.send(None)`` to drive one inference round off
-    that pre-staged wire — no fake user message, no extra tool result.
-    The adapter must distinguish ``None`` (no append) from ``str`` /
-    ``list`` (the real input shapes).
-    """
+def _make_anthropic_session_with_pre_staged_pair():
+    """Build a real AnthropicChatSession with a synthesized notification
+    pair already at the wire tail."""
+    from unittest.mock import MagicMock
     from lingtai_kernel.llm.interface import (
         ChatInterface,
         ToolCallBlock,
@@ -1042,34 +1035,97 @@ def test_anthropic_send_none_skips_input_append() -> None:
     ])
     iface.add_tool_results([
         ToolResultBlock(id="notif_1", name="system",
-                        content="{\"_synthesized\": true}",
+                        content='{"_synthesized": true}',
                         synthesized=True),
     ])
-    entry_count = len(iface.entries)
 
-    session = AnthropicChatSession.__new__(AnthropicChatSession)
-    session._interface = iface
-    session.pre_request_hook = None
+    session = AnthropicChatSession(
+        client=MagicMock(),
+        model="claude-sonnet-test",
+        system_prompt="system",
+        interface=iface,
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+    )
+    return session, iface
 
-    # Replicate the head of `send(None)` up to the API call: the only
-    # observable side-effect we care about here is "no append happened".
-    if None is None:
+
+def _fake_anthropic_response(text: str = "ok"):
+    """Build a MagicMock that mimics anthropic SDK's response shape."""
+    from unittest.mock import MagicMock
+
+    raw = MagicMock()
+    block = MagicMock()
+    block.type = "text"
+    block.text = text
+    raw.content = [block]
+    raw.usage = MagicMock(
+        input_tokens=10,
+        output_tokens=2,
+        thinking_tokens=0,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+    )
+    raw.id = "resp_1"
+    raw.model = "claude-sonnet-test"
+    raw.role = "assistant"
+    raw.stop_reason = "end_turn"
+    return raw
+
+
+def test_anthropic_send_none_does_not_append_input() -> None:
+    """``AnthropicChatSession.send(None)`` calls the API with the
+    pre-staged wire, does not append a user message, and records only
+    the assistant response."""
+    session, iface = _make_anthropic_session_with_pre_staged_pair()
+    pre_count = len(iface.entries)
+    session._client.messages.create.return_value = _fake_anthropic_response()
+
+    response = session.send(None)
+
+    assert response is not None
+    assert session._client.messages.create.called
+    # Wire grew by exactly one entry — the assistant response — not two.
+    assert len(iface.entries) == pre_count + 1
+    assert iface.entries[-1].role == "assistant"
+    # The pre-staged pair is intact.
+    assert iface.entries[pre_count - 2].role == "assistant"
+    assert iface.entries[pre_count - 1].role == "user"
+
+
+def test_anthropic_send_none_error_does_not_drop_pair() -> None:
+    """API failure during a ``send(None)`` must not invoke
+    ``drop_trailing`` — the pre-staged user entry is the notification
+    pair's tool_result, not something this call appended."""
+    session, iface = _make_anthropic_session_with_pre_staged_pair()
+    pre_count = len(iface.entries)
+    session._client.messages.create.side_effect = RuntimeError("boom")
+
+    try:
+        session.send(None)
+    except RuntimeError:
         pass
-    elif isinstance(None, str):  # pragma: no cover
-        session._interface.add_user_message(None)
-    elif isinstance(None, list):  # pragma: no cover
-        session._interface.add_tool_results(None)
 
-    assert len(iface.entries) == entry_count
+    # Wire is unchanged — the synthesized pair survived.
+    assert len(iface.entries) == pre_count
+    assert iface.entries[-1].role == "user"
+    from lingtai_kernel.llm.interface import ToolResultBlock
+    assert any(
+        isinstance(b, ToolResultBlock) for b in iface.entries[-1].content
+    )
 
 
-def test_openai_send_none_skips_input_append() -> None:
-    """Same contract for ``OpenAIChatSession.send(None)``."""
+def _make_openai_session_with_pre_staged_pair():
+    """Build a real OpenAIChatSession with a synthesized notification
+    pair already at the wire tail."""
+    from unittest.mock import MagicMock
     from lingtai_kernel.llm.interface import (
         ChatInterface,
         ToolCallBlock,
         ToolResultBlock,
     )
+    from lingtai.llm.openai.adapter import OpenAIChatSession
 
     iface = ChatInterface()
     iface.add_assistant_message(content=[
@@ -1078,22 +1134,93 @@ def test_openai_send_none_skips_input_append() -> None:
     ])
     iface.add_tool_results([
         ToolResultBlock(id="notif_1", name="system",
-                        content="{\"_synthesized\": true}",
+                        content='{"_synthesized": true}',
                         synthesized=True),
     ])
-    entry_count = len(iface.entries)
 
-    # The contract: the input-append branch must short-circuit on None.
-    # Mirror the head of OpenAIChatSession.send.
-    message = None
-    if message is None:
+    session = OpenAIChatSession(
+        client=MagicMock(),
+        model="gpt-test",
+        interface=iface,
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+        client_kwargs={},
+    )
+    return session, iface
+
+
+def _fake_openai_response(text: str = "ok"):
+    """Build a MagicMock mimicking openai SDK's ChatCompletion shape."""
+    from unittest.mock import MagicMock
+
+    raw = MagicMock()
+    msg = MagicMock()
+    msg.role = "assistant"
+    msg.content = text
+    msg.tool_calls = None
+    msg.reasoning_content = None
+    msg.reasoning = None
+    choice = MagicMock()
+    choice.message = msg
+    choice.finish_reason = "stop"
+    raw.choices = [choice]
+    raw.usage = MagicMock(
+        prompt_tokens=10,
+        completion_tokens=2,
+        total_tokens=12,
+        prompt_tokens_details=None,
+        completion_tokens_details=None,
+    )
+    raw.model = "gpt-test"
+    raw.id = "resp_1"
+    return raw
+
+
+def test_openai_send_none_does_not_append_input() -> None:
+    """``OpenAIChatSession.send(None)`` drives the API off the
+    pre-staged wire, does not append a user message, and records only
+    the assistant response."""
+    session, iface = _make_openai_session_with_pre_staged_pair()
+    pre_count = len(iface.entries)
+    session._client.chat.completions.create.return_value = _fake_openai_response()
+
+    response = session.send(None)
+
+    assert response is not None
+    assert session._client.chat.completions.create.called
+    # Wire grew by exactly one entry — the assistant response — not two.
+    assert len(iface.entries) == pre_count + 1
+    assert iface.entries[-1].role == "assistant"
+
+
+def test_openai_send_none_error_does_not_drop_pair() -> None:
+    """API failure during a ``send(None)`` must not corrupt the
+    pre-staged wire."""
+    session, iface = _make_openai_session_with_pre_staged_pair()
+    pre_count = len(iface.entries)
+    session._client.chat.completions.create.side_effect = RuntimeError("boom")
+
+    try:
+        session.send(None)
+    except RuntimeError:
         pass
-    elif isinstance(message, str):  # pragma: no cover
-        iface.add_user_message(message)
-    elif isinstance(message, list):  # pragma: no cover
-        iface.add_tool_results(message)
 
-    assert len(iface.entries) == entry_count
+    assert len(iface.entries) == pre_count
+    assert iface.entries[-1].role == "user"
+
+
+def test_openai_send_str_still_appends_user_message() -> None:
+    """Sanity check: the existing str/list paths are unchanged."""
+    session, iface = _make_openai_session_with_pre_staged_pair()
+    pre_count = len(iface.entries)
+    session._client.chat.completions.create.return_value = _fake_openai_response()
+
+    session.send("hello world")
+
+    # Two new entries: the user message we just appended, and the
+    # assistant response.
+    assert len(iface.entries) == pre_count + 2
 
 
 def test_responses_convert_input_none_yields_empty_list() -> None:
