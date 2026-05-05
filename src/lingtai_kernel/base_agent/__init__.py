@@ -357,6 +357,20 @@ class BaseAgent:
         # system.notification pairs. Bounce/MCP/soul notifications still
         # use system.notification but don't need per-ref tracking.
 
+        # Notification sync state (filesystem-as-protocol redesign).
+        # Tracks (a) the last-seen `.notification/` fingerprint so we can
+        # detect changes between heartbeat ticks, and (b) the call_id of
+        # the currently-injected wire pair (or None if no notification
+        # block is currently in the wire).  See notifications.py and
+        # discussions/notification-filesystem-redesign.md.
+        self._notification_fp: tuple = ()
+        self._notification_block_id: str | None = None
+        # ACTIVE-state stash: the JSON body to prepend to the next
+        # ToolResultBlock at request-send time.  Set by _sync_notifications
+        # while the agent is mid-tool-chain; consumed (and reset to None)
+        # by _inject_notification_meta inside SessionManager.send().
+        self._pending_notification_meta: str | None = None
+
         # Lifecycle
         self._shutdown = threading.Event()
         self._asleep = threading.Event()   # set when entering ASLEEP; cleared on wake
@@ -398,6 +412,7 @@ class BaseAgent:
             build_tool_schemas_fn=self._build_tool_schemas,
             logger_fn=self._log,
             build_system_batches_fn=self._build_system_prompt_batches,
+            notification_inject_fn=self._inject_notification_meta,
         )
 
         # Boot the psyche intrinsic
@@ -720,6 +735,271 @@ class BaseAgent:
                 from_hook=True,
             )
             self._save_chat_history()
+
+    # ------------------------------------------------------------------
+    # Notification sync — filesystem-as-protocol replacement for tc_inbox.
+    # See notifications.py and discussions/notification-filesystem-redesign.md.
+    # ------------------------------------------------------------------
+
+    _NOTIF_PREFIX_LEAD = "notifications:\n"
+
+    @staticmethod
+    def _strip_notification_prefix(content: str) -> str:
+        """Remove a leading ``notifications:\\n…\\n\\n`` block if present.
+
+        Idempotent.  Used both before reprepending fresh meta and on older
+        result blocks to maintain the single-slot invariant.
+        """
+        lead = BaseAgent._NOTIF_PREFIX_LEAD
+        if not content.startswith(lead):
+            return content
+        end = content.find("\n\n", len(lead))
+        if end < 0:
+            return content
+        return content[end + 2:]
+
+    def _sync_notifications(self) -> None:
+        """Sync `.notification/` state into the wire.
+
+        Computes the current fingerprint; if unchanged, no-op.  On change:
+        1. Strip the prior wire pair (if any).
+        2. If the new collection is empty, commit the empty fingerprint
+           and return — wire now has zero notification blocks.
+        3. Otherwise, inject a new block appropriate for current state:
+
+           * IDLE → splice ``(call, result)`` pair.
+           * ACTIVE → stash JSON body in ``_pending_notification_meta``
+             for ``SessionManager.send()`` to pick up.
+           * ASLEEP → wake to IDLE (this is the canonical
+             notification-driven wake), then splice the pair and post
+             ``MSG_TC_WAKE``.
+
+        ``MSG_TC_WAKE`` fires only on the ASLEEP→IDLE transition.  An
+        IDLE-state strip+reinject does NOT post wake — the agent is
+        already running and will see the new pair on its next request
+        cycle.
+
+        The fingerprint is committed only when injection succeeds (or
+        when in a state that cannot inject — STUCK/SUSPENDED/empty).
+        If injection is blocked (e.g. ``has_pending_tool_calls()``),
+        the fingerprint stays at its prior value and the next heartbeat
+        tick retries.
+        """
+        from ..notifications import notification_fingerprint, collect_notifications
+
+        fp = notification_fingerprint(self._working_dir)
+        if fp == self._notification_fp:
+            return
+
+        notifications = collect_notifications(self._working_dir)
+        prior_block_id = self._notification_block_id
+
+        # --- Strip prior block ---
+        if prior_block_id is not None and self._chat is not None:
+            try:
+                self._chat.interface.remove_pair_by_call_id(prior_block_id)
+            except Exception:
+                pass
+            self._notification_block_id = None
+
+        if not notifications:
+            # All cleared — wire now has zero notification blocks.
+            self._notification_fp = fp
+            return
+
+        # --- Inject new block based on current state ---
+        from ..state import AgentState
+
+        inject_ok = False
+
+        if self._state == AgentState.ASLEEP:
+            # Notification arrival wakes the agent, then inject as IDLE.
+            # MSG_TC_WAKE fires only here, on the wake transition.
+            self._asleep.clear()
+            self._cancel_event.clear()
+            self._set_state(AgentState.IDLE, reason="notification_arrival")
+            self._reset_uptime()
+            inject_ok = self._inject_notification_pair(notifications)
+            if inject_ok:
+                from ..message import _make_message, MSG_TC_WAKE
+                try:
+                    wake_msg = _make_message(MSG_TC_WAKE, "system", "")
+                    self.inbox.put(wake_msg)
+                    self._wake_nap("notification_arrival")
+                except Exception:
+                    pass
+
+        elif self._state == AgentState.IDLE:
+            # Already awake — strip + reinject only.  No MSG_TC_WAKE: the
+            # agent will observe the new pair on its next request cycle.
+            inject_ok = self._inject_notification_pair(notifications)
+
+        elif self._state == AgentState.ACTIVE:
+            # Stash for injection at request-send time (meta on latest
+            # ToolResultBlock).  Same envelope shape as IDLE pair so the
+            # agent sees one signal regardless of delivery path.
+            body = {"_synthesized": True, "notifications": notifications}
+            self._pending_notification_meta = json.dumps(
+                body, indent=2, ensure_ascii=False
+            )
+            inject_ok = True
+            self._log(
+                "notification_stashed_active",
+                sources=list(notifications.keys()),
+            )
+
+        # STUCK / SUSPENDED — no injection.  The on-disk state is
+        # observed; we just can't act on it until state recovers.
+
+        # --- Commit fingerprint only if injection succeeded ---
+        if inject_ok or self._state not in (
+            AgentState.IDLE, AgentState.ASLEEP
+        ):
+            self._notification_fp = fp
+
+    def _inject_notification_pair(self, notifications: dict) -> bool:
+        """Inject a synthetic (call, result) pair for IDLE / ASLEEP states.
+
+        Builds ``system(action="notification")`` / ``<JSON dict>`` and
+        appends to the wire interface.  Records the call_id for later
+        stripping.
+
+        The ``ToolResultBlock`` is created with ``synthesized=True``
+        (the existing flag the kernel already uses for heal-path
+        placeholders).  The result content also carries a top-level
+        ``_synthesized: true`` field in its JSON body so the agent can
+        distinguish kernel-injected reads from voluntary calls when
+        reading conversation history.
+
+        Returns True if injection succeeded, False if it had to abort
+        (e.g. pending tool_calls block append).  When False is returned,
+        the caller MUST NOT update ``_notification_fp`` — otherwise the
+        change would be silently dropped instead of retried.
+        """
+        import secrets
+        from ..llm.interface import ToolCallBlock, ToolResultBlock
+
+        if self._chat is None:
+            try:
+                self._session.ensure_session()
+            except Exception:
+                return False
+            if self._chat is None:
+                return False
+
+        iface = self._chat.interface
+        # If the wire has unanswered tool_calls, appending a user-role
+        # result entry would violate the alternation invariant.  Defer.
+        if iface.has_pending_tool_calls():
+            return False
+
+        call_id = f"notif_{int(time.time()*1000):x}_{secrets.token_hex(2)}"
+        body = {"_synthesized": True, "notifications": notifications}
+        content_json = json.dumps(body, indent=2, ensure_ascii=False)
+
+        call_block = ToolCallBlock(
+            id=call_id,
+            name="system",
+            args={"action": "notification"},
+        )
+        result_block = ToolResultBlock(
+            id=call_id,
+            name="system",
+            content=content_json,
+            synthesized=True,
+        )
+
+        iface.add_assistant_message(content=[call_block])
+        iface.add_tool_results([result_block])
+        self._notification_block_id = call_id
+        self._save_chat_history(ledger_source="notification_sync")
+        self._log(
+            "notification_pair_injected",
+            call_id=call_id,
+            sources=list(notifications.keys()),
+        )
+        return True
+
+    def _inject_notification_meta(self, message):
+        """ACTIVE-state: prepend notification JSON to a recent str ToolResultBlock.
+
+        Called from ``SessionManager.send()`` before the API call.  Walks
+        the wire backwards looking for a ``ToolResultBlock`` whose
+        ``.content`` is a string (dict-content blocks come from MCP
+        structured results — those are skipped to avoid corrupting their
+        schema).  Prepends the
+        ``notifications:\\n<json>\\n\\n`` prefix to the most recent
+        string-content result, stripping any stale prefix from older
+        results.
+
+        If no string-content ``ToolResultBlock`` exists, leaves
+        ``_pending_notification_meta`` set and the next ``send()``
+        retries.
+
+        Returns the (possibly unchanged) message.
+        """
+        from ..llm.interface import ToolResultBlock
+
+        if self._pending_notification_meta is None:
+            return message
+        if self._chat is None:
+            return message
+
+        iface = self._chat.interface
+        notif_prefix = (
+            f"{self._NOTIF_PREFIX_LEAD}{self._pending_notification_meta}\n\n"
+        )
+
+        # Walk backwards to find the most recent user entry whose content
+        # contains a *string-content* ToolResultBlock.
+        target_entry = None
+        target_block = None
+        for entry in reversed(iface.entries):
+            if entry.role != "user":
+                continue
+            for block in entry.content:
+                if (
+                    isinstance(block, ToolResultBlock)
+                    and isinstance(block.content, str)
+                ):
+                    target_entry = entry
+                    target_block = block
+                    break
+            if target_block is not None:
+                break
+
+        if target_block is None:
+            # All recent results are dict-typed (or there are none).
+            # Keep the pending meta; the next send() with a string
+            # result will carry it.
+            self._log(
+                "notification_meta_deferred",
+                reason="no_str_tool_result",
+            )
+            return message
+
+        # Strip notification prefix from ALL OTHER user ToolResultBlocks.
+        for entry in iface.entries:
+            if entry.role != "user":
+                continue
+            for block in entry.content:
+                if block is target_block:
+                    continue
+                if isinstance(block, ToolResultBlock) and isinstance(
+                    block.content, str
+                ):
+                    block.content = self._strip_notification_prefix(block.content)
+
+        # Strip-and-reinject on the target.
+        cleaned = self._strip_notification_prefix(target_block.content)
+        target_block.content = notif_prefix + cleaned
+
+        self._pending_notification_meta = None
+        self._log(
+            "notification_meta_injected",
+            entry_id=target_entry.id,
+        )
+        return message
 
     def _persist_soul_entry(self, result: dict, mode: str = "flow", source: str = "agent") -> None:
         from ..intrinsics.soul.flow import _persist_soul_entry

@@ -286,6 +286,22 @@ def _heartbeat_loop(agent) -> None:
         # .rules = network rules signal
         _check_rules_file(agent)
 
+        # --- Notification sync ---
+        # Poll the `.notification/` directory for changes.  The sync
+        # method is a no-op when the fingerprint is unchanged, so this
+        # call is cheap on the steady-state path.  On change it strips
+        # the prior wire block and reinjects per current state (IDLE
+        # pair / ACTIVE meta-stash / ASLEEP wake-then-pair).  See
+        # base_agent/__init__.py:_sync_notifications and
+        # discussions/notification-filesystem-redesign.md.
+        try:
+            agent._sync_notifications()
+        except Exception as notif_err:
+            from ..logging import get_logger
+            get_logger().warning(
+                f"[{agent.agent_name}] notification sync failed: {notif_err}"
+            )
+
         # Stamina enforcement — asleep when stamina expires
         if agent._uptime_anchor is not None and agent._state not in (AgentState.ASLEEP, AgentState.SUSPENDED):
             elapsed = time.monotonic() - agent._uptime_anchor

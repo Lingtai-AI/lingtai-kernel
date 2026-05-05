@@ -1,18 +1,23 @@
-"""Tests for intrinsics.system._dismiss — voluntary notification dismissal.
+"""Tests for the ``system(action='dismiss')`` deprecation shim.
 
-These tests use a stub agent that mimics the production BaseAgent →
-SessionManager → ChatSession → ChatInterface hierarchy. Specifically the
-production access path for the chat-side helper is:
+Under the legacy ``tc_inbox`` model, agents dismissed individual
+notification pairs by ``notif_id``.  The filesystem redesign replaces
+that lifecycle: producers write `.notification/<tool>.json` files and
+clear them when their state changes; the kernel keeps the wire in sync
+automatically.  There is no per-notification dismiss action under the
+new model.
 
-    agent._session.chat.interface.remove_pair_by_notif_id(notif_id)
+The shim survives so chat histories that reference dismiss calls don't
+crash on replay.  These tests verify the shim contract:
 
-A previous version of this stub put `ChatInterface` directly on
-`_StubSession.chat`, which let unit tests pass against an implementation
-bug that called `agent._session.chat.remove_pair_by_notif_id(...)` —
-production AttributeError'd because the real `_session.chat` is a
-ChatSession (OpenAIChatSession etc.) without that method. To prevent
-recurrence, the stub now mirrors the real hierarchy: ChatSession-shaped
-holder with `.interface` pointing at the real ChatInterface.
+  * Returns ``{"status": "ok", "note": "<deprecation>"}`` regardless
+    of input shape.
+  * Does NOT mutate the wire chat or tc_inbox queue.
+  * Does NOT validate ``ids`` (no error path) — the call is a no-op.
+  * Logs a ``system_dismiss_deprecated`` event so unintended calls
+    surface in agent logs.
+
+Phase 3 deletes ``_dismiss`` and this test file entirely.
 """
 from __future__ import annotations
 
@@ -27,12 +32,6 @@ from lingtai_kernel.tc_inbox import TCInbox, InvoluntaryToolCall
 
 
 class _StubChatSession:
-    """Stand-in for OpenAIChatSession / AnthropicChatSession etc. Production
-    hierarchy is ``agent._session.chat`` -> ChatSession (provider-specific)
-    -> ``.interface`` -> ChatInterface. The dismiss handler MUST go through
-    ``.interface`` to reach ``remove_pair_by_notif_id``; calling the method
-    directly on the ChatSession would AttributeError in production."""
-
     def __init__(self, interface: ChatInterface):
         self.interface = interface
 
@@ -45,7 +44,7 @@ class _StubSession:
 @dataclass
 class _StubAgent:
     _tc_inbox: TCInbox = field(default_factory=TCInbox)
-    _session: _StubSession = field(default=None)  # set in __post_init__
+    _session: _StubSession = field(default=None)
     _logs: list[tuple[str, dict]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -56,114 +55,103 @@ class _StubAgent:
         self._logs.append((event_type, fields))
 
 
-def _enqueue_notification(agent: _StubAgent, notif_id: str, ref_id: str = "mail_abc",
-                          source: str = "email") -> str:
-    """Helper: enqueue one notification on tc_inbox, splice it into chat,
-    and update the pending dict — mimics what _enqueue_system_notification
-    + the next drain pass would do."""
+def _enqueue_notification(agent: _StubAgent, notif_id: str) -> str:
     call_id = f"call_{notif_id}"
-    call = ToolCallBlock(
-        id=call_id,
-        name="system",
-        args={
-            "action": "notification",
-            "notif_id": notif_id,
-            "source": source,
-            "ref_id": ref_id,
-        },
-    )
+    call = ToolCallBlock(id=call_id, name="system", args={
+        "action": "notification",
+        "notif_id": notif_id,
+    })
     result = ToolResultBlock(id=call_id, name="system", content="...")
     agent._session.chat.interface.add_assistant_message(content=[call])
     agent._session.chat.interface.add_tool_results([result])
     return call_id
 
 
-def test_dismiss_removes_from_chat():
+# ---------------------------------------------------------------------------
+# Deprecation contract
+# ---------------------------------------------------------------------------
+
+
+def test_dismiss_returns_ok_with_deprecation_note():
     agent = _StubAgent()
-    _enqueue_notification(agent, "notif_xxx", ref_id="mail_a")
     res = sys_intrinsic._dismiss(agent, {"ids": ["notif_xxx"]})
     assert res["status"] == "ok"
-    assert res["results"] == {"notif_xxx": "dismissed"}
-    assert len(agent._session.chat.interface.conversation_entries()) == 0
+    assert "note" in res
+    assert "deprecated" in res["note"].lower()
 
 
-def test_dismiss_only_in_queue_not_chat():
-    """Notification still in tc_inbox, not yet spliced — dismiss removes
-    from queue and reports dismissed."""
+def test_dismiss_does_not_remove_from_chat():
+    """Pre-redesign behavior: dismiss removed wire pairs.  Post-redesign:
+    the wire stays untouched — producers manage state, not dismiss."""
     agent = _StubAgent()
-    call = ToolCallBlock(
-        id="call_001",
-        name="system",
-        args={
-            "action": "notification",
-            "notif_id": "notif_yyy",
-            "source": "email",
-            "ref_id": "mail_b",
-        },
-    )
-    result = ToolResultBlock(id="call_001", name="system", content="...")
+    _enqueue_notification(agent, "notif_xxx")
+    sys_intrinsic._dismiss(agent, {"ids": ["notif_xxx"]})
+    # 2 entries (call + result) still present.
+    assert len(agent._session.chat.interface.conversation_entries()) == 2
+
+
+def test_dismiss_does_not_remove_from_queue():
+    agent = _StubAgent()
+    call = ToolCallBlock(id="c1", name="system", args={
+        "action": "notification",
+        "notif_id": "notif_q",
+    })
+    result = ToolResultBlock(id="c1", name="system", content="...")
     agent._tc_inbox.enqueue(InvoluntaryToolCall(
         call=call, result=result,
-        source="system.notification:notif_yyy",
+        source="system.notification:notif_q",
         enqueued_at=0.0, coalesce=False, replace_in_history=False,
     ))
+    sys_intrinsic._dismiss(agent, {"ids": ["notif_q"]})
+    # Queue still has the item.
+    assert len(agent._tc_inbox) == 1
 
-    res = sys_intrinsic._dismiss(agent, {"ids": ["notif_yyy"]})
-    assert res["results"] == {"notif_yyy": "dismissed"}
-    assert len(agent._tc_inbox) == 0
 
-
-def test_dismiss_unknown_id_returns_not_found():
+def test_dismiss_unknown_id_no_error():
+    """Pre-redesign: unknown id returned 'not_found' (still ok).
+    Post-redesign: every call is the same deprecation no-op — there is
+    no per-id status to report."""
     agent = _StubAgent()
-    res = sys_intrinsic._dismiss(agent, {"ids": ["notif_does_not_exist"]})
+    res = sys_intrinsic._dismiss(agent, {"ids": ["does_not_exist"]})
     assert res["status"] == "ok"
-    assert res["results"] == {"notif_does_not_exist": "not_found"}
+    assert "results" not in res
 
 
-def test_dismiss_mixed_ids():
-    agent = _StubAgent()
-    _enqueue_notification(agent, "notif_a", ref_id="mail_a")
-    _enqueue_notification(agent, "notif_b", ref_id="mail_b")
-    res = sys_intrinsic._dismiss(agent, {"ids": ["notif_a", "notif_does_not_exist", "notif_b"]})
-    assert res["results"] == {
-        "notif_a": "dismissed",
-        "notif_does_not_exist": "not_found",
-        "notif_b": "dismissed",
-    }
-    assert len(agent._session.chat.interface.conversation_entries()) == 0
-
-
-def test_dismiss_empty_list_errors():
+def test_dismiss_empty_list_no_error():
+    """Pre-redesign: empty/missing ids was an error.  Post-redesign: the
+    call is a no-op shim; argument validation is irrelevant."""
     agent = _StubAgent()
     res = sys_intrinsic._dismiss(agent, {"ids": []})
-    assert res["status"] == "error"
+    assert res["status"] == "ok"
 
 
-def test_dismiss_missing_ids_errors():
+def test_dismiss_missing_ids_no_error():
     agent = _StubAgent()
     res = sys_intrinsic._dismiss(agent, {})
-    assert res["status"] == "error"
+    assert res["status"] == "ok"
 
 
-def test_dismiss_string_id_coerced_to_list():
-    """Defensive: agent passes a single id as a string instead of [string]."""
+def test_dismiss_logs_deprecation():
     agent = _StubAgent()
-    _enqueue_notification(agent, "notif_single", ref_id="mail_x")
-    res = sys_intrinsic._dismiss(agent, {"ids": "notif_single"})
-    assert res["results"] == {"notif_single": "dismissed"}
+    sys_intrinsic._dismiss(agent, {"ids": ["a", "b"]})
+    deprecated_events = [e for e, _ in agent._logs if e == "system_dismiss_deprecated"]
+    assert len(deprecated_events) == 1
 
 
-def test_dismiss_invalid_element_in_list():
+# ---------------------------------------------------------------------------
+# Voluntary system(action='notification') is now ALLOWED (was rejected pre-redesign)
+# ---------------------------------------------------------------------------
+
+
+def test_handle_dispatches_voluntary_notification(tmp_path):
+    """Under the .notification/ redesign, agent CAN voluntarily call
+    system(action='notification') to read the current state of the
+    notification surface.  Returns the collect_notifications() dict
+    (or {} when nothing is published).
+    """
     agent = _StubAgent()
-    res = sys_intrinsic._dismiss(agent, {"ids": [123, "notif_real"]})
-    assert res["results"]["123"] == "invalid_id"
-    assert res["results"]["notif_real"] == "not_found"
-
-
-def test_handle_rejects_notification_action():
-    """Defense-in-depth: agent cannot call system(action='notification', ...)
-    via public dispatch even if the LLM hallucinates that action name."""
-    agent = _StubAgent()
-    res = sys_intrinsic.handle(agent, {"action": "notification", "notif_id": "x"})
-    assert res["status"] == "error"
-    assert "kernel" in res["message"].lower() or "synthesized" in res["message"].lower()
+    agent._working_dir = tmp_path
+    res = sys_intrinsic.handle(agent, {"action": "notification"})
+    # No producers have written; result should be an empty dict.
+    assert isinstance(res, dict)
+    assert res == {}

@@ -80,20 +80,28 @@ def _make_email_notification(
 
 
 def test_arrival_then_voluntary_dismiss():
+    """After the .notification/ filesystem redesign, system(action='dismiss')
+    is a no-op deprecation shim — the agent never dismisses notifications;
+    producers manage their own state by writing/clearing
+    .notification/<tool>.json files.  This test now verifies the shim
+    contract: the call returns ok with a deprecation note and leaves the
+    wire untouched.  The test will be deleted in Phase 3 along with
+    full dismiss removal.
+    """
     agent = _StubAgent()
     item = _make_email_notification("notif_a", "mail_001")
     agent._tc_inbox.enqueue(item)
 
-    # Splice (simulate _drain_tc_inbox)
     drained = agent._tc_inbox.drain()
     for it in drained:
         _splice_pair(agent, it)
     assert len(agent._session.chat.interface.conversation_entries()) == 2
 
-    # Voluntary dismiss
     res = sys_intrinsic._dismiss(agent, {"ids": ["notif_a"]})
-    assert res["results"] == {"notif_a": "dismissed"}
-    assert len(agent._session.chat.interface.conversation_entries()) == 0
+    assert res["status"] == "ok"
+    assert "deprecated" in res.get("note", "").lower()
+    # Wire untouched — no dismiss path under the new model.
+    assert len(agent._session.chat.interface.conversation_entries()) == 2
 
 
 def test_arrival_then_email_read_auto_dismiss():
@@ -129,24 +137,27 @@ def test_check_does_not_dismiss():
 
 
 def test_race_dismiss_before_splice():
-    """Mail arrives → enqueue → BEFORE drain, agent voluntary dismiss removes
-    the pair from tc_inbox. The pair never lands in chat."""
+    """Pre-redesign: race-dismiss removed the pair from the queue before
+    splice.  Post-redesign: dismiss is a no-op shim, so the queue/chat
+    state is untouched by the dismiss call.  Test will be deleted in
+    Phase 3 along with full dismiss removal.
+    """
     agent = _StubAgent()
     item = _make_email_notification("notif_d", "mail_004")
     agent._tc_inbox.enqueue(item)
-    # Do NOT splice yet — race condition.
 
-    # Dismiss directly by notif_id (no _pending_mail_notifications lookup needed)
     res = sys_intrinsic._dismiss(agent, {"ids": ["notif_d"]})
-    assert res["results"] == {"notif_d": "dismissed"}
-    # Queue is empty AFTER dismiss; chat was never written.
-    assert len(agent._tc_inbox) == 0
-    assert len(agent._session.chat.interface.conversation_entries()) == 0
+    assert res["status"] == "ok"
+    assert "deprecated" in res.get("note", "").lower()
+    # Queue remains — dismiss no longer touches tc_inbox.
+    assert len(agent._tc_inbox) == 1
 
 
 def test_multiple_arrivals_dismiss_one_keep_others():
-    """Three notifications arrive; agent dismisses only one. Other two
-    notifications persist."""
+    """Pre-redesign: dismiss removed one pair; others persisted.
+    Post-redesign: dismiss is a no-op shim, so all pairs remain
+    untouched. Test will be deleted in Phase 3.
+    """
     agent = _StubAgent()
     items = [
         _make_email_notification("notif_e", "mail_005"),
@@ -161,11 +172,10 @@ def test_multiple_arrivals_dismiss_one_keep_others():
         _splice_pair(agent, it)
     assert len(agent._session.chat.interface.conversation_entries()) == 6  # 3 pairs
 
-    # Dismiss one
     sys_intrinsic._dismiss(agent, {"ids": ["notif_e"]})
 
-    # Two pairs remain.
-    assert len(agent._session.chat.interface.conversation_entries()) == 4
+    # All three pairs still present — dismiss is a no-op now.
+    assert len(agent._session.chat.interface.conversation_entries()) == 6
 
 
 def test_bounce_persists_until_voluntary_dismiss():
@@ -196,10 +206,14 @@ def test_bounce_persists_until_voluntary_dismiss():
     for it in drained:
         _splice_pair(agent, it)
 
-    # Voluntary dismiss works.
+    # Pre-redesign: voluntary dismiss removed the bounce pair from the wire.
+    # Post-redesign: dismiss is a no-op shim; the wire is untouched.
+    # Bounce notifications now flow through .notification/system.json
+    # under the producer-managed-state model.  Test will be deleted in Phase 3.
     res = sys_intrinsic._dismiss(agent, {"ids": [notif_id]})
-    assert res["results"] == {notif_id: "dismissed"}
-    assert len(agent._session.chat.interface.conversation_entries()) == 0
+    assert res["status"] == "ok"
+    assert "deprecated" in res.get("note", "").lower()
+    assert len(agent._session.chat.interface.conversation_entries()) == 2
 
 
 def test_no_msg_request_from_system_in_inbox():

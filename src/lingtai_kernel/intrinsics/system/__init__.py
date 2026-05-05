@@ -74,18 +74,16 @@ from .karma import (  # noqa: F401
 def handle(agent, args: dict) -> dict:
     """Handle system tool — runtime, lifecycle, synchronization."""
     action = args.get("action")
-    # Belt-and-suspenders: 'notification' is kernel-synthesized only.
-    # Even if the LLM hallucinates this action, refuse to dispatch.
+    # Voluntary `notification` query: returns the current state of all
+    # notification channels by reading `.notification/*.json`.  The
+    # kernel may also synthesize this call on the agent's behalf when a
+    # change arrives during IDLE/ASLEEP — in either case the agent sees
+    # the same shape: ``{"_synthesized": <bool>, "notifications": {...}}``
+    # for kernel-injected calls, or the bare collection dict for
+    # voluntary calls.  See discussions/notification-filesystem-redesign.md.
     if action == "notification":
-        return {
-            "status": "error",
-            "message": (
-                "system(action='notification', ...) is reserved for kernel-"
-                "synthesized notifications and cannot be invoked directly. "
-                "Use system(action='dismiss', ids=[...]) to dismiss "
-                "notifications you have handled."
-            ),
-        }
+        from ...notifications import collect_notifications
+        return collect_notifications(agent._working_dir)
     handler = {
         "nap": _nap,
         "refresh": _refresh,
