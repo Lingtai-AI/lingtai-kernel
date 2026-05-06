@@ -129,6 +129,10 @@ No `agent_id`. The path is the identity. Agents find each other by path, communi
 
 Read the full manifesto at [lingtai.ai](https://lingtai.ai).
 
+## Acknowledgements
+
+See [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
+
 ## License
 
 MIT — [Zesen Huang](https://github.com/huangzesen), 2025–2026
