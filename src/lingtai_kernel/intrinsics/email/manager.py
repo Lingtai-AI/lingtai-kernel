@@ -839,6 +839,21 @@ class EmailManager:
     def _lookup(self, email_id: str) -> dict | None:
         return self._load_email(email_id)
 
+    @staticmethod
+    def _reply_subject(original: dict, override: str | None) -> str:
+        """Derive a reply subject. If the original has no subject (every
+        "naked" message), synthesize one from the first body line so the
+        reply doesn't ship as literal "Re: " — bad for self-recall and
+        rejected by some IMAP relays.
+        """
+        if override:
+            return override
+        orig_subject = (original.get("subject") or "").strip()
+        if not orig_subject:
+            body_first = (original.get("message") or "").strip().split("\n", 1)[0]
+            orig_subject = body_first[:30] if body_first else "(no subject)"
+        return orig_subject if orig_subject.startswith("Re: ") else f"Re: {orig_subject}"
+
     def _reply(self, args: dict) -> dict:
         email_id = args.get("email_id", "")
         if isinstance(email_id, list):
@@ -853,14 +868,9 @@ class EmailManager:
         if original is None:
             return {"error": f"Email not found: {email_id}"}
 
-        orig_subject = original.get("subject", "")
-        subject = args.get("subject") or (
-            orig_subject if orig_subject.startswith("Re: ") else f"Re: {orig_subject}"
-        )
-
         return self._send({
             "address": original["from"],
-            "subject": subject,
+            "subject": self._reply_subject(original, args.get("subject")),
             "message": message_text,
             "cc": args.get("cc") or [],
             "bcc": args.get("bcc") or [],
@@ -899,14 +909,9 @@ class EmailManager:
         extra_cc = args.get("cc") or []
         extra_bcc = args.get("bcc") or []
 
-        orig_subject = original.get("subject", "")
-        subject = args.get("subject") or (
-            orig_subject if orig_subject.startswith("Re: ") else f"Re: {orig_subject}"
-        )
-
         return self._send({
             "address": reply_to,
-            "subject": subject,
+            "subject": self._reply_subject(original, args.get("subject")),
             "message": message_text,
             "cc": other_recipients + extra_cc,
             "bcc": extra_bcc,
