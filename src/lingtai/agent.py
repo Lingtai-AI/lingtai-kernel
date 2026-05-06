@@ -304,11 +304,21 @@ class Agent(BaseAgent):
             }
 
         The ``type`` field defaults to ``"stdio"`` if omitted.
+
+        Side effect: every init.json mcp entry whose name was registered
+        is recorded in ``self._mcp_init_specs``. The ``_retry_failed_mcps``
+        helper consults this dict on ``system(action="refresh")`` to detect
+        and re-spawn MCPs whose subprocess died (issue #34).
         """
         import json
 
         from lingtai_kernel.logging import get_logger
         logger = get_logger()
+
+        # Per-name tracking of init.json MCP launches. Populated below and
+        # consulted by `_retry_failed_mcps`. Reset on every load so that
+        # entries removed from init.json drop out of the retry pool.
+        self._mcp_init_specs: dict[str, dict] = {}
 
         # LICC env injection — every spawned MCP gets these so it can
         # locate the agent's working dir + know its own registry name and
@@ -317,19 +327,24 @@ class Agent(BaseAgent):
             "LINGTAI_AGENT_DIR": str(self._working_dir),
         }
 
-        def _spawn(name: str, cfg: dict, source: str) -> None:
+        def _spawn(name: str, cfg: dict, source: str) -> object | None:
+            """Return the MCPClient/HTTPMCPClient on success, None on failure."""
+            # Snapshot the client list pre-spawn so we can identify the new
+            # client connect_mcp* appended (avoids changing connect_mcp's
+            # public return contract — it returns tool names, not the client).
+            pre_clients = list(getattr(self, "_mcp_clients", []) or [])
             try:
                 server_type = cfg.get("type", "stdio")
                 if server_type == "http":
                     if "url" not in cfg:
-                        return
+                        return None
                     tools = self.connect_mcp_http(
                         url=cfg["url"],
                         headers=cfg.get("headers"),
                     )
                 else:
                     if "command" not in cfg:
-                        return
+                        return None
                     # Merge: LICC defaults < per-MCP env (user-supplied).
                     # Add LINGTAI_MCP_NAME per-spawn so each MCP knows its
                     # own registry name without needing to be told elsewhere.
@@ -346,9 +361,15 @@ class Agent(BaseAgent):
                 logger.info("[%s] MCP %s (%s): loaded %d tools (%s)",
                             self.agent_name, name, source, len(tools),
                             ", ".join(tools))
+                # Identify the client connect_mcp* just appended.
+                post_clients = list(getattr(self, "_mcp_clients", []) or [])
+                new_clients = post_clients[len(pre_clients):]
+                # connect_mcp / connect_mcp_http always append exactly one.
+                return new_clients[-1] if new_clients else None
             except Exception as e:
                 logger.warning("[%s] MCP %s (%s): failed to load: %s",
                                self.agent_name, name, source, e)
+                return None
 
         # Source 1: legacy mcp/servers.json
         legacy_config = self._working_dir / "mcp" / "servers.json"
@@ -396,7 +417,142 @@ class Agent(BaseAgent):
                     self.agent_name, name,
                 )
                 continue
-            _spawn(name, cfg, source="init.json:mcp")
+            client = _spawn(name, cfg, source="init.json:mcp")
+            # Record every registered init.json mcp entry — failures (client
+            # is None) and successes alike — so `_retry_failed_mcps` can
+            # tell which ones to re-attempt vs leave alone.
+            self._mcp_init_specs[name] = {
+                "cfg": cfg,
+                "source": "init.json:mcp",
+                "client": client,
+            }
+
+    def _retry_failed_mcps(self) -> dict:
+        """Re-spawn any init.json MCP whose subprocess is dead or never started.
+
+        Walks ``self._mcp_init_specs`` (populated by ``_load_mcp_from_workdir``)
+        and, for each entry whose tracked client is missing or visibly
+        unhealthy, tears it down and re-attempts the spawn with the original
+        config. Returns a report dict ``{retried: [...], recovered: [...],
+        still_failed: [...], healthy: [...]}``.
+
+        Why this exists: ``system(action="refresh")`` is the documented
+        "fix config → refresh" recovery path for curated addons (imap,
+        telegram, feishu, wechat). Without this retry, an MCP that exited
+        during initial boot stays dead until full process restart — see
+        Lingtai-AI/lingtai#34.
+
+        Health check: missing client (boot-time spawn raised) is the
+        clearest signal. For clients that registered but whose subprocess
+        later died, ``MCPClient.is_connected()`` is the cheapest probe — it
+        returns False when the background loop has exited (which happens
+        when the stdio transport closes due to subprocess death).
+        """
+        from lingtai_kernel.logging import get_logger
+        logger = get_logger()
+
+        specs = getattr(self, "_mcp_init_specs", None)
+        if not specs:
+            return {"retried": [], "recovered": [], "still_failed": [],
+                    "healthy": []}
+
+        retried: list[str] = []
+        recovered: list[str] = []
+        still_failed: list[str] = []
+        healthy: list[str] = []
+
+        # LICC env (must mirror _load_mcp_from_workdir).
+        licc_env = {
+            "LINGTAI_AGENT_DIR": str(self._working_dir),
+        }
+
+        for name, spec in list(specs.items()):
+            client = spec.get("client")
+            cfg = spec.get("cfg") or {}
+            source = spec.get("source", "init.json:mcp")
+
+            # Health: client present AND its session is connected.
+            if client is not None and getattr(client, "is_connected", lambda: False)():
+                healthy.append(name)
+                continue
+
+            retried.append(name)
+            self._log("mcp_retry_attempt", name=name, source=source)
+
+            # Tear down the dead client (if any). connect_mcp* will append a
+            # fresh one. We also remove the dead client from
+            # self._mcp_clients so stop()/refresh teardown does not double-
+            # close it.
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                clients = getattr(self, "_mcp_clients", None)
+                if isinstance(clients, list):
+                    try:
+                        clients.remove(client)
+                    except ValueError:
+                        pass
+
+            # Re-attempt the spawn. Mirrors the dispatch in
+            # `_load_mcp_from_workdir._spawn` — kept inline (not factored)
+            # to avoid leaking the closure-captured `licc_env` / logger.
+            pre_clients = list(getattr(self, "_mcp_clients", []) or [])
+            new_client: object | None = None
+            try:
+                server_type = cfg.get("type", "stdio")
+                if server_type == "http":
+                    if "url" not in cfg:
+                        raise ValueError("http transport requires 'url'")
+                    self.connect_mcp_http(
+                        url=cfg["url"],
+                        headers=cfg.get("headers"),
+                    )
+                else:
+                    if "command" not in cfg:
+                        raise ValueError("stdio transport requires 'command'")
+                    merged_env = {
+                        **licc_env,
+                        "LINGTAI_MCP_NAME": name,
+                        **(cfg.get("env") or {}),
+                    }
+                    self.connect_mcp(
+                        command=cfg["command"],
+                        args=cfg.get("args"),
+                        env=merged_env,
+                    )
+                post_clients = list(getattr(self, "_mcp_clients", []) or [])
+                new = post_clients[len(pre_clients):]
+                new_client = new[-1] if new else None
+            except Exception as e:
+                logger.warning("[%s] MCP %s (%s): retry failed: %s",
+                               self.agent_name, name, source, e)
+                self._log("mcp_retry_failed", name=name, error=str(e))
+                spec["client"] = None
+                still_failed.append(name)
+                continue
+
+            spec["client"] = new_client
+            if new_client is not None and getattr(
+                new_client, "is_connected", lambda: False)():
+                logger.info("[%s] MCP %s (%s): retry recovered",
+                            self.agent_name, name, source)
+                self._log("mcp_retry_recovered", name=name)
+                recovered.append(name)
+            else:
+                # Spawn returned without raising but the client is not
+                # connected — treat as still failed.
+                self._log("mcp_retry_failed", name=name,
+                          error="client not connected after retry")
+                still_failed.append(name)
+
+        return {
+            "retried": retried,
+            "recovered": recovered,
+            "still_failed": still_failed,
+            "healthy": healthy,
+        }
 
     def _cpr_agent(self, address: str) -> "Agent | None":
         """Resuscitate a suspended agent by launching it as a detached process.

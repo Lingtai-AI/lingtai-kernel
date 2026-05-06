@@ -285,3 +285,149 @@ def test_loader_skips_unregistered_init_mcp(tmp_path, caplog):
     # We can't easily intercept the kernel logger here, but the registry stays empty
     # and no MCP client should have been added.
     # (The legacy mcp/servers.json path is also untouched.)
+
+
+# ---------------------------------------------------------------------------
+# Failed-MCP retry on refresh — regression for Lingtai-AI/lingtai#34
+# ---------------------------------------------------------------------------
+
+class _FakeMCPClient:
+    """Minimal stand-in for MCPClient/HTTPMCPClient.
+
+    `is_connected_value` controls health probes; tool list is empty so the
+    Agent's tool registration loop is a no-op (no need to fake schemas).
+    """
+
+    def __init__(self, is_connected_value: bool):
+        self._connected = is_connected_value
+        self.closed = False
+
+    def start(self):
+        return None
+
+    def is_connected(self) -> bool:
+        return self._connected and not self.closed
+
+    def list_tools(self, timeout: float = 10):
+        return []
+
+    def close(self):
+        self.closed = True
+
+
+def test_retry_failed_mcps_records_dead_then_recovers(tmp_path, monkeypatch):
+    """A registered init.json MCP that boots dead should be retried on
+    `_retry_failed_mcps()` and reported as recovered when the second attempt
+    succeeds. Regression for Lingtai-AI/lingtai#34."""
+    workdir = tmp_path / "agent"
+    workdir.mkdir(parents=True)
+    # Pre-stage registry so the init.json mcp entry passes the gate.
+    (workdir / "mcp_registry.jsonl").write_text(json.dumps({
+        "name": "telegram",
+        "summary": "test",
+        "transport": "stdio",
+        "command": "/bin/true",
+        "args": [],
+        "source": "user",
+    }) + "\n")
+    init = {
+        "mcp": {
+            "telegram": {"type": "stdio", "command": "/bin/true", "args": []},
+        },
+    }
+    (workdir / "init.json").write_text(json.dumps(init))
+
+    # Patch connect_mcp on the Agent class: first call → returns dead client
+    # (subprocess "exited" immediately); second call → returns live client.
+    call_count = {"n": 0}
+
+    def fake_connect_mcp(self, command, args=None, env=None):
+        call_count["n"] += 1
+        client = _FakeMCPClient(is_connected_value=(call_count["n"] >= 2))
+        if not hasattr(self, "_mcp_clients"):
+            self._mcp_clients = []
+        self._mcp_clients.append(client)
+        return []  # no tools to register
+
+    monkeypatch.setattr(Agent, "connect_mcp", fake_connect_mcp)
+
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"mcp": {}},
+    )
+
+    # Boot recorded the spec, but the tracked client is dead.
+    assert "telegram" in agent._mcp_init_specs
+    boot_client = agent._mcp_init_specs["telegram"]["client"]
+    assert boot_client is not None
+    assert not boot_client.is_connected()
+
+    # Retry: should detect death, close+remove, respawn — second spawn
+    # returns a live client → reported as recovered.
+    report = agent._retry_failed_mcps()
+    assert "telegram" in report["retried"]
+    assert "telegram" in report["recovered"]
+    assert report["still_failed"] == []
+    # The dead client should have been closed and dropped.
+    assert boot_client.closed
+    assert boot_client not in agent._mcp_clients
+    # New client tracked.
+    new_client = agent._mcp_init_specs["telegram"]["client"]
+    assert new_client is not None and new_client.is_connected()
+
+
+def test_retry_failed_mcps_skips_healthy(tmp_path, monkeypatch):
+    """A live MCP should be reported as `healthy`, not retried."""
+    workdir = tmp_path / "agent"
+    workdir.mkdir(parents=True)
+    (workdir / "mcp_registry.jsonl").write_text(json.dumps({
+        "name": "telegram",
+        "summary": "test",
+        "transport": "stdio",
+        "command": "/bin/true",
+        "args": [],
+        "source": "user",
+    }) + "\n")
+    (workdir / "init.json").write_text(json.dumps({
+        "mcp": {"telegram": {"type": "stdio", "command": "/bin/true"}},
+    }))
+
+    def fake_connect_mcp(self, command, args=None, env=None):
+        client = _FakeMCPClient(is_connected_value=True)
+        if not hasattr(self, "_mcp_clients"):
+            self._mcp_clients = []
+        self._mcp_clients.append(client)
+        return []
+
+    monkeypatch.setattr(Agent, "connect_mcp", fake_connect_mcp)
+
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"mcp": {}},
+    )
+
+    report = agent._retry_failed_mcps()
+    assert report["retried"] == []
+    assert report["recovered"] == []
+    assert report["still_failed"] == []
+    assert "telegram" in report["healthy"]
+
+
+def test_retry_failed_mcps_no_specs_is_noop(tmp_path):
+    """An agent with no init.json mcp entries should return an empty
+    report — never raise, never assume `_mcp_init_specs` exists."""
+    workdir = tmp_path / "agent"
+    workdir.mkdir(parents=True)
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"mcp": {}},
+    )
+    report = agent._retry_failed_mcps()
+    assert report == {"retried": [], "recovered": [],
+                      "still_failed": [], "healthy": []}

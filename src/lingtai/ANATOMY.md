@@ -22,7 +22,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 ### Key functions / classes
 
-**`agent.py`** — `Agent(BaseAgent)`: `__init__` :33 (expand groups, decompress addons, setup caps, install manuals, load MCP) · `_setup_capability` :134 · `_persist_llm_config` :109 · `_install_intrinsic_manuals` :156 · `_load_mcp_from_workdir` :282 · `_read_init` :583 (read + materialize preset + validate) · `_setup_from_init` :707 (**full reconstruct** — shared by boot and live refresh) · `_activate_preset` :633 (runtime swap, atomic write) · `_reload_prompt_sections` :914 · `connect_mcp` :454 / `connect_mcp_http` :506 · `start` :447 / `stop` :552
+**`agent.py`** — `Agent(BaseAgent)`: `__init__` :33 (expand groups, decompress addons, setup caps, install manuals, load MCP) · `_setup_capability` :134 · `_persist_llm_config` :109 · `_install_intrinsic_manuals` :156 · `_load_mcp_from_workdir` :282 (also tracks specs in `_mcp_init_specs`) · `_retry_failed_mcps` :430 (re-spawn dead MCPs on `system(refresh)` — issue #34) · `_read_init` :739 (read + materialize preset + validate) · `_setup_from_init` :863 (**full reconstruct** — shared by boot and live refresh) · `_activate_preset` :789 (runtime swap, atomic write) · `_reload_prompt_sections` :1070 · `connect_mcp` :610 / `connect_mcp_http` :662 · `start` :603 / `stop` :708
 
 **`cli.py`**: `load_init` :20 · `build_agent` :60 · `run` :147 · `main` :192
 
@@ -73,5 +73,6 @@ Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai_kernel/` (
 - **`materialize_active_preset` is pure dict mutation** — disk write only in `_activate_preset` :633 (atomic `.tmp` → replace).
 - **`presets.py` imports kernel** (`lingtai_kernel.migrate`) — preset validation normalizes legacy shapes via kernel migrations before type-checking.
 - **Sensitive key stripping:** `_build_manifest` :239 strips `api_key`, `api_key_env`, `token`, `password` from capability kwargs before writing `.agent.json`.
-- **Drift hazard:** `_setup_from_init` :817–834 manually reconstructs `AgentConfig` with inline defaults that MUST mirror `lingtai_kernel.config.AgentConfig` (comment at :811, nothing enforces).
-- **Addon decompression** runs BEFORE capability setup so `mcp` capability sees populated `mcp_registry.jsonl` on first reconcile (:79, :853).
+- **Drift hazard:** `_setup_from_init` :973–990 manually reconstructs `AgentConfig` with inline defaults that MUST mirror `lingtai_kernel.config.AgentConfig` (comment at :967, nothing enforces).
+- **Addon decompression** runs BEFORE capability setup so `mcp` capability sees populated `mcp_registry.jsonl` on first reconcile (:79, :1009).
+- **MCP retry contract (issue #34):** `_load_mcp_from_workdir` records every registered init.json mcp entry into `self._mcp_init_specs` (name → `{cfg, source, client}`). `_retry_failed_mcps` walks this dict, closes any dead client (`is_connected()` False), respawns with the original config, and reports `{retried, recovered, still_failed, healthy}`. `system(action="refresh")` calls it via `intrinsics/system/preset.py:_refresh` before `_perform_refresh` so the documented "fix config → refresh" recovery path works without full process restart.

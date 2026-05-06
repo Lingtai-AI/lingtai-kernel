@@ -19,8 +19,8 @@ System intrinsic — runtime, lifecycle, and synchronization. Provides the agent
 - `preset.py` — Preset management and refresh.
   - `_preset_ref_in()` (`preset.py:13-33`) — normalized membership test for preset path strings (~/foo vs absolute).
   - `_check_context_fits()` (`preset.py:36-64`) — verify agent's current context fits within target preset's context_limit.
-  - `_refresh()` (`preset.py:67-148`) — stop, reload config + MCP servers, restart. Handles preset swap (named or revert) with authorization gate and context-limit guard.
-  - `_presets()` (`preset.py:151-232`) — list available presets with LLM connectivity probing.
+  - `_refresh()` (`preset.py:79-186`) — stop, reload config + MCP servers, restart. Handles preset swap (named or revert) with authorization gate and context-limit guard. **MCP retry hook (issue #34):** before calling `agent._perform_refresh()`, invokes `agent._retry_failed_mcps()` if the Agent subclass defines it. Failures are logged and swallowed so a flaky MCP cannot block refresh itself. Lets the documented "fix config → refresh" recovery path work in-process.
+  - `_presets()` (`preset.py:189-270`) — list available presets with LLM connectivity probing.
 
 - `karma.py` — Karma-gated lifecycle actions.
   - `_KARMA_ACTIONS` / `_NIRVANA_ACTIONS` (`karma.py:13-14`) — gate mapping sets.
