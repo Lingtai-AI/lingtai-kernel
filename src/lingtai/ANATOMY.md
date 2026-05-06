@@ -62,7 +62,7 @@ Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai_kernel/` (
 |---|---|---|
 | `<workdir>/init.json` | `_activate_preset` :633, `cli.run` :159 | Preset swap (atomic write); venv_path writeback |
 | `<workdir>/system/llm.json` | `_persist_llm_config` :109 | LLM provider/model/base_url for revive |
-| `<workdir>/system/{covenant,principle,procedures,brief,rules,pad}.md` | `_reload_prompt_sections` :914 | Prompt sections from init.json |
+| `<workdir>/system/{covenant,principle,substrate,procedures,brief,rules,pad}.md` | `_reload_prompt_sections` :914 | Prompt sections from init.json (substrate is opt-in, kernel-owned, cross-app stable — issue #39) |
 | `<workdir>/.library/intrinsic/` | `_install_intrinsic_manuals` :156 | Wipe-and-rewrite every boot |
 | `<workdir>/.agent.json` | `_build_manifest` :231 via `_workdir.write_manifest` | Runtime manifest snapshot |
 | `<workdir>/.mcp_inbox/` | MCPInboxPoller (started at :451) | LICC events from out-of-process MCPs |

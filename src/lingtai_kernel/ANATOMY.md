@@ -16,7 +16,7 @@ The kernel root holds the coordinator (`base_agent/`) plus a flat collection of 
 - `tool_executor.py` — `ToolExecutor`. Synchronous tool dispatch, reasoning-parameter injection, timing, error capture.
 - `tool_timing.py` — small helper for tool execution timing records.
 - `tc_inbox.py` — `TCInbox` and `InvoluntaryToolCall`. **Legacy queue retained but dormant** under the `.notification/` redesign. Phase 3 will remove this module entirely; meanwhile the producer pipeline writes filesystem files instead of enqueuing. The molt path still calls `agent._tc_inbox.drain()` defensively to clear any pre-redesign items that survived a process restart.
-- `prompt.py` — `SystemPromptManager` plus `build_system_prompt` / `build_system_prompt_batches`. Composes the system prompt from identity, capabilities, intrinsics, pad, rules.
+- `prompt.py` — `SystemPromptManager` plus `build_system_prompt` / `build_system_prompt_batches`. Composes the system prompt from identity, capabilities, intrinsics, pad, rules. Default render order (`prompt.py:39-53`): principle → covenant → **substrate** → tools → procedures → comment, then rules → brief → library → codex → identity → pad. `substrate` is the kernel-owned, cross-app-stable section between covenant and tools (issue #39); empty by default — opt-in via `substrate_file` / `substrate` in init.json.
 - `meta_block.py` — meta-block rendering (the structured prefix the kernel injects into LLM messages with state, time, stamina, etc.).
 - `message.py` — `_make_message`, message-type sentinels (`MSG_REQUEST`, `MSG_TC_WAKE`). The wire format for the agent's inbox queue.
 - `state.py` — `AgentState` enum (ACTIVE / IDLE / STUCK / ASLEEP / SUSPENDED).

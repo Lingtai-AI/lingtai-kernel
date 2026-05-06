@@ -25,6 +25,7 @@ TOP_OPTIONAL: dict[str, type | tuple[type, ...]] = {
 TOP_KNOWN: set[str] = {
     "manifest", "env_file", "venv_path", "addons", "mcp",
     "principle", "principle_file", "covenant", "covenant_file",
+    "substrate", "substrate_file",
     "procedures", "procedures_file", "brief", "brief_file",
     "pad", "pad_file", "prompt", "prompt_file",
     "comment", "comment_file",
@@ -89,8 +90,14 @@ def validate_init(data: dict) -> list[str]:
         if has_file and not isinstance(data[file_key], str):
             raise ValueError(f"{file_key}: expected str, got {type(data[file_key]).__name__}")
 
-    # Optional text fields: inline value OR _file path (neither required)
-    for key in ("comment", "procedures", "brief"):
+    # Optional text fields: inline value OR _file path (neither required).
+    # `substrate` is the kernel-owned, cross-app-stable system prompt
+    # section that describes the agent's architecture to itself (tool
+    # tiers, data-flow topology, life states, channel discipline,
+    # attention model). Injected between covenant and tools by the prompt
+    # manager. See lingtai issue #39. Opt-in: agents without substrate
+    # configured render the same prompt they did before.
+    for key in ("comment", "procedures", "brief", "substrate"):
         file_key = f"{key}_file"
         if key in data and not isinstance(data[key], str):
             raise ValueError(f"{key}: expected str, got {type(data[key]).__name__}")

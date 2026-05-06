@@ -889,7 +889,8 @@ class Agent(BaseAgent):
         # soul(action='voice') intrinsic and resolved from manifest.soul
         # — the legacy escape hatch is gone. Existing init.json files
         # may still carry soul_file; it's silently ignored.
-        for key in ("covenant", "principle", "procedures", "brief", "pad", "prompt", "comment"):
+        for key in ("covenant", "principle", "substrate", "procedures",
+                    "brief", "pad", "prompt", "comment"):
             file_key = f"{key}_file"
             if file_key in data:
                 data[key] = resolve_file(data.get(key), data.pop(file_key))
@@ -1081,7 +1082,8 @@ class Agent(BaseAgent):
                 return
             # Resolve *_file fields (brief_file, covenant_file, etc.)
             from .config_resolve import resolve_file
-            for key in ("covenant", "principle", "procedures", "brief", "pad", "comment"):
+            for key in ("covenant", "principle", "substrate", "procedures",
+                        "brief", "pad", "comment"):
                 file_key = f"{key}_file"
                 if file_key in data:
                     data[key] = resolve_file(data.get(key), data.pop(file_key))
@@ -1098,6 +1100,24 @@ class Agent(BaseAgent):
             covenant = covenant_file.read_text()
         if covenant:
             self._prompt_manager.write_section("covenant", covenant, protected=True)
+
+        # --- Substrate (kernel-owned, cross-app stable; opt-in via #39) ---
+        # The substrate section sits between covenant and tools in the
+        # rendered prompt and describes the agent's architecture to itself
+        # (tool tiers, data-flow topology, life states, channel discipline,
+        # attention model). When unset, the section is dropped — agents
+        # without substrate configured render the same prompt they did
+        # before issue #39 landed.
+        substrate = data.get("substrate", "")
+        substrate_file = system_dir / "substrate.md"
+        if substrate:
+            substrate_file.write_text(substrate)
+        elif substrate_file.is_file():
+            substrate = substrate_file.read_text()
+        if substrate:
+            self._prompt_manager.write_section("substrate", substrate, protected=True)
+        else:
+            self._prompt_manager.delete_section("substrate")
 
         # --- Rules (from system/rules.md, not init.json) ---
         rules_md = system_dir / "rules.md"
