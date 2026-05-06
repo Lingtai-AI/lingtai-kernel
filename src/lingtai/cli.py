@@ -78,11 +78,18 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
     # predates this field cooperatively share the network-wide 60 RPM cap
     # by default. Set to 0 in init.json to disable gating.
     max_rpm = m.get("max_rpm", 60)
-    provider_defaults: dict | None = None
+    provider_key = llm["provider"].lower()
+    per_provider: dict = {}
     if max_rpm > 0:
-        # provider_defaults is dict[provider_name, defaults_dict]; scope to
-        # the agent's configured provider so other providers stay unaffected.
-        provider_defaults = {llm["provider"].lower(): {"max_rpm": max_rpm}}
+        per_provider["max_rpm"] = max_rpm
+    user_headers = llm.get("default_headers")
+    if isinstance(user_headers, dict) and user_headers:
+        # Pass-through; LLMService._default_headers_for honors caller-supplied
+        # headers and fills only the gaps with provider policy.
+        per_provider["default_headers"] = dict(user_headers)
+    # provider_defaults is dict[provider_name, defaults_dict]; scope to
+    # the agent's configured provider so other providers stay unaffected.
+    provider_defaults: dict | None = {provider_key: per_provider} if per_provider else None
     service = LLMService(
         provider=llm["provider"],
         model=llm["model"],

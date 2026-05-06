@@ -942,9 +942,16 @@ class Agent(BaseAgent):
         # init.json predates this field cooperatively share the network-wide
         # 60 RPM cap by default. Set to 0 in init.json to disable gating.
         new_max_rpm = m.get("max_rpm", 60)
-        new_provider_defaults: dict | None = None
+        new_provider_key = new_provider.lower()
+        new_per_provider: dict = {}
         if new_max_rpm > 0:
-            new_provider_defaults = {new_provider.lower(): {"max_rpm": new_max_rpm}}
+            new_per_provider["max_rpm"] = new_max_rpm
+        new_user_headers = llm.get("default_headers")
+        if isinstance(new_user_headers, dict) and new_user_headers:
+            new_per_provider["default_headers"] = dict(new_user_headers)
+        new_provider_defaults: dict | None = (
+            {new_provider_key: new_per_provider} if new_per_provider else None
+        )
 
         if (
             new_provider != self.service.provider
