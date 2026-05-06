@@ -100,40 +100,58 @@ def validate_event(event: dict) -> tuple[bool, str | None]:
 # Dispatch
 # ---------------------------------------------------------------------------
 
-def _format_notification(mcp_name: str, event: dict) -> str:
-    """Render an LICC event into the [system] notification body that lands
-    in the agent's inbox. Mirrors the prose IMAPMailManager used to use
-    pre-MCP, so agent-side prompts and habits keep working."""
-    sender = event["from"]
-    subject = event["subject"]
-    body = event["body"]
-    preview = body[:200].replace("\n", " ")
+def _format_notification_summary(mcp_name: str, count: int) -> str:
+    """Render a count-only [system] notification body for the agent's inbox.
+
+    Body content is intentionally stripped: messaging MCPs (telegram,
+    feishu, wechat, imap, ...) deliver the event payload twice — once as
+    the tool result of an explicit ``<mcp>(action="check"/"read")`` call
+    and once via this kernel-synthesized notification. Inlining the body
+    here caused the agent to process the same message twice (issue #37).
+
+    The notification is now signal-only: it tells the agent how many new
+    events arrived from which MCP. The agent calls the MCP's read/check
+    action to fetch the actual payloads. Sender / subject / body never
+    appear in this string — they only reach the agent via the explicit
+    tool call.
+    """
+    plural = "" if count == 1 else "s"
     return (
-        f"[system] New event from MCP '{mcp_name}'.\n"
-        f"  From: {sender}\n"
-        f"  Subject: {subject}\n"
-        f"  {preview}{'...' if len(body) > 200 else ''}"
+        f"[system] New event from MCP '{mcp_name}': "
+        f"{count} unread message{plural}. "
+        f"Call the MCP's read/check action to fetch."
     )
 
 
-def _dispatch_event(agent: "BaseAgent", mcp_name: str, event: dict) -> None:
-    """Hand a validated event to the agent's inbox."""
-    from lingtai_kernel.message import _make_message, MSG_REQUEST
+def _consume_event(agent: "BaseAgent", mcp_name: str, event: dict) -> bool:
+    """Record the per-event log entry; return whether this event requested wake.
 
-    notification = _format_notification(mcp_name, event)
-    msg = _make_message(MSG_REQUEST, "system", notification)
-    agent.inbox.put(msg)
-
-    if event.get("wake", True):
-        agent._wake_nap("mcp_event")
-
+    The user-visible inbox notification is dispatched once per MCP per sweep
+    by ``_dispatch_summary`` after ``_scan_once`` has consumed all events
+    in this MCP's directory. Per-event traceability still flows to the agent
+    log so operators can audit individual deliveries.
+    """
+    wake = bool(event.get("wake", True))
     agent._log(
         "mcp_inbox_event",
         mcp=mcp_name,
         sender=event["from"],
         subject=event["subject"],
-        wake=event.get("wake", True),
+        wake=wake,
     )
+    return wake
+
+
+def _dispatch_summary(agent: "BaseAgent", mcp_name: str, count: int, wake: bool) -> None:
+    """Post one signal-only notification covering ``count`` events from ``mcp_name``."""
+    from lingtai_kernel.message import _make_message, MSG_REQUEST
+
+    notification = _format_notification_summary(mcp_name, count)
+    msg = _make_message(MSG_REQUEST, "system", notification)
+    agent.inbox.put(msg)
+
+    if wake:
+        agent._wake_nap("mcp_event")
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +186,13 @@ def _now_iso() -> str:
 
 
 def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
-    """One sweep through .mcp_inbox/<mcp_name>/*.json. Returns count dispatched."""
+    """One sweep through .mcp_inbox/<mcp_name>/*.json. Returns count dispatched.
+
+    Per MCP per sweep: consume up to ``MAX_EVENTS_PER_CYCLE`` valid events
+    (logging each individually), then post a single coalesced [system]
+    notification carrying only the count. Body / sender / subject are
+    intentionally never inlined — see ``_format_notification_summary``.
+    """
     if not inbox_root.is_dir():
         return 0
 
@@ -183,6 +207,7 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
         mcp_name = mcp_dir.name
         # Bound work per cycle to avoid pathological backlog blocking.
         events_this_mcp = 0
+        any_wake = False
         for entry in sorted(mcp_dir.iterdir()):
             if events_this_mcp >= MAX_EVENTS_PER_CYCLE:
                 break
@@ -213,12 +238,13 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
                 _dead_letter(entry, f"validation failed: {err}")
                 continue
 
-            # Dispatch and delete on success.
+            # Consume (log per-event + collect wake intent) and delete on success.
             try:
-                _dispatch_event(agent, mcp_name, event)
+                wake = _consume_event(agent, mcp_name, event)
             except Exception as e:
                 _dead_letter(entry, f"dispatch failed: {e}")
                 continue
+            any_wake = any_wake or wake
 
             try:
                 entry.unlink()
@@ -230,6 +256,17 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
 
             dispatched += 1
             events_this_mcp += 1
+
+        # One coalesced [system] notification per MCP per sweep — keeps the
+        # wake-up signal but eliminates the duplicate-content footgun (#37).
+        if events_this_mcp > 0:
+            try:
+                _dispatch_summary(agent, mcp_name, events_this_mcp, any_wake)
+            except Exception as e:
+                log.error(
+                    "mcp_inbox: failed to post summary for %s (count=%d): %s",
+                    mcp_name, events_this_mcp, e,
+                )
 
     return dispatched
 
