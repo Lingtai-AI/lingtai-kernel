@@ -378,6 +378,11 @@ class BaseAgent:
         # discussions/notification-filesystem-redesign.md.
         self._notification_fp: tuple = ()
         self._notification_block_id: str | None = None
+        # Monotonic counter ensuring every synthesized notification pair
+        # carries unique tokens (timestamp + seq) even when the underlying
+        # payload repeats — defeats DeepSeek's cache fast-path empty-completion
+        # failure mode on byte-identical synthetic pairs.
+        self._notification_inject_seq: int = 0
         # ACTIVE-state stash: the JSON body to prepend to the next
         # ToolResultBlock at request-send time.  Set by _sync_notifications
         # while the agent is mid-tool-chain; consumed (and reset to None)
@@ -982,6 +987,14 @@ class BaseAgent:
         distinguish kernel-injected reads from voluntary calls when
         reading conversation history.
 
+        Both call.args and result.content carry meta blocks matching what
+        real tool calls produce (build_meta → current_time, context,
+        stamina_left_seconds, plus a monotonic injection_seq). This makes
+        every synthesized pair tokenize uniquely even when the underlying
+        notification payload repeats — a second protection layer against
+        the DeepSeek cache fast-path empty-response failure beyond the
+        TextBlock prefix novelty.
+
         Returns True if injection succeeded, False if it had to abort
         (e.g. pending tool_calls block append).  When False is returned,
         the caller MUST NOT update ``_notification_fp`` — otherwise the
@@ -1012,7 +1025,30 @@ class BaseAgent:
             return False
 
         call_id = f"notif_{int(time.time()*1000):x}_{secrets.token_hex(2)}"
-        body = {"_synthesized": True, "notifications": notifications}
+
+        # Meta block — same shape real tool results carry (current_time +
+        # context + stamina_left_seconds, via build_meta), embedded in BOTH
+        # call.args and result.content so every synthesized pair tokenizes
+        # uniquely even when the notification payload repeats. The monotonic
+        # injection_seq is added on top to guarantee novelty within the same
+        # second (heal+retry tight loops, time-blind agents).
+        # Defensive try/except + getattr cover test doubles that bypass
+        # __init__ and don't carry the full agent attribute surface.
+        self._notification_inject_seq = getattr(self, "_notification_inject_seq", 0) + 1
+        try:
+            meta = build_meta(self)
+        except (AttributeError, TypeError):
+            meta = {}
+        meta["injection_seq"] = self._notification_inject_seq
+
+        body = {
+            "_synthesized": True,
+            "notifications": notifications,
+        }
+        # Flatten meta into body top-level — matches real tool results
+        # (status/result fields then current_time/context/stamina_left_seconds
+        # at the same level), so the model sees the same shape it's used to.
+        body.update(meta)
         content_json = json.dumps(body, indent=2, ensure_ascii=False)
 
         # Build a per-source summary: "3 email, 1 soul, 0 system".
@@ -1038,10 +1074,16 @@ class BaseAgent:
         )
 
         text_block = TextBlock(text=summary_text)
+        # call.args carries injection_seq only — real tool calls don't have
+        # current_time/context/stamina in their args (those live in results).
+        # The seq is enough to defeat byte-equality on the assistant turn.
         call_block = ToolCallBlock(
             id=call_id,
             name="system",
-            args={"action": "notification"},
+            args={
+                "action": "notification",
+                "injection_seq": self._notification_inject_seq,
+            },
         )
         result_block = ToolResultBlock(
             id=call_id,
