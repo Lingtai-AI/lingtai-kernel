@@ -2,7 +2,10 @@
 
 Covers: validation; one-shot scan dispatching valid events; dead-letter
 of invalid events; .tmp file ignored; wake=false skipping _wake_nap;
-multiple MCPs with separate subdirs.
+multiple MCPs with separate subdirs; signal-only notification body
+(issue #37 — no body / sender / subject leaks into the kernel
+notification, since the agent already gets that content via the explicit
+``<mcp>(action="read")`` tool call).
 
 The poller-as-thread is exercised lightly via start/stop and a manual
 event injection; correctness is mostly proved by the synchronous _scan_once
@@ -126,16 +129,56 @@ def test_scan_dispatches_valid_event_to_inbox(tmp_path):
     dispatched = _scan_once(agent, inbox_root)
     assert dispatched == 1
 
-    # Message landed in agent inbox.
+    # Message landed in agent inbox — signal-only, no body content (issue #37).
     assert agent.inbox.qsize() >= 1
     msg = agent.inbox.get_nowait()
     assert "telegram" in msg.content
-    assert "alice" in msg.content
-    assert "hi" in msg.content
-    assert "hello" in msg.content
+    assert "1 unread message" in msg.content
+    # Sender / subject / body must NOT be inlined; the agent learns them by
+    # explicitly calling the MCP's read/check action.
+    assert "alice" not in msg.content
+    assert "hi" not in msg.content
+    assert "hello" not in msg.content
 
     # File was deleted on success.
     assert not (inbox_root / "telegram" / "ev1.json").exists()
+
+
+def test_scan_coalesces_multiple_events_into_one_summary(tmp_path):
+    """Issue #37: multiple events from the same MCP in one sweep produce
+    exactly one [system] notification with the count, never inlined bodies."""
+    agent, workdir = _mk_agent(tmp_path)
+    _write_event(workdir, "telegram", "ev1", {
+        "from": "alice", "subject": "s1", "body": "secret-body-1",
+    })
+    _write_event(workdir, "telegram", "ev2", {
+        "from": "bob", "subject": "s2", "body": "secret-body-2",
+    })
+    _write_event(workdir, "telegram", "ev3", {
+        "from": "carol", "subject": "s3", "body": "secret-body-3",
+    })
+
+    dispatched = _scan_once(agent, workdir / INBOX_DIRNAME)
+    assert dispatched == 3
+
+    # Exactly ONE [system] notification, not three.
+    assert agent.inbox.qsize() == 1
+    msg = agent.inbox.get_nowait()
+    assert "telegram" in msg.content
+    assert "3 unread message" in msg.content
+    # No body / sender / subject content leaked.
+    for forbidden in ("secret-body", "alice", "bob", "carol", "s1", "s2", "s3"):
+        assert forbidden not in msg.content, f"leaked {forbidden!r} into notification"
+
+
+def test_scan_summary_uses_singular_for_one_event(tmp_path):
+    agent, workdir = _mk_agent(tmp_path)
+    _write_event(workdir, "imap", "ev1", {
+        "from": "a", "subject": "s", "body": "b",
+    })
+    _scan_once(agent, workdir / INBOX_DIRNAME)
+    msg = agent.inbox.get_nowait()
+    assert "1 unread message." in msg.content  # no plural 's'
 
 
 def test_scan_calls_wake_nap_by_default(tmp_path):
