@@ -21,9 +21,15 @@ def create_custom_adapter(
     api_key: str | None = None,
     api_compat: str = "openai",
     base_url: str | None = None,
+    default_headers: dict | None = None,
     **kwargs,
 ) -> LLMAdapter:
-    """Factory: creates adapter based on api_compat."""
+    """Factory: creates adapter based on api_compat.
+
+    ``default_headers`` is forwarded to the underlying SDK client when it
+    is supported (currently only the OpenAI-compat path). Other api_compat
+    branches silently drop it for now — extend here when needed.
+    """
     if api_compat == "gemini":
         from ..gemini.adapter import GeminiAdapter
         return GeminiAdapter(api_key=api_key, **kwargs)
@@ -36,4 +42,7 @@ def create_custom_adapter(
         if not base_url:
             raise ValueError("OpenAI-compat provider requires a base_url")
         from ..openai.adapter import OpenAIAdapter
-        return OpenAIAdapter(api_key=api_key, base_url=base_url, **kwargs)
+        oa_kwargs: dict = dict(kwargs)
+        if default_headers is not None:
+            oa_kwargs["default_headers"] = default_headers
+        return OpenAIAdapter(api_key=api_key, base_url=base_url, **oa_kwargs)

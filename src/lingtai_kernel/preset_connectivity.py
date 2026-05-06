@@ -34,6 +34,7 @@ _PROVIDER_DEFAULT_URLS = {
     "openrouter": "https://openrouter.ai",
     "codex":      "https://chatgpt.com",
     "mimo":       "https://api.xiaomimimo.com",
+    "kimi":       "https://api.kimi.com",
 }
 
 

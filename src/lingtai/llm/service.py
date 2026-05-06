@@ -109,6 +109,12 @@ class LLMService(LLMServiceABC):
         max_rpm = defaults.get("max_rpm", 0) if defaults else 0
         rpm_kw: dict = {"max_rpm": max_rpm} if max_rpm > 0 else {}
 
+        # Provider-specific default headers (e.g. Kimi requires honest UA per ToS).
+        headers_kw: dict = {}
+        default_headers = self._default_headers_for(provider, defaults)
+        if default_headers:
+            headers_kw["default_headers"] = default_headers
+
         p = provider.lower()
         factory = self._adapter_registry.get(p)
         if factory is None:
@@ -121,8 +127,26 @@ class LLMService(LLMServiceABC):
         return factory(
             model=self._model,
             defaults=defaults,
-            **key_kw, **url_kw, **rpm_kw,
+            **key_kw, **url_kw, **rpm_kw, **headers_kw,
         )
+
+    def _default_headers_for(self, provider: str, defaults: dict | None) -> dict | None:
+        """Return provider-specific default HTTP headers, if any.
+
+        Caller-supplied headers in *defaults* (under the ``default_headers``
+        key) win; provider-policy defaults only fill in what the caller did
+        not specify. For Kimi we set ``User-Agent`` to honestly identify
+        ourselves — Kimi's ToS forbids spoofing other coding tools'
+        User-Agents, and accounts can be suspended for it.
+        """
+        caller_headers: dict = {}
+        if defaults and isinstance(defaults.get("default_headers"), dict):
+            caller_headers = dict(defaults["default_headers"])
+
+        if provider.lower() == "kimi" and "User-Agent" not in caller_headers:
+            caller_headers["User-Agent"] = "LingTai-Agent/1.0"
+
+        return caller_headers or None
 
     # --- Adapter cache ---
 
