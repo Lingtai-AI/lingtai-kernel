@@ -43,7 +43,7 @@ Generic agent kernel. Single class `BaseAgent` with methods distributed across 6
 - `lifecycle.py` writes `.agent.heartbeat` (`base_agent/lifecycle.py:155-159`), consumes signal files (`.interrupt`, `.refresh`, `.suspend`, `.sleep`, `.prompt`, `.clear`, `.inquiry`, `.rules`), and reads `.notification/*.json` via `_sync_notifications` on every tick.
 - `turn.py` writes `history/chat_history.jsonl` via `_save_chat_history` (delegated to `__init__.py`), writes `.status.json` and `logs/token_ledger.jsonl`.
 - `messaging.py` writes `.notification/email.json` (via `_rerender_unread_digest`) and merges into `.notification/system.json` (via `_enqueue_system_notification`, RMW under a per-agent `threading.Lock`).
-- `__init__.py` writes the notification `(call, result)` pair into `chat_history.jsonl` via `_save_chat_history(ledger_source="notification_sync")` after a successful `_inject_notification_pair`.
+- `__init__.py` writes the notification `(call, result)` pair into `chat_history.jsonl` via `_save_chat_history(ledger_source="notification_sync")` after a successful `_inject_notification_pair`. The same call also emits a `notification_pair_injected` event to `events.jsonl` carrying `call_id`, `sources`, `summary`, **and `meta`** (the same `build_meta(agent)` dict — `current_time`, `context.{system_tokens,history_tokens,usage}`, `stamina_left_seconds`, `injection_seq` — that the agent itself sees in the synthesized tool-result body). The TUI's `parseEvent` reads the `meta` block and renders it as a faint footer line under the notification banner; older events.jsonl rows that pre-date this addition simply omit `meta` and the renderer drops the footer. See `lingtai/tui/internal/fs/session.go::parseEvent` notification branch and issue #40.
 
 ## Notes
 

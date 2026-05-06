@@ -1101,6 +1101,7 @@ class BaseAgent:
             call_id=call_id,
             sources=list(notifications.keys()),
             summary=summary_text,
+            meta=meta,
         )
         return True
 
