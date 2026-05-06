@@ -176,6 +176,17 @@ def _heartbeat_loop(agent) -> None:
                 refresh_file.rename(taken_file)
             except OSError:
                 pass
+            # Recovery path: an externally-signalled refresh exists to unstick
+            # error states. Drop the .llm_hang sentinel so the relaunched
+            # process doesn't wake into the LLM-hang refusal loop. See
+            # issue #35.
+            hang_file = agent._working_dir / ".llm_hang"
+            if hang_file.is_file():
+                try:
+                    hang_file.unlink(missing_ok=True)
+                    agent._log("llm_hang_cleared", reason="refresh_signal")
+                except OSError:
+                    pass
             agent._cancel_event.set()
             agent._set_state(AgentState.SUSPENDED, reason="refresh")
             agent._shutdown.set()
@@ -339,11 +350,22 @@ def _heartbeat_loop(agent) -> None:
 
 
 def _perform_refresh(agent) -> None:
-    """Refresh = .refresh handshake + deferred relaunch."""
+    """Refresh = .llm_hang clear + .refresh handshake + deferred relaunch."""
     import subprocess
     import sys
 
     agent._log("refresh_start")
+    # Recovery path: refresh exists to unstick error states, so unconditionally
+    # drop the .llm_hang sentinel here. Without this, a hung-LLM agent that
+    # gets refreshed comes back up only to be re-stuck the moment it transitions
+    # to ASLEEP and tries to wake. See issue #35.
+    hang_file = agent._working_dir / ".llm_hang"
+    if hang_file.exists():
+        try:
+            hang_file.unlink(missing_ok=True)
+            agent._log("llm_hang_cleared", reason="refresh")
+        except OSError:
+            pass
     agent._save_chat_history()
     cmd = _build_launch_cmd(agent)
     if cmd is None:

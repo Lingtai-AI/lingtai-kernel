@@ -22,6 +22,10 @@ class _FakeAgent:
     _asleep: threading.Event = field(default_factory=threading.Event)
     _logs: list[tuple[str, dict]] = field(default_factory=list)
     _states: list[AgentState] = field(default_factory=list)
+    # ``_chat`` is read by ``_run_loop`` when ``_asleep`` is set (to heal
+    # dangling tool_calls before sleeping). Default to None — fake agents
+    # in this suite never have a live chat session.
+    _chat: object = None
 
     def _log(self, event_type: str, **fields):
         self._logs.append((event_type, fields))
@@ -105,6 +109,7 @@ def test_run_loop_skips_chat_history_save_after_worker_still_running(tmp_path, m
 
 
 def test_asleep_wake_refuses_when_llm_hang_signal_exists(tmp_path, monkeypatch):
+    import time as _time
     agent = _FakeAgent(tmp_path, _state=AgentState.ASLEEP)
     agent._shutdown = threading.Event()
     agent._asleep.set()
@@ -112,7 +117,10 @@ def test_asleep_wake_refuses_when_llm_hang_signal_exists(tmp_path, monkeypatch):
     agent._inbox_timeout = 0.01
     agent.inbox = queue.Queue()
     agent.inbox.put(_make_message(MSG_REQUEST, "human", "wake?"))
-    (tmp_path / ".llm_hang").write_text(json.dumps({"detected_at": 1}), encoding="utf-8")
+    # Fresh sentinel — well within TTL so wake should still be refused.
+    (tmp_path / ".llm_hang").write_text(
+        json.dumps({"detected_at": _time.time()}), encoding="utf-8",
+    )
 
     # Stop the loop after it refuses the wake and returns to the asleep wait.
     calls = {"n": 0}
@@ -132,3 +140,160 @@ def test_asleep_wake_refuses_when_llm_hang_signal_exists(tmp_path, monkeypatch):
     assert agent._asleep.is_set()
     assert any(name == "wake_refused_llm_hang" for name, _ in agent._logs)
     assert not any(new == AgentState.ACTIVE for new in agent._states)
+
+
+# ---------------------------------------------------------------------------
+# Issue #35 — .llm_hang sentinel TTL + recovery paths
+# ---------------------------------------------------------------------------
+
+
+def test_stale_llm_hang_signal_auto_clears_and_wakes(tmp_path, monkeypatch):
+    """A sentinel older than the TTL is dropped at the wake-refusal site
+    and the agent is allowed to wake. See issue #35."""
+    import time as _time
+
+    agent = _FakeAgent(tmp_path, _state=AgentState.ASLEEP)
+    agent._shutdown = threading.Event()
+    agent._asleep.set()
+    agent._cancel_event = threading.Event()
+    agent._inbox_timeout = 0.01
+    agent._reset_uptime = lambda: None
+    agent._save_chat_history = lambda *a, **kw: None
+    agent._config = SimpleNamespace(insights_interval=0)
+    agent.inbox = queue.Queue()
+    agent.inbox.put(_make_message(MSG_REQUEST, "human", "wake?"))
+    # Sentinel detected well past the TTL — must be auto-cleared.
+    stale = _time.time() - (turn._LLM_HANG_SENTINEL_TTL_SECONDS + 60)
+    (tmp_path / ".llm_hang").write_text(
+        json.dumps({"detected_at": stale}), encoding="utf-8",
+    )
+
+    # Make _handle_message a no-op so the loop completes one turn cleanly,
+    # then shutdown.
+    def fake_handle(_agent, _msg):
+        _agent._shutdown.set()
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
+
+    turn._run_loop(agent)
+
+    assert not (tmp_path / ".llm_hang").exists()
+    assert any(name == "llm_hang_cleared"
+               and fields.get("reason") == "ttl_expired"
+               for name, fields in agent._logs)
+    # The agent transitioned to ACTIVE (woke up).
+    assert any(s == AgentState.ACTIVE for s in agent._states)
+
+
+def test_wake_refused_log_includes_ttl_remaining(tmp_path, monkeypatch):
+    """When the sentinel is fresh, the wake-refusal log carries the
+    remaining TTL so operators see actual recovery time. See issue #35."""
+    import time as _time
+
+    agent = _FakeAgent(tmp_path, _state=AgentState.ASLEEP)
+    agent._shutdown = threading.Event()
+    agent._asleep.set()
+    agent._cancel_event = threading.Event()
+    agent._inbox_timeout = 0.01
+    agent.inbox = queue.Queue()
+    agent.inbox.put(_make_message(MSG_REQUEST, "human", "wake?"))
+    (tmp_path / ".llm_hang").write_text(
+        json.dumps({"detected_at": _time.time()}), encoding="utf-8",
+    )
+
+    calls = {"n": 0}
+    def cancel_timer(_agent):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            _agent._shutdown.set()
+
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", cancel_timer)
+
+    turn._run_loop(agent)
+
+    refusals = [fields for name, fields in agent._logs
+                if name == "wake_refused_llm_hang"]
+    assert refusals, "expected wake_refused_llm_hang log entry"
+    assert "ttl_remaining_seconds" in refusals[0]
+    # New sentinel — remaining should be close to the full TTL.
+    assert refusals[0]["ttl_remaining_seconds"] >= 0
+    assert refusals[0]["ttl_remaining_seconds"] <= int(turn._LLM_HANG_SENTINEL_TTL_SECONDS)
+
+
+def test_send_with_watchdog_attaches_worker_done_callback(tmp_path, monkeypatch):
+    """When the worker is still running, the watchdog registers a
+    done-callback on the orphaned future so the sentinel clears as soon
+    as the worker finally exits — without waiting out the TTL.
+    See issue #35."""
+    from concurrent.futures import Future
+
+    agent = _FakeAgent(tmp_path)
+    agent._session = SimpleNamespace(
+        send=lambda content: (_ for _ in ()).throw(_worker_error_with_future()),
+    )
+    monkeypatch.setattr(
+        turn.threading, "Timer",
+        lambda *a, **kw: SimpleNamespace(start=lambda: None, cancel=lambda: None,
+                                          daemon=False),
+    )
+
+    captured: dict = {}
+    real_future = Future()
+    captured["future"] = real_future
+
+    def _err_factory():
+        return WorkerStillRunningError(
+            elapsed=300.0, grace=5.0, agent_name="test",
+            future=real_future,
+        )
+
+    agent._session.send = lambda content: (_ for _ in ()).throw(_err_factory())
+
+    with pytest.raises(WorkerStillRunningError):
+        turn._send_with_watchdog(agent, "hi")
+
+    assert (tmp_path / ".llm_hang").exists()  # sentinel still there
+    # Worker finally exits — done callback should fire and remove sentinel.
+    real_future.set_result(None)
+    assert not (tmp_path / ".llm_hang").exists()
+    assert any(name == "llm_hang_cleared"
+               and fields.get("reason") == "worker_exited"
+               for name, fields in agent._logs)
+
+
+def _worker_error_with_future():  # pragma: no cover — overridden inline above
+    return WorkerStillRunningError(elapsed=300.0, grace=5.0, agent_name="test")
+
+
+def test_perform_refresh_clears_llm_hang_sentinel(tmp_path):
+    """system(action='refresh') and TUI /refresh both flow through
+    _perform_refresh, which must drop the sentinel before relaunching.
+    See issue #35."""
+    from lingtai_kernel.base_agent.lifecycle import _perform_refresh
+
+    (tmp_path / ".llm_hang").write_text(
+        json.dumps({"detected_at": 1}), encoding="utf-8",
+    )
+
+    agent = _FakeAgent(tmp_path)
+    agent._save_chat_history = lambda: None
+    # No launch cmd → refresh exits early but cleanup must still happen.
+    agent._build_launch_cmd = lambda: None
+
+    # Patch _build_launch_cmd inside lifecycle to return None for this fake.
+    import lingtai_kernel.base_agent.lifecycle as lifecycle
+    original = lifecycle._build_launch_cmd
+    lifecycle._build_launch_cmd = lambda _agent: None
+    try:
+        _perform_refresh(agent)
+    finally:
+        lifecycle._build_launch_cmd = original
+
+    assert not (tmp_path / ".llm_hang").exists()
+    assert any(name == "llm_hang_cleared"
+               and fields.get("reason") == "refresh"
+               for name, fields in agent._logs)
