@@ -283,6 +283,7 @@ def _run_loop(agent) -> None:
                     ts = now_iso(agent)
                     aed_msg = _t(agent._config.language, "system.stuck_revive", ts=ts, tool_calls=err_desc)
                     msg = _make_message(MSG_REQUEST, "system", aed_msg)
+                    agent._set_state(AgentState.ACTIVE, reason=f"AED recovery attempt {aed_attempts}")
 
             if not agent._asleep.is_set():
                 agent._set_state(sleep_state)
