@@ -1101,19 +1101,35 @@ class Agent(BaseAgent):
         if covenant:
             self._prompt_manager.write_section("covenant", covenant, protected=True)
 
-        # --- Substrate (kernel-owned, cross-app stable; opt-in via #39) ---
-        # The substrate section sits between covenant and tools in the
-        # rendered prompt and describes the agent's architecture to itself
-        # (tool tiers, data-flow topology, life states, channel discipline,
-        # attention model). When unset, the section is dropped — agents
-        # without substrate configured render the same prompt they did
-        # before issue #39 landed.
+        # --- Substrate (kernel-owned, cross-app stable; #39) ---
+        # The substrate section sits right after `## tools` and describes
+        # the agent's architecture to itself (tool tiers, data-flow
+        # topology, life states, channel discipline, attention model).
+        #
+        # Resolution precedence:
+        #   1. data["substrate"]          — inline init.json string
+        #   2. system/substrate.md        — agent's own copy (editable)
+        #   3. packaged prompts/substrate.md — kernel default (TBD placeholder)
+        #
+        # Every agent gets the section populated by default. To opt out,
+        # set `"substrate": " "` (a single space, written to system/
+        # substrate.md and rendered as effectively blank).
         substrate = data.get("substrate", "")
         substrate_file = system_dir / "substrate.md"
         if substrate:
             substrate_file.write_text(substrate)
         elif substrate_file.is_file():
             substrate = substrate_file.read_text()
+        else:
+            # Packaged default — write to system_dir so the agent has its
+            # own editable copy on disk going forward.
+            try:
+                from importlib.resources import files
+                packaged = files("lingtai.prompts").joinpath("substrate.md").read_text()
+                substrate_file.write_text(packaged)
+                substrate = packaged
+            except (FileNotFoundError, ModuleNotFoundError, OSError):
+                substrate = ""
         if substrate:
             self._prompt_manager.write_section("substrate", substrate, protected=True)
         else:
