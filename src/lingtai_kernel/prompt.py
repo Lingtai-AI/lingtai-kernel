@@ -6,16 +6,20 @@ sections by mutation frequency so cache breakpoints can be placed between
 batches:
 
     Batch 1 — immovable after init (ideal cache-read prefix):
-        principle (no header) → covenant → substrate → tools → procedures → comment
+        principle (no header) → covenant → tools → substrate → procedures → comment
     Batch 2 — rarely mutated (most stable first):
         rules → brief → library → codex → identity → pad
 
-`substrate` sits between covenant (who you are) and tools (what you have)
-because it is the kernel-owned, cross-app-stable description of the agent
-to itself: tool tiers, data-flow topology, life states, channel
-discipline, attention model. See lingtai issue #39. Backward compatible:
-agents without a `substrate` section configured render the same prompt
-they did before — the slot stays empty.
+`substrate` sits **right after tools** so it functions as the long-form
+companion to the schemas above it: tool schemas carry mechanical
+reference (parameter names, types, one-line action descriptions),
+substrate carries the operational wisdom (tool tiers, data-flow
+topology, life states, channel discipline, attention model — patterns
+that span multiple tools). See lingtai issue #39. The kernel ships a
+packaged `lingtai/prompts/substrate.md` placeholder so the slot is
+always populated; the `Agent` subclass copies it to
+`system/substrate.md` on first boot, where the agent (or human) can
+edit it freely.
 
 build_system_prompt() assembles base_prompt + rendered sections.
 """
@@ -40,15 +44,15 @@ class SystemPromptManager:
     # the adapter can cover the whole stable prefix. Within each batch,
     # sections are ordered most-stable-first so later mutations invalidate
     # as little prior content as possible.
-    #   Batch 1 (immovable):         principle, covenant, substrate, tools, procedures, comment
+    #   Batch 1 (immovable):         principle, covenant, tools, substrate, procedures, comment
     #   Batch 2 (rarely-mutated):    rules, brief, library, codex, identity, pad
     # First entry (principle) is rendered without ## header (raw text).
     _DEFAULT_ORDER = [
         # Batch 1 — immovable
         "principle",
         "covenant",
-        "substrate",
         "tools",
+        "substrate",
         "procedures",
         "comment",
         # Batch 2 — rarely mutated (most stable first)
@@ -99,7 +103,7 @@ class SystemPromptManager:
     # place cache_control markers. Sections not listed here fall into the
     # "unordered" bucket rendered just before the tail batch.
     _BATCHES: tuple[tuple[str, ...], ...] = (
-        ("principle", "covenant", "substrate", "tools", "procedures", "comment"),
+        ("principle", "covenant", "tools", "substrate", "procedures", "comment"),
         ("rules", "brief", "library", "codex", "identity", "pad"),
     )
 
