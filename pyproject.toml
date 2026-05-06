@@ -51,6 +51,7 @@ lingtai = [
     "capabilities/*/*.json",
     "capabilities/*/manual/**/*",
     "intrinsic_skills/*/**/*",
+    "prompts/*.md",
 ]
 
 [tool.pytest.ini_options]

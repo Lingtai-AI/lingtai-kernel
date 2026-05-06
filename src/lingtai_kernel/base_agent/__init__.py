@@ -187,6 +187,7 @@ class BaseAgent:
         streaming: bool = False,
         covenant: str = "",
         principle: str = "",
+        substrate: str = "",
         procedures: str = "",
         brief: str = "",
         pad: str = "",
@@ -228,11 +229,12 @@ class BaseAgent:
         # MailService: None means mail intrinsic disabled
         self._mail_service = mail_service
 
-        # Covenant, principle, procedures, brief, and pad file paths
+        # Covenant, principle, substrate, procedures, brief, and pad file paths
         system_dir = self._working_dir / "system"
         pad_file = system_dir / "pad.md"
         covenant_file = system_dir / "covenant.md"
         principle_file = system_dir / "principle.md"
+        substrate_file = system_dir / "substrate.md"
         procedures_file = system_dir / "procedures.md"
         brief_file = system_dir / "brief.md"
 
@@ -249,6 +251,15 @@ class BaseAgent:
             principle_file.write_text(principle)
         elif principle_file.is_file():
             principle = principle_file.read_text()
+
+        # Substrate: same pattern as covenant/principle. Opt-in (issue
+        # #39): kernel-owned, cross-app-stable system prompt section that
+        # describes the agent's architecture to itself; rendered between
+        # covenant and tools by SystemPromptManager.
+        if substrate:
+            substrate_file.write_text(substrate)
+        elif substrate_file.is_file():
+            substrate = substrate_file.read_text()
 
         # Procedures: same pattern as covenant/principle
         if procedures:
@@ -277,6 +288,8 @@ class BaseAgent:
             self._prompt_manager.write_section("principle", principle, protected=True)
         if covenant:
             self._prompt_manager.write_section("covenant", covenant, protected=True)
+        if substrate:
+            self._prompt_manager.write_section("substrate", substrate, protected=True)
         if procedures:
             self._prompt_manager.write_section("procedures", procedures, protected=True)
         if brief:
