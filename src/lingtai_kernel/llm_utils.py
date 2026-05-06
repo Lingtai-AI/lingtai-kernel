@@ -30,12 +30,18 @@ class WorkerStillRunningError(TimeoutError):
     This is stronger than an ordinary provider timeout: the provider adapter
     may still hold and mutate the shared ChatInterface, so AED must not repair
     or retry against that interface in-process.
+
+    Carries the orphaned ``Future`` so callers (e.g. ``_send_with_watchdog``)
+    can attach an ``add_done_callback`` to clear the ``.llm_hang`` sentinel
+    once the worker eventually exits — see issue #35.
     """
 
-    def __init__(self, *, elapsed: float, grace: float, agent_name: str):
+    def __init__(self, *, elapsed: float, grace: float, agent_name: str,
+                 future: Future | None = None):
         self.elapsed = elapsed
         self.grace = grace
         self.agent_name = agent_name
+        self.future = future
         super().__init__(
             f"LLM worker still running after {elapsed:.0f}s + {grace:.0f}s grace; "
             "ChatInterface is unsafe for AED retry"
@@ -95,6 +101,7 @@ def _wait_for_worker_settle(future: Future, elapsed: float, agent_name: str) -> 
             elapsed=elapsed,
             grace=_WORKER_SETTLE_GRACE,
             agent_name=agent_name,
+            future=future,
         )
     except Exception:
         # Worker raised something other than timeout — that's fine, its

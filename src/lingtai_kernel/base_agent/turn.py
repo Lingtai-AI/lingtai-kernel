@@ -24,6 +24,12 @@ logger = get_logger()
 _LLM_HANG_THRESHOLD_SECONDS = 120.0
 _LLM_SLOW_THRESHOLD_SECONDS = 60.0
 
+# TTL for the .llm_hang sentinel (seconds). Once written, the sentinel is
+# considered stale after this long and is auto-cleared at the wake-refusal
+# check so the agent can recover without manual filesystem surgery. See
+# issue #35.
+_LLM_HANG_SENTINEL_TTL_SECONDS = 300.0
+
 
 class EmptyLLMResponseError(RuntimeError):
     """The LLM returned a response with no text, no tool_calls, and no thoughts.
@@ -84,6 +90,32 @@ def _llm_hang_signal_exists(agent) -> bool:
         return False
 
 
+def _llm_hang_signal_age(agent) -> float | None:
+    """Return seconds since the sentinel's recorded ``detected_at``.
+
+    Falls back to file mtime when the JSON is unreadable or missing the key,
+    so a sentinel written by an older format never traps the agent. Returns
+    ``None`` only if the file is gone or both reads fail.
+    """
+    hang_file = agent._working_dir / ".llm_hang"
+    try:
+        raw = hang_file.read_text(encoding="utf-8")
+    except OSError:
+        raw = None
+    if raw:
+        try:
+            payload = json.loads(raw)
+            detected_at = payload.get("detected_at")
+            if isinstance(detected_at, (int, float)):
+                return max(0.0, time.time() - float(detected_at))
+        except (ValueError, TypeError):
+            pass
+    try:
+        return max(0.0, time.time() - hang_file.stat().st_mtime)
+    except OSError:
+        return None
+
+
 def _remove_llm_hang_signal(agent) -> None:
     try:
         (agent._working_dir / ".llm_hang").unlink(missing_ok=True)
@@ -140,6 +172,26 @@ def _send_with_watchdog(agent, content):
     except WorkerStillRunningError as err:
         keep_hang_signal = True
         _mark_worker_still_running(agent, err)
+        # When the orphaned worker future eventually settles (provider
+        # finally returns, raises, or its HTTP client drops the socket),
+        # clear the sentinel so the agent can wake without waiting out the
+        # TTL. The callback runs on the worker thread; only filesystem ops
+        # touch agent state, so this is safe. See issue #35.
+        future = getattr(err, "future", None)
+        if future is not None:
+            def _on_worker_exit(_fut, _agent=agent):
+                try:
+                    _remove_llm_hang_signal(_agent)
+                    _agent._log("llm_hang_cleared", reason="worker_exited")
+                except Exception:
+                    # Never let a cleanup callback raise into the pool.
+                    pass
+            try:
+                future.add_done_callback(_on_worker_exit)
+            except Exception:
+                # If the pool is gone or callback registration fails, fall
+                # back to TTL-based recovery at the wake-refusal site.
+                pass
         raise
     finally:
         hang_timer.cancel()
@@ -199,13 +251,39 @@ def _run_loop(agent) -> None:
                     break  # shutdown was set — exit inner loop
 
                 if _llm_hang_signal_exists(agent):
-                    agent._log("wake_refused_llm_hang", trigger=msg.type)
-                    agent._asleep.set()
-                    agent._set_state(
-                        AgentState.ASLEEP,
-                        reason="LLM hang signal present; explicit refresh required",
-                    )
-                    continue
+                    # TTL recovery: a sentinel older than the TTL is presumed
+                    # stale (the orphaned worker is long gone but its done
+                    # callback never fired, e.g. process restart in the
+                    # interim). Clear it and proceed with the wake instead
+                    # of leaving the agent stranded forever. See issue #35.
+                    age = _llm_hang_signal_age(agent)
+                    if age is not None and age > _LLM_HANG_SENTINEL_TTL_SECONDS:
+                        _remove_llm_hang_signal(agent)
+                        agent._log(
+                            "llm_hang_cleared",
+                            reason="ttl_expired",
+                            age_seconds=round(age, 1),
+                        )
+                    else:
+                        remaining = (
+                            _LLM_HANG_SENTINEL_TTL_SECONDS - age
+                            if age is not None
+                            else _LLM_HANG_SENTINEL_TTL_SECONDS
+                        )
+                        reason = (
+                            f"LLM hang detected. Sentinel auto-clears in "
+                            f"{int(max(0, remaining))} seconds, or use "
+                            f"system(action='refresh') to clear immediately."
+                        )
+                        agent._log(
+                            "wake_refused_llm_hang",
+                            trigger=msg.type,
+                            age_seconds=(round(age, 1) if age is not None else None),
+                            ttl_remaining_seconds=int(max(0, remaining)),
+                        )
+                        agent._asleep.set()
+                        agent._set_state(AgentState.ASLEEP, reason=reason)
+                        continue
 
                 # Wake up
                 agent._asleep.clear()
