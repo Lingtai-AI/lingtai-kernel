@@ -1038,6 +1038,7 @@ class OpenAIAdapter(LLMAdapter):
         use_responses: bool = False,
         force_responses: bool = False,
         max_rpm: int = 0,
+        default_headers: dict | None = None,
     ):
         self.base_url = base_url
         self._use_responses = use_responses
@@ -1046,6 +1047,8 @@ class OpenAIAdapter(LLMAdapter):
         if base_url:
             kwargs["base_url"] = base_url
         kwargs["timeout"] = timeout_ms / 1000.0  # openai SDK uses seconds
+        if default_headers:
+            kwargs["default_headers"] = dict(default_headers)
         self._client_kwargs = dict(kwargs)  # store for session reset
         self._client = openai.OpenAI(**kwargs)
         self._setup_gate(max_rpm)
