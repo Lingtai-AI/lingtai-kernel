@@ -164,6 +164,21 @@ def _refresh(agent, args: dict) -> dict:
                    preset=preset_name, reason=reason, revert=revert_preset)
 
     agent._log("refresh_requested", reason=reason)
+
+    # Re-spawn any init.json MCPs whose subprocess exited at boot (or has
+    # since died). The Agent subclass owns the retry — BaseAgent has no
+    # MCP machinery — so the call is gated on hasattr(). Failures are
+    # logged and swallowed so a flaky MCP cannot block refresh itself.
+    # Closes Lingtai-AI/lingtai#34.
+    retry = getattr(agent, "_retry_failed_mcps", None)
+    if callable(retry):
+        try:
+            report = retry()
+            if report.get("retried"):
+                agent._log("mcp_retry_summary", **report)
+        except Exception as e:
+            agent._log("mcp_retry_error", error=str(e))
+
     agent._perform_refresh()
     return {
         "status": "ok",
