@@ -49,12 +49,33 @@ def _soul_whisper(agent) -> None:
     Only fires under ACTIVE or IDLE. The timer is normally cancelled
     on entry to STUCK/ASLEEP/SUSPENDED via _set_state, so the state
     check here is defensive.
+
+    Issue #47: Also checks for pending notifications before running
+    consultation. This ensures messages are seen within one soul delay
+    cycle instead of waiting indefinitely.
     """
     from ...state import AgentState
+    from ...notifications import notification_fingerprint, collect_notifications
 
     agent._soul_timer = None
     try:
         if agent._state in (AgentState.ACTIVE, AgentState.IDLE):
+            # Issue #47: Check for pending notifications before consultation
+            # This ensures messages are seen within one soul delay cycle
+            try:
+                fp = notification_fingerprint(agent._working_dir)
+                if fp != agent._notification_fp:
+                    notifications = collect_notifications(agent._working_dir)
+                    if notifications:
+                        agent._log("soul_flow_notification_check",
+                                   sources=list(notifications.keys()))
+                        # Force notification sync to surface any pending messages
+                        agent._sync_notifications()
+            except Exception as notif_err:
+                agent._log("soul_flow_notification_check_error",
+                           error=str(notif_err))
+
+            # Run the normal consultation fire
             agent._run_consultation_fire()
         else:
             agent._log("soul_whisper_skipped", reason=agent._state.value)

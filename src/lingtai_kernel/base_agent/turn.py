@@ -363,6 +363,23 @@ def _run_loop(agent) -> None:
                     msg = _make_message(MSG_REQUEST, "system", aed_msg)
                     agent._set_state(AgentState.ACTIVE, reason=f"AED recovery attempt {aed_attempts}")
 
+            # Issue #47: Check for pending notifications before going idle
+            # This catches messages that arrived during active work
+            if sleep_state == AgentState.IDLE and not agent._asleep.is_set():
+                try:
+                    from ..notifications import notification_fingerprint, collect_notifications
+                    fp = notification_fingerprint(agent._working_dir)
+                    if fp != agent._notification_fp:
+                        notifications = collect_notifications(agent._working_dir)
+                        if notifications:
+                            agent._log("idle_notification_check",
+                                       sources=list(notifications.keys()))
+                            # Sync notifications to surface any pending messages
+                            agent._sync_notifications()
+                except Exception as notif_err:
+                    agent._log("idle_notification_check_error",
+                               error=str(notif_err))
+
             if not agent._asleep.is_set():
                 agent._set_state(sleep_state)
             if skip_post_turn_save:

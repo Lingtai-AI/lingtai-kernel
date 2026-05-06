@@ -100,7 +100,7 @@ def validate_event(event: dict) -> tuple[bool, str | None]:
 # Dispatch
 # ---------------------------------------------------------------------------
 
-def _format_notification_summary(mcp_name: str, count: int) -> str:
+def _format_notification_summary(mcp_name: str, count: int, has_human_messages: bool = False) -> str:
     """Render a count-only [system] notification body for the agent's inbox.
 
     Body content is intentionally stripped: messaging MCPs (telegram,
@@ -114,11 +114,16 @@ def _format_notification_summary(mcp_name: str, count: int) -> str:
     action to fetch the actual payloads. Sender / subject / body never
     appear in this string — they only reach the agent via the explicit
     tool call.
+
+    Issue #47: Human messages (telegram, email, etc.) are prioritized
+    in the notification summary to help agents distinguish between
+    human messages and system events.
     """
     plural = "" if count == 1 else "s"
+    priority_hint = " [HUMAN]" if has_human_messages else ""
     return (
         f"[system] New event from MCP '{mcp_name}': "
-        f"{count} unread message{plural}. "
+        f"{count} unread message{plural}{priority_hint}. "
         f"Call the MCP's read/check action to fetch."
     )
 
@@ -142,11 +147,16 @@ def _consume_event(agent: "BaseAgent", mcp_name: str, event: dict) -> bool:
     return wake
 
 
-def _dispatch_summary(agent: "BaseAgent", mcp_name: str, count: int, wake: bool) -> None:
-    """Post one signal-only notification covering ``count`` events from ``mcp_name``."""
+def _dispatch_summary(agent: "BaseAgent", mcp_name: str, count: int, wake: bool, has_human_messages: bool = False) -> None:
+    """Post one signal-only notification covering ``count`` events from ``mcp_name``.
+
+    Issue #47: Human messages (telegram, email, etc.) are prioritized
+    in the notification summary to help agents distinguish between
+    human messages and system events.
+    """
     from lingtai_kernel.message import _make_message, MSG_REQUEST
 
-    notification = _format_notification_summary(mcp_name, count)
+    notification = _format_notification_summary(mcp_name, count, has_human_messages=has_human_messages)
     msg = _make_message(MSG_REQUEST, "system", notification)
     agent.inbox.put(msg)
 
@@ -208,6 +218,9 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
         # Bound work per cycle to avoid pathological backlog blocking.
         events_this_mcp = 0
         any_wake = False
+        # Issue #47: Track if this MCP has human messages
+        # Human messages come from messaging MCPs (telegram, email, feishu, wechat)
+        has_human_messages = False
         for entry in sorted(mcp_dir.iterdir()):
             if events_this_mcp >= MAX_EVENTS_PER_CYCLE:
                 break
@@ -246,6 +259,16 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
                 continue
             any_wake = any_wake or wake
 
+            # Issue #47: Detect human messages
+            # Human messages come from messaging MCPs (telegram, email, feishu, wechat)
+            # and have a "from" field that looks like a username (not a system sender)
+            if not has_human_messages:
+                sender = event.get("from", "")
+                # Check if this is a human message (not from system/soul/etc.)
+                # Human senders typically have usernames or first names
+                if sender and not sender.startswith("system") and not sender.startswith("soul"):
+                    has_human_messages = True
+
             try:
                 entry.unlink()
             except OSError as e:
@@ -261,7 +284,8 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
         # wake-up signal but eliminates the duplicate-content footgun (#37).
         if events_this_mcp > 0:
             try:
-                _dispatch_summary(agent, mcp_name, events_this_mcp, any_wake)
+                _dispatch_summary(agent, mcp_name, events_this_mcp, any_wake,
+                                  has_human_messages=has_human_messages)
             except Exception as e:
                 log.error(
                     "mcp_inbox: failed to post summary for %s (count=%d): %s",
