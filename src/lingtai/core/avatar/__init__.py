@@ -41,6 +41,36 @@ from ...i18n import t
 _AVATAR_NAME_RE = re.compile(r"^[\w-]+$")  # \w is Unicode-aware in Py3 re
 _AVATAR_NAME_MAX_LEN = 64
 
+# Mission quality gate — minimum length below which we treat the mission as a
+# probable accidental spawn unless the caller explicitly confirms.
+_MISSION_MIN_CHARS = 20
+
+# Suspicious tokens that indicate a debug/test placeholder mission. Compared
+# case-insensitively against the trimmed mission (full match) and against the
+# first whitespace-delimited token (prefix match like "test something").
+_MISSION_SUSPICIOUS = {"test", "debug", "check", "tmp", "temp", "foo", "bar"}
+
+
+def _mission_looks_unsafe(mission: str) -> tuple[bool, str]:
+    """Heuristic mission-quality gate.
+
+    Returns ``(unsafe, reason)``. Used to refuse accidental spawns where the
+    mission field is empty, far too short, or matches a debug/test placeholder
+    pattern. Caller can override with ``confirm=True``.
+    """
+    trimmed = (mission or "").strip()
+    if not trimmed:
+        return True, "mission is empty"
+    if len(trimmed) < _MISSION_MIN_CHARS:
+        return True, f"mission is very short ({len(trimmed)} chars)"
+    lower = trimmed.lower()
+    if lower in _MISSION_SUSPICIOUS or lower.startswith(
+        tuple(f"{w} " for w in _MISSION_SUSPICIOUS)
+    ):
+        return True, "mission looks like a debug/test placeholder"
+    return False, ""
+
+
 if TYPE_CHECKING:
     from ...agent import Agent
 
@@ -75,6 +105,14 @@ def get_schema(lang: str = "en") -> dict:
             "rules_content": {
                 "type": "string",
                 "description": t(lang, "avatar.rules_content"),
+            },
+            "dry_run": {
+                "type": "boolean",
+                "description": t(lang, "avatar.dry_run"),
+            },
+            "confirm": {
+                "type": "boolean",
+                "description": t(lang, "avatar.confirm"),
             },
         },
         "required": ["name"],
@@ -127,6 +165,8 @@ class AvatarManager:
         reasoning = args.get("_reasoning")
         peer_name = args.get("name")
         avatar_type = args.get("type", "shallow")
+        dry_run = bool(args.get("dry_run", False))
+        confirm = bool(args.get("confirm", False))
 
         if peer_name is None:
             return {"error": "name is required — pick a true name (真名) for the 他我 (e.g. 'researcher', '学者')"}
@@ -154,6 +194,34 @@ class AvatarManager:
                 )
             }
 
+        # Mission-quality gate. The reasoning field becomes the avatar's first
+        # prompt, so an empty / very-short / debug-placeholder mission almost
+        # always means an accidental spawn (a real incident: an agent batched
+        # avatar(spawn) into a parallel call with mission "test" and a process
+        # was created). Refuse unless the caller explicitly passes confirm=True.
+        # The dry-run path is exempt — its whole purpose is preview without
+        # commitment, and forcing confirm=True there would defeat that.
+        if not dry_run and not confirm:
+            unsafe, reason = _mission_looks_unsafe(reasoning or "")
+            if unsafe:
+                preview_mission = (reasoning or "").strip()
+                return {
+                    "status": "confirmation_needed",
+                    "warning": (
+                        f"Mission appears short/test-like ({reason}). "
+                        f"Pass confirm=true to proceed, or dry_run=true to preview. "
+                        f"Each avatar(spawn) creates an independent process — "
+                        f"double-check your reasoning field before retrying."
+                    ),
+                    "reason": reason,
+                    "preview": {
+                        "name": peer_name,
+                        "type": avatar_type,
+                        "mission": preview_mission,
+                        "mission_chars": len(preview_mission),
+                    },
+                }
+
         # Check if this peer already exists and is live
         from lingtai_kernel.handshake import is_alive
         for record in self._read_ledger():
@@ -178,6 +246,30 @@ class AvatarManager:
             parent_init = json.loads(parent_init_path.read_text())
         except (json.JSONDecodeError, OSError) as e:
             return {"error": f"failed to read parent init.json: {e}"}
+
+        # Dry-run short-circuit. Returns a preview of what would be created,
+        # but performs NO filesystem mutation and NO process launch. We've
+        # already validated name/type and confirmed parent has a usable
+        # init.json, so the preview reflects what a real spawn would do.
+        if dry_run:
+            avatar_working_dir = parent._working_dir.parent / peer_name
+            preview_mission = (reasoning or "").strip()
+            unsafe, reason = _mission_looks_unsafe(reasoning or "")
+            return {
+                "status": "dry_run",
+                "preview": {
+                    "name": peer_name,
+                    "type": avatar_type,
+                    "working_dir": str(avatar_working_dir),
+                    "address": avatar_working_dir.name,
+                    "mission": preview_mission,
+                    "mission_chars": len(preview_mission),
+                    "mission_unsafe": unsafe,
+                    "mission_reason": reason if unsafe else "",
+                    "comment": args.get("comment", ""),
+                },
+                "message": "Dry run — no process spawned, no files written.",
+            }
 
         # Working dir: sibling of parent, named after the avatar. Defense-in-depth
         # scope check — resolve and assert the target's parent equals the network

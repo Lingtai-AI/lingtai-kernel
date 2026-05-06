@@ -14,7 +14,7 @@ independent life — its existence does not depend on yours.
 
 ## Components
 
-- `avatar/__init__.py` — the entire capability in a single file. `get_description` (`avatar/__init__.py:49-50`), `get_schema` (`avatar/__init__.py:53-81`), `setup` (`avatar/__init__.py:666-672`). The core class is `AvatarManager` (`avatar/__init__.py:85-665`).
+- `avatar/__init__.py` — the entire capability in a single file. `_mission_looks_unsafe` (mission-quality heuristic, near top of module), `get_description`, `get_schema`, `setup`. The core class is `AvatarManager`.
 
 ## Public API
 
@@ -22,7 +22,7 @@ The `avatar` tool exposes two actions:
 
 | Action   | Description |
 |----------|-------------|
-| `spawn`  | Spawn a new avatar agent (shallow or deep) with a given name, optional type, and optional comment |
+| `spawn`  | Spawn a new avatar agent (shallow or deep) with a given name, optional type, and optional comment. Accepts `dry_run` (preview-only) and `confirm` (acknowledge mission-quality gate). |
 | `rules`  | Set rules content and distribute via `.rules` signal files to self + all descendants |
 
 ## Internal Module Layout
@@ -59,6 +59,8 @@ avatar/__init__.py
 - **Liveness check:** Before spawning, existing ledger entries are checked via `handshake.is_alive()`. If a live avatar with the same name exists, the spawn is refused with `already_active`.
 - **Boot verification:** After launching, `_wait_for_boot()` polls for `.agent.heartbeat` or process exit within 5 seconds. If the process exits before handshaking, stderr is captured and the failure is reported.
 - **Deep copy scope guard:** `_prepare_deep()` asserts `dst.parent == src.parent` to prevent rmtree from reaching outside the network root.
+- **Mission-quality gate (issue #33):** Before any filesystem mutation, `_spawn` runs `_mission_looks_unsafe(reasoning)` — empty / sub-20-char / debug-placeholder missions return `{"status": "confirmation_needed", ...}` unless `confirm=true`. The dry-run path is exempt (its purpose is preview without commitment).
+- **Dry-run (issue #33):** `dry_run=true` short-circuits after parent `init.json` is loaded and before any working dir is created or process launched, returning `{"status": "dry_run", "preview": {...}}`. The preview includes whether the mission would have tripped the quality gate.
 
 ## Dependencies
 
