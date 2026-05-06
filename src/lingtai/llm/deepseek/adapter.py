@@ -18,14 +18,21 @@ Assistant turns BEFORE the first tool_call don't need it. After the
 first tool_call, every assistant turn needs it — including the final
 plain-text reply that followed the tool loop.
 
-DeepSeek validates field presence, not content: the server doesn't
-fingerprint or diff the string — it just wants *something* there to
-confirm the client is thinking-mode aware. This adapter therefore does
-not try to preserve the actual reasoning text across restarts; it injects
-a stable placeholder on every affected assistant turn. Reasoning is
-scratch work, not durable state — the agent's real memory lives in the
-system prompt, pad, and conversation. Round-tripping reasoning is a
-protocol artifact, not an information-flow need.
+Real reasoning is preserved end-to-end now. The OpenAI adapter captures
+``reasoning_content`` into a ThinkingBlock on every assistant turn
+(``openai/adapter.py``); ``interface_converters.to_openai`` emits the
+ThinkingBlock back as ``reasoning_content`` on replay. The historical
+"byte-identical placeholder" approach (commits afc7ddc → 86c2a3d)
+caused DeepSeek's cache fast-path to collapse onto the placeholder
+string, producing empty responses (issue #9). Real per-turn reasoning
+is byte-different by construction and avoids the collapse.
+
+The only remaining responsibility of this adapter is the **fallback**:
+if an assistant turn replayed from history has no captured ThinkingBlock
+(e.g. chat_history.jsonl entries written before this fix shipped, or
+entries where the provider returned no reasoning text at all), inject a
+per-turn-unique stub so DeepSeek's field-presence validator is satisfied
+without re-introducing the cache-collapse pattern.
 
 Everything else inherits from ``OpenAIAdapter`` / ``OpenAIChatSession``
 unchanged via the ``_build_messages`` and ``_session_class`` hook points
@@ -40,38 +47,48 @@ from ..openai.adapter import OpenAIAdapter, OpenAIChatSession
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 
-# Human-readable placeholder sent as reasoning_content on every assistant
-# turn once thinking mode has been invoked by a prior tool_call. DeepSeek
-# validates field presence, not content — any non-empty string is accepted.
-# A readable string is preferred over empty for wire-debugging clarity.
-#
-# DeepSeek V4's cache-hit fast-path (verified empirically: high cache hit +
-# low thinking_tokens ~= 10) echoes the last reasoning_content it saw in
-# context verbatim, rather than generating fresh reasoning. This causes the
-# kernel's 'thinking' event to log this exact string as the agent's thought.
-# The strip-on-parse in DeepSeekChatSession.send/send_stream filters these
-# exact-match echoes out of response.thoughts.
-_REASONING_PLACEHOLDER = "(reasoning omitted — not preserved across turns)"
+def _fallback_reasoning_for(msg: dict, turn_idx: int) -> str:
+    """Build a per-turn-unique reasoning stub for an assistant message.
+
+    Used only when an assistant turn carries no real reasoning_content
+    (typically: history entries that predate the ThinkingBlock-preservation
+    fix, or turns where the provider returned no reasoning text). The
+    string must be byte-different per turn — a constant placeholder
+    triggers DeepSeek's cache fast-path to collapse onto it and emit
+    empty responses (issue #9).
+
+    DeepSeek validates field presence, not content, so any non-empty
+    string is accepted. We inline tool names and the call ids to keep
+    the stub naturally unique per turn.
+    """
+    tool_calls = msg.get("tool_calls") or []
+    if tool_calls:
+        names = ",".join(
+            (tc.get("function", {}) or {}).get("name", "") for tc in tool_calls
+        )
+        ids = ",".join(tc.get("id", "") for tc in tool_calls)
+        return f"call {names} [{ids}] (turn {turn_idx})"
+    # Plain-text post-tool-call turn — content is per-turn unique by nature.
+    content = msg.get("content") or ""
+    snippet = content[:64].replace("\n", " ")
+    return f"reply [{snippet}] (turn {turn_idx})"
 
 
 class DeepSeekChatSession(OpenAIChatSession):
-    """Chat session that injects a reasoning_content placeholder on tool-call turns."""
+    """Chat session that satisfies DeepSeek's reasoning_content round-trip contract.
+
+    Real reasoning_content is emitted by ``interface_converters.to_openai``
+    when the canonical interface has a ThinkingBlock on the assistant turn.
+    This subclass only injects a per-turn-unique fallback on assistant
+    turns that lack one — typically rehydrated history entries from before
+    the fix shipped.
+    """
 
     def _build_messages(self) -> list[dict]:
         messages = super()._build_messages()
-        # Inject placeholder on every assistant turn from the FIRST tool_call
-        # onward. DeepSeek's server validates that reasoning_content is present
-        # on all assistant turns once thinking mode has been invoked by a tool
-        # call, even on plain-text replies following the tool loop.
-        #
-        # Per-turn unique tag defeats DeepSeek's cache fast-path. Without it,
-        # a wire with the SAME placeholder string repeated across many
-        # assistant turns triggers the fast-path: the server returns just a
-        # placeholder echo (output_tokens=10, thinking_tokens=10) with no
-        # text and no tool_calls. Empirically (n=20 per condition at 354k
-        # input, 99.5% cache hit): constant placeholder → 65% empty rate;
-        # per-turn unique tag → 0% empty rate. Server still validates field
-        # presence, not content, so any non-empty string is accepted.
+        # Field-presence requirement only kicks in once thinking mode has
+        # been invoked by an assistant tool_call. Earlier plain-text turns
+        # must NOT carry reasoning_content — DeepSeek rejects that.
         seen_tool_call = False
         turn_idx = 0
         for msg in messages:
@@ -81,49 +98,9 @@ class DeepSeekChatSession(OpenAIChatSession):
                 seen_tool_call = True
             if seen_tool_call:
                 turn_idx += 1
-                msg["reasoning_content"] = f"{_REASONING_PLACEHOLDER} [turn={turn_idx}]"
+                if not msg.get("reasoning_content"):
+                    msg["reasoning_content"] = _fallback_reasoning_for(msg, turn_idx)
         return messages
-
-    def send(self, message):
-        response = super().send(message)
-        _strip_placeholder_echoes(response)
-        return response
-
-    def send_stream(self, message, on_chunk=None):
-        response = super().send_stream(message, on_chunk)
-        _strip_placeholder_echoes(response)
-        return response
-
-
-_TURN_TAG_RE = __import__("re").compile(r"^\s*\[turn=\d+\]\s*")
-
-
-def _strip_placeholder_echoes(response) -> None:
-    """Strip our placeholder string from the start of each thought.
-
-    DeepSeek V4, seeing our placeholder on every recent assistant turn in
-    context, prepends that exact string to its own fresh reasoning on the
-    next response. Result: thoughts like
-        "(reasoning omitted — not preserved across turns)发现 args 检查失败..."
-    We chop the placeholder prefix off so the kernel's 'thinking' event log
-    shows just the real reasoning. Also strips the per-turn `[turn=N]` tag
-    we now append to the placeholder for cache-busting.
-
-    Pure-echo responses (where thought == placeholder with no tail) become
-    empty strings and are dropped entirely — there's no reasoning to keep.
-    """
-    if not getattr(response, "thoughts", None):
-        return
-    cleaned: list[str] = []
-    for t in response.thoughts:
-        if t and t.startswith(_REASONING_PLACEHOLDER):
-            tail = t[len(_REASONING_PLACEHOLDER):].lstrip()
-            tail = _TURN_TAG_RE.sub("", tail)
-            if tail:
-                cleaned.append(tail)
-        else:
-            cleaned.append(t)
-    response.thoughts = cleaned
 
 
 class DeepSeekAdapter(OpenAIAdapter):

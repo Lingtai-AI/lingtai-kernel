@@ -27,7 +27,7 @@ from lingtai_kernel.llm.base import (
 )
 from lingtai_kernel.llm.interface import ToolResultBlock
 from lingtai.llm.base import LLMAdapter
-from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
+from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock, ToolCallBlock
 from ..interface_converters import to_openai, to_responses_input
 from lingtai_kernel.llm.streaming import StreamingAccumulator
 
@@ -619,6 +619,16 @@ class OpenAIChatSession(ChatSession):
         blocks: list = []
         if choice and choice.message:
             msg = choice.message
+            # Capture reasoning_content (DeepSeek/o-series) or reasoning
+            # (OpenRouter) into a ThinkingBlock. Persisting it makes the
+            # next request carry real reasoning back to the provider on
+            # replay, instead of a constant placeholder. See issue #9.
+            reasoning = (
+                getattr(msg, "reasoning_content", None)
+                or getattr(msg, "reasoning", None)
+            )
+            if reasoning:
+                blocks.append(ThinkingBlock(text=reasoning))
             if msg.content:
                 blocks.append(TextBlock(text=msg.content))
             if msg.tool_calls:
@@ -802,6 +812,12 @@ class OpenAIChatSession(ChatSession):
 
         # 5. Record assistant response into interface
         blocks: list = []
+        # Persist captured reasoning as a ThinkingBlock so the next request
+        # can replay it via reasoning_content (see issue #9).
+        if result.thoughts:
+            joined = "\n".join(t for t in result.thoughts if t)
+            if joined:
+                blocks.append(ThinkingBlock(text=joined))
         if result.text:
             blocks.append(TextBlock(text=result.text))
         for tc in result.tool_calls:

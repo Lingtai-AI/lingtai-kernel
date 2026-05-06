@@ -44,7 +44,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 - **Tool-call ID dual system** — Provider-issued wire IDs (e.g. Anthropic `tool_use_id`, OpenAI `tool_call_id`) flow through `tool_call_id` kwarg. LingTai issues its own `_tool_call_id` (`service.py:46`: `tc_<unix>_<4-hex>`) stamped onto every result dict for agent-level correlation.
 - **Interface converters** — Four bidirectional pairs:
   - `to_anthropic`/`from_anthropic` — Anthropic Messages format (system excluded, ThinkingBlock with signature round-trip)
-  - `to_openai`/`from_openai` — Chat Completions format (tool results as `role=tool`, ThinkingBlocks dropped)
+  - `to_openai`/`from_openai` — Chat Completions format (tool results as `role=tool`, ThinkingBlocks emit as `reasoning_content` for DeepSeek round-trip; other OpenAI-compat providers ignore the field)
   - `to_responses_input` — Responses API input items (`function_call` / `function_call_output` shapes, ThinkingBlocks omitted)
   - `to_gemini`/`from_gemini` — Interactions TurnParam format (`role=model`, `function_call`/`function_result`, `thought` blocks)
 - **ToolCallBlock shape conversions** — Anthropic: `tool_use` with `input` dict. OpenAI CC: `function_call` with `arguments` JSON string. Responses: `function_call` with `arguments` JSON string and `call_id`. Gemini: `function_call` with `arguments` dict and `id`.

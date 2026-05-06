@@ -140,7 +140,7 @@ def to_openai(iface: ChatInterface) -> list[dict]:
                 messages.append({"role": "user", "content": [_to_openai_block(b) for b in entry.content]})
         elif entry.role == "assistant":
             msg: dict[str, Any] = {"role": "assistant"}
-            text_parts, tool_calls = [], []
+            text_parts, tool_calls, thinking_parts = [], [], []
             for block in entry.content:
                 if isinstance(block, TextBlock):
                     text_parts.append(block.text)
@@ -149,13 +149,23 @@ def to_openai(iface: ChatInterface) -> list[dict]:
                         "id": block.id, "type": "function",
                         "function": {"name": block.name, "arguments": json.dumps(block.args)},
                     })
-                # ThinkingBlocks dropped for OpenAI
+                elif isinstance(block, ThinkingBlock):
+                    if block.text:
+                        thinking_parts.append(block.text)
             if text_parts:
                 msg["content"] = "\n".join(text_parts)
             if tool_calls:
                 msg["tool_calls"] = tool_calls
             if not text_parts and not tool_calls:
                 msg["content"] = ""
+            # Real reasoning_content if captured. DeepSeek's thinking-mode
+            # contract requires this on every assistant turn after the first
+            # tool_call; other OpenAI-compat providers ignore the field.
+            # Preserving the real text (instead of a byte-identical placeholder)
+            # avoids DeepSeek's cache fast-path collapsing onto the placeholder
+            # and emitting empty responses. See lingtai-kernel issue #9.
+            if thinking_parts:
+                msg["reasoning_content"] = "\n".join(thinking_parts)
             messages.append(msg)
     return messages
 
