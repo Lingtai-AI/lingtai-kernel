@@ -367,7 +367,12 @@ def _perform_refresh(agent) -> None:
         except OSError:
             pass
     agent._save_chat_history()
-    cmd = _build_launch_cmd(agent)
+    # Bound-method dispatch — _build_launch_cmd lives on BaseAgent (returns
+    # None) and Agent (returns the real `lingtai run` cmd). A prior version
+    # called a module-level _build_launch_cmd shadow that always returned
+    # None, silently no-opping every user refresh on the Agent subclass —
+    # see issue #7, confirmed in vivo against deepseek_pro 2026-05-05.
+    cmd = agent._build_launch_cmd()
     if cmd is None:
         agent._log("refresh_no_launch_cmd")
         return
@@ -435,11 +440,6 @@ def _can_fallback_preset(agent) -> bool:
         return bool(active and default and active != default)
     except Exception:
         return False
-
-
-def _build_launch_cmd(agent) -> list[str] | None:
-    """Return the command to relaunch this agent. Override in subclasses."""
-    return None
 
 
 def _check_rules_file(agent) -> None:

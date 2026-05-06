@@ -284,14 +284,7 @@ def test_perform_refresh_clears_llm_hang_sentinel(tmp_path):
     # No launch cmd → refresh exits early but cleanup must still happen.
     agent._build_launch_cmd = lambda: None
 
-    # Patch _build_launch_cmd inside lifecycle to return None for this fake.
-    import lingtai_kernel.base_agent.lifecycle as lifecycle
-    original = lifecycle._build_launch_cmd
-    lifecycle._build_launch_cmd = lambda _agent: None
-    try:
-        _perform_refresh(agent)
-    finally:
-        lifecycle._build_launch_cmd = original
+    _perform_refresh(agent)
 
     assert not (tmp_path / ".llm_hang").exists()
     assert any(name == "llm_hang_cleared"
