@@ -338,7 +338,7 @@ class TestAvatarRulesAction:
 
         mgr = agent.get_capability("avatar")
         with _patch_avatar_launch():
-            result = mgr.handle({"name": "child"})
+            result = mgr.handle({"name": "child", "confirm": True})
         assert result["status"] == "ok"
         assert result["agent_name"] == "child"
         assert result["address"] == "child"  # relative name (current convention)
@@ -424,7 +424,7 @@ class TestAutoDistributeAfterSpawn:
 
         mgr = parent.get_capability("avatar")
         with _patch_avatar_launch():
-            result = mgr.handle({"name": "child"})
+            result = mgr.handle({"name": "child", "confirm": True})
         assert result["status"] == "ok"
 
         # Child dir is a sibling of parent_dir (avatar_working_dir = parent.parent / name)
@@ -438,7 +438,7 @@ class TestAutoDistributeAfterSpawn:
 
         mgr = parent.get_capability("avatar")
         with _patch_avatar_launch():
-            result = mgr.handle({"name": "child"})
+            result = mgr.handle({"name": "child", "confirm": True})
         assert result["status"] == "ok"
 
         child_dir = parent_dir.parent / "child"
@@ -452,7 +452,7 @@ class TestAutoDistributeAfterSpawn:
 
         mgr = parent.get_capability("avatar")
         with _patch_avatar_launch():
-            result = mgr.handle({"name": "clone", "type": "deep"})
+            result = mgr.handle({"name": "clone", "type": "deep", "confirm": True})
         assert result["status"] == "ok"
 
         clone_dir = parent_dir.parent / "clone"
@@ -529,7 +529,7 @@ class TestSpawnNameValidation:
         mgr = parent.get_capability("avatar")
 
         with _patch_avatar_launch():
-            result = mgr.handle({"name": good_name})
+            result = mgr.handle({"name": good_name, "confirm": True})
 
         assert result.get("status") == "ok", f"name={good_name!r} should have been accepted but got {result}"
         assert (parent_dir.parent / good_name).is_dir()
@@ -543,7 +543,7 @@ class TestSpawnNameValidation:
 
         with _patch_avatar_launch():
             # Pass both a safe name and a malicious legacy dir; name wins.
-            result = mgr.handle({"name": "safe", "dir": "avatars/evil"})
+            result = mgr.handle({"name": "safe", "dir": "avatars/evil", "confirm": True})
 
         assert result.get("status") == "ok"
         assert (parent_dir.parent / "safe").is_dir()

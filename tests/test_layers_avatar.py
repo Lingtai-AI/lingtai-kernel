@@ -77,7 +77,7 @@ class TestAvatarManager:
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"])
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"name": "helper"})
+        result = mgr.handle({"name": "helper", "confirm": True})
         assert result["status"] == "ok"
         assert "address" in result
         assert result["address"]  # filesystem path (non-empty string)
@@ -88,7 +88,7 @@ class TestAvatarManager:
         from lingtai.agent import Agent
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities={"bash": {"yolo": True}, "avatar": {}})
-        result = parent._tool_handlers["avatar"]({"name": "child"})
+        result = parent._tool_handlers["avatar"]({"name": "child", "confirm": True})
         assert result["status"] == "ok"
         # New architecture: avatars run as their own processes; introspection
         # is via the avatar's on-disk init.json, not an in-process _peers map.
@@ -105,7 +105,7 @@ class TestAvatarManager:
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"], covenant="Be helpful and concise.")
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"name": "helper"})
+        result = mgr.handle({"name": "helper", "confirm": True})
         assert result["status"] == "ok"
 
     def test_spawn_no_admin(self, tmp_path):
@@ -114,7 +114,7 @@ class TestAvatarManager:
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"], admin={"karma": True})
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"name": "helper"})
+        result = mgr.handle({"name": "helper", "confirm": True})
         assert result["status"] == "ok"
         child_init = json.loads((parent._working_dir.parent / "helper" / "init.json").read_text())
         child_admin = child_init.get("manifest", {}).get("admin", {})
@@ -129,9 +129,9 @@ class TestAvatarManager:
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities={"avatar": {"max_agents": 2}})
         mgr = parent.get_capability("avatar")
-        r1 = mgr.handle({"name": "a1"})
+        r1 = mgr.handle({"name": "a1", "confirm": True})
         assert r1["status"] == "ok"
-        r2 = mgr.handle({"name": "a2"})
+        r2 = mgr.handle({"name": "a2", "confirm": True})
         assert "error" in r2
 
     def test_spawn_duplicate_name_error(self, tmp_path):
@@ -148,9 +148,9 @@ class TestAvatarManager:
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"])
         mgr = parent.get_capability("avatar")
-        r1 = mgr.handle({"name": "helper"})
+        r1 = mgr.handle({"name": "helper", "confirm": True})
         assert r1["status"] == "ok"
-        r2 = mgr.handle({"name": "helper"})
+        r2 = mgr.handle({"name": "helper", "confirm": True})
         assert "error" in r2 or r2.get("status") == "already_active"
 
     def test_spawn_mirror_false_no_identity_files(self, tmp_path):
@@ -168,7 +168,7 @@ class TestAvatarManager:
         (lib_dir / "codex.json").write_text('{"entries": []}')
 
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"name": "blank"})
+        result = mgr.handle({"name": "blank", "confirm": True})
         assert result["status"] == "ok"
         child_dir = parent._working_dir.parent / "blank"
         # Character and codex should NOT be copied
@@ -194,7 +194,7 @@ class TestAvatarManager:
         (exports_dir / "abc123.txt").write_text("exported knowledge")
 
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"name": "clone", "mirror": True})
+        result = mgr.handle({"name": "clone", "mirror": True, "confirm": True})
         assert result["status"] == "ok"
         child_dir = parent._working_dir.parent / "clone"
         assert (child_dir / "system" / "character.md").read_text() == "I am the parent"
@@ -208,7 +208,7 @@ class TestAvatarManager:
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"])
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"name": "clone", "mirror": True})
+        result = mgr.handle({"name": "clone", "mirror": True, "confirm": True})
         assert result["status"] == "ok"
 
     def test_ledger_records_spawn(self, tmp_path):
@@ -217,11 +217,142 @@ class TestAvatarManager:
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"])
         mgr = parent.get_capability("avatar")
-        mgr.handle({"name": "clone"})
+        mgr.handle({"name": "clone", "confirm": True})
         ledger = (parent._working_dir / "delegates" / "ledger.jsonl").read_text().strip()
         record = json.loads(ledger)
         assert record["name"] == "clone"
         assert record["boot_status"] == "ok"
+
+
+class TestMissionQualityGate:
+    """Issue #33 — mission/dry_run/confirm guardrails on avatar(spawn)."""
+
+    @pytest.fixture(autouse=True)
+    def _autopatch(self, fake_avatar_launch):
+        yield
+
+    def _parent(self, tmp_path):
+        from lingtai.agent import Agent
+        return Agent(
+            service=make_mock_service(),
+            agent_name="parent",
+            working_dir=tmp_path / "parent",
+            capabilities=["avatar"],
+        )
+
+    def test_helper_rejects_empty(self):
+        from lingtai.core.avatar import _mission_looks_unsafe
+        unsafe, reason = _mission_looks_unsafe("")
+        assert unsafe and "empty" in reason
+
+    def test_helper_rejects_short(self):
+        from lingtai.core.avatar import _mission_looks_unsafe
+        unsafe, reason = _mission_looks_unsafe("too short")
+        assert unsafe and "short" in reason
+
+    def test_helper_rejects_test_word(self):
+        from lingtai.core.avatar import _mission_looks_unsafe
+        unsafe, reason = _mission_looks_unsafe("test")
+        assert unsafe
+
+    def test_helper_rejects_test_prefix(self):
+        from lingtai.core.avatar import _mission_looks_unsafe
+        unsafe, reason = _mission_looks_unsafe("debug something something something")
+        assert unsafe and "placeholder" in reason
+
+    def test_helper_accepts_real_mission(self):
+        from lingtai.core.avatar import _mission_looks_unsafe
+        unsafe, reason = _mission_looks_unsafe(
+            "Investigate the heartbeat regression in the kernel and report findings"
+        )
+        assert not unsafe and reason == ""
+
+    def test_spawn_with_no_mission_returns_confirmation_needed(self, tmp_path):
+        """Spawn with no _reasoning and no confirm should be refused with a preview."""
+        parent = self._parent(tmp_path)
+        mgr = parent.get_capability("avatar")
+        result = mgr.handle({"name": "helper"})
+        assert result["status"] == "confirmation_needed"
+        assert "warning" in result
+        assert "preview" in result
+        assert result["preview"]["name"] == "helper"
+        # No working dir created
+        assert not (parent._working_dir.parent / "helper").exists()
+        # No ledger entry
+        assert not (parent._working_dir / "delegates" / "ledger.jsonl").exists()
+
+    def test_spawn_with_short_mission_returns_confirmation_needed(self, tmp_path):
+        parent = self._parent(tmp_path)
+        mgr = parent.get_capability("avatar")
+        result = mgr.handle({"name": "helper", "_reasoning": "test"})
+        assert result["status"] == "confirmation_needed"
+        assert result["preview"]["mission"] == "test"
+        assert result["preview"]["mission_chars"] == 4
+
+    def test_spawn_with_confirm_bypasses_gate(self, tmp_path):
+        parent = self._parent(tmp_path)
+        mgr = parent.get_capability("avatar")
+        # No mission, but confirm=True acknowledges the risk.
+        result = mgr.handle({"name": "helper", "confirm": True})
+        assert result["status"] == "ok"
+        assert (parent._working_dir.parent / "helper").is_dir()
+
+    def test_spawn_with_real_mission_proceeds(self, tmp_path):
+        parent = self._parent(tmp_path)
+        mgr = parent.get_capability("avatar")
+        result = mgr.handle({
+            "name": "helper",
+            "_reasoning": "Investigate the heartbeat regression and report back via mail",
+        })
+        assert result["status"] == "ok"
+
+    def test_dry_run_returns_preview_without_spawning(self, tmp_path):
+        parent = self._parent(tmp_path)
+        mgr = parent.get_capability("avatar")
+        result = mgr.handle({"name": "helper", "dry_run": True})
+        assert result["status"] == "dry_run"
+        assert result["preview"]["name"] == "helper"
+        assert result["preview"]["type"] == "shallow"
+        assert result["preview"]["address"] == "helper"
+        # The preview reports that an empty mission would have tripped the gate.
+        assert result["preview"]["mission_unsafe"] is True
+        # No working dir, no ledger.
+        assert not (parent._working_dir.parent / "helper").exists()
+        assert not (parent._working_dir / "delegates" / "ledger.jsonl").exists()
+
+    def test_dry_run_does_not_require_confirm(self, tmp_path):
+        """Dry-run is preview-only; mission gate must not block it."""
+        parent = self._parent(tmp_path)
+        mgr = parent.get_capability("avatar")
+        # Empty mission + no confirm + dry_run=True → returns dry_run, not confirmation_needed.
+        result = mgr.handle({"name": "helper", "dry_run": True})
+        assert result["status"] == "dry_run"
+
+    def test_dry_run_preview_reports_real_mission_safe(self, tmp_path):
+        parent = self._parent(tmp_path)
+        mgr = parent.get_capability("avatar")
+        result = mgr.handle({
+            "name": "helper",
+            "dry_run": True,
+            "_reasoning": "Investigate the heartbeat regression and report back via mail",
+        })
+        assert result["status"] == "dry_run"
+        assert result["preview"]["mission_unsafe"] is False
+        assert result["preview"]["mission_reason"] == ""
+
+    def test_schema_exposes_dry_run_and_confirm(self):
+        from lingtai.core.avatar import get_schema
+        sch = get_schema("en")
+        assert "dry_run" in sch["properties"]
+        assert sch["properties"]["dry_run"]["type"] == "boolean"
+        assert "confirm" in sch["properties"]
+        assert sch["properties"]["confirm"]["type"] == "boolean"
+
+    def test_description_warns_against_accidental_spawn(self):
+        from lingtai.core.avatar import get_description
+        desc = get_description("en")
+        assert "WARNING" in desc
+        assert "independent process" in desc.lower()
 
 
 class TestSetupAvatar:
