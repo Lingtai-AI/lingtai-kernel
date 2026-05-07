@@ -142,7 +142,7 @@ Beyond kernel-driven sync, agents can call `system(action="notification")` thems
 
 ### Migration window — `tc_inbox` is dormant, not deleted
 
-Phase 2 (`d2da97e`) migrated all in-tree producers (mail, system events, soul flow) to `publish_notification`. The `tc_inbox.py` module survives Phase 2 as dead code — no producer enqueues, the drain hook is still installed but always finds the queue empty. Phase 3 (deferred to a separate point release after soak) will:
+Phase 2 (`d2da97e`) migrated all in-tree producers (mail, system events, soul flow) to `publish_notification`. Phase 2.5 migrated the LICC MCP inbox (`core/mcp/inbox.py`) to publish via `notifications.submit` to `.notification/mcp.<server>.json` instead of posting to the legacy inbox queue. The `tc_inbox.py` module survives as dead code — no producer enqueues, the drain hook is still installed but always finds the queue empty. Phase 3 (deferred to a separate point release after soak) will:
 - Delete `tc_inbox.py`.
 - Remove the pre-request drain hook from `BaseAgent._install_drain_hook` and the three drain call sites.
 - Remove the `_dismiss` deprecation no-op (currently still answers `system(action="dismiss")` with `{"status":"ok","note":"...deprecated..."}` for in-flight chat histories).

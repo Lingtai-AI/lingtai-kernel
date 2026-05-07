@@ -12,7 +12,7 @@ the agent's inbox.
 ## Components
 
 - `mcp/__init__.py` — MCP registry management and tool surface. `get_description` (`mcp/__init__.py:374-375`), `get_schema` (`mcp/__init__.py:378-379`), `setup` (`mcp/__init__.py:382-406`). Key functions: `validate_record` (`mcp/__init__.py:82-125`), `validate_registry_line` (`mcp/__init__.py:128-138`), `read_registry` (`mcp/__init__.py:149-186`), `decompress_addons` (`mcp/__init__.py:201-257`), `_build_registry_xml` (`mcp/__init__.py:274-299`), `_reconcile` (`mcp/__init__.py:306-342`).
-- `mcp/inbox.py` — LICC v1 filesystem inbox poller. `validate_event` (`mcp/inbox.py:65-96`); `_format_notification_summary` (`mcp/inbox.py:103-123`) — **signal-only** notification body, no sender/subject/body inlined (issue #37 — content arrives via the explicit `<mcp>(action="read")` tool call, never twice); `_consume_event` (`mcp/inbox.py:126-142`) — per-event log + wake intent; `_dispatch_summary` (`mcp/inbox.py:145-154`) — one coalesced [system] notification per MCP per sweep; `_scan_once` (`mcp/inbox.py:188-269`) coalesces per MCP; `MCPInboxPoller` class (`mcp/inbox.py:278-321`).
+- `mcp/inbox.py` — LICC v1 filesystem inbox poller. `validate_event` (`mcp/inbox.py:65-96`); `_format_notification_summary` (`mcp/inbox.py:103-123`) — **deprecated** legacy helper (retained for backward compat); `_consume_event` (`mcp/inbox.py:126-142`) — per-event log + wake intent; `_dispatch_summary` (`mcp/inbox.py:145-175`) — publishes to `.notification/mcp.<mcp_name>.json` via `notifications.submit`, one coalesced notification per MCP per sweep; `_scan_once` (`mcp/inbox.py:198-271`) coalesces per MCP; `MCPInboxPoller` class (`mcp/inbox.py:278-321`).
 - `mcp/manual/` — skill documentation (`SKILL.md`) plus reference docs (`curated-addons.md`, `third-party-and-legacy.md`, `troubleshooting.md`) and scripts (`find_readme.py`).
 
 ## Public API
@@ -76,10 +76,10 @@ mcp/inbox.py
   ├── Validation
   │   └── validate_event()              — validates a parsed LICC event
   │
-  ├── Dispatch (signal-only since issue #37)
-  │   ├── _format_notification_summary()— count-only [system] body; no sender/subject/body
+  ├── Dispatch (signal-only since issue #37, .notification/ since this fix)
+  │   ├── _format_notification_summary()— DEPRECATED; retained for backward compat
   │   ├── _consume_event()              — per-event log + wake intent collector
-  │   └── _dispatch_summary()           — one coalesced inbox post per MCP per sweep
+  │   └── _dispatch_summary()           — publishes to .notification/mcp.<name>.json
   │
   ├── Dead-letter
   │   └── _dead_letter()                — moves invalid file to .dead/ with .error.json sidecar
@@ -104,14 +104,15 @@ mcp/inbox.py
 - **LICC atomicity:** MCP servers must write `.json.tmp` then rename to `.json`. Half-written `.tmp` files are ignored by the scanner.
 - **LICC dead-letter:** Invalid events (parse errors, missing fields, unknown version, dispatch failures) are moved to `.dead/` with a `.error.json` sidecar. Dead-letters are never auto-deleted.
 - **LICC bounded work:** `MAX_EVENTS_PER_CYCLE = 100` per MCP per sweep prevents pathological backlog from blocking the poller.
-- **LICC signal-only notification (issue #37):** The kernel-synthesized `[system]` notification carries only the MCP name and event count — never the event's `from`, `subject`, or `body`. Messaging MCPs (telegram, feishu, wechat, imap, …) already deliver payload via the explicit `<mcp>(action="check"/"read")` tool result; inlining the body here caused the agent to process every message twice. The notification is a wake-up signal that says "N new events from MCP X — call its read action to fetch." Multiple events from the same MCP in one sweep are coalesced into a single summary; `wake` is the OR of all per-event `wake` flags.
+- **LICC signal-only notification (issue #37):** The notification carries only the MCP name and event count — never the event's `from`, `subject`, or `body`. Messaging MCPs (telegram, feishu, wechat, imap, …) already deliver payload via the explicit `<mcp>(action="check"/"read")` tool result; inlining the body here caused the agent to process every message twice. The notification is a wake-up signal that says "N new events from MCP X — call its read action to fetch." Multiple events from the same MCP in one sweep are coalesced into a single summary; `wake` is the OR of all per-event `wake` flags.
+- **LICC uses `.notification/` filesystem-as-protocol:** `_dispatch_summary` publishes via `notifications.submit` to `.notification/mcp.<mcp_name>.json` instead of posting to the legacy inbox queue. This unifies MCP events with all other notification producers (email, soul, system events) in the kernel's `_sync_notifications` wire injection path.
 - **Pure presentation:** The capability never writes to the registry file. It only reads and renders.
 
 ## Dependencies
 
 - `yaml` (PyYAML) — used by the library capability's frontmatter parser (imported transitively; not directly used here)
 - `lingtai.i18n` — `t()` for localized strings (imported but the description is hardcoded English)
-- `lingtai_kernel.message` — `_make_message`, `MSG_REQUEST` for inbox dispatch (in `inbox.py`)
+- `lingtai_kernel.notifications` — `submit` (as `publish_notification`) for `.notification/` dispatch (in `inbox.py`)
 - `lingtai_kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
 - `lingtai.mcp_catalog.json` — kernel-shipped MCP catalog file (read at runtime)
 

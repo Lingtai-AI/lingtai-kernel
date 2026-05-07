@@ -101,19 +101,13 @@ def validate_event(event: dict) -> tuple[bool, str | None]:
 # ---------------------------------------------------------------------------
 
 def _format_notification_summary(mcp_name: str, count: int) -> str:
-    """Render a count-only [system] notification body for the agent's inbox.
+    """Render a count-only signal notification body for MCP events.
 
-    Body content is intentionally stripped: messaging MCPs (telegram,
-    feishu, wechat, imap, ...) deliver the event payload twice — once as
-    the tool result of an explicit ``<mcp>(action="check"/"read")`` call
-    and once via this kernel-synthesized notification. Inlining the body
-    here caused the agent to process the same message twice (issue #37).
-
-    The notification is now signal-only: it tells the agent how many new
-    events arrived from which MCP. The agent calls the MCP's read/check
-    action to fetch the actual payloads. Sender / subject / body never
-    appear in this string — they only reach the agent via the explicit
-    tool call.
+    .. deprecated::
+        This function is retained for backward compatibility but is no
+        longer called by ``_dispatch_summary``.  The notification is now
+        published via the kernel's ``.notification/`` filesystem-as-protocol
+        (see ``_dispatch_summary``).
     """
     plural = "" if count == 1 else "s"
     return (
@@ -143,15 +137,42 @@ def _consume_event(agent: "BaseAgent", mcp_name: str, event: dict) -> bool:
 
 
 def _dispatch_summary(agent: "BaseAgent", mcp_name: str, count: int, wake: bool) -> None:
-    """Post one signal-only notification covering ``count`` events from ``mcp_name``."""
-    from lingtai_kernel.message import _make_message, MSG_REQUEST
+    """Publish one signal-only notification covering ``count`` events from ``mcp_name``.
 
-    notification = _format_notification_summary(mcp_name, count)
-    msg = _make_message(MSG_REQUEST, "system", notification)
-    agent.inbox.put(msg)
+    Uses the kernel's canonical ``.notification/`` filesystem-as-protocol
+    instead of the legacy inbox queue.  The notification file is written as
+    ``.notification/mcp.<mcp_name>.json`` and surfaces in the agent's
+    ``system(action="notification")`` wire block alongside email, soul,
+    and system events.
 
-    if wake:
-        agent._wake_nap("mcp_event")
+    No explicit wake is needed — ``_sync_notifications`` detects the
+    fingerprint change on the next heartbeat tick and handles the
+    IDLE→MSG_TC_WAKE transition.
+    """
+    from lingtai_kernel.notifications import submit as publish_notification
+
+    plural = "" if count == 1 else "s"
+    header = (
+        f"{count} new event{plural} from MCP '{mcp_name}'"
+    )
+    notification_text = _format_notification_summary(mcp_name, count)
+    publish_notification(
+        agent._working_dir,
+        f"mcp.{mcp_name}",
+        header=header,
+        icon="💬",
+        priority="normal",
+        instructions=(
+            f"Call the MCP '{mcp_name}' read/check action to fetch "
+            f"the {count} new event{plural}. "
+            f"The event details are NOT inlined here — use the MCP tool."
+        ),
+        data={
+            "count": count,
+            "source": mcp_name,
+            "body": notification_text,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
