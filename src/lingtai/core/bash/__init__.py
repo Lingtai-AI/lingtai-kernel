@@ -11,8 +11,11 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import re
+import signal
 import subprocess
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -33,6 +36,12 @@ def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
         "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["run", "poll", "cancel"],
+                "description": t(lang, "bash.action"),
+                "default": "run",
+            },
             "command": {
                 "type": "string",
                 "description": t(lang, "bash.command"),
@@ -46,8 +55,17 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "string",
                 "description": t(lang, "bash.working_dir"),
             },
+            "async": {
+                "type": "boolean",
+                "description": t(lang, "bash.async"),
+                "default": False,
+            },
+            "job_id": {
+                "type": "string",
+                "description": t(lang, "bash.job_id"),
+            },
         },
-        "required": ["command"],
+        "required": [],  # command required only for action=run; job_id for poll/cancel
     }
 
 
@@ -155,25 +173,17 @@ class BashManager:
         self._policy = policy
         self._working_dir = working_dir
         self._max_output = max_output
+        self._jobs_dir: Path | None = None
 
-    def handle(self, args: dict) -> dict:
-        command = args.get("command", "")
-        if not command.strip():
-            return {"status": "error", "message": "command is required"}
+    def _ensure_jobs_dir(self) -> Path:
+        """Create and return the jobs directory (lazy init)."""
+        if self._jobs_dir is None:
+            self._jobs_dir = Path(self._working_dir) / "system" / "jobs"
+        self._jobs_dir.mkdir(parents=True, exist_ok=True)
+        return self._jobs_dir
 
-        # Check policy
-        if not self._policy.is_allowed(command):
-            denied = BashPolicy._extract_commands(command)
-            return {
-                "status": "error",
-                "message": f"Command not allowed by policy. "
-                f"Denied command(s): {', '.join(denied)}",
-            }
-
-        timeout = args.get("timeout", 30)
-        cwd = args.get("working_dir", self._working_dir)
-
-        # Validate working_dir is under the agent's working directory
+    def _validate_working_dir(self, cwd: str) -> dict | None:
+        """Validate cwd is under the agent sandbox. Returns error dict or None."""
         try:
             resolved = str(Path(cwd).resolve())
             sandbox = str(Path(self._working_dir).resolve())
@@ -185,7 +195,59 @@ class BashManager:
                 }
         except (ValueError, OSError):
             return {"status": "error", "message": "Invalid working_dir path"}
+        return None
 
+    def _validate_command(self, command: str) -> dict | None:
+        """Validate command is non-empty and allowed by policy. Returns error dict or None."""
+        if not command.strip():
+            return {"status": "error", "message": "command is required"}
+        if not self._policy.is_allowed(command):
+            denied = BashPolicy._extract_commands(command)
+            return {
+                "status": "error",
+                "message": f"Command not allowed by policy. "
+                f"Denied command(s): {', '.join(denied)}",
+            }
+        return None
+
+    @staticmethod
+    def _validate_job_id(job_id: str) -> dict | None:
+        """Validate job_id is safe (no path traversal). Returns error dict or None."""
+        if not job_id:
+            return {"status": "error", "message": "job_id is required"}
+        # Reject path traversal attempts
+        if "/" in job_id or "\\" in job_id or ".." in job_id:
+            return {"status": "error", "message": f"Invalid job_id: {job_id}"}
+        return None
+
+    def handle(self, args: dict) -> dict:
+        action = args.get("action", "run")
+
+        if action == "poll":
+            return self._handle_poll(args)
+        if action == "cancel":
+            return self._handle_cancel(args)
+        # action == "run"
+        return self._handle_run(args)
+
+    def _handle_run(self, args: dict) -> dict:
+        command = args.get("command", "")
+        err = self._validate_command(command)
+        if err:
+            return err
+
+        cwd = args.get("working_dir", self._working_dir)
+        err = self._validate_working_dir(cwd)
+        if err:
+            return err
+
+        is_async = args.get("async", False)
+        if is_async:
+            return self._run_async(command, cwd)
+        return self._run_sync(command, cwd, args.get("timeout", 30))
+
+    def _run_sync(self, command: str, cwd: str, timeout: float) -> dict:
+        """Synchronous execution — original behavior, unchanged."""
         try:
             result = subprocess.run(
                 command,
@@ -212,6 +274,166 @@ class BashManager:
             return {"status": "error", "message": f"Command timed out after {timeout}s"}
         except Exception as e:
             return {"status": "error", "message": f"Command failed: {e}"}
+
+    def _run_async(self, command: str, cwd: str) -> dict:
+        """Start command in background, return job_id immediately."""
+        jobs_dir = self._ensure_jobs_dir()
+        job_id = f"job-{uuid.uuid4().hex[:8]}"
+        job_dir = jobs_dir / job_id
+        job_dir.mkdir()
+
+        (job_dir / "command").write_text(command)
+        (job_dir / "status").write_text("running")
+
+        stdout_f = open(job_dir / "stdout.log", "w")
+        stderr_f = open(job_dir / "stderr.log", "w")
+
+        try:
+            proc = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=stdout_f,
+                stderr=stderr_f,
+                cwd=cwd,
+                start_new_session=True,
+            )
+        except Exception as e:
+            stdout_f.close()
+            stderr_f.close()
+            # Clean up on launch failure
+            import shutil
+            shutil.rmtree(job_dir, ignore_errors=True)
+            return {"status": "error", "message": f"Failed to start async job: {e}"}
+
+        (job_dir / "pid").write_text(str(proc.pid))
+        # Store Popen + file handles in-process so we can reap and close them.
+        if not hasattr(self, "_open_handles"):
+            self._open_handles: dict[str, tuple] = {}
+        self._open_handles[job_id] = (proc, stdout_f, stderr_f)
+
+        return {
+            "status": "ok",
+            "job_id": job_id,
+            "pid": proc.pid,
+            "message": f'Job started. Use bash(action="poll", job_id="{job_id}") to check.',
+        }
+
+    def _handle_poll(self, args: dict) -> dict:
+        """Check status of an async job."""
+        job_id = args.get("job_id", "")
+        err = self._validate_job_id(job_id)
+        if err:
+            return err
+
+        jobs_dir = self._ensure_jobs_dir()
+        job_dir = jobs_dir / job_id
+        if not job_dir.is_dir():
+            return {"status": "error", "message": f"Job not found: {job_id}"}
+
+        status = (job_dir / "status").read_text().strip()
+        if status != "running":
+            return {"status": "error", "message": f"Job already finished ({status})"}
+
+        pid = int((job_dir / "pid").read_text().strip())
+
+        # Use Popen.poll() if we have the handle (same process), else os.waitpid
+        handles = getattr(self, "_open_handles", {})
+        entry = handles.get(job_id)
+        if entry:
+            proc = entry[0]
+            returncode = proc.poll()
+        else:
+            # Fallback: try waitpid (different manager instance, same PID file)
+            try:
+                wpid, wait_status = os.waitpid(pid, os.WNOHANG)
+                returncode = os.waitstatus_to_exitcode(wait_status) if wpid != 0 else None
+            except ChildProcessError:
+                # Not our child — check if alive via signal 0
+                try:
+                    os.kill(pid, 0)
+                    returncode = None  # still alive
+                except OSError:
+                    returncode = -1  # dead but we can't get the code
+
+        if returncode is None:
+            return {"status": "running", "job_id": job_id, "pid": pid}
+
+        # Process finished — close file handles, read output
+        self._close_handles(job_id)
+
+        stdout = (job_dir / "stdout.log").read_text()
+        stderr = (job_dir / "stderr.log").read_text()
+
+        if len(stdout) > self._max_output:
+            stdout = stdout[: self._max_output] + f"\n... (truncated, {len(stdout)} chars total)"
+        if len(stderr) > self._max_output:
+            stderr = stderr[: self._max_output] + f"\n... (truncated, {len(stderr)} chars total)"
+
+        # Clean up
+        import shutil
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+        return {
+            "status": "done",
+            "exit_code": returncode,
+            "stdout": stdout,
+            "stderr": stderr,
+        }
+
+    def _handle_cancel(self, args: dict) -> dict:
+        """Kill an async job."""
+        job_id = args.get("job_id", "")
+        err = self._validate_job_id(job_id)
+        if err:
+            return err
+
+        jobs_dir = self._ensure_jobs_dir()
+        job_dir = jobs_dir / job_id
+        if not job_dir.is_dir():
+            return {"status": "error", "message": f"Job not found: {job_id}"}
+
+        status = (job_dir / "status").read_text().strip()
+        if status != "running":
+            return {"status": "error", "message": f"Job already finished ({status})"}
+
+        pid = int((job_dir / "pid").read_text().strip())
+
+        # Kill the entire process group (start_new_session=True makes pid the pgid)
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass  # Already dead
+
+        # Reap via Popen if we have the handle, to avoid zombies
+        handles = getattr(self, "_open_handles", {})
+        entry = handles.get(job_id)
+        if entry:
+            proc = entry[0]
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+
+        self._close_handles(job_id)
+
+        # Clean up
+        import shutil
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+        return {"status": "cancelled", "job_id": job_id}
+
+    def _close_handles(self, job_id: str) -> None:
+        """Close open file handles for a job if we hold them."""
+        handles = getattr(self, "_open_handles", {})
+        entry = handles.pop(job_id, None)
+        if entry:
+            # entry is (Popen, stdout_file, stderr_file)
+            for fh in entry[1:]:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
 
 
 def setup(

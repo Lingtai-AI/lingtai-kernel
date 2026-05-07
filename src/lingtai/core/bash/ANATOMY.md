@@ -12,15 +12,22 @@ be explicitly opted into.
 
 ## Public API
 
-The `bash` tool exposes a single action:
+The `bash` tool supports synchronous and asynchronous execution:
 
 | Parameter      | Type     | Description |
 |----------------|----------|-------------|
-| `command`      | string   | Shell command to execute (required) |
-| `timeout`      | number   | Timeout in seconds (default: 30) |
+| `command`      | string   | Shell command to execute (required for `run`) |
+| `timeout`      | number   | Timeout in seconds (default: 30, sync only) |
 | `working_dir`  | string   | Working directory for execution (default: agent's working dir) |
+| `action`       | string   | `run` (default), `poll`, or `cancel` |
+| `async`        | boolean  | If true, run in background and return job_id immediately (default: false) |
+| `job_id`       | string   | Job ID for `poll` and `cancel` actions |
 
-Returns `{status, exit_code, stdout, stderr}` on success, or `{status: "error", message}` on failure.
+**Sync mode** (`async=false`, default): Returns `{status, exit_code, stdout, stderr}` on success, or `{status: "error", message}` on failure. Identical to pre-async behavior.
+
+**Async mode** (`async=true`): Returns `{status: "ok", job_id, pid, message}` immediately. Use `action="poll"` with the job_id to check status: returns `{status: "running", job_id, pid}` or `{status: "done", exit_code, stdout, stderr}`. Use `action="cancel"` to kill the process group.
+
+Job files are stored under `system/jobs/{job_id}/` (stdout.log, stderr.log, pid, status). Cleaned up automatically on poll-completion or cancel.
 
 ## Internal Module Layout
 
@@ -37,7 +44,13 @@ bash/__init__.py
   │
   ├── BashManager                    — execution manager
   │   ├── __init__(policy, working_dir, max_output) — stores policy + config
-  │   └── handle(args)               — validates policy, runs subprocess, truncates output
+  │   ├── handle(args)               — dispatches to _handle_run / _handle_poll / _handle_cancel
+  │   ├── _handle_run(args)          — validates + runs sync or async
+  │   ├── _run_sync(command, cwd, timeout) — original subprocess.run path
+  │   ├── _run_async(command, cwd)   — subprocess.Popen with start_new_session, returns job_id
+  │   ├── _handle_poll(args)         — checks job status via Popen.poll() or os.waitpid
+  │   ├── _handle_cancel(args)       — SIGTERM to process group, cleanup
+  │   └── _close_handles(job_id)     — closes open file handles for a job
   │
   └── setup(agent, policy_file, yolo) — resolves policy, registers bash tool
 ```
@@ -49,6 +62,8 @@ bash/__init__.py
 - **Working directory sandbox:** `working_dir` is validated to be under the agent's working directory. Paths are resolved and checked with `startswith(sandbox + "/")`.
 - **Output truncation:** `max_output = 50_000` chars. Both stdout and stderr are truncated with a note showing total length.
 - **Subprocess isolation:** Commands run via `subprocess.run(shell=True, capture_output=True, text=True, timeout=...)` in the agent's working directory by default.
+- **Async subprocess:** Async commands use `subprocess.Popen(shell=True, start_new_session=True)` with stdout/stderr redirected to files under `system/jobs/{job_id}/`. `start_new_session=True` ensures the process gets its own session, enabling `os.killpg()` for clean cancellation.
+- **Job lifecycle:** Jobs are created on async run, tracked via PID files, and cleaned up (directory deleted) after poll-completion or cancel. File handles are closed via `_close_handles()` to avoid resource leaks.
 - **Policy file location:** Default policy is `bash/bash_policy.json` (shipped with the kernel). Can be overridden via `policy_file` arg or bypassed with `yolo=True`.
 
 ## Dependencies
