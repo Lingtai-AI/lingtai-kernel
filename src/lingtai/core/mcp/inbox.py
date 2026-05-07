@@ -363,6 +363,14 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
                     "mcp_inbox: failed to post summary for %s (count=%d): %s",
                     mcp_name, events_this_mcp, e,
                 )
+        else:
+            # No events for this MCP — clear any stale notification so the
+            # agent doesn't keep seeing "1 new event" after it's been handled.
+            try:
+                from lingtai_kernel.notifications import clear as clear_notification
+                clear_notification(agent._working_dir, f"mcp.{mcp_name}")
+            except Exception:
+                pass
 
     return dispatched
 
