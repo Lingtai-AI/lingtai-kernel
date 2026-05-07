@@ -1,7 +1,7 @@
-"""Tests for the subconscious engine (feat/subconscious-redesign).
+"""Tests for the subconscious engine (Architecture B: inline injection).
 
 Tests the shared engine extraction, config hard-gating, JSON parsing,
-timer lifecycle, JSONL persistence, and IDLE-gated soul flow.
+timer lifecycle, in-memory insight storage, and IDLE-gated soul flow.
 """
 from __future__ import annotations
 
@@ -199,71 +199,102 @@ class TestSubconsciousJsonParsing:
 
 
 # ---------------------------------------------------------------------------
-# JSONL persistence
+# In-memory insight storage (replaces JSONL tests)
 # ---------------------------------------------------------------------------
 
 
-class TestSubconsciousJsonl:
-    """Append, read, and clear the subconscious JSONL."""
+class TestSubconsciousInMemoryStorage:
+    """Store, read, and clear subconscious insights in-memory."""
 
-    def test_append_and_read(self, tmp_path):
+    def test_store_and_read(self, tmp_path):
         agent = _make_agent(tmp_path)
         from lingtai_kernel.intrinsics.soul.subconscious import (
-            _append_subconscious_record,
-            _read_subconscious_tail,
-            _clear_subconscious_jsonl,
+            _store_subconscious_insight,
+            _get_subconscious_insights,
+            _clear_subconscious_insights,
         )
 
-        _append_subconscious_record(agent, {
+        _store_subconscious_insight(agent, {
             "ts": time.time(),
             "fire_id": "test",
             "insight": "pattern found",
             "confidence": 0.7,
             "source_memory": "snap",
-            "source_snapshot": "snapshot:foo",
             "model_used": "cheap",
         })
 
-        tail = _read_subconscious_tail(agent, n=5)
-        assert "pattern found" in tail
-        assert "confidence=0.7" in tail
+        insights = _get_subconscious_insights(agent)
+        assert len(insights) == 1
+        assert insights[0]["insight"] == "pattern found"
+        assert insights[0]["confidence"] == 0.7
 
-        _clear_subconscious_jsonl(agent)
-        tail = _read_subconscious_tail(agent, n=5)
-        assert tail == ""
+        _clear_subconscious_insights(agent)
+        insights = _get_subconscious_insights(agent)
+        assert len(insights) == 0
 
-    def test_read_reverse_order(self, tmp_path):
-        """Newest-last ordering."""
+    def test_multiple_insights_order(self, tmp_path):
+        """Insights are stored in order."""
         agent = _make_agent(tmp_path)
         from lingtai_kernel.intrinsics.soul.subconscious import (
-            _append_subconscious_record,
-            _read_subconscious_tail,
+            _store_subconscious_insight,
+            _get_subconscious_insights,
         )
 
-        _append_subconscious_record(agent, {
+        _store_subconscious_insight(agent, {
             "ts": time.time() - 10,
             "fire_id": "f1",
             "insight": "first insight",
             "confidence": 0.5,
             "source_memory": "s1",
-            "source_snapshot": "snapshot:a",
             "model_used": "m",
         })
-        _append_subconscious_record(agent, {
+        _store_subconscious_insight(agent, {
             "ts": time.time(),
             "fire_id": "f2",
             "insight": "second insight",
             "confidence": 0.8,
             "source_memory": "s2",
-            "source_snapshot": "snapshot:b",
             "model_used": "m",
         })
 
-        tail = _read_subconscious_tail(agent, n=10)
-        # second insight should appear after first (newest-last)
-        first_pos = tail.index("first insight")
-        second_pos = tail.index("second insight")
-        assert second_pos > first_pos
+        insights = _get_subconscious_insights(agent)
+        assert len(insights) == 2
+        assert insights[0]["insight"] == "first insight"
+        assert insights[1]["insight"] == "second insight"
+
+    def test_clear_is_idempotent(self, tmp_path):
+        """Clearing empty insights is safe."""
+        agent = _make_agent(tmp_path)
+        from lingtai_kernel.intrinsics.soul.subconscious import _clear_subconscious_insights
+        _clear_subconscious_insights(agent)  # No error
+        _clear_subconscious_insights(agent)  # Still no error
+
+    def test_thread_safety(self, tmp_path):
+        """Concurrent stores are thread-safe."""
+        agent = _make_agent(tmp_path)
+        from lingtai_kernel.intrinsics.soul.subconscious import (
+            _store_subconscious_insight,
+            _get_subconscious_insights,
+        )
+
+        def store_worker(i):
+            _store_subconscious_insight(agent, {
+                "ts": time.time(),
+                "fire_id": f"f{i}",
+                "insight": f"insight {i}",
+                "confidence": 0.5,
+                "source_memory": "s",
+                "model_used": "m",
+            })
+
+        threads = [threading.Thread(target=store_worker, args=(i,)) for i in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        insights = _get_subconscious_insights(agent)
+        assert len(insights) == 10
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +322,11 @@ class TestSubconsciousTimerLifecycle:
         assert agent._subconscious_timer.is_alive()
         _cancel_subconscious_timer(agent)
         assert agent._subconscious_timer is None
+
+    def test_timer_interval_is_30s(self, tmp_path):
+        """Architecture B uses 30s interval (not 60s)."""
+        from lingtai_kernel.intrinsics.soul.subconscious import _SUBCONSCIOUS_FIRE_INTERVAL
+        assert _SUBCONSCIOUS_FIRE_INTERVAL == 30.0
 
     def test_state_transition_cancels_timer(self, tmp_path):
         agent = _make_agent(tmp_path, subconscious_enabled=True)
@@ -449,3 +485,77 @@ class TestIdleGatedSoulFlow:
         agent._state = AgentState.ASLEEP
         from lingtai_kernel.intrinsics.soul.flow import _soul_fire_allowed
         assert _soul_fire_allowed(agent) is False
+
+
+# ---------------------------------------------------------------------------
+# Current context building
+# ---------------------------------------------------------------------------
+
+
+class TestCurrentContextBuilding:
+    """_build_current_context clones the current chat interface."""
+
+    def test_no_chat_returns_none(self, tmp_path):
+        agent = _make_agent(tmp_path)
+        agent._chat = None
+        from lingtai_kernel.intrinsics.soul.subconscious import _build_current_context
+        result = _build_current_context(agent)
+        assert result is None
+
+    def test_clones_interface(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul.subconscious import _build_current_context
+        from lingtai_kernel.llm.interface import ChatInterface
+
+        agent = _make_agent(tmp_path)
+        mock_iface = ChatInterface()
+        mock_iface.add_user_message("test message")
+        agent._chat = MagicMock()
+        agent._chat.interface = mock_iface
+
+        result = _build_current_context(agent)
+        assert result is not None
+        assert len(result.entries) == 1
+        # Verify it's a clone (not the same object)
+        assert result is not mock_iface
+
+
+# ---------------------------------------------------------------------------
+# Notification injection
+# ---------------------------------------------------------------------------
+
+
+class TestNotificationInjection:
+    """_inject_subconscious_inline publishes to the notification system."""
+
+    def test_no_insights_is_noop(self, tmp_path):
+        agent = _make_agent(tmp_path)
+        from lingtai_kernel.intrinsics.soul.subconscious import _inject_subconscious_inline
+        # Should not raise
+        _inject_subconscious_inline(agent)
+
+    def test_publishes_latest_insight(self, tmp_path):
+        agent = _make_agent(tmp_path)
+        from lingtai_kernel.intrinsics.soul.subconscious import (
+            _store_subconscious_insight,
+            _inject_subconscious_inline,
+        )
+
+        _store_subconscious_insight(agent, {
+            "ts": time.time(),
+            "fire_id": "test",
+            "insight": "check your email",
+            "confidence": 0.9,
+            "source_memory": "past_snapshot",
+            "model_used": "cheap",
+        })
+
+        with patch(
+            "lingtai_kernel.intrinsics.system.publish_notification"
+        ) as mock_publish:
+            _inject_subconscious_inline(agent)
+            mock_publish.assert_called_once()
+            # Verify channel name and data
+            call_args = mock_publish.call_args
+            assert call_args[0][1] == "subconscious"
+            assert call_args.kwargs["data"]["insight"] == "check your email"
+            assert call_args.kwargs["data"]["confidence"] == 0.9

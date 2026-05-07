@@ -475,15 +475,16 @@ def _handle_request(agent, msg: Message) -> None:
     from ..intrinsics.soul.subconscious import (
         _start_subconscious_timer,
         _cancel_subconscious_timer,
-        _clear_subconscious_jsonl,
+        _clear_subconscious_insights,
+        _inject_subconscious_inline,
     )
 
     # Splice any queued involuntary tool-call pairs
     agent._drain_tc_inbox()
 
     # Subconscious lifecycle: clear stale insights, then start the
-    # 60-second fan-out timer for the duration of this turn.
-    _clear_subconscious_jsonl(agent)
+    # 30-second timer for the duration of this turn.
+    _clear_subconscious_insights(agent)
     _start_subconscious_timer(agent)
 
     try:
@@ -603,7 +604,7 @@ def _handle_request(agent, msg: Message) -> None:
     finally:
         # Always cancel the subconscious timer at turn end, even on exception.
         _cancel_subconscious_timer(agent)
-        _clear_subconscious_jsonl(agent)
+        _clear_subconscious_insights(agent)
 
 
 def _handle_tc_wake(agent, msg: Message) -> None:

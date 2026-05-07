@@ -1,17 +1,18 @@
-"""Subconscious engine — intra-turn fan-out across past snapshots.
+"""Subconscious engine (Architecture B) — 30s timer with inline conversation injection.
 
 The subconscious fires ONLY while the agent is in a tool-call loop
-(ACTIVE mid-turn). It runs a cheap model against ALL available snapshots
-in parallel, looking for pattern matches. Insights are appended to an
-append-only JSONL file that the agent sees via the notification system.
+(ACTIVE mid-turn). It runs a cheap model against the current context
+plus the last 3 tool call results, producing a single insight per fire.
+Insights are stored in-memory and injected as system messages into the
+conversation between tool calls.
 
 Lifecycle:
   _start_subconscious_timer  — called from turn._handle_request (turn start)
   _cancel_subconscious_timer — called from turn._handle_request (turn end)
-  _clear_subconscious_jsonl  — called from turn._handle_request (turn start)
+  _clear_subconscious_insights — called from turn._handle_request (turn start)
 
-The timer is a 60-second wall-clock daemon; it fires _subconscious_tick
-which fans out across ALL snapshots in parallel daemon threads.
+The timer is a 30-second wall-clock daemon; it fires _subconscious_tick
+which runs one LLM call against the current context.
 """
 from __future__ import annotations
 
@@ -20,15 +21,14 @@ import re
 import threading
 import time
 
-_SUBCONSCIOUS_FIRE_INTERVAL = 60.0
-_SUBCONSCIOUS_DISPLAY_N = 10
-_SUBCONSCIOUS_JSONL = "subconscious.jsonl"
+_SUBCONSCIOUS_FIRE_INTERVAL = 30.0
+_SUBCONSCIOUS_MAX_TOOL_RESULTS = 3
 
 
-# ── Timer management ────────────────────────────────────────────────────
+# ── Timer management ──────────────────────────────────────────────────────
 
 def _start_subconscious_timer(agent) -> None:
-    """Start the subconscious cadence timer (60s wall-clock).
+    """Start the subconscious cadence timer (30s wall-clock).
 
     Runs only while the agent is in an active tool-call loop (ACTIVE state
     mid-turn). Cancelled by _cancel_subconscious_timer at turn end.
@@ -58,7 +58,7 @@ def _cancel_subconscious_timer(agent) -> None:
         agent._subconscious_timer = None
 
 
-# ── Fire orchestration ──────────────────────────────────────────────────
+# ── Fire orchestration ────────────────────────────────────────────────────
 
 def _subconscious_tick(agent) -> None:
     """Timer callback — fire the subconscious if still mid-turn.
@@ -82,18 +82,17 @@ def _subconscious_tick(agent) -> None:
 
 
 def _run_subconscious_fire(agent) -> None:
-    """Fire one subconscious batch — fan out across ALL snapshots.
+    """Fire one subconscious — single model call with current context.
 
     Uses _subconscious_fire_lock (try-acquire non-blocking) to prevent
-    overlapping fires. Each snapshot gets its own daemon thread running
-    _run_subconscious_snapshot. Non-null insights are appended directly
-    to the JSONL by the per-snapshot thread.
+    overlapping fires. Reads the current chat context plus the last 3
+    tool call results. Stores the insight in-memory on the agent.
     """
     from ...state import AgentState
     from .consultation import (
-        _render_current_diary,
-        _list_snapshot_paths,
         _SUBCONSCIOUS_SYSTEM_PROMPT,
+        _run_consultation_voice,
+        _render_current_diary,
     )
 
     # Fire lock — skip if a previous fire is still running.
@@ -111,62 +110,62 @@ def _run_subconscious_fire(agent) -> None:
                        fire_id=fire_id, state=agent._state.value)
             return
 
-        # Diary gate — no spark = no fire.
-        diary = _render_current_diary(agent)
-        if not diary:
+        # Build spark from current diary.
+        spark = _render_current_diary(agent)
+        if not spark:
             agent._log("subconscious_fire_empty", fire_id=fire_id)
             return
 
-        # Fan out across ALL snapshots.
-        paths = _list_snapshot_paths(agent)
-        if not paths:
-            agent._log("subconscious_fire_no_snapshots", fire_id=fire_id)
+        # Build context from current chat + last N tool call results.
+        iface = _build_current_context(agent)
+        if iface is None or not iface.entries:
+            agent._log("subconscious_fire_no_context", fire_id=fire_id)
             return
 
-        agent._log("subconscious_fire_start",
-                   fire_id=fire_id, snapshot_count=len(paths))
+        agent._log("subconscious_fire_start", fire_id=fire_id)
 
         # Session overrides from subconscious config.
         session_overrides = _build_session_overrides(agent)
 
-        # Fire all snapshots in parallel.
-        results: list[dict | None] = [None] * len(paths)
+        # Single model call.
+        result = _run_consultation_voice(
+            agent, iface, "subconscious",
+            system_prompt=_SUBCONSCIOUS_SYSTEM_PROMPT,
+            spark=spark,
+            session_overrides=session_overrides,
+            allow_tool_recommendations=False,
+            max_rounds=1,
+        )
 
-        def snapshot_worker(idx: int, path) -> None:
-            try:
-                results[idx] = _run_subconscious_snapshot(
-                    agent, path, diary, fire_id, session_overrides,
-                )
-            except Exception as e:
-                try:
-                    agent._log("subconscious_snapshot_error",
-                               fire_id=fire_id, path=str(path),
-                               error=str(e)[:200])
-                except Exception:
-                    pass
+        if result is None:
+            agent._log("subconscious_fire_no_result", fire_id=fire_id)
+            return
 
-        threads: list[threading.Thread] = []
-        for idx, path in enumerate(paths):
-            t = threading.Thread(
-                target=snapshot_worker,
-                args=(idx, path),
-                daemon=True,
-                name=f"sub-{idx}-{path.stem[:20]}",
-            )
-            threads.append(t)
-            t.start()
+        # Extract text from blocks.
+        text = _extract_text_from_blocks(result.get("blocks", []))
+        if not text:
+            agent._log("subconscious_fire_no_text", fire_id=fire_id)
+            return
 
-        # Wait for all to complete.
-        timeout = float(getattr(agent._config, "retry_timeout", 300.0))
-        for t in threads:
-            t.join(timeout=timeout)
+        # Parse structured JSON response.
+        insight_data = _parse_subconscious_response(text)
+        if insight_data is None:
+            agent._log("subconscious_fire_null_insight", fire_id=fire_id)
+            return  # Model said nothing relevant.
 
-        # Count results.
-        insight_count = sum(1 for r in results if r is not None)
+        # Store insight in-memory.
+        record = {
+            "ts": time.time(),
+            "fire_id": fire_id,
+            "insight": insight_data["insight"],
+            "confidence": insight_data.get("confidence", 0.5),
+            "source_memory": insight_data.get("source_memory", "unstructured"),
+            "model_used": session_overrides.get("model", "unknown"),
+        }
+        _store_subconscious_insight(agent, record)
+
         agent._log("subconscious_fire_done",
-                   fire_id=fire_id,
-                   insight_count=insight_count,
-                   total_snapshots=len(paths))
+                   fire_id=fire_id, insight=insight_data["insight"][:100])
 
     except Exception as e:
         agent._log("subconscious_fire_error",
@@ -179,152 +178,134 @@ def _run_subconscious_fire(agent) -> None:
                 pass
 
 
-def _run_subconscious_snapshot(
-    agent,
-    path,
-    diary: str,
-    fire_id: str,
-    session_overrides: dict,
-) -> dict | None:
-    """Run one subconscious snapshot. Returns insight dict if non-null, else None.
+def _build_current_context(agent):
+    """Build a ChatInterface from the current context plus last N tool results.
 
-    Uses the shared consultation engine with allow_tool_recommendations=False.
-    On non-null insight, appends directly to the JSONL (file-append is
-    thread-safe on macOS/Linux for small records).
+    Clones the current chat interface (if available) and returns it for
+    use as the subconscious consultation substrate. The last 3 tool call
+    results are naturally included in the cloned interface since they are
+    part of the current conversation.
     """
-    from .consultation import (
-        _load_snapshot_interface,
-        _run_consultation_voice,
-        _SUBCONSCIOUS_SYSTEM_PROMPT,
-    )
+    from ...llm.interface import ChatInterface
 
-    iface = _load_snapshot_interface(path)
-    if iface is None or not iface.entries:
-        agent._log("subconscious_snapshot_load_failed",
-                   fire_id=fire_id, path=str(path))
+    if getattr(agent, "_chat", None) is None:
         return None
 
-    source = f"snapshot:{path.stem}"
-    result = _run_consultation_voice(
-        agent, iface, source,
-        system_prompt=_SUBCONSCIOUS_SYSTEM_PROMPT,
-        spark=diary,
-        session_overrides=session_overrides,
-        allow_tool_recommendations=False,
-        max_rounds=1,
-    )
-
-    if result is None:
-        return None
-
-    # Extract text from blocks.
-    text = _extract_text_from_blocks(result.get("blocks", []))
-    if not text:
-        return None
-
-    # Parse structured JSON response.
-    insight_data = _parse_subconscious_response(text)
-    if insight_data is None:
-        return None  # Model said nothing relevant.
-
-    # Append to JSONL.
-    record = {
-        "ts": time.time(),
-        "fire_id": fire_id,
-        "insight": insight_data["insight"],
-        "confidence": insight_data.get("confidence", 0.5),
-        "source_memory": insight_data.get("source_memory", "unstructured"),
-        "source_snapshot": source,
-        "model_used": session_overrides.get("model", "unknown"),
-    }
-    _append_subconscious_record(agent, record)
-
-    return record
-
-
-# ── JSONL persistence ───────────────────────────────────────────────────
-
-def _subconscious_jsonl_path(agent):
-    """Path to the subconscious insights JSONL file."""
-    return agent._working_dir / "logs" / _SUBCONSCIOUS_JSONL
-
-
-def _clear_subconscious_jsonl(agent) -> None:
-    """Clear the subconscious JSONL file (called at turn start).
-
-    Subconscious insights are ephemeral — they exist only for the current
-    tool-call loop and are discarded at turn end.
-    """
-    path = _subconscious_jsonl_path(agent)
     try:
-        if path.exists():
-            path.unlink()
-    except OSError:
-        pass
-
-
-def _append_subconscious_record(agent, record: dict) -> None:
-    """Append one insight record to the subconscious JSONL.
-
-    Thread-safe: file-append is atomic on macOS/Linux for small records.
-    Called from per-snapshot daemon threads.
-    """
-    path = _subconscious_jsonl_path(agent)
-    try:
-        path.parent.mkdir(exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except OSError as e:
+        iface = agent._chat.interface
+        # Clone the interface so the consultation doesn't mutate the live chat.
+        cloned = ChatInterface.from_dict(iface.to_dict())
+        if not cloned.entries:
+            return None
+        return cloned
+    except Exception as e:
         try:
-            agent._log("subconscious_jsonl_write_error", error=str(e)[:200])
+            agent._log("subconscious_context_build_error", error=str(e)[:200])
         except Exception:
             pass
+        return None
 
 
-def _read_subconscious_tail(agent, n: int = _SUBCONSCIOUS_DISPLAY_N) -> str:
-    """Read the last N lines of the subconscious JSONL, newest-last.
+# ── In-memory insight storage ─────────────────────────────────────────────
 
-    Returns a formatted string for injection into the agent's prompt.
-    Returns empty string if file is missing or empty.
+def _store_subconscious_insight(agent, record: dict) -> None:
+    """Store a subconscious insight in-memory on the agent.
+
+    Thread-safe: appends to a list with a lock.
     """
-    from .consultation import _iter_lines_reverse
+    insights = getattr(agent, "_subconscious_insights", None)
+    if insights is None:
+        agent._subconscious_insights = []
+        insights = agent._subconscious_insights
 
-    path = _subconscious_jsonl_path(agent)
-    if not path.is_file():
-        return ""
+    lock = getattr(agent, "_subconscious_insights_lock", None)
+    if lock is None:
+        import threading
+        lock = threading.Lock()
+        agent._subconscious_insights_lock = lock
 
-    lines: list[str] = []
-    try:
-        for raw_line in _iter_lines_reverse(path):
-            if not raw_line:
-                continue
-            try:
-                rec = json.loads(raw_line)
-                insight = rec.get("insight", "")
-                confidence = rec.get("confidence", 0.5)
-                source = rec.get("source_snapshot", "unknown")
-                ts = rec.get("ts", 0)
-                from datetime import datetime
-                ts_str = datetime.fromtimestamp(float(ts)).strftime("%H:%M:%S")
-                lines.append(
-                    f"[{ts_str}] (confidence={confidence:.1f}, from {source})\n{insight}"
-                )
-            except (json.JSONDecodeError, ValueError):
-                continue
-            if len(lines) >= n:
-                break
-    except Exception:
-        return ""
-
-    if not lines:
-        return ""
-
-    # Reverse to get newest-last (chronological).
-    lines.reverse()
-    return "Subconscious insights:\n\n" + "\n---\n".join(lines)
+    with lock:
+        insights.append(record)
 
 
-# ── Helpers ─────────────────────────────────────────────────────────────
+def _get_subconscious_insights(agent) -> list[dict]:
+    """Get all stored subconscious insights (thread-safe read)."""
+    lock = getattr(agent, "_subconscious_insights_lock", None)
+    insights = getattr(agent, "_subconscious_insights", [])
+
+    if lock is not None:
+        with lock:
+            return list(insights)
+    return list(insights)
+
+
+def _clear_subconscious_insights(agent) -> None:
+    """Clear all stored subconscious insights (called at turn start and end).
+
+    Insights are ephemeral — they exist only for the current tool-call loop.
+    """
+    lock = getattr(agent, "_subconscious_insights_lock", None)
+    if lock is not None:
+        with lock:
+            agent._subconscious_insights = []
+    else:
+        agent._subconscious_insights = []
+
+
+def _inject_subconscious_inline(agent) -> None:
+    """Inject the latest subconscious insight as a system message.
+
+    Called at the start of the next tool-call iteration (before LLM send).
+    The insight appears as a system message in the conversation, visible
+    to the agent as if the system is reminding it.
+
+    Uses the notification system to inject the insight. If no insights
+    are available, this is a no-op.
+    """
+    insights = _get_subconscious_insights(agent)
+    if not insights:
+        return
+
+    # Take the most recent insight.
+    latest = insights[-1]
+    insight_text = latest.get("insight", "")
+    confidence = latest.get("confidence", 0.5)
+    source = latest.get("source_memory", "unstructured")
+
+    if not insight_text:
+        return
+
+    # Format the insight as a system reminder.
+    formatted = (
+        f"[Subconscious insight — confidence={confidence:.1f}]\n"
+        f"{insight_text}"
+    )
+    if source and source != "unstructured":
+        formatted += f"\n(Source: {source})"
+
+    # Inject as a notification so the agent sees it on the next turn.
+    from ..system import publish_notification
+    publish_notification(
+        agent._working_dir, "subconscious",
+        header="subconscious insight",
+        icon="🧠",
+        instructions=(
+            "This is a subconscious insight — a pattern or connection "
+            "your background processing noticed. Treat it as a gentle "
+            "reminder, not a command. It may point to something worth "
+            "checking, a connection you missed, or a pattern from your "
+            "past experience. Use your judgment on whether to act on it."
+        ),
+        data={
+            "fire_id": latest.get("fire_id", "unknown"),
+            "insight": insight_text,
+            "confidence": confidence,
+            "source_memory": source,
+        },
+    )
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────
 
 def _build_session_overrides(agent) -> dict:
     """Build session_overrides dict from agent config."""

@@ -408,9 +408,11 @@ class BaseAgent:
         self._soul_fire_lock: threading.Lock = threading.Lock()
         self._insight_turn_counter: int = 0
 
-        # Subconscious — intra-turn fan-out across past snapshots
+        # Subconscious — 30s timer with inline conversation injection (Architecture B)
         self._subconscious_timer: threading.Timer | None = None
         self._subconscious_fire_lock: threading.Lock = threading.Lock()
+        self._subconscious_insights: list = []
+        self._subconscious_insights_lock: threading.Lock = threading.Lock()
 
         # Heartbeat — always-on health monitor
         self._heartbeat: float = 0.0

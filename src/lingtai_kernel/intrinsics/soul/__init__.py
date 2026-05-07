@@ -73,12 +73,13 @@ from .flow import (
     _rehydrate_appendix_tracking,
 )
 
-# Re-export subconscious engine
+# Re-export subconscious engine (Architecture B: inline injection)
 from .subconscious import (
     _start_subconscious_timer,
     _cancel_subconscious_timer,
-    _clear_subconscious_jsonl,
-    _read_subconscious_tail,
+    _clear_subconscious_insights,
+    _inject_subconscious_inline,
+    _get_subconscious_insights,
     _run_subconscious_fire,
 )
 
