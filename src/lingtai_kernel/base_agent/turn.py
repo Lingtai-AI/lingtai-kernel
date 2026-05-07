@@ -472,123 +472,138 @@ def _handle_message(agent, msg: Message) -> None:
 def _handle_request(agent, msg: Message) -> None:
     """Send request to LLM, process response with tool calls."""
     from ..llm import LLMResponse
+    from ..intrinsics.soul.subconscious import (
+        _start_subconscious_timer,
+        _cancel_subconscious_timer,
+        _clear_subconscious_jsonl,
+    )
 
     # Splice any queued involuntary tool-call pairs
     agent._drain_tc_inbox()
 
-    max_calls, dup_free, dup_hard = _get_guard_limits(agent)
-    guard = LoopGuard(
-        max_total_calls=max_calls,
-        dup_free_passes=dup_free,
-        dup_hard_block=dup_hard,
-    )
-    agent._executor = ToolExecutor(
-        dispatch_fn=agent._dispatch_tool,
-        make_tool_result_fn=lambda name, result, **kw: agent.service.make_tool_result(
-            name, result, provider=agent._config.provider, **kw
-        ),
-        guard=guard,
-        known_tools=set(agent._intrinsics) | set(agent._tool_handlers),
-        parallel_safe_tools=agent._PARALLEL_SAFE_TOOLS,
-        logger_fn=agent._log,
-        meta_fn=lambda: build_meta(agent),
-    )
-    content = agent._pre_request(msg)
-    meta = build_meta(agent)
+    # Subconscious lifecycle: clear stale insights, then start the
+    # 60-second fan-out timer for the duration of this turn.
+    _clear_subconscious_jsonl(agent)
+    _start_subconscious_timer(agent)
 
-    # Molt pressure — warn agent when context is getting full.
-    #
-    # Hard ceiling and forced-wipe paths still prepend their notice to the
-    # current user message because they are kernel ACTIONS the agent must
-    # see this turn (the wipe already happened; the agent needs to know
-    # working memory just got cleared).
-    #
-    # Graduated warnings (level 1/2/3 below the hard ceiling) are routed
-    # through the .notification/molt.json channel instead of being baked
-    # into user message content. Each level fully replaces the prior file
-    # — same single-slot pattern as soul/email — so the wire only carries
-    # the freshest pressure level. When pressure drops below the warn
-    # threshold the file is cleared so the warning stops re-injecting.
-    has_molt = "psyche" in agent._intrinsics
-    pressure = agent._session.get_context_pressure()
+    try:
+        max_calls, dup_free, dup_hard = _get_guard_limits(agent)
+        guard = LoopGuard(
+            max_total_calls=max_calls,
+            dup_free_passes=dup_free,
+            dup_hard_block=dup_hard,
+        )
+        agent._executor = ToolExecutor(
+            dispatch_fn=agent._dispatch_tool,
+            make_tool_result_fn=lambda name, result, **kw: agent.service.make_tool_result(
+                name, result, provider=agent._config.provider, **kw
+            ),
+            guard=guard,
+            known_tools=set(agent._intrinsics) | set(agent._tool_handlers),
+            parallel_safe_tools=agent._PARALLEL_SAFE_TOOLS,
+            logger_fn=agent._log,
+            meta_fn=lambda: build_meta(agent),
+        )
+        content = agent._pre_request(msg)
+        meta = build_meta(agent)
 
-    if pressure >= agent._config.molt_hard_ceiling and has_molt:
-        # Hard ceiling — unconditional force-wipe (action, stays inline).
-        lang = agent._config.language
-        agent._log("auto_forget", reason="hard ceiling", pressure=pressure, ceiling=agent._config.molt_hard_ceiling)
-        from ..intrinsics import psyche as _psyche
-        from ..intrinsics.system import clear_notification
-        _psyche.context_forget(agent)
-        agent._session._compaction_warnings = 0
-        clear_notification(agent._working_dir, "molt")
-        content = f"{_t(lang, 'system.molt_wiped')}\n\n{content}"
-    elif pressure >= agent._config.molt_pressure and has_molt:
-        max_warnings = agent._config.molt_warnings
-        agent._session._compaction_warnings += 1
-        warnings = agent._session._compaction_warnings
-        remaining = max(0, max_warnings - warnings)
-        lang = agent._config.language
-        if warnings > max_warnings:
-            # Forced wipe after ignored warnings (action, stays inline).
+        # Molt pressure — warn agent when context is getting full.
+        #
+        # Hard ceiling and forced-wipe paths still prepend their notice to the
+        # current user message because they are kernel ACTIONS the agent must
+        # see this turn (the wipe already happened; the agent needs to know
+        # working memory just got cleared).
+        #
+        # Graduated warnings (level 1/2/3 below the hard ceiling) are routed
+        # through the .notification/molt.json channel instead of being baked
+        # into user message content. Each level fully replaces the prior file
+        # — same single-slot pattern as soul/email — so the wire only carries
+        # the freshest pressure level. When pressure drops below the warn
+        # threshold the file is cleared so the warning stops re-injecting.
+        has_molt = "psyche" in agent._intrinsics
+        pressure = agent._session.get_context_pressure()
+
+        if pressure >= agent._config.molt_hard_ceiling and has_molt:
+            # Hard ceiling — unconditional force-wipe (action, stays inline).
+            lang = agent._config.language
+            agent._log("auto_forget", reason="hard ceiling", pressure=pressure, ceiling=agent._config.molt_hard_ceiling)
             from ..intrinsics import psyche as _psyche
             from ..intrinsics.system import clear_notification
-            agent._log("auto_forget", reason=f"ignored {max_warnings} molt warnings", pressure=pressure)
             _psyche.context_forget(agent)
             agent._session._compaction_warnings = 0
             clear_notification(agent._working_dir, "molt")
             content = f"{_t(lang, 'system.molt_wiped')}\n\n{content}"
+        elif pressure >= agent._config.molt_pressure and has_molt:
+            max_warnings = agent._config.molt_warnings
+            agent._session._compaction_warnings += 1
+            warnings = agent._session._compaction_warnings
+            remaining = max(0, max_warnings - warnings)
+            lang = agent._config.language
+            if warnings > max_warnings:
+                # Forced wipe after ignored warnings (action, stays inline).
+                from ..intrinsics import psyche as _psyche
+                from ..intrinsics.system import clear_notification
+                agent._log("auto_forget", reason=f"ignored {max_warnings} molt warnings", pressure=pressure)
+                _psyche.context_forget(agent)
+                agent._session._compaction_warnings = 0
+                clear_notification(agent._working_dir, "molt")
+                content = f"{_t(lang, 'system.molt_wiped')}\n\n{content}"
+            else:
+                # Graduated warning — publish to .notification/molt.json.
+                # Each call fully replaces the file, so the wire carries
+                # only the current level. _sync_notifications picks up the
+                # fingerprint change on the next heartbeat tick and routes
+                # it through the synthetic-pair injection (same path as
+                # email/soul). The warning thus appears on the *next* turn,
+                # not this one — acceptable tradeoff: the agent has 3+
+                # turns of buffer before forced wipe.
+                from ..intrinsics.system import publish_notification
+                level = min(warnings, 3)
+                level_prompt = _t(
+                    lang,
+                    f"system.molt_warning_level{level}",
+                    pressure=f"{pressure:.0%}",
+                    remaining=remaining,
+                )
+                if level >= 2:
+                    level_prompt = level_prompt + "\n\n" + _t(lang, "system.molt_procedure")
+                molt_prompt = agent._config.molt_prompt or level_prompt
+                status = f"[context: {pressure:.0%} | {remaining}/{max_warnings}]"
+                publish_notification(
+                    agent._working_dir, "molt",
+                    header=f"context {pressure:.0%}, {remaining}/{max_warnings} turns left",
+                    icon=("⚠️" if level >= 2 else "🪶"),
+                    priority=("high" if level >= 2 else "normal"),
+                    data={
+                        "pressure": pressure,
+                        "level": level,
+                        "warnings": warnings,
+                        "remaining": remaining,
+                        "max_warnings": max_warnings,
+                        "warning_text": molt_prompt,
+                        "status": status,
+                    },
+                )
         else:
-            # Graduated warning — publish to .notification/molt.json.
-            # Each call fully replaces the file, so the wire carries
-            # only the current level. _sync_notifications picks up the
-            # fingerprint change on the next heartbeat tick and routes
-            # it through the synthetic-pair injection (same path as
-            # email/soul). The warning thus appears on the *next* turn,
-            # not this one — acceptable tradeoff: the agent has 3+
-            # turns of buffer before forced wipe.
-            from ..intrinsics.system import publish_notification
-            level = min(warnings, 3)
-            level_prompt = _t(
-                lang,
-                f"system.molt_warning_level{level}",
-                pressure=f"{pressure:.0%}",
-                remaining=remaining,
-            )
-            if level >= 2:
-                level_prompt = level_prompt + "\n\n" + _t(lang, "system.molt_procedure")
-            molt_prompt = agent._config.molt_prompt or level_prompt
-            status = f"[context: {pressure:.0%} | {remaining}/{max_warnings}]"
-            publish_notification(
-                agent._working_dir, "molt",
-                header=f"context {pressure:.0%}, {remaining}/{max_warnings} turns left",
-                icon=("⚠️" if level >= 2 else "🪶"),
-                priority=("high" if level >= 2 else "normal"),
-                data={
-                    "pressure": pressure,
-                    "level": level,
-                    "warnings": warnings,
-                    "remaining": remaining,
-                    "max_warnings": max_warnings,
-                    "warning_text": molt_prompt,
-                    "status": status,
-                },
-            )
-    else:
-        # Pressure dropped below threshold — clear any stale molt notice
-        # so the wire stops carrying it.
-        if has_molt:
-            from ..intrinsics.system import clear_notification
-            clear_notification(agent._working_dir, "molt")
+            # Pressure dropped below threshold — clear any stale molt notice
+            # so the wire stops carrying it.
+            if has_molt:
+                from ..intrinsics.system import clear_notification
+                clear_notification(agent._working_dir, "molt")
 
-    prefix = render_meta(agent, meta)
-    if prefix:
-        content = f"{prefix}\n\n{content}"
-    agent._log("text_input", text=content)
-    response = _send_with_watchdog(agent, content)
-    agent._last_usage = response.usage
-    agent._save_chat_history()
-    result = _process_response(agent, response)
-    agent._post_request(msg, result)
+        prefix = render_meta(agent, meta)
+        if prefix:
+            content = f"{prefix}\n\n{content}"
+        agent._log("text_input", text=content)
+        response = _send_with_watchdog(agent, content)
+        agent._last_usage = response.usage
+        agent._save_chat_history()
+        result = _process_response(agent, response)
+        agent._post_request(msg, result)
+    finally:
+        # Always cancel the subconscious timer at turn end, even on exception.
+        _cancel_subconscious_timer(agent)
+        _clear_subconscious_jsonl(agent)
 
 
 def _handle_tc_wake(agent, msg: Message) -> None:

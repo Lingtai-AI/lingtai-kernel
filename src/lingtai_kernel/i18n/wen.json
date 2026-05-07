@@ -84,5 +84,9 @@
   "email.unread_digest": "[邮] 未阅之书凡 {count} 封，新者发于 {recency}。\n\n{entries}\n{more}",
   "email.unread_digest.entry": "  {n}. 自 {name} ({address}) —— {subject}\n     编号：{id}\n     发于：{sent_at}\n     {preview}",
   "email.unread_digest.more": "（仅显前 {shown} 封，共 {total}）",
-  "email.unread_digest.no_subject": "（无题）"
+  "email.unread_digest.no_subject": "（无题）",
+  "soul.subconscious_enabled_description": "启潜意识之能 — 于行具调用之际，以廉模遍历诸旧影。须显定 subconscious_provider 与 subconscious_model。默认：否。",
+  "soul.subconscious_provider_description": "潜意识扇出之 LLM 供者。潜意识启用时必填。可与主机同。",
+  "soul.subconscious_model_description": "潜意识扇出之 LLM 模型。潜意识启用时必填。宜用廉模 — 扇出遍历诸旧影。",
+  "soul.subconscious_base_url_description": "可择潜意识 LLM 之基址（如本机模型端）。"
 }

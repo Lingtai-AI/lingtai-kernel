@@ -25,24 +25,43 @@ SOUL_VOICE_PROMPT_MAX = 4000
 
 
 def _handle_config(agent, args: dict) -> dict:
-    """Handle action='config' — adjust soul flow knobs.
+    """Handle action='config' — adjust soul flow and subconscious knobs.
 
-    Accepts any subset of: delay_seconds, consultation_past_count.
+    Accepts any subset of: delay_seconds, consultation_past_count,
+    subconscious_enabled, subconscious_provider, subconscious_model,
+    subconscious_base_url.
+
     Validates each provided field, updates live state, restarts the
     wall-clock timer if delay changed, persists to init.json. Returns
     old and new values for every field that was actually changed
     (untouched fields are absent from the response).
+
+    Subconscious hard-gating: enabling subconscious requires both
+    subconscious_provider AND subconscious_model to be explicitly set.
+    They MAY equal the primary model's values — the user just has to
+    say so. No silent fallback.
     """
+    _SUBCONSCIOUS_FIELDS = {
+        "subconscious_enabled",
+        "subconscious_provider",
+        "subconscious_model",
+        "subconscious_base_url",
+    }
     provided: dict = {}
     if "delay_seconds" in args:
         provided["delay_seconds"] = args["delay_seconds"]
     if "consultation_past_count" in args:
         provided["consultation_past_count"] = args["consultation_past_count"]
+    for f in _SUBCONSCIOUS_FIELDS:
+        if f in args:
+            provided[f] = args[f]
     if not provided:
         return {
             "error": (
                 "config requires at least one of: delay_seconds, "
-                "consultation_past_count."
+                "consultation_past_count, subconscious_enabled, "
+                "subconscious_provider, subconscious_model, "
+                "subconscious_base_url."
             ),
         }
 
@@ -87,6 +106,63 @@ def _handle_config(agent, args: dict) -> dict:
         old_values["consultation_past_count"] = int(getattr(agent._config, "consultation_past_count", 2))
         agent._config.consultation_past_count = v
         new_values["consultation_past_count"] = v
+
+    # ── Subconscious config fields ──────────────────────────────────
+
+    if "subconscious_provider" in provided:
+        raw = provided["subconscious_provider"]
+        if raw is not None and (not isinstance(raw, str) or not raw.strip()):
+            return {"error": "subconscious_provider must be a non-empty string or null."}
+        old_values["subconscious_provider"] = getattr(agent._config, "subconscious_provider", None)
+        agent._config.subconscious_provider = raw.strip() if isinstance(raw, str) and raw.strip() else None
+        new_values["subconscious_provider"] = agent._config.subconscious_provider
+
+    if "subconscious_model" in provided:
+        raw = provided["subconscious_model"]
+        if raw is not None and (not isinstance(raw, str) or not raw.strip()):
+            return {"error": "subconscious_model must be a non-empty string or null."}
+        old_values["subconscious_model"] = getattr(agent._config, "subconscious_model", None)
+        agent._config.subconscious_model = raw.strip() if isinstance(raw, str) and raw.strip() else None
+        new_values["subconscious_model"] = agent._config.subconscious_model
+
+    if "subconscious_base_url" in provided:
+        raw = provided["subconscious_base_url"]
+        if raw is not None and (not isinstance(raw, str) or not raw.strip()):
+            return {"error": "subconscious_base_url must be a non-empty string or null."}
+        old_values["subconscious_base_url"] = getattr(agent._config, "subconscious_base_url", None)
+        agent._config.subconscious_base_url = raw.strip() if isinstance(raw, str) and raw.strip() else None
+        new_values["subconscious_base_url"] = agent._config.subconscious_base_url
+
+    if "subconscious_enabled" in provided:
+        raw = provided["subconscious_enabled"]
+        if isinstance(raw, str):
+            v = raw.strip().lower() in ("true", "1", "yes")
+        elif isinstance(raw, (int, float)):
+            v = bool(raw)
+        elif isinstance(raw, bool):
+            v = raw
+        else:
+            return {"error": f"subconscious_enabled must be a boolean, got {type(raw).__name__}."}
+
+        if v:
+            # Hard-gating: both provider and model must be explicitly set.
+            provider = getattr(agent._config, "subconscious_provider", None)
+            model = getattr(agent._config, "subconscious_model", None)
+            if not provider or not model:
+                return {
+                    "error": (
+                        "subconscious_enabled=True requires both "
+                        "subconscious_provider and subconscious_model "
+                        "to be explicitly set. They MAY equal the primary "
+                        "model's values — you just have to say so. "
+                        "This prevents accidental billing surprises from "
+                        "the per-turn fan-out cost."
+                    ),
+                }
+
+        old_values["subconscious_enabled"] = getattr(agent._config, "subconscious_enabled", False)
+        agent._config.subconscious_enabled = v
+        new_values["subconscious_enabled"] = v
 
     # Restart the wall-clock timer if delay changed (or if any change
     # happened — restarting on every config call keeps the cadence in
@@ -258,6 +334,23 @@ def _persist_soul_config(agent, new_values: dict) -> str | None:
         soul_block["delay"] = new_values["delay_seconds"]
     if "consultation_past_count" in new_values:
         soul_block["consultation_past_count"] = new_values["consultation_past_count"]
+
+    # Subconscious config — persist under manifest.soul.subconscious.
+    _SUBCONSCIOUS_PERSIST_MAP = {
+        "subconscious_enabled": ("subconscious", "enabled"),
+        "subconscious_provider": ("subconscious", "provider"),
+        "subconscious_model": ("subconscious", "model"),
+        "subconscious_base_url": ("subconscious", "base_url"),
+    }
+    any_sub = any(k in new_values for k in _SUBCONSCIOUS_PERSIST_MAP)
+    if any_sub:
+        sub_block = soul_block.get("subconscious")
+        if not isinstance(sub_block, dict):
+            sub_block = {}
+            soul_block["subconscious"] = sub_block
+        for field, (section, key) in _SUBCONSCIOUS_PERSIST_MAP.items():
+            if field in new_values:
+                sub_block[key] = new_values[field]
 
     return _atomic_write_init(init_path, data)
 

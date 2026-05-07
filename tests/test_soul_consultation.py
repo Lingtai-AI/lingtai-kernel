@@ -508,19 +508,20 @@ class TestRunConsultationRedirectLoop:
 
     def test_consultation_no_diary_cue_past_bails(self, tmp_path):
         # Past branch needs the diary as the spark — empty diary means
-        # nothing to react to, so bail.
+        # nothing to react to, so bail early (no session created).
         agent = _FakeAgent(tmp_path)
         iface = ChatInterface(); iface.add_user_message("substrate")
         assert _run_consultation(agent, iface, "snapshot:foo") is None
-        assert agent.service.create_session.called
+        assert not agent.service.create_session.called
 
     def test_consultation_no_diary_cue_insights_bails(self, tmp_path):
         # After the raw-diary refactor, insights no longer bypasses the
         # diary check.  No spark = no consultation for any source.
+        # Bail early — no session created.
         agent = _FakeAgent(tmp_path)
         iface = ChatInterface(); iface.add_user_message("substrate")
         assert _run_consultation(agent, iface, "insights") is None
-        assert agent.service.create_session.called
+        assert not agent.service.create_session.called
 
     def test_consultation_spark_is_raw_diary(self, tmp_path):
         """The spark sent to session.send() is the raw diary cue, not a

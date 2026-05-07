@@ -84,5 +84,9 @@
   "email.unread_digest": "[email] {count} unread message(s) — most recent {recency}.\n\n{entries}\n{more}",
   "email.unread_digest.entry": "  {n}. From {name} ({address}) — {subject}\n     ID: {id}\n     Sent at: {sent_at}\n     {preview}",
   "email.unread_digest.more": "(showing first {shown} of {total})",
-  "email.unread_digest.no_subject": "(no subject)"
+  "email.unread_digest.no_subject": "(no subject)",
+  "soul.subconscious_enabled_description": "Enable the subconscious engine — fan-out across ALL past snapshots during tool-call loops using a cheap model. Requires explicit subconscious_provider and subconscious_model. Default: false.",
+  "soul.subconscious_provider_description": "LLM provider for subconscious fan-out calls. Required when subconscious_enabled=True. May equal the primary provider.",
+  "soul.subconscious_model_description": "LLM model for subconscious fan-out calls. Required when subconscious_enabled=True. Use a cheap model — the fan-out runs against ALL snapshots.",
+  "soul.subconscious_base_url_description": "Optional base URL override for the subconscious LLM provider (e.g. for local model endpoints)."
 }

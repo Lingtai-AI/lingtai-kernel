@@ -979,6 +979,7 @@ class Agent(BaseAgent):
         # side default change with the stale literal here. Kept as
         # explicit literals for readability rather than introspecting
         # AgentConfig fields.
+        subconscious = soul.get("subconscious", {}) or {}
         self._config = AgentConfig(
             stamina=m.get("stamina", 86400.0),
             soul_delay=soul.get("delay", 300.0),
@@ -996,6 +997,11 @@ class Agent(BaseAgent):
             aed_timeout=m.get("aed_timeout", 360.0),
             max_aed_attempts=m.get("max_aed_attempts", 3),
             max_rpm=new_max_rpm,
+            subconscious_enabled=subconscious.get("enabled", False),
+            subconscious_provider=subconscious.get("provider"),
+            subconscious_model=subconscious.get("model"),
+            subconscious_base_url=subconscious.get("base_url"),
+            subconscious_context_window=subconscious.get("context_window", 128_000),
         )
         self._soul_delay = max(1.0, self._config.soul_delay)
         self._session._config = self._config

@@ -408,6 +408,10 @@ class BaseAgent:
         self._soul_fire_lock: threading.Lock = threading.Lock()
         self._insight_turn_counter: int = 0
 
+        # Subconscious — intra-turn fan-out across past snapshots
+        self._subconscious_timer: threading.Timer | None = None
+        self._subconscious_fire_lock: threading.Lock = threading.Lock()
+
         # Heartbeat — always-on health monitor
         self._heartbeat: float = 0.0
         self._heartbeat_thread: threading.Thread | None = None
@@ -558,6 +562,7 @@ class BaseAgent:
         IDLE starts a fresh ``soul_delay``-second timer.
         """
         from ..intrinsics.soul.flow import _start_soul_timer, _cancel_soul_timer
+        from ..intrinsics.soul.subconscious import _cancel_subconscious_timer
 
         old = self._state
         if old == new_state:
@@ -568,13 +573,21 @@ class BaseAgent:
         else:
             self._idle.set()
 
-        fire_eligible = {AgentState.ACTIVE, AgentState.IDLE}
-        was_eligible = old in fire_eligible
-        is_eligible = new_state in fire_eligible
-        if was_eligible and not is_eligible:
+        # Soul flow fires only when IDLE (not ACTIVE).  Firing mid-turn
+        # splices consultation tool-call recommendations into the active
+        # tool loop, producing ghost interleaved results.  Timer is
+        # started on IDLE entry, cancelled on leaving IDLE.
+        was_idle = old == AgentState.IDLE
+        is_idle = new_state == AgentState.IDLE
+        if was_idle and not is_idle:
             _cancel_soul_timer(self)
-        elif is_eligible and not was_eligible:
+        elif is_idle and not was_idle:
             _start_soul_timer(self)
+
+        # Subconscious timer — always cancel on any state transition
+        # away from ACTIVE (it only runs during active tool-call loops).
+        if old == AgentState.ACTIVE and new_state != AgentState.ACTIVE:
+            _cancel_subconscious_timer(self)
 
         self._log("agent_state", old=old.value, new=new_state.value, reason=reason)
         self._workdir.write_manifest(self._build_manifest())

@@ -155,8 +155,8 @@ class TestSoulTimer:
         assert agent._soul_timer is None
 
     def test_soul_timer_runs_perpetual_regardless_of_state(self, tmp_path):
-        """Timer is not state-gated — runs from boot, perpetually rescheduling
-        in _soul_whisper finally. State transitions don't kick the timer."""
+        """Timer is IDLE-gated — started on IDLE entry, cancelled on leaving IDLE.
+        ACTIVE state does not start or maintain the timer."""
         from lingtai_kernel import AgentState, BaseAgent
         agent = BaseAgent(
             service=_make_mock_service(),
@@ -165,19 +165,21 @@ class TestSoulTimer:
         )
         agent._soul_delay = 300.0
 
-        # State transitions must NOT touch the timer.
+        # Going ACTIVE from initial state — timer stays None (not IDLE).
         agent._set_state(AgentState.ACTIVE, reason="test")
         assert agent._soul_timer is None
-        agent._set_state(AgentState.IDLE, reason="done")
-        assert agent._soul_timer is None
 
-        # Explicit start (the path normally taken by start() at boot).
-        agent._start_soul_timer()
+        # Going IDLE starts the timer.
+        agent._set_state(AgentState.IDLE, reason="done")
         assert agent._soul_timer is not None
         assert agent._soul_timer.is_alive()
 
-        # Going active does NOT cancel the timer — cadence persists.
+        # Going ACTIVE from IDLE cancels the timer.
         agent._set_state(AgentState.ACTIVE, reason="new mail")
+        assert agent._soul_timer is None
+
+        # Going IDLE again restarts it.
+        agent._set_state(AgentState.IDLE, reason="done again")
         assert agent._soul_timer is not None
 
         agent._cancel_soul_timer()
@@ -240,7 +242,8 @@ def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
     from lingtai_kernel.state import AgentState
 
     agent = MagicMock()
-    agent._state = AgentState.ACTIVE
+    # Soul flow fires only when IDLE (not ACTIVE mid-turn).
+    agent._state = AgentState.IDLE
     agent._logs = []
     agent._tc_inbox.enqueue = MagicMock()
 

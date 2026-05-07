@@ -41,6 +41,19 @@ _CONSULTATION_TOOL_REFUSAL = (
 _CONSULTATION_MAX_ROUNDS = 3
 _DIARY_CUE_TOKEN_CAP = 10_000
 
+# Subconscious prompt — "does this remind you of something?"
+# Used by the subconscious engine (cheap-model fan-out across all snapshots).
+# No tool schema, no thinking, single round, structured JSON output.
+_SUBCONSCIOUS_SYSTEM_PROMPT = (
+    "The chat below is your context — your thoughts, your work, your tools, your memory.\n\n"
+    "Your role: Does the current self's thinking and diary remind you of something?\n"
+    "If so, write a brief insight to inform the current self. If not, stay silent.\n\n"
+    "Format your insight as JSON:\n"
+    '{"insight": "...", "confidence": 0.0-1.0, "source_memory": "..."}\n'
+    'If nothing reminds you: {"insight": null}\n'
+    "You cannot execute tools. Do not attempt tool calls."
+)
+
 
 def _send_with_timeout(agent, session, content: "str | list"):
     """Send with timeout using a daemon thread. Returns response or None.
@@ -377,53 +390,99 @@ def _build_consultation_cue(agent, kind: str, diary: str) -> str:
         return f"{template}\n\n{body}"
 
 
-def _run_consultation(agent, iface, source: str) -> dict | None:
-    """Run one substrate+spark consultation against a seeded ChatInterface.
+def _run_consultation_voice(
+    agent,
+    iface,
+    source: str,
+    *,
+    system_prompt: str,
+    spark: str,
+    session_overrides: dict | None = None,
+    allow_tool_recommendations: bool = True,
+    max_rounds: int = _CONSULTATION_MAX_ROUNDS,
+) -> dict | None:
+    """Shared consultation engine — runs one substrate+spark LLM call.
 
-    The seeded interface is cloned verbatim. The present diary cue is sent as
-    the spark. Tool schemas are declared so historic tool calls/results remain
-    structurally legible, but any new tool-call attempts are intercepted with
-    synthetic refusal ``ToolResultBlock``s for up to
-    ``_CONSULTATION_MAX_ROUNDS`` rounds.
+    This is the primitive that both soul flow and subconscious build on.
+    The caller owns substrate selection, prompt choice, session overrides,
+    and delivery of results.
 
-    Returns ``{"source": source, "blocks": [...]}`` or None on failure/no cue.
+    Parameters
+    ----------
+    agent : BaseAgent
+        The live agent (for service, config, logging).
+    iface : ChatInterface
+        Substrate — loaded from current chat or a past snapshot.
+    source : str
+        Label for the voice (e.g. "insights", "snapshot:<stem>").
+    system_prompt : str
+        Consultation system prompt ("advise" for flow, "remind" for subconscious).
+    spark : str
+        Cue text — the diary or other trigger to send as the first user message.
+    session_overrides : dict | None
+        Optional override keys: provider, model, base_url, context_window.
+    allow_tool_recommendations : bool
+        When True (soul flow), tool schemas are declared and tool-call
+        attempts are intercepted with refusal blocks. When False
+        (subconscious), tools=None and the model cannot call tools.
+    max_rounds : int
+        Maximum consultation rounds (only matters when allow_tool_recommendations=True).
+
+    Returns ``{"source": source, "blocks": [...]}`` or None on failure.
     """
     if iface is None or not iface.entries:
         return None
 
-    window = None
-    if getattr(agent, "_chat", None) is not None:
-        try:
-            window = agent._chat.context_window()
-        except Exception:
-            window = None
+    overrides = session_overrides or {}
+
+    # Context window
+    window = overrides.get("context_window")
     if window is None:
-        window = int(getattr(agent._config, "context_limit", None) or 200_000)
+        if getattr(agent, "_chat", None) is not None:
+            try:
+                window = agent._chat.context_window()
+            except Exception:
+                window = None
+        if window is None:
+            window = int(getattr(agent._config, "context_limit", None) or 200_000)
     target = max(1, int(window * 0.7))
     fitted = _fit_interface_to_window(iface, target)
     if not fitted.entries:
         return None
 
+    # Tool schemas — only when tool recommendations are allowed.
     tool_schemas = None
-    try:
-        tool_schemas = agent._session._build_tool_schemas_fn() or None
-    except Exception as e:
+    if allow_tool_recommendations:
         try:
-            agent._log("consultation_tool_schema_error", source=source, error=str(e)[:200])
-        except Exception:
-            pass
-        tool_schemas = None
+            tool_schemas = agent._session._build_tool_schemas_fn() or None
+        except Exception as e:
+            try:
+                agent._log("consultation_tool_schema_error", source=source, error=str(e)[:200])
+            except Exception:
+                pass
+            tool_schemas = None
+
+    # Model routing
+    provider = overrides.get("provider", agent._config.provider)
+    model = overrides.get("model", agent._config.model or agent.service.model)
+    base_url = overrides.get("base_url")
 
     try:
-        session = agent.service.create_session(
-            system_prompt=_CONSULTATION_SYSTEM_PROMPT,
+        create_kwargs = dict(
+            system_prompt=system_prompt,
             tools=tool_schemas,
-            model=agent._config.model or agent.service.model,
-            thinking="high",
+            model=model,
             tracked=False,
             interface=fitted,
-            provider=agent._config.provider,
+            provider=provider,
         )
+        if allow_tool_recommendations:
+            create_kwargs["thinking"] = "high"
+        else:
+            create_kwargs["thinking"] = None
+        if base_url:
+            create_kwargs["base_url"] = base_url
+        session = agent.service.create_session(**create_kwargs)
     except Exception as e:
         try:
             agent._log("consultation_session_failed", source=source, error=str(e)[:200])
@@ -431,19 +490,33 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
             pass
         return None
 
-    diary = _render_current_diary(agent)
-    if not diary:
-        # No spark = no consultation. Avoid sending an empty user message —
-        # the model has no trigger to react to.
+    # Single-round path (no tool interception).
+    if not allow_tool_recommendations:
+        response = _send_with_timeout(agent, session, spark)
+        if response is None:
+            return None
+        try:
+            _write_soul_tokens(agent, response)
+        except Exception:
+            pass
+        try:
+            if session.interface.entries:
+                tail = session.interface.entries[-1]
+                if tail.role == "assistant":
+                    blocks = list(tail.content)
+                    if blocks:
+                        return {"source": source, "blocks": blocks}
+        except Exception:
+            pass
         return None
-    spark = diary
 
+    # Multi-round path with tool-call interception.
     from ...llm.interface import ToolResultBlock
 
     blocks_collected: list = []
     next_input: "str | list[ToolResultBlock]" = spark
 
-    for _round_idx in range(_CONSULTATION_MAX_ROUNDS):
+    for _round_idx in range(max_rounds):
         response = _send_with_timeout(agent, session, next_input)
         if response is None:
             break
@@ -479,6 +552,33 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
         return None
 
     return {"source": source, "blocks": blocks_collected}
+
+
+def _run_consultation(agent, iface, source: str) -> dict | None:
+    """Run one substrate+spark consultation against a seeded ChatInterface.
+
+    The seeded interface is cloned verbatim. The present diary cue is sent as
+    the spark. Tool schemas are declared so historic tool calls/results remain
+    structurally legible, but any new tool-call attempts are intercepted with
+    synthetic refusal ``ToolResultBlock``s for up to
+    ``_CONSULTATION_MAX_ROUNDS`` rounds.
+
+    Returns ``{"source": source, "blocks": [...]}`` or None on failure/no cue.
+    """
+    if iface is None or not iface.entries:
+        return None
+
+    diary = _render_current_diary(agent)
+    if not diary:
+        return None
+
+    return _run_consultation_voice(
+        agent, iface, source,
+        system_prompt=_CONSULTATION_SYSTEM_PROMPT,
+        spark=diary,
+        allow_tool_recommendations=True,
+        max_rounds=_CONSULTATION_MAX_ROUNDS,
+    )
 
 
 def _list_snapshot_paths(agent):

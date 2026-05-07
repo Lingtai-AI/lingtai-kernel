@@ -42,6 +42,7 @@ from .config import (
 # Re-export consultation pipeline
 from .consultation import (
     _CONSULTATION_SYSTEM_PROMPT,
+    _SUBCONSCIOUS_SYSTEM_PROMPT,
     _CONSULTATION_TOOL_REFUSAL,
     _CONSULTATION_MAX_ROUNDS,
     _DIARY_CUE_TOKEN_CAP,
@@ -52,6 +53,7 @@ from .consultation import (
     _fit_interface_to_window,
     _kind_for_source,
     _build_consultation_cue,
+    _run_consultation_voice,
     _run_consultation,
     _list_snapshot_paths,
     _run_consultation_batch,
@@ -69,6 +71,15 @@ from .flow import (
     _persist_soul_entry,
     _run_consultation_fire,
     _rehydrate_appendix_tracking,
+)
+
+# Re-export subconscious engine
+from .subconscious import (
+    _start_subconscious_timer,
+    _cancel_subconscious_timer,
+    _clear_subconscious_jsonl,
+    _read_subconscious_tail,
+    _run_subconscious_fire,
 )
 
 
@@ -101,6 +112,22 @@ def get_schema(lang: str = "en") -> dict:
                 "minimum": CONSULTATION_PAST_COUNT_MIN,
                 "maximum": CONSULTATION_PAST_COUNT_MAX,
                 "description": t(lang, "soul.consultation_past_count_description"),
+            },
+            "subconscious_enabled": {
+                "type": "boolean",
+                "description": t(lang, "soul.subconscious_enabled_description"),
+            },
+            "subconscious_provider": {
+                "type": ["string", "null"],
+                "description": t(lang, "soul.subconscious_provider_description"),
+            },
+            "subconscious_model": {
+                "type": ["string", "null"],
+                "description": t(lang, "soul.subconscious_model_description"),
+            },
+            "subconscious_base_url": {
+                "type": ["string", "null"],
+                "description": t(lang, "soul.subconscious_base_url_description"),
             },
             "set": {
                 "type": "string",

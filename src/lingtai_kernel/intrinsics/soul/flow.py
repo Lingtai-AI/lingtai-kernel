@@ -59,7 +59,7 @@ def _soul_whisper(agent) -> None:
 
     agent._soul_timer = None
     try:
-        if agent._state in (AgentState.ACTIVE, AgentState.IDLE):
+        if agent._state == AgentState.IDLE:
             # Issue #47: Check for pending notifications before consultation
             # This ensures messages are seen within one soul delay cycle
             try:
@@ -145,10 +145,15 @@ def _flatten_v3_for_pair(agent, voice: dict) -> dict:
 
 
 def _soul_fire_allowed(agent) -> bool:
-    """True when soul-flow may inject results into the live agent."""
+    """True when soul-flow may inject results into the live agent.
+
+    IDLE only — firing while ACTIVE (mid-tool-loop) would splice the
+    consultation pair into an active tool-call sequence, producing ghost
+    tool-call recommendations interleaved with real tool results.
+    """
     from ...state import AgentState
 
-    return agent._state in (AgentState.ACTIVE, AgentState.IDLE)
+    return agent._state == AgentState.IDLE
 
 
 def _shape_soul_voices(voices_for_pair: list[dict]) -> list[dict]:
