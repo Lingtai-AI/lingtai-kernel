@@ -119,7 +119,7 @@ def test_validator_rejects_non_dict_metadata():
 # _scan_once dispatch
 # ---------------------------------------------------------------------------
 
-def test_scan_dispatches_valid_event_to_inbox(tmp_path):
+def test_scan_dispatches_valid_event_to_notification(tmp_path):
     agent, workdir = _mk_agent(tmp_path)
     _write_event(workdir, "telegram", "ev1", {
         "from": "alice", "subject": "hi", "body": "hello",
@@ -129,24 +129,30 @@ def test_scan_dispatches_valid_event_to_inbox(tmp_path):
     dispatched = _scan_once(agent, inbox_root)
     assert dispatched == 1
 
-    # Message landed in agent inbox — signal-only, no body content (issue #37).
-    assert agent.inbox.qsize() >= 1
-    msg = agent.inbox.get_nowait()
-    assert "telegram" in msg.content
-    assert "1 unread message" in msg.content
+    # Notification file published to .notification/mcp.telegram.json.
+    notif_file = workdir / ".notification" / "mcp.telegram.json"
+    assert notif_file.exists(), "notification file not created"
+    import json as _json
+    notif = _json.loads(notif_file.read_text(encoding="utf-8"))
+    assert "telegram" in notif["header"]
+    assert "1 new event" in notif["header"]
+    assert notif["data"]["count"] == 1
+    assert notif["data"]["source"] == "telegram"
     # Sender / subject / body must NOT be inlined; the agent learns them by
     # explicitly calling the MCP's read/check action.
-    assert "alice" not in msg.content
-    assert "hi" not in msg.content
-    assert "hello" not in msg.content
+    assert "alice" not in notif["header"]
+    assert "hi" not in notif["header"]
+    assert "hello" not in notif["header"]
 
     # File was deleted on success.
     assert not (inbox_root / "telegram" / "ev1.json").exists()
 
 
-def test_scan_coalesces_multiple_events_into_one_summary(tmp_path):
+def test_scan_coalesces_multiple_events_into_one_notification(tmp_path):
     """Issue #37: multiple events from the same MCP in one sweep produce
-    exactly one [system] notification with the count, never inlined bodies."""
+    exactly one notification with the count, never inlined bodies."""
+    import json as _json
+
     agent, workdir = _mk_agent(tmp_path)
     _write_event(workdir, "telegram", "ev1", {
         "from": "alice", "subject": "s1", "body": "secret-body-1",
@@ -161,54 +167,62 @@ def test_scan_coalesces_multiple_events_into_one_summary(tmp_path):
     dispatched = _scan_once(agent, workdir / INBOX_DIRNAME)
     assert dispatched == 3
 
-    # Exactly ONE [system] notification, not three.
-    assert agent.inbox.qsize() == 1
-    msg = agent.inbox.get_nowait()
-    assert "telegram" in msg.content
-    assert "3 unread message" in msg.content
+    # Exactly ONE notification file, not three.
+    notif_file = workdir / ".notification" / "mcp.telegram.json"
+    assert notif_file.exists(), "notification file not created"
+    notif = _json.loads(notif_file.read_text(encoding="utf-8"))
+    assert "telegram" in notif["header"]
+    assert "3 new events" in notif["header"]
+    assert notif["data"]["count"] == 3
     # No body / sender / subject content leaked.
     for forbidden in ("secret-body", "alice", "bob", "carol", "s1", "s2", "s3"):
-        assert forbidden not in msg.content, f"leaked {forbidden!r} into notification"
+        assert forbidden not in notif["header"], f"leaked {forbidden!r} into notification"
 
 
 def test_scan_summary_uses_singular_for_one_event(tmp_path):
+    import json as _json
+
     agent, workdir = _mk_agent(tmp_path)
     _write_event(workdir, "imap", "ev1", {
         "from": "a", "subject": "s", "body": "b",
     })
     _scan_once(agent, workdir / INBOX_DIRNAME)
-    msg = agent.inbox.get_nowait()
-    assert "1 unread message." in msg.content  # no plural 's'
+    notif_file = workdir / ".notification" / "mcp.imap.json"
+    assert notif_file.exists()
+    notif = _json.loads(notif_file.read_text(encoding="utf-8"))
+    assert "1 new event" in notif["header"]  # no plural 's'
 
 
-def test_scan_calls_wake_nap_by_default(tmp_path):
+def test_scan_publishes_notification_file(tmp_path):
+    """Events are published to .notification/ — no explicit _wake_nap needed."""
+    import json as _json
+
     agent, workdir = _mk_agent(tmp_path)
     _write_event(workdir, "telegram", "ev1", {
         "from": "alice", "subject": "hi", "body": "hello",
     })
 
-    with pytest.MonkeyPatch.context() as mp:
-        called = []
-        mp.setattr(agent, "_wake_nap", lambda reason: called.append(reason))
-        _scan_once(agent, workdir / INBOX_DIRNAME)
+    _scan_once(agent, workdir / INBOX_DIRNAME)
 
-    assert called == ["mcp_event"]
+    notif_file = workdir / ".notification" / "mcp.telegram.json"
+    assert notif_file.exists()
+    notif = _json.loads(notif_file.read_text(encoding="utf-8"))
+    assert notif["icon"] == "💬"
+    assert notif["data"]["source"] == "telegram"
+    assert "body" in notif["data"]
 
 
-def test_scan_skips_wake_when_wake_false(tmp_path):
+def test_scan_publishes_notification_even_when_wake_false(tmp_path):
+    """Notification is always published regardless of wake flag."""
     agent, workdir = _mk_agent(tmp_path)
     _write_event(workdir, "telegram", "ev1", {
         "from": "alice", "subject": "hi", "body": "hello", "wake": False,
     })
 
-    with pytest.MonkeyPatch.context() as mp:
-        called = []
-        mp.setattr(agent, "_wake_nap", lambda reason: called.append(reason))
-        _scan_once(agent, workdir / INBOX_DIRNAME)
+    _scan_once(agent, workdir / INBOX_DIRNAME)
 
-    assert called == []
-    # But still delivered to inbox.
-    assert agent.inbox.qsize() >= 1
+    notif_file = workdir / ".notification" / "mcp.telegram.json"
+    assert notif_file.exists(), "notification file should exist even with wake=False"
 
 
 def test_scan_dead_letters_invalid_json(tmp_path):
@@ -265,7 +279,9 @@ def test_scan_handles_multiple_mcps(tmp_path):
 
     dispatched = _scan_once(agent, workdir / INBOX_DIRNAME)
     assert dispatched == 2
-    assert agent.inbox.qsize() == 2
+    # One notification file per MCP.
+    assert (workdir / ".notification" / "mcp.telegram.json").exists()
+    assert (workdir / ".notification" / "mcp.feishu.json").exists()
 
 
 def test_scan_skips_dotted_subdirs(tmp_path):
@@ -304,10 +320,11 @@ def test_poller_dispatches_events_async(tmp_path):
             "from": "alice", "subject": "async", "body": "hello",
         })
         # Wait up to 2 poll cycles for delivery.
+        notif_file = workdir / ".notification" / "mcp.telegram.json"
         deadline = time.monotonic() + (POLL_INTERVAL * 4 + 0.5)
-        while time.monotonic() < deadline and agent.inbox.qsize() == 0:
+        while time.monotonic() < deadline and not notif_file.exists():
             time.sleep(0.05)
-        assert agent.inbox.qsize() >= 1
+        assert notif_file.exists(), "notification file not created within timeout"
     finally:
         poller.stop()
 
