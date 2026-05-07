@@ -84,5 +84,10 @@
   "email.unread_digest": "[邮件] 共有 {count} 封未读消息——最近一封于 {recency}。\n\n{entries}\n{more}",
   "email.unread_digest.entry": "  {n}. 来自 {name} ({address}) —— {subject}\n     ID：{id}\n     发送时间：{sent_at}\n     {preview}",
   "email.unread_digest.more": "（仅显示前 {shown} 封，共 {total} 封）",
-  "email.unread_digest.no_subject": "（无主题）"
+  "email.unread_digest.no_subject": "（无主题）",
+  "soul.subconscious_enabled_description": "启用潜意识引擎（架构A：事件驱动 + 元块注入）。启用后，每次工具调用批次完成后会触发一次廉价模型咨询，洞察注入到元块（文本输入前缀）中。需要先设置 subconscious_provider 和 subconscious_model。",
+  "soul.subconscious_provider_description": "潜意识咨询的 LLM 提供商。可选用于 action='config'。可以与主提供商相同——只需显式声明即可（硬性限制以防止意外计费）。",
+  "soul.subconscious_model_description": "潜意识咨询的 LLM 模型。可选用于 action='config'。请使用廉价模型——潜意识在每个工具调用批次后都会触发。",
+  "soul.subconscious_base_url_description": "潜意识 LLM 提供商的可选基础 URL 覆盖。",
+  "soul.subconscious_context_window_description": "潜意识会话的上下文窗口大小。可选用于 action='config'。默认 128000。"
 }

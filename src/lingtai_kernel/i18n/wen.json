@@ -84,5 +84,10 @@
   "email.unread_digest": "[邮] 未阅之书凡 {count} 封，新者发于 {recency}。\n\n{entries}\n{more}",
   "email.unread_digest.entry": "  {n}. 自 {name} ({address}) —— {subject}\n     编号：{id}\n     发于：{sent_at}\n     {preview}",
   "email.unread_digest.more": "（仅显前 {shown} 封，共 {total}）",
-  "email.unread_digest.no_subject": "（无题）"
+  "email.unread_digest.no_subject": "（无题）",
+  "soul.subconscious_enabled_description": "启潜识之机（架构甲：事驱而块注）。启用后，每批器毕即发廉价模型之咨，所得洞见注于元块（文入前缀）。须先设 subconscious_provider 与 subconscious_model。",
+  "soul.subconscious_provider_description": "潜识咨议所用之 LLM 供给。可选用于 action='config'。可与主供给同——但须明言，以防意外计费之虞。",
+  "soul.subconscious_model_description": "潜识咨议所用之 LLM 模型。可选用于 action='config'。宜用廉模——潜识每批器毕皆发。",
+  "soul.subconscious_base_url_description": "潜识 LLM 供给之可选基址覆盖。",
+  "soul.subconscious_context_window_description": "潜识会话之文脉窗口大小。可选用于 action='config'。预设 128000。"
 }
