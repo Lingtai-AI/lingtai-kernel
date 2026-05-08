@@ -272,12 +272,6 @@ class OpenAIChatSession(ChatSession):
         """
         return to_openai(self._interface)
 
-    # Maximum number of context-overflow halving rounds before giving up.
-    # 10 rounds × 10% drop ≈ 65% of conversation eligible for trimming —
-    # plenty of headroom for any single-attachment overflow without thrashing.
-    _OVERFLOW_MAX_ROUNDS = 10
-    _OVERFLOW_DROP_FRACTION = 0.10
-
     @staticmethod
     def _is_context_overflow_error(exc: Exception) -> bool:
         """Detect provider 400-class context-length-exceeded errors.
@@ -313,127 +307,9 @@ class OpenAIChatSession(ChatSession):
             )
         )
 
-    def _trim_context_one_round(self) -> int:
-        """Drop ~10% of non-system entries from the FRONT of the interface.
-
-        Snaps the cut point forward so we never split an
-        ``assistant[ToolCallBlock]`` from its matching
-        ``user[ToolResultBlock]`` — the resulting wire payload would be
-        invalid for strict providers.
-
-        Returns the number of entries dropped (0 if none could be dropped
-        — caller should treat that as terminal).
-        """
-        entries = self._interface._entries  # canonical list, mutated in place
-        if not entries:
-            return 0
-        # Index of first non-system entry.
-        first_conv = 0
-        if entries[0].role == "system":
-            first_conv = 1
-        conv_len = len(entries) - first_conv
-        if conv_len <= 1:
-            return 0
-        drop_n = max(1, int(conv_len * self._OVERFLOW_DROP_FRACTION))
-        cut = first_conv + drop_n  # entries[first_conv:cut] get dropped
-
-        # Snap cut forward past any assistant[tool_calls] / user[tool_results]
-        # boundary so we never strand a tool_call without its result.
-        max_cut = len(entries)
-        while cut < max_cut:
-            # If the entry just *before* the cut is assistant[tool_calls],
-            # advance until we're past its matching user[tool_results].
-            if cut == 0:
-                break
-            prev = entries[cut - 1]
-            if prev.role == "assistant" and any(
-                isinstance(b, ToolCallBlock) for b in prev.content
-            ):
-                cut += 1
-                continue
-            # If the entry at the cut is a user[tool_results-only], advance
-            # past it so we don't leave dangling results without their call.
-            cur = entries[cut]
-            if cur.role == "user" and cur.content and all(
-                isinstance(b, ToolResultBlock) for b in cur.content
-            ):
-                cut += 1
-                continue
-            break
-
-        if cut >= max_cut:
-            # Snap consumed everything — refuse to drop the entire conversation.
-            return 0
-
-        dropped = cut - first_conv
-        # Mutate in place: keep system + everything from cut onward.
-        del entries[first_conv:cut]
-        return dropped
-
-    def _inject_overflow_notice(self, total_dropped: int, rounds: int) -> None:
-        """Append a single user-role kernel notice after successful recovery.
-
-        We use the user role (universally supported) with an explicit
-        ``[kernel]`` prefix — same pattern as our synthesized tool aborts.
-        The notice strongly recommends molting since context pressure is
-        now demonstrably above the model's hard ceiling.
-        """
-        notice = (
-            f"[kernel] Context exceeded the provider's hard token limit. "
-            f"To recover, the kernel dropped {total_dropped} oldest entries "
-            f"across {rounds} retry round(s). Detail from earlier turns may "
-            f"be lost — re-read recent context before acting on it. "
-            f"**Strongly recommend triggering a molt soon** — the conversation "
-            f"is past the model's safe limit and further growth will overflow "
-            f"again."
-        )
-        self._interface._append("user", [TextBlock(text=notice)])
-
-    def _run_with_overflow_recovery(self, do_call):
-        """Run an API call with context-overflow auto-recovery.
-
-        ``do_call`` is a zero-arg callable performing one full attempt
-        (build kwargs from current interface state + invoke the API). It
-        is re-called after each trim so the request reflects the post-trim
-        canonical interface.
-
-        Returns ``(result, total_dropped, rounds)``. ``total_dropped`` is 0
-        and ``rounds`` is 0 when no recovery was needed. On non-overflow
-        errors, re-raises immediately. On terminal failure (cannot trim
-        further, or max rounds hit), re-raises the original error.
-        """
-        total_dropped = 0
-        rounds = 0
-        while True:
-            try:
-                result = do_call()
-                return result, total_dropped, rounds
-            except Exception as exc:
-                if not self._is_context_overflow_error(exc):
-                    raise
-                if rounds >= self._OVERFLOW_MAX_ROUNDS:
-                    logger.warning(
-                        "[overflow-recovery] giving up after %d rounds "
-                        "(dropped %d entries total) — re-raising provider error.",
-                        rounds, total_dropped,
-                    )
-                    raise
-                dropped = self._trim_context_one_round()
-                if dropped == 0:
-                    logger.warning(
-                        "[overflow-recovery] cannot trim further "
-                        "(dropped %d entries across %d rounds) — re-raising.",
-                        total_dropped, rounds,
-                    )
-                    raise
-                total_dropped += dropped
-                rounds += 1
-                logger.warning(
-                    "[overflow-recovery] round %d: dropped %d entries "
-                    "(running total %d). Retrying.",
-                    rounds, dropped, total_dropped,
-                )
-                continue
+    # _trim_context_one_round, _run_with_overflow_recovery, and
+    # _inject_overflow_notice are inherited from ChatSession (base class).
+    # Only _is_context_overflow_error needs to be provider-specific.
 
     def _pair_orphan_tool_calls(self, messages: list[dict]) -> list[dict]:
         """Final wire-layer guard: synthesize placeholder tool messages for

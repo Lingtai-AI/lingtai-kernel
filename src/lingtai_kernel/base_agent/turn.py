@@ -515,103 +515,84 @@ def _handle_request(agent, msg: Message) -> None:
     pressure = agent._session.get_context_pressure()
 
     if pressure >= agent._config.molt_hard_ceiling and has_molt:
-        if agent._session._compaction_warnings > 0:
-            # Hard ceiling, already warned — force-wipe.
-            lang = agent._config.language
-            agent._log("auto_forget", reason="hard ceiling", pressure=pressure, ceiling=agent._config.molt_hard_ceiling)
-            from ..intrinsics import psyche as _psyche
-            from ..intrinsics.system import clear_notification
-            _psyche.context_forget(agent)
-            agent._session._compaction_warnings = 0
-            clear_notification(agent._working_dir, "molt")
-            content = f"{_t(lang, 'system.molt_wiped')}\n[Pressure: {pressure:.0%}, hard ceiling: {agent._config.molt_hard_ceiling:.0%}]\n\n{content}"
-        else:
-            # Hard ceiling, first hit — publish urgent notification so
-            # the agent gets one turn to see the warning and molt
-            # voluntarily before the next turn force-wipes.
-            agent._session._compaction_warnings += 1
-            warnings = agent._session._compaction_warnings
-            max_warnings = agent._config.molt_warnings
-            remaining = max(0, max_warnings - warnings)
-            lang = agent._config.language
-            level = 3  # highest urgency
-            level_prompt = _t(
-                lang,
-                "system.molt_warning_level3",
-                pressure=f"{pressure:.0%}",
-                remaining=remaining,
-            )
-            level_prompt = level_prompt + "\n\n" + _t(lang, "system.molt_procedure")
-            molt_prompt = agent._config.molt_prompt or level_prompt
-            status = f"[context: {pressure:.0%} | CRITICAL]"
-            from ..intrinsics.system import publish_notification
-            publish_notification(
-                agent._working_dir, "molt",
-                header=f"context {pressure:.0%}, CRITICAL — force-wipe next turn",
-                icon="🚨",
-                priority="high",
-                data={
-                    "pressure": pressure,
-                    "level": level,
-                    "warnings": warnings,
-                    "remaining": remaining,
-                    "max_warnings": max_warnings,
-                    "warning_text": molt_prompt,
-                    "status": status,
-                },
-            )
-            agent._log("molt_hard_ceiling_warning", pressure=pressure, ceiling=agent._config.molt_hard_ceiling)
+        # Hard ceiling — publish urgent notification so the agent sees
+        # the warning and can molt voluntarily.  No force-wipe: if the
+        # agent ignores the warning, the LLM call will overflow and the
+        # adapter-level recovery (ChatSession._run_with_overflow_recovery)
+        # will trim the oldest entries and retry.
+        agent._session._compaction_warnings += 1
+        warnings = agent._session._compaction_warnings
+        max_warnings = agent._config.molt_warnings
+        remaining = max(0, max_warnings - warnings)
+        lang = agent._config.language
+        level = 3  # highest urgency
+        level_prompt = _t(
+            lang,
+            "system.molt_warning_level3",
+            pressure=f"{pressure:.0%}",
+            remaining=remaining,
+        )
+        level_prompt = level_prompt + "\n\n" + _t(lang, "system.molt_procedure")
+        molt_prompt = agent._config.molt_prompt or level_prompt
+        status = f"[context: {pressure:.0%} | CRITICAL]"
+        from ..intrinsics.system import publish_notification
+        publish_notification(
+            agent._working_dir, "molt",
+            header=f"context {pressure:.0%}, CRITICAL — molt now or overflow recovery will trim",
+            icon="🚨",
+            priority="high",
+            data={
+                "pressure": pressure,
+                "level": level,
+                "warnings": warnings,
+                "remaining": remaining,
+                "max_warnings": max_warnings,
+                "warning_text": molt_prompt,
+                "status": status,
+            },
+        )
+        agent._log("molt_hard_ceiling_warning", pressure=pressure, ceiling=agent._config.molt_hard_ceiling)
     elif pressure >= agent._config.molt_pressure and has_molt:
         max_warnings = agent._config.molt_warnings
         agent._session._compaction_warnings += 1
         warnings = agent._session._compaction_warnings
         remaining = max(0, max_warnings - warnings)
         lang = agent._config.language
-        if warnings > max_warnings:
-            # Forced wipe after ignored warnings (action, stays inline).
-            from ..intrinsics import psyche as _psyche
-            from ..intrinsics.system import clear_notification
-            agent._log("auto_forget", reason=f"ignored {max_warnings} molt warnings", pressure=pressure)
-            _psyche.context_forget(agent)
-            agent._session._compaction_warnings = 0
-            clear_notification(agent._working_dir, "molt")
-            content = f"{_t(lang, 'system.molt_wiped')}\n[Pressure: {pressure:.0%}, hard ceiling: {agent._config.molt_hard_ceiling:.0%}]\n\n{content}"
-        else:
-            # Graduated warning — publish to .notification/molt.json.
-            # Each call fully replaces the file, so the wire carries
-            # only the current level. _sync_notifications picks up the
-            # fingerprint change on the next heartbeat tick and routes
-            # it through the synthetic-pair injection (same path as
-            # email/soul). The warning thus appears on the *next* turn,
-            # not this one — acceptable tradeoff: the agent has 3+
-            # turns of buffer before forced wipe.
-            from ..intrinsics.system import publish_notification
-            level = min(warnings, 3)
-            level_prompt = _t(
-                lang,
-                f"system.molt_warning_level{level}",
-                pressure=f"{pressure:.0%}",
-                remaining=remaining,
-            )
-            if level >= 2:
-                level_prompt = level_prompt + "\n\n" + _t(lang, "system.molt_procedure")
-            molt_prompt = agent._config.molt_prompt or level_prompt
-            status = f"[context: {pressure:.0%} | {remaining}/{max_warnings}]"
-            publish_notification(
-                agent._working_dir, "molt",
-                header=f"context {pressure:.0%}, {remaining}/{max_warnings} turns left",
-                icon=("⚠️" if level >= 2 else "🪶"),
-                priority=("high" if level >= 2 else "normal"),
-                data={
-                    "pressure": pressure,
-                    "level": level,
-                    "warnings": warnings,
-                    "remaining": remaining,
-                    "max_warnings": max_warnings,
-                    "warning_text": molt_prompt,
-                    "status": status,
-                },
-            )
+        # Graduated warning — publish to .notification/molt.json.
+        # Each call fully replaces the file, so the wire carries
+        # only the current level. _sync_notifications picks up the
+        # fingerprint change on the next heartbeat tick and routes
+        # it through the synthetic-pair injection (same path as
+        # email/soul). The warning thus appears on the *next* turn,
+        # not this one — acceptable tradeoff: the agent has 3+
+        # turns of buffer before forced wipe.
+        from ..intrinsics.system import publish_notification
+        level = min(warnings, 3)
+        level_prompt = _t(
+            lang,
+            f"system.molt_warning_level{level}",
+            pressure=f"{pressure:.0%}",
+            remaining=remaining,
+        )
+        if level >= 2:
+            level_prompt = level_prompt + "\n\n" + _t(lang, "system.molt_procedure")
+        molt_prompt = agent._config.molt_prompt or level_prompt
+        status = f"[context: {pressure:.0%} | {remaining}/{max_warnings}]"
+        publish_notification(
+            agent._working_dir, "molt",
+            header=f"context {pressure:.0%}, {remaining}/{max_warnings} turns left",
+            icon=("⚠️" if level >= 2 else "🪶"),
+            priority=("high" if level >= 2 else "normal"),
+            data={
+                "pressure": pressure,
+                "level": level,
+                "warnings": warnings,
+                "remaining": remaining,
+                "max_warnings": max_warnings,
+                "warning_text": molt_prompt,
+                "status": status,
+            },
+        )
     else:
         # Pressure dropped below threshold — clear any stale molt notice
         # so the wire stops carrying it.

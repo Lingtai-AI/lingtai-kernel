@@ -315,6 +315,27 @@ class AnthropicChatSession(ChatSession):
         """The canonical ChatInterface for this session."""
         return self._interface
 
+    # -- Context-overflow detection (Anthropic-specific) -------------------
+
+    @staticmethod
+    def _is_context_overflow_error(exc: Exception) -> bool:
+        """Detect Anthropic context-length-exceeded errors."""
+        if not isinstance(exc, anthropic.BadRequestError):
+            return False
+        msg = (str(exc) or "").lower()
+        return any(
+            needle in msg
+            for needle in (
+                "too many tokens",
+                "context length",
+                "context window",
+                "prompt is too long",
+                "input is too long",
+                "maximum context",
+                "request too large",
+            )
+        )
+
     def _build_request_kwargs(self, messages: list[dict]) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -367,14 +388,18 @@ class AnthropicChatSession(ChatSession):
         if self.pre_request_hook is not None:
             self.pre_request_hook(self._interface)
 
-        self._interface.enforce_tool_pairing()
-        candidate_msgs = to_anthropic(self._interface)
-        clean_messages = _ensure_alternation(candidate_msgs)
-        kwargs = self._build_request_kwargs(clean_messages)
+        # Build kwargs from current interface state — re-runs inside the
+        # overflow-recovery loop so each retry sees the post-trim interface.
+        def _do_call():
+            self._interface.enforce_tool_pairing()
+            candidate_msgs = to_anthropic(self._interface)
+            clean_messages = _ensure_alternation(candidate_msgs)
+            kwargs = self._build_request_kwargs(clean_messages)
+            return self._client.messages.create(**kwargs)
 
         try:
-            raw = self._client.messages.create(**kwargs)
-        except Exception as api_err:
+            raw, total_dropped, rounds = self._run_with_overflow_recovery(_do_call)
+        except Exception:
             # Revert the interface on error - drop the last user entry,
             # but only when this call appended one.  ``message is None``
             # means the caller pre-staged the wire and we must not
@@ -382,6 +407,10 @@ class AnthropicChatSession(ChatSession):
             if message is not None:
                 self._interface.drop_trailing(lambda e: e.role == "user")
             raise
+
+        # If recovery fired (entries were dropped), inject the molt notice.
+        if rounds > 0:
+            self._inject_overflow_notice(total_dropped=total_dropped, rounds=rounds)
 
         # Parse response and add to interface
         response = _parse_response(raw)
@@ -442,15 +471,19 @@ class AnthropicChatSession(ChatSession):
         if self.pre_request_hook is not None:
             self.pre_request_hook(self._interface)
 
-        # Build ephemeral Anthropic messages from interface
-        self._interface.enforce_tool_pairing()
-        candidate_msgs = to_anthropic(self._interface)
-        clean_messages = _ensure_alternation(candidate_msgs)
-        kwargs = self._build_request_kwargs(clean_messages)
-
+        # Build ephemeral Anthropic messages from interface — re-runs inside
+        # the overflow-recovery loop so each retry sees the post-trim interface.
         acc = StreamingAccumulator()
+        final_message = None
 
-        try:
+        def _do_stream():
+            nonlocal final_message, acc
+            acc = StreamingAccumulator()
+            self._interface.enforce_tool_pairing()
+            candidate_msgs = to_anthropic(self._interface)
+            clean_messages = _ensure_alternation(candidate_msgs)
+            kwargs = self._build_request_kwargs(clean_messages)
+
             with self._client.messages.stream(**kwargs) as stream:
                 for event in stream:
                     etype = getattr(event, "type", None)
@@ -482,12 +515,20 @@ class AnthropicChatSession(ChatSession):
                         acc.finish_tool()
 
                 final_message = stream.get_final_message()
+            return final_message
+
+        try:
+            raw_result, total_dropped, rounds = self._run_with_overflow_recovery(_do_stream)
         except Exception:
             # Revert the interface on error — drop the last user entry
             # only if this call appended one.
             if message is not None:
                 self._interface.drop_trailing(lambda e: e.role == "user")
             raise
+
+        # If recovery fired (entries were dropped), inject the molt notice.
+        if rounds > 0:
+            self._inject_overflow_notice(total_dropped=total_dropped, rounds=rounds)
 
         # Extract usage from final message (includes cache metrics)
         # Same normalisation as _parse_response — see comment there.
