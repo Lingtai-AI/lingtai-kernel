@@ -930,8 +930,10 @@ class BaseAgent:
         # observed; we just can't act on it until state recovers.
 
         # --- Commit fingerprint only if injection succeeded ---
-        if inject_ok or self._state not in (
-            AgentState.IDLE, AgentState.ASLEEP
+        # ACTIVE defers FP commit to _inject_notification_meta(); only
+        # STUCK/SUSPENDED commit here (they can't inject at all).
+        if inject_ok or self._state in (
+            AgentState.STUCK, AgentState.SUSPENDED
         ):
             self._notification_fp = fp
 
@@ -1159,19 +1161,21 @@ class BaseAgent:
                 "notification_meta_fallback_to_pair",
                 reason="no_tool_result",
             )
+            injected = False
             try:
                 body = json.loads(self._pending_notification_meta)
                 notifications = body.get("notifications", {})
                 if notifications:
-                    self._inject_notification_pair(notifications)
+                    injected = self._inject_notification_pair(notifications)
             except (json.JSONDecodeError, TypeError):
                 pass
-            self._pending_notification_meta = None
-            # Commit the fingerprint now that delivery succeeded.
-            pending_fp = getattr(self, "_pending_notification_fp", None)
-            if pending_fp is not None:
-                self._notification_fp = pending_fp
-                self._pending_notification_fp = None
+            if injected:
+                self._pending_notification_meta = None
+                # Commit the fingerprint now that delivery succeeded.
+                if self._pending_notification_fp is not None:
+                    self._notification_fp = self._pending_notification_fp
+                    self._pending_notification_fp = None
+            # If not injected, leave pending state for next send() retry.
             return message
 
         # If the target block has dict content, serialize to JSON string.
@@ -1198,9 +1202,8 @@ class BaseAgent:
 
         self._pending_notification_meta = None
         # Commit the fingerprint now that delivery succeeded.
-        pending_fp = getattr(self, "_pending_notification_fp", None)
-        if pending_fp is not None:
-            self._notification_fp = pending_fp
+        if self._pending_notification_fp is not None:
+            self._notification_fp = self._pending_notification_fp
             self._pending_notification_fp = None
         self._log(
             "notification_meta_injected",

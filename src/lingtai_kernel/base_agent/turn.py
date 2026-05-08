@@ -475,6 +475,11 @@ def _check_molt_pressure(agent) -> None:
     Extracted from ``_handle_request`` so it can be called from the tool
     loop (``_process_response``) and notification-wake path
     (``_handle_tc_wake``) as well — not just at turn start.
+
+    Uses ``_molt_warning_counted`` (set at turn boundaries) to prevent
+    incrementing the warning counter more than once per turn — mid-loop
+    calls from ``_process_response`` publish updated notifications but
+    don't double-count.
     """
     has_molt = "psyche" in agent._intrinsics
     if not has_molt:
@@ -483,7 +488,9 @@ def _check_molt_pressure(agent) -> None:
     pressure = agent._session.get_context_pressure()
 
     if pressure >= agent._config.molt_hard_ceiling:
-        agent._session._compaction_warnings += 1
+        if not getattr(agent, "_molt_warning_counted", False):
+            agent._session._compaction_warnings += 1
+            agent._molt_warning_counted = True
         warnings = agent._session._compaction_warnings
         max_warnings = agent._config.molt_warnings
         remaining = max(0, max_warnings - warnings)
@@ -517,7 +524,9 @@ def _check_molt_pressure(agent) -> None:
         agent._log("molt_hard_ceiling_warning", pressure=pressure, ceiling=agent._config.molt_hard_ceiling)
     elif pressure >= agent._config.molt_pressure:
         max_warnings = agent._config.molt_warnings
-        agent._session._compaction_warnings += 1
+        if not getattr(agent, "_molt_warning_counted", False):
+            agent._session._compaction_warnings += 1
+            agent._molt_warning_counted = True
         warnings = agent._session._compaction_warnings
         remaining = max(0, max_warnings - warnings)
         lang = agent._config.language
@@ -561,6 +570,11 @@ def _check_molt_pressure(agent) -> None:
 def _handle_request(agent, msg: Message) -> None:
     """Send request to LLM, process response with tool calls."""
     from ..llm import LLMResponse
+
+    # Reset per-turn molt warning flag so the counter increments at most
+    # once per turn (mid-loop _check_molt_pressure calls update the
+    # notification but don't double-count).
+    agent._molt_warning_counted = False
 
     # Splice any queued involuntary tool-call pairs
     agent._drain_tc_inbox()
@@ -627,6 +641,9 @@ def _handle_tc_wake(agent, msg: Message) -> None:
     no-op was the bug that left spliced notification pairs unread.
     """
     from ..llm import LLMResponse
+
+    # Reset per-turn molt warning flag (same as _handle_request).
+    agent._molt_warning_counted = False
 
     if agent._chat is None:
         try:
@@ -885,6 +902,13 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # chains so the agent doesn't go from below-threshold to hard
         # ceiling in a single turn with zero warnings.
         _check_molt_pressure(agent)
+        # Synchronous notification sync — same pattern as _handle_request:
+        # ensure any just-published molt warning reaches
+        # _pending_notification_meta before the next session.send().
+        try:
+            agent._sync_notifications()
+        except Exception:
+            pass
 
     final_text = "\n".join(collected_text_parts)
     has_errors = bool(collected_errors)
