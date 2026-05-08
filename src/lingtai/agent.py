@@ -66,6 +66,8 @@ class Agent(BaseAgent):
                 if name in _GROUPS:
                     for sub in _GROUPS[name]:
                         expanded_dict[sub] = {}
+                elif cap_kwargs is None:
+                    expanded_dict[name] = {}
                 else:
                     expanded_dict[name] = cap_kwargs
             capabilities = expanded_dict
@@ -90,7 +92,7 @@ class Agent(BaseAgent):
             for name, cap_kwargs in capabilities.items():
                 try:
                     self._setup_capability(name, **cap_kwargs)
-                except (ValueError, ImportError) as e:
+                except (ValueError, ImportError, TypeError) as e:
                     self._log("capability_skipped", capability=name, reason=str(e))
 
         # Install intrinsic manuals (wipe-and-rewrite .library/intrinsic/)
@@ -1035,13 +1037,15 @@ class Agent(BaseAgent):
                 if name in _GROUPS:
                     for sub in _GROUPS[name]:
                         expanded[sub] = {}
+                elif cap_kwargs is None:
+                    expanded[name] = {}
                 else:
                     expanded[name] = cap_kwargs
             capabilities = expanded
             for name, cap_kwargs in capabilities.items():
                 try:
                     self._setup_capability(name, **cap_kwargs)
-                except (ValueError, ImportError) as e:
+                except (ValueError, ImportError, TypeError) as e:
                     self._log("capability_skipped", capability=name, reason=str(e))
 
         # Install intrinsic manuals (wipe-and-rewrite .library/intrinsic/)
