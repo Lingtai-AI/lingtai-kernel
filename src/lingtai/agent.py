@@ -66,6 +66,8 @@ class Agent(BaseAgent):
                 if name in _GROUPS:
                     for sub in _GROUPS[name]:
                         expanded_dict[sub] = {}
+                elif cap_kwargs is None:
+                    pass
                 else:
                     expanded_dict[name] = cap_kwargs
             capabilities = expanded_dict
@@ -1035,6 +1037,8 @@ class Agent(BaseAgent):
                 if name in _GROUPS:
                     for sub in _GROUPS[name]:
                         expanded[sub] = {}
+                elif cap_kwargs is None:
+                    pass
                 else:
                     expanded[name] = cap_kwargs
             capabilities = expanded

@@ -72,6 +72,12 @@ def create_search_service(
 
     def _require_key() -> str:
         if not api_key:
+            # Try MINIMAX_API_KEY from environment as fallback
+            import os as _os
+            if name == "minimax":
+                _fallback_key = _os.environ.get("MINIMAX_API_KEY", "")
+                if _fallback_key:
+                    return _fallback_key
             raise RuntimeError(
                 f"Search provider {provider!r} requires an api_key."
             )
