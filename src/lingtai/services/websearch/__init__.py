@@ -4,7 +4,6 @@ Providers:
 - DuckDuckGoSearchService — zero-API-key search via ddgs package.
 - AnthropicSearchService — Anthropic native web search tool.
 - OpenAISearchService — OpenAI search-preview model.
-- GeminiSearchService — Gemini Google Search grounding.
 - MiniMaxSearchService — MiniMax MCP web_search tool.
 
 Factory:
@@ -57,7 +56,7 @@ def create_search_service(
 
     Args:
         provider: Provider name (``"duckduckgo"``, ``"anthropic"``,
-                  ``"openai"``, ``"gemini"``, ``"minimax"``).
+                  ``"openai"``, ``"minimax"``).
         api_key: API key for the provider (required for all except duckduckgo).
         model: Optional model override.
 
@@ -95,13 +94,6 @@ def create_search_service(
             kwargs["model"] = model
         return OpenAISearchService(**kwargs)
 
-    if name == "gemini":
-        from .gemini import GeminiSearchService
-        kwargs = {"api_key": _require_key()}
-        if model:
-            kwargs["model"] = model
-        return GeminiSearchService(**kwargs)
-
     if name == "minimax":
         from .minimax import MiniMaxSearchService
         return MiniMaxSearchService(api_key=_require_key(), api_host=api_host)
@@ -112,5 +104,5 @@ def create_search_service(
 
     raise ValueError(
         f"Unknown web search provider: {provider!r}. "
-        f"Supported: duckduckgo, anthropic, openai, gemini, minimax, zhipu."
+        f"Supported: duckduckgo, anthropic, openai, minimax, zhipu."
     )

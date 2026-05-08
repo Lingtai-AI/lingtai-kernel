@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
 
 PROVIDERS = {
-    "providers": ["duckduckgo", "minimax", "zhipu", "gemini", "anthropic", "openai"],
+    "providers": ["duckduckgo", "minimax", "zhipu", "anthropic", "openai"],
     "default": "duckduckgo",
     "fallback_on_inherit": "duckduckgo",
 }

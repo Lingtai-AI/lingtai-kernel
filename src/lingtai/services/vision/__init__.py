@@ -64,7 +64,7 @@ def create_vision_service(provider: str, *, api_key: str | None = None, **kwargs
     """Factory — create a VisionService for the given provider.
 
     Args:
-        provider: Provider name ("anthropic", "openai", "gemini", "minimax", "local").
+        provider: Provider name ("anthropic", "openai", "minimax", "local").
         api_key: API key for the provider (not required for "local").
         **kwargs: Additional provider-specific kwargs (e.g., model, base_url).
 
@@ -90,9 +90,6 @@ def create_vision_service(provider: str, *, api_key: str | None = None, **kwargs
     elif provider == "openai":
         from .openai import OpenAIVisionService
         return OpenAIVisionService(api_key=api_key, **kwargs)
-    elif provider == "gemini":
-        from .gemini import GeminiVisionService
-        return GeminiVisionService(api_key=api_key, **kwargs)
     elif provider == "minimax":
         from .minimax import MiniMaxVisionService
         return MiniMaxVisionService(api_key=api_key, **kwargs)
@@ -105,5 +102,5 @@ def create_vision_service(provider: str, *, api_key: str | None = None, **kwargs
     else:
         raise ValueError(
             f"Unsupported vision provider: {provider!r}. "
-            f"Supported: anthropic, openai, gemini, minimax, zhipu, mimo, local."
+            f"Supported: anthropic, openai, minimax, zhipu, mimo, local."
         )

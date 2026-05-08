@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
 
 PROVIDERS = {
-    "providers": ["minimax", "zhipu", "mimo", "gemini", "anthropic", "openai"],
+    "providers": ["minimax", "zhipu", "mimo", "anthropic", "openai"],
     "default": None,
     "fallback_on_inherit": None,  # no agnostic fallback for vision
 }
@@ -126,7 +126,7 @@ def setup(
     elif vision_service is None:
         raise ValueError(
             "vision capability requires 'vision_service' or 'provider' + 'api_key'. "
-            "Example: capabilities={'vision': {'provider': 'gemini', 'api_key': '...'}}"
+            "Example: capabilities={'vision': {'provider': 'anthropic', 'api_key': '...'}}"
         )
 
     lang = agent._config.language

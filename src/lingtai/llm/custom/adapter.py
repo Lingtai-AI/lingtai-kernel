@@ -1,16 +1,14 @@
-"""Custom adapter — named provider aliases with OpenAI, Anthropic, or Gemini compat.
+"""Custom adapter — named provider aliases with OpenAI or Anthropic compat.
 
-Any provider name not matching a built-in (openai, anthropic, gemini, minimax)
+Any provider name not matching a built-in (openai, anthropic, minimax)
 routes here. The api_compat field selects the underlying adapter:
 
   "openai"    — OpenAI Chat Completions (default)
   "anthropic" — Anthropic Messages API
-  "gemini"    — Google Gemini (requires api_key, ignores base_url)
 
 Usage in config.json providers section:
   "openrouter":  {"api_compat": "openai",    "base_url": "https://openrouter.ai/api/v1", ...}
   "bedrock":     {"api_compat": "anthropic",  "base_url": "https://...", ...}
-  "vertex":      {"api_compat": "gemini",     ...}
 """
 from lingtai.llm.base import LLMAdapter
 
@@ -30,10 +28,7 @@ def create_custom_adapter(
     is supported (currently only the OpenAI-compat path). Other api_compat
     branches silently drop it for now — extend here when needed.
     """
-    if api_compat == "gemini":
-        from ..gemini.adapter import GeminiAdapter
-        return GeminiAdapter(api_key=api_key, **kwargs)
-    elif api_compat == "anthropic":
+    if api_compat == "anthropic":
         if not base_url:
             raise ValueError("Anthropic-compat provider requires a base_url")
         from ..anthropic.adapter import AnthropicAdapter

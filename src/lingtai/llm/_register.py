@@ -10,14 +10,6 @@ from __future__ import annotations
 def register_all_adapters() -> None:
     from lingtai.llm.service import LLMService
 
-    def _gemini(*, model=None, defaults=None, api_key=None, max_rpm=0, **_kw):
-        from .gemini.adapter import GeminiAdapter
-        kw: dict = {}
-        if api_key is not None: kw["api_key"] = api_key
-        if max_rpm > 0: kw["max_rpm"] = max_rpm
-        if model: kw["default_model"] = model
-        return GeminiAdapter(**kw)
-
     def _anthropic(*, model=None, defaults=None, **kw):
         from .anthropic.adapter import AnthropicAdapter
         kw.pop("model", None)
@@ -44,7 +36,6 @@ def register_all_adapters() -> None:
         compat = defaults.get("api_compat", "openai") if defaults else "openai"
         return create_custom_adapter(api_compat=compat, **{k: v for k, v in kw.items() if v is not None})
 
-    LLMService.register_adapter("gemini", _gemini)
     LLMService.register_adapter("anthropic", _anthropic)
     LLMService.register_adapter("openai", _openai)
     LLMService.register_adapter("minimax", _minimax)
