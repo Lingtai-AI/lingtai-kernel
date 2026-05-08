@@ -122,6 +122,7 @@ def setup(
         if provider == "zhipu" and "z_ai_mode" not in kwargs:
             from .._zhipu_mode import resolve_z_ai_mode
             kwargs["z_ai_mode"] = resolve_z_ai_mode(agent)
+        kwargs.pop("base_url", None)
         vision_service = create_vision_service(provider, api_key=api_key, **kwargs)
     elif vision_service is None:
         raise ValueError(
