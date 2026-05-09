@@ -674,9 +674,13 @@ class DaemonManager:
         else:
             effective_timeout = self._timeout
 
-        # Clear completed emanations and stale pools
-        self._emanations = {k: v for k, v in self._emanations.items()
-                            if not v["future"].done()}
+        # Clear completed emanations and stale pools.
+        # Keep completed CLI emanations (backend != lingtai) so that `ask`
+        # can still route to `_handle_ask_cli` and `list` can show them.
+        self._emanations = {
+            k: v for k, v in self._emanations.items()
+            if not v["future"].done() or v.get("backend") not in (None, "lingtai")
+        }
         self._pools = [(p, c) for p, c in self._pools if not c.is_set()]
 
         # --- Claude Code / Codex backend: skip preset resolution entirely ---
