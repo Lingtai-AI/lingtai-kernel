@@ -355,3 +355,62 @@ def test_message_summary_no_disambiguation_without_recipient_id():
     result = _message_summary(msg, set())
     assert result["from"] == "mimo-1 (mimo-1)"
     assert "agent:" not in result["from"]
+
+# ---------------------------------------------------------------------------
+# Cross-project from field: full path for abs mode
+# ---------------------------------------------------------------------------
+
+
+def test_abs_mode_from_field_uses_full_path(tmp_path):
+    """When mode='abs', the from field should be the sender's full working directory."""
+    agent = _make_agent(tmp_path, agent_name="mimo-1")
+    mail_svc = MagicMock()
+    mail_svc.address = "mimo-1"
+    mail_svc.send.return_value = None
+    agent._mail_service = mail_svc
+
+    mgr = agent._email_manager
+    result = mgr.handle({
+        "action": "send",
+        "address": "/other/project/.lingtai/mimo-1",
+        "message": "hello cross-project",
+        "mode": "abs",
+    })
+    assert result["status"] == "sent"
+
+    # The sent record should have the full path as from
+    sent_dir = agent.working_dir / "mailbox" / "sent"
+    sent_entries = [d for d in sent_dir.iterdir() if d.is_dir()]
+    assert len(sent_entries) == 1
+    sent_record = json.loads((sent_entries[0] / "message.json").read_text())
+    # from should be the full working directory path
+    assert sent_record["from"] == str(agent.working_dir)
+    assert "/" in sent_record["from"]  # full path contains slashes
+
+    agent.stop(timeout=1.0)
+
+
+def test_peer_mode_from_field_uses_relative_name(tmp_path):
+    """When mode='peer' (default), the from field should be the relative name."""
+    agent = _make_agent(tmp_path, agent_name="mimo-1")
+    mail_svc = MagicMock()
+    mail_svc.address = "mimo-1"
+    mail_svc.send.return_value = None
+    agent._mail_service = mail_svc
+
+    mgr = agent._email_manager
+    result = mgr.handle({
+        "action": "send",
+        "address": "sibling-agent",
+        "message": "hello peer",
+    })
+    assert result["status"] == "sent"
+
+    sent_dir = agent.working_dir / "mailbox" / "sent"
+    sent_entries = [d for d in sent_dir.iterdir() if d.is_dir()]
+    assert len(sent_entries) == 1
+    sent_record = json.loads((sent_entries[0] / "message.json").read_text())
+    # from should be the relative name
+    assert sent_record["from"] == "mimo-1"
+
+    agent.stop(timeout=1.0)

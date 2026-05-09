@@ -648,10 +648,16 @@ class EmailManager:
         deliver_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
         all_recipients = to_list + cc + bcc
 
+        # For cross-project (abs) emails, use full path as sender
+        # so the recipient can reply to the correct address.
+        abs_sender = str(self._agent._working_dir) if mode == "abs" else None
+
         for addr in all_recipients:
             dispatch_payload = dict(base_payload)
             dispatch_payload["_dispatch_to"] = addr
             dispatch_payload["_mode"] = mode
+            if abs_sender is not None:
+                dispatch_payload["from"] = abs_sender
             msg_id = _persist_to_outbox(self._agent, dispatch_payload, deliver_at)
             tt = threading.Thread(
                 target=_mailman,
@@ -665,8 +671,11 @@ class EmailManager:
         sent_id = _new_mailbox_id()
         sent_dir = self._mailbox_path / "sent" / sent_id
         sent_dir.mkdir(parents=True, exist_ok=True)
+        sent_payload = dict(base_payload)
+        if abs_sender is not None:
+            sent_payload["from"] = abs_sender
         sent_record = {
-            **base_payload,
+            **sent_payload,
             "_mailbox_id": sent_id,
             "sent_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "delay": delay,
