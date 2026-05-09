@@ -87,6 +87,7 @@ def get_schema(lang: str = "en") -> dict:
                         "task": {"type": "string"},
                         "tools": {"type": "array", "items": {"type": "string"}},
                         "preset": {"type": "string"},
+                        "model": {"type": "string"},
                     },
                     "required": ["task", "tools"],
                 },
@@ -528,6 +529,7 @@ class DaemonManager:
         task: str,
         cancel_event: threading.Event,
         timeout_event: threading.Event | None = None,
+        model: str | None = None,
     ) -> str:
         """Run a Claude Code CLI session as the emanation backend.
 
@@ -535,6 +537,11 @@ class DaemonManager:
         and streams stdout back via ``_notify_parent()``. After the process
         finishes, discovers the session ID from the JSONL files and stores it
         in run_dir's daemon.json as ``claude_session_id``.
+
+        When model is provided, passes ``--model <model>`` to the CLI.
+        Writes a CLAUDE.md to the run directory and adds ``--add-dir`` so the
+        Claude Code session picks up network awareness (email contract, codex
+        access, parent identity).
         """
         def _exit_cancelled() -> str:
             if timeout_event is not None and timeout_event.is_set():
@@ -546,14 +553,33 @@ class DaemonManager:
         if cancel_event.is_set():
             return _exit_cancelled()
 
+        # Write CLAUDE.md for network awareness
+        from .claude_md import build_emanation_claude_md
+
+        lingtai_root = str(self._agent._working_dir.parent)
+        parent_address = self._agent._working_dir.name
+        codex_path = str(self._agent._working_dir / "codex" / "codex.json")
+        claude_md_content = build_emanation_claude_md(
+            emanation_id=em_id,
+            parent_address=parent_address,
+            lingtai_root=lingtai_root,
+            codex_path=codex_path,
+            task=task,
+        )
+        claude_md_path = run_dir.path / "CLAUDE.md"
+        claude_md_path.write_text(claude_md_content, encoding="utf-8")
+
         cmd = [
             "claude",
             "--print",
             "--dangerously-skip-permissions",
             "--output-format", "text",
             "--name", em_id,
-            task,
+            "--add-dir", str(run_dir.path),
         ]
+        if model:
+            cmd += ["--model", model]
+        cmd.append(task)
         self._log("daemon_claude_code_start", em_id=em_id, cmd=" ".join(cmd))
 
         try:
@@ -887,10 +913,12 @@ class DaemonManager:
                 return {"status": "error",
                         "message": f"Failed to create daemon folder: {e}"}
 
+            task_model = spec.get("model")
             future = pool.submit(
                 self._run_claude_code_emanation,
                 em_id, run_dir, spec["task"],
                 cancel_event, timeout_event,
+                model=task_model,
             )
             future.add_done_callback(
                 lambda f, eid=em_id, task=spec["task"]:
