@@ -828,6 +828,7 @@ def test_inject_notification_meta_prefers_most_recent_block(tmp_path: Path) -> N
         def __init__(self):
             self._chat_stub = chat
             self._pending_notification_meta = '{"_synthesized": true, "notifications": {"email": {}}}'
+            self._pending_notification_fp = None
             self._logs = []
 
         @property
@@ -874,6 +875,7 @@ def test_inject_notification_meta_dict_only(tmp_path: Path) -> None:
         def __init__(self):
             self._chat_stub = chat
             self._pending_notification_meta = '{"_synthesized": true, "notifications": {"molt": {"pressure": 0.9}}}'
+            self._pending_notification_fp = None
             self._logs = []
 
         @property
@@ -929,6 +931,7 @@ def test_inject_notification_meta_strips_old_prefix(tmp_path: Path) -> None:
         def __init__(self):
             self._chat_stub = chat
             self._pending_notification_meta = '{"_synthesized": true, "notifications": {"email": {}}}'
+            self._pending_notification_fp = None
             self._logs = []
 
         @property

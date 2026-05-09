@@ -389,6 +389,10 @@ class BaseAgent:
         # by _inject_notification_meta inside SessionManager.send().
         self._pending_notification_meta: str | None = None
         self._pending_notification_fp: str | None = None
+        # Per-turn flag: prevents _check_molt_pressure from incrementing
+        # _compaction_warnings more than once per turn. Reset at turn
+        # boundaries in _handle_request / _handle_tc_wake.
+        self._molt_warning_counted: bool = False
 
         # Lifecycle
         self._shutdown = threading.Event()
@@ -932,9 +936,9 @@ class BaseAgent:
         # --- Commit fingerprint only if injection succeeded ---
         # ACTIVE defers FP commit to _inject_notification_meta(); only
         # STUCK/SUSPENDED commit here (they can't inject at all).
-        if inject_ok or self._state in (
-            AgentState.STUCK, AgentState.SUSPENDED
-        ):
+        if inject_ok:
+            self._notification_fp = fp
+        elif self._state in (AgentState.STUCK, AgentState.SUSPENDED):
             self._notification_fp = fp
 
     def _heal_pending_tool_calls(self, *, reason: str) -> bool:
@@ -1038,8 +1042,8 @@ class BaseAgent:
         # uniquely even when the notification payload repeats. The monotonic
         # injection_seq is added on top to guarantee novelty within the same
         # second (heal+retry tight loops, time-blind agents).
-        # Defensive try/except + getattr cover test doubles that bypass
-        # __init__ and don't carry the full agent attribute surface.
+        # Defensive getattr covers test doubles that bypass __init__ and
+        # don't carry the full agent attribute surface.
         self._notification_inject_seq = getattr(self, "_notification_inject_seq", 0) + 1
         try:
             meta = build_meta(self)
