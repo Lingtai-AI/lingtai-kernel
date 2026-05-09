@@ -29,6 +29,8 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -113,6 +115,11 @@ def get_schema(lang: str = "en") -> dict:
             "confirm": {
                 "type": "boolean",
                 "description": t(lang, "avatar.confirm"),
+            },
+            "backend": {
+                "type": "string",
+                "enum": ["lingtai", "claude-code"],
+                "description": t(lang, "avatar.backend"),
             },
         },
         "allOf": [
@@ -333,6 +340,17 @@ class AvatarManager:
             if sig_file.is_file():
                 sig_file.unlink(missing_ok=True)
 
+        # --- Claude Code backend: skip lingtai init.json entirely ---
+        backend = args.get("backend", "lingtai")
+        if backend == "claude-code":
+            return self._spawn_claude_code(
+                peer_name=peer_name,
+                avatar_working_dir=avatar_working_dir,
+                avatar_type=avatar_type,
+                reasoning=reasoning,
+                comment=args.get("comment", ""),
+            )
+
         # Seed the avatar's first turn with a parent-identity prompt + the
         # caller's reasoning (task brief). Written to the avatar's `.prompt`
         # file — picked up by the kernel's signal-file watcher on first poll
@@ -428,6 +446,178 @@ class AvatarManager:
                 f"check .agent.heartbeat freshness before relying on it"
             )
         return result
+
+    # ------------------------------------------------------------------
+    # Claude Code backend
+    # ------------------------------------------------------------------
+
+    def _spawn_claude_code(
+        self,
+        peer_name: str,
+        avatar_working_dir: Path,
+        avatar_type: str,
+        reasoning: str | None = None,
+        comment: str = "",
+    ) -> dict:
+        """Spawn a Claude Code CLI avatar as a persistent network peer.
+
+        Creates the working directory structure, writes CLAUDE.md with
+        email contract + codex instructions + mission, launches the
+        avatar wrapper process, and verifies boot.
+        """
+        parent = self._agent
+        lingtai_root = str(parent._working_dir.parent)
+
+        # 1. Create directory structure (deep copy already happened if needed)
+        for subdir in ("mailbox/inbox", "mailbox/sent", "codex", "logs"):
+            (avatar_working_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+        # 2. Write .agent.json (minimal — for network handshake)
+        agent_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+        agent_json = {
+            "agent_id": agent_id,
+            "agent_name": peer_name,
+            "nickname": None,
+            "address": peer_name,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "admin": {},
+            "language": parent._config.language,
+            "state": "active",
+            "runtime": "claude-code",
+            "capabilities": [
+                ["bash", {}],
+                ["read", {}],
+                ["write", {}],
+                ["edit", {}],
+                ["glob", {}],
+                ["grep", {}],
+            ],
+        }
+        (avatar_working_dir / ".agent.json").write_text(
+            json.dumps(agent_json, indent=2), encoding="utf-8"
+        )
+
+        # 3. Initialize codex
+        if avatar_type == "deep":
+            # Deep copy already handled by _prepare_deep (codex/ copied)
+            pass
+        else:
+            codex_path = avatar_working_dir / "codex" / "codex.json"
+            if not codex_path.is_file():
+                codex_path.write_text(
+                    json.dumps({"version": 1, "entries": []}, indent=2)
+                )
+
+        # 4. Write CLAUDE.md with full network integration instructions
+        from .claude_md import build_avatar_claude_md
+
+        parent_address = parent._working_dir.name
+        mission = reasoning or "No specific mission provided."
+        claude_md = build_avatar_claude_md(
+            agent_name=peer_name,
+            agent_id=agent_id,
+            parent_address=parent_address,
+            lingtai_root=lingtai_root,
+            mission=mission,
+            codex_path=str(avatar_working_dir / "codex" / "codex.json"),
+            comment=comment,
+        )
+        (avatar_working_dir / "CLAUDE.md").write_text(claude_md, encoding="utf-8")
+
+        # 5. Write .prompt file for the wrapper to consume on first boot
+        parent_name = parent.agent_name or parent_address
+        parent_prompt = t(
+            parent._config.language, "avatar.parent_prompt",
+            parent_name=parent_name,
+            parent_address=parent_address,
+        )
+        first_prompt = parent_prompt
+        if reasoning and reasoning.strip():
+            first_prompt = f"{parent_prompt}\n\n{reasoning.strip()}"
+        (avatar_working_dir / ".prompt").write_text(first_prompt, encoding="utf-8")
+
+        # 6. Launch wrapper process
+        proc, stderr_path = self._launch_claude_code(avatar_working_dir)
+        pid = proc.pid
+
+        # 7. Wait for boot (heartbeat file)
+        boot_status, boot_error = self._wait_for_boot(
+            avatar_working_dir, proc, stderr_path,
+        )
+
+        # 8. Record in ledger
+        ledger_extra = {"boot_status": boot_status, "backend": "claude-code"}
+        if boot_error:
+            ledger_extra["boot_error"] = boot_error
+        self._append_ledger(
+            "avatar", peer_name,
+            working_dir=avatar_working_dir.name,
+            mission=reasoning or "",
+            type=avatar_type,
+            pid=pid,
+            **ledger_extra,
+        )
+
+        if boot_status == "failed":
+            return {
+                "error": (
+                    f"avatar {peer_name!r} failed to boot: {boot_error}. "
+                    f"See {stderr_path} for details."
+                ),
+                "address": avatar_working_dir.name,
+                "agent_name": peer_name,
+                "backend": "claude-code",
+                "pid": pid,
+            }
+
+        # Auto-distribute rules to all descendants (including newborn)
+        parent_rules_md = parent._working_dir / "system" / "rules.md"
+        if parent_rules_md.is_file():
+            try:
+                rules_content = parent_rules_md.read_text()
+            except OSError:
+                rules_content = ""
+            if rules_content.strip():
+                self._distribute_rules_to_descendants(rules_content, parent._working_dir)
+
+        result = {
+            "status": "ok",
+            "address": avatar_working_dir.name,
+            "agent_name": peer_name,
+            "type": avatar_type,
+            "backend": "claude-code",
+            "pid": pid,
+        }
+        if boot_status == "slow":
+            result["warning"] = (
+                f"avatar still booting after {self._BOOT_WAIT_SECS}s — "
+                f"check .agent.heartbeat freshness before relying on it"
+            )
+        return result
+
+    @staticmethod
+    def _launch_claude_code(working_dir: Path) -> tuple[subprocess.Popen, Path]:
+        """Launch the Claude Code avatar wrapper as a detached process."""
+        wrapper_script = Path(__file__).parent / "cc_avatar_wrapper.py"
+        python = sys.executable
+        cmd = [python, str(wrapper_script), str(working_dir)]
+
+        logs_dir = working_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        stderr_path = logs_dir / "spawn.stderr"
+        stderr_fh = stderr_path.open("wb")
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr_fh,
+                start_new_session=True,
+            )
+        finally:
+            stderr_fh.close()
+        return proc, stderr_path
 
     @classmethod
     def _wait_for_boot(

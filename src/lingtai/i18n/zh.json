@@ -59,5 +59,6 @@
   "daemon.message": "'ask' 操作的跟进消息",
   "library.description": "你的器灵专属技能库。系统提示词中的 <available_skills> 目录列出了当前所有可用的技能。调用 info 可阅读完整的技能库工作流（编写、发布、通过 pad.append 加载），并验证技能库的健康状态。也可直接查阅 .library/intrinsic/ 中的 library-manual 技能。",
   "library.action_info": "info：返回 library-manual 技能正文，以及运行时健康快照（目录规模、解析后的路径、问题列表）。",
-  "library.preamble": "以下技能为特定任务提供专门指导。当任务匹配某个技能的描述时，使用 read 工具读取 location 字段所示路径下的 SKILL.md 文件，然后遵循其中指示。每个技能文件夹可能包含支持文件（脚本、模板、数据）——SKILL.md 会引用它们。经常使用的技能可通过 psyche({object:'pad', action:'append', files:[location]}) 固定到 pad 中，使其跨轮次持久存在。若没有明显匹配的技能，则不加载任何技能。"
+  "library.preamble": "以下技能为特定任务提供专门指导。当任务匹配某个技能的描述时，使用 read 工具读取 location 字段所示路径下的 SKILL.md 文件，然后遵循其中指示。每个技能文件夹可能包含支持文件（脚本、模板、数据）——SKILL.md 会引用它们。经常使用的技能可通过 psyche({object:'pad', action:'append', files:[location]}) 固定到 pad 中，使其跨轮次持久存在。若没有明显匹配的技能，则不加载任何技能。",
+  "avatar.backend": "执行后端。'lingtai'（默认）生成完整的灵台内核代理。'claude-code' 生成一个 Claude Code CLI 会话作为持久网络参与者，拥有自己的邮箱、典集和生命周期。"
 }

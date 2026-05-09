@@ -59,5 +59,6 @@
   "daemon.message": "'ask' 操作之跟进之言",
   "library.description": "尔之器灵藏典。系统之中 <available_skills> 所列，皆此时可取之技。呼 info 以得 library-manual 全文（藏用、出新、以 pad.append 载入），兼验藏典康否。详参 .library/intrinsic/ 中 library-manual 一技。",
   "library.action_info": "info：还 library-manual 之文，并录当时之康状（技数、解径、患记）。",
-  "library.preamble": "下列诸技，各司其事。凡所遇事与技之描合者，以 read 取其 location 所指之 SKILL.md，循而行之。每技之匣，或含副件（script、template、data），SKILL.md 自有所引。常用之技，可以 psyche({object:'pad', action:'append', files:[location]}) 固于 pad，跨轮常存。若无可取者，勿妄载。"
+  "library.preamble": "下列诸技，各司其事。凡所遇事与技之描合者，以 read 取其 location 所指之 SKILL.md，循而行之。每技之匣，或含副件（script、template、data），SKILL.md 自有所引。常用之技，可以 psyche({object:'pad', action:'append', files:[location]}) 固于 pad，跨轮常存。若无可取者，勿妄载。",
+  "avatar.backend": "所用之后端。'lingtai'（默）生完整灵台内核代理。'claude-code' 生 Claude Code CLI 会话为持久网络之节，自具邮箱、典集与生灭之序。"
 }

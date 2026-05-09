@@ -40,6 +40,7 @@ class AvatarEdge:
     capabilities: list[str] = field(default_factory=list)
     provider: str | None = None
     model: str | None = None
+    backend: str = "lingtai"         # "lingtai" | "claude-code"
 
 
 @dataclass
@@ -212,6 +213,7 @@ def _build_avatar_edges(nodes: dict[str, AgentNode]) -> list[AvatarEdge]:
                 capabilities=record.get("capabilities", []),
                 provider=record.get("provider"),
                 model=record.get("model"),
+                backend=record.get("backend", "lingtai"),
             ))
     return edges
 
