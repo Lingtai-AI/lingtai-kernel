@@ -15,6 +15,7 @@ from ..logging import get_logger
 from ..loop_guard import LoopGuard
 from ..tool_executor import ToolExecutor
 from ..meta_block import build_meta, render_meta
+from ..sent_message_tracker import SEND_TOOLS, SEND_ACTIONS, CHECK_ACTIONS
 from ..time_veil import now_iso
 
 logger = get_logger()
@@ -576,6 +577,9 @@ def _handle_request(agent, msg: Message) -> None:
     # notification but don't double-count).
     agent._molt_warning_counted = False
 
+    # Reset sent-message tracker flag at turn boundary (issue #63).
+    agent._sent_tracker.reset()
+
     # Splice any queued involuntary tool-call pairs
     agent._drain_tc_inbox()
 
@@ -786,6 +790,93 @@ def _get_guard_limits(agent) -> tuple[int, int, int]:
     return (max_turns, 2, 8)
 
 
+def _check_external_send(agent, tool_calls) -> bool:
+    """Check if any tool calls sent a message to an external channel.
+
+    Scans the just-executed batch for send/reply actions on external
+    channel tools (telegram, imap, wechat, feishu). When found, records
+    the send in the tracker and returns True — the caller should commit
+    tool results and break the tool loop so the agent goes IDLE.
+
+    The notification system will wake the agent when a reply arrives.
+    """
+    tracker = agent._sent_tracker
+    for tc in tool_calls:
+        if tc.name not in SEND_TOOLS:
+            continue
+        args = tc.args or {}
+        action = args.get("action", "")
+        if action in SEND_ACTIONS:
+            content = args.get("message", "") or args.get("body", "") or args.get("text", "")
+            recipient = args.get("to", "") or args.get("chat_id", "") or args.get("address", "")
+            if content and recipient:
+                if tracker.was_recently_sent(content, recipient):
+                    agent._log(
+                        "send_dedup_detected",
+                        tool=tc.name,
+                        recipient=recipient,
+                    )
+                    continue
+                tracker.record_sent(content, recipient, tc.name)
+                agent._log(
+                    "external_send_detected",
+                    tool=tc.name,
+                    action=action,
+                    recipient=recipient,
+                )
+            else:
+                # Send with missing content/recipient — still counts as a send
+                tracker.just_sent_message = True
+                agent._log(
+                    "external_send_detected",
+                    tool=tc.name,
+                    action=action,
+                    recipient=recipient or "(unknown)",
+                )
+        elif action in CHECK_ACTIONS:
+            # Polling backoff handled separately after tool results
+            pass
+    return tracker.just_sent_message
+
+
+def _check_poll_backoff(agent, tool_calls) -> bool:
+    """Check if polling actions should trigger idle-after-backoff.
+
+    Counts consecutive check/read calls on external channel tools within
+    the same turn. After ``max_poll_retries`` consecutive checks on the
+    same channel, returns True to signal the agent should go IDLE.
+
+    The counter resets when a send action occurs or when new messages
+    arrive via the notification system.
+    """
+    tracker = agent._sent_tracker
+    should_idle = False
+    for tc in tool_calls:
+        if tc.name not in SEND_TOOLS:
+            continue
+        args = tc.args or {}
+        action = args.get("action", "")
+        if action in SEND_ACTIONS:
+            # Send resets the poll counter for this channel.
+            tracker.reset_poll(tc.name)
+            continue
+        if action not in CHECK_ACTIONS:
+            continue
+        # Record a poll attempt (assume no new messages — the conservative
+        # default). If new messages actually arrived, the notification
+        # system will wake the agent via a separate path.
+        tracker.record_poll(tc.name, found_new=False)
+        if tracker.should_stop_polling(tc.name):
+            agent._log(
+                "poll_backoff_exhausted",
+                tool=tc.name,
+                action=action,
+                poll_count=tracker._poll_counts.get(tc.name, 0),
+            )
+            should_idle = True
+    return should_idle
+
+
 def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
     """Handle tool calls and collect text output.
 
@@ -885,6 +976,37 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             agent._log("turn_cancelled_post_tool",
                        reason="cancel_event_set_after_tool_execute")
             return {"text": "", "failed": False, "errors": []}
+
+        # Issue #63: idle-after-send — if the agent just sent a message
+        # to an external channel (Telegram, IMAP, etc.), commit tool
+        # results and break the loop. The notification system will wake
+        # the agent when a reply arrives. Without this, the LLM would
+        # re-enter the loop, poll for a response, get nothing, and
+        # re-send — creating an infinite polling loop.
+        if _check_external_send(agent, response.tool_calls):
+            if tool_results and agent._chat:
+                agent._chat.commit_tool_results(tool_results)
+            agent._log("idle_after_send",
+                       reason="external_message_sent")
+            agent._sent_tracker.reset()
+            return {
+                "text": "\n".join(collected_text_parts),
+                "failed": False,
+                "errors": [],
+            }
+
+        # Issue #63: poll backoff — if the agent is repeatedly checking
+        # for new messages without finding any, go IDLE after max retries.
+        if _check_poll_backoff(agent, response.tool_calls):
+            if tool_results and agent._chat:
+                agent._chat.commit_tool_results(tool_results)
+            agent._log("idle_after_poll_backoff",
+                       reason="poll_retries_exhausted")
+            return {
+                "text": "\n".join(collected_text_parts),
+                "failed": False,
+                "errors": [],
+            }
 
         guard.record_calls(len(response.tool_calls))
 
