@@ -488,7 +488,7 @@ def _check_molt_pressure(agent) -> None:
     pressure = agent._session.get_context_pressure()
 
     if pressure >= agent._config.molt_hard_ceiling:
-        if not getattr(agent, "_molt_warning_counted", False):
+        if not agent._molt_warning_counted:
             agent._session._compaction_warnings += 1
             agent._molt_warning_counted = True
         warnings = agent._session._compaction_warnings
@@ -524,7 +524,7 @@ def _check_molt_pressure(agent) -> None:
         agent._log("molt_hard_ceiling_warning", pressure=pressure, ceiling=agent._config.molt_hard_ceiling)
     elif pressure >= agent._config.molt_pressure:
         max_warnings = agent._config.molt_warnings
-        if not getattr(agent, "_molt_warning_counted", False):
+        if not agent._molt_warning_counted:
             agent._session._compaction_warnings += 1
             agent._molt_warning_counted = True
         warnings = agent._session._compaction_warnings
@@ -755,6 +755,13 @@ def _handle_tc_wake(agent, msg: Message) -> None:
         # Notification-driven turns should also check pressure so
         # warnings fire even when the agent is woken by mail/soul.
         _check_molt_pressure(agent)
+        # Synchronous notification sync — same pattern as _process_response:
+        # ensure any just-published molt warning reaches
+        # _pending_notification_meta before the next session.send().
+        try:
+            agent._sync_notifications()
+        except Exception:
+            pass
     except Exception as e:
         if iface.has_pending_tool_calls():
             # tool_completed=True: the wire-drive path only fires when the
