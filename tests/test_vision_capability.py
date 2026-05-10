@@ -1,6 +1,8 @@
 """Tests for vision capability and VisionService."""
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -115,12 +117,94 @@ def test_vision_setup_with_provider_and_key(tmp_path):
         assert isinstance(mgr, VisionManager)
 
 
+def test_vision_setup_with_codex_provider_without_api_key(tmp_path):
+    """Codex vision uses ChatGPT OAuth, so setup should not require api_key."""
+    with patch("lingtai.capabilities.vision.create_vision_service") as mock_factory:
+        mock_svc = MagicMock(spec=VisionService)
+        mock_factory.return_value = mock_svc
+
+        agent = make_mock_agent(tmp_path)
+        mgr = setup(agent, provider="codex")
+
+        mock_factory.assert_called_once_with("codex", api_key=None)
+        assert isinstance(mgr, VisionManager)
+
+
+def test_vision_setup_unsupported_provider_raises(tmp_path):
+    """Unsupported providers should raise so agent capability bookkeeping rolls back."""
+    agent = make_mock_agent(tmp_path)
+    with pytest.raises(ValueError, match="Unsupported vision provider"):
+        setup(agent, provider="not-real")
+    agent._log.assert_called_with(
+        "capability_skipped",
+        capability="vision",
+        requested_provider="not-real",
+        reason="no vision support for provider 'not-real'",
+    )
+
+
 def test_vision_setup_requires_provider_or_service(tmp_path):
     """setup() without provider or service raises ValueError."""
     agent = make_mock_agent(tmp_path)
     with pytest.raises(ValueError, match="vision capability requires"):
         setup(agent)
 
+
+def test_create_vision_service_codex_without_api_key(monkeypatch):
+    """Codex factory should not require api_key and should use OAuth manager."""
+    fake_openai = SimpleNamespace(OpenAI=MagicMock())
+    monkeypatch.setitem(sys.modules, "openai", fake_openai)
+
+    with patch("lingtai.services.vision.codex.CodexTokenManager") as mock_mgr:
+        svc = create_vision_service("codex")
+
+    from lingtai.services.vision.codex import CodexVisionService
+
+    assert isinstance(svc, CodexVisionService)
+    mock_mgr.assert_called_once_with(token_path=None)
+
+
+def test_codex_vision_service_streams_responses_api(monkeypatch, tmp_path):
+    """CodexVisionService should parse streaming output_text deltas without network calls."""
+    img_path = tmp_path / "chart.png"
+    img_path.write_bytes(b"fake png bytes")
+
+    events = [
+        SimpleNamespace(type="response.created"),
+        SimpleNamespace(type="response.output_text.delta", delta="A chart"),
+        SimpleNamespace(type="response.output_text.delta", delta=" with candles"),
+        SimpleNamespace(type="response.completed"),
+    ]
+    responses = MagicMock()
+    responses.create.return_value = events
+    client = SimpleNamespace(responses=responses)
+    openai_cls = MagicMock(return_value=client)
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=openai_cls))
+
+    with patch("lingtai.services.vision.codex.CodexTokenManager") as mock_mgr_cls:
+        mock_mgr_cls.return_value.get_access_token.return_value = "oauth-token"
+        from lingtai.services.vision.codex import CodexVisionService
+
+        svc = CodexVisionService(timeout=9.5)
+        result = svc.analyze_image(str(img_path), prompt="What is shown?")
+
+    assert result == "A chart with candles"
+    openai_cls.assert_called_once_with(
+        api_key="oauth-token",
+        base_url="https://chatgpt.com/backend-api/codex",
+        timeout=9.5,
+    )
+    responses.create.assert_called_once()
+    kwargs = responses.create.call_args.kwargs
+    assert kwargs["model"] == "gpt-5.5"
+    assert kwargs["instructions"]
+    assert kwargs["stream"] is True
+    assert kwargs["store"] is False
+    assert "max_output_tokens" not in kwargs
+    content = kwargs["input"][0]["content"]
+    assert content[0] == {"type": "input_text", "text": "What is shown?"}
+    assert content[1]["type"] == "input_image"
+    assert content[1]["image_url"].startswith("data:image/png;base64,")
 
 def test_create_vision_service_unknown_provider():
     """create_vision_service should raise ValueError for unknown providers."""

@@ -8,10 +8,10 @@ Vision capability — image understanding via pluggable VisionService backends.
 
 | File | LOC | Role |
 |---|---|---|
-| `__init__.py` | 135 | `VisionManager`, `setup()`, provider registry, tool schema |
+| `__init__.py` | 134 | `VisionManager`, `setup()`, provider registry, tool schema |
 
 **Key symbols:**
-- `PROVIDERS` (L27-31) — supported providers: `minimax`, `zhipu`, `mimo`, `gemini`, `anthropic`, `openai`. No default, no fallback.
+- `PROVIDERS` (L27-31) — supported providers: `minimax`, `zhipu`, `mimo`, `gemini`, `anthropic`, `openai`, `codex`. No default, no fallback.
 - `VisionManager` (L53) — handles tool calls; resolves relative image paths via `agent._working_dir` (L73).
 - `setup()` (L90) — entry point called by `capabilities.setup_capability()`. Creates `VisionManager`, registers `"vision"` tool on agent (L134).
 
@@ -35,6 +35,7 @@ Single file. No internal state — `VisionManager` instances hold agent + servic
 
 ## Notes
 
-- Graceful skip (L105-112): if the agent's provider isn't in `PROVIDERS`, setup returns `None` silently (no error). Agent logs `capability_skipped`.
-- Provider-specific kwarg injection (L119-124) is opt-in per provider — prevents `TypeError` from passing unsupported kwargs to heterogeneous service constructors.
+- Unsupported providers (L104-111): if the requested provider is not in `PROVIDERS`, setup logs `capability_skipped` and raises `ValueError` so capability bookkeeping can roll back.
+- Provider-specific kwarg injection (L115-120) is opt-in per provider — prevents `TypeError` from passing unsupported kwargs to heterogeneous service constructors.
+- Codex is exposed through `PROVIDERS` and flows to `create_vision_service("codex", api_key=None)`; the service uses ChatGPT OAuth rather than an API key.
 - Local mlx-vlm provider exists in `services/vision/local.py` but is intentionally hidden from `PROVIDERS` (see docstring L11-14).

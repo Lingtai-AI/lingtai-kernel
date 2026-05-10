@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
 
 PROVIDERS = {
-    "providers": ["minimax", "zhipu", "mimo", "gemini", "anthropic", "openai"],
+    "providers": ["minimax", "zhipu", "mimo", "gemini", "anthropic", "openai", "codex"],
     "default": None,
     "fallback_on_inherit": None,  # no agnostic fallback for vision
 }
@@ -100,8 +100,6 @@ def setup(
     Raises ``ValueError`` if neither is provided.
     """
     if vision_service is None and provider is not None:
-        # Graceful skip: if the resolved provider isn't supported by vision
-        # and no fallback exists, silently skip registration.
         if provider not in PROVIDERS["providers"]:
             agent._log(
                 "capability_skipped",
@@ -109,7 +107,7 @@ def setup(
                 requested_provider=provider,
                 reason=f"no vision support for provider {provider!r}",
             )
-            return None
+            raise ValueError(f"Unsupported vision provider: {provider!r}")
 
         # Provider-specific kwarg injection. Each branch is opt-in because
         # vision services have heterogeneous constructor signatures —
