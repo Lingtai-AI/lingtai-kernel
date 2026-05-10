@@ -147,6 +147,9 @@ def _context_molt(agent, args: dict) -> dict:
             keep_pairs.append((call_for_provider_id[pid], result_for_provider_id[pid]))
 
     # Parse keep_last — number of trailing entries to preserve across the molt.
+    # Default is 20: every molt automatically keeps the last 20 conversation
+    # entries unless the agent explicitly passes 0 or a different value.
+    _KEEP_LAST_DEFAULT = 20
     keep_last_raw = args.get("keep_last")
     keep_last: int | None = None
     if keep_last_raw is not None:
@@ -157,7 +160,9 @@ def _context_molt(agent, args: dict) -> dict:
         if keep_last < 0:
             return {"error": "keep_last must be non-negative."}
         if keep_last == 0:
-            keep_last = None  # 0 is the same as not specifying it
+            keep_last = None  # 0 explicitly disables keep_last
+    else:
+        keep_last = _KEEP_LAST_DEFAULT
 
     before_tokens = iface_pre.estimate_context_tokens()
 
@@ -175,6 +180,28 @@ def _context_molt(agent, args: dict) -> dict:
             and not any(isinstance(b, ToolCallBlock) and b.id == tc_id for b in e.content)
         ]
         keep_last_entries = non_system[-keep_last:] if keep_last <= len(non_system) else non_system[:]
+
+    # Deduplicate: when both keep_last and keep_tool_calls are used, remove
+    # any keep_last entries whose ToolCallBlocks or ToolResultBlocks are
+    # already captured in keep_pairs, so the same tool call doesn't appear
+    # twice in the post-molt context.
+    if keep_last_entries and keep_pairs:
+        kept_wire_ids = set()
+        for call_block, result_block in keep_pairs:
+            kept_wire_ids.add(call_block.id)
+            kept_wire_ids.add(result_block.id)
+
+        def _entry_overlaps_keep_pairs(entry) -> bool:
+            for block in entry.content:
+                if isinstance(block, ToolCallBlock) and block.id in kept_wire_ids:
+                    return True
+                if isinstance(block, ToolResultBlock) and block.id in kept_wire_ids:
+                    return True
+            return False
+
+        keep_last_entries = [
+            e for e in keep_last_entries if not _entry_overlaps_keep_pairs(e)
+        ]
 
     # Snapshot the pre-molt interface to a discrete file so future
     # past-self consultation can load it as cached substrate. Best-effort.

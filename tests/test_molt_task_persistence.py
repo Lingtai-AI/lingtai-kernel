@@ -100,8 +100,8 @@ def _count_non_system_entries(iface):
 class TestContextMoltKeepLast:
     """Test keep_last parameter on agent-initiated molt."""
 
-    def test_keep_last_none_archives_all(self, tmp_path):
-        """Default (no keep_last): all entries archived, fresh session is clean."""
+    def test_keep_last_default_preserves_20(self, tmp_path):
+        """Default (no keep_last): keeps last 20 entries (default)."""
         from lingtai_kernel.intrinsics.psyche._molt import _context_molt
 
         agent = _make_agent(tmp_path)
@@ -119,6 +119,40 @@ class TestContextMoltKeepLast:
             result = _context_molt(agent, {
                 "summary": "Test summary",
                 "_tc_id": tc_id,
+            })
+
+            assert result["status"] == "ok"
+            # Default keeps last 20, but only 4 non-system entries exist
+            # (excluding the molt call), so all 4 are kept.
+            assert result["kept_last"] == 4
+
+            iface = agent._chat.interface
+            non_system = [e for e in iface.entries if e.role != "system"]
+            # 4 kept + 1 molt call = 5
+            assert len(non_system) == 5
+        finally:
+            agent.stop()
+
+    def test_keep_last_zero_archives_all(self, tmp_path):
+        """keep_last=0 explicitly disables keeping, archives all."""
+        from lingtai_kernel.intrinsics.psyche._molt import _context_molt
+
+        agent = _make_agent(tmp_path)
+        agent.start()
+        try:
+            _ensure_session(agent)
+            _populate_conversation(agent, [
+                ("user", "Message 1"),
+                ("assistant", "Reply 1"),
+                ("user", "Message 2"),
+                ("assistant", "Reply 2"),
+            ])
+            tc_id = _add_molt_call(agent)
+
+            result = _context_molt(agent, {
+                "summary": "Test summary",
+                "_tc_id": tc_id,
+                "keep_last": 0,
             })
 
             assert result["status"] == "ok"
@@ -224,33 +258,69 @@ class TestContextMoltKeepLast:
         finally:
             agent.stop()
 
-    def test_keep_last_zero_same_as_none(self, tmp_path):
-        """keep_last=0 is treated the same as not specifying it."""
+    def test_keep_last_deduplicates_with_keep_tool_calls(self, tmp_path):
+        """Entries already in keep_tool_calls are removed from keep_last."""
         from lingtai_kernel.intrinsics.psyche._molt import _context_molt
+        from lingtai_kernel.llm.interface import ToolResultBlock
 
         agent = _make_agent(tmp_path)
         agent.start()
         try:
             _ensure_session(agent)
-            _populate_conversation(agent, [
-                ("user", "Message"),
-                ("assistant", "Reply"),
+            iface = agent._chat.interface
+
+            # Add a user message
+            iface.add_user_message("Do something")
+
+            # Add a tool call + result pair with a LingTai id
+            tool_tc_id = "toolu_tool_dedup"
+            lt_id = "tc_dedup_abc"
+            iface.add_assistant_message(content=[
+                ToolCallBlock(id=tool_tc_id, name="file_read", args={"path": "x.py"})
             ])
+            iface.add_tool_results([
+                ToolResultBlock(
+                    id=tool_tc_id, name="file_read",
+                    content={"text": "file contents", "_tool_call_id": lt_id}
+                )
+            ])
+
+            # Add more conversation
+            iface.add_assistant_message([TextBlock(text="Here's what I found")])
+            iface.add_user_message("Thanks")
+
             tc_id = _add_molt_call(agent)
 
+            # keep_last=100 to keep everything, keep_tool_calls names the
+            # same tool pair — the overlapping entries should be deduplicated.
             result = _context_molt(agent, {
                 "summary": "Test summary",
                 "_tc_id": tc_id,
-                "keep_last": 0,
+                "keep_last": 100,
+                "keep_tool_calls": [lt_id],
             })
 
             assert result["status"] == "ok"
-            assert result["kept_last"] == 0
+            assert result["kept_tool_calls"] == 1
 
+            # Without dedup, keep_last would include the tool_call and
+            # tool_result entries AND keep_pairs would replay them again.
+            # With dedup, the two overlapping entries are removed from
+            # keep_last_entries. Non-system entries before molt:
+            #   user("Do something"), assistant(tool_call), user(tool_result),
+            #   assistant("Here's what I found"), user("Thanks")
+            # = 5 entries. The tool_call entry and tool_result entry overlap
+            # with keep_pairs, so keep_last_entries = 5 - 2 = 3.
+            assert result["kept_last"] == 3
+
+            # Verify the tool pair appears exactly once in the fresh interface.
             iface = agent._chat.interface
             non_system = [e for e in iface.entries if e.role != "system"]
-            # Only the molt call, no kept entries
-            assert len(non_system) == 1
+            tool_call_count = sum(
+                1 for e in non_system for b in e.content
+                if isinstance(b, ToolCallBlock) and b.id == tool_tc_id
+            )
+            assert tool_call_count == 1, "Tool call should appear exactly once (no duplicates)"
         finally:
             agent.stop()
 
