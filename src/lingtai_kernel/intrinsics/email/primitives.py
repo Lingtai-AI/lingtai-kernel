@@ -159,10 +159,11 @@ def _message_summary(msg: dict, read_ids: set[str], truncate: int = 500,
     if identity and identity.get("agent_name"):
         name = identity["agent_name"]
         sender_id = identity.get("agent_id", "")
-        # Disambiguate when sender shares our name but is a different agent
+        # Disambiguate when sender is a different agent — always show
+        # agent_id when it differs from ours, regardless of name match.
+        # This handles abs-mode emails where from is a full path.
         if (recipient_agent_id and sender_id
-                and sender_id != recipient_agent_id
-                and name == sender):
+                and sender_id != recipient_agent_id):
             name = f"{name} (agent:{sender_id})"
         sender = f"{name} ({sender})"
     return {
@@ -368,11 +369,10 @@ def _render_unread_digest(agent, *, max_entries: int = 10, preview_chars: int = 
         addr = m.get("from", "unknown")
         identity = m.get("identity") or {}
         name = identity.get("agent_name") or addr
-        # Disambiguate when sender shares our name but is a different agent
+        # Disambiguate when sender is a different agent
         sender_id = identity.get("agent_id", "")
         if (recipient_id and sender_id
-                and sender_id != recipient_id
-                and name == agent.agent_name):
+                and sender_id != recipient_id):
             name = f"{name} (agent:{sender_id})"
         subj_raw = m.get("subject")
         subject = subj_raw if subj_raw else _t(lang, "email.unread_digest.no_subject")

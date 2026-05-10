@@ -233,9 +233,9 @@ def test_check_disambiguates_same_name_different_agent_id(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_check_no_disambiguation_for_different_names(tmp_path):
-    """When sender has a different agent_name from recipient, no
-    disambiguation is needed — the name alone suffices."""
+def test_check_disambiguates_different_names_different_agent_id(tmp_path):
+    """When sender has a different agent_name AND different agent_id,
+    agent_id is shown for full clarity (no ambiguity)."""
     agent = _make_agent(tmp_path, agent_name="alice")
     _seed_inbox(agent.working_dir, "msg1", {
         "from": "bob-addr",
@@ -249,9 +249,9 @@ def test_check_no_disambiguation_for_different_names(tmp_path):
     })
     result = agent._email_manager.handle({"action": "check"})
     msg = result["emails"][0]
-    # No agent_id disambiguation needed
-    assert msg["from"] == "bob (bob-addr)"
-    assert "agent:" not in msg["from"]
+    # agent_id shown for clarity — different agent from a different project
+    assert "agent:20260506-111111-cccc" in msg["from"]
+    assert "bob" in msg["from"]
 
     agent.stop(timeout=1.0)
 
