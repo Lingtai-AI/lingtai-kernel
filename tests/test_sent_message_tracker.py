@@ -1,4 +1,4 @@
-"""Tests for SentMessageTracker — dedup, idle-after-send, and poll backoff."""
+"""Tests for SentMessageTracker — dedup and poll backoff."""
 from __future__ import annotations
 
 import time
@@ -72,12 +72,6 @@ class TestWasRecentlySent:
 
 
 class TestRecordSent:
-    def test_sets_flag(self):
-        tracker = SentMessageTracker()
-        assert not tracker.just_sent_message
-        tracker.record_sent("hello", "alice", "telegram")
-        assert tracker.just_sent_message
-
     def test_resets_poll_counter(self):
         tracker = SentMessageTracker()
         tracker.record_poll("telegram", found_new=False)
@@ -152,14 +146,7 @@ class TestPollBackoff:
         assert tracker.poll_backoff_seconds("telegram") == 8.0
 
 
-class TestReset:
-    def test_reset_clears_flag(self):
-        tracker = SentMessageTracker()
-        tracker.record_sent("hello", "alice", "telegram")
-        assert tracker.just_sent_message
-        tracker.reset()
-        assert not tracker.just_sent_message
-
+class TestResetPoll:
     def test_reset_poll(self):
         tracker = SentMessageTracker()
         tracker.record_poll("telegram", found_new=False)
@@ -193,9 +180,10 @@ class TestCheckExternalSend:
         from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         tc = self._make_tc("read", {"path": "/tmp"})
-        assert not _check_external_send(agent, [tc])
+        _check_external_send(agent, [tc])
+        assert len(agent._sent_tracker._entries) == 0
 
-    def test_send_action_sets_flag(self):
+    def test_send_action_records(self):
         from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         tc = self._make_tc("telegram", {
@@ -203,10 +191,10 @@ class TestCheckExternalSend:
             "message": "hello human",
             "chat_id": "12345",
         })
-        assert _check_external_send(agent, [tc])
-        assert agent._sent_tracker.just_sent_message
+        _check_external_send(agent, [tc])
+        assert len(agent._sent_tracker._entries) == 1
 
-    def test_reply_action_sets_flag(self):
+    def test_reply_action_records(self):
         from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         tc = self._make_tc("imap", {
@@ -214,9 +202,10 @@ class TestCheckExternalSend:
             "message": "thanks for your email",
             "to": "user@example.com",
         })
-        assert _check_external_send(agent, [tc])
+        _check_external_send(agent, [tc])
+        assert len(agent._sent_tracker._entries) == 1
 
-    def test_dedup_sets_idle_and_warns(self):
+    def test_dedup_warns_via_tool_result(self):
         from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         # First send
@@ -226,7 +215,6 @@ class TestCheckExternalSend:
             "chat_id": "12345",
         })
         _check_external_send(agent, [tc1])
-        agent._sent_tracker.reset()
 
         # Same message again — dedup should detect it
         tc2 = self._make_tc("telegram", {
@@ -242,17 +230,16 @@ class TestCheckExternalSend:
         tr.content = "sent ok"
         tool_results = [tr]
 
-        result = _check_external_send(agent, [tc2], tool_results)
-        # Soft approach: dedup now triggers idle
-        assert result
-        assert agent._sent_tracker.just_sent_message
+        _check_external_send(agent, [tc2], tool_results)
         # Tool result should contain the warning
         assert "Recently sent similar message" in tr.content
         # Original content preserved
         assert "sent ok" in tr.content
+        # Only the first send was recorded (dedup skips recording)
+        assert len(agent._sent_tracker._entries) == 1
 
     def test_dedup_without_tool_results(self):
-        """Dedup still sets idle flag even when tool_results not passed."""
+        """Dedup still skips recording when tool_results not passed."""
         from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         tc1 = self._make_tc("telegram", {
@@ -261,22 +248,22 @@ class TestCheckExternalSend:
             "chat_id": "12345",
         })
         _check_external_send(agent, [tc1])
-        agent._sent_tracker.reset()
 
         tc2 = self._make_tc("telegram", {
             "action": "send",
             "message": "hello human",
             "chat_id": "12345",
         })
-        result = _check_external_send(agent, [tc2])
-        assert result
-        assert agent._sent_tracker.just_sent_message
+        _check_external_send(agent, [tc2])
+        # Only first send recorded
+        assert len(agent._sent_tracker._entries) == 1
 
     def test_check_action_not_a_send(self):
         from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         tc = self._make_tc("telegram", {"action": "check"})
-        assert not _check_external_send(agent, [tc])
+        _check_external_send(agent, [tc])
+        assert len(agent._sent_tracker._entries) == 0
 
     def test_internal_mail_ignored(self):
         from lingtai_kernel.base_agent.turn import _check_external_send
@@ -286,7 +273,8 @@ class TestCheckExternalSend:
             "address": "agent@network",
             "message": "hello",
         })
-        assert not _check_external_send(agent, [tc])
+        _check_external_send(agent, [tc])
+        assert len(agent._sent_tracker._entries) == 0
 
     def test_multiple_tools_mixed(self):
         from lingtai_kernel.base_agent.turn import _check_external_send
@@ -297,7 +285,8 @@ class TestCheckExternalSend:
             "message": "hi",
             "to": "user123",
         })
-        assert _check_external_send(agent, [tc_read, tc_send])
+        _check_external_send(agent, [tc_read, tc_send])
+        assert len(agent._sent_tracker._entries) == 1
 
 
 class TestCheckPollBackoff:

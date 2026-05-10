@@ -577,9 +577,6 @@ def _handle_request(agent, msg: Message) -> None:
     # notification but don't double-count).
     agent._molt_warning_counted = False
 
-    # Reset sent-message tracker flag at turn boundary (issue #63).
-    agent._sent_tracker.reset()
-
     # Splice any queued involuntary tool-call pairs
     agent._drain_tc_inbox()
 
@@ -790,15 +787,13 @@ def _get_guard_limits(agent) -> tuple[int, int, int]:
     return (max_turns, 2, 8)
 
 
-def _check_external_send(agent, tool_calls, tool_results=None) -> bool:
-    """Check if any tool calls sent a message to an external channel.
+def _check_external_send(agent, tool_calls, tool_results=None) -> None:
+    """Record external sends and warn on duplicates.
 
     Scans the just-executed batch for send/reply actions on external
-    channel tools (telegram, imap, wechat, feishu). When found, records
-    the send in the tracker and returns True — the caller should commit
-    tool results and break the tool loop so the agent goes IDLE.
-
-    The notification system will wake the agent when a reply arrives.
+    channel tools (telegram, imap, wechat, feishu). Records each send
+    in the tracker for dedup. When a duplicate is detected, appends a
+    warning to the corresponding tool result.
     """
     tracker = agent._sent_tracker
     for tc in tool_calls:
@@ -816,11 +811,6 @@ def _check_external_send(agent, tool_calls, tool_results=None) -> bool:
                         tool=tc.name,
                         recipient=recipient,
                     )
-                    # Soft approach: still mark as sent so the agent
-                    # goes IDLE instead of retrying immediately.
-                    tracker.just_sent_message = True
-                    # Append a warning to the tool result so the LLM
-                    # sees the dedup feedback.
                     if tool_results:
                         for tr in tool_results:
                             if tr.id == tc.id:
@@ -838,19 +828,6 @@ def _check_external_send(agent, tool_calls, tool_results=None) -> bool:
                     action=action,
                     recipient=recipient,
                 )
-            else:
-                # Send with missing content/recipient — still counts as a send
-                tracker.just_sent_message = True
-                agent._log(
-                    "external_send_detected",
-                    tool=tc.name,
-                    action=action,
-                    recipient=recipient or "(unknown)",
-                )
-        elif action in CHECK_ACTIONS:
-            # Polling backoff handled separately after tool results
-            pass
-    return tracker.just_sent_message
 
 
 def _check_poll_backoff(agent, tool_calls) -> bool:
@@ -991,23 +968,9 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                        reason="cancel_event_set_after_tool_execute")
             return {"text": "", "failed": False, "errors": []}
 
-        # Issue #63: idle-after-send — if the agent just sent a message
-        # to an external channel (Telegram, IMAP, etc.), commit tool
-        # results and break the loop. The notification system will wake
-        # the agent when a reply arrives. Without this, the LLM would
-        # re-enter the loop, poll for a response, get nothing, and
-        # re-send — creating an infinite polling loop.
-        if _check_external_send(agent, response.tool_calls, tool_results):
-            if tool_results and agent._chat:
-                agent._chat.commit_tool_results(tool_results)
-            agent._log("idle_after_send",
-                       reason="external_message_sent")
-            agent._sent_tracker.reset()
-            return {
-                "text": "\n".join(collected_text_parts),
-                "failed": False,
-                "errors": [],
-            }
+        # Issue #63: dedup check — warn agent if it just re-sent
+        # a duplicate message to an external channel.
+        _check_external_send(agent, response.tool_calls, tool_results)
 
         # Issue #63: poll backoff — if the agent is repeatedly checking
         # for new messages without finding any, go IDLE after max retries.

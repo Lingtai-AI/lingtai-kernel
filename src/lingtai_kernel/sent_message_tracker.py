@@ -1,10 +1,9 @@
-"""Sent message tracker — deduplication and idle-after-send for external channels.
+"""Sent message tracker — deduplication and poll backoff for external channels.
 
 Tracks recently sent messages to external channels (Telegram, IMAP, WeChat,
 Feishu) so the turn engine can:
-1. Skip duplicate sends within a short window.
-2. Signal the agent to go IDLE after sending (wait for notification-driven wake).
-3. Apply exponential backoff on polling/check actions when no new messages found.
+1. Warn on duplicate sends within a short window.
+2. Apply exponential backoff on polling/check actions when no new messages found.
 """
 from __future__ import annotations
 
@@ -44,7 +43,7 @@ def _content_hash(content: str, recipient: str) -> str:
 
 
 class SentMessageTracker:
-    """Track recently sent messages for dedup and idle-after-send.
+    """Track recently sent messages for dedup and poll backoff.
 
     Thread-safe: all public methods are safe to call from any thread
     (the tracker is only used from the single-threaded tool-call loop).
@@ -65,10 +64,6 @@ class SentMessageTracker:
         # Polling backoff state (per-channel).
         self._poll_counts: dict[str, int] = {}
         self._max_poll_retries: int = 3
-
-        # Flag: set after a send action completes. The turn engine
-        # checks this to decide whether to go IDLE.
-        self.just_sent_message: bool = False
 
     def _cleanup(self) -> None:
         """Remove entries older than TTL."""
@@ -101,8 +96,6 @@ class SentMessageTracker:
         # Cap entries.
         if len(self._entries) > self._max_entries:
             self._entries = self._entries[-self._max_entries:]
-        # Set flag for turn engine.
-        self.just_sent_message = True
         # Reset poll backoff for this channel — the agent just sent,
         # so a future check is legitimate.
         self._poll_counts.pop(channel, None)
@@ -129,10 +122,6 @@ class SentMessageTracker:
         if count <= 0:
             return 0.0
         return min(2.0 ** count, 8.0)
-
-    def reset(self) -> None:
-        """Clear the just_sent_message flag. Called at turn boundaries."""
-        self.just_sent_message = False
 
     def reset_poll(self, channel: str) -> None:
         """Reset poll backoff for a channel."""
