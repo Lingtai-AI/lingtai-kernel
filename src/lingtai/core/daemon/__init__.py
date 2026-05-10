@@ -1052,8 +1052,11 @@ class DaemonManager:
             return {"status": "error", "message": f"Unknown emanation: {em_id}"}
 
         # Claude Code backend: resume the session with --resume <session-id>
-        if entry.get("backend") in ("claude-code", "codex"):
+        if entry.get("backend") == "claude-code":
             return self._handle_ask_cli(em_id, entry, message)
+        if entry.get("backend") == "codex":
+            return {"status": "error",
+                    "message": "ask is not supported for codex backends (one-shot execution)"}
 
         if entry["future"].done():
             return {"status": "error", "message": "not running"}
