@@ -152,7 +152,7 @@ def handle(agent, args: dict) -> dict:
                     agent._log("soul_flow_voluntary_waiting_idle")
                     # Wait up to soul_delay seconds; if the agent never goes
                     # IDLE (stuck in ACTIVE), give up rather than hang.
-                    timeout = getattr(agent, "_soul_delay", 300.0)
+                    timeout = getattr(agent, "_soul_delay", 7200.0)
                     if not idle_event.wait(timeout=timeout):
                         agent._log("soul_flow_voluntary_timeout",
                                    timeout=timeout)
