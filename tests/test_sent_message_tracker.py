@@ -216,7 +216,7 @@ class TestCheckExternalSend:
         })
         assert _check_external_send(agent, [tc])
 
-    def test_dedup_detected(self):
+    def test_dedup_sets_idle_and_warns(self):
         from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         # First send
@@ -234,10 +234,43 @@ class TestCheckExternalSend:
             "message": "hello human",
             "chat_id": "12345",
         })
-        # The dedup logs but the flag isn't set for the duplicate itself
-        # (record_sent is skipped), so just_sent_message stays False
+        tc2.id = "call_dedup"
+
+        # Build a tool result matching tc2
+        tr = MagicMock()
+        tr.id = "call_dedup"
+        tr.content = "sent ok"
+        tool_results = [tr]
+
+        result = _check_external_send(agent, [tc2], tool_results)
+        # Soft approach: dedup now triggers idle
+        assert result
+        assert agent._sent_tracker.just_sent_message
+        # Tool result should contain the warning
+        assert "Recently sent similar message" in tr.content
+        # Original content preserved
+        assert "sent ok" in tr.content
+
+    def test_dedup_without_tool_results(self):
+        """Dedup still sets idle flag even when tool_results not passed."""
+        from lingtai_kernel.base_agent.turn import _check_external_send
+        agent = self._make_agent()
+        tc1 = self._make_tc("telegram", {
+            "action": "send",
+            "message": "hello human",
+            "chat_id": "12345",
+        })
+        _check_external_send(agent, [tc1])
+        agent._sent_tracker.reset()
+
+        tc2 = self._make_tc("telegram", {
+            "action": "send",
+            "message": "hello human",
+            "chat_id": "12345",
+        })
         result = _check_external_send(agent, [tc2])
-        assert not result  # deduped send doesn't trigger idle
+        assert result
+        assert agent._sent_tracker.just_sent_message
 
     def test_check_action_not_a_send(self):
         from lingtai_kernel.base_agent.turn import _check_external_send

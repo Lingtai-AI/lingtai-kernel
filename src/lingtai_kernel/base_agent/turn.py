@@ -790,7 +790,7 @@ def _get_guard_limits(agent) -> tuple[int, int, int]:
     return (max_turns, 2, 8)
 
 
-def _check_external_send(agent, tool_calls) -> bool:
+def _check_external_send(agent, tool_calls, tool_results=None) -> bool:
     """Check if any tool calls sent a message to an external channel.
 
     Scans the just-executed batch for send/reply actions on external
@@ -816,6 +816,20 @@ def _check_external_send(agent, tool_calls) -> bool:
                         tool=tc.name,
                         recipient=recipient,
                     )
+                    # Soft approach: still mark as sent so the agent
+                    # goes IDLE instead of retrying immediately.
+                    tracker.just_sent_message = True
+                    # Append a warning to the tool result so the LLM
+                    # sees the dedup feedback.
+                    if tool_results:
+                        for tr in tool_results:
+                            if tr.id == tc.id:
+                                tr.content = (
+                                    (tr.content or "")
+                                    + "\n⚠️ Recently sent similar message"
+                                    " to this recipient. Skipping duplicate."
+                                )
+                                break
                     continue
                 tracker.record_sent(content, recipient, tc.name)
                 agent._log(
@@ -983,7 +997,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # the agent when a reply arrives. Without this, the LLM would
         # re-enter the loop, poll for a response, get nothing, and
         # re-send — creating an infinite polling loop.
-        if _check_external_send(agent, response.tool_calls):
+        if _check_external_send(agent, response.tool_calls, tool_results):
             if tool_results and agent._chat:
                 agent._chat.commit_tool_results(tool_results)
             agent._log("idle_after_send",
