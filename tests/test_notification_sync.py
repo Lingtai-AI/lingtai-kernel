@@ -28,8 +28,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from lingtai_kernel.notifications import (
     notification_fingerprint,
     collect_notifications,
@@ -341,6 +339,65 @@ def test_soul_voices_shape(tmp_path: Path) -> None:
     assert shaped[1]["voice"] == "are you sure?"
     # Empty thinking is omitted from the entry.
     assert "thinking" not in shaped[1]
+
+
+def test_human_soul_inquiry_publishes_btw_notification(tmp_path: Path) -> None:
+    """Human `/btw` inquiry results are mirrored to the agent as notification."""
+    from lingtai_kernel.intrinsics.soul.inquiry import (
+        _publish_human_inquiry_notification,
+    )
+
+    agent = _ProducerStubAgent(_working_dir=tmp_path)
+    _publish_human_inquiry_notification(
+        agent,
+        {
+            "prompt": "What should I know?",
+            "voice": "You asked a side question.",
+            "thinking": ["mirror thought"],
+        },
+        "What should I know?",
+    )
+
+    out = collect_notifications(tmp_path)
+    assert "btw" in out
+    payload = out["btw"]
+    assert payload["header"] == "/btw side inquiry answered"
+    assert payload["icon"] == "💭"
+    assert "not a direct new instruction" in payload["instructions"]
+    assert payload["data"] == {
+        "source": "human",
+        "mode": "inquiry",
+        "question": "What should I know?",
+        "answer": "You asked a side question.",
+        "thinking": ["mirror thought"],
+    }
+    assert any(evt == "btw_notification_published" for evt, _ in agent._logs)
+
+
+def test_non_human_soul_inquiry_does_not_publish_btw_notification(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Auto-insight / agent inquiries keep the existing log-only behavior."""
+    from lingtai_kernel.intrinsics.soul import inquiry
+
+    agent = _ProducerStubAgent(_working_dir=tmp_path)
+    monkeypatch.setattr(
+        inquiry,
+        "soul_inquiry",
+        lambda _agent, question: {
+            "prompt": question,
+            "voice": "auto answer",
+            "thinking": [],
+        },
+    )
+
+    inquiry._run_inquiry(agent, "auto?", source="insight")
+
+    out = collect_notifications(tmp_path)
+    assert "btw" not in out
+    assert any(evt == "insight" for evt, _ in agent._logs)
+    assert (tmp_path / "logs" / "soul_inquiry.jsonl").is_file()
 
 
 # ---------------------------------------------------------------------------

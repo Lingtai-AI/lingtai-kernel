@@ -3,6 +3,7 @@
 Clones the agent's conversation (text + thinking only, no tool calls/results),
 sends a one-shot question, returns the answer. One-shot per invocation.
 """
+
 from __future__ import annotations
 
 
@@ -61,6 +62,47 @@ def soul_inquiry(agent, question: str) -> dict | None:
     }
 
 
+def _publish_human_inquiry_notification(agent, result: dict, question: str) -> None:
+    """Publish a clear `/btw` notification for human-source inquiries.
+
+    The TUI's `/btw` command writes `.inquiry`; the heartbeat runs this
+    inquiry asynchronously and the existing log entry still drives TUI
+    rendering.  This notification is the bridge back to the main agent:
+    it tells the active self what the human asked its mirrored self and
+    what answer came back, without treating the exchange as a normal
+    user request.
+    """
+    from ...notifications import submit
+
+    answer = str(result.get("voice") or "")
+    submit(
+        agent._working_dir,
+        "btw",
+        header="/btw side inquiry answered",
+        icon="💭",
+        instructions=(
+            "This is the result of a human /btw side inquiry answered by "
+            "your mirrored self via soul.inquiry. It is context with clear "
+            "provenance, not a direct new instruction. Use it only if it "
+            "helps the current work. The human still reaches you directly "
+            "through email. Dismiss with system(action='dismiss', channel='btw') "
+            "after you have noted it."
+        ),
+        data={
+            "source": "human",
+            "mode": "inquiry",
+            "question": question,
+            "answer": answer,
+            "thinking": result.get("thinking") or [],
+        },
+    )
+    agent._log("btw_notification_published", question=question[:200])
+    try:
+        agent._wake_nap("btw_inquiry_published")
+    except Exception as e:
+        agent._log("btw_notification_wake_error", error=str(e)[:200])
+
+
 def _run_inquiry(agent, question: str, source: str = "agent") -> None:
     """Run soul.inquiry and log result as insight event."""
     from .flow import _persist_soul_entry
@@ -68,8 +110,12 @@ def _run_inquiry(agent, question: str, source: str = "agent") -> None:
     try:
         result = soul_inquiry(agent, question)
         if result:
-            agent._log("insight", text=result["voice"], question=question, source=source)
+            agent._log(
+                "insight", text=result["voice"], question=question, source=source
+            )
             _persist_soul_entry(agent, result, mode="inquiry", source=source)
+            if source == "human":
+                _publish_human_inquiry_notification(agent, result, question)
         else:
             agent._log("insight", text="(silence)", question=question, source=source)
     except Exception as e:
