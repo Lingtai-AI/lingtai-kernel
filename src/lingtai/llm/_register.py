@@ -96,6 +96,13 @@ def register_all_adapters() -> None:
     for name in ("glm", "zhipu"):
         LLMService.register_adapter(name, _zhipu)
 
+    def _mimo(*, model=None, defaults=None, **kw):
+        from .mimo.adapter import MimoAdapter
+        kw.pop("model", None)
+        return MimoAdapter(**{k: v for k, v in kw.items() if v is not None})
+
+    LLMService.register_adapter("mimo", _mimo)
+
     # Providers routed through the generic custom adapter
-    for name in ("grok", "qwen", "kimi", "mimo"):
+    for name in ("grok", "qwen", "kimi"):
         LLMService.register_adapter(name, _custom)
