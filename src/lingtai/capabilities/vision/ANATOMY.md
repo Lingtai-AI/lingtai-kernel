@@ -11,7 +11,7 @@ Vision capability — image understanding via pluggable VisionService backends.
 | `__init__.py` | 153 | `VisionManager`, `setup()`, provider registry, tool schema |
 
 **Key symbols:**
-- `PROVIDERS` (L27-31) — supported providers: `minimax`, `zhipu`, `mimo`, `gemini`, `anthropic`, `openai`, `codex`. No default, no fallback.
+- `PROVIDERS` (L27-31) — supported providers: `minimax`, `zhipu`, `mimo`, `gemini`, `anthropic`, `openai`, `codex`. No static default; OpenAI-compat inherit fallback lives in `setup()`, not the registry.
 - `VisionManager` (L53) — handles tool calls; resolves relative image paths via `agent._working_dir` (L73).
 - `setup()` (L90) — entry point called by `capabilities.setup_capability()`. Creates `VisionManager`, registers `"vision"` tool on agent (L134).
 
