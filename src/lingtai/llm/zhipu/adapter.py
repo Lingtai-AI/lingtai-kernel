@@ -22,6 +22,18 @@ from ..openai.adapter import OpenAIAdapter, OpenAIChatSession
 logger = logging.getLogger(__name__)
 
 
+def _extract_text(content) -> str:
+    """Extract plain text from a content value (string or list of blocks)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            item.get("text", "") for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    return ""
+
+
 def _merge_consecutive_same_role(messages: list[dict]) -> list[dict]:
     """Merge consecutive messages with the same role.
 
@@ -59,11 +71,21 @@ def _merge_consecutive_same_role(messages: list[dict]) -> list[dict]:
             "GLM rejects same-role runs (error 1214)",
             role,
         )
-        prev_content = prev.get("content") or ""
-        cur_content = msg.get("content") or ""
-        # Concatenate text (skip empty halves).
-        parts = [p for p in (prev_content, cur_content) if p]
-        prev["content"] = "\n".join(parts) if parts else ""
+        prev_content = prev.get("content")
+        cur_content = msg.get("content")
+        prev_is_list = isinstance(prev_content, list)
+        cur_is_list = isinstance(cur_content, list)
+
+        prev_text = _extract_text(prev_content)
+        cur_text = _extract_text(cur_content)
+        parts = [p for p in (prev_text, cur_text) if p]
+        merged_text = "\n".join(parts) if parts else ""
+
+        # Keep list format if either side used it.
+        if prev_is_list or cur_is_list:
+            prev["content"] = [{"type": "text", "text": merged_text}]
+        else:
+            prev["content"] = merged_text
 
         if role == "assistant":
             # Preserve tool_calls from the *last* message that has them.
