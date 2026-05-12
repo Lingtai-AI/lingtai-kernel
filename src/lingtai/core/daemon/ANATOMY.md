@@ -9,7 +9,7 @@ request text.
 
 ## Components
 
-- `daemon/__init__.py` — public capability surface. `get_description`, `get_schema`, and `setup`; the core class is `DaemonManager`, which manages the full emanation lifecycle. Key internals: `_ToolCollector` (`daemon/__init__.py:37-64`) intercepts `add_tool` calls during preset-driven capability setup to build a sandboxed tool surface without mutating the parent's registry. `EMANATION_BLACKLIST` (`daemon/__init__.py:34`) prevents recursion by blocking `daemon`, `avatar`, `psyche`, and `library` tools in subagents.
+- `daemon/__init__.py` — public capability surface. `get_description`, `get_schema`, and `setup`; the core class is `DaemonManager`, which manages the full emanation lifecycle. Key internals: `_ToolCollector` (`daemon/__init__.py:37-64`) intercepts `add_tool` calls during preset-driven capability setup to build a sandboxed tool surface without mutating the parent's registry. `EMANATION_BLACKLIST` (`daemon/__init__.py:34`) prevents recursion by blocking `daemon`, `avatar`, `psyche`, `skills`, and deprecated `codex` tools in subagents.
 - `daemon/run_dir.py` — per-emanation filesystem run directory. `DaemonRunDir` owns every filesystem effect for one run: folder layout, `daemon.json` atomic writes, JSONL appends, CLI progress events, heartbeat touches, `result.txt`, and terminal state markers. The `DaemonManager` calls into a `DaemonRunDir` at every lifecycle hook without itself touching the filesystem.
 
 ## Public API
@@ -55,7 +55,7 @@ daemon/run_dir.py
 
 ## Key Invariants
 
-- **No recursion:** `EMANATION_BLACKLIST` prevents emanations from spawning sub-emanations, avatars, psyche, or library.
+- **No recursion:** `EMANATION_BLACKLIST` prevents emanations from spawning sub-emanations, avatars, psyche, the skill catalog, or deprecated codex.
 - **Tool surface isolation:** `_ToolCollector` ensures preset-driven capability setup does not mutate the parent agent's tool registry.
 - **Filesystem isolation:** Each emanation gets its own `daemons/em-<N>-<YYYYMMDD-HHMMSS>-<hash6>/` directory. `DaemonRunDir` uses atomic `os.replace` for `daemon.json` and single-writer append-only JSONL for events/chat history.
 - **Timeout vs. cancel distinction:** Separate `timeout_event` and `cancel_event` allow the run loop to call `mark_timeout()` vs. `mark_cancelled()` based on which signal fired first.
@@ -81,6 +81,6 @@ daemon/run_dir.py
 ## Composition
 
 - **Parent:** `src/lingtai/core/` (capability package).
-- **Siblings:** `avatar/`, `mcp/`, `library/`, `codex/`, `bash/`.
+- **Siblings:** `avatar/`, `mcp/`, `library/` (knowledge), `skills/` (skill catalog), `codex/` (compatibility wrapper), `bash/`.
 - **Manual:** `daemon/manual/SKILL.md` — skill documentation for the LLM.
 - **Kernel hooks:** `setup()` is called during capability initialization; `DaemonManager.handle()` is registered as the `daemon` tool handler.

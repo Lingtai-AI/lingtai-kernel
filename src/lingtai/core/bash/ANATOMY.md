@@ -74,6 +74,6 @@ bash/__init__.py
 ## Composition
 
 - **Parent:** `src/lingtai/core/` (capability package).
-- **Siblings:** `daemon/`, `avatar/`, `mcp/`, `library/`, `codex/`.
+- **Siblings:** `daemon/`, `avatar/`, `mcp/`, `library/` (knowledge), `skills/` (skill catalog), `codex/` (compatibility wrapper).
 - **Manual:** `bash/manual/SKILL.md` — operational guide for agents (currently focused on scheduled / cron-driven work — when to schedule, the wake-by-mailbox-drop contract, hygiene rules, OS-specific recipes for launchd / systemd / crontab, and debugging walkthroughs).
 - **Kernel hooks:** `setup()` is called during capability initialization; `BashManager.handle()` is registered as the `bash` tool handler.

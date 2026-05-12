@@ -164,7 +164,7 @@ If a single file is large enough to need its own anatomy, that is a refactor sig
 ## Relationship to other skills
 
 - **`lingtai-anatomy`** — describes the LingTai *system* as a user experiences it: TUI flows, presets, init.jsonc, runtime layout under `~/.lingtai-tui/`. Lives outside the kernel. If your question is "how does my init.jsonc get there," start there.
-- **Per-tool manuals** (`daemon-manual`, `mcp-manual`, `library-manual`, ...) — operational how-to for invoking specific tools. If your question is "how do I use X," start there.
+- **Per-tool manuals** (`daemon-manual`, `mcp-manual`, `skills-manual`, ...) — operational how-to for invoking specific tools. If your question is "how do I use X," start there.
 - **`lingtai-kernel-anatomy` (this skill)** — the convention behind the kernel anatomy tree. If your question is "what is X actually doing inside me, where does it live in my code," read this once to know the convention, then descend the kernel anatomy tree.
 
 The three skills are layered. Manuals tell you how to act. Umbrella anatomy tells you about the world you live in. Kernel anatomy tells you about yourself.

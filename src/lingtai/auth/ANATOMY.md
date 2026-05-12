@@ -20,7 +20,7 @@ Codex OAuth token management — reads TUI-written tokens, checks expiry, auto-r
 - **No intra-wrapper imports.** Self-contained — only stdlib, `httpx`, `filelock`.
 - **Reads disk token file** written by the TUI (`LINGTAI_TUI_DIR` env or `~/.lingtai-tui/`, L35-36).
 - **Calls** `https://auth.openai.com/oauth/token` (L17) for token refresh.
-- **Referenced by**: `lingtai.core.codex` (the codex capability reads access tokens).
+- **Referenced by**: the Codex LLM adapter registry (`src/lingtai/llm/_register.py`), which uses ChatGPT OAuth tokens for the `codex` provider.
 
 ## Composition
 

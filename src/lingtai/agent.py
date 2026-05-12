@@ -56,11 +56,11 @@ class Agent(BaseAgent):
 
         # Expand groups and normalize to dict
         if isinstance(capabilities, list):
-            from .capabilities import expand_groups
+            from .capabilities import expand_groups, normalize_capabilities
             expanded = expand_groups(capabilities)
-            capabilities = {name: {} for name in expanded}
+            capabilities = normalize_capabilities({name: {} for name in expanded})
         elif isinstance(capabilities, dict):
-            from .capabilities import _GROUPS
+            from .capabilities import _GROUPS, normalize_capabilities
             expanded_dict: dict[str, dict] = {}
             for name, cap_kwargs in capabilities.items():
                 if name in _GROUPS:
@@ -70,7 +70,7 @@ class Agent(BaseAgent):
                     expanded_dict[name] = {}
                 else:
                     expanded_dict[name] = cap_kwargs
-            capabilities = expanded_dict
+            capabilities = normalize_capabilities(expanded_dict)
 
 
         # Track for avatar replay
@@ -215,17 +215,17 @@ class Agent(BaseAgent):
         install_from(caps_pkg, "capabilities")
         install_skills_from(skills_pkg, "capabilities")
 
-        # If the library capability is loaded, re-run its reconcile now that
+        # If the skills capability is loaded, re-run its reconcile now that
         # the manuals are on disk — so the injected catalog reflects them on
-        # the very first turn (library.setup()'s initial _reconcile ran BEFORE
+        # the very first turn (skills.setup()'s initial _reconcile ran BEFORE
         # install, when the manual dir was empty).
         for cap_name, cap_kwargs in self._capabilities:
-            if cap_name == "library":
+            if cap_name == "skills":
                 try:
-                    from .core import library as libmod
-                    libmod._reconcile(self, list(cap_kwargs.get("paths", []) or []))
+                    from .core import skills as skillsmod
+                    skillsmod._reconcile(self, list(cap_kwargs.get("paths", []) or []))
                 except Exception as e:
-                    self._log("library_reconcile_failed", reason=str(e))
+                    self._log("skills_reconcile_failed", reason=str(e))
                 break
 
     _SENSITIVE_KEYS = {"api_key", "api_key_env", "api_secret", "token", "password"}
@@ -1115,7 +1115,7 @@ class Agent(BaseAgent):
         # Re-run capability setup
         capabilities = _resolve_capabilities(m.get("capabilities", {}))
         if capabilities:
-            from .capabilities import expand_groups, _GROUPS
+            from .capabilities import _GROUPS, normalize_capabilities
             expanded: dict[str, dict] = {}
             for name, cap_kwargs in capabilities.items():
                 if name in _GROUPS:
@@ -1125,7 +1125,7 @@ class Agent(BaseAgent):
                     expanded[name] = {}
                 else:
                     expanded[name] = cap_kwargs
-            capabilities = expanded
+            capabilities = normalize_capabilities(expanded)
             for name, cap_kwargs in capabilities.items():
                 try:
                     self._setup_capability(name, **cap_kwargs)

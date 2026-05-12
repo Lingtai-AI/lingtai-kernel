@@ -244,23 +244,33 @@ def validate_init(data: dict) -> list[str]:
         if not all(isinstance(x, str) for x in addons):
             warnings.append("addons: all entries must be strings (curated MCP names)")
 
-    # Validate manifest.capabilities.library shape if present.
+    # Validate manifest.capabilities.skills shape if present.
+    # Back-compat: before the codex→library / library→skills rename,
+    # manifest.capabilities.library.paths configured the skill catalog. Accept
+    # that spelling when it still carries paths so old agents can refresh.
     caps = manifest.get("capabilities") or {}
-    library_cfg = caps.get("library") if isinstance(caps, dict) else None
-    if library_cfg is not None:
-        if not isinstance(library_cfg, dict):
-            raise ValueError(
-                f"manifest.capabilities.library: expected object, got {type(library_cfg).__name__}"
-            )
-        paths = library_cfg.get("paths")
-        if paths is not None:
-            if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+    if isinstance(caps, dict):
+        for cap_name in ("skills", "library"):
+            cfg = caps.get(cap_name)
+            if cfg is None:
+                continue
+            if not isinstance(cfg, dict):
                 raise ValueError(
-                    "manifest.capabilities.library.paths: expected list[str]"
+                    f"manifest.capabilities.{cap_name}: expected object, "
+                    f"got {type(cfg).__name__}"
                 )
-        for key in library_cfg:
-            if key != "paths":
-                warnings.append(f"unknown field in manifest.capabilities.library: {key}")
+            paths = cfg.get("paths")
+            if paths is not None:
+                if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+                    raise ValueError(
+                        f"manifest.capabilities.{cap_name}.paths: expected list[str]"
+                    )
+            if cap_name == "skills" or "paths" in cfg:
+                for key in cfg:
+                    if key != "paths":
+                        warnings.append(
+                            f"unknown field in manifest.capabilities.{cap_name}: {key}"
+                        )
 
     return warnings
 

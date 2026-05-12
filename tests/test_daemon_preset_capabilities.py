@@ -210,7 +210,7 @@ def test_instantiate_still_raises_on_broken_known_capability(tmp_path, monkeypat
 
 
 def test_instantiate_skips_blacklisted_capabilities(tmp_path):
-    """daemon/avatar/psyche/library in a preset's capabilities are skipped
+    """daemon/avatar/psyche/skills/codex in preset capabilities are skipped
     (not instantiated, no error)."""
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")

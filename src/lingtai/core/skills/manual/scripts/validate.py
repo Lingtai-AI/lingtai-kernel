@@ -74,7 +74,7 @@ def validate_skill_md_length(skill_path: Path) -> tuple[bool, list[str]]:
 
     lines = skill_md.read_text(encoding="utf-8").splitlines()
     # Filter out empty lines and frontmatter
-    code_lines = [l for l in lines if l.strip() and not l.strip().startswith('#')]
+    code_lines = [line for line in lines if line.strip() and not line.strip().startswith('#')]
 
     if len(code_lines) > 500:
         warnings.append(f"WARNING: SKILL.md has {len(code_lines)} non-comment lines (> 500). Consider moving content to references/.")

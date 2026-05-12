@@ -411,7 +411,7 @@ class ChatInterface:
         """Record a system prompt + tools.  Only adds entry if either changed.
 
         If the tail entry is an assistant turn with unanswered tool_calls
-        (e.g. a tool that mutates the system prompt — psyche, codex, library —
+        (e.g. a tool that mutates the system prompt — psyche, library, skills —
         is running mid-loop), the new system entry is stashed in
         ``_pending_system`` instead of appended. Inserting it now would split
         the assistant[tool_calls] from its tool_results on the wire and break

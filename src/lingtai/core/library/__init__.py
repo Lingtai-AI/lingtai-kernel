@@ -1,293 +1,28 @@
-"""Library capability — per-agent skill catalog (pure presentation).
+"""Library capability — durable long-term knowledge across molts.
 
-Every agent has its own ``<agent>/.library/``:
+A journal-shaped knowledge store persisted in the legacy codex/codex.json
+file. Each entry's id + title + summary is always visible in the
+system prompt; content and supplementary material load on demand via view().
 
-- ``intrinsic/capabilities/<cap>/`` and ``intrinsic/addons/<addon>/`` — manual
-  bundles installed by the Agent initializer (wipe-and-rewrite on every
-  ``_setup_from_init``). The library capability does NOT create or populate
-  this directory.
-- ``custom/`` — agent-authored skills. Never touched by any kernel code.
-
-Additional paths come from ``init.json``:
-
-``manifest.capabilities.library.paths``: list[str] — each entry is scanned
-recursively and contributes to the ``<available_skills>`` XML injected into the
-system prompt's ``library`` section. Paths may be absolute, relative to the
-agent working dir, or tilde-prefixed.
-
-This capability is pure presentation: it scans whatever is on disk and builds
-the catalog. It never writes to ``.library/``. File installation is the
-initializer's job.
-
-Tool surface: a single ``info`` action that returns the library manual body
-plus a runtime health snapshot.
-
-Usage: ``Agent(capabilities={"library": {"paths": [...]}})`` or via init.json.
+Usage:
+    agent = Agent(capabilities=["library"])
 """
 from __future__ import annotations
 
-import logging
-import re
-from pathlib import Path
+import hashlib
+import json
+import os
+import tempfile
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
-
-import yaml
 
 from ...i18n import t
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
 
-log = logging.getLogger(__name__)
-
 PROVIDERS = {"providers": [], "default": "builtin"}
 
-
-# ---------------------------------------------------------------------------
-# Frontmatter parser
-# ---------------------------------------------------------------------------
-
-_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
-
-
-def _parse_frontmatter(text: str) -> dict[str, str]:
-    m = _FRONTMATTER_RE.match(text)
-    if not m:
-        return {}
-    try:
-        loaded = yaml.safe_load(m.group(1)) or {}
-    except yaml.YAMLError:
-        return {}
-    if not isinstance(loaded, dict):
-        return {}
-    # Coerce to str|str — YAML may produce ints/lists/None for unrelated keys
-    # (e.g. version: 2.0). Multi-line scalars (>, |) collapse to clean strings.
-    return {str(k): (" ".join(str(v).split()) if v is not None else "") for k, v in loaded.items()}
-
-
-# ---------------------------------------------------------------------------
-# Path resolution
-# ---------------------------------------------------------------------------
-
-def _resolve_path(p: str, working_dir: Path) -> Path:
-    """Resolve a user-declared library path.
-
-    - Tilde expansion (``~/foo`` → user home).
-    - Absolute paths used as-is.
-    - Relative paths resolved against the agent working dir.
-    """
-    expanded = Path(p).expanduser()
-    if expanded.is_absolute():
-        return expanded
-    return (working_dir / expanded).resolve(strict=False)
-
-
-# ---------------------------------------------------------------------------
-# Skill scanner
-# ---------------------------------------------------------------------------
-
-def _parse_skill_file(skill_file: Path, label: str) -> tuple[dict | None, dict | None]:
-    try:
-        text = skill_file.read_text(encoding="utf-8")
-    except OSError as e:
-        return None, {"folder": label, "reason": f"cannot read SKILL.md: {e}"}
-
-    fm = _parse_frontmatter(text)
-    name = fm.get("name", "")
-    description = fm.get("description", "")
-    if not name:
-        return None, {"folder": label, "reason": "SKILL.md missing required frontmatter field: name"}
-    if not description:
-        return None, {"folder": label, "reason": "SKILL.md missing required frontmatter field: description"}
-
-    return {
-        "name": name,
-        "description": description,
-        "version": fm.get("version", ""),
-        "path": str(skill_file),
-    }, None
-
-
-def _scan_recursive(
-    directory: Path,
-    valid: list[dict],
-    problems: list[dict],
-    prefix: str = "",
-) -> None:
-    if not directory.is_dir():
-        return
-
-    try:
-        children = sorted(directory.iterdir())
-    except OSError:
-        return
-
-    for child in children:
-        if not child.is_dir():
-            continue
-        if child.name.startswith("."):
-            continue
-
-        label = f"{prefix}{child.name}" if prefix else child.name
-        skill_file = child / "SKILL.md"
-
-        if skill_file.is_file():
-            sk, prob = _parse_skill_file(skill_file, label)
-            if sk:
-                valid.append(sk)
-            if prob:
-                problems.append(prob)
-            continue
-
-        # No SKILL.md — classify.
-        try:
-            grandchildren = list(child.iterdir())
-        except OSError:
-            continue
-        has_loose_files = any(
-            not c.is_dir() and not c.name.startswith(".")
-            for c in grandchildren
-        )
-        if has_loose_files:
-            problems.append({
-                "folder": label,
-                "reason": "not a skill (no SKILL.md) and has loose files — corrupted",
-            })
-            continue
-
-        _scan_recursive(child, valid, problems, prefix=f"{label}/")
-
-
-def _scan(directory: Path) -> tuple[list[dict], list[dict]]:
-    valid: list[dict] = []
-    problems: list[dict] = []
-    _scan_recursive(directory, valid, problems)
-    return valid, problems
-
-
-# ---------------------------------------------------------------------------
-# XML catalog builder
-# ---------------------------------------------------------------------------
-
-def _escape_xml(s: str) -> str:
-    return (
-        s.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&apos;")
-    )
-
-
-def _build_catalog_xml(skills: list[dict], lang: str) -> str:
-    if not skills:
-        return ""
-
-    lines = [
-        t(lang, "library.preamble"),
-        "",
-        "<available_skills>",
-    ]
-    for sk in skills:
-        lines.append("  <skill>")
-        lines.append(f"    <name>{_escape_xml(sk['name'])}</name>")
-        lines.append(f"    <description>{_escape_xml(sk['description'])}</description>")
-        lines.append(f"    <location>{_escape_xml(sk['path'])}</location>")
-        lines.append("  </skill>")
-    lines.append("</available_skills>")
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Core reconciliation (shared by setup and `info` health check)
-# ---------------------------------------------------------------------------
-
-def _reconcile(
-    agent: "BaseAgent",
-    paths: list[str],
-) -> dict:
-    """Scan ``.library/`` + Tier-1 paths, inject catalog, report status.
-
-    The library capability is pure presentation: it reads whatever the Agent
-    initializer wrote to ``.library/intrinsic/`` and the agent wrote to
-    ``.library/custom/``. It does NOT create directories or copy files.
-
-    Returns a dict suitable for the ``info`` response.
-    """
-    working_dir = agent._working_dir
-    library_dir = working_dir / ".library"
-    intrinsic_dir = library_dir / "intrinsic"
-    custom_dir = library_dir / "custom"
-
-    problems: list[dict] = []
-    status = "ok"
-    error: str | None = None
-
-    # Scan intrinsic + custom. If they don't exist, _scan silently returns empty.
-    all_skills: list[dict] = []
-    int_valid, int_problems = _scan(intrinsic_dir)
-    all_skills.extend(int_valid)
-    problems.extend(int_problems)
-
-    cus_valid, cus_problems = _scan(custom_dir)
-    all_skills.extend(cus_valid)
-    problems.extend(cus_problems)
-
-    # Scan each Tier 1 path.
-    paths_report: dict[str, dict] = {}
-    for raw in paths:
-        resolved = _resolve_path(raw, working_dir)
-        exists = resolved.is_dir()
-        p_valid: list[dict] = []
-        p_problems: list[dict] = []
-        if exists:
-            p_valid, p_problems = _scan(resolved)
-            all_skills.extend(p_valid)
-            problems.extend(p_problems)
-        else:
-            log.warning("library: path does not exist: %s (resolved=%s)", raw, resolved)
-        paths_report[raw] = {
-            "resolved": str(resolved),
-            "exists": exists,
-            "skills": len(p_valid),
-        }
-
-    # Build and inject catalog.
-    lang = agent._config.language
-    catalog_xml = _build_catalog_xml(all_skills, lang)
-    if catalog_xml:
-        agent.update_system_prompt("library", catalog_xml, protected=True)
-    else:
-        agent.update_system_prompt("library", "", protected=True)
-
-    # Health signal: the library capability's own manual must be present.
-    library_manual_path = intrinsic_dir / "capabilities" / "library" / "SKILL.md"
-    if not library_manual_path.is_file():
-        status = "degraded"
-        error = error or (
-            "library manual missing — initializer may have failed or "
-            "capability not installed correctly"
-        )
-        manual_body = ""
-    else:
-        manual_body = library_manual_path.read_text(encoding="utf-8")
-
-    result = {
-        "status": status,
-        "library_manual": manual_body,
-        "library_dir": str(library_dir),
-        "catalog_size": len(all_skills),
-        "paths": paths_report,
-        "problems": problems,
-    }
-    if error:
-        result["error"] = error
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Tool dispatch
-# ---------------------------------------------------------------------------
 
 def get_description(lang: str = "en") -> str:
     return t(lang, "library.description")
@@ -299,46 +34,304 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["info"],
-                "description": t(lang, "library.action_info"),
+                "enum": ["submit", "view", "consolidate", "delete"],
+                "description": t(lang, "library.action"),
+            },
+            "title": {
+                "type": "string",
+                "description": t(lang, "library.title"),
+            },
+            "summary": {
+                "type": "string",
+                "description": t(lang, "library.summary"),
+            },
+            "content": {
+                "type": "string",
+                "description": t(lang, "library.content"),
+            },
+            "supplementary": {
+                "type": "string",
+                "description": t(lang, "library.supplementary"),
+            },
+            "ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": t(lang, "library.ids"),
+            },
+            "include_supplementary": {
+                "type": "boolean",
+                "description": t(lang, "library.include_supplementary"),
             },
         },
         "required": ["action"],
     }
 
 
-def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> None:
-    """Set up the library capability.
 
-    ``paths`` is the Tier 1 list from ``init.json`` ``manifest.capabilities.library.paths``.
-    When omitted (e.g., direct ``Agent(capabilities=["library"])`` use without kwargs),
-    no additional paths are scanned — only the per-agent ``.library/``.
+class LibraryManager:
+    """Durable long-term knowledge — submit, view, consolidate, delete."""
 
-    The capability itself does not create or populate ``.library/``; the Agent
-    initializer's ``_install_intrinsic_manuals`` step handles that. Setup just
-    scans whatever is on disk and injects the XML catalog so the first turn
-    sees a ready catalog.
-    """
-    lang = agent._config.language
-    path_list = list(paths) if paths else []
+    DEFAULT_MAX_ENTRIES = 50
 
-    # Run reconciliation once on setup so the catalog is ready before first turn.
-    # This only READS from .library/ — the initializer has already written it.
-    _reconcile(agent, path_list)
+    def __init__(
+        self,
+        agent: "BaseAgent",
+        *,
+        library_limit: int | None = None,
+        codex_limit: int | None = None,
+    ):
+        self._agent = agent
+        self._working_dir = agent._working_dir
+        limit = library_limit if library_limit is not None else codex_limit
+        self._max_entries = limit if limit is not None else self.DEFAULT_MAX_ENTRIES
 
-    # Register the `info` action. `info` re-runs _reconcile to get a fresh snapshot.
-    def handle_library(args: dict) -> dict:
+        self._codex_json = self._working_dir / "codex" / "codex.json"
+        self._entries: list[dict] = self._load_entries()
+
+    # ------------------------------------------------------------------
+    # System prompt catalog
+    # ------------------------------------------------------------------
+
+    def _inject_catalog(self) -> None:
+        """Inject library entry index (id + title + summary) into system prompt."""
+        if not self._entries:
+            self._agent.update_system_prompt("library", "", protected=True)
+            self._agent.update_system_prompt("codex", "", protected=True)
+            return
+
+        lines = [
+            f"Your library has {len(self._entries)}/{self._max_entries} entries:",
+            "",
+        ]
+        for e in self._entries:
+            lines.append(f"- [{e['id']}] {e['title']}: {e['summary']}")
+        lines.append("")
+        lines.append(
+            "Use library(view, ids=[...]) to read full content. "
+            "Pass include_supplementary=true for backing material."
+        )
+
+        self._agent.update_system_prompt("library", "\n".join(lines), protected=True)
+        self._agent.update_system_prompt("codex", "", protected=True)
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def _load_entries(self) -> list[dict]:
+        if not self._codex_json.is_file():
+            return []
+        try:
+            data = json.loads(self._codex_json.read_text())
+            entries = data.get("entries", [])
+            for e in entries:
+                if "title" not in e:
+                    e["title"] = e.get("content", "")[:50] or "Untitled"
+                    e["summary"] = e.get("content", "")[:200]
+                    e["supplementary"] = ""
+            return entries
+        except (json.JSONDecodeError, OSError):
+            return []
+
+    def _save_entries(self) -> None:
+        data = {"version": 1, "entries": self._entries}
+        self._codex_json.parent.mkdir(exist_ok=True)
+        fd, tmp = tempfile.mkstemp(
+            dir=str(self._codex_json.parent), suffix=".tmp",
+        )
+        try:
+            os.write(fd, json.dumps(data, indent=2, ensure_ascii=False).encode())
+            os.close(fd)
+            os.replace(tmp, str(self._codex_json))
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+
+    @staticmethod
+    def _make_id(content: str, created_at: str) -> str:
+        return hashlib.sha256(
+            (content + created_at).encode()
+        ).hexdigest()[:8]
+
+    # ------------------------------------------------------------------
+    # Dispatch
+    # ------------------------------------------------------------------
+
+    _VALID_ACTIONS = {"submit", "view", "consolidate", "delete"}
+
+    def handle(self, args: dict) -> dict:
         action = args.get("action", "")
-        if action == "info":
-            return _reconcile(agent, path_list)
+        if action not in self._VALID_ACTIONS:
+            return {
+                "error": f"Unknown action: {action!r}. "
+                f"Valid: {', '.join(sorted(self._VALID_ACTIONS))}.",
+            }
+        method = getattr(self, f"_{action}")
+        return method(args)
+
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
+
+    def _submit(self, args: dict) -> dict:
+        title = args.get("title", "").strip()
+        summary = args.get("summary", "").strip()
+        content = args.get("content", "").strip()
+        supplementary = args.get("supplementary", "").strip()
+        if not title:
+            return {"error": "title is required for submit."}
+        if not summary:
+            return {"error": "summary is required for submit."}
+        if len(self._entries) >= self._max_entries:
+            return {
+                "error": f"Library is full ({self._max_entries} entries). "
+                "Consolidate related entries first, "
+                "delete obsolete ones, or use supplementary "
+                "to pack more detail into existing entries.",
+                "entries": len(self._entries),
+                "max": self._max_entries,
+            }
+        now = datetime.now(timezone.utc).isoformat()
+        # Seed for id: title + (content or summary) — preserves uniqueness
+        # when content is omitted.
+        entry_id = self._make_id(title + (content or summary), now)
+        self._entries.append({
+            "id": entry_id,
+            "title": title,
+            "summary": summary,
+            "content": content,
+            "supplementary": supplementary,
+            "created_at": now,
+        })
+        self._save_entries()
+        self._inject_catalog()
         return {
-            "status": "error",
-            "message": f"unknown action: {action!r}, only 'info' is supported",
+            "status": "ok",
+            "id": entry_id,
+            "entries": len(self._entries),
+            "max": self._max_entries,
         }
+
+    def _view(self, args: dict) -> dict:
+        ids = args.get("ids")
+        if not ids:
+            return {"error": "ids is required for view."}
+        include_supp = bool(args.get("include_supplementary", False))
+
+        entries_by_id = {e["id"]: e for e in self._entries}
+        invalid = [i for i in ids if i not in entries_by_id]
+        if invalid:
+            return {"error": f"Unknown library IDs: {', '.join(invalid)}"}
+
+        result_entries = []
+        for entry_id in ids:
+            e = entries_by_id[entry_id]
+            item = {
+                "id": e["id"],
+                "title": e["title"],
+                "summary": e["summary"],
+                "content": e.get("content", ""),
+            }
+            if include_supp:
+                item["supplementary"] = e.get("supplementary", "")
+            result_entries.append(item)
+
+        return {"status": "ok", "entries": result_entries}
+
+    def _consolidate(self, args: dict) -> dict:
+        ids = args.get("ids")
+        title = args.get("title", "").strip()
+        summary = args.get("summary", "").strip()
+        content = args.get("content", "").strip()
+        supplementary = args.get("supplementary", "").strip()
+        if not ids:
+            return {"error": "ids is required for consolidate."}
+        if not title:
+            return {"error": "title is required for consolidate."}
+        if not summary:
+            return {"error": "summary is required for consolidate."}
+
+        existing_ids = {e["id"] for e in self._entries}
+        invalid = [i for i in ids if i not in existing_ids]
+        if invalid:
+            return {"error": f"Unknown library IDs: {', '.join(invalid)}"}
+
+        ids_set = set(ids)
+        self._entries = [e for e in self._entries if e["id"] not in ids_set]
+
+        now = datetime.now(timezone.utc).isoformat()
+        new_id = self._make_id(title + (content or summary), now)
+        self._entries.append({
+            "id": new_id,
+            "title": title,
+            "summary": summary,
+            "content": content,
+            "supplementary": supplementary,
+            "created_at": now,
+        })
+
+        self._save_entries()
+        self._inject_catalog()
+        return {"status": "ok", "id": new_id, "removed": len(ids)}
+
+    def _delete(self, args: dict) -> dict:
+        ids = args.get("ids")
+        if not ids:
+            return {"error": "ids is required for delete."}
+
+        existing_ids = {e["id"] for e in self._entries}
+        invalid = [i for i in ids if i not in existing_ids]
+        if invalid:
+            return {"error": f"Unknown library IDs: {', '.join(invalid)}"}
+
+        ids_set = set(ids)
+        before = len(self._entries)
+        self._entries = [e for e in self._entries if e["id"] not in ids_set]
+        removed = before - len(self._entries)
+
+        self._save_entries()
+        self._inject_catalog()
+        return {"status": "ok", "removed": removed}
+
+
+def setup(
+    agent: "BaseAgent",
+    *,
+    library_limit: int | None = None,
+    codex_limit: int | None = None,
+) -> LibraryManager:
+    """Set up the library capability — durable long-term knowledge."""
+    lang = agent._config.language
+
+    mgr = LibraryManager(
+        agent, library_limit=library_limit, codex_limit=codex_limit,
+    )
 
     agent.add_tool(
         "library",
         schema=get_schema(lang),
-        handler=handle_library,
+        handler=mgr.handle,
         description=get_description(lang),
     )
+    # Deprecated compatibility alias for callers that still invoke codex(...).
+    agent.add_tool(
+        "codex",
+        schema=get_schema(lang),
+        handler=mgr.handle,
+        description="Deprecated alias for library \u2014 use library(...) instead. "
+        + get_description(lang),
+    )
+
+    # Inject library catalog into system prompt at boot.
+    mgr._inject_catalog()
+
+    return mgr
+
+
+# Back-compat import alias: old code may still import CodexManager.
+CodexManager = LibraryManager

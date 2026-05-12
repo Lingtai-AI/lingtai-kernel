@@ -72,5 +72,5 @@ avatar/__init__.py
 ## Composition
 
 - **Parent:** `src/lingtai/core/` (capability package).
-- **Siblings:** `daemon/`, `mcp/`, `library/`, `codex/`, `bash/`.
+- **Siblings:** `daemon/`, `mcp/`, `library/` (knowledge), `skills/` (skill catalog), `codex/` (compatibility wrapper), `bash/`.
 - **Kernel hooks:** `setup()` is called during capability initialization; `AvatarManager.handle()` is registered as the `avatar` tool handler. The daemon capability blacklists `avatar` to prevent avatar-in-daemon recursion.

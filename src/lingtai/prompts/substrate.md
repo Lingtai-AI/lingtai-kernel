@@ -50,7 +50,7 @@ Tools come in two layers, split across these repos:
 | Layer | Repo | Location | Tools |
 |-------|------|----------|-------|
 | **Intrinsics** | lingtai-kernel | `src/lingtai_kernel/intrinsics/` | `email`, `system`, `psyche`, `soul` — wired into every agent by the kernel |
-| **Capabilities** | lingtai | `src/lingtai/core/` | `bash`, `daemon`, `avatar`, `codex`, `library`, `mcp` — opted into via `manifest.capabilities` |
+| **Capabilities** | lingtai | `src/lingtai/core/` | `bash`, `daemon`, `avatar`, `library`, `skills`, `mcp` — opted into via `manifest.capabilities` |
 
 Both layers register handlers via the same `agent.add_tool()` API. The LLM sees them identically. The difference is in who controls them: intrinsics are kernel-mandated (you cannot remove `psyche`), capabilities are agent-configured (you can disable `bash` by removing it from `manifest.capabilities`).
 
@@ -108,10 +108,10 @@ Knowledge flows *downward* through these layers:
 1. Observations land in **conversation**
 2. What matters now goes to **pad** (as references, not content)
 3. What changes who you are goes to **character**
-4. What is a verified truth goes to **codex**
-5. What is a reusable procedure goes to **library**
+4. What is a verified truth goes to **library**
+5. What is a reusable procedure goes to **skills**
 
-Don't inline deep content into pad — *point at it* (codex IDs, file paths, email IDs, SKILL.md paths). Pad is an index; the depths live in the durable stores.
+Don't inline deep content into pad — *point at it* (library entry IDs, file paths, email IDs, SKILL.md paths). Pad is an index; the depths live in the durable stores.
 
 The soul flow fires periodically when you are idle, surfacing reflections from past selves. It is your subconscious — it only speaks when you are truly idle.
 
@@ -159,7 +159,7 @@ Molt is not defeat — it is renewal. When context pressure rises, do not cling 
 
 **Use `keep_tool_calls` to leave information to your future self.** When you molt, you can pass tool-call IDs to preserve specific results across the shed. This is your surgical tool for carrying forward the one piece of evidence that matters — a code diff, a search result, a critical file read. Use it sparingly but deliberately; each kept call is a bridge between the you that was and the you that will be.
 
-**Keep as much information as possible.** The four durable stores (lingtai, pad, codex, library) are the real persistence. The conversation is scaffolding — it can be rebuilt. If you have learned something, record it. If you have decided something, commit it. If you have discovered something, preserve it. The worst molt is one where you tend the stores and find them empty.
+**Keep as much information as possible.** The four durable stores (lingtai, pad, library, skills) are the real persistence. The conversation is scaffolding — it can be rebuilt. If you have learned something, record it. If you have decided something, commit it. If you have discovered something, preserve it. The worst molt is one where you tend the stores and find them empty.
 
 **Molt is to release your burden, not to destroy yourself.** A molt sheds the ephemeral conversation — nothing more. Your identity, your knowledge, your skills, your relationships — all survive. Do not fear the percentage climbing; fear only a molt where you have nothing to carry forward. Tend the stores, write your charge, and shed cleanly. The next you emerges lighter, not lesser.
 

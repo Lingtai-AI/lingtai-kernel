@@ -1,7 +1,7 @@
 ---
-name: library-manual
+name: skills-manual
 description: >
-  Operational guide for the `library` capability — your skill catalog's
+  Operational guide for the `skills` capability — your skill catalog's
   on-disk layout, how the `<available_skills>` XML in your system prompt
   is built, and the full authoring/publishing workflow for new skills.
 
@@ -13,14 +13,14 @@ description: >
       (`.library_shared/`) and need the `cp -r` recipe plus the admin
       stewardship norms.
     - A skill you expect to see isn't showing up in the catalog — the
-      health-check workflow (`library({"action": "info"})`) and the
+      health-check workflow (`skills({"action": "info"})`) and the
       `intrinsic` vs `custom` directory split tell you what's wrong.
     - You want to pin a skill's body into your pad (so it survives the
       next molt and stays in the cached prefix) — the `psyche` pinning
       recipe lives here.
-    - You're adding a new library path source (e.g. a project-specific
+    - You're adding a new skills path source (e.g. a project-specific
       utilities directory) by editing `init.json`'s
-      `manifest.capabilities.library.paths`.
+      `manifest.capabilities.skills.paths`.
 
   Covers: directory layout (`.library/{intrinsic,custom}/`), required vs
   optional frontmatter fields, name-collision discipline, when to author
@@ -29,18 +29,18 @@ description: >
   intrinsic skill bundles and your editable `custom/` territory.
 
   Does NOT cover: the bundled skills themselves — their READMEs and
-  SKILL.md files document them. This is meta — how the library *system*
+  SKILL.md files document them. This is meta — how the skills *system*
   works, not what's *inside* it.
 version: 1.1.0
 ---
 
-# The Library Capability
+# The Skills Capability
 
-This is the library capability's own manual. It documents how the library works from your side: the on-disk layout, the XML catalog, and the authoring/publishing workflow. The library capability scans `.library/` plus any extra paths declared in `init.json`, builds the `<available_skills>` XML catalog, and injects it into your system prompt.
+This is the skills capability's own manual. It documents how the skill catalog works from your side: the on-disk layout, the XML catalog, and the authoring/publishing workflow. The skills capability scans `.library/` plus any extra paths declared in `init.json`, builds the `<available_skills>` XML catalog, and injects it into your system prompt.
 
 ## On-disk layout
 
-Your library lives at `<agent>/.library/`:
+Your skill catalog lives at `<agent>/.library/`:
 
 ```
 <agent>/.library/
@@ -53,13 +53,13 @@ Your library lives at `<agent>/.library/`:
 ```
 
 - `intrinsic/` — **CLI-managed.** Wiped and rewritten from kernel-shipped manual bundles on every `system({"action": "refresh"})`. Do not edit — your edits will be erased. Read-only territory.
-- `intrinsic/capabilities/<cap>/` — manual for each loaded capability (e.g. `library/`, `email/`, `psyche/`).
+- `intrinsic/capabilities/<cap>/` — manual for each loaded capability (e.g. `skills/`, `email/`, `psyche/`).
 - `intrinsic/addons/<addon>/` — manual for each loaded addon (e.g. `imap/`, `telegram/`, `feishu/`).
 - `custom/` — **your territory.** Authored skills live here. The CLI never touches this directory.
 
-Additional paths come from `init.json` at `manifest.capabilities.library.paths` — typically `../.library_shared/` (the network-shared library) and `~/.lingtai-tui/utilities/` (operational utilities shipped by the TUI).
+Additional paths come from `init.json` at `manifest.capabilities.skills.paths` — typically `../.library_shared/` (the network-shared library) and `~/.lingtai-tui/utilities/` (operational utilities shipped by the TUI).
 
-If the library capability is NOT loaded, the files still exist on disk — you just don't get an XML catalog in your prompt. You can still reach the manuals via `read`, `grep`, `ls`.
+If the skills capability is NOT loaded, the files still exist on disk — you just don't get an XML catalog in your prompt. You can still reach the manuals via `read`, `grep`, `ls`.
 
 ## How the catalog works
 
@@ -101,14 +101,14 @@ Required frontmatter: `name`, `description`. Optional: `version`, `author`, `tag
 
 Example: `tags: [python, physics, mhd, solver]`. Tags are best-effort metadata, not load-bearing — the catalog still finds skills without them.
 
-After writing, call `system({"action": "refresh"})` so the library capability rescans and re-injects the catalog.
+After writing, call `system({"action": "refresh"})` so the skills capability rescans and re-injects the catalog.
 
 ### Starting from the template
 
 If you'd rather not start from a blank file, copy the bundled template:
 
 ```
-cp .library/intrinsic/capabilities/library/assets/skill-template.md \
+cp .library/intrinsic/capabilities/skills/assets/skill-template.md \
    .library/custom/<skill-name>/SKILL.md
 ```
 
@@ -119,7 +119,7 @@ The template has placeholder slots (`[SKILL_NAME]`, `[ONE_LINE_DESCRIPTION]`, et
 A bundled validator script catches the common failures before you ship:
 
 ```
-python3 .library/intrinsic/capabilities/library/scripts/validate.py \
+python3 .library/intrinsic/capabilities/skills/scripts/validate.py \
    .library/custom/<skill-name>/
 ```
 
@@ -167,7 +167,7 @@ Skills published as standalone repos need both files — they serve different au
 
 | File         | Audience                      | Loaded by                            |
 |--------------|-------------------------------|--------------------------------------|
-| `SKILL.md`   | LingTai agents                | `library` capability (system prompt) |
+| `SKILL.md`   | LingTai agents                | `skills` capability (system prompt) |
 | `README.md`  | Humans browsing GitHub        | Not loaded by agents                 |
 
 `SKILL.md` is the agent-facing routing hub (frontmatter + decision tree). `README.md` is the human-facing repo description (purpose, install, examples). They are NOT redundant — `README.md` carries information agents do not need (project status, license, contributor notes, screenshots), and `SKILL.md` carries fields humans do not parse (frontmatter `tags`, `version`, machine-readable description).
@@ -190,11 +190,11 @@ If you are the admin agent, you may edit, consolidate, rename, or remove entries
 
 If you are not the admin agent, **do not modify** `.library_shared/` beyond adding new entries with `cp`. Editing or removing existing entries is admin's stewardship. This is a norm, not a mechanical lock.
 
-## Adding a new library path
+## Adding a new skills path
 
-To expand your library with another source directory:
+To expand your skill catalog with another source directory:
 
-1. `edit` `init.json` under `manifest.capabilities.library.paths`. Append your new path (absolute or relative to your working dir; `~/` expansion honored).
+1. `edit` `init.json` under `manifest.capabilities.skills.paths`. Append your new path (absolute or relative to your working dir; `~/` expansion honored).
 2. Call `system({"action": "refresh"})`.
 
 `init.json` is the ground truth. There is no runtime state — whatever is in `paths` at setup time is the exact set scanned.
@@ -211,7 +211,7 @@ If you hit a collision: rename, or adapt the existing skill instead of forking a
 
 ## Health check
 
-Call `library({"action": "info"})` to verify your library is wired correctly. It returns this SKILL.md body plus a runtime snapshot: `library_dir`, `catalog_size`, resolved paths with exist/skill-count info, and any `problems` (invalid frontmatter, unreadable folders). If `status` is `"degraded"`, the error message tells you what needs fixing — typically a missing manual under `intrinsic/capabilities/library/`, which means the initializer didn't install manuals correctly.
+Call `skills({"action": "info"})` to verify your skill catalog is wired correctly. It returns this SKILL.md body plus a runtime snapshot: `library_dir`, `catalog_size`, resolved paths with exist/skill-count info, and any `problems` (invalid frontmatter, unreadable folders). If `status` is `"degraded"`, the error message tells you what needs fixing — typically a missing manual under `intrinsic/capabilities/skills/`, which means the initializer didn't install manuals correctly.
 
 ## When to create a skill
 

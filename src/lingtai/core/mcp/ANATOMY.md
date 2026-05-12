@@ -110,7 +110,7 @@ mcp/inbox.py
 
 ## Dependencies
 
-- `yaml` (PyYAML) — used by the library capability's frontmatter parser (imported transitively; not directly used here)
+- `yaml` (PyYAML) — used by the skills capability's frontmatter parser (imported transitively; not directly used here)
 - `lingtai.i18n` — `t()` for localized strings (imported but the description is hardcoded English)
 - `lingtai_kernel.notifications` — `submit` (as `publish_notification`) for `.notification/` dispatch (in `inbox.py`)
 - `lingtai_kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
@@ -119,6 +119,6 @@ mcp/inbox.py
 ## Composition
 
 - **Parent:** `src/lingtai/core/` (capability package).
-- **Siblings:** `daemon/`, `avatar/`, `library/`, `codex/`, `bash/`.
+- **Siblings:** `daemon/`, `avatar/`, `library/` (knowledge), `skills/` (skill catalog), `codex/` (compatibility wrapper), `bash/`.
 - **Manual:** `mcp/manual/SKILL.md` — registration contract and usage guide.
 - **Kernel hooks:** `setup()` is called during capability initialization; `decompress_addons()` is called by the Agent initializer before `setup`. `MCPInboxPoller.start()/stop()` are called by the agent lifecycle.

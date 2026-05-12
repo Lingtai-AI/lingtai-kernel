@@ -1,11 +1,8 @@
-"""Tests for the redesigned library capability."""
+"""Tests for the renamed skills capability."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock
-
-import pytest
 
 from lingtai.agent import Agent
 
@@ -18,9 +15,9 @@ def make_mock_service():
     return svc
 
 
-def _mk_agent(tmp_path: Path, library_cfg: dict | None = None):
-    """Create an agent with the library capability, optionally passing kwargs."""
-    caps = {"library": library_cfg or {}}
+def _mk_agent(tmp_path: Path, skills_cfg: dict | None = None):
+    """Create an agent with the skills capability, optionally passing kwargs."""
+    caps = {"skills": skills_cfg or {}}
     workdir = tmp_path / "agent"
     agent = Agent(
         service=make_mock_service(),
@@ -43,7 +40,7 @@ def _write_skill(folder: Path, name: str, desc: str = "test skill"):
 # ---------------------------------------------------------------------------
 
 
-def test_library_setup_creates_per_agent_directories(tmp_path):
+def test_skills_setup_creates_per_agent_directories(tmp_path):
     agent, workdir = _mk_agent(tmp_path)
     try:
         assert (workdir / ".library").is_dir()
@@ -57,30 +54,30 @@ def test_library_setup_creates_per_agent_directories(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_library_setup_hard_copies_intrinsics(tmp_path):
+def test_skills_setup_hard_copies_intrinsics(tmp_path):
     # The Agent initializer installs each loaded capability's manual/ bundle
-    # into intrinsic/capabilities/<cap>/. The library capability documents
+    # into intrinsic/capabilities/<cap>/. The skills capability documents
     # itself like every other capability.
     agent, workdir = _mk_agent(tmp_path)
     try:
         skill_md = (
-            workdir / ".library" / "intrinsic" / "capabilities" / "library" / "SKILL.md"
+            workdir / ".library" / "intrinsic" / "capabilities" / "skills" / "SKILL.md"
         )
         assert skill_md.is_file()
-        assert "name: library-manual" in skill_md.read_text()
+        assert "name: skills-manual" in skill_md.read_text()
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_library_setup_overwrites_stale_intrinsic(tmp_path):
+def test_skills_setup_overwrites_stale_intrinsic(tmp_path):
     # The Agent initializer wipes-and-rewrites intrinsic/ on construction.
     # A stale entry from a previous kernel version must be replaced.
     workdir = tmp_path / "agent"
     stale = (
-        workdir / ".library" / "intrinsic" / "capabilities" / "library" / "SKILL.md"
+        workdir / ".library" / "intrinsic" / "capabilities" / "skills" / "SKILL.md"
     )
     stale.parent.mkdir(parents=True, exist_ok=True)
-    stale.write_text("---\nname: library-manual\ndescription: STALE\n---\n")
+    stale.write_text("---\nname: skills-manual\ndescription: STALE\n---\n")
 
     # Also leave a stale top-level dir to confirm wipe-and-rewrite scrubs old layouts.
     old_layout = workdir / ".library" / "intrinsic" / "skill-for-skill" / "SKILL.md"
@@ -91,19 +88,19 @@ def test_library_setup_overwrites_stale_intrinsic(tmp_path):
         service=make_mock_service(),
         agent_name="test",
         working_dir=workdir,
-        capabilities={"library": {}},
+        capabilities={"skills": {}},
     )
     try:
         body = stale.read_text()
         assert "STALE" not in body
-        assert "The Library Capability" in body or "library-manual" in body
+        assert "The Skills Capability" in body or "skills-manual" in body
         # Old layout scrubbed.
         assert not old_layout.exists()
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_library_setup_leaves_custom_untouched(tmp_path):
+def test_skills_setup_leaves_custom_untouched(tmp_path):
     workdir = tmp_path / "agent"
     user_skill = workdir / ".library" / "custom" / "my-tool" / "SKILL.md"
     user_skill.parent.mkdir(parents=True, exist_ok=True)
@@ -113,7 +110,7 @@ def test_library_setup_leaves_custom_untouched(tmp_path):
         service=make_mock_service(),
         agent_name="test",
         working_dir=workdir,
-        capabilities={"library": {}},
+        capabilities={"skills": {}},
     )
     try:
         assert user_skill.read_text() == "---\nname: my-tool\ndescription: Mine\n---\nUser content.\n"
@@ -126,21 +123,21 @@ def test_library_setup_leaves_custom_untouched(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_library_scans_absolute_path(tmp_path):
+def test_skills_scans_absolute_path(tmp_path):
     extra = tmp_path / "extra"
     _write_skill(extra / "shared-skill", "shared-skill")
 
     agent, _ = _mk_agent(tmp_path, {"paths": [str(extra)]})
     try:
-        result = agent._tool_handlers["library"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info"})
         assert result["status"] == "ok"
         assert result["paths"][str(extra)]["skills"] == 1
-        assert result["catalog_size"] >= 2  # library-manual + shared-skill
+        assert result["catalog_size"] >= 2  # skills-manual + shared-skill
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_library_resolves_relative_path_from_working_dir(tmp_path):
+def test_skills_resolves_relative_path_from_working_dir(tmp_path):
     # Build a network-root layout: tmp_path is the network root.
     # The agent lives at tmp_path/agent, and .library_shared sits at tmp_path/.library_shared.
     shared = tmp_path / ".library_shared"
@@ -148,7 +145,7 @@ def test_library_resolves_relative_path_from_working_dir(tmp_path):
 
     agent, _ = _mk_agent(tmp_path, {"paths": ["../.library_shared"]})
     try:
-        result = agent._tool_handlers["library"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info"})
         assert result["status"] == "ok"
         assert result["paths"]["../.library_shared"]["exists"] is True
         assert result["paths"]["../.library_shared"]["skills"] == 1
@@ -156,7 +153,7 @@ def test_library_resolves_relative_path_from_working_dir(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_library_expands_tilde(tmp_path, monkeypatch):
+def test_skills_expands_tilde(tmp_path, monkeypatch):
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
@@ -165,16 +162,16 @@ def test_library_expands_tilde(tmp_path, monkeypatch):
 
     agent, _ = _mk_agent(tmp_path, {"paths": ["~/my-utils"]})
     try:
-        result = agent._tool_handlers["library"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info"})
         assert result["paths"]["~/my-utils"]["exists"] is True
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_library_reports_missing_path_as_not_existing(tmp_path):
+def test_skills_reports_missing_path_as_not_existing(tmp_path):
     agent, _ = _mk_agent(tmp_path, {"paths": ["/does/not/exist"]})
     try:
-        result = agent._tool_handlers["library"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info"})
         assert result["paths"]["/does/not/exist"]["exists"] is False
         assert result["paths"]["/does/not/exist"]["skills"] == 0
     finally:
@@ -186,12 +183,12 @@ def test_library_reports_missing_path_as_not_existing(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_info_returns_library_manual_body(tmp_path):
+def test_info_returns_skills_manual_body(tmp_path):
     agent, _ = _mk_agent(tmp_path)
     try:
-        result = agent._tool_handlers["library"]({"action": "info"})
-        assert "library_manual" in result
-        assert "name: library-manual" in result["library_manual"]
+        result = agent._tool_handlers["skills"]({"action": "info"})
+        assert "skills_manual" in result
+        assert "name: skills-manual" in result["skills_manual"]
     finally:
         agent.stop(timeout=1.0)
 
@@ -199,7 +196,7 @@ def test_info_returns_library_manual_body(tmp_path):
 def test_info_reports_ok_when_healthy(tmp_path):
     agent, _ = _mk_agent(tmp_path)
     try:
-        result = agent._tool_handlers["library"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info"})
         assert result["status"] == "ok"
         assert "error" not in result
     finally:
@@ -207,18 +204,18 @@ def test_info_reports_ok_when_healthy(tmp_path):
 
 
 def test_info_reports_degraded_when_intrinsic_missing(tmp_path):
-    # The library capability is pure presentation — it does NOT reinstall
+    # The skills capability is pure presentation — it does NOT reinstall
     # manuals when info is called. So if the initializer-installed manual is
     # deleted out-of-band after setup, info must report degraded.
     agent, workdir = _mk_agent(tmp_path)
     try:
         manual_path = (
-            workdir / ".library" / "intrinsic" / "capabilities" / "library" / "SKILL.md"
+            workdir / ".library" / "intrinsic" / "capabilities" / "skills" / "SKILL.md"
         )
         assert manual_path.is_file(), "precondition: initializer installed manual"
         manual_path.unlink()
 
-        result = agent._tool_handlers["library"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info"})
         assert result["status"] == "degraded"
         assert "error" in result
     finally:
@@ -236,10 +233,10 @@ def test_info_surfaces_problems(tmp_path):
         service=make_mock_service(),
         agent_name="test",
         working_dir=workdir,
-        capabilities={"library": {}},
+        capabilities={"skills": {}},
     )
     try:
-        result = agent._tool_handlers["library"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info"})
         problem_folders = [p["folder"] for p in result["problems"]]
         assert any("broken" in f for f in problem_folders)
     finally:
@@ -251,15 +248,15 @@ def test_info_surfaces_problems(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_catalog_injected_into_library_section(tmp_path):
+def test_catalog_injected_into_skills_section(tmp_path):
     extra = tmp_path / "extra"
     _write_skill(extra / "shared-thing", "shared-thing")
 
     agent, _ = _mk_agent(tmp_path, {"paths": [str(extra)]})
     try:
-        prompt = agent._prompt_manager.read_section("library") or ""
+        prompt = agent._prompt_manager.read_section("skills") or ""
         assert "<available_skills>" in prompt
-        assert "library-manual" in prompt
+        assert "skills-manual" in prompt
         assert "shared-thing" in prompt
     finally:
         agent.stop(timeout=1.0)
@@ -273,12 +270,79 @@ def test_custom_skills_appear_in_catalog(tmp_path):
         service=make_mock_service(),
         agent_name="test",
         working_dir=workdir,
-        capabilities={"library": {}},
+        capabilities={"skills": {}},
     )
     try:
-        prompt = agent._prompt_manager.read_section("library") or ""
+        prompt = agent._prompt_manager.read_section("skills") or ""
         assert "my-tool" in prompt
         assert "my desc" in prompt
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_old_library_paths_config_normalizes_to_skills_only(tmp_path):
+    extra = tmp_path / "extra"
+    _write_skill(extra / "old-shared", "old-shared")
+    workdir = tmp_path / "agent"
+
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"library": {"paths": [str(extra)]}},
+    )
+    try:
+        assert "skills" in agent._tool_handlers
+        assert "library" not in agent._tool_handlers
+        prompt = agent._prompt_manager.read_section("skills") or ""
+        assert "old-shared" in prompt
+        assert not (agent._prompt_manager.read_section("library") or "")
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_old_codex_library_pair_normalizes_to_library_and_skills(tmp_path):
+    extra = tmp_path / "extra"
+    _write_skill(extra / "paired-shared", "paired-shared")
+    workdir = tmp_path / "agent"
+
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"codex": {}, "library": {"paths": [str(extra)]}},
+    )
+    try:
+        assert set(["library", "codex", "skills"]).issubset(agent._tool_handlers)
+        assert "paired-shared" in (agent._prompt_manager.read_section("skills") or "")
+        result = agent._tool_handlers["library"]({
+            "action": "submit", "title": "Pair", "summary": "knowledge entry"
+        })
+        assert result["status"] == "ok"
+        assert "Pair" in (agent._prompt_manager.read_section("library") or "")
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_new_library_and_skills_config_registers_both(tmp_path):
+    extra = tmp_path / "extra"
+    _write_skill(extra / "new-shared", "new-shared")
+    workdir = tmp_path / "agent"
+
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"library": {}, "skills": {"paths": [str(extra)]}},
+    )
+    try:
+        assert set(["library", "codex", "skills"]).issubset(agent._tool_handlers)
+        assert "new-shared" in (agent._prompt_manager.read_section("skills") or "")
+        result = agent._tool_handlers["library"]({
+            "action": "submit", "title": "New", "summary": "knowledge entry"
+        })
+        assert result["status"] == "ok"
+        assert "New" in (agent._prompt_manager.read_section("library") or "")
     finally:
         agent.stop(timeout=1.0)
 
@@ -288,7 +352,7 @@ def test_custom_skills_appear_in_catalog(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_library_does_not_create_git_repo(tmp_path):
+def test_skills_does_not_create_git_repo(tmp_path):
     agent, workdir = _mk_agent(tmp_path)
     try:
         assert not (workdir / ".library" / ".git").exists()
