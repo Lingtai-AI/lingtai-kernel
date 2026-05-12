@@ -119,6 +119,6 @@ mcp/inbox.py
 ## Composition
 
 - **Parent:** `src/lingtai/core/` (capability package).
-- **Siblings:** `daemon/`, `avatar/`, `library/` (knowledge), `skills/` (skill catalog), `codex/` (compatibility wrapper), `bash/`.
+- **Siblings:** `daemon/`, `avatar/`, `knowledge/` (private durable memory), `skills/` (skill catalog), `bash/`.
 - **Manual:** `mcp/manual/SKILL.md` — registration contract and usage guide.
 - **Kernel hooks:** `setup()` is called during capability initialization; `decompress_addons()` is called by the Agent initializer before `setup`. `MCPInboxPoller.start()/stop()` are called by the agent lifecycle.

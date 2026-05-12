@@ -8,7 +8,7 @@ batches:
     Batch 1 — immovable after init (ideal cache-read prefix):
         principle (no header) → covenant → tools → substrate → procedures → comment
     Batch 2 — rarely mutated (most stable first):
-        rules → brief → skills → library → identity → pad
+        rules → brief → skills → knowledge → identity → pad
 
 `substrate` sits **right after tools** so it functions as the long-form
 companion to the schemas above it: tool schemas carry mechanical
@@ -44,7 +44,7 @@ class SystemPromptManager:
     # sections are ordered most-stable-first so later mutations invalidate
     # as little prior content as possible.
     #   Batch 1 (immovable):         principle, covenant, tools, substrate, procedures, comment
-    #   Batch 2 (rarely-mutated):    rules, brief, skills, library, identity, pad
+    #   Batch 2 (rarely-mutated):    rules, brief, skills, knowledge, identity, pad
     # First entry (principle) is rendered without ## header (raw text).
     _DEFAULT_ORDER = [
         # Batch 1 — immovable
@@ -58,7 +58,7 @@ class SystemPromptManager:
         "rules",
         "brief",
         "skills",
-        "library",
+        "knowledge",
         "identity",
         "pad",
     ]
@@ -103,7 +103,7 @@ class SystemPromptManager:
     # "unordered" bucket rendered just before the tail batch.
     _BATCHES: tuple[tuple[str, ...], ...] = (
         ("principle", "covenant", "tools", "substrate", "procedures", "comment"),
-        ("rules", "brief", "skills", "library", "identity", "pad"),
+        ("rules", "brief", "skills", "knowledge", "identity", "pad"),
     )
 
     def render(self) -> str:

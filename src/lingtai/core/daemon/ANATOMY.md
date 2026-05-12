@@ -81,6 +81,6 @@ daemon/run_dir.py
 ## Composition
 
 - **Parent:** `src/lingtai/core/` (capability package).
-- **Siblings:** `avatar/`, `mcp/`, `library/` (knowledge), `skills/` (skill catalog), `codex/` (compatibility wrapper), `bash/`.
+- **Siblings:** `avatar/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog), `bash/`.
 - **Manual:** `daemon/manual/SKILL.md` — skill documentation for the LLM.
 - **Kernel hooks:** `setup()` is called during capability initialization; `DaemonManager.handle()` is registered as the `daemon` tool handler.

@@ -9,7 +9,7 @@ Skills capability — per-agent skill catalog and skill-manual surface. This is 
 
 ## Connections
 
-- `lingtai.capabilities` maps canonical `skills` here and normalizes old skill-catalog `library.paths` configs to `skills.paths` (`../../capabilities/__init__.py:54-110`).
+- `lingtai.capabilities` maps canonical `skills` here. Former skill-catalog `library.paths` compatibility is removed in the clean rename.
 - `Agent._install_intrinsic_manuals()` copies every capability `manual/` bundle into `.library/intrinsic/capabilities/<name>/`, then re-runs `skills._reconcile()` for first-turn catalog freshness when `skills` is loaded (`../../agent.py:158-229`).
 - The daemon capability blacklists `skills` so emanations do not recursively receive the skill catalog tool (`../daemon/__init__.py:34`).
 
@@ -24,11 +24,11 @@ The `skills` tool exposes one action:
 ## State
 
 - Skill storage remains `<agent>/.library/` for compatibility: `intrinsic/` is CLI-managed and `custom/` is agent-authored (`__init__.py:217-220`).
-- Config path source is canonical `manifest.capabilities.skills.paths`; old `manifest.capabilities.library.paths` is accepted during migration (`../../init_schema.py:247-264`).
+- Config path source is canonical `manifest.capabilities.skills.paths` (`../../init_schema.py:247-268`).
 - Prompt state is the `skills` section (`__init__.py:255-261`).
 - Health check expects `.library/intrinsic/capabilities/skills/SKILL.md` and reports `skills_manual`, with `library_manual` retained as a response compatibility key (`__init__.py:263-282`).
 
 ## Notes
 
 - The `.library/` directory name and `.library_shared/` convention are intentionally preserved in this rename-only change; they are storage compatibility names, not the user-facing capability name.
-- New callers should use `skills({"action":"info"})`; old `library({"action":"info"})` is not registered because `library` now names the durable knowledge tool.
+- New callers should use `skills({"action":"info"})`; old `library({"action":"info"})` is not registered because private durable memory is now `knowledge` and `library` is not registered.

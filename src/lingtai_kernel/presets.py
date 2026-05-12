@@ -297,8 +297,7 @@ def materialize_active_preset(data: dict, working_dir: Path) -> None:
     whole point of presets) with one carve-out: ``skills.paths`` from
     init.json appends to the preset's skills paths, deduped, preset defaults
     first. Skill paths are project-truth (where this agent's extra skills
-    live) — swapping presets should not erase them. Old ``library.paths`` is
-    accepted during the rename migration.
+    live) — swapping presets should not erase them.
 
     Mutates ``data`` in place. No-op when ``manifest.preset.active`` is unset
     or when the manifest already has a literal ``llm`` and no preset block.
@@ -354,23 +353,21 @@ def materialize_active_preset(data: dict, working_dir: Path) -> None:
     manifest["llm"] = preset_llm
 
     # Capabilities are wholesale-replaced by the preset (atomic swap is the
-    # whole point of presets). Two carve-outs preserve project-truth across
+    # whole point of presets). One carve-out preserves project-truth across
     # preset switches:
     #   - skills.paths: extras declared in init.json append to the preset's
     #     defaults. Skill paths are project-truth (where this agent's extra
     #     skills live), not runtime-tier choices, so swapping presets should
-    #     not erase them. Old library.paths is treated as skills.paths when
-    #     it appears during migration.
+    #     not erase them.
     # If you need to add another carve-out, do it here — keep the list short.
     init_caps = manifest.get("capabilities", {}) if isinstance(
         manifest.get("capabilities"), dict) else {}
     init_skill_paths: list[str] = []
-    for cap_name in ("skills", "library"):
-        cfg = init_caps.get(cap_name)
-        if isinstance(cfg, dict) and isinstance(cfg.get("paths"), list):
-            for path in cfg.get("paths", []):
-                if isinstance(path, str) and path not in init_skill_paths:
-                    init_skill_paths.append(path)
+    cfg = init_caps.get("skills")
+    if isinstance(cfg, dict) and isinstance(cfg.get("paths"), list):
+        for path in cfg.get("paths", []):
+            if isinstance(path, str) and path not in init_skill_paths:
+                init_skill_paths.append(path)
 
     new_caps = preset_manifest.get("capabilities", init_caps)
     if isinstance(new_caps, dict) and init_skill_paths:

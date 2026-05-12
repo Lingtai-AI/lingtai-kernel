@@ -595,13 +595,13 @@ class AvatarManager:
                 shutil.rmtree(dst_system)
             shutil.copytree(src_system, dst_system)
 
-        # codex/
-        src_lib = src / "codex"
-        if src_lib.is_dir():
-            dst_lib = dst / "codex"
-            if dst_lib.exists():
-                shutil.rmtree(dst_lib)
-            shutil.copytree(src_lib, dst_lib)
+        # knowledge/
+        src_knowledge = src / "knowledge"
+        if src_knowledge.is_dir():
+            dst_knowledge = dst / "knowledge"
+            if dst_knowledge.exists():
+                shutil.rmtree(dst_knowledge)
+            shutil.copytree(src_knowledge, dst_knowledge)
 
         # exports/
         src_exports = src / "exports"

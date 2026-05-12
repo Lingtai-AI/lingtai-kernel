@@ -245,15 +245,11 @@ def validate_init(data: dict) -> list[str]:
             warnings.append("addons: all entries must be strings (curated MCP names)")
 
     # Validate manifest.capabilities.skills shape if present.
-    # Back-compat: before the codex→library / library→skills rename,
-    # manifest.capabilities.library.paths configured the skill catalog. Accept
-    # that spelling when it still carries paths so old agents can refresh.
     caps = manifest.get("capabilities") or {}
     if isinstance(caps, dict):
-        for cap_name in ("skills", "library"):
-            cfg = caps.get(cap_name)
-            if cfg is None:
-                continue
+        cap_name = "skills"
+        cfg = caps.get(cap_name)
+        if cfg is not None:
             if not isinstance(cfg, dict):
                 raise ValueError(
                     f"manifest.capabilities.{cap_name}: expected object, "
@@ -265,12 +261,11 @@ def validate_init(data: dict) -> list[str]:
                     raise ValueError(
                         f"manifest.capabilities.{cap_name}.paths: expected list[str]"
                     )
-            if cap_name == "skills" or "paths" in cfg:
-                for key in cfg:
-                    if key != "paths":
-                        warnings.append(
-                            f"unknown field in manifest.capabilities.{cap_name}: {key}"
-                        )
+            for key in cfg:
+                if key != "paths":
+                    warnings.append(
+                        f"unknown field in manifest.capabilities.{cap_name}: {key}"
+                    )
 
     return warnings
 

@@ -1,4 +1,4 @@
-"""Tests for library capability — durable long-term knowledge."""
+"""Tests for knowledge capability — durable long-term knowledge."""
 from __future__ import annotations
 
 import json
@@ -20,67 +20,107 @@ def make_mock_service():
 # ---------------------------------------------------------------------------
 
 
-def test_library_setup_registers_tool(tmp_path):
+def test_knowledge_setup_registers_only_knowledge_tool(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 50}},
+        capabilities={"knowledge": {"knowledge_limit": 50}},
     )
-    assert "library" in agent._tool_handlers
-    assert "codex" in agent._tool_handlers  # deprecated compatibility alias
+    assert "knowledge" in agent._tool_handlers
+    assert "library" not in agent._tool_handlers
+    assert "codex" not in agent._tool_handlers
     agent.stop(timeout=1.0)
 
 
-def test_codex_capability_normalizes_to_library(tmp_path):
-    agent = Agent(
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["codex"],
-    )
-    try:
-        assert agent.get_capability("library") is not None
-        assert agent.get_capability("codex") is None
-        assert "library" in agent._tool_handlers
-        assert "codex" in agent._tool_handlers
-    finally:
-        agent.stop(timeout=1.0)
+
+def test_former_alias_capabilities_do_not_register_knowledge(tmp_path):
+    for cap in ("library", "codex"):
+        agent = Agent(
+            service=make_mock_service(), agent_name=f"test-{cap}", working_dir=tmp_path / cap,
+            capabilities=[cap],
+        )
+        try:
+            assert agent.get_capability("knowledge") is None
+            assert "knowledge" not in agent._tool_handlers
+            assert cap not in agent._tool_handlers
+        finally:
+            agent.stop(timeout=1.0)
 
 
-def test_codex_tool_alias_uses_library_store(tmp_path):
+def test_knowledge_tool_uses_knowledge_store(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 50}},
+        capabilities={"knowledge": {"knowledge_limit": 50}},
     )
     try:
-        result = agent._tool_handlers["codex"]({
+        result = agent._tool_handlers["knowledge"]({
             "action": "submit",
-            "title": "Compat",
-            "summary": "Old codex tool writes to renamed library.",
+            "title": "Knowledge",
+            "summary": "Knowledge tool writes to the knowledge store.",
         })
         assert result["status"] == "ok"
-        prompt = agent._prompt_manager.read_section("library") or ""
-        assert "Compat" in prompt
-        assert (agent.working_dir / "codex" / "codex.json").is_file()
+        prompt = agent._prompt_manager.read_section("knowledge") or ""
+        assert "Knowledge" in prompt
+        assert (agent.working_dir / "knowledge" / "knowledge.json").is_file()
+    finally:
+        agent.stop(timeout=1.0)
+
+def test_prompt_catalog_is_progressive_disclosure_index(tmp_path):
+    agent = Agent(
+        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
+        capabilities={"knowledge": {"knowledge_limit": 50}},
+    )
+    try:
+        mgr = agent.get_capability("knowledge")
+        full_content = "FULL_CONTENT_SENTINEL only view should disclose"
+        supplementary = "SUPPLEMENTARY_SENTINEL only explicit supplementary view should disclose"
+        result = mgr.handle({
+            "action": "submit",
+            "title": "Progressive Disclosure Entry",
+            "summary": "Short visible summary.",
+            "content": full_content,
+            "supplementary": supplementary,
+        })
+
+        prompt = agent._prompt_manager.read_section("knowledge") or ""
+        assert result["id"] in prompt
+        assert "Progressive Disclosure Entry" in prompt
+        assert "Short visible summary." in prompt
+        assert "compact index only" in prompt
+        assert full_content not in prompt
+        assert supplementary not in prompt
+
+        viewed = mgr.handle({"action": "view", "ids": [result["id"]]})
+        assert viewed["entries"][0]["content"] == full_content
+        assert "supplementary" not in viewed["entries"][0]
+
+        viewed_with_supplementary = mgr.handle({
+            "action": "view",
+            "ids": [result["id"]],
+            "include_supplementary": True,
+        })
+        assert viewed_with_supplementary["entries"][0]["supplementary"] == supplementary
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_library_manager_accessible(tmp_path):
+def test_knowledge_manager_accessible_by_exact_name(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 50}},
+        capabilities={"knowledge": {"knowledge_limit": 50}},
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("knowledge")
     assert mgr is not None
     agent.stop(timeout=1.0)
 
 
-def test_library_independent_of_psyche(tmp_path):
-    """Library is a separate capability; psyche is always-on as intrinsic."""
+def test_knowledge_independent_of_psyche(tmp_path):
+    """Knowledge is a separate capability; psyche is always-on as intrinsic."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 50}},
+        capabilities={"knowledge": {"knowledge_limit": 50}},
     )
     assert "psyche" in agent._intrinsics
-    assert "library" in agent._tool_handlers
+    assert "knowledge" in agent._tool_handlers
     agent.stop(timeout=1.0)
 
 
@@ -92,9 +132,9 @@ def test_library_independent_of_psyche(tmp_path):
 def test_submit_creates_entry(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 50}},
+        capabilities={"knowledge": {"knowledge_limit": 50}},
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("knowledge")
     result = mgr.handle({
         "action": "submit",
         "title": "TCP Retry Logic",
@@ -103,7 +143,7 @@ def test_submit_creates_entry(tmp_path):
     })
     assert result["status"] == "ok"
     assert "id" in result
-    data = json.loads((agent.working_dir / "codex" / "codex.json").read_text())
+    data = json.loads((agent.working_dir / "knowledge" / "knowledge.json").read_text())
     assert len(data["entries"]) == 1
     assert data["entries"][0]["title"] == "TCP Retry Logic"
     agent.stop(timeout=1.0)
@@ -112,9 +152,9 @@ def test_submit_creates_entry(tmp_path):
 def test_submit_requires_title(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 50}},
+        capabilities={"knowledge": {"knowledge_limit": 50}},
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("knowledge")
     result = mgr.handle({"action": "submit", "summary": "s", "content": "c"})
     assert "error" in result
     agent.stop(timeout=1.0)
@@ -123,9 +163,9 @@ def test_submit_requires_title(tmp_path):
 def test_submit_enforces_limit(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 2}},
+        capabilities={"knowledge": {"knowledge_limit": 2}},
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("knowledge")
     mgr.handle({"action": "submit", "title": "A", "summary": "s", "content": "c"})
     mgr.handle({"action": "submit", "title": "B", "summary": "s", "content": "c"})
     result = mgr.handle({"action": "submit", "title": "C", "summary": "s", "content": "c"})
@@ -143,9 +183,9 @@ def test_submit_without_content(tmp_path):
     """Title + summary alone is a valid entry — content is optional."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 50}},
+        capabilities={"knowledge": {"knowledge_limit": 50}},
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("knowledge")
     result = mgr.handle({
         "action": "submit",
         "title": "A",
@@ -164,9 +204,9 @@ def test_submit_without_content(tmp_path):
 def test_view_returns_content(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 50}},
+        capabilities={"knowledge": {"knowledge_limit": 50}},
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("knowledge")
     r = mgr.handle({"action": "submit", "title": "X", "summary": "s", "content": "full content here"})
     result = mgr.handle({"action": "view", "ids": [r["id"]]})
     assert result["status"] == "ok"
@@ -179,9 +219,9 @@ def test_view_returns_content(tmp_path):
 def test_view_with_include_supplementary(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 50}},
+        capabilities={"knowledge": {"knowledge_limit": 50}},
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("knowledge")
     r = mgr.handle({
         "action": "submit", "title": "X", "summary": "s",
         "content": "main", "supplementary": "extra material",
@@ -197,9 +237,9 @@ def test_view_with_include_supplementary(tmp_path):
 def test_view_invalid_id(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 50}},
+        capabilities={"knowledge": {"knowledge_limit": 50}},
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("knowledge")
     result = mgr.handle({"action": "view", "ids": ["nope"]})
     assert "error" in result
     agent.stop(timeout=1.0)
@@ -209,9 +249,9 @@ def test_filter_and_export_actions_rejected(tmp_path):
     """Removed actions return error, not silent no-op."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 50}},
+        capabilities={"knowledge": {"knowledge_limit": 50}},
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("knowledge")
     for action in ("filter", "export"):
         result = mgr.handle({"action": action})
         assert "error" in result, f"{action} should be rejected"
@@ -227,9 +267,9 @@ def test_filter_and_export_actions_rejected(tmp_path):
 def test_consolidate(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 50}},
+        capabilities={"knowledge": {"knowledge_limit": 50}},
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("knowledge")
     r1 = mgr.handle({"action": "submit", "title": "A", "summary": "s1.", "content": "c1"})
     r2 = mgr.handle({"action": "submit", "title": "B", "summary": "s2.", "content": "c2"})
     result = mgr.handle({
@@ -241,7 +281,7 @@ def test_consolidate(tmp_path):
     })
     assert result["status"] == "ok"
     assert result["removed"] == 2
-    data = json.loads((agent.working_dir / "codex" / "codex.json").read_text())
+    data = json.loads((agent.working_dir / "knowledge" / "knowledge.json").read_text())
     assert len(data["entries"]) == 1
     assert data["entries"][0]["title"] == "AB Combined"
     agent.stop(timeout=1.0)
@@ -255,15 +295,15 @@ def test_consolidate(tmp_path):
 def test_delete(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities={"library": {"library_limit": 50}},
+        capabilities={"knowledge": {"knowledge_limit": 50}},
     )
-    mgr = agent.get_capability("library")
+    mgr = agent.get_capability("knowledge")
     r1 = mgr.handle({"action": "submit", "title": "A", "summary": "s.", "content": "c"})
     r2 = mgr.handle({"action": "submit", "title": "B", "summary": "s.", "content": "c"})
     result = mgr.handle({"action": "delete", "ids": [r1["id"]]})
     assert result["status"] == "ok"
     assert result["removed"] == 1
-    data = json.loads((agent.working_dir / "codex" / "codex.json").read_text())
+    data = json.loads((agent.working_dir / "knowledge" / "knowledge.json").read_text())
     assert len(data["entries"]) == 1
     assert data["entries"][0]["id"] == r2["id"]
     agent.stop(timeout=1.0)
@@ -275,7 +315,7 @@ def test_delete(tmp_path):
 
 
 def test_schema_has_all_fields():
-    from lingtai.core.library import get_schema
+    from lingtai.core.knowledge import get_schema
     SCHEMA = get_schema("en")
     actions = SCHEMA["properties"]["action"]["enum"]
     assert set(actions) == {"submit", "view", "consolidate", "delete"}
@@ -298,15 +338,15 @@ def test_schema_has_all_fields():
 
 
 def test_id_deterministic():
-    from lingtai.core.library import LibraryManager
-    id1 = LibraryManager._make_id("hello", "2026-03-16T00:00:00Z")
-    id2 = LibraryManager._make_id("hello", "2026-03-16T00:00:00Z")
+    from lingtai.core.knowledge import KnowledgeManager
+    id1 = KnowledgeManager._make_id("hello", "2026-03-16T00:00:00Z")
+    id2 = KnowledgeManager._make_id("hello", "2026-03-16T00:00:00Z")
     assert id1 == id2
     assert len(id1) == 8
 
 
 def test_id_differs_by_content():
-    from lingtai.core.library import LibraryManager
-    id1 = LibraryManager._make_id("hello", "2026-03-16T00:00:00Z")
-    id2 = LibraryManager._make_id("world", "2026-03-16T00:00:00Z")
+    from lingtai.core.knowledge import KnowledgeManager
+    id1 = KnowledgeManager._make_id("hello", "2026-03-16T00:00:00Z")
+    id2 = KnowledgeManager._make_id("world", "2026-03-16T00:00:00Z")
     assert id1 != id2

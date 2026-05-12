@@ -5,7 +5,7 @@ processes. Two modes:
 
 - **Shallow (初生):** Copy `init.json` to a new working dir, strip identity,
   launch. The avatar gets the same LLM config + capabilities but no history.
-- **Deep (二重身):** Copy the entire working dir (`system/`, `codex/`, `exports/`)
+- **Deep (二重身):** Copy identity and durable knowledge (`system/`, `knowledge/`, `exports/`)
   plus `init.json`, strip name + history. The avatar is a doppelgänger — same
   character, pad, knowledge — but starts a fresh conversation.
 
@@ -35,7 +35,7 @@ avatar/__init__.py
   │  Spawn pipeline:
   ├── _spawn()                      — validates name, checks liveness, prepares working dir, launches process
   ├── _make_avatar_init()           — builds avatar's init.json from parent's (strips identity, reroots paths)
-  ├── _prepare_deep()               — copies system/ + codex/ + exports/ + combo.json for deep mode
+  ├── _prepare_deep()               — copies system/ + knowledge/ + exports/ + combo.json for deep mode
   ├── _launch()                     — runs `lingtai-agent run <dir>` as a detached subprocess
   ├── _wait_for_boot()              — polls .agent.heartbeat or process exit for boot verification
   │
@@ -72,5 +72,5 @@ avatar/__init__.py
 ## Composition
 
 - **Parent:** `src/lingtai/core/` (capability package).
-- **Siblings:** `daemon/`, `mcp/`, `library/` (knowledge), `skills/` (skill catalog), `codex/` (compatibility wrapper), `bash/`.
+- **Siblings:** `daemon/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog), `bash/`.
 - **Kernel hooks:** `setup()` is called during capability initialization; `AvatarManager.handle()` is registered as the `avatar` tool handler. The daemon capability blacklists `avatar` to prevent avatar-in-daemon recursion.

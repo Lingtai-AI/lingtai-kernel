@@ -140,7 +140,7 @@ class TestAvatarManager:
         assert "error" in r2 or r2.get("status") == "already_active"
 
     def test_spawn_does_not_copy_identity_files(self, tmp_path):
-        """Spawning an avatar should not copy parent character/pad/codex.
+        """Spawning an avatar should not copy parent character/pad/knowledge.
         (The legacy ``mirror=True`` identity-copy behavior was removed.)"""
         from lingtai.agent import Agent
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
@@ -150,17 +150,17 @@ class TestAvatarManager:
         system_dir.mkdir(parents=True, exist_ok=True)
         (system_dir / "character.md").write_text("I am the parent")
         (system_dir / "pad.md").write_text("Parent pad")
-        lib_dir = parent._working_dir / "codex"
-        lib_dir.mkdir(parents=True, exist_ok=True)
-        (lib_dir / "codex.json").write_text('{"entries": []}')
+        knowledge_dir = parent._working_dir / "knowledge"
+        knowledge_dir.mkdir(parents=True, exist_ok=True)
+        (knowledge_dir / "knowledge.json").write_text('{"entries": []}')
 
         mgr = parent.get_capability("avatar")
         result = mgr.handle({"name": "blank", "confirm": True})
         assert result["status"] == "ok"
         child_dir = parent._working_dir.parent / "blank"
-        # Character and codex should NOT be copied
+        # Character and knowledge should NOT be copied
         assert not (child_dir / "system" / "character.md").is_file()
-        assert not (child_dir / "codex" / "codex.json").is_file()
+        assert not (child_dir / "knowledge" / "knowledge.json").is_file()
 
     def test_spawn_missing_files_ok(self, tmp_path):
         """Spawn with no identity files in the parent should not error."""

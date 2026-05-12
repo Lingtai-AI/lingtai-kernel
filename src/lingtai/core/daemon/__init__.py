@@ -31,7 +31,7 @@ from .run_dir import DaemonRunDir
 PROVIDERS = {"providers": [], "default": "builtin"}
 
 # Tools emanations can never use (no recursion, no spawning, no identity mutation)
-EMANATION_BLACKLIST = {"daemon", "avatar", "psyche", "skills", "codex"}
+EMANATION_BLACKLIST = {"daemon", "avatar", "psyche", "skills", "knowledge"}
 
 
 class _ToolCollector:

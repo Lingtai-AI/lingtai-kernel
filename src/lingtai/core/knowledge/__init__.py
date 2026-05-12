@@ -1,11 +1,11 @@
-"""Library capability — durable long-term knowledge across molts.
+"""Knowledge capability — private durable knowledge across molts.
 
-A journal-shaped knowledge store persisted in the legacy codex/codex.json
-file. Each entry's id + title + summary is always visible in the
-system prompt; content and supplementary material load on demand via view().
+A journal-shaped private knowledge store persisted in knowledge/knowledge.json.
+Each entry's id + title + summary is always visible in the system prompt;
+content and supplementary material load on demand via view().
 
 Usage:
-    agent = Agent(capabilities=["library"])
+    agent = Agent(capabilities=["knowledge"])
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ PROVIDERS = {"providers": [], "default": "builtin"}
 
 
 def get_description(lang: str = "en") -> str:
-    return t(lang, "library.description")
+    return t(lang, "knowledge.description")
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -35,32 +35,32 @@ def get_schema(lang: str = "en") -> dict:
             "action": {
                 "type": "string",
                 "enum": ["submit", "view", "consolidate", "delete"],
-                "description": t(lang, "library.action"),
+                "description": t(lang, "knowledge.action"),
             },
             "title": {
                 "type": "string",
-                "description": t(lang, "library.title"),
+                "description": t(lang, "knowledge.title"),
             },
             "summary": {
                 "type": "string",
-                "description": t(lang, "library.summary"),
+                "description": t(lang, "knowledge.summary"),
             },
             "content": {
                 "type": "string",
-                "description": t(lang, "library.content"),
+                "description": t(lang, "knowledge.content"),
             },
             "supplementary": {
                 "type": "string",
-                "description": t(lang, "library.supplementary"),
+                "description": t(lang, "knowledge.supplementary"),
             },
             "ids": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": t(lang, "library.ids"),
+                "description": t(lang, "knowledge.ids"),
             },
             "include_supplementary": {
                 "type": "boolean",
-                "description": t(lang, "library.include_supplementary"),
+                "description": t(lang, "knowledge.include_supplementary"),
             },
         },
         "required": ["action"],
@@ -68,7 +68,7 @@ def get_schema(lang: str = "en") -> dict:
 
 
 
-class LibraryManager:
+class KnowledgeManager:
     """Durable long-term knowledge — submit, view, consolidate, delete."""
 
     DEFAULT_MAX_ENTRIES = 50
@@ -77,15 +77,15 @@ class LibraryManager:
         self,
         agent: "BaseAgent",
         *,
-        library_limit: int | None = None,
-        codex_limit: int | None = None,
+        knowledge_limit: int | None = None,
     ):
         self._agent = agent
         self._working_dir = agent._working_dir
-        limit = library_limit if library_limit is not None else codex_limit
-        self._max_entries = limit if limit is not None else self.DEFAULT_MAX_ENTRIES
+        self._max_entries = (
+            knowledge_limit if knowledge_limit is not None else self.DEFAULT_MAX_ENTRIES
+        )
 
-        self._codex_json = self._working_dir / "codex" / "codex.json"
+        self._knowledge_json = self._working_dir / "knowledge" / "knowledge.json"
         self._entries: list[dict] = self._load_entries()
 
     # ------------------------------------------------------------------
@@ -93,36 +93,36 @@ class LibraryManager:
     # ------------------------------------------------------------------
 
     def _inject_catalog(self) -> None:
-        """Inject library entry index (id + title + summary) into system prompt."""
+        """Inject knowledge entry index (id + title + summary) into system prompt."""
         if not self._entries:
-            self._agent.update_system_prompt("library", "", protected=True)
-            self._agent.update_system_prompt("codex", "", protected=True)
+            self._agent.update_system_prompt("knowledge", "", protected=True)
             return
 
         lines = [
-            f"Your library has {len(self._entries)}/{self._max_entries} entries:",
+            f"Your knowledge has {len(self._entries)}/{self._max_entries} entries:",
             "",
         ]
         for e in self._entries:
             lines.append(f"- [{e['id']}] {e['title']}: {e['summary']}")
         lines.append("")
         lines.append(
-            "Use library(view, ids=[...]) to read full content. "
-            "Pass include_supplementary=true for backing material."
+            "This is a compact index only. "
+            "Use knowledge(view, ids=[...]) to disclose full content "
+            "for selected entries. Pass include_supplementary=true only "
+            "when you need backing material."
         )
 
-        self._agent.update_system_prompt("library", "\n".join(lines), protected=True)
-        self._agent.update_system_prompt("codex", "", protected=True)
+        self._agent.update_system_prompt("knowledge", "\n".join(lines), protected=True)
 
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
 
     def _load_entries(self) -> list[dict]:
-        if not self._codex_json.is_file():
+        if not self._knowledge_json.is_file():
             return []
         try:
-            data = json.loads(self._codex_json.read_text())
+            data = json.loads(self._knowledge_json.read_text())
             entries = data.get("entries", [])
             for e in entries:
                 if "title" not in e:
@@ -135,14 +135,14 @@ class LibraryManager:
 
     def _save_entries(self) -> None:
         data = {"version": 1, "entries": self._entries}
-        self._codex_json.parent.mkdir(exist_ok=True)
+        self._knowledge_json.parent.mkdir(exist_ok=True)
         fd, tmp = tempfile.mkstemp(
-            dir=str(self._codex_json.parent), suffix=".tmp",
+            dir=str(self._knowledge_json.parent), suffix=".tmp",
         )
         try:
             os.write(fd, json.dumps(data, indent=2, ensure_ascii=False).encode())
             os.close(fd)
-            os.replace(tmp, str(self._codex_json))
+            os.replace(tmp, str(self._knowledge_json))
         except Exception:
             try:
                 os.close(fd)
@@ -189,7 +189,7 @@ class LibraryManager:
             return {"error": "summary is required for submit."}
         if len(self._entries) >= self._max_entries:
             return {
-                "error": f"Library is full ({self._max_entries} entries). "
+                "error": f"Knowledge is full ({self._max_entries} entries). "
                 "Consolidate related entries first, "
                 "delete obsolete ones, or use supplementary "
                 "to pack more detail into existing entries.",
@@ -226,7 +226,7 @@ class LibraryManager:
         entries_by_id = {e["id"]: e for e in self._entries}
         invalid = [i for i in ids if i not in entries_by_id]
         if invalid:
-            return {"error": f"Unknown library IDs: {', '.join(invalid)}"}
+            return {"error": f"Unknown knowledge IDs: {', '.join(invalid)}"}
 
         result_entries = []
         for entry_id in ids:
@@ -259,7 +259,7 @@ class LibraryManager:
         existing_ids = {e["id"] for e in self._entries}
         invalid = [i for i in ids if i not in existing_ids]
         if invalid:
-            return {"error": f"Unknown library IDs: {', '.join(invalid)}"}
+            return {"error": f"Unknown knowledge IDs: {', '.join(invalid)}"}
 
         ids_set = set(ids)
         self._entries = [e for e in self._entries if e["id"] not in ids_set]
@@ -287,7 +287,7 @@ class LibraryManager:
         existing_ids = {e["id"] for e in self._entries}
         invalid = [i for i in ids if i not in existing_ids]
         if invalid:
-            return {"error": f"Unknown library IDs: {', '.join(invalid)}"}
+            return {"error": f"Unknown knowledge IDs: {', '.join(invalid)}"}
 
         ids_set = set(ids)
         before = len(self._entries)
@@ -302,36 +302,24 @@ class LibraryManager:
 def setup(
     agent: "BaseAgent",
     *,
-    library_limit: int | None = None,
-    codex_limit: int | None = None,
-) -> LibraryManager:
-    """Set up the library capability — durable long-term knowledge."""
+    knowledge_limit: int | None = None,
+) -> KnowledgeManager:
+    """Set up the knowledge capability — private durable knowledge."""
     lang = agent._config.language
 
-    mgr = LibraryManager(
-        agent, library_limit=library_limit, codex_limit=codex_limit,
+    mgr = KnowledgeManager(
+        agent,
+        knowledge_limit=knowledge_limit,
     )
 
     agent.add_tool(
-        "library",
+        "knowledge",
         schema=get_schema(lang),
         handler=mgr.handle,
         description=get_description(lang),
     )
-    # Deprecated compatibility alias for callers that still invoke codex(...).
-    agent.add_tool(
-        "codex",
-        schema=get_schema(lang),
-        handler=mgr.handle,
-        description="Deprecated alias for library \u2014 use library(...) instead. "
-        + get_description(lang),
-    )
-
-    # Inject library catalog into system prompt at boot.
+    # Inject knowledge catalog into system prompt at boot.
     mgr._inject_catalog()
 
     return mgr
 
-
-# Back-compat import alias: old code may still import CodexManager.
-CodexManager = LibraryManager
