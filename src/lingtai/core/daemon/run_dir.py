@@ -29,7 +29,7 @@ class DaemonRunDir:
             history/chat_history.jsonl   # session transcript
             logs/token_ledger.jsonl      # per-call tokens, daemon-scoped
             logs/events.jsonl            # tool_call, tool_result, cli_output, daemon_*
-            result.txt                 # full terminal result when available
+            result.txt                   # full terminal result when available
     """
 
     def __init__(
@@ -152,6 +152,10 @@ class DaemonRunDir:
     @property
     def result_path(self) -> Path:
         return self._path / "result.txt"
+
+    def state_snapshot(self) -> dict:
+        """Return a shallow copy of the current daemon.json state."""
+        return dict(self._state)
 
     # ------------------------------------------------------------------
     # Internal helpers

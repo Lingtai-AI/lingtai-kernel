@@ -235,6 +235,7 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
     assert len(events) == 2
     assert {e["source"] for e in events} == {"daemon"}
     assert {e["ref_id"] for e in events} == {"em-1", "em-2"}
+    assert all("[daemon:em-" not in e["body"] for e in events)
 
 
 def test_handle_emanate_allows_concurrent(tmp_path):
@@ -405,6 +406,7 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path):
     assert any(e["source"] == "daemon" and e["ref_id"] == "em-1" for e in events)
     assert any("Task done" in e["body"] for e in events)
     assert any("daemon(action=\"check\", id=\"em-1\")" in e["body"] for e in events)
+    assert all("[daemon:em-" not in e["body"] for e in events)
 
     reclaim_result = mgr._handle_reclaim()
     assert reclaim_result["status"] == "reclaimed"
@@ -440,6 +442,7 @@ def test_on_emanation_done_publishes_system_notification_not_request(tmp_path):
     assert "Daemon em-9 done" in event["body"]
     assert "daemon(action=\"check\", id=\"em-9\")" in event["body"]
     assert "final report" in event["body"]
+    assert "[daemon:em-" not in event["body"]
 
 
 def test_on_emanation_done_failure_always_notifies(tmp_path):
@@ -468,6 +471,7 @@ def test_on_emanation_done_failure_always_notifies(tmp_path):
     assert events[0]["ref_id"] == "em-fail"
     assert "failed" in events[0]["body"]
     assert "boom" in events[0]["body"]
+    assert "[daemon:em-" not in events[0]["body"]
 
 
 def test_on_emanation_done_short_success_still_suppressed(tmp_path):

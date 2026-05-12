@@ -146,14 +146,13 @@ class DaemonManager:
 
     def __init__(self, agent: "Agent", max_emanations: int = 10,
                  max_turns: int = 200, timeout: float = 3600.0,
-                 notify_threshold: int = 20, max_result_chars: int = 2000):
+                 notify_threshold: int = 20):
         self._agent = agent
         self._max_emanations = max_emanations
         self._max_turns = max_turns
         self._timeout = timeout
         self._default_model = agent.service.model
         self._notify_threshold = notify_threshold
-        self._max_result_chars = max_result_chars
 
         # Emanation registry: em_id → entry dict
         self._emanations: dict[str, dict] = {}
@@ -737,8 +736,9 @@ class DaemonManager:
         ]
         if run_dir is not None:
             parts.append(f"Run directory: {run_dir.path}")
-            if run_dir._state.get("result_path"):
-                parts.append(f"Result file: {run_dir._state['result_path']}")
+            result_path = run_dir.state_snapshot().get("result_path")
+            if result_path:
+                parts.append(f"Result file: {result_path}")
         if preview:
             parts.append(f"Preview:\n{preview}")
         body = "\n".join(parts)
@@ -1321,13 +1321,12 @@ class DaemonManager:
 
 def setup(agent: "Agent", max_emanations: int = 10,
           max_turns: int = 200, timeout: float = 3600.0,
-          notify_threshold: int = 20, max_result_chars: int = 2000) -> DaemonManager:
+          notify_threshold: int = 20) -> DaemonManager:
     """Set up the daemon capability on an agent."""
     lang = agent._config.language
     mgr = DaemonManager(agent, max_emanations=max_emanations,
                         max_turns=max_turns, timeout=timeout,
-                        notify_threshold=notify_threshold,
-                        max_result_chars=max_result_chars)
+                        notify_threshold=notify_threshold)
     schema = get_schema(lang)
     agent.add_tool("daemon", schema=schema, handler=mgr.handle,
                    description=get_description(lang))
