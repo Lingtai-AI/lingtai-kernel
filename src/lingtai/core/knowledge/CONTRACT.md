@@ -115,9 +115,11 @@ Entries may carry supporting files (scripts, assets, notes, raw logs,
 attachments). Those files are not parsed by the capability; the agent opens
 them via the regular `read`/`bash` tools when it loads an entry.
 
-The capability never writes inside `knowledge/`. The agent is the sole
-author. There is no JSON store and no automatic migration from the previous
-`knowledge/knowledge.json` file; that file is ignored.
+The agent is the sole long-term author of `knowledge/`. The only capability
+write is a one-time legacy migration: if `knowledge/knowledge.json` exists,
+entries are converted to `knowledge/<slug>/KNOWLEDGE.md`, each legacy
+`supplementary` field is written to `references/supplementary.md`, and the
+source JSON is renamed to `knowledge.json.migrated` to prevent repeat work.
 
 ## Prompt injection
 
@@ -151,6 +153,7 @@ skill -> private knowledge.
 |---|---|---|
 | `knowledge` is the only private durable memory capability in the builtin registry | `src/lingtai/capabilities/__init__.py` | `tests/test_check_caps.py::test_get_all_providers_includes_expected_capabilities` |
 | `knowledge` setup registers only the `knowledge` tool | `src/lingtai/core/knowledge/__init__.py` | `tests/test_knowledge.py::test_knowledge_setup_registers_only_knowledge_tool` |
+| Legacy `knowledge/knowledge.json` entries migrate once into `KNOWLEDGE.md` folders; `supplementary` becomes `references/supplementary.md` | `src/lingtai/core/knowledge/__init__.py` | `tests/test_knowledge.py::test_legacy_knowledge_json_migrates_to_knowledge_md` |
 | Manager-style lookup is exact: `knowledge` resolves and former names do not | `src/lingtai/agent.py` | `tests/test_knowledge.py::test_former_alias_capabilities_do_not_register_knowledge` |
 | Catalog reads `<agent>/knowledge/<name>/KNOWLEDGE.md` and excludes `SKILL.md` entries | `src/lingtai/core/knowledge/__init__.py` | `tests/test_knowledge.py::test_knowledge_md_convention_distinct_from_skill_md` |
 | Prompt catalog includes only `name`/`description`/`path` from frontmatter | `src/lingtai/core/knowledge/__init__.py` | `tests/test_knowledge.py::test_prompt_catalog_only_metadata_not_body` |

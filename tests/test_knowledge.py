@@ -366,14 +366,22 @@ def test_info_surfaces_missing_frontmatter(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_legacy_knowledge_json_is_ignored(tmp_path):
-    """Old `knowledge/knowledge.json` is not consulted; it does not become an entry."""
+def test_legacy_knowledge_json_migrates_to_knowledge_md(tmp_path):
+    """Old JSON entries are converted once into KNOWLEDGE.md folders."""
     workdir = tmp_path / "agent"
     legacy_dir = workdir / "knowledge"
     legacy_dir.mkdir(parents=True, exist_ok=True)
     (legacy_dir / "knowledge.json").write_text(
-        '{"version": 1, "entries": [{"id": "abc", "title": "Old", "summary": "Stale"}]}'
+        '{"version": 1, "entries": [{'
+        '"id": "abc123", '
+        '"title": "TCP Retry Logic", '
+        '"summary": "Covers retry backoff and failure modes.", '
+        '"content": "The TCP mail service uses exponential backoff.", '
+        '"supplementary": "Raw logs and citations."'
+        '}]}',
+        encoding="utf-8",
     )
+
     agent = Agent(
         service=make_mock_service(),
         agent_name="test",
@@ -382,9 +390,56 @@ def test_legacy_knowledge_json_is_ignored(tmp_path):
     )
     try:
         result = agent._tool_handlers["knowledge"]({"action": "info"})
-        assert result["catalog_size"] == 0
+        assert result["catalog_size"] == 1
+        assert result["problems"] == []
+
+        entry = legacy_dir / "tcp-retry-logic"
+        md = entry / "KNOWLEDGE.md"
+        refs = entry / "references" / "supplementary.md"
+        assert md.is_file()
+        assert refs.is_file()
+        text = md.read_text(encoding="utf-8")
+        assert 'name: "tcp-retry-logic"' in text
+        assert 'description: "Covers retry backoff and failure modes."' in text
+        assert 'legacy_id: "abc123"' in text
+        assert "The TCP mail service uses exponential backoff." in text
+        assert "references/supplementary.md" in text
+        assert refs.read_text(encoding="utf-8") == "Raw logs and citations.\n"
+
+        assert not (legacy_dir / "knowledge.json").exists()
+        assert (legacy_dir / "knowledge.json.migrated").is_file()
+
         prompt = agent._prompt_manager.read_section("knowledge") or ""
-        assert "Old" not in prompt
-        assert "Stale" not in prompt
+        assert "tcp-retry-logic" in prompt
+        assert "Covers retry backoff and failure modes." in prompt
+        assert "The TCP mail service uses exponential backoff." not in prompt
+        assert "Raw logs and citations" not in prompt
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_legacy_knowledge_json_migration_uses_unique_slugs(tmp_path):
+    workdir = tmp_path / "agent"
+    legacy_dir = workdir / "knowledge"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    (legacy_dir / "knowledge.json").write_text(
+        '{"entries": ['
+        '{"id": "a1", "title": "Duplicate", "summary": "First"},'
+        '{"id": "b2", "title": "Duplicate", "summary": "Second"}'
+        ']}',
+        encoding="utf-8",
+    )
+
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"knowledge": {}},
+    )
+    try:
+        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        assert result["catalog_size"] == 2
+        assert (legacy_dir / "duplicate" / "KNOWLEDGE.md").is_file()
+        assert (legacy_dir / "duplicate-b2" / "KNOWLEDGE.md").is_file()
     finally:
         agent.stop(timeout=1.0)

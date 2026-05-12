@@ -43,8 +43,8 @@ That substrate has the wrong shape for private durable knowledge:
 3. Preserve the **private/public boundary**: knowledge entries may reference
    local paths, mail ids, and logs; skills must not.
 4. Replace the JSON database with a filesystem catalog **in one focused
-   patch**; no compatibility shims, no migration code (the user base is small
-   and the rename is already breaking).
+   patch**, with one narrow compatibility bridge: existing `knowledge.json`
+   entries migrate once into `KNOWLEDGE.md` folders.
 
 ## Non-goals
 
@@ -56,9 +56,6 @@ That substrate has the wrong shape for private durable knowledge:
 - A capacity limit. The filesystem is the limit. No `knowledge_limit`
   enforcement; the kwarg is accepted and silently ignored so old presets do
   not break.
-- Automatic migration from `knowledge/knowledge.json`. The file is simply
-  ignored. The previous PR series is recent enough that migration cost
-  exceeds reauthoring cost.
 
 ## Design
 
@@ -152,8 +149,8 @@ boundary we are protecting.
 
 - `KnowledgeManager` class and all four CRUD actions
   (`submit` / `view` / `consolidate` / `delete`).
-- JSON store at `<agent>/knowledge/knowledge.json` (still ignored if present;
-  no migration).
+- Runtime JSON store at `<agent>/knowledge/knowledge.json`. If the legacy file
+  exists, it is migrated once into folders and renamed to `knowledge.json.migrated`.
 - Capacity limit (`DEFAULT_MAX_ENTRIES = 50`, `knowledge_limit=N`). The kwarg
   is accepted and ignored for preset compatibility.
 - `_make_id`, deterministic 8-char content hashes, and `created_at`
@@ -177,11 +174,22 @@ boundary we are protecting.
 
 ## Migration
 
-None in this patch. The previous JSON-knowledge feature shipped recently
-enough that we expect ≤1 active store to exist in the wild, and re-authoring
-a handful of entries as `KNOWLEDGE.md` folders is straightforward. If an
-existing agent has a `knowledge/knowledge.json`, it is silently ignored;
-the agent can read the JSON with `read` and rewrite entries manually.
+The patch includes a one-time migration for the previous JSON-backed store. On
+setup or `knowledge({action: "info"})`, if `<agent>/knowledge/knowledge.json`
+exists, the capability reads its `entries` array and converts each object:
+
+- `title` becomes the filesystem slug seed and the optional frontmatter `title`.
+- `summary` becomes frontmatter `description`.
+- `content` becomes the main `KNOWLEDGE.md` body.
+- `supplementary` becomes `references/supplementary.md` and a `## References`
+  link in the main document.
+- `id` is preserved as frontmatter `legacy_id`.
+
+After at least one successful migrated entry, the source JSON is renamed to
+`knowledge.json.migrated` (or a numbered variant) so migration does not repeat.
+Malformed JSON or malformed entries are reported as `problems` in the `info`
+snapshot; the prompt catalog only includes successfully migrated/scanned
+entries.
 
 ## Verification
 

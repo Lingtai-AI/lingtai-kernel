@@ -24,8 +24,11 @@ Usage: ``Agent(capabilities={"knowledge": {}})`` or via init.json.
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -144,6 +147,166 @@ def _scan(directory: Path) -> tuple[list[dict], list[dict]]:
     return valid, problems
 
 
+
+# ---------------------------------------------------------------------------
+# Legacy JSON migration
+# ---------------------------------------------------------------------------
+
+_SLUG_RE = re.compile(r"[^a-z0-9._-]+")
+
+
+def _slugify(value: str, fallback: str) -> str:
+    """Return a filesystem-safe knowledge entry name."""
+    base = value.strip().lower() or fallback
+    base = _SLUG_RE.sub("-", base)
+    base = base.strip(".-_") or fallback
+    return base[:64].strip(".-_") or fallback
+
+
+def _yaml_quote(value: str) -> str:
+    """Render a small frontmatter scalar safely as JSON/YAML-compatible text."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp", prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def _unique_entry_dir(root: Path, preferred: str, legacy_id: str) -> tuple[Path, str]:
+    slug = _slugify(preferred, fallback=_slugify(legacy_id, "entry"))
+    candidate = root / slug
+    if not candidate.exists():
+        return candidate, slug
+
+    suffix_base = _slugify(legacy_id, "entry")
+    candidate = root / f"{slug}-{suffix_base}"
+    if not candidate.exists():
+        return candidate, candidate.name
+
+    i = 2
+    while True:
+        candidate = root / f"{slug}-{suffix_base}-{i}"
+        if not candidate.exists():
+            return candidate, candidate.name
+        i += 1
+
+
+def _format_knowledge_md(*, name: str, title: str, description: str, content: str, supplementary: str, legacy_id: str, created_at: str) -> str:
+    frontmatter = [
+        "---",
+        f"name: {_yaml_quote(name)}",
+        f"description: {_yaml_quote(description)}",
+        "version: \"1.0.0\"",
+        "origin: \"migrated-knowledge-json\"",
+    ]
+    if legacy_id:
+        frontmatter.append(f"legacy_id: {_yaml_quote(legacy_id)}")
+    if title:
+        frontmatter.append(f"title: {_yaml_quote(title)}")
+    if created_at:
+        frontmatter.append(f"created_at: {_yaml_quote(created_at)}")
+    frontmatter.append("---")
+
+    body_parts = ["\n".join(frontmatter), ""]
+    if title:
+        body_parts.append(f"# {title}")
+        body_parts.append("")
+    if content:
+        body_parts.append(content.rstrip())
+        body_parts.append("")
+    else:
+        body_parts.append(description)
+        body_parts.append("")
+    if supplementary:
+        body_parts.append("## References")
+        body_parts.append("")
+        body_parts.append("- [Migrated supplementary material](references/supplementary.md)")
+        body_parts.append("")
+    return "\n".join(body_parts).rstrip() + "\n"
+
+
+def _migrate_legacy_json(knowledge_dir: Path) -> list[dict]:
+    """One-time migration from ``knowledge/knowledge.json`` into folders.
+
+    Old entries become ``knowledge/<slug>/KNOWLEDGE.md``. The old
+    ``supplementary`` field is written to ``references/supplementary.md`` and
+    linked from the main document. The source JSON is renamed after a successful
+    migration so the operation is not repeated on the next scan.
+    """
+    legacy = knowledge_dir / "knowledge.json"
+    if not legacy.is_file():
+        return []
+
+    problems: list[dict] = []
+    try:
+        data = json.loads(legacy.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        return [{"folder": "knowledge.json", "reason": f"cannot migrate legacy knowledge.json: {e}"}]
+
+    raw_entries = data.get("entries", []) if isinstance(data, dict) else []
+    if not isinstance(raw_entries, list):
+        return [{"folder": "knowledge.json", "reason": "cannot migrate legacy knowledge.json: entries is not a list"}]
+
+    migrated = 0
+    for idx, raw in enumerate(raw_entries, 1):
+        if not isinstance(raw, dict):
+            problems.append({"folder": f"knowledge.json[{idx}]", "reason": "legacy entry is not an object"})
+            continue
+        legacy_id = str(raw.get("id") or idx)
+        title = str(raw.get("title") or raw.get("content") or f"Entry {idx}").strip()
+        summary = str(raw.get("summary") or title or raw.get("content") or "Migrated knowledge entry").strip()
+        content = str(raw.get("content") or "").strip()
+        supplementary = str(raw.get("supplementary") or "").strip()
+        created_at = str(raw.get("created_at") or "").strip()
+
+        entry_dir, name = _unique_entry_dir(knowledge_dir, title, legacy_id)
+        try:
+            md = _format_knowledge_md(
+                name=name,
+                title=title,
+                description=summary,
+                content=content,
+                supplementary=supplementary,
+                legacy_id=legacy_id,
+                created_at=created_at,
+            )
+            _atomic_write_text(entry_dir / "KNOWLEDGE.md", md)
+            if supplementary:
+                _atomic_write_text(entry_dir / "references" / "supplementary.md", supplementary.rstrip() + "\n")
+            migrated += 1
+        except OSError as e:
+            problems.append({"folder": f"knowledge.json[{idx}]", "reason": f"migration write failed: {e}"})
+
+    if migrated:
+        backup = knowledge_dir / "knowledge.json.migrated"
+        if backup.exists():
+            n = 2
+            while (knowledge_dir / f"knowledge.json.migrated.{n}").exists():
+                n += 1
+            backup = knowledge_dir / f"knowledge.json.migrated.{n}"
+        try:
+            legacy.rename(backup)
+        except OSError as e:
+            problems.append({"folder": "knowledge.json", "reason": f"migrated entries but could not rename legacy file: {e}"})
+
+    return problems
+
+
 # ---------------------------------------------------------------------------
 # XML catalog builder
 # ---------------------------------------------------------------------------
@@ -190,7 +353,9 @@ def _reconcile(agent: "BaseAgent") -> dict:
     working_dir = agent._working_dir
     knowledge_dir = working_dir / "knowledge"
 
+    migration_problems = _migrate_legacy_json(knowledge_dir)
     entries, problems = _scan(knowledge_dir)
+    problems = migration_problems + problems
 
     lang = agent._config.language
     catalog_xml = _build_catalog_xml(entries, lang)

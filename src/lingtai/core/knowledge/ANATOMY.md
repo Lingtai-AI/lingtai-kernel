@@ -36,8 +36,10 @@ the regular `read` tool.
 - Required frontmatter: `name`, `description`. Optional: `version`.
 - Prompt state: protected `knowledge` section holds the preamble + `<knowledge>`
   XML block.
-- No JSON store, no per-entry size cap, no automatic migration from the
-  previous `knowledge/knowledge.json` layout.
+- No JSON store and no per-entry size cap. A one-time legacy migration
+  converts `knowledge/knowledge.json` entries into `KNOWLEDGE.md` folders,
+  writes old `supplementary` text to `references/supplementary.md`, and renames
+  the source JSON to `knowledge.json.migrated`.
 
 ## Invariants
 
@@ -47,8 +49,9 @@ the regular `read` tool.
   rename by design.
 - The catalog injects only `name`/`description`/`path`. Bodies and supporting
   files never appear in the prompt; the agent loads them via `read`.
-- The capability never writes inside `<agent>/knowledge/`. The agent is the
-  sole author.
+- The capability normally never writes inside `<agent>/knowledge/`; the sole
+  exception is the one-time legacy JSON migration. After migration, the agent is
+  the sole author.
 - `SKILL.md` belongs to skills; `KNOWLEDGE.md` belongs to knowledge. The two
   filenames are not aliases.
 - For the stable behavior contract, read `src/lingtai/core/knowledge/CONTRACT.md`
