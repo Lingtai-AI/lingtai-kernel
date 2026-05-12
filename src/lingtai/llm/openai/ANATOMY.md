@@ -9,18 +9,18 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `OpenAIAdapter`, `OpenAIChatSession` |
-| `adapter.py` | 1398 | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
+| `adapter.py` | 1470 | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
 | `defaults.py` | 7 | `DEFAULTS` dict: `api_compat="openai"`, `use_responses_api=True` |
 
 ### adapter.py class map
 
 | Class | Lines | Role |
 |-------|-------|------|
-| `OpenAIChatSession` | 227–718 | Chat Completions session with context overflow auto-recovery |
-| `OpenAIResponsesSession` | 727–904 | Responses API session with server-side `previous_response_id` chaining |
-| `OpenAIAdapter` | 914–1175 | `LLMAdapter` implementation; dispatches to Completions or Responses path |
-| `CodexResponsesSession` | 1185–1343 | Stateless Responses variant for ChatGPT-OAuth `/backend-api/codex` |
-| `CodexOpenAIAdapter` | 1344–1398 | Adapter variant that builds `CodexResponsesSession` |
+| `OpenAIChatSession` | 289–781 | Chat Completions session with context overflow auto-recovery |
+| `OpenAIResponsesSession` | 789–971 | Responses API session with server-side `previous_response_id` chaining |
+| `OpenAIAdapter` | 979–1242 | `LLMAdapter` implementation; dispatches to Completions or Responses path |
+| `CodexResponsesSession` | 1250–1413 | Stateless Responses variant for ChatGPT-OAuth `/backend-api/codex` |
+| `CodexOpenAIAdapter` | 1416–1470 | Adapter variant that builds `CodexResponsesSession` |
 
 ### adapter.py helpers
 
@@ -31,42 +31,43 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `_build_responses_tools()` | 83–107 | `FunctionSchema` → Responses API flat format (`{type, name, description, parameters}`); scrubs disallowed top-level JSON-Schema combinators (`allOf`, `oneOf`, etc.) |
 | `_parse_tool_calls()` | 110–127 | Raw SDK `tool_calls` → `list[ToolCall]` |
 | `_parse_response()` | 130–174 | ChatCompletion → `LLMResponse` (extracts reasoning from `reasoning_content` or `reasoning`) |
-| `_parse_responses_api_response()` | 177–219 | Responses API output → `LLMResponse` (handles `message`, `function_call`, `reasoning` output items) |
+| `_handle_responses_reasoning_event()` | 195–236 | Responses stream reasoning-summary event handler; accumulates `summary_text` deltas/done fallback without raw reasoning text |
+| `_parse_responses_api_response()` | 239–281 | Responses API output → `LLMResponse` (handles `message`, `function_call`, `reasoning` output items) |
 
 ## Connections
 
 - **Base class** — `OpenAIAdapter` extends `LLMAdapter` (`from lingtai.llm.base import LLMAdapter`, line 29).
 - **Kernel types** — imports `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata` from `lingtai_kernel.llm.base`.
-- **Interface converters** — imports `to_openai` and `to_responses_input` from `lingtai.llm.interface_converters` (line 30).
-- **Streaming** — imports `StreamingAccumulator` from `lingtai_kernel.llm.streaming` (line 31).
+- **Interface converters** — imports `to_openai` and `to_responses_input` from `lingtai.llm.interface_converters` (line 31).
+- **Streaming** — imports `StreamingAccumulator` from `lingtai_kernel.llm.streaming` (line 32).
 - **HTTP client** — imports `httpx` for timeout construction (line 16); `openai` SDK for all API calls (line 17).
-- **Subclass hooks** — `_session_class` (line 922) for Completions path; `_adapter_extra_body()` (line 1108) for provider-specific `extra_body`.
+- **Subclass hooks** — `_session_class` (line 987) for Completions path; `_adapter_extra_body()` (line 1173) for provider-specific `extra_body`.
 
 ## Composition
 
 ### Two session paths
 
-The adapter forks at `create_chat()` (line 950):
-1. **Responses API** (`_create_responses_session`, line 990) — when `use_responses=True` AND (`base_url` is None OR `force_responses=True`). Builds `OpenAIResponsesSession`.
-2. **Chat Completions** (`_create_completions_session`, line 1050) — fallback for compatible providers. Builds `self._session_class` (subclass-overridable).
+The adapter forks at `create_chat()` (line 1015):
+1. **Responses API** (`_create_responses_session`, line 1055) — when `use_responses=True` AND (`base_url` is None OR `force_responses=True`). Builds `OpenAIResponsesSession`.
+2. **Chat Completions** (`_create_completions_session`, line 1115) — fallback for compatible providers. Builds `self._session_class` (subclass-overridable).
 
 Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 
-### Chat Completions session flow (`OpenAIChatSession.send`, line 376)
+### Chat Completions session flow (`OpenAIChatSession.send`, line 438)
 
 1. Record user input into `ChatInterface` (str → `add_user_message`; list → `add_tool_results`)
 2. `_build_kwargs()`: enforce tool pairing → serialize via `_build_messages()` → `_pair_orphan_tool_calls()` wire guard
 3. `_run_with_overflow_recovery(_do_call)` — retries with context trimming on 400 context-length errors
 4. On success: record assistant response into interface via `_record_assistant_response()`
 
-### Responses API session flow (`OpenAIResponsesSession.send`, line 791)
+### Responses API session flow (`OpenAIResponsesSession.send`, line 853)
 
 1. `_convert_input(message)` → Responses API input items
 2. Chain `previous_response_id` if available
 3. Call `client.responses.create(**kwargs)`
 4. Store `response_id` for next turn
 
-### Codex stateless flow (`CodexResponsesSession.send_stream`, line 1201)
+### Codex stateless flow (`CodexResponsesSession.send_stream`, line 1266)
 
 1. Record message into canonical `ChatInterface`
 2. `to_responses_input(interface)` — replay full conversation as input items
@@ -76,9 +77,9 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 ## State
 
 - **`OpenAIChatSession._interface`** — canonical `ChatInterface`, single source of truth. Mutated in-place: `add_user_message`, `add_tool_results`, `add_assistant_message`, `drop_trailing`.
-- **`OpenAIChatSession._request_timeout`** — per-request HTTP timeout set by caller before dispatch (line 257). Prevents race between watchdog and SDK.
-- **`OpenAIResponsesSession._response_id`** — server-side session chain pointer. Updated after each `send()`.
-- **`CodexResponsesSession._response_id`** — transient debug aid only; never threaded into next request (line 1338).
+- **`OpenAIChatSession._request_timeout`** — per-request HTTP timeout set by caller before dispatch (line 319). Prevents race between watchdog and SDK.
+- **`OpenAIResponsesSession._response_id`** — server-side session chain pointer. Updated after each `send()` / streamed response.
+- **`CodexResponsesSession._response_id`** — transient debug aid only; never threaded into next request (line 1410).
 - **`OpenAIAdapter._client`** — shared `openai.OpenAI` instance. `_client_kwargs` stored for session `reset()`.
 - **`OpenAIAdapter._session_class`** — class var, subclasses override (e.g. DeepSeek injects `reasoning_content` preservation).
 
@@ -91,7 +92,7 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 | `ToolCallBlock` | `{type: "function", id, function: {name, arguments: <json-str>}}` on assistant message `tool_calls` array | `{type: "function_call", call_id, name, arguments: <json-str>}` as top-level output item |
 | `ToolResultBlock` | `{role: "tool", tool_call_id, content}` as separate message | `{type: "function_call_output", call_id, output}` as top-level input item |
 | `TextBlock` | `content` string on assistant message | `{type: "output_text", text}` inside message content |
-| `ThinkingBlock` | Emitted as `reasoning_content` on assistant message (DeepSeek thinking-mode round-trip; other CC providers ignore the field). Captured back from `message.reasoning_content` / `message.reasoning` into a ThinkingBlock by `_record_assistant_response` (non-streaming) and the streaming finalize path. | Replayed as a top-level `{type: "reasoning", summary: [{type: "summary_text", text: ...}]}` item before assistant text/calls by `to_responses_input` (`../interface_converters.py:233-258`) so stateless Codex can retain summarized reasoning context. |
+| `ThinkingBlock` | Emitted as `reasoning_content` on assistant message (DeepSeek thinking-mode round-trip; other CC providers ignore the field). Captured back from `message.reasoning_content` / `message.reasoning` into a ThinkingBlock by `_record_assistant_response` (non-streaming) and the streaming finalize path. | Replayed as a top-level `{type: "reasoning", summary: [{type: "summary_text", text: ...}]}` item before assistant text/calls by `to_responses_input` (`../interface_converters.py:233-258`) so stateless Codex can retain summarized reasoning context. Responses streaming captures `response.reasoning_summary_text.*` into thoughts and Codex persists those thoughts as ThinkingBlocks before tool calls. |
 
 ### Context overflow auto-recovery
 
@@ -102,17 +103,17 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 
 ### Wire-layer orphan guard
 
-`_pair_orphan_tool_calls()` (line 314) scans the serialized message list for `assistant.tool_calls` without matching `role=tool` messages. Synthesizes placeholder tool results with `[synthesized placeholder — real result was not in context at send time]`. Logs warnings for investigation. Does NOT mutate canonical interface.
+`_pair_orphan_tool_calls()` (line 376) scans the serialized message list for `assistant.tool_calls` without matching `role=tool` messages. Synthesizes placeholder tool results with `[synthesized placeholder — real result was not in context at send time]`. Logs warnings for investigation. Does NOT mutate canonical interface.
 
 ### Streaming
 
-- **CC streaming** (`send_stream`, line 560) — `stream=True, stream_options={include_usage: True}`. Uses `StreamingAccumulator` for text + tool deltas. Reasoning deltas captured from `delta.reasoning` or `delta.reasoning_content` (OpenRouter compatibility, lines 664-671). Overflow recovery wraps the stream open + first chunk (lines 606-625).
-- **Responses streaming** (`send_stream`, line 829) — event types: `response.output_text.delta`, `response.function_call_arguments.delta`, `response.output_item.added/done`, `response.completed`.
-- **Codex streaming** — forces `stream=True` even on `send()` (line 1197). Full interface replay per request.
+- **CC streaming** (`send_stream`, line 622) — `stream=True, stream_options={include_usage: True}`. Uses `StreamingAccumulator` for text + tool deltas. Reasoning deltas captured from `delta.reasoning` or `delta.reasoning_content` (OpenRouter compatibility, lines 726-733). Overflow recovery wraps the stream open + first chunk (lines 668-690).
+- **Responses streaming** (`send_stream`, line 891) — event types: `response.reasoning_summary_text.delta/done` (summary thoughts only), `response.output_text.delta`, `response.function_call_arguments.delta`, `response.output_item.added/done`, `response.completed`.
+- **Codex streaming** — forces `stream=True` even on `send()` (line 1262). Full interface replay per request; captured summary thoughts are persisted as ThinkingBlocks so `to_responses_input` replays reasoning items before function calls.
 
 ### Authentication paths
 
-- **Standard** — `api_key` passed to `openai.OpenAI(api_key=...)` at construction (line 944).
+- **Standard** — `api_key` passed to `openai.OpenAI(api_key=...)` at construction (line 1009).
 - **Codex OAuth** — `CodexOpenAIAdapter` built by `../_register.py:54` with `CodexTokenManager.get_access_token()`. Token refreshed by monkey-patching `create_chat` and `generate` to update `adapter._client.api_key` in-place before each call.
 
 ### Tool schema conversion
@@ -123,14 +124,14 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 ### Reasoning extraction
 
 - **CC non-streaming** (`_parse_response`, line 130) — checks `message.reasoning_content` (OpenAI native) then `message.reasoning` (OpenRouter).
-- **CC streaming** — `delta.reasoning` or `delta.reasoning_content` accumulated via `acc.add_thought()` (line 671).
-- **Responses non-streaming** — `reasoning` output items with `summary_text` blocks (lines 193-197).
-- **Responses streaming** — reasoning events not currently handled (Responses API reasoning is encrypted).
+- **CC streaming** — `delta.reasoning` or `delta.reasoning_content` accumulated via `acc.add_thought()` (line 733).
+- **Responses non-streaming** — `reasoning` output items with `summary_text` blocks (lines 256-259).
+- **Responses streaming** — `response.reasoning_summary_text.delta/done` and reasoning output-item summaries are captured as summary thoughts; raw `response.reasoning_text.*` is intentionally not persisted by default.
 
 ### Subclass hooks
 
-- `_session_class` (line 922) — override to inject provider-specific session behavior on the CC path.
-- `_adapter_extra_body()` (line 1108) — override to add `extra_body` JSON fields (e.g. OpenRouter `reasoning: {include: true}`).
+- `_session_class` (line 987) — override to inject provider-specific session behavior on the CC path.
+- `_adapter_extra_body()` (line 1173) — override to add `extra_body` JSON fields (e.g. OpenRouter `reasoning: {include: true}`).
 
 ### `send(None)` contract — continue from wire
 
