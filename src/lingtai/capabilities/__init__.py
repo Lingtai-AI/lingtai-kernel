@@ -54,15 +54,23 @@ def canonical_capability_name(name: str) -> str:
 def normalize_capabilities(capabilities: dict[str, dict]) -> dict[str, dict]:
     """Normalize old capability names to the post-rename surface.
 
-    Old manifests commonly contain both ``codex`` and ``library``. In that
-    context the old ``library`` entry is the skill catalog, so it becomes
-    ``skills`` while old ``codex`` becomes the new knowledge ``library``.
-    New manifests should use ``library`` for knowledge and ``skills`` for the
-    skill catalog. If both old and new keys are present, canonical keys win and
-    missing ``paths`` from the old skill-catalog key are merged into ``skills``.
+    Old manifests can spell the skill catalog as a bare ``library`` entry, as
+    ``library.paths``, or as a ``codex`` + ``library`` pair. Those old
+    ``library`` entries become ``skills`` while old ``codex`` becomes the new
+    knowledge ``library``. A ``library`` entry with knowledge-library-only kwargs
+    such as ``library_limit`` or ``codex_limit`` is treated as explicit new
+    knowledge config. New manifests should use ``library`` for knowledge and
+    ``skills`` for the skill catalog. If both new keys are present, canonical
+    keys win and missing ``paths`` from the old skill-catalog key are merged
+    into ``skills``.
     """
     out: dict[str, dict] = {}
-    has_old_codex = "codex" in capabilities
+
+    def is_explicit_new_library_config(value: object) -> bool:
+        """True when a ``library`` config clearly means durable knowledge."""
+        return isinstance(value, dict) and any(
+            key in value for key in ("library_limit", "codex_limit")
+        )
 
     def merge_dict(dst: str, value: object) -> None:
         if value is None:
@@ -94,13 +102,14 @@ def normalize_capabilities(capabilities: dict[str, dict]) -> dict[str, dict]:
         elif (
             name == "library"
             and "skills" not in capabilities
-            and (
-                has_old_codex
-                or (isinstance(kwargs, dict) and "paths" in kwargs)
-            )
+            and not is_explicit_new_library_config(kwargs)
         ):
-            # Old pair: codex + library, or old library-only config carrying
-            # path extras. The library entry was the skill catalog.
+            # Legacy ambiguity: before the rename, a bare ``library`` entry was
+            # the skill catalog. Keep old ``library``/``library: {}``/``library.paths``
+            # manifests on the skill-catalog path. A library entry with
+            # knowledge-library-only kwargs (e.g. ``library_limit``) is treated as
+            # an explicit new durable-knowledge config. New configs that want both
+            # meanings spell them explicitly as ``library`` + ``skills``.
             target = "skills"
         else:
             target = name

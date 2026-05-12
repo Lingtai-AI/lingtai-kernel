@@ -29,7 +29,7 @@ Root capabilities package — registry, rename compatibility, and setup dispatch
 
 - `_BUILTIN` is static capability name → module path (`__init__.py:15-34`). The deprecated `codex` name resolves to `lingtai.core.library` for one migration window (`__init__.py:19-21`).
 - `_GROUPS` is static group name → list of capabilities; currently only `"file"` expands to `[read, write, edit, glob, grep]` (`__init__.py:36-39`).
-- `normalize_capabilities()` is pure: old `codex` becomes new `library`; old skill-catalog `library` configs become `skills` when paired with old `codex` or when they carry `paths` and no explicit `skills`; `paths` lists merge/dedupe for `skills` (`__init__.py:54-108`).
+- `normalize_capabilities()` is pure: old `codex` becomes new `library`; old skill-catalog `library` configs (bare `library`, `library: {}`, or `library.paths`) become `skills` unless an explicit `skills` key disambiguates, while knowledge-library-only kwargs such as `library_limit`/`codex_limit` keep `library` on the new durable-knowledge path; `paths` lists merge/dedupe for `skills` (`__init__.py:54-117`).
 - No mutable runtime state is held by this package.
 
 ## Notes

@@ -280,6 +280,42 @@ def test_custom_skills_appear_in_catalog(tmp_path):
         agent.stop(timeout=1.0)
 
 
+def test_old_library_empty_config_normalizes_to_skills_only(tmp_path):
+    workdir = tmp_path / "agent"
+
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"library": {}},
+    )
+    try:
+        assert "skills" in agent._tool_handlers
+        assert "library" not in agent._tool_handlers
+        assert "<available_skills>" in (agent._prompt_manager.read_section("skills") or "")
+        assert not (agent._prompt_manager.read_section("library") or "")
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_old_library_list_config_normalizes_to_skills_only(tmp_path):
+    workdir = tmp_path / "agent"
+
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities=["library"],
+    )
+    try:
+        assert "skills" in agent._tool_handlers
+        assert "library" not in agent._tool_handlers
+        assert "<available_skills>" in (agent._prompt_manager.read_section("skills") or "")
+        assert not (agent._prompt_manager.read_section("library") or "")
+    finally:
+        agent.stop(timeout=1.0)
+
+
 def test_old_library_paths_config_normalizes_to_skills_only(tmp_path):
     extra = tmp_path / "extra"
     _write_skill(extra / "old-shared", "old-shared")
