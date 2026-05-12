@@ -88,7 +88,8 @@ CustomAgent(Agent)     — your domain logic
 <td>
 
 `psyche` — evolving identity
-`codex` — knowledge archive
+`library` — durable knowledge archive
+`skills` — skill catalog
 `email` — full mailbox system
 
 </td>

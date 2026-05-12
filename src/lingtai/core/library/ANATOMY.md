@@ -5,6 +5,7 @@ Library capability — durable long-term knowledge across molts. The capability 
 ## Components
 
 - `library/__init__.py` — the capability implementation. `get_description` (`__init__.py:27-28`), `get_schema` (`__init__.py:31-67`), `LibraryManager` (`__init__.py:71-299`), and `setup` (`__init__.py:302-333`). `CodexManager` remains as an import alias (`__init__.py:336-337`).
+- `library/CONTRACT.md` — public contract companion for the implementation; it cites the code ranges above and the rename-normalization source in `src/lingtai/capabilities/__init__.py`.
 
 ## Connections
 
@@ -35,3 +36,4 @@ The deprecated `codex` tool alias accepts the same schema and dispatches to the 
 
 - This change is naming-first, not storage-v2: the on-disk JSON shape and `codex/` directory stay unchanged while user-facing concepts move from Codex to Library.
 - The old `lingtai.core.codex` module is now a compatibility wrapper; new code should import `lingtai.core.library`.
+- For the stable behavior contract (tool actions, response shapes, persistence, prompt injection, limits, and compatibility rules), read `src/lingtai/core/library/CONTRACT.md` before editing this capability.
