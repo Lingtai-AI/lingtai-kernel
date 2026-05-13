@@ -16,6 +16,34 @@ Knowledge is an agent's private long-term memory. It is for facts, decisions, ob
 
 Skills are different: a skill is a reusable procedure meant to travel across agents. Knowledge may point to skills; skills should not depend on private knowledge.
 
+
+## Names you will see
+
+The current private-memory capability is named `knowledge`, and the only tool it registers is:
+
+```text
+knowledge({"action": "info"})
+```
+
+Older documentation and UI surfaces may still say `library` or `codex`. Treat those as historical names for the private durable knowledge store unless the text is clearly talking about skills. In current agent code, `library(...)` and `codex(...)` are not registered compatibility aliases.
+
+Do not confuse this with the `.library/` directory: `.library/` is the on-disk home for **skills** (`SKILL.md` files), not for private `knowledge` entries. The naming is legacy but intentional for compatibility.
+
+Quick map:
+
+| Term / path | Current meaning |
+|---|---|
+| `knowledge` tool / capability | Private per-agent durable memory catalog. |
+| `<agent>/knowledge/<name>/KNOWLEDGE.md` | One private knowledge entry. |
+| `.library/intrinsic`, `.library/custom`, `.library_shared` | Skill shelves containing `SKILL.md` files. |
+| `skills` tool / capability | Catalog of reusable portable procedures. |
+| `/skills` in the TUI | Browse the skill catalog for the selected agent. |
+| `/knowledge` in the TUI | Browse private durable knowledge/codex entries. |
+| `/library` or `/codex` in the TUI | Legacy aliases for `/knowledge`; keep only for compatibility. |
+| `recipe.json#library_name` | Legacy schema field naming a recipe-bundled skill library. It appends to `skills.paths`. |
+
+When writing new docs, prefer `knowledge` for private memory and `skills` for reusable procedures. Use `library` only when referring to a literal legacy path or schema field such as `.library/`, `.library_shared`, or `recipe.json#library_name`.
+
 ## Layout
 
 Each entry is a folder under `<agent>/knowledge/` with a `KNOWLEDGE.md` file:

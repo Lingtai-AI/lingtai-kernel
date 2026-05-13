@@ -8,7 +8,7 @@ This file is a navigation hub. Each sub-package has its own `ANATOMY.md` with co
 
 ## Components
 
-- `intrinsics/__init__.py` — registry. Imports the four sub-packages and exposes `ALL_INTRINSICS = {"email": email, "system": system, "psyche": psyche, "soul": soul}`. `BaseAgent._wire_intrinsics()` (`base_agent/__init__.py:409`) consumes this dict and binds each module's `handle()` into the agent's tool surface.
+- `intrinsics/__init__.py` — registry. Imports the four sub-packages and exposes `ALL_INTRINSICS = {"email": email, "system": system, "psyche": psyche, "soul": soul}`. `BaseAgent._wire_intrinsics()` (`base_agent/__init__.py:495`) consumes this dict and binds each module's `handle()` into the agent's tool surface.
 
 - [`intrinsics/email/`](email/ANATOMY.md) — filesystem mailbox. Inbox/outbox/sent/archive folders, contacts, recurring schedules, mail delivery via daemon threads. `.notification/email.json` is a **live mirror** of the current unread set: any read-state mutation (`_read`, `_dismiss`, `_archive`, `_delete`) re-renders the digest so the wire's notification reflects the new state on the next heartbeat sync. The digest body inlines each entry's mailbox ID directly under the subject so the agent can pass it to `email_id` without a separate `check` call. Each entry preview is up to 200 chars; truncated previews end with `... (N more chars)`. The agent dismisses handled mails via `email(action="read", email_id=[...])` (returns bodies + clears) or `email(action="dismiss", email_id=[...])` (clears only, no bodies). On bounce, merges into `.notification/system.json` events list. Decomposed in `d229efe` from a 1,530-line `email.py` into a 5-module sub-package (`__init__.py`, `primitives.py`, `schema.py`, `manager.py`).
 
