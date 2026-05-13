@@ -145,37 +145,215 @@ def build_meta(agent) -> dict:
     else:
         meta["stamina_left_seconds"] = -1
 
-    # Notifications — always surface the current notification-channel state
-    # in every tool-call result metadata block so the agent always knows what
-    # channels have pending signals.  The dict maps channel names to a
-    # compact summary (header, icon, priority); empty dict means no active
-    # notifications.  This is the "last tool-call result metadata always
-    # carries notification state" contract.
+    # Notifications are deliberately NOT included here. Active-state
+    # notification metadata is a moving single-slot block that lives on the
+    # latest tool-call result only — see ``attach_active_notifications``.
+    # Putting it in ``build_meta`` would stamp it onto every tool result
+    # and accumulate forever in history, which is the bug fixed alongside
+    # this comment. The IDLE-state synthesized notification pair built by
+    # ``_inject_notification_pair`` embeds the full ``notifications`` field
+    # directly and does not need a duplicate ``_notifications`` summary.
+
+    return meta
+
+
+# ---------------------------------------------------------------------------
+# Active-state notification stamping — moving single-slot, latest result only.
+# ---------------------------------------------------------------------------
+
+
+def _collect_active_notifications_compact(agent) -> dict | None:
+    """Return the compact notification snapshot for the latest tool result.
+
+    Reads ``.notification/*.json`` via :func:`collect_notifications` and
+    produces a ``{channel: {header, icon, priority}}`` mapping. Returns
+    ``None`` when there are no active channels (or anything goes wrong);
+    callers treat ``None`` as "do not stamp."
+    """
     try:
         from .notifications import collect_notifications
+        from pathlib import Path
+
         working_dir = getattr(agent, "_working_dir", None)
-        if working_dir is not None:
-            from pathlib import Path
-            notifs = collect_notifications(Path(working_dir))
-            if notifs:
-                compact = {}
-                for source, payload in notifs.items():
-                    if not isinstance(payload, dict):
-                        continue
-                    entry = {}
-                    if header := payload.get("header"):
-                        entry["header"] = header
-                    if icon := payload.get("icon"):
-                        entry["icon"] = icon
-                    if priority := payload.get("priority"):
-                        entry["priority"] = priority
-                    compact[source] = entry
-                if compact:
-                    meta["_notifications"] = compact
+        if working_dir is None:
+            return None
+        notifs = collect_notifications(Path(working_dir))
+        if not notifs:
+            return None
+        compact: dict = {}
+        for source, payload in notifs.items():
+            if not isinstance(payload, dict):
+                continue
+            entry: dict = {}
+            if header := payload.get("header"):
+                entry["header"] = header
+            if icon := payload.get("icon"):
+                entry["icon"] = icon
+            if priority := payload.get("priority"):
+                entry["priority"] = priority
+            compact[source] = entry
+        return compact or None
+    except Exception:
+        return None
+
+
+def _last_dict_result(tool_results: list) -> dict | None:
+    """Return the dict carried by the latest tool-result block in ``tool_results``.
+
+    Adapter-built ToolResultBlocks store the tool's return value in
+    ``.content``. The notification stamp is only meaningful when that content
+    is a dict (the JSON shape the agent already parses); other shapes
+    (e.g. a string from a tool that returned text) are skipped. Walks
+    backward from the tail so the freshest dict result wins even when
+    later tools returned non-dicts.
+    """
+    for block in reversed(tool_results):
+        content = getattr(block, "content", None)
+        if isinstance(content, dict):
+            return content
+    return None
+
+
+# Skeleton content placed in a synthesized pair's result dict once its live
+# notification payload has been moved away or cleared.  Keeps the pair in
+# history (preserving conversation structure) while making it clear to the
+# LLM — and to future introspective code — that the live data is elsewhere.
+_NOTIFICATION_SKELETON: dict = {
+    "_synthesized": True,
+    "_notification_placeholder": True,
+    "message": (
+        "This was a kernel-synthesized system(action=notification) tool-call pair. "
+        "The live notification payload that was here has been moved to a newer tool "
+        "result metadata block or cleared."
+    ),
+}
+
+
+def skeletonize_notification_holder(agent) -> None:
+    """Strip live notification payload from the current live holder and replace
+    it with a skeleton placeholder; drop the holder reference.
+
+    The live holder (``agent._notification_live_holder``) may point to:
+    * A normal tool-result content dict — strip ``_notifications``,
+      ``notifications``, and ``_notification_guidance`` keys.
+    * A synthesized pair's content dict — replace ALL keys with the skeleton
+      so the pair stays in history but carries no live payload.
+
+    Synthesized pairs are identified by the presence of ``_synthesized: True``
+    in the holder dict.  Normal tool-result dicts never carry that key.
+
+    After this call ``agent._notification_live_holder`` is ``None``.
+    Called by:
+    * The IDLE/ASLEEP inject path before stamping the new synthesized pair.
+    * The ACTIVE path in ``attach_active_notifications`` when moving payload
+      to a newer normal tool result (via ``prior_holder`` arg).
+    * The notifications-cleared path so no holder carries stale payload.
+    """
+    holder = getattr(agent, "_notification_live_holder", None)
+    if isinstance(holder, dict):
+        if holder.get("_synthesized"):
+            # Synthesized pair — replace entire content with skeleton.
+            holder.clear()
+            holder.update(_NOTIFICATION_SKELETON)
+        else:
+            # Normal tool result dict — strip notification keys only.
+            holder.pop("_notifications", None)
+            holder.pop("notifications", None)
+            holder.pop("_notification_guidance", None)
+    agent._notification_live_holder = None
+
+
+# Keep the old name as an alias so external callers (if any) don't break.
+# Internal code should prefer skeletonize_notification_holder.
+def clear_active_notification_holder(agent) -> None:
+    """Legacy alias for :func:`skeletonize_notification_holder`.
+
+    Maintained for backward compatibility.  New code should call
+    ``skeletonize_notification_holder`` directly.
+    """
+    skeletonize_notification_holder(agent)
+
+
+def attach_active_notifications(
+    agent,
+    tool_results: list,
+    *,
+    prior_holder: dict | None = None,
+) -> dict | None:
+    """Move the ``_notifications`` meta block to the latest tool result only.
+
+    Contract:
+        * Skeletonize ``prior_holder`` if it exists — for a normal tool
+          result dict this strips the ``_notifications`` key; for a
+          synthesized pair's content dict this replaces all content with
+          the skeleton placeholder.  Either way the prior holder is
+          cleared from ``agent._notification_live_holder`` before the new
+          holder is registered.
+        * If active notifications exist, stamp the compact summary onto
+          the latest dict-shaped tool result in ``tool_results``, commit
+          the current ``notification_fingerprint`` onto
+          ``agent._notification_fp`` so the IDLE-path synthesized pair
+          will not later re-deliver the same unchanged state, and return
+          that dict as the new holder.
+        * If there are no active notifications, no stamping happens,
+          ``_notification_fp`` is left untouched, and ``None`` is returned
+          (callers should also clear their holder).
+
+    ``tool_results`` is the list of ToolResultBlock objects returned from
+    ToolExecutor; their ``.content`` is shared by reference with the
+    canonical ChatInterface entries that the adapters append, so mutating
+    the dict here propagates to history without a separate write.
+
+    Active-state delivery only: the IDLE-path synthesized notification
+    pair is built by ``_inject_notification_pair`` directly and does not
+    pass through this helper. Committing ``_notification_fp`` here is the
+    bridge that prevents the same notification state from being delivered
+    twice (once via tool-result meta, again via the synthesized pair).
+    """
+    compact = _collect_active_notifications_compact(agent)
+    if not compact:
+        # Underlying notification files are gone/empty. The prior holder is
+        # now stale, so skeletonize it and report that no live holder remains.
+        if prior_holder is not None:
+            agent._notification_live_holder = prior_holder
+            skeletonize_notification_holder(agent)
+        return None
+
+    target = _last_dict_result(tool_results)
+    if target is None:
+        # Active notifications exist, but this batch has no dict-shaped
+        # result to receive the moving meta block. Keep the prior live
+        # holder (if any) intact and leave _notification_fp uncommitted so
+        # the state can still be delivered later via another tool result or
+        # the IDLE synthesized-pair path.
+        return prior_holder
+
+    # We have both live notifications and a new target. Only now is it safe
+    # to strip/skeletonize the previous holder.
+    if prior_holder is not None:
+        agent._notification_live_holder = prior_holder
+        skeletonize_notification_holder(agent)
+
+    target["_notifications"] = compact
+    # Register this dict as the new live holder.
+    agent._notification_live_holder = target
+
+    # Commit the fingerprint so the IDLE-path `_sync_notifications` will
+    # see fp == agent._notification_fp and skip the synthesized pair for
+    # this same unchanged state. Read the fingerprint of the same files
+    # we just stamped from. Best-effort: a fingerprint failure must not
+    # break the (already-successful) stamping.
+    try:
+        from .notifications import notification_fingerprint
+        from pathlib import Path
+
+        working_dir = getattr(agent, "_working_dir", None)
+        if working_dir is not None and hasattr(agent, "_notification_fp"):
+            agent._notification_fp = notification_fingerprint(Path(working_dir))
     except Exception:
         pass
 
-    return meta
+    return target
 
 
 def render_meta(agent, meta: dict) -> str:

@@ -260,6 +260,8 @@ def _context_molt(agent, args: dict) -> dict:
         agent._notification_fp = ()
     if hasattr(agent, "_notification_block_id"):
         agent._notification_block_id = None
+    if hasattr(agent, "_notification_live_holder"):
+        agent._notification_live_holder = None
     if hasattr(agent, "_pending_notification_meta"):
         agent._pending_notification_meta = None
     if hasattr(agent, "_pending_notification_fp"):
@@ -475,6 +477,8 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
         agent._notification_fp = ()
     if hasattr(agent, "_notification_block_id"):
         agent._notification_block_id = None
+    if hasattr(agent, "_notification_live_holder"):
+        agent._notification_live_holder = None
     if hasattr(agent, "_pending_notification_meta"):
         agent._pending_notification_meta = None
     if hasattr(agent, "_pending_notification_fp"):

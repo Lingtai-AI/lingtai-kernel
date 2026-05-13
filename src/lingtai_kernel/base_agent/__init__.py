@@ -413,11 +413,13 @@ class BaseAgent:
         # use system.notification but don't need per-ref tracking.
 
         # Notification sync state (filesystem-as-protocol redesign).
-        # Tracks (a) the last-seen `.notification/` fingerprint so we can
-        # detect changes between heartbeat ticks, and (b) the call_id of
-        # the currently-injected wire pair (or None if no notification
-        # block is currently in the wire).  See notifications.py and
-        # discussions/notification-filesystem-redesign.md.
+        # _notification_fp: last-seen `.notification/` fingerprint for
+        #   change-detection between heartbeat ticks.
+        # _notification_block_id: call_id of the most recently injected
+        #   synthesized pair — kept for informational/molt-reset purposes;
+        #   no longer used for remove_pair_by_call_id (pairs are now
+        #   skeletonized in-place, not deleted).
+        # See notifications.py and notification-filesystem-redesign.md.
         self._notification_fp: tuple = ()
         self._notification_block_id: str | None = None
         # Monotonic counter ensuring every synthesized notification pair
@@ -425,9 +427,16 @@ class BaseAgent:
         # payload repeats — defeats DeepSeek's cache fast-path empty-completion
         # failure mode on byte-identical synthetic pairs.
         self._notification_inject_seq: int = 0
-        # ACTIVE-state notification delivery is deferred until the turn
-        # reaches an IDLE boundary.  No notification payload is ever
-        # prepended to unrelated tool results.
+        # Unified live notification holder — points to whichever dict
+        # currently carries the live notification payload.  May be:
+        #   * a normal tool-result content dict (ACTIVE path), or
+        #   * a synthesized pair's result content dict (IDLE path).
+        # Only ONE holder exists at a time.  When a new holder is
+        # registered, the old one is skeletonized in-place so history
+        # never accumulates stale notification data across results.
+        # See `meta_block.skeletonize_notification_holder` and
+        # `meta_block.attach_active_notifications`.
+        self._notification_live_holder: dict | None = None
         # Per-turn flag: prevents _check_molt_pressure from incrementing
         # _compaction_warnings more than once per turn. Reset at turn
         # boundaries in _handle_request / _handle_tc_wake.
@@ -809,9 +818,12 @@ class BaseAgent:
         """Sync `.notification/` state into the wire.
 
         Computes the current fingerprint; if unchanged, no-op.  On change:
-        1. Strip the prior wire pair (if any).
-        2. If the new collection is empty, commit the empty fingerprint
-           and return — wire now has zero notification blocks.
+        1. Skeletonize the current live holder (if any) in-place — does NOT
+           remove synthesized pairs from history.  Synthesized pairs are kept
+           as placeholder skeletons; only normal tool-result dicts have their
+           notification keys stripped.
+        2. If the new collection is empty, commit the empty fingerprint and
+           return.
         3. Otherwise, inject a new block appropriate for current state:
 
            * IDLE → splice ``(call, result)`` pair (impersonates a
@@ -826,12 +838,10 @@ class BaseAgent:
            * ASLEEP → wake to IDLE, splice the pair, post
              ``MSG_TC_WAKE``.
 
-        From the LLM's viewpoint the wake path is indistinguishable
-        from a voluntary tool call: the agent appears to have called
-        ``system(action="notification")``, gotten the digest back, and
-        is now responding to it.  The ``_synthesized: true`` field in
-        the JSON body is the only tell, and only if the agent
-        introspects it.
+        Invariant: at most one result block in history carries live
+        notification payload at any time.  Old synthesized pairs become
+        skeleton placeholders but are never deleted — the conversation
+        structure is preserved.
 
         The fingerprint is committed only when injection succeeds (or
         when in a state that cannot inject — STUCK/SUSPENDED/empty).
@@ -840,24 +850,21 @@ class BaseAgent:
         tick retries.
         """
         from ..notifications import notification_fingerprint, collect_notifications
+        from ..meta_block import skeletonize_notification_holder
 
         fp = notification_fingerprint(self._working_dir)
         if fp == self._notification_fp:
             return
 
         notifications = collect_notifications(self._working_dir)
-        prior_block_id = self._notification_block_id
-
-        # --- Strip prior block ---
-        if prior_block_id is not None and self._chat is not None:
-            try:
-                self._chat.interface.remove_pair_by_call_id(prior_block_id)
-            except Exception:
-                pass
-            self._notification_block_id = None
 
         if not notifications:
-            # All cleared — wire now has zero notification blocks.
+            # All channels cleared.  Skeletonize the current live holder
+            # (whether it is a normal tool-result dict or a synthesized
+            # pair content dict) so no history block keeps advertising
+            # stale notification state.  Synthesized pairs remain in
+            # history as placeholders; they are never deleted.
+            skeletonize_notification_holder(self)
             self._notification_fp = fp
             # Defensive cleanup for agents upgraded from the retired
             # ACTIVE-state meta-prefix delivery path.
@@ -893,6 +900,11 @@ class BaseAgent:
             self._cancel_event.clear()
             self._set_state(AgentState.IDLE, reason="notification_arrival")
             self._reset_uptime()
+            # Old synthesized pairs are kept in history as placeholder
+            # skeletons, not deleted.  Do not skeletonize the current holder
+            # until this new injection succeeds; otherwise a blocked append
+            # would discard the only live payload even though _notification_fp
+            # remains uncommitted for retry.
             inject_ok = self._inject_notification_pair(notifications)
             if not inject_ok:
                 self._heal_pending_tool_calls(reason="wake_inject_blocked")
@@ -917,20 +929,25 @@ class BaseAgent:
                 )
 
         elif self._state == AgentState.IDLE:
-            # Strip + reinject AND post MSG_TC_WAKE.  IDLE is "between
-            # turns, run loop blocked on inbox.get()" — without a wake
-            # message the loop sits forever, the wire pair never goes
-            # to the LLM, and the agent appears unresponsive even
+            # Skeletonize + reinject AND post MSG_TC_WAKE.  IDLE is
+            # "between turns, run loop blocked on inbox.get()" — without
+            # a wake message the loop sits forever, the wire pair never
+            # goes to the LLM, and the agent appears unresponsive even
             # though the notification arrived.
             #
             # _handle_tc_wake (post-rewrite) drives the wire forward
             # without appending anything: the (call, result) pair we
-            # just spliced IS the new turn from the agent's
-            # perspective.  No fake user input, no meta prefix.
+            # just spliced IS the new turn from the agent's perspective.
+            # No fake user input, no meta prefix.
             #
-            # Same heal-and-retry as the ASLEEP branch: if the wire
-            # has dangling tool_calls, close them synthetically and
-            # retry, otherwise the IDLE inbox stays dead.
+            # Same heal-and-retry as the ASLEEP branch: if the wire has
+            # dangling tool_calls, close them synthetically and retry,
+            # otherwise the IDLE inbox stays dead.
+            # Old synthesized pairs are kept in history as placeholder
+            # skeletons, not deleted.  Do not skeletonize the current holder
+            # until this new injection succeeds; otherwise a blocked append
+            # would discard the only live payload even though _notification_fp
+            # remains uncommitted for retry.
             inject_ok = self._inject_notification_pair(notifications)
             if not inject_ok:
                 self._heal_pending_tool_calls(reason="idle_inject_blocked")
@@ -1016,10 +1033,14 @@ class BaseAgent:
 
         The ``ToolResultBlock`` is created with ``synthesized=True``
         (the existing flag the kernel already uses for heal-path
-        placeholders).  The result content also carries a top-level
-        ``_synthesized: true`` field in its JSON body so the agent can
-        distinguish kernel-injected reads from voluntary calls when
-        reading conversation history.
+        placeholders) and its ``content`` is a mutable dict (not a JSON
+        string).  All adapters serialize dict content correctly via
+        ``json.dumps``.  Storing a dict enables in-place skeletonization
+        later: when the live payload moves to a newer result, the dict
+        is mutated to the skeleton placeholder shape — the pair stays in
+        history but carries no live data.  The ``_synthesized: true``
+        field in the body lets the agent distinguish kernel-injected
+        reads from voluntary calls when reading conversation history.
 
         Both call.args and result.content carry meta blocks matching what
         real tool calls produce (build_meta → current_time, context,
@@ -1107,7 +1128,11 @@ class BaseAgent:
         # (status/result fields then current_time/context/stamina_left_seconds
         # at the same level), so the model sees the same shape it's used to.
         body.update(meta)
-        content_json = json.dumps(body, indent=2, ensure_ascii=False)
+        # Store body as a dict (not a JSON string) so it can be mutated
+        # in-place when this pair is skeletonized later.  All adapters
+        # already handle dict content via isinstance checks — see
+        # interface_converters.py and anthropic/adapter.py.
+        content_dict = body
 
         # Build a per-source summary: "3 email, 1 soul, 0 system".
         # Counts come from data.count / len(data.events) / len(data.voices)
@@ -1152,13 +1177,34 @@ class BaseAgent:
         result_block = ToolResultBlock(
             id=call_id,
             name="system",
-            content=content_json,
+            content=content_dict,  # dict, not JSON string — mutable for skeletonization
             synthesized=True,
         )
 
         iface.add_assistant_message(content=[text_block, call_block])
         iface.add_tool_results([result_block])
+
+        # The append succeeded.  Now skeletonize the previous live holder
+        # (if any) before registering this synthesized pair as the new live
+        # holder.  Doing it after append preserves the old live payload if
+        # injection had to abort because of pending tool calls.
+        prior_holder = getattr(self, "_notification_live_holder", None)
+        if prior_holder is not None and prior_holder is not content_dict:
+            try:
+                from ..meta_block import skeletonize_notification_holder
+                self._notification_live_holder = prior_holder
+                skeletonize_notification_holder(self)
+            except Exception:
+                pass
+
+        # Register content_dict as the live holder so future
+        # skeletonize_notification_holder / attach_active_notifications calls
+        # can mutate it in-place without touching conversation history.
+        # _notification_block_id is retained for informational / molt-reset
+        # purposes; it is no longer used for remove_pair_by_call_id.
+        self._notification_live_holder = content_dict
         self._notification_block_id = call_id
+
         self._save_chat_history(ledger_source="notification_sync")
         self._log(
             "notification_pair_injected",

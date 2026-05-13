@@ -649,7 +649,8 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     assert isinstance(result_block, ToolResultBlock)
     assert result_block.synthesized is True
 
-    body = json.loads(result_block.content)
+    body = result_block.content
+    assert isinstance(body, dict)
     assert body["_synthesized"] is True
     assert "not automatically human instructions" in body["_notification_guidance"]
     assert "source(s): email" in body["_notification_guidance"]
@@ -716,8 +717,11 @@ def test_sync_idle_strip_then_reinject(tmp_path: Path) -> None:
 
     assert second_id is not None
     assert second_id != first_id
-    # Old pair stripped, new pair in place — total still 2 entries.
-    assert len(agent._chat_stub.interface.entries) == 2
+    # Old pair kept as a placeholder skeleton, new pair appended.
+    assert len(agent._chat_stub.interface.entries) == 4
+    first_body = agent._chat_stub.interface.entries[1].content[0].content
+    assert first_body["_notification_placeholder"] is True
+    assert "notifications" not in first_body
 
 
 def test_sync_idle_empty_strips(tmp_path: Path) -> None:
@@ -767,8 +771,13 @@ def test_sync_idle_empty_strips(tmp_path: Path) -> None:
     clear(tmp_path, "email")
     agent._sync_notifications()
 
-    assert agent._notification_block_id is None
-    assert len(agent._chat_stub.interface.entries) == 0
+    # The synthesized pair remains in history, but its live payload is
+    # skeletonized so it cannot be mistaken for current notification data.
+    assert agent._notification_block_id is not None
+    assert len(agent._chat_stub.interface.entries) == 2
+    body = agent._chat_stub.interface.entries[1].content[0].content
+    assert body["_notification_placeholder"] is True
+    assert "notifications" not in body
 
 
 def test_sync_no_change_is_noop(tmp_path: Path) -> None:
@@ -1061,10 +1070,11 @@ def test_end_of_turn_idle_sync_delivers_deferred_notification(tmp_path: Path) ->
     assert entries[1].role == "user"
     result_block = entries[1].content[0]
     assert isinstance(result_block, ToolResultBlock)
-    body = json.loads(result_block.content)
+    body = result_block.content
+    assert isinstance(body, dict)
     assert body["_synthesized"] is True
     assert "system" in body["notifications"]
-    assert not result_block.content.startswith("notifications:\n")
+    assert isinstance(result_block.content, dict)
 
 
 # ---------------------------------------------------------------------------

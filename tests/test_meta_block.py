@@ -4,7 +4,14 @@ from __future__ import annotations
 import re
 from types import SimpleNamespace
 
-from lingtai_kernel.meta_block import build_meta, render_meta, stamp_meta
+from lingtai_kernel.meta_block import (
+    attach_active_notifications,
+    build_meta,
+    clear_active_notification_holder,
+    render_meta,
+    stamp_meta,
+)
+from lingtai_kernel.llm.interface import ToolResultBlock
 
 
 def _fake_agent(*, time_awareness: bool = True, timezone_awareness: bool = True):
@@ -373,4 +380,183 @@ def test_build_meta_usage_matches_get_context_pressure_after_restore():
 # synthetic system(action="notification") tool-call pairs spliced via tc_inbox;
 # see docs/plans/2026-05-02-system-notification-as-tool-call.md. Tests for the
 # old inbox-drain path lived here and have been removed alongside the field.
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# attach_active_notifications — moving single-slot, latest-result-only stamping.
+# ---------------------------------------------------------------------------
+
+
+def _notif_agent(working_dir):
+    """Minimal agent stand-in. ``attach_active_notifications`` reads
+    ``agent._working_dir`` and, on successful stamping, commits the
+    current notification fingerprint to ``agent._notification_fp`` so
+    the IDLE-path synthesized pair does not re-deliver the same state."""
+    return SimpleNamespace(_working_dir=working_dir, _notification_fp=())
+
+
+def _write_email_notif(tmp_path):
+    notif_dir = tmp_path / ".notification"
+    notif_dir.mkdir(parents=True, exist_ok=True)
+    (notif_dir / "email.json").write_text(
+        '{"header": "1 unread", "icon": "📬", "priority": "normal"}'
+    )
+
+
+def test_attach_active_notifications_moves_to_latest_and_clears_prior(tmp_path):
+    from lingtai_kernel.notifications import notification_fingerprint
+
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+    assert agent._notification_fp == ()
+
+    # First batch: a single dict-shaped tool result, no prior holder.
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert holder is first.content
+    assert "_notifications" in first.content
+    assert first.content["_notifications"] == {
+        "email": {"header": "1 unread", "icon": "📬", "priority": "normal"}
+    }
+    # Successful stamping must commit the fingerprint, so the IDLE-path
+    # synthesized pair will treat this same state as already delivered.
+    expected_fp = notification_fingerprint(tmp_path)
+    assert expected_fp != ()
+    assert agent._notification_fp == expected_fp
+
+    # Second batch: a new dict result. The old dict must shed its
+    # `_notifications`; only the new dict carries it.
+    second = ToolResultBlock(id="t2", name="x", content={"ok": False})
+    new_holder = attach_active_notifications(
+        agent, [second], prior_holder=holder
+    )
+    assert new_holder is second.content
+    assert "_notifications" not in first.content
+    assert "_notifications" in second.content
+
+
+def test_attach_active_notifications_no_active_clears_prior(tmp_path):
+    # No `.notification/` directory at all → no active notifications.
+    agent = _notif_agent(tmp_path)
+    # Pre-existing fingerprint from a hypothetical earlier delivery; the
+    # no-active path must NOT touch it (preserves IDLE-path semantics).
+    sentinel_fp = (("sentinel.json", 1, 1),)
+    agent._notification_fp = sentinel_fp
+
+    # Seed a prior holder as if a previous batch had stamped one.
+    prior = {"ok": True, "_notifications": {"email": {"header": "stale"}}}
+    new_block = ToolResultBlock(id="t1", name="x", content={"ok": "new"})
+
+    result = attach_active_notifications(
+        agent, [new_block], prior_holder=prior
+    )
+    assert result is None
+    assert "_notifications" not in prior
+    assert "_notifications" not in new_block.content
+    # Crucially: with no active notifications, we leave the fp alone so
+    # the IDLE-path synthesized pair retains whatever guard state it had.
+    assert agent._notification_fp == sentinel_fp
+
+
+def test_attach_active_notifications_no_target_preserves_fp(tmp_path):
+    # Active notifications exist, but no dict-shaped tool result is
+    # available to stamp onto (e.g. all results were strings, or the
+    # batch is empty). Must NOT commit `_notification_fp` — otherwise
+    # the IDLE-path would silently skip delivering this never-seen state.
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+    sentinel_fp = (("sentinel.json", 1, 1),)
+    agent._notification_fp = sentinel_fp
+
+    # Case A: empty batch.
+    assert attach_active_notifications(agent, [], prior_holder=None) is None
+    assert agent._notification_fp == sentinel_fp
+
+    # Case B: batch with only string-content blocks (no dict target).
+    string_only = ToolResultBlock(id="t1", name="x", content="plain text")
+    result = attach_active_notifications(
+        agent, [string_only], prior_holder=None
+    )
+    assert result is None
+    assert agent._notification_fp == sentinel_fp
+    assert string_only.content == "plain text"
+
+
+def test_attach_active_notifications_picks_latest_dict_in_batch(tmp_path):
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+
+    # A batch with multiple ToolResultBlocks: a dict, then another dict,
+    # then a string-content block at the tail. The walk-backward logic
+    # should skip the string and land on the *latest* dict (`middle`).
+    earlier = ToolResultBlock(id="t1", name="x", content={"k": "earlier"})
+    middle = ToolResultBlock(id="t2", name="x", content={"k": "middle"})
+    string_tail = ToolResultBlock(id="t3", name="x", content="plain text")
+
+    holder = attach_active_notifications(
+        agent, [earlier, middle, string_tail], prior_holder=None
+    )
+
+    assert holder is middle.content
+    assert "_notifications" in middle.content
+    assert "_notifications" not in earlier.content
+    # String content is untouched — and it certainly didn't grow a key.
+    assert string_tail.content == "plain text"
+
+
+# ---------------------------------------------------------------------------
+# skeletonize_notification_holder / clear_active_notification_holder — strip
+# stale live notification payload while preserving history structure.  Old
+# synthesized notification pairs remain as placeholder skeletons; normal tool
+# results only lose notification-specific keys.
+# ---------------------------------------------------------------------------
+
+
+def test_clear_active_notification_holder_strips_normal_live_holder():
+    stamped = {
+        "ok": True,
+        "_notifications": {"email": {"header": "x"}},
+        "notifications": {"email": {"data": {}}},
+        "_notification_guidance": "live guidance",
+    }
+    agent = SimpleNamespace(_notification_live_holder=stamped)
+
+    clear_active_notification_holder(agent)
+
+    assert stamped == {"ok": True}
+    assert agent._notification_live_holder is None
+
+
+def test_clear_active_notification_holder_skeletonizes_synthesized_holder():
+    synthesized = {
+        "_synthesized": True,
+        "_notification_guidance": "live guidance",
+        "notifications": {"email": {"data": {"count": 1}}},
+        "current_time": "2026-05-13T00:00:00Z",
+    }
+    agent = SimpleNamespace(_notification_live_holder=synthesized)
+
+    clear_active_notification_holder(agent)
+
+    assert synthesized["_synthesized"] is True
+    assert synthesized["_notification_placeholder"] is True
+    assert "kernel-synthesized system(action=notification)" in synthesized["message"]
+    assert "notifications" not in synthesized
+    assert "_notification_guidance" not in synthesized
+    assert agent._notification_live_holder is None
+
+
+def test_clear_active_notification_holder_handles_none_holder():
+    agent = SimpleNamespace(_notification_live_holder=None)
+    clear_active_notification_holder(agent)
+    assert agent._notification_live_holder is None
+
+
+def test_clear_active_notification_holder_handles_missing_key():
+    holder = {"ok": True}  # no notification keys
+    agent = SimpleNamespace(_notification_live_holder=holder)
+    clear_active_notification_holder(agent)
+    assert holder == {"ok": True}
+    assert agent._notification_live_holder is None
 # ---------------------------------------------------------------------------

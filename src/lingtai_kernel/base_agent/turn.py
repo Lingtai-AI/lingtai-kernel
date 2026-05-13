@@ -14,7 +14,7 @@ from ..i18n import t as _t
 from ..logging import get_logger
 from ..loop_guard import LoopGuard
 from ..tool_executor import ToolExecutor
-from ..meta_block import build_meta, render_meta
+from ..meta_block import attach_active_notifications, build_meta, render_meta
 from ..sent_message_tracker import SEND_TOOLS, SEND_ACTIONS, CHECK_ACTIONS
 from ..time_veil import now_iso
 
@@ -1056,6 +1056,19 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             on_result_hook=agent._on_tool_result_hook,
             cancel_event=agent._cancel_event,
             collected_errors=collected_errors,
+        )
+
+        # Move the live notification payload from the previous holder (if
+        # any) to the latest tool-result dict from this batch.  The prior
+        # holder is skeletonized in-place before the new one is registered,
+        # maintaining the at-most-one-live-payload invariant.  If the prior
+        # holder was a synthesized pair, its content becomes a skeleton
+        # placeholder (kept in history); if it was a normal tool result,
+        # its _notifications key is removed.
+        agent._notification_live_holder = attach_active_notifications(
+            agent,
+            tool_results,
+            prior_holder=agent._notification_live_holder,
         )
 
         if intercepted:
