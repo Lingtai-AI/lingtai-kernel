@@ -26,6 +26,7 @@ import time as _time
 
 from .i18n import t as _t
 from .time_veil import now_iso
+from .token_counter import count_tokens
 
 
 def build_meta(agent) -> dict:
@@ -162,11 +163,17 @@ def build_meta(agent) -> dict:
 # ---------------------------------------------------------------------------
 
 
-_NOTIFICATION_PREVIEW_MAX = 500
-
-
 def _notification_preview(payload: dict) -> str | None:
-    """Return a bounded human-readable preview for compact notification meta."""
+    """Return the human-readable preview for notification metadata.
+
+    Producers use slightly different payload shapes: email writes a digest,
+    MCP inboxes write a list of structured previews, system notifications
+    write event bodies, and soul flow writes voice blocks.  Normalize those
+    common shapes into a single string so the one live ``_notifications``
+    holder shows what arrived.  The result is deliberately not capped here:
+    the live-holder invariant ensures old previews are stripped instead of
+    accumulating through history.
+    """
     candidates: list[object] = [payload.get("preview")]
     data = payload.get("data")
     if isinstance(data, dict):
@@ -175,14 +182,122 @@ def _notification_preview(payload: dict) -> str | None:
             data.get("preview"),
             data.get("message"),
         ])
+
+        previews = data.get("previews")
+        if isinstance(previews, list):
+            lines = []
+            for item in previews:
+                if isinstance(item, dict):
+                    bits = [
+                        str(item.get(key, "")).strip()
+                        for key in ("from", "subject", "preview")
+                        if item.get(key)
+                    ]
+                    if bits:
+                        lines.append(" — ".join(bits))
+                elif isinstance(item, str) and item.strip():
+                    lines.append(item.strip())
+            if lines:
+                candidates.append("\n".join(lines))
+
+        events = data.get("events")
+        if isinstance(events, list):
+            lines = []
+            for item in events:
+                if isinstance(item, dict):
+                    body = str(item.get("body", "")).strip()
+                    if not body:
+                        continue
+                    source = str(item.get("source", "")).strip()
+                    lines.append(f"{source}: {body}" if source else body)
+                elif isinstance(item, str) and item.strip():
+                    lines.append(item.strip())
+            if lines:
+                candidates.append("\n".join(lines))
+
+        voices = data.get("voices")
+        if isinstance(voices, list):
+            lines = []
+            for item in voices:
+                if isinstance(item, dict):
+                    voice = str(item.get("voice", "")).strip()
+                    if not voice:
+                        continue
+                    source = str(item.get("source", "")).strip()
+                    lines.append(f"{source}: {voice}" if source else voice)
+                elif isinstance(item, str) and item.strip():
+                    lines.append(item.strip())
+            if lines:
+                candidates.append("\n".join(lines))
+
     for candidate in candidates:
         if not isinstance(candidate, str) or not candidate:
             continue
-        if len(candidate) <= _NOTIFICATION_PREVIEW_MAX:
-            return candidate
-        suffix = f"... ({len(candidate) - _NOTIFICATION_PREVIEW_MAX} more chars)"
-        return candidate[:_NOTIFICATION_PREVIEW_MAX] + suffix
+        return candidate
     return None
+
+
+_NOTIFICATION_PREVIEW_TOKEN_BUDGET = 5_000
+_NOTIFICATION_PREVIEW_TRUNCATION_MARKER = "…"
+
+
+def _truncate_preview_to_token_budget(text: str, token_budget: int) -> str:
+    """Truncate ``text`` so its estimated token count fits ``token_budget``."""
+    if token_budget <= 0:
+        return ""
+    if count_tokens(text) <= token_budget:
+        return text
+
+    marker = _NOTIFICATION_PREVIEW_TRUNCATION_MARKER
+    if count_tokens(marker) > token_budget:
+        return ""
+
+    lo, hi = 0, len(text)
+    best = marker
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = text[:mid].rstrip() + marker
+        if count_tokens(candidate) <= token_budget:
+            best = candidate
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
+
+
+def _fit_notification_previews_to_budget(
+    compact: dict,
+    *,
+    token_budget: int = _NOTIFICATION_PREVIEW_TOKEN_BUDGET,
+) -> None:
+    """Mutate compact notification previews so their aggregate fits budget.
+
+    At most one compact ``_notifications`` block is live at a time, so previews
+    may be generous. Still, a burst of channels can be pathological; when the
+    aggregate preview token count exceeds the shared budget, each preview gets
+    the same per-preview token slice. This satisfies the budget without letting
+    one huge producer starve the others.
+    """
+    previews: list[tuple[dict, str]] = []
+    for entry in compact.values():
+        if not isinstance(entry, dict):
+            continue
+        preview = entry.get("preview")
+        if isinstance(preview, str) and preview:
+            previews.append((entry, preview))
+
+    if not previews:
+        return
+
+    total = sum(count_tokens(preview) for _, preview in previews)
+    if total <= token_budget:
+        return
+
+    per_preview_budget = max(1, token_budget // len(previews))
+    for entry, preview in previews:
+        entry["preview"] = _truncate_preview_to_token_budget(
+            preview, per_preview_budget
+        )
 
 
 def _collect_active_notifications_compact(agent) -> dict | None:
@@ -219,6 +334,7 @@ def _collect_active_notifications_compact(agent) -> dict | None:
             if preview := _notification_preview(payload):
                 entry["preview"] = preview
             compact[source] = entry
+        _fit_notification_previews_to_budget(compact)
         return compact or None
     except Exception:
         return None

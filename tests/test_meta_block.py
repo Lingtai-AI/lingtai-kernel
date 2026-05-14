@@ -5,12 +5,14 @@ import re
 from types import SimpleNamespace
 
 from lingtai_kernel.meta_block import (
+    _fit_notification_previews_to_budget,
     attach_active_notifications,
     build_meta,
     clear_active_notification_holder,
     render_meta,
     stamp_meta,
 )
+from lingtai_kernel.token_counter import count_tokens
 from lingtai_kernel.llm.interface import ToolResultBlock
 
 
@@ -440,6 +442,90 @@ def test_attach_active_notifications_moves_to_latest_and_clears_prior(tmp_path):
     assert new_holder is second.content
     assert "_notifications" not in first.content
     assert "_notifications" in second.content
+
+
+def test_attach_active_notifications_compacts_mcp_preview_list(tmp_path):
+    notif_dir = tmp_path / ".notification"
+    notif_dir.mkdir(parents=True, exist_ok=True)
+    (notif_dir / "mcp.telegram.json").write_text(
+        '{"header": "2 new events", "icon": "💬", "priority": "normal", '
+        '"data": {"previews": ['
+        '{"from": "alice", "subject": "hello", "preview": "first body"}, '
+        '{"from": "bob", "subject": "status", "preview": "second body"}'
+        ']}}'
+    )
+    agent = _notif_agent(tmp_path)
+    block = ToolResultBlock(id="t1", name="x", content={"ok": True})
+
+    attach_active_notifications(agent, [block], prior_holder=None)
+
+    assert block.content["_notifications"]["mcp.telegram"]["preview"] == (
+        "alice — hello — first body\nbob — status — second body"
+    )
+
+
+def test_attach_active_notifications_compacts_system_event_bodies(tmp_path):
+    notif_dir = tmp_path / ".notification"
+    notif_dir.mkdir(parents=True, exist_ok=True)
+    (notif_dir / "system.json").write_text(
+        '{"header": "1 system notification", "icon": "🔔", "priority": "normal", '
+        '"data": {"events": ['
+        '{"source": "daemon", "body": "Daemon finished with useful details"}'
+        ']}}'
+    )
+    agent = _notif_agent(tmp_path)
+    block = ToolResultBlock(id="t1", name="x", content={"ok": True})
+
+    attach_active_notifications(agent, [block], prior_holder=None)
+
+    assert block.content["_notifications"]["system"]["preview"] == (
+        "daemon: Daemon finished with useful details"
+    )
+
+
+def test_attach_active_notifications_compacts_soul_voice_preview(tmp_path):
+    notif_dir = tmp_path / ".notification"
+    notif_dir.mkdir(parents=True, exist_ok=True)
+    (notif_dir / "soul.json").write_text(
+        '{"header": "soul flow", "icon": "🌊", "priority": "normal", '
+        '"data": {"voices": ['
+        '{"source": "insights", "voice": "Remember to verify by email."}'
+        ']}}'
+    )
+    agent = _notif_agent(tmp_path)
+    block = ToolResultBlock(id="t1", name="x", content={"ok": True})
+
+    attach_active_notifications(agent, [block], prior_holder=None)
+
+    assert block.content["_notifications"]["soul"]["preview"] == (
+        "insights: Remember to verify by email."
+    )
+
+
+def test_fit_notification_previews_to_budget_truncates_each_preview():
+    compact = {
+        "email": {"preview": "email " * 200},
+        "system": {"preview": "system " * 200},
+    }
+
+    _fit_notification_previews_to_budget(compact, token_budget=50)
+
+    previews = [entry["preview"] for entry in compact.values()]
+    assert sum(count_tokens(preview) for preview in previews) <= 50
+    assert all(preview.endswith("…") for preview in previews)
+    assert all(count_tokens(preview) <= 25 for preview in previews)
+
+
+def test_fit_notification_previews_to_budget_leaves_under_budget_unchanged():
+    compact = {
+        "email": {"preview": "short email preview"},
+        "system": {"preview": "short system preview"},
+    }
+    before = {k: dict(v) for k, v in compact.items()}
+
+    _fit_notification_previews_to_budget(compact, token_budget=5_000)
+
+    assert compact == before
 
 
 def test_attach_active_notifications_no_active_clears_prior(tmp_path):
