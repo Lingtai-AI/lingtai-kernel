@@ -71,6 +71,11 @@ def test_run_loop_skips_chat_history_save_after_worker_still_running(tmp_path, m
     assert any(name == "chat_history_save_skipped" for name, _ in agent._logs)
     assert any(name == "llm_worker_still_running" for name, _ in agent._logs)
     assert agent._asleep.is_set()
+    # Both STUCK and ASLEEP must be written to .agent.json so the TUI's
+    # state read is accurate and the heartbeat AED timeout doesn't see a
+    # bare STUCK agent (which would trigger redundant recovery).
+    assert AgentState.STUCK in agent._states
+    assert AgentState.ASLEEP in agent._states
     assert not (tmp_path / ".llm_hang").exists()
 
 
