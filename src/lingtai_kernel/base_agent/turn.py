@@ -1064,7 +1064,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # maintaining the at-most-one-live-payload invariant.  If the prior
         # holder was a synthesized pair, its content becomes a skeleton
         # placeholder (kept in history); if it was a normal tool result,
-        # its _notifications key is removed.
+        # its canonical notification payload keys are removed.
         agent._notification_live_holder = attach_active_notifications(
             agent,
             tool_results,
