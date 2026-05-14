@@ -593,16 +593,15 @@ def _handle_message(agent, msg: Message) -> None:
 
 
 def _check_molt_pressure(agent) -> None:
-    """Check context pressure and publish/clear molt warnings.
+    """Check context pressure and publish/clear the molt notification.
 
-    Extracted from ``_handle_request`` so it can be called from the tool
-    loop (``_process_response``) and notification-wake path
-    (``_handle_tc_wake``) as well — not just at turn start.
+    Single threshold, no ladder: above ``molt_pressure`` publish one
+    notification telling the agent context is high and to consult
+    procedures.md for the molt recipe; below threshold clear it.
 
-    Uses ``_molt_warning_counted`` (set at turn boundaries) to prevent
-    incrementing the warning counter more than once per turn — mid-loop
-    calls from ``_process_response`` publish updated notifications but
-    don't double-count.
+    Safe to call from the tool loop and notification-wake paths — the
+    notification system fingerprints content and skips redundant wire
+    updates, so repeated calls at the same pressure are no-ops.
     """
     has_molt = "psyche" in agent._intrinsics
     if not has_molt:
@@ -610,93 +609,29 @@ def _check_molt_pressure(agent) -> None:
 
     pressure = agent._session.get_context_pressure()
 
-    if pressure >= agent._config.molt_hard_ceiling:
-        if not agent._molt_warning_counted:
-            agent._session._compaction_warnings += 1
-            agent._molt_warning_counted = True
-        warnings = agent._session._compaction_warnings
-        max_warnings = agent._config.molt_warnings
-        remaining = max(0, max_warnings - warnings)
+    if pressure >= agent._config.molt_pressure:
         lang = agent._config.language
-        level = 3
-        level_prompt = _t(
-            lang,
-            "system.molt_warning_level3",
-            pressure=f"{pressure:.0%}",
-            remaining=remaining,
+        warning_text = agent._config.molt_prompt or _t(
+            lang, "system.molt_warning", pressure=f"{pressure:.0%}"
         )
-        level_prompt = level_prompt + "\n\n" + _t(lang, "system.molt_procedure")
-        molt_prompt = agent._config.molt_prompt or level_prompt
-        status = f"[context: {pressure:.0%} | CRITICAL]"
         from ..intrinsics.system import publish_notification
         publish_notification(
             agent._working_dir, "molt",
-            header=f"context {pressure:.0%}, CRITICAL — molt now or overflow recovery will trim",
-            icon="🚨",
+            header=f"context {pressure:.0%} — consider molt",
+            icon="⚠️",
             priority="high",
             data={
                 "pressure": pressure,
-                "level": level,
-                "warnings": warnings,
-                "remaining": remaining,
-                "max_warnings": max_warnings,
-                "warning_text": molt_prompt,
-                "status": status,
-            },
-        )
-        agent._log("molt_hard_ceiling_warning", pressure=pressure, ceiling=agent._config.molt_hard_ceiling)
-    elif pressure >= agent._config.molt_pressure:
-        max_warnings = agent._config.molt_warnings
-        if not agent._molt_warning_counted:
-            agent._session._compaction_warnings += 1
-            agent._molt_warning_counted = True
-        warnings = agent._session._compaction_warnings
-        remaining = max(0, max_warnings - warnings)
-        lang = agent._config.language
-        from ..intrinsics.system import publish_notification
-        level = min(warnings, 3)
-        level_prompt = _t(
-            lang,
-            f"system.molt_warning_level{level}",
-            pressure=f"{pressure:.0%}",
-            remaining=remaining,
-        )
-        if level >= 2:
-            level_prompt = level_prompt + "\n\n" + _t(lang, "system.molt_procedure")
-        molt_prompt = agent._config.molt_prompt or level_prompt
-        status = f"[context: {pressure:.0%} | {remaining}/{max_warnings}]"
-        publish_notification(
-            agent._working_dir, "molt",
-            header=f"context {pressure:.0%}, {remaining}/{max_warnings} turns left",
-            icon=("⚠️" if level >= 2 else "🪶"),
-            priority=("high" if level >= 2 else "normal"),
-            data={
-                "pressure": pressure,
-                "level": level,
-                "warnings": warnings,
-                "remaining": remaining,
-                "max_warnings": max_warnings,
-                "warning_text": molt_prompt,
-                "status": status,
+                "warning_text": warning_text,
             },
         )
     else:
-        # Pressure dropped below threshold — clear any stale molt notice
-        # and reset the warning counter so it doesn't escalate faster
-        # than it should across pressure oscillations.
         from ..intrinsics.system import clear_notification
         clear_notification(agent._working_dir, "molt")
-        if agent._session._compaction_warnings > 0:
-            agent._session._compaction_warnings = 0
 
 
 def _handle_request(agent, msg: Message) -> None:
     """Send request to LLM, process response with tool calls."""
-    # Reset per-turn molt warning flag so the counter increments at most
-    # once per turn (mid-loop _check_molt_pressure calls update the
-    # notification but don't double-count).
-    agent._molt_warning_counted = False
-
     # Splice any queued involuntary tool-call pairs
     agent._drain_tc_inbox()
 
@@ -761,9 +696,6 @@ def _handle_tc_wake(agent, msg: Message) -> None:
     of no-op-and-return — the previous "tc_inbox_empty" silent
     no-op was the bug that left spliced notification pairs unread.
     """
-    # Reset per-turn molt warning flag (same as _handle_request).
-    agent._molt_warning_counted = False
-
     if agent._chat is None:
         try:
             agent._session.ensure_session()
@@ -1134,9 +1066,9 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         agent._last_usage = response.usage
         agent._save_chat_history(ledger_source=ledger_source)
 
-        # Mid-loop pressure check — fire warnings during extended tool
-        # chains so the agent doesn't go from below-threshold to hard
-        # ceiling in a single turn with zero warnings.
+        # Mid-loop pressure check — keep the molt notification fresh
+        # during extended tool chains so the agent sees the signal even
+        # while it's deep inside a multi-call loop.
         _check_molt_pressure(agent)
         # Synchronous notification sync — same ACTIVE deferral semantics as
         # _handle_request; delivery happens at the next IDLE boundary.

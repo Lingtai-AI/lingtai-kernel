@@ -178,11 +178,6 @@ def test_get_context_pressure_zero_window():
     assert sm.get_context_pressure() == 0.0
 
 
-def test_compaction_warnings_initialized():
-    sm, _, _ = make_session_manager()
-    assert sm._compaction_warnings == 0
-
-
 # ------------------------------------------------------------------
 # _track_usage()
 # ------------------------------------------------------------------

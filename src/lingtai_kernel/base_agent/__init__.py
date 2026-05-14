@@ -437,10 +437,6 @@ class BaseAgent:
         # See `meta_block.skeletonize_notification_holder` and
         # `meta_block.attach_active_notifications`.
         self._notification_live_holder: dict | None = None
-        # Per-turn flag: prevents _check_molt_pressure from incrementing
-        # _compaction_warnings more than once per turn. Reset at turn
-        # boundaries in _handle_request / _handle_tc_wake.
-        self._molt_warning_counted: bool = False
 
         # Lifecycle
         self._shutdown = threading.Event()

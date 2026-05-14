@@ -221,10 +221,6 @@ def _context_molt(agent, args: dict) -> dict:
     agent._session._chat = None
     agent._session._interaction_id = None
 
-    # Reset molt warnings
-    if hasattr(agent._session, "_compaction_warnings"):
-        agent._session._compaction_warnings = 0
-
     # Track molt count and persist to manifest
     agent._molt_count += 1
     agent._workdir.write_manifest(agent._build_manifest())
@@ -444,9 +440,6 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
     # Wipe context
     agent._session._chat = None
     agent._session._interaction_id = None
-
-    if hasattr(agent._session, "_compaction_warnings"):
-        agent._session._compaction_warnings = 0
 
     agent._molt_count += 1
     agent._workdir.write_manifest(agent._build_manifest())

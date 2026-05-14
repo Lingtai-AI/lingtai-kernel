@@ -78,9 +78,6 @@ class SessionManager:
         self._token_fallback_warned = False
         self._latest_input_tokens = 0
 
-        # Compaction pressure tracking
-        self._compaction_warnings: int = 0
-
         # Streaming state
         self._text_already_streamed = False
         self._intermediate_text_streamed = False

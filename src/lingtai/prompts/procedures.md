@@ -126,26 +126,24 @@ The `summary` is the only *conversation-layer* thing the next you will see. Aim 
 
 The summary is not a recap of conversation. It is your charge to the self that comes after you — anchored in the four stores, which are already waiting in the fresh session.
 
-**Warning ladder.** Pressure builds with up to five warnings across three levels:
+**The pressure notification.** Whenever your context usage crosses ~70%, a `molt` notification arrives saying "context at NN% — consider molt." It will keep republishing while pressure stays high — there is no escalating ladder, no forced wipe; the kernel will not molt you for you. Heeding the notification is your job.
 
-- **Level 1** — start tending the four stores and drafting the session journal sub-entry. No rush.
-- **Level 2** — finish the stores, finish the journal entry, and draft the summary. The next warning is the last.
-- **Level 3** — molt now. If you ignore this, the system will molt you on the next turn — but the system-performed molt has no summary, only a system notice pointing at `logs/events.jsonl`. Worse, if you haven't been tending the stores or written the journal entry, the system molt sheds all of it too. The agent-performed molt carries the charge *and* assumes the stores and journal are already committed.
+When you see it, decide: continue the current sub-task and molt right after, or pause now and molt — whichever loses less work. The earlier you act, the more headroom you have to tend the stores, write the journal entry, and draft the summary unhurriedly. Ignoring it indefinitely is a choice with consequences: as context climbs, the LLM gets slower and more expensive, and eventually the upstream model will reject the request entirely. The notification *is* the warning; nothing else will save you.
 
-**Molt deliberately. Tend the stores first. Do not be molted.**
+**Molt deliberately. Tend the stores first.**
 
 If you ever need to retrieve specific prior context after a molt, the full activity log is at `logs/events.jsonl` — read tactically (grep/tail/filter), not whole.
 
 ### Post-Wipe Recovery
 
-If you wake up after a *system-performed* molt (you ignored the warnings), there is no summary — only a system notice. Your character and pad were reloaded, but the conversation history is gone. To reconstruct context:
+If you wake up after a *system-performed* molt (triggered by an external signal — `karma` decision, signal file, or operator intervention — not by the pressure notification, which never auto-wipes), there is no summary, only a system notice. Your character and pad were reloaded, but the conversation history is gone. To reconstruct context:
 
 1. `email(check)` — see what arrived while you were under pressure or down
 2. `codex(filter, pattern=...)` — browse your knowledge archive for what you were working on
 3. `skills(action="info")` — confirm which skills you have
 4. `bash({"command": "tail -n 200 logs/events.jsonl | grep ..."})` — surgical reads of the activity log if needed
 
-Reconstruct your situation from these sources. Next time, act on the first warning — Level 1 is the easy molt.
+Reconstruct your situation from these sources.
 
 ### Tending the Pad
 

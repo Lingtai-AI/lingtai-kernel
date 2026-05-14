@@ -213,31 +213,24 @@ def _make_agent_with_psyche(tmp_path):
     )
 
 
-def test_compaction_warning_published_at_80_percent(tmp_path):
-    """At 80%+ context (warn band, below hard ceiling), the kernel publishes
-    a molt-pressure notification to .notification/molt.json instead of
-    inlining a [system] block in user content. The notification channel
-    routes through the synthetic-pair mechanism on the next sync tick.
-
-    Hard-ceiling and forced-wipe paths still inline content; those remain
-    covered by their own tests."""
+def test_compaction_warning_published_above_threshold(tmp_path):
+    """Above the molt_pressure threshold, the kernel publishes a
+    notification to .notification/molt.json rather than inlining a
+    [system] block in user content."""
     agent = _make_agent_with_psyche(tmp_path)
     agent.start()
     try:
         # Stamp a real int context_limit so build_meta() doesn't fall through
         # to chat_obj.context_window() (a MagicMock that breaks comparisons).
         agent._config.context_limit = 100_000
-        # Mock session to report 85% context pressure (warn band, below the
-        # default hard ceiling).
+        # Mock session to report 85% context pressure (above the default
+        # 0.7 threshold).
         agent._session.get_context_pressure = lambda: 0.85
-        agent._session._compaction_warnings = 0
 
-        # Capture what gets sent to LLM
         sent_content = []
 
         def capture_send(content):
             sent_content.append(content)
-            # Return a mock LLMResponse
             resp = MagicMock()
             resp.text = "ok"
             resp.tool_calls = []
@@ -250,79 +243,15 @@ def test_compaction_warning_published_at_80_percent(tmp_path):
         msg = _make_message(MSG_REQUEST, sender="test", content="do something")
         agent._handle_request(msg)
 
-        # User content is NOT mutated at warn level — the molt warning is
-        # routed through .notification/molt.json instead.
+        # User content is NOT mutated — the molt warning routes through
+        # .notification/molt.json instead.
         assert len(sent_content) > 0
         assert not any("[system]" in c for c in sent_content)
 
-        # Counter incremented once for this turn.
-        assert agent._session._compaction_warnings == 1
-
-        # Notification file was written by publish_notification.
         notif_path = agent._working_dir / ".notification" / "molt.json"
-        assert notif_path.is_file(), "warn-level molt should publish a notification"
+        assert notif_path.is_file(), "above-threshold molt should publish a notification"
         import json
         notif = json.loads(notif_path.read_text())
-        # The notification carries molt-pressure context the agent will read
-        # via the synthetic-pair channel on the next sync.
         assert "molt" in json.dumps(notif).lower()
-    finally:
-        agent.stop()
-
-
-def test_compaction_resets_warning_counter(tmp_path):
-    """After successful compact, warning counter should reset to 0."""
-    from lingtai.agent import Agent
-    from lingtai_kernel.llm.interface import ChatInterface
-
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-
-    def fake_create_session(**kwargs):
-        mock_chat = MagicMock()
-        iface = ChatInterface()
-        iface.add_system("You are helpful.")
-        mock_chat.interface = iface
-        mock_chat.context_window.return_value = 100_000
-        return mock_chat
-
-    svc.create_session.side_effect = fake_create_session
-
-    agent = Agent(
-        service=svc, agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["psyche"],
-    )
-    agent.start()
-    try:
-        from lingtai_kernel.llm.interface import ToolCallBlock
-
-        # Ensure a session exists
-        agent._session.ensure_session()
-        agent._session._compaction_warnings = 2  # simulate 2 warnings
-
-        # The molt's own tool_call must already be in the live interface
-        # so _context_molt can locate it by tc.id and replay it into the
-        # fresh session (matches how base_agent dispatches in production).
-        molt_wire_id = "toolu_test_compaction_reset"
-        molt_summary = "My important context summary."
-        agent._session._chat.interface.add_assistant_message([
-            ToolCallBlock(
-                id=molt_wire_id,
-                name="psyche",
-                args={"object": "context", "action": "molt", "summary": molt_summary},
-            ),
-        ])
-
-        result = agent._intrinsics["psyche"]({
-            "object": "context",
-            "action": "molt",
-            "summary": molt_summary,
-            "_tc_id": molt_wire_id,
-        })
-
-        assert result["status"] == "ok"
-        assert agent._session._compaction_warnings == 0
     finally:
         agent.stop()

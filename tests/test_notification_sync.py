@@ -1002,7 +1002,6 @@ def test_end_of_turn_idle_sync_delivers_deferred_notification(tmp_path: Path) ->
     class _SessionStub:
         def __init__(self, chat):
             self.chat = chat
-            self._compaction_warnings = 0
 
         def get_context_pressure(self):
             return 0.0
@@ -1010,8 +1009,6 @@ def test_end_of_turn_idle_sync_delivers_deferred_notification(tmp_path: Path) ->
     class _ConfigStub:
         language = "en"
         molt_pressure = 0.9
-        molt_hard_ceiling = 0.95
-        molt_warnings = 3
         molt_prompt = ""
         insights_interval = 0
         max_aed_attempts = 1
