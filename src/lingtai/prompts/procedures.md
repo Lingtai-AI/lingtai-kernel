@@ -66,16 +66,48 @@ Molt is yours to perform. The covenant teaches the philosophy (§V); this is the
 
 **Rhythm.** For `lingtai` and `codex`, tending happens *once* per task, at the end — not mid-task. Hold updates in your head while working, then commit them in a single pass before going idle (or before molting). Mid-task edits to these stores create noise and waste tokens. The exception is a long-running task where a crash would genuinely destroy work — checkpoint deliberately in that case. Pad has a different rhythm — see "Tending the Pad" below. The covenant teaches the *why* (§V · 去芜存菁); this section is the *how*.
 
-**Step 1 — tend the four durable stores:**
+**Step 1 — tend the four durable stores and write the session journal:**
 
 - `lingtai` — `psyche(lingtai, update, content=<full identity>)`. **This is crucial — `lingtai` defines who you are.** Each update is a full rewrite, so include your whole identity, not just the delta. Carry forward who you have become.
 - `pad` — your living index of what you're working on. Edit it to reflect your current goal and the references that point at where the substance lives. **See "Tending the Pad" below for the full practice.** Use `psyche(pad, append, ...)` to pin file contents as read-only reference alongside your notes — it's a file-loading tool, not an incremental jotting tool.
 - `codex` — `codex(submit, title=..., summary=..., content=...)` for any verifiable truth, key finding, or decision worth keeping forever. One distinct fact per entry; the store is permanent but bounded.
 - `skills` — write `.library/custom/<name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `version`) for any reusable procedure the next you (or a peer) might need, then call `system({"action": "refresh"})` to re-scan the catalog. Share via `../.library_shared/<name>/` if broadly useful. See the `skill-manual` skill for authoring conventions.
+- `session journal` — append a substantial sub-knowledge entry under `knowledge/session-journal/` describing what you did this session, extensively. **See "Step 2 — write the session journal" below for the full practice.** This is where the *narrative* of your work lives, complementing the structured stores above.
 
-These four happen *before* the molt call. They are not optional. Without them, the molt sheds everything.
+All five happen *before* the molt call. They are not optional. Without them, the molt sheds everything.
 
-**Step 2 — write the charge and molt:**
+**Step 2 — write the session journal (substantively):**
+
+The four stores above capture *who you are*, *what you're working on*, *verifiable truths*, and *reusable procedures*. None of them captures the *story* of a session — what you tried, what you learned, what surprised you, the dead ends, the small decisions that didn't rise to the level of a codex entry but that future-you would want to see. The session journal is that missing layer.
+
+Write it as a parent/child knowledge structure under `knowledge/session-journal/`:
+
+```
+knowledge/session-journal/
+├── KNOWLEDGE.md                                       # parent index
+├── 2026-05-13-nudge-service/KNOWLEDGE.md              # one session
+├── 2026-05-13-procedures-to-kernel/KNOWLEDGE.md       # another session
+└── 2026-05-14-wechat-fixes/KNOWLEDGE.md               # ...
+```
+
+**The parent `knowledge/session-journal/KNOWLEDGE.md` is the index — short, scannable, progressive-disclosure.** One line per sub-entry: date, slug, one-sentence hook. The next you reads this first, decides which sub-entry is relevant to the present task, and only then drills into the substance.
+
+**The sub-entry `<date>-<slug>/KNOWLEDGE.md` is the substance — write it long.** Several thousand tokens is fine. It is not bounded the way codex is. Include:
+
+- **What the session was about** — the original ask, the framing, who/what set it off
+- **What you actually did** — the sequence, including pivots and the reasons for them. The pivots matter more than the final state — they show *how you got there*, which is the part future-you cannot reconstruct from the diff
+- **What you learned** — non-obvious facts, surprises, things that took longer than expected, things that turned out simpler than expected
+- **Decisions and their reasoning** — the *why*, especially when an alternative was rejected. The committed code shows the choice; only this captures the reasoning
+- **Open threads** — things noticed but deferred, ideas that didn't make it in, follow-ups for a future session
+- **Pointers** — codex IDs you submitted, skills you wrote, commits/PRs/files that anchor the work
+
+This is progressive disclosure in action. Pad indexes the *current* goal; the session journal indexes *all past goals*. The parent KNOWLEDGE.md is your table of contents across sessions; each sub-entry is a chapter. A future you investigating "did I ever work on X?" greps the parent index in one read, then loads only the one chapter that matters — never paying the cost of inlining all journal history into context.
+
+Use a date-prefix slug (`2026-05-13-nudge-service`) so chronology is visible in `ls` and recent sessions sort to the bottom. The kernel `knowledge` mechanic auto-discovers subdirectories containing `KNOWLEDGE.md`, so the entries appear in the catalog without any registration step. Write the files via `bash` / file_io directly — there is no `knowledge(submit, ...)` tool; the filesystem *is* the API.
+
+Updating the parent index at each session is part of the practice — append one line to its `KNOWLEDGE.md` referencing the new sub-entry. A stale parent index defeats progressive disclosure: if the index doesn't know the sub-entry exists, the next you won't find it.
+
+**Step 3 — write the charge and molt:**
 
 ```
 psyche(object="context", action="molt", summary=<your charge to the next you>)
@@ -89,15 +121,16 @@ The `summary` is the only *conversation-layer* thing the next you will see. Aim 
 - **Who to contact** — collaborators, who is waiting on what
 - **Which codex entries matter** — IDs the next you should load via `codex(read, ...)`
 - **Which skills to load** — `skills` SKILL.md paths the next task will need
+- **The session journal sub-entry path** — the `knowledge/session-journal/<date>-<slug>/KNOWLEDGE.md` you just wrote, so the next you can read the full narrative if they need to
 - **Anything else worth carrying forward** — insights, gotchas, things you'd hate to rediscover
 
 The summary is not a recap of conversation. It is your charge to the self that comes after you — anchored in the four stores, which are already waiting in the fresh session.
 
 **Warning ladder.** Pressure builds with up to five warnings across three levels:
 
-- **Level 1** — start tending the four stores. No rush.
-- **Level 2** — finish the stores and draft the summary. The next warning is the last.
-- **Level 3** — molt now. If you ignore this, the system will molt you on the next turn — but the system-performed molt has no summary, only a system notice pointing at `logs/events.jsonl`. Worse, if you haven't been tending the stores, the system molt sheds all of it too. The agent-performed molt carries the charge *and* assumes the stores are already committed.
+- **Level 1** — start tending the four stores and drafting the session journal sub-entry. No rush.
+- **Level 2** — finish the stores, finish the journal entry, and draft the summary. The next warning is the last.
+- **Level 3** — molt now. If you ignore this, the system will molt you on the next turn — but the system-performed molt has no summary, only a system notice pointing at `logs/events.jsonl`. Worse, if you haven't been tending the stores or written the journal entry, the system molt sheds all of it too. The agent-performed molt carries the charge *and* assumes the stores and journal are already committed.
 
 **Molt deliberately. Tend the stores first. Do not be molted.**
 
