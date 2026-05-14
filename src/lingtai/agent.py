@@ -1263,14 +1263,32 @@ class Agent(BaseAgent):
             self._prompt_manager.write_section("principle", principle, protected=True)
 
         # --- Procedures ---
+        # Resolution precedence (mirrors substrate above):
+        #   1. data["procedures"]          — inline init.json string
+        #   2. system/procedures.md        — agent's own copy (editable)
+        #   3. packaged prompts/procedures.md — kernel default
+        #
+        # Every agent gets the section populated by default. To opt out,
+        # set `"procedures": " "` (a single space, written to system/
+        # procedures.md and rendered as effectively blank).
         procedures = data.get("procedures", "")
         procedures_file = system_dir / "procedures.md"
         if procedures:
             procedures_file.write_text(procedures)
         elif procedures_file.is_file():
             procedures = procedures_file.read_text()
+        else:
+            try:
+                from importlib.resources import files
+                packaged = files("lingtai.prompts").joinpath("procedures.md").read_text()
+                procedures_file.write_text(packaged)
+                procedures = packaged
+            except (FileNotFoundError, ModuleNotFoundError, OSError):
+                procedures = ""
         if procedures:
             self._prompt_manager.write_section("procedures", procedures, protected=True)
+        else:
+            self._prompt_manager.delete_section("procedures")
 
         # --- Brief (externally-maintained, written by secretary) ---
         brief = data.get("brief", "")
