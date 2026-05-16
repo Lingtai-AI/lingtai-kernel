@@ -127,6 +127,42 @@ def _prepare_aed_retry_message(agent, err_desc: str) -> Message:
     return _make_message(MSG_REQUEST, "system", aed_msg)
 
 
+def _close_pending_tool_calls_for_recovery(
+    agent,
+    reason: str,
+    *,
+    ledger_source: str,
+    tool_completed: bool = False,
+) -> bool:
+    """Close a dangling assistant tool-call tail before normal recovery.
+
+    Once an assistant response containing tool calls has been persisted to the
+    canonical chat, the wire must not return to IDLE with that assistant turn
+    still unanswered.  If no real tool results are available, synthesize honest
+    recovery results so strict providers can accept the next append/send.
+    """
+    if agent._chat is None:
+        return False
+    iface = agent._chat.interface
+    if not iface.has_pending_tool_calls():
+        return False
+    try:
+        iface.close_pending_tool_calls(reason=reason, tool_completed=tool_completed)
+    except Exception as e:
+        agent._log(
+            "heal_pending_tool_calls_failed",
+            reason=reason,
+            error=str(e)[:200],
+        )
+        return False
+    agent._log("heal_pending_tool_calls", reason=reason)
+    try:
+        agent._save_chat_history(ledger_source=ledger_source)
+    except Exception:
+        pass
+    return True
+
+
 def _run_loop(agent) -> None:
     """Wait for messages, process them. Agent persists between messages."""
     from ..state import AgentState
@@ -564,13 +600,30 @@ def _handle_tc_wake(agent, msg: Message) -> None:
     iface = agent._chat.interface
     items = agent._tc_inbox.drain()
 
-    # Mid-pair tail — defer.  Re-enqueue any drained legacy items so
-    # the next wake retries them.
+    # Mid-pair tail — heal instead of looping forever.  Re-enqueue any
+    # drained legacy items so this wake only repairs the current wire; after
+    # synthetic tool results land, the wire-drive path below can show the
+    # recovery notice to the LLM immediately.
     if iface.has_pending_tool_calls():
         for item in items:
             agent._tc_inbox.enqueue(item)
-        agent._log("tc_wake_noop", reason="pending_tool_calls")
-        return
+        items = []
+        healed = False
+        try:
+            healed = agent._heal_pending_tool_calls(
+                reason="tc_wake_pending_tool_calls"
+            )
+        except Exception as e:
+            agent._log(
+                "tc_wake_noop",
+                reason="pending_tool_calls_heal_failed",
+                error=str(e)[:200],
+            )
+            return
+        if not healed:
+            agent._log("tc_wake_noop", reason="pending_tool_calls_heal_failed")
+            return
+        agent._log("tc_wake_healed_pending_tool_calls")
 
     agent._executor = ToolExecutor(
         dispatch_fn=agent._dispatch_tool,
@@ -824,24 +877,58 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         if not response.tool_calls:
             break
 
+        agent._log(
+            "tool_batch_received",
+            call_count=len(response.tool_calls),
+            tool_names=[tc.name for tc in response.tool_calls],
+            tool_call_ids=[tc.id for tc in response.tool_calls],
+        )
+
         if agent._cancel_event.is_set():
+            _close_pending_tool_calls_for_recovery(
+                agent,
+                "cancel_before_tool_dispatch",
+                ledger_source=ledger_source,
+            )
             agent._cancel_event.clear()
             return {"text": "", "failed": False, "errors": []}
 
         stop_reason = guard.check_limit(len(response.tool_calls))
         if stop_reason:
+            _close_pending_tool_calls_for_recovery(
+                agent,
+                f"tool_loop_limit: {stop_reason}",
+                ledger_source=ledger_source,
+            )
             break
 
         invalid_reason = guard.check_invalid_tool_limit()
         if invalid_reason:
+            _close_pending_tool_calls_for_recovery(
+                agent,
+                f"invalid_tool_limit: {invalid_reason}",
+                ledger_source=ledger_source,
+            )
             break
 
         # Delegate to ToolExecutor
+        agent._log(
+            "tool_batch_dispatch_start",
+            call_count=len(response.tool_calls),
+            tool_names=[tc.name for tc in response.tool_calls],
+            tool_call_ids=[tc.id for tc in response.tool_calls],
+        )
         tool_results, intercepted, intercept_text = agent._executor.execute(
             response.tool_calls,
             on_result_hook=agent._on_tool_result_hook,
             cancel_event=agent._cancel_event,
             collected_errors=collected_errors,
+        )
+        agent._log(
+            "tool_batch_dispatch_done",
+            call_count=len(response.tool_calls),
+            result_count=len(tool_results),
+            intercepted=intercepted,
         )
 
         # Move the live notification payload from the previous holder (if
@@ -860,6 +947,12 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         if intercepted:
             if tool_results and agent._chat:
                 agent._chat.commit_tool_results(tool_results)
+            else:
+                _close_pending_tool_calls_for_recovery(
+                    agent,
+                    "intercepted_without_tool_results",
+                    ledger_source=ledger_source,
+                )
             return {
                 "text": intercept_text,
                 "failed": False,
@@ -879,6 +972,12 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         if agent._cancel_event.is_set():
             if tool_results and agent._chat:
                 agent._chat.commit_tool_results(tool_results)
+            else:
+                _close_pending_tool_calls_for_recovery(
+                    agent,
+                    "cancel_after_tool_dispatch_without_results",
+                    ledger_source=ledger_source,
+                )
             agent._cancel_event.clear()
             agent._log("turn_cancelled_post_tool",
                        reason="cancel_event_set_after_tool_execute")
@@ -893,6 +992,12 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         if _check_poll_backoff(agent, response.tool_calls):
             if tool_results and agent._chat:
                 agent._chat.commit_tool_results(tool_results)
+            else:
+                _close_pending_tool_calls_for_recovery(
+                    agent,
+                    "poll_backoff_without_tool_results",
+                    ledger_source=ledger_source,
+                )
             agent._log("idle_after_poll_backoff",
                        reason="poll_retries_exhausted")
             return {
@@ -913,6 +1018,14 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 agent.agent_name,
                 collected_errors[-1],
             )
+            if tool_results and agent._chat:
+                agent._chat.commit_tool_results(tool_results)
+            else:
+                _close_pending_tool_calls_for_recovery(
+                    agent,
+                    "repeated_tool_errors_without_results",
+                    ledger_source=ledger_source,
+                )
             break
 
         in_tool_loop = True
