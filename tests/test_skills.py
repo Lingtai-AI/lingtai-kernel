@@ -262,6 +262,41 @@ def test_catalog_injected_into_skills_section(tmp_path):
         agent.stop(timeout=1.0)
 
 
+def test_catalog_rendering_is_readable_without_xml_quote_noise(tmp_path):
+    # The catalog goes straight into the system prompt; humans (and the model)
+    # have complained that the prior shape was XML-escape soup. Pin the new
+    # shape: per-skill block with indented `description:` body, no `&quot;` /
+    # `&apos;` noise from over-escaping element text.
+    workdir = tmp_path / "agent"
+    _write_skill(
+        workdir / ".library" / "custom" / "fancy-tool",
+        "fancy-tool",
+        'Handles "quoted" args and \'apostrophes\' — keep them raw.',
+    )
+
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"skills": {}},
+    )
+    try:
+        prompt = agent._prompt_manager.read_section("skills") or ""
+        # No spurious escape entities for `"` and `'` in element text.
+        assert "&quot;" not in prompt
+        assert "&apos;" not in prompt
+        # The new shape uses indented `description:` blocks.
+        assert "    description:" in prompt
+        assert "      Handles \"quoted\" args" in prompt
+        # The outer wrapper still exists (consumers grep for it).
+        assert "<available_skills>" in prompt
+        assert "</available_skills>" in prompt
+        # The skill block keeps clean field labels rather than inline tags.
+        assert "    name: fancy-tool" in prompt
+    finally:
+        agent.stop(timeout=1.0)
+
+
 def test_custom_skills_appear_in_catalog(tmp_path):
     workdir = tmp_path / "agent"
     _write_skill(workdir / ".library" / "custom" / "my-tool", "my-tool", "my desc")
