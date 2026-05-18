@@ -40,7 +40,7 @@
   "vision.question": "关于图像之问",
   "web_search.description": "游历之器——搜寻大千世界之最新信息。用于实时数据、近期事件、文档或超出训练所知之内容。返排序后之搜索结果，含题、URL 与摘要。欲取并阅一具体 URL，或求精深之策（PDF 之取、JS 动渲之页、隐身抓取、备用之径），可参 `web-browsing` 之技。",
   "web_search.query": "搜寻之问",
-  "daemon.description": "神識——遣短暂之分神以隔上下文。分神者，一次性 LLM 会话，自具上下文窗，共享汝之工作目录然毕后不存记忆。以分神将嘈杂、耗上下文之事剥离己身：大规模文件扫描、探索之搜、多步之研、批量之转——凡所求唯结论者。默 4 并发（可于每灵之 init.json 中配；daemon(action=\"list\") 报实之上限）。要：分神之果截至约 2000 字。如需详出，令分神书报告于文卷，毕后自取。操作：emanate（分），list（观），ask（问），reclaim（收）。详见 daemon-manual 技。",
+  "daemon.description": "神識——遣短暂之分神以隔上下文。分神者，一次性 LLM 会话，自具上下文窗，共享汝之工作目录然毕后不存记忆。以分神将嘈杂、耗上下文之事剥离己身：大规模文件扫描、探索之搜、多步之研、批量之转——凡所求唯结论者。默 4 并发（可于每灵之 init.json 中配；daemon(action=\"list\") 报实之上限）。要：分神之果截至约 2000 字。如需详出，令分神书报告于文卷，毕后自取。操作：emanate（分），list（观），ask（问），check（察），reclaim（收）。毕则系统自报，无须屡问「成否」；唯疑其滞，方以 check 察之。详见 daemon-manual 技（含察之节度）。",
   "daemon.action": "所执之操作：'emanate'（分，遣出分神），'list'（观，显诸状），'ask'（问，跟进），'check'（察，览某分神近事），'reclaim'（收，尽数终止）",
   "daemon.last": "'check' 之操作：自 events.jsonl 返还几条近事。默二十。每轮约生事二（tool_call 与 tool_result），故 last=20 约涵十次工具之遣。",
   "daemon.truncate": "'check' 之操作：返事所含字符串字段之至长，过此则以省略缀之。默五百。设为零则不截。",
