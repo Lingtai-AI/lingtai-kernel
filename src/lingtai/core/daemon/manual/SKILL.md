@@ -164,6 +164,28 @@ Because the only progress signal is `last_output_at`, the right cadence on CLI b
 - **Reclaiming on a hunch.** See the stall heuristic. Default to "let it cook."
 - **`check` with `last=1000, truncate=0`.** Dumps the full event log into your context. Use targeted `last=20` and only widen if needed.
 
+
+### Resting while daemon work is pending: set a cron notification reminder
+
+If the daemon is healthy but unfinished and you are about to rest, do **not** keep polling and do **not** rely on memory. Set a lightweight wakeup reminder through the `bash-manual` section **"One-shot wakeup reminders via `.notification/cron.json`"**.
+
+Use this when:
+
+- a Claude Code / Codex backend task is still running but has enough context to finish alone;
+- you opened a PR and want to check CI/mergeability later;
+- a render/download/build/test run is expected to complete after you sleep;
+- the human asked for a later follow-up and the reminder is for you, not for them.
+
+The reminder should say what is pending and what to check, for example:
+
+```text
+⏺ Codex active. Plot regenerated (362KB, 23:38) — waiting for caption + commit. Polling at 23:42.
+```
+
+When the `cron` notification wakes you, read pad first, inspect the relevant daemon/job/PR, act, then dismiss the channel with `system(action="dismiss", channel="cron")`.
+
+This complements the polling rule above: completion is push-notified, stalls are inspected sparingly, and deliberate rest gets one future reminder rather than a busy loop.
+
 ## Worked example: a daemon that's been running 5 minutes
 
 You called `daemon(action="emanate", ...)` for `em-3`, asked it to "scan src/ for security issues", and it's been running 5 minutes. You're nervous.
