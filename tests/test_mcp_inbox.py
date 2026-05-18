@@ -267,6 +267,95 @@ def test_scan_truncates_long_body_into_preview_snippet(tmp_path):
     assert preview["subject"] == "S" * 150
 
 
+def test_scan_legacy_event_without_metadata_yields_only_base_preview_fields(tmp_path):
+    """Phase-1 IM seam: events without metadata must produce the exact
+    pre-existing preview shape — {from, subject, preview} with no extras.
+    Behavioural baseline for the additive metadata change."""
+    import json as _json
+
+    agent, workdir = _mk_agent(tmp_path)
+    _write_event(workdir, "telegram", "ev1", {
+        "from": "alice", "subject": "hi", "body": "hello",
+    })
+
+    _scan_once(agent, workdir / INBOX_DIRNAME)
+    notif = _json.loads((workdir / ".notification" / "mcp.telegram.json").read_text(encoding="utf-8"))
+    p = notif["data"]["previews"][0]
+    assert set(p.keys()) == {"from", "subject", "preview"}
+    assert p["from"] == "alice"
+    assert p["subject"] == "hi"
+    assert p["preview"] == "hello"
+
+
+def test_scan_preserves_conversation_metadata_in_preview(tmp_path):
+    """Phase-1 IM seam: when an event carries
+    metadata.{conversation_ref, message_ref, platform}, those values
+    surface in the per-event preview entry and in the notification
+    instructions so the agent can route follow-up work to the right
+    thread without calling read()."""
+    import json as _json
+
+    agent, workdir = _mk_agent(tmp_path)
+    _write_event(workdir, "telegram", "ev1", {
+        "from": "alice",
+        "subject": "hi",
+        "body": "hello",
+        "metadata": {
+            "conversation_ref": "tg:chat:42",
+            "message_ref": "tg:msg:9001",
+            "platform": "telegram",
+        },
+    })
+
+    _scan_once(agent, workdir / INBOX_DIRNAME)
+    notif = _json.loads((workdir / ".notification" / "mcp.telegram.json").read_text(encoding="utf-8"))
+    p = notif["data"]["previews"][0]
+    # Existing fields still pass through untouched.
+    assert p["from"] == "alice"
+    assert p["subject"] == "hi"
+    assert p["preview"] == "hello"
+    # New IM fields preserved.
+    assert p["conversation_ref"] == "tg:chat:42"
+    assert p["message_ref"] == "tg:msg:9001"
+    assert p["platform"] == "telegram"
+    # Instructions render them concisely so the model sees them inline.
+    assert "tg:chat:42" in notif["instructions"]
+    assert "tg:msg:9001" in notif["instructions"]
+
+
+def test_scan_ignores_non_string_or_empty_metadata_values(tmp_path):
+    """Non-string, empty, or unknown-key metadata values are silently
+    dropped — a misbehaving MCP cannot inject arbitrary structures into
+    the notification payload via this seam, and legacy/sloppy events do
+    not become dead-lettered."""
+    import json as _json
+
+    from lingtai.core.mcp.inbox import _PREVIEW_META_FIELD_CAP
+
+    agent, workdir = _mk_agent(tmp_path)
+    _write_event(workdir, "telegram", "ev1", {
+        "from": "alice",
+        "subject": "hi",
+        "body": "hello",
+        "metadata": {
+            "conversation_ref": "",                      # empty → ignored
+            "message_ref": 12345,                        # non-string → ignored
+            "platform": "x" * (_PREVIEW_META_FIELD_CAP + 100),  # oversize → capped
+            "unrelated_field": {"nested": "junk"},       # unknown key → ignored
+        },
+    })
+
+    _scan_once(agent, workdir / INBOX_DIRNAME)
+    notif = _json.loads((workdir / ".notification" / "mcp.telegram.json").read_text(encoding="utf-8"))
+    p = notif["data"]["previews"][0]
+    assert "conversation_ref" not in p
+    assert "message_ref" not in p
+    assert "unrelated_field" not in p
+    assert p["platform"] == "x" * _PREVIEW_META_FIELD_CAP
+    # Base fields still intact.
+    assert p["from"] == "alice"
+
+
 def test_scan_publishes_notification_even_when_wake_false(tmp_path):
     """Notification is always published regardless of wake flag."""
     agent, workdir = _mk_agent(tmp_path)

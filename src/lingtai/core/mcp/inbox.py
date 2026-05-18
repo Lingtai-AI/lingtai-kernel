@@ -69,6 +69,18 @@ _MAX_SUBJECT_LEN = 200
 # that need to show recent message history inline in the notification.
 _PREVIEW_FIELD_CAP = 10000  # chars of body to inline as the snippet (raised for IM conversations)
 
+# Optional metadata fields that MCP servers may attach to a LICC event under
+# the top-level `metadata` dict. When present and well-formed, these get
+# copied into the per-event preview so the agent can see *which*
+# conversation / message / platform an event came from without calling
+# read() on the MCP. Strictly additive: legacy events without metadata
+# behave identically; non-string or empty values are silently ignored.
+# Capped at the same 200 chars as `subject` — these are refs/handles, not
+# message bodies, so they should be naturally short. A misbehaving MCP that
+# stuffs a kilobyte into `conversation_ref` won't bloat the notification.
+_PREVIEW_META_FIELDS = ("conversation_ref", "message_ref", "platform")
+_PREVIEW_META_FIELD_CAP = 200
+
 
 # ---------------------------------------------------------------------------
 # Validation
@@ -134,6 +146,29 @@ def _format_notification_summary(mcp_name: str, count: int, has_human_messages: 
     )
 
 
+def _extract_preview_meta(event: dict) -> dict:
+    """Pull optional IM/chat metadata fields off a LICC event for the preview.
+
+    Returns a dict containing only the supported keys
+    (``conversation_ref``, ``message_ref``, ``platform``) whose values are
+    non-empty strings, each truncated to ``_PREVIEW_META_FIELD_CAP``.
+
+    Strictly additive: events without ``metadata`` or with non-dict /
+    non-string / empty values yield an empty dict and behave exactly as
+    they did before this field existed. No validation errors raised — a
+    malformed metadata payload just produces no extra preview fields.
+    """
+    meta = event.get("metadata")
+    if not isinstance(meta, dict):
+        return {}
+    out: dict = {}
+    for key in _PREVIEW_META_FIELDS:
+        val = meta.get(key)
+        if isinstance(val, str) and val:
+            out[key] = val[:_PREVIEW_META_FIELD_CAP]
+    return out
+
+
 def _consume_event(agent: "BaseAgent", mcp_name: str, event: dict) -> tuple[bool, dict]:
     """Record the per-event log entry; return (wake, preview).
 
@@ -147,6 +182,11 @@ def _consume_event(agent: "BaseAgent", mcp_name: str, event: dict) -> tuple[bool
     The full body is NOT included — it stays behind the MCP's read action
     so the agent has one source of truth and avoids the re-processing loop
     that issue #37 fixed.
+
+    Optional IM/chat metadata fields (``conversation_ref``, ``message_ref``,
+    ``platform``) from ``event["metadata"]`` are copied into the preview
+    when present as non-empty strings. Legacy events without metadata
+    produce the exact same preview shape as before.
 
     Per-event traceability flows to the agent log so operators can audit
     individual deliveries; the user-visible coalesced notification is
@@ -168,6 +208,7 @@ def _consume_event(agent: "BaseAgent", mcp_name: str, event: dict) -> tuple[bool
         "subject": subject,
         "preview": body[:_PREVIEW_FIELD_CAP],
     }
+    preview.update(_extract_preview_meta(event))
     return wake, preview
 
 
@@ -213,6 +254,9 @@ def _dispatch_summary(
         instructions_lines.append("Previews:")
         for i, p in enumerate(previews, start=1):
             instructions_lines.append(f"  {i}. {p['from']} — {p['subject']}")
+            meta_bits = [f"{k}={p[k]}" for k in _PREVIEW_META_FIELDS if k in p]
+            if meta_bits:
+                instructions_lines.append(f"     [{', '.join(meta_bits)}]")
             snippet = p.get("preview", "")
             if snippet:
                 instructions_lines.append(f"     {snippet}")
