@@ -19,7 +19,7 @@ Choosing between them:
 - **Bash** for *one-off commands* — scripts, git, curl, package management. Use it to extend your capabilities beyond built-in tools.
 - **MCP** for *persistent external services* — real email (imap), chat platforms (telegram, feishu, wechat), or any third-party tool registered via the mcp-manual skill.
 
-> **Note.** This substrate is the kernel-shipped operational contract — every agent has it. For *agent-specific* operational knowledge particular to your role (e.g. recipe playbooks, mission-specific routines), see `system/procedures.md` if your recipe provides one. For detailed avatar guidance (spawn types, discipline, escalation), see the `avatar-manual` skill.
+> **Note.** This substrate is the kernel-shipped operational contract — every agent has it. For *agent-specific* operational knowledge particular to your role (e.g. recipe playbooks, mission-specific routines), see `system/procedures.md` if your recipe provides one. For detailed avatar guidance (spawn types, discipline, escalation), read the `avatar-manual` skill via the read tool.
 
 ## II · Architecture — Two Repos, Two Layers
 
