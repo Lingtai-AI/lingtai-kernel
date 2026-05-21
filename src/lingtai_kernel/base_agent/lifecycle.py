@@ -478,7 +478,7 @@ def _perform_refresh(agent) -> None:
         f"name = {agent_name!r}\n"
         f"addr = {address!r}\n"
         "MAX_ATTEMPTS = 5\n"
-        "HEALTH_CHECK_WAIT = 120\n"
+        "HEALTH_CHECK_WAIT = 10\n"
         "def log(typ, **kw):\n"
         "    entry = {'type': typ, 'address': addr, 'agent_name': name, 'ts': time.time(), **kw}\n"
         "    try:\n"
