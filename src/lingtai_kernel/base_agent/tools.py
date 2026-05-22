@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from ..intrinsics import ALL_INTRINSICS
 from ..llm import FunctionSchema
+from ..secondary_tools import is_secondary_primary_eligible, secondary_schema_property
 from ..i18n import t as _t
 from ..types import UnknownToolError
 
@@ -54,7 +55,10 @@ def _build_tool_schemas(agent) -> list[FunctionSchema]:
 
     Every tool gets a 'reasoning' parameter injected — the agent must
     explain why it's calling this tool. Reasoning is logged as part of
-    the agent's diary and stripped before the handler runs.
+    the agent's diary and stripped before the handler runs. Eligible
+    non-communication capability/MCP tools also get the reserved
+    ``secondary`` parameter for a restricted human-reply tool call that the
+    runtime executes mechanically before the primary handler.
     """
     reasoning_prop = {
         "reasoning": {
@@ -73,6 +77,8 @@ def _build_tool_schemas(agent) -> list[FunctionSchema]:
             params = dict(info["module"].get_schema(lang))
             props = dict(params.get("properties", {}))
             props.update(reasoning_prop)
+            if is_secondary_primary_eligible(name):
+                props["secondary"] = secondary_schema_property()
             params["properties"] = props
             schemas.append(
                 FunctionSchema(
@@ -87,6 +93,8 @@ def _build_tool_schemas(agent) -> list[FunctionSchema]:
         params = dict(s.parameters)
         props = dict(params.get("properties", {}))
         props.update(reasoning_prop)
+        if is_secondary_primary_eligible(s.name):
+            props["secondary"] = secondary_schema_property()
         params["properties"] = props
         schemas.append(
             FunctionSchema(
