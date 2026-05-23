@@ -44,6 +44,21 @@ from typing import Any, Callable
 # readable.
 ARTIFACT_MARKER = "lingtai_tool_result_spill"
 
+# Top-level reserved fields that ``ToolExecutor`` attaches to dict-shaped
+# primary results before they reach the wire.  When the primary result
+# itself is oversized and gets spilled, replacing the whole dict with the
+# manifest would silently drop these — losing the bounded secondary
+# summary (already capped by ``SECONDARY_READ_RESULT_MAX_BYTES`` and the
+# only signal that a same-turn secondary tool actually ran) and the
+# loop-guard duplicate warning.  Both are small by construction.
+#
+# Deliberately tight allowlist.  Arbitrary business-level top-level keys
+# (e.g. a tool returning ``{"data": [...]}``) are NOT hoisted — that's
+# what the artifact file is for.  ``_meta`` is also intentionally
+# omitted: it's stamped by ``stamp_meta`` and a copy lives in the
+# artifact; agents that want timing/context can read the sidecar.
+_HOISTED_RESERVED_FIELDS = ("_secondary", "_duplicate_warning")
+
 # Preventive cap — applied by ToolExecutor on every freshly built tool
 # result, before it reaches the LLM wire.
 PREVENTIVE_MAX_CHARS = 10_000
@@ -127,6 +142,15 @@ def spill_oversized_result(
     workdir-relative and absolute), original size, cap, tool/call metadata,
     a UTC timestamp, a short preview, and a ``source`` field marking which
     code path produced the spill (``"preventive"`` or ``"retroactive"``).
+
+    When the original is a dict, reserved provider-visible fields listed in
+    ``_HOISTED_RESERVED_FIELDS`` (currently ``_secondary``,
+    ``_duplicate_warning``) are copied verbatim from the original onto the
+    manifest so they survive the wire replacement.  The artifact file
+    always holds the complete post-dispatch original, including those
+    fields, so nothing is lost — the hoist only makes the wire-bound
+    copy honest about same-turn secondary outcomes and loop-guard
+    warnings.
 
     When ``working_dir`` is None or the write fails, returns the manifest
     with ``spill_path`` / ``spill_path_abs`` set to None and a
@@ -215,8 +239,24 @@ def spill_oversized_result(
     if working_dir is None:
         manifest["spill_error"] = manifest.get("spill_error") or "no working_dir configured"
 
+    # Hoist a small allowlist of provider-visible reserved fields from a
+    # dict-shaped original onto the manifest, so secondary outcomes and
+    # loop-guard duplicate warnings reach the wire even when the primary
+    # payload was too large to inline.  The allowlist is deliberately
+    # tight (`_HOISTED_RESERVED_FIELDS`); arbitrary business keys live in
+    # the artifact only.  Hoisting runs BEFORE the defensive trim loop so
+    # the preview-trim accounts for the hoisted bytes.
+    if isinstance(result, dict):
+        for key in _HOISTED_RESERVED_FIELDS:
+            if key in result:
+                manifest[key] = result[key]
+
     # Defensive: if the manifest itself somehow exceeds the cap (e.g. an
-    # absurd tool_call_id), trim the preview further.  Loop is bounded.
+    # absurd tool_call_id, or a hoisted ``_secondary`` whose own truncated
+    # body bumps us over), trim the preview further.  Loop is bounded.
+    # ``_secondary`` is already bounded by SECONDARY_READ_RESULT_MAX_BYTES
+    # upstream, so in practice the manifest stays well under the cap; the
+    # loop here is a defence-in-depth, not a routine code path.
     for _ in range(4):
         if _serialized_len(manifest) <= max_chars:
             break

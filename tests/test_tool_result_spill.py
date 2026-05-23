@@ -441,3 +441,165 @@ def test_executor_logs_spill_event(tmp_path):
     assert spill_events[0][1]["tool_name"] == "read"
     assert spill_events[0][1]["tool_call_id"] == "tc-log"
     assert spill_events[0][1]["original_char_count"] == len(big)
+
+
+# -- PR #147 review fix: hoist reserved fields onto spill manifest ----------
+
+def test_spill_manifest_hoists_secondary_summary_from_oversized_dict(tmp_path):
+    """Regression for PR #147 review: when ``_attach_secondary_result`` has
+    written ``_secondary`` onto a primary result and the primary then spills,
+    the manifest sent to the LLM must still expose the bounded secondary
+    summary.  Otherwise the agent never learns whether the same-turn
+    secondary tool (e.g. ``email(action="read")``) actually ran.
+    """
+    secondary_summary = {
+        "status": "success",
+        "tool": "email",
+        "action": "read",
+        "result": {
+            "emails": [
+                {"id": "e1", "from": "human", "subject": "ping", "body": "hi"},
+            ],
+        },
+    }
+    result = {
+        "status": "ok",
+        "big_blob": "X" * (CAP * 4),  # forces the primary to spill
+        "_secondary": secondary_summary,
+    }
+    out = _spill_oversized_result(
+        result,
+        max_chars=CAP,
+        tool_name="bash",
+        tool_call_id="tc-sec-hoist",
+        working_dir=tmp_path,
+    )
+
+    # Spilled — and _secondary survived the wire replacement.
+    assert out["status"] == "spilled"
+    assert "_secondary" in out, (
+        "Bounded secondary summary lost on spill — agent has no idea "
+        "whether the secondary call ran."
+    )
+    assert out["_secondary"] == secondary_summary
+    assert _serialized_len(out) <= CAP
+
+    # Artifact still holds the full post-dispatch dict, _secondary included.
+    artifact = tmp_path / out["spill_path"]
+    on_disk = json.loads(artifact.read_text(encoding="utf-8"))
+    assert on_disk["big_blob"] == result["big_blob"]
+    assert on_disk["_secondary"] == secondary_summary
+
+
+def test_spill_manifest_hoists_duplicate_warning_from_oversized_dict(tmp_path):
+    """``_duplicate_warning`` from LoopGuard is provider-visible and short.
+    Hoist it onto the manifest so the agent still sees the loop-guard
+    nudge even when the primary result spilled."""
+    result = {
+        "status": "ok",
+        "blob": "Y" * (CAP * 3),
+        "_duplicate_warning": "warning: duplicate call #3 — consider varying your args",
+    }
+    out = _spill_oversized_result(
+        result,
+        max_chars=CAP,
+        tool_name="read",
+        tool_call_id="tc-dup",
+        working_dir=tmp_path,
+    )
+    assert out["status"] == "spilled"
+    assert out.get("_duplicate_warning") == result["_duplicate_warning"]
+    assert _serialized_len(out) <= CAP
+
+
+def test_spill_manifest_hoists_both_reserved_fields_when_both_present(tmp_path):
+    """Both _secondary and _duplicate_warning hoist simultaneously."""
+    result = {
+        "status": "ok",
+        "blob": "Z" * (CAP * 3),
+        "_secondary": {"status": "success", "tool": "email", "action": "send"},
+        "_duplicate_warning": "warn: dup #2",
+    }
+    out = _spill_oversized_result(
+        result, max_chars=CAP, tool_name="bash", tool_call_id="tc-both",
+        working_dir=tmp_path,
+    )
+    assert out["status"] == "spilled"
+    assert out["_secondary"] == result["_secondary"]
+    assert out["_duplicate_warning"] == result["_duplicate_warning"]
+    assert _serialized_len(out) <= CAP
+
+
+def test_spill_manifest_does_not_hoist_arbitrary_business_keys(tmp_path):
+    """Allowlist is tight — top-level business keys that happen to be small
+    are NOT lifted onto the manifest.  Their content lives in the artifact."""
+    result = {
+        "status": "ok",
+        "blob": "B" * (CAP * 3),
+        "rows_processed": 12345,           # business key — must NOT hoist
+        "warnings": ["row 17 skipped"],    # business key — must NOT hoist
+        "_secondary": {"status": "success", "tool": "email", "action": "read"},
+    }
+    out = _spill_oversized_result(
+        result, max_chars=CAP, tool_name="bash", tool_call_id="tc-tight",
+        working_dir=tmp_path,
+    )
+    assert "rows_processed" not in out
+    assert "warnings" not in out
+    # But _secondary still hoisted (it's on the allowlist).
+    assert "_secondary" in out
+
+
+def test_spill_manifest_no_hoist_when_original_is_non_dict(tmp_path):
+    """If the original is a raw string, there are no top-level reserved
+    fields to hoist — the manifest is the usual shape with no extras."""
+    big = "S" * (CAP * 2)
+    out = _spill_oversized_result(
+        big, max_chars=CAP, tool_name="read", tool_call_id="tc-str",
+        working_dir=tmp_path,
+    )
+    assert out["status"] == "spilled"
+    assert "_secondary" not in out
+    assert "_duplicate_warning" not in out
+
+
+def test_spill_manifest_hoist_survives_through_executor_call_site(tmp_path):
+    """End-to-end: a primary dispatch whose dict result carries ``_secondary``
+    (as attached by ``_attach_secondary_result``) and is then oversized must
+    reach the wire with ``_secondary`` intact on the manifest.
+
+    Reproduces the PR #147 review scenario: secondary email read on an
+    oversized primary result.
+    """
+    secondary_summary = {
+        "status": "success",
+        "tool": "email",
+        "action": "read",
+        "result": {"emails": [{"id": "e1", "subject": "ping"}]},
+    }
+    # Build a dispatch_fn that returns a result with _secondary already
+    # attached (simulating the post-_attach_secondary_result state); the
+    # executor passes this to _build_result_message → spill.
+    def dispatch(tc):
+        return {
+            "status": "ok",
+            "blob": "X" * (CAP * 3),
+            "_secondary": secondary_summary,
+        }
+
+    captured = MagicMock(side_effect=lambda name, result, **kw: result)
+    executor = ToolExecutor(
+        dispatch_fn=dispatch,
+        make_tool_result_fn=captured,
+        guard=LoopGuard(max_total_calls=50),
+        working_dir=tmp_path,
+    )
+    executor.execute([ToolCall(name="bash", args={}, id="tc-e2e")])
+
+    name, wire_payload = captured.call_args.args
+    assert name == "bash"
+    assert wire_payload["status"] == "spilled"
+    assert "_secondary" in wire_payload
+    assert wire_payload["_secondary"] == secondary_summary
+    # The wire payload is still under the cap.
+    assert _serialized_len(wire_payload) <= CAP
