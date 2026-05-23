@@ -667,12 +667,27 @@ class EmailManager:
         # so the recipient can reply to the correct address.
         abs_sender = str(self._agent._working_dir) if mode == "abs" else None
 
+        # When delivering across .lingtai/ network boundaries, also embed
+        # an explicit return route so the recipient's later ``reply``
+        # cannot collapse to an ambiguous bare alias (issue #145). The
+        # bare ``from`` alone is unsafe when two networks each host an
+        # agent with the same short name (e.g. both have "mimo-1").
+        return_route = None
+        if mode == "abs":
+            return_route = {
+                "mode": "abs",
+                "address": str(self._agent._working_dir),
+                "sender_agent_id": getattr(self._agent, "_agent_id", ""),
+            }
+
         for addr in all_recipients:
             dispatch_payload = dict(base_payload)
             dispatch_payload["_dispatch_to"] = addr
             dispatch_payload["_mode"] = mode
             if abs_sender is not None:
                 dispatch_payload["from"] = abs_sender
+            if return_route is not None:
+                dispatch_payload["_return_route"] = return_route
             msg_id = _persist_to_outbox(self._agent, dispatch_payload, deliver_at)
             tt = threading.Thread(
                 target=_mailman,
@@ -689,6 +704,8 @@ class EmailManager:
         sent_payload = dict(base_payload)
         if abs_sender is not None:
             sent_payload["from"] = abs_sender
+        if return_route is not None:
+            sent_payload["_return_route"] = return_route
         sent_record = {
             **sent_payload,
             "_mailbox_id": sent_id,
@@ -908,6 +925,74 @@ class EmailManager:
             orig_subject = body_first[:30] if body_first else "(no subject)"
         return orig_subject if orig_subject.startswith("Re: ") else f"Re: {orig_subject}"
 
+    def _resolve_reply_target(self, original: dict) -> tuple[str, str] | dict:
+        """Pick the concrete address+mode to reply to.
+
+        Returns ``(address, mode)`` on success, or ``{"error": ...}`` on
+        an ambiguous self-route — the live failure mode of issue #145
+        where two ``.lingtai/`` networks both host an agent with the
+        same bare name.
+
+        Resolution order:
+
+        1. Inbound ``_return_route`` (embedded by abs sends) wins.
+        2. Else, an absolute-path ``from`` is treated as an abs route
+           (graceful upgrade for messages from older senders).
+        3. Else, the bare ``from`` is used in peer mode.
+
+        Ambiguity guard: in branches 2 & 3, if the resolved peer-mode
+        target points at the responder's own working directory while
+        ``identity.agent_id`` differs from the responder's own agent
+        id, refuse rather than silently self-deliver.
+        """
+        rr = original.get("_return_route")
+        if isinstance(rr, dict) and rr.get("mode") == "abs" and rr.get("address"):
+            return (str(rr["address"]), "abs")
+
+        from_field = original.get("from") or ""
+        from_str = str(from_field)
+        if from_str:
+            try:
+                p = Path(from_str)
+            except (TypeError, ValueError):
+                p = None
+            if p is not None and p.is_absolute():
+                return (from_str, "abs")
+
+        # Bare alias / peer mode. Apply ambiguity guard.
+        own_workdir = self._agent._working_dir
+        own_addr = (self._agent._mail_service.address
+                    if self._agent._mail_service is not None
+                    and self._agent._mail_service.address
+                    else own_workdir.name)
+        own_id = getattr(self._agent, "_agent_id", "") or ""
+        identity = original.get("identity") or {}
+        sender_id = ""
+        if isinstance(identity, dict):
+            sender_id = identity.get("agent_id", "") or ""
+        # The bare from would resolve to self when it equals our own
+        # short alias OR equals our workdir name. In that situation,
+        # if the original carries a sender_agent_id different from
+        # ours, the reply would silently land in our own inbox — the
+        # exact misroute reported in #145.
+        if from_str and sender_id and sender_id != own_id and (
+            from_str == own_addr or from_str == own_workdir.name
+        ):
+            return {
+                "error": (
+                    "Reply target is ambiguous: the original message's "
+                    f"from={from_str!r} resolves to this agent's own "
+                    f"address, but identity.agent_id={sender_id!r} differs "
+                    f"from our own agent_id={own_id!r}. The original "
+                    "sender likely lives in a different .lingtai/ network "
+                    "that shares the same bare address. Resend with "
+                    "email(action='send', mode='abs', address='<absolute "
+                    "path of the original sender>') instead."
+                )
+            }
+
+        return (from_str, "peer")
+
     def _reply(self, args: dict) -> dict:
         email_id = args.get("email_id", "")
         if isinstance(email_id, list):
@@ -922,8 +1007,14 @@ class EmailManager:
         if original is None:
             return {"error": f"Email not found: {email_id}"}
 
+        resolved = self._resolve_reply_target(original)
+        if isinstance(resolved, dict):
+            return resolved
+        address, mode = resolved
+
         return self._send({
-            "address": original["from"],
+            "address": address,
+            "mode": mode,
             "subject": self._reply_subject(original, args.get("subject")),
             "message": message_text,
             "cc": args.get("cc") or [],
@@ -944,20 +1035,31 @@ class EmailManager:
         if original is None:
             return {"error": f"Email not found: {email_id}"}
 
+        resolved = self._resolve_reply_target(original)
+        if isinstance(resolved, dict):
+            return resolved
+        reply_to, mode = resolved
+
         my_address = (
             self._agent._mail_service.address
             if self._agent._mail_service
             else str(self._agent._working_dir)
         )
 
-        reply_to = original["from"]
         orig_to = original.get("to") or []
         if isinstance(orig_to, str):
             orig_to = [orig_to]
         orig_cc = original.get("cc") or []
+        # Exclude our own address(es) and the primary reply target from
+        # the CC fan-out, comparing against both the bare ``from`` of
+        # the original and the resolved abs/peer address we'll actually
+        # dispatch to.
+        bare_from = original.get("from", "")
         other_recipients = [
             addr for addr in orig_to + orig_cc
-            if addr != my_address and addr != reply_to
+            if addr != my_address
+            and addr != reply_to
+            and addr != bare_from
         ]
 
         extra_cc = args.get("cc") or []
@@ -965,6 +1067,7 @@ class EmailManager:
 
         return self._send({
             "address": reply_to,
+            "mode": mode,
             "subject": self._reply_subject(original, args.get("subject")),
             "message": message_text,
             "cc": other_recipients + extra_cc,
