@@ -399,6 +399,7 @@ def _perform_refresh(agent) -> None:
     ``_shutdown`` / ``_cancel_event`` ourselves so the watcher's second
     phase can complete.
     """
+    import os
     import subprocess
     import sys
 
@@ -557,12 +558,14 @@ def _perform_refresh(agent) -> None:
         "        stderr_tail=stderr_tail[-500:])\n"
         "log('refresh_failed_permanent', attempts=MAX_ATTEMPTS)\n"
     )
+    watcher_env = {**os.environ, "LINGTAI_REFRESH_ENV_OVERWRITE": "1"}
     subprocess.Popen(
         [sys.executable, "-c", relaunch_script],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
+        env=watcher_env,
     )
     agent._log("refresh_deferred_relaunch",
                cmd=cmd[0], handshake=handshake_source)

@@ -980,8 +980,13 @@ class Agent(BaseAgent):
         from lingtai_kernel.config import AgentConfig
 
         env_file = data.get("env_file")
+        import os
+
+        overwrite_env_file = os.environ.get("LINGTAI_REFRESH_ENV_OVERWRITE") == "1"
         if env_file:
-            load_env_file(env_file)
+            load_env_file(env_file, overwrite=overwrite_env_file)
+        if overwrite_env_file:
+            os.environ.pop("LINGTAI_REFRESH_ENV_OVERWRITE", None)
 
         # Resolve *_file fields for top-level text content.
         # Note: "soul" / "soul_file" were retired in v0.7.6 and are now

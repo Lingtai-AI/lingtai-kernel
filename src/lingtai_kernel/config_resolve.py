@@ -48,8 +48,15 @@ def resolve_env(value: str | None, env_name: str | None) -> str | None:
     return value
 
 
-def load_env_file(path: str | Path) -> None:
-    """Load a .env file into os.environ. Existing vars are not overwritten."""
+def load_env_file(path: str | Path, *, overwrite: bool = False) -> None:
+    """Load a .env file into os.environ.
+
+    By default, existing process environment variables are preserved so a
+    caller's explicit shell environment wins at initial boot. Pass
+    ``overwrite=True`` for deliberate config reloads (notably
+    ``system(action="refresh")``) so edits to the agent's env_file replace
+    stale values inherited by the relaunched process.
+    """
     env_path = Path(path).expanduser()
     if not env_path.is_file():
         return
@@ -62,7 +69,7 @@ def load_env_file(path: str | Path) -> None:
             continue
         key = key.strip()
         val = val.strip().strip("'\"")
-        if key not in os.environ:
+        if overwrite or key not in os.environ:
             os.environ[key] = val
 
 

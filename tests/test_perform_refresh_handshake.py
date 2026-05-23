@@ -229,3 +229,18 @@ def test_perform_refresh_logs_handshake_source(tmp_path):
     _, kw = relaunch_events[0]
     assert kw.get("handshake") == "synthesized_direct_call", \
         f"expected synthesized_direct_call, got {kw.get('handshake')!r}"
+
+
+def test_perform_refresh_watcher_marks_env_file_overwrite(tmp_path):
+    """A refresh relaunch inherits the old process environment. Mark the
+    watcher process so the relaunched agent overwrites stale env_file values
+    with freshly edited .env contents.
+    """
+    agent = _make_agent_with_launch_cmd(tmp_path)
+
+    with patch("subprocess.Popen") as mock_popen:
+        agent._perform_refresh()
+
+    assert mock_popen.called
+    _, kwargs = mock_popen.call_args
+    assert kwargs["env"]["LINGTAI_REFRESH_ENV_OVERWRITE"] == "1"

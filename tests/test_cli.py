@@ -119,10 +119,14 @@ def test_load_env_file(tmp_path):
     assert os.environ["TEST_CLI_KEY"] == "secret123"
     assert os.environ["TEST_CLI_OTHER"] == "quoted"
 
-    # Does not overwrite existing
+    # Does not overwrite existing by default
     os.environ["TEST_CLI_KEY"] = "original"
     load_env_file(env_path)
     assert os.environ["TEST_CLI_KEY"] == "original"
+
+    # Explicit refresh reloads may choose to overwrite stale process env.
+    load_env_file(env_path, overwrite=True)
+    assert os.environ["TEST_CLI_KEY"] == "secret123"
 
     # Clean up
     os.environ.pop("TEST_CLI_KEY", None)
@@ -207,6 +211,36 @@ def test_build_agent_env_file_loaded(mock_mail, mock_agent, mock_llm, tmp_path):
     assert llm_kwargs["api_key"] == "from-file"
     assert llm_kwargs["provider"] == "anthropic"
     assert llm_kwargs["model"] == "test-model"
+
+
+@patch("lingtai.cli.LLMService")
+@patch("lingtai.cli.Agent")
+@patch("lingtai.cli.FilesystemMailService")
+def test_build_agent_env_file_overwrites_on_refresh_marker(mock_mail, mock_agent, mock_llm, tmp_path):
+    """Refresh relaunches should let an edited env_file replace stale
+    inherited process environment values before resolving api_key_env.
+    """
+    from lingtai.cli import load_init, build_agent
+
+    env_path = tmp_path / "secrets.env"
+    env_path.write_text("TEST_ENV_FILE_REFRESH_KEY=fresh-from-file\n")
+
+    _write_init(tmp_path)
+    data = load_init(tmp_path)
+    data["env_file"] = str(env_path)
+    data["manifest"]["llm"]["api_key_env"] = "TEST_ENV_FILE_REFRESH_KEY"
+
+    os.environ["TEST_ENV_FILE_REFRESH_KEY"] = "stale-process-value"
+    os.environ["LINGTAI_REFRESH_ENV_OVERWRITE"] = "1"
+    try:
+        build_agent(data, tmp_path)
+    finally:
+        os.environ.pop("TEST_ENV_FILE_REFRESH_KEY", None)
+        os.environ.pop("LINGTAI_REFRESH_ENV_OVERWRITE", None)
+
+    mock_llm.assert_called_once()
+    assert mock_llm.call_args.kwargs["api_key"] == "fresh-from-file"
+    assert "LINGTAI_REFRESH_ENV_OVERWRITE" not in os.environ
 
 
 # --- addons ---

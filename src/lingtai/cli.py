@@ -76,10 +76,16 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
     then delegates all setup to _perform_refresh() which reads init.json.
     This ensures boot and live refresh share one code path.
     """
-    # Load env file if specified (needed for LLM API key resolution)
+    # Load env file if specified (needed for LLM API key resolution).
+    # Refresh relaunches inherit the old process env; a watcher marker lets
+    # the freshly edited env_file replace those stale values once, then is
+    # consumed so later child processes keep normal boot semantics.
     env_file = data.get("env_file")
+    overwrite_env_file = os.environ.get("LINGTAI_REFRESH_ENV_OVERWRITE") == "1"
     if env_file:
-        load_env_file(env_file)
+        load_env_file(env_file, overwrite=overwrite_env_file)
+    if overwrite_env_file:
+        os.environ.pop("LINGTAI_REFRESH_ENV_OVERWRITE", None)
 
     m = data["manifest"]
     llm = m["llm"]
