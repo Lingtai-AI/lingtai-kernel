@@ -92,6 +92,7 @@ def setup(
     vision_service: VisionService | None = None,
     provider: str | None = None,
     api_key: str | None = None,
+    api_key_env: str | None = None,
     **kwargs: Any,
 ) -> VisionManager:
     """Set up the vision capability on an agent.
@@ -100,6 +101,9 @@ def setup(
     Raises ``ValueError`` if neither is provided.
     """
     if vision_service is None and provider is not None:
+        if api_key_env:
+            from ...config_resolve import resolve_env
+            api_key = resolve_env(api_key, api_key_env)
         if provider not in PROVIDERS["providers"]:
             # No dedicated VisionService for this provider. If the agent's
             # main LLM is OpenAI-compatible (custom relay, OpenRouter,

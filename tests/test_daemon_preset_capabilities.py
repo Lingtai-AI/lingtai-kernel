@@ -209,6 +209,56 @@ def test_instantiate_still_raises_on_broken_known_capability(tmp_path, monkeypat
         raise AssertionError("expected ValueError for broken known capability")
 
 
+def test_instantiate_skips_broken_unused_known_capability(tmp_path, monkeypatch):
+    """A known capability that fails setup is skipped when this task did not
+    request any tool it provides."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    original_setup = __import__(
+        "lingtai.capabilities", fromlist=["setup_capability"]
+    ).setup_capability
+
+    def boom_for_vision(target, name, **kwargs):
+        if name == "vision":
+            raise ValueError("simulated broken vision")
+        return original_setup(target, name, **kwargs)
+
+    monkeypatch.setattr("lingtai.capabilities.setup_capability", boom_for_vision)
+
+    schemas, handlers = mgr._instantiate_preset_capabilities(
+        {"file": {}, "vision": {"provider": "codex", "api_key_env": "IGNORED"}},
+        {"provider": "mock", "model": "mock"},
+        required_tools={"read", "write", "edit", "glob", "grep"},
+    )
+
+    assert "read" in schemas
+    assert "vision" not in schemas
+
+
+def test_instantiate_raises_for_broken_required_known_capability(tmp_path, monkeypatch):
+    """A known capability that fails setup is still hard when requested."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    def boom(target, name, **kwargs):
+        raise ValueError("simulated broken vision")
+
+    monkeypatch.setattr("lingtai.capabilities.setup_capability", boom)
+
+    try:
+        mgr._instantiate_preset_capabilities(
+            {"vision": {"provider": "codex", "api_key_env": "IGNORED"}},
+            {"provider": "mock", "model": "mock"},
+            required_tools={"vision"},
+        )
+    except ValueError as e:
+        assert "vision" in str(e)
+        assert "simulated broken vision" in str(e)
+    else:
+        raise AssertionError("expected ValueError for broken required capability")
+
+
 def test_instantiate_skips_blacklisted_capabilities(tmp_path):
     """daemon/avatar/psyche/skills/knowledge/library/codex in preset capabilities are skipped
     (not instantiated, no error)."""
@@ -434,3 +484,81 @@ def test_emanate_preset_does_not_pollute_parent_tool_registry(tmp_path,
     # Parent unchanged
     assert set(agent._tool_handlers.keys()) == pre_handlers
     assert {s.name for s in agent._tool_schemas} == pre_schemas
+
+
+def test_emanate_preset_broken_unused_vision_dispatches(tmp_path, monkeypatch):
+    """File-only daemon dispatch is not blocked by broken unused vision."""
+    import lingtai.preset_connectivity as preset_connectivity
+    import lingtai.capabilities as capabilities
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    original_setup = capabilities.setup_capability
+
+    def boom_for_vision(target, name, **kwargs):
+        if name == "vision":
+            raise ValueError("simulated broken vision")
+        return original_setup(target, name, **kwargs)
+
+    monkeypatch.setattr(capabilities, "setup_capability", boom_for_vision)
+
+    presets_dir = tmp_path / "presets"
+    presets_dir.mkdir()
+    _write_preset(
+        presets_dir,
+        "file_plus_broken_vision",
+        capabilities={
+            "file": {},
+            "vision": {"provider": "codex", "api_key_env": "IGNORED"},
+        },
+    )
+
+    agent = _make_agent(tmp_path, ["daemon"], presets_dir=presets_dir)
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    preset_path = str(presets_dir / "file_plus_broken_vision.json")
+    with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
+        result = mgr.handle({"action": "emanate", "tasks": [
+            {"task": "scan files", "tools": ["file"], "preset": preset_path},
+        ]})
+
+    assert result["status"] == "dispatched", result.get("message")
+    assert result["count"] == 1
+
+
+def test_emanate_preset_broken_requested_vision_fails(tmp_path, monkeypatch):
+    """Requested capability setup failures remain hard errors."""
+    import lingtai.preset_connectivity as preset_connectivity
+    import lingtai.capabilities as capabilities
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    original_setup = capabilities.setup_capability
+
+    def boom_for_vision(target, name, **kwargs):
+        if name == "vision":
+            raise ValueError("simulated broken vision")
+        return original_setup(target, name, **kwargs)
+
+    monkeypatch.setattr(capabilities, "setup_capability", boom_for_vision)
+
+    presets_dir = tmp_path / "presets"
+    presets_dir.mkdir()
+    _write_preset(
+        presets_dir,
+        "broken_vision",
+        capabilities={"vision": {"provider": "codex", "api_key_env": "IGNORED"}},
+    )
+
+    agent = _make_agent(tmp_path, ["daemon"], presets_dir=presets_dir)
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    preset_path = str(presets_dir / "broken_vision.json")
+    with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
+        result = mgr.handle({"action": "emanate", "tasks": [
+            {"task": "inspect image", "tools": ["vision"], "preset": preset_path},
+        ]})
+
+    assert result["status"] == "error"
+    assert "preset capability 'vision' failed to set up" in result["message"]
+    assert "simulated broken vision" in result["message"]

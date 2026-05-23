@@ -30,6 +30,7 @@ venv/
 # Internal design docs / session artifacts (private — not for public repo)
 docs/
 MagicMock/
+reports/
 
 # Specific discussion drafts kept local (others under discussions/ are
 # committed by convention; ignore individual files rather than the whole dir)

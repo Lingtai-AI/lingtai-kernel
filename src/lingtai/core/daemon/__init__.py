@@ -315,10 +315,25 @@ class DaemonManager:
                     for n in tool_names if n in self._agent._tool_handlers}
         return schemas, dispatch
 
+    def _expand_requested_tools(self, requested: list[str]) -> set[str]:
+        """Expand requested daemon tools after group aliases and blacklist."""
+        from ...capabilities import _GROUPS
+
+        tool_names: set[str] = set()
+        for name in requested:
+            if name in EMANATION_BLACKLIST:
+                continue
+            if name in _GROUPS:
+                tool_names.update(_GROUPS[name])
+            else:
+                tool_names.add(name)
+        return tool_names
+
     def _instantiate_preset_capabilities(
         self,
         preset_caps: dict,
         preset_llm: dict,
+        required_tools: set[str] | None = None,
     ) -> tuple[dict, dict]:
         """Instantiate a preset's manifest.capabilities into a sandbox.
 
@@ -329,9 +344,10 @@ class DaemonManager:
         LLM, not the parent's — capabilities follow the body that hosts
         them.
 
-        Raises ``ValueError`` for unknown or broken capabilities. The caller
-        (``_handle_emanate``) converts that into a tool-level error and
-        refuses the whole batch.
+        Raises ``ValueError`` for broken capabilities that are required by
+        the current task. Broken unused capabilities are logged and skipped.
+        The caller (``_handle_emanate``) converts required setup failures into
+        a tool-level error and refuses the whole batch.
         """
         from ...capabilities import setup_capability, _GROUPS, _BUILTIN
         from ...presets import expand_inherit
@@ -359,6 +375,7 @@ class DaemonManager:
                 expanded[name] = kwargs
 
         collector = _ToolCollector(self._agent)
+        required = required_tools
         for name, kwargs in expanded.items():
             if name in EMANATION_BLACKLIST:
                 continue
@@ -380,6 +397,13 @@ class DaemonManager:
             try:
                 setup_capability(collector, name, **kwargs)
             except Exception as e:
+                if required is not None and name not in required:
+                    self._log(
+                        "daemon_preset_capability_skipped",
+                        capability=name,
+                        reason=f"setup failed: {e}",
+                    )
+                    continue
                 raise ValueError(
                     f"preset capability {name!r} failed to set up: {e}"
                 ) from e
@@ -1185,7 +1209,9 @@ class DaemonManager:
             # if unusual configuration.
             try:
                 preset_schemas, preset_handlers = self._instantiate_preset_capabilities(
-                    preset_caps, preset_llm,
+                    preset_caps,
+                    preset_llm,
+                    required_tools=self._expand_requested_tools(spec.get("tools", [])),
                 )
             except ValueError as e:
                 return {"status": "error",

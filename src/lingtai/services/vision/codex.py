@@ -28,6 +28,7 @@ class CodexVisionService(VisionService):
         max_output_tokens: int | None = None,
         timeout: float = 120.0,
         token_path: str | None = None,
+        **_ignored: Any,
     ) -> None:
         import openai as _openai
 

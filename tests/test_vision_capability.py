@@ -117,6 +117,22 @@ def test_vision_setup_with_provider_and_key(tmp_path):
         assert isinstance(mgr, VisionManager)
 
 
+def test_vision_setup_resolves_api_key_env(tmp_path, monkeypatch):
+    """setup() should resolve api_key_env before constructing provider services."""
+    monkeypatch.setenv("VISION_TEST_API_KEY", "sk-from-env")
+    with patch("lingtai.capabilities.vision.create_vision_service") as mock_factory:
+        mock_svc = MagicMock(spec=VisionService)
+        mock_factory.return_value = mock_svc
+
+        agent = make_mock_agent(tmp_path)
+        mgr = setup(agent, provider="zhipu", api_key_env="VISION_TEST_API_KEY")
+
+        mock_factory.assert_called_once()
+        assert mock_factory.call_args.args == ("zhipu",)
+        assert mock_factory.call_args.kwargs["api_key"] == "sk-from-env"
+        assert isinstance(mgr, VisionManager)
+
+
 def test_vision_setup_with_codex_provider_without_api_key(tmp_path):
     """Codex vision uses ChatGPT OAuth, so setup should not require api_key."""
     with patch("lingtai.capabilities.vision.create_vision_service") as mock_factory:
@@ -163,6 +179,24 @@ def test_create_vision_service_codex_without_api_key(monkeypatch):
 
     with patch("lingtai.services.vision.codex.CodexTokenManager") as mock_mgr:
         svc = create_vision_service("codex")
+
+    from lingtai.services.vision.codex import CodexVisionService
+
+    assert isinstance(svc, CodexVisionService)
+    mock_mgr.assert_called_once_with(token_path=None)
+
+
+def test_create_vision_service_codex_ignores_extra_preset_kwargs(monkeypatch):
+    """Codex vision should tolerate irrelevant preset kwargs like api_key_env."""
+    fake_openai = SimpleNamespace(OpenAI=MagicMock())
+    monkeypatch.setitem(sys.modules, "openai", fake_openai)
+
+    with patch("lingtai.services.vision.codex.CodexTokenManager") as mock_mgr:
+        svc = create_vision_service(
+            "codex",
+            api_key_env="IGNORED",
+            provider_note="from preset",
+        )
 
     from lingtai.services.vision.codex import CodexVisionService
 
