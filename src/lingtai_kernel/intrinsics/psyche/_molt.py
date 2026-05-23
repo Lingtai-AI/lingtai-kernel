@@ -9,8 +9,92 @@ Contains:
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 from ...llm.interface import ToolCallBlock, ToolResultBlock
+
+
+# Channel name for the post-molt reminder notification. Distinct from the
+# pressure-warning ``molt`` channel owned by base_agent.turn._check_molt_pressure
+# so a pressure-clear under threshold cannot sweep the reminder.
+_POST_MOLT_CHANNEL = "post-molt"
+
+
+def _first_nonempty_line(text: str | None) -> str:
+    if not text:
+        return ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def _publish_post_molt(
+    agent,
+    *,
+    initiator: str,
+    source: str,
+    molt_count: int,
+    summary: str,
+    reasoning: str | None,
+    summary_path: Path | None,
+    before_tokens: int,
+    after_tokens: int,
+) -> None:
+    """Drop a `.notification/post-molt.json` reminder for the fresh agent.
+
+    Best-effort — a publish failure must not block the molt return path.
+    """
+    try:
+        from ..system import publish_notification
+
+        reminder = (reasoning or "").strip() or _first_nonempty_line(summary)
+        if initiator == "agent":
+            header = f"post-molt #{molt_count} — resume work"
+        else:
+            header = f"post-molt #{molt_count} ({source}) — resume work"
+
+        summary_rel = (
+            str(summary_path.relative_to(agent._working_dir))
+            if summary_path is not None
+            else None
+        )
+
+        data = {
+            "initiator": initiator,
+            "source": source,
+            "molt_count": molt_count,
+            "reminder": reminder,
+            "summary_path": summary_rel,
+            "tokens_before": before_tokens,
+            "tokens_after": after_tokens,
+        }
+        if reasoning:
+            data["reasoning"] = reasoning
+
+        instructions = (
+            "You just completed a molt. Read system/pad.md, the latest "
+            "summary under system/summaries/, and the most recent human-channel "
+            "messages to reconstruct context, then continue the prior task. "
+            "Once you have re-engaged, dismiss this reminder with "
+            "system(action='dismiss', channel='post-molt')."
+        )
+
+        publish_notification(
+            agent._working_dir,
+            _POST_MOLT_CHANNEL,
+            header=header,
+            icon="🌱",
+            priority="high",
+            instructions=instructions,
+            data=data,
+        )
+    except Exception as e:
+        try:
+            agent._log("post_molt_notification_failed", error=str(e))
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +405,22 @@ def _context_molt(agent, args: dict) -> dict:
         after_tokens=after_tokens,
     )
 
+    # Post-molt reminder. ToolExecutor strips visible ``reasoning`` and
+    # injects ``_reasoning``; accept the plain key too so direct callers
+    # (tests, in-process invocations) behave the same.
+    reasoning = args.get("_reasoning") or args.get("reasoning")
+    _publish_post_molt(
+        agent,
+        initiator="agent",
+        source="agent",
+        molt_count=agent._molt_count,
+        summary=summary,
+        reasoning=reasoning,
+        summary_path=summary_path,
+        before_tokens=before_tokens,
+        after_tokens=after_tokens,
+    )
+
     # The faint-memory result.
     from ...i18n import t
     lang = agent._config.language
@@ -510,6 +610,21 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
         summary=summary,
         source=source,
         molt_count=agent._molt_count,
+        before_tokens=before_tokens,
+        after_tokens=after_tokens,
+    )
+
+    # Post-molt reminder — the system-authored summary itself is the
+    # reminder string; reasoning is absent because the agent did not author
+    # this molt.
+    _publish_post_molt(
+        agent,
+        initiator="system",
+        source=source,
+        molt_count=agent._molt_count,
+        summary=summary,
+        reasoning=None,
+        summary_path=summary_path,
         before_tokens=before_tokens,
         after_tokens=after_tokens,
     )
