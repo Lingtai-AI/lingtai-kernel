@@ -1,0 +1,439 @@
+"""Tests for daemon CLI backend free-form options (`backend_options`).
+
+Covers:
+- The pure argv conversion helper (`_backend_options_to_argv`).
+- Per-task backend_options validation in `_handle_emanate_cli`.
+- CLI runners (`_run_claude_code_emanation`, `_run_codex_emanation`)
+  appending backend_argv between required flags and the task prompt.
+- Persistence: resolved options land in daemon.json.
+- The lingtai backend ignoring the field (no schema breakage).
+"""
+from __future__ import annotations
+
+import json
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from lingtai_kernel.config import AgentConfig
+from lingtai.core.daemon import (
+    _backend_options_to_argv,
+)
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: _backend_options_to_argv
+# ---------------------------------------------------------------------------
+
+
+def test_argv_none_and_empty_return_empty():
+    assert _backend_options_to_argv(None) == []
+    assert _backend_options_to_argv({}) == []
+
+
+def test_argv_bool_true_emits_flag_only():
+    assert _backend_options_to_argv({"search": True}) == ["--search"]
+
+
+def test_argv_bool_false_and_null_are_omitted():
+    assert _backend_options_to_argv({"search": False, "verbose": None}) == []
+
+
+def test_argv_string_int_float():
+    out = _backend_options_to_argv({"model": "gpt-5"})
+    assert out == ["--model", "gpt-5"]
+
+    out = _backend_options_to_argv({"retries": 3})
+    assert out == ["--retries", "3"]
+
+    out = _backend_options_to_argv({"temperature": 0.5})
+    assert out == ["--temperature", "0.5"]
+
+
+def test_argv_list_repeats_flag():
+    out = _backend_options_to_argv({"include": ["src", "tests"]})
+    assert out == ["--include", "src", "--include", "tests"]
+
+
+def test_argv_underscore_key_becomes_dash():
+    out = _backend_options_to_argv({"output_format": "json"})
+    assert out == ["--output-format", "json"]
+
+
+def test_argv_mixed_options_preserve_key_order():
+    out = _backend_options_to_argv({
+        "model": "claude-opus-4-7",
+        "effort": "high",
+        "search": True,
+    })
+    # dict iteration is insertion-ordered in Python 3.7+
+    assert out == [
+        "--model", "claude-opus-4-7",
+        "--effort", "high",
+        "--search",
+    ]
+
+
+def test_argv_rejects_leading_dash_key():
+    with pytest.raises(ValueError, match="safe CLI flag name"):
+        _backend_options_to_argv({"-model": "x"})
+
+
+def test_argv_rejects_empty_key():
+    with pytest.raises(ValueError, match="safe CLI flag name"):
+        _backend_options_to_argv({"": "x"})
+
+
+def test_argv_rejects_space_in_key():
+    with pytest.raises(ValueError, match="safe CLI flag name"):
+        _backend_options_to_argv({"output format": "json"})
+
+
+def test_argv_rejects_shell_metachar_in_key():
+    with pytest.raises(ValueError, match="safe CLI flag name"):
+        _backend_options_to_argv({"model;rm -rf": "x"})
+
+
+def test_argv_rejects_nested_object_value():
+    with pytest.raises(ValueError, match="unsupported value type"):
+        _backend_options_to_argv({"config": {"nested": True}})
+
+
+def test_argv_rejects_list_with_nested_object():
+    with pytest.raises(ValueError, match="list items must be"):
+        _backend_options_to_argv({"include": [{"path": "src"}]})
+
+
+def test_argv_rejects_list_with_bool_item():
+    with pytest.raises(ValueError, match="list items must be"):
+        _backend_options_to_argv({"flags": [True, False]})
+
+
+def test_argv_rejects_non_dict_root():
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        _backend_options_to_argv("--search")  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Integration: _handle_emanate_cli validation + persistence
+# ---------------------------------------------------------------------------
+
+
+def _make_agent(tmp_path):
+    """Minimal Agent with daemon capability and mock LLM service."""
+    from lingtai.agent import Agent
+    svc = MagicMock()
+    svc.provider = "mock"
+    svc.model = "mock-model"
+    svc.create_session = MagicMock()
+    svc.make_tool_result = MagicMock()
+    agent = Agent(
+        svc,
+        working_dir=tmp_path / "daemon-agent",
+        capabilities=["daemon"],
+        config=AgentConfig(),
+    )
+    return agent
+
+
+def test_emanate_cli_rejects_bad_backend_options(tmp_path):
+    """A single invalid backend_options spec refuses the whole batch
+    with a tool-level error mentioning the offending index."""
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "claude-code",
+        "tasks": [
+            {"task": "ok task", "tools": [], "backend_options": {"effort": "high"}},
+            {"task": "bad task", "tools": [], "backend_options": {"-model": "x"}},
+        ],
+    })
+    assert result["status"] == "error"
+    assert "tasks[1].backend_options" in result["message"]
+    # Nothing was scheduled
+    assert mgr._emanations == {}
+
+
+def test_emanate_cli_persists_resolved_options(tmp_path):
+    """Successful CLI emanate writes backend_options + backend_argv into
+    daemon.json so daemon(check) and the on-disk artifact can be
+    reconstructed later."""
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    # Block the worker from actually invoking subprocess.Popen — we only
+    # care that _handle_emanate_cli wired the run_dir state correctly.
+    captured: dict = {}
+
+    def fake_run(em_id, run_dir, task, cancel_event, timeout_event,
+                 backend_argv=None):
+        captured["em_id"] = em_id
+        captured["task"] = task
+        captured["backend_argv"] = list(backend_argv or [])
+        captured["daemon_json_state"] = json.loads(
+            run_dir.daemon_json_path.read_text()
+        )
+        run_dir.mark_done("[fake done]")
+        return "[fake done]"
+
+    with patch.object(mgr, "_run_claude_code_emanation", side_effect=fake_run):
+        result = mgr.handle({
+            "action": "emanate",
+            "backend": "claude-code",
+            "tasks": [{
+                "task": "Refactor auth.",
+                "tools": [],
+                "backend_options": {
+                    "effort": "high",
+                    "model": "claude-opus-4-7",
+                    "search": True,
+                },
+            }],
+        })
+        assert result["status"] == "dispatched"
+
+        # Wait for the fake worker to complete.
+        em_id = result["ids"][0]
+        fut = mgr._emanations[em_id]["future"]
+        fut.result(timeout=5)
+
+    assert captured["backend_argv"] == [
+        "--effort", "high",
+        "--model", "claude-opus-4-7",
+        "--search",
+    ]
+    state = captured["daemon_json_state"]
+    assert state["backend"] == "claude-code"
+    assert state["backend_options"] == {
+        "effort": "high",
+        "model": "claude-opus-4-7",
+        "search": True,
+    }
+    assert state["backend_argv"] == [
+        "--effort", "high",
+        "--model", "claude-opus-4-7",
+        "--search",
+    ]
+
+
+def test_emanate_cli_no_options_omits_fields(tmp_path):
+    """When backend_options is absent, daemon.json should not carry the
+    fields at all (avoids confusing readers into thinking an empty
+    options object was passed)."""
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    captured: dict = {}
+
+    def fake_run(em_id, run_dir, task, cancel_event, timeout_event,
+                 backend_argv=None):
+        captured["backend_argv"] = list(backend_argv or [])
+        captured["state"] = json.loads(run_dir.daemon_json_path.read_text())
+        run_dir.mark_done("[fake done]")
+        return "[fake done]"
+
+    with patch.object(mgr, "_run_claude_code_emanation", side_effect=fake_run):
+        result = mgr.handle({
+            "action": "emanate",
+            "backend": "claude-code",
+            "tasks": [{"task": "no options", "tools": []}],
+        })
+        assert result["status"] == "dispatched"
+        em_id = result["ids"][0]
+        mgr._emanations[em_id]["future"].result(timeout=5)
+
+    assert captured["backend_argv"] == []
+    assert "backend_options" not in captured["state"]
+    assert "backend_argv" not in captured["state"]
+
+
+def test_lingtai_backend_ignores_backend_options(tmp_path):
+    """The lingtai backend has no CLI process — backend_options must be
+    silently ignored, never raised against the schema."""
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    # Force preset path off and mock create_session so the worker is a no-op.
+    mock_session = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = "task done"
+    mock_resp.tool_calls = []
+    mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
+                                thinking_tokens=0, cached_tokens=0)
+    mock_session.send = MagicMock(return_value=mock_resp)
+    agent.service.create_session = MagicMock(return_value=mock_session)
+
+    result = mgr.handle({
+        "action": "emanate",
+        # backend defaults to "lingtai"
+        "tasks": [{
+            "task": "lingtai task",
+            "tools": ["file"],
+            # This must be ignored, not validated. Even an "invalid" object
+            # would be accepted because the lingtai backend never reads it.
+            "backend_options": {"effort": "high"},
+        }],
+    })
+    assert result["status"] == "dispatched"
+
+
+# ---------------------------------------------------------------------------
+# Runner cmd construction: backend_argv lands before the task prompt
+# ---------------------------------------------------------------------------
+
+
+def test_claude_code_cmd_appends_backend_argv_before_task(tmp_path):
+    """The Claude Code runner must put backend_argv after the required
+    infrastructure flags and immediately before the task positional."""
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    captured_cmd: list[list[str]] = []
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = iter([])
+            self.stderr = iter([])
+            self.returncode = 0
+            self.pid = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(cmd, *args, **kwargs):
+        captured_cmd.append(list(cmd))
+        return FakeProc()
+
+    from lingtai.core.daemon.run_dir import DaemonRunDir
+    run_dir = DaemonRunDir(
+        parent_working_dir=agent._working_dir,
+        handle="em-test",
+        task="dummy task",
+        tools=[],
+        model="claude-code",
+        max_turns=10,
+        timeout_s=60,
+        parent_addr=agent._working_dir.name,
+        parent_pid=1,
+        system_prompt="[stub]",
+        backend="claude-code",
+    )
+
+    import threading as _t
+    cancel = _t.Event()
+    timeout = _t.Event()
+
+    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+        mgr._run_claude_code_emanation(
+            "em-test", run_dir, "Refactor auth.",
+            cancel, timeout,
+            backend_argv=["--effort", "high", "--model", "claude-opus-4-7"],
+        )
+
+    assert len(captured_cmd) == 1
+    cmd = captured_cmd[0]
+    # Required prefix preserved
+    assert cmd[0] == "claude"
+    assert "--print" in cmd
+    assert "--dangerously-skip-permissions" in cmd
+    assert "--output-format" in cmd and "stream-json" in cmd
+    assert "--verbose" in cmd
+    assert "--name" in cmd
+    # backend_argv lives somewhere after --name and before the trailing task
+    effort_idx = cmd.index("--effort")
+    model_idx = cmd.index("--model")
+    name_idx = cmd.index("--name")
+    task_idx = cmd.index("Refactor auth.")
+    assert name_idx < effort_idx < task_idx
+    assert name_idx < model_idx < task_idx
+    # The task itself is the very last token
+    assert cmd[-1] == "Refactor auth."
+
+
+def test_codex_cmd_appends_backend_argv_before_task(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    captured_cmd: list[list[str]] = []
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = iter([])
+            self.stderr = iter([])
+            self.returncode = 0
+            self.pid = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(cmd, *args, **kwargs):
+        captured_cmd.append(list(cmd))
+        return FakeProc()
+
+    from lingtai.core.daemon.run_dir import DaemonRunDir
+    run_dir = DaemonRunDir(
+        parent_working_dir=agent._working_dir,
+        handle="em-codex",
+        task="dummy",
+        tools=[],
+        model="codex",
+        max_turns=10,
+        timeout_s=60,
+        parent_addr=agent._working_dir.name,
+        parent_pid=1,
+        system_prompt="[stub]",
+        backend="codex",
+    )
+
+    import threading as _t
+    cancel = _t.Event()
+    timeout = _t.Event()
+
+    # Codex needs a `turn.completed` event to consider the run successful;
+    # feed a minimal valid stream.
+    fake_stdout_lines = [
+        '{"type":"thread.started","thread_id":"thr-xyz"}\n',
+        '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n',
+        '{"type":"turn.completed"}\n',
+    ]
+
+    class StreamingFakeProc(FakeProc):
+        def __init__(self):
+            super().__init__()
+            self.stdout = iter(fake_stdout_lines)
+            self.stderr = iter([])
+
+    with patch("lingtai.core.daemon.subprocess.Popen",
+               side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
+                                                  or StreamingFakeProc())):
+        mgr._run_codex_emanation(
+            "em-codex", run_dir, "Find the breaking change.",
+            cancel, timeout,
+            backend_argv=["--model", "gpt-5", "--search"],
+        )
+
+    assert len(captured_cmd) == 1
+    cmd = captured_cmd[0]
+    assert cmd[:4] == ["codex", "exec", "--json",
+                       "--dangerously-bypass-approvals-and-sandbox"]
+    # backend_argv tokens are present, in order, and before the task
+    assert cmd[4:6] == ["--model", "gpt-5"]
+    assert cmd[6] == "--search"
+    assert cmd[-1] == "Find the breaking change."
+
+
+# ---------------------------------------------------------------------------
+# Schema surface
+# ---------------------------------------------------------------------------
+
+
+def test_schema_includes_backend_options():
+    from lingtai.core.daemon import get_schema
+    schema = get_schema("en")
+    task_props = schema["properties"]["tasks"]["items"]["properties"]
+    assert "backend_options" in task_props
+    assert task_props["backend_options"]["type"] == "object"
+    # The free-form description should mention discovery via --help so
+    # agents know not to expect a fixed list here.
+    assert "--help" in task_props["backend_options"]["description"]

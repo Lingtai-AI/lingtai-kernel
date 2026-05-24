@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -85,6 +86,71 @@ def _claude_code_env() -> dict[str, str]:
     return env
 
 
+# Safe CLI option key: letters/digits with '-' or '_' separators. No leading
+# '-' (the helper adds '--' itself). No spaces, no shell metachars — argv is
+# passed as a list to subprocess, but we still refuse anything that doesn't
+# look like a real CLI flag to keep error messages early and obvious.
+_BACKEND_OPTION_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def _backend_options_to_argv(options: dict | None) -> list[str]:
+    """Convert a free-form backend_options dict into a list of argv tokens.
+
+    Conversion rules:
+      - key must match ``[A-Za-z0-9][A-Za-z0-9_-]*`` (no leading '-', no
+        empty). Underscores in the key are converted to dashes for the
+        emitted flag. Long flags only: ``--<flag>``.
+      - value ``True`` → ``["--flag"]`` (presence flag, no argument).
+      - value ``False`` or ``None`` → omitted entirely.
+      - value ``str`` / ``int`` / ``float`` → ``["--flag", str(value)]``.
+      - value ``list``/``tuple`` of scalars → repeated
+        ``["--flag", v1, "--flag", v2, ...]``.
+      - Nested dicts / nested lists / objects of unsupported type → raise
+        ``ValueError`` with a clear message.
+
+    Returns argv tokens ready to be appended to a subprocess command list
+    (never a shell string). Empty / falsy input returns ``[]``.
+    """
+    if not options:
+        return []
+    if not isinstance(options, dict):
+        raise ValueError(
+            f"backend_options must be a JSON object, got {type(options).__name__}"
+        )
+
+    argv: list[str] = []
+    for key, value in options.items():
+        if not isinstance(key, str) or not _BACKEND_OPTION_KEY_RE.match(key):
+            raise ValueError(
+                f"backend_options key {key!r} is not a safe CLI flag name "
+                "(letters/digits with '-' or '_' separators, no leading '-')"
+            )
+        flag = "--" + key.replace("_", "-")
+
+        if value is False or value is None:
+            continue
+        if value is True:
+            argv.append(flag)
+            continue
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            argv.extend([flag, str(value)])
+            continue
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                if isinstance(item, bool) or not isinstance(item, (str, int, float)):
+                    raise ValueError(
+                        f"backend_options[{key!r}] list items must be string/int/float scalars "
+                        f"(got {type(item).__name__})"
+                    )
+                argv.extend([flag, str(item)])
+            continue
+        raise ValueError(
+            f"backend_options[{key!r}] has unsupported value type "
+            f"{type(value).__name__}; expected bool/str/int/float/list of scalars/null"
+        )
+    return argv
+
+
 class _ToolCollector:
     """Captures add_tool calls during preset-driven capability setup.
 
@@ -138,6 +204,10 @@ def get_schema(lang: str = "en") -> dict:
                         "preset": {
                             "type": "string",
                             "description": t(lang, "daemon.tasks.preset"),
+                        },
+                        "backend_options": {
+                            "type": "object",
+                            "description": t(lang, "daemon.tasks.backend_options"),
                         },
                     },
                     "required": ["task", "tools"],
@@ -608,6 +678,7 @@ class DaemonManager:
         task: str,
         cancel_event: threading.Event,
         timeout_event: threading.Event | None = None,
+        backend_argv: list[str] | None = None,
     ) -> str:
         """Run a Claude Code CLI session as the emanation backend.
 
@@ -647,6 +718,10 @@ class DaemonManager:
         if cancel_event.is_set():
             return _exit_cancelled()
 
+        # Required infrastructure flags come first; free-form
+        # backend_options sit between them and the task prompt so the
+        # task itself stays the trailing positional argument that the
+        # Claude Code CLI expects.
         cmd = [
             "claude",
             "--print",
@@ -654,8 +729,10 @@ class DaemonManager:
             "--output-format", "stream-json",
             "--verbose",
             "--name", em_id,
-            task,
         ]
+        if backend_argv:
+            cmd.extend(backend_argv)
+        cmd.append(task)
         self._log("daemon_claude_code_start", em_id=em_id, cmd=" ".join(cmd))
 
         spawn_env = _claude_code_env()
@@ -875,6 +952,7 @@ class DaemonManager:
         task: str,
         cancel_event: threading.Event,
         timeout_event: threading.Event | None = None,
+        backend_argv: list[str] | None = None,
     ) -> str:
         """Run a Codex CLI session as the emanation backend.
 
@@ -915,8 +993,10 @@ class DaemonManager:
             "exec",
             "--json",
             "--dangerously-bypass-approvals-and-sandbox",
-            task,
         ]
+        if backend_argv:
+            cmd.extend(backend_argv)
+        cmd.append(task)
         self._log("daemon_codex_start", em_id=em_id, cmd=" ".join(cmd))
 
         try:
@@ -1337,6 +1417,21 @@ class DaemonManager:
         run directory; only terminal completion/failure emits a compact
         system notification.
         """
+        # Pre-flight: validate per-task backend_options BEFORE creating any
+        # run_dir or scheduling work, so a single bad spec refuses the whole
+        # batch with a clear message instead of leaving half-spawned daemons.
+        resolved_backend_argv: list[list[str]] = []
+        for i, spec in enumerate(tasks):
+            raw_opts = spec.get("backend_options")
+            if raw_opts is None:
+                resolved_backend_argv.append([])
+                continue
+            try:
+                resolved_backend_argv.append(_backend_options_to_argv(raw_opts))
+            except ValueError as e:
+                return {"status": "error",
+                        "message": f"tasks[{i}].backend_options: {e}"}
+
         cancel_event = threading.Event()
         timeout_event = threading.Event()
         pool = ThreadPoolExecutor(max_workers=len(tasks))
@@ -1346,10 +1441,12 @@ class DaemonManager:
         parent_addr = self._agent._working_dir.name
         parent_pid = os.getpid()
 
-        for spec in tasks:
+        for i, spec in enumerate(tasks):
             em_id = f"em-{self._next_id}"
             self._next_id += 1
             ids.append(em_id)
+            backend_argv = resolved_backend_argv[i]
+            backend_options = spec.get("backend_options") or None
 
             system_prompt = f"[{backend} backend — task delegated to external CLI]"
             try:
@@ -1371,6 +1468,18 @@ class DaemonManager:
                 return {"status": "error",
                         "message": f"Failed to create daemon folder: {e}"}
 
+            # Persist the resolved options into daemon.json for observability.
+            # The raw object (what the agent passed) goes alongside the
+            # converted argv tokens so the run is fully reconstructible from
+            # the run dir.
+            if backend_options is not None or backend_argv:
+                run_dir._state["backend_options"] = backend_options
+                run_dir._state["backend_argv"] = list(backend_argv)
+                run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+            self._log("daemon_backend_options",
+                      em_id=em_id, backend=backend,
+                      argv=list(backend_argv))
+
             if backend == "codex":
                 run_fn = self._run_codex_emanation
             else:
@@ -1379,6 +1488,7 @@ class DaemonManager:
                 run_fn,
                 em_id, run_dir, spec["task"],
                 cancel_event, timeout_event,
+                backend_argv,
             )
             future.add_done_callback(
                 lambda f, eid=em_id, task=spec["task"]:

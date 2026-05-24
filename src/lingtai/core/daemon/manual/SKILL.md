@@ -31,7 +31,7 @@ description: >
   agent runtime that emanations are mini-versions of. Read that first if
   you don't yet understand the turn loop, then come here for daemon-specific
   inspection patterns.
-version: 0.2.0
+version: 0.3.0
 ---
 
 # daemon manual
@@ -223,6 +223,83 @@ The `backend` parameter selects the execution engine for emanations. Default is 
 **When to use CLI backends:** When the task benefits from a different agent runtime's tool surface (e.g., Claude Code's built-in file editing, Codex's sandboxed execution) rather than the lingtai emanation's curated tool set.
 
 **CLI backends skip preset resolution** — the external CLI manages its own model, tools, and permissions. The `tools` field in the task spec is ignored for CLI backends.
+
+### Passing free-form CLI flags via `backend_options`
+
+For `claude-code` and `codex` backends, each task may carry an optional
+`backend_options` JSON object that is converted to argv tokens and appended
+to the CLI command before the task prompt. This lets you reach the underlying
+CLI's full flag surface (model selection, search/web access, effort levels,
+sandbox/policy switches, etc.) without the daemon needing to hard-code them.
+
+**This is intentionally a passthrough, not a fixed table.** Claude Code and
+Codex both rev their flag lists between releases. **Before adding new
+options, run `claude --help` or `codex exec --help` in `bash` to discover
+what the installed version actually supports today.** Anything in this
+manual is illustrative, not authoritative.
+
+```jsonc
+// Claude Code with a specific reasoning effort and model
+{
+  "action": "emanate",
+  "backend": "claude-code",
+  "tasks": [{
+    "task": "Refactor auth.py for clarity.",
+    "tools": [],
+    "backend_options": {
+      "effort": "high",
+      "model": "claude-opus-4-7"
+    }
+  }]
+}
+
+// Codex with model + web search
+{
+  "action": "emanate",
+  "backend": "codex",
+  "tasks": [{
+    "task": "Find the breaking change in the last release.",
+    "tools": [],
+    "backend_options": {
+      "model": "gpt-5",
+      "search": true
+    }
+  }]
+}
+```
+
+**Conversion rules** (validated before any process is spawned — a single
+bad spec refuses the whole batch with a clear `ValueError`):
+
+| Value type | Result |
+|---|---|
+| `true` | flag only, e.g. `{"search": true}` → `--search` |
+| `false` / `null` | flag omitted entirely |
+| string / int / float | `--flag <value>` |
+| list of scalars | repeated: `--flag v1 --flag v2 ...` |
+| nested object / array of objects | **rejected** with `ValueError` |
+
+**Key safety:** keys must look like CLI flag names (letters/digits with
+`-` or `_` separators, no leading `-`, no spaces). Underscores in keys are
+converted to dashes in the emitted flag, so JSON-friendly `{"output_format":
+"json"}` becomes `--output-format json`. Unsafe keys are rejected before
+any subprocess call.
+
+**When it applies:** `backend_options` is honored only at `emanate` time
+(when the CLI session is first spawned). `daemon(action="ask", ...)` reuses
+the existing session via `claude --resume` / `codex exec resume` and does
+not re-pass `backend_options` — the runtime flags chosen at emanate time
+persist for the life of the session.
+
+**Where it shows up on disk:** the resolved options are written into the
+emanation's `daemon.json` (`backend_options` field for the raw object,
+`backend_argv` for the converted argv tokens), plus a
+`daemon_backend_options` entry in the parent's `logs/events.jsonl`. So a
+later `daemon(action="check", id="em-N")` and the events log together let
+you reconstruct exactly which flags were passed.
+
+**`lingtai` backend ignores `backend_options`.** The field is silently
+dropped for the built-in backend — there's no CLI process to forward it to.
 
 **Working directory:** Both CLI backends run in the parent agent's working directory (`_working_dir`), not in the emanation's `daemons/em-N-*/` folder. The `daemons/` folder is used for tracking state (`daemon.json`, logs) and terminal output (`result.txt`).
 
