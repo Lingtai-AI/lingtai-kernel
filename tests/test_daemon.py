@@ -1041,3 +1041,482 @@ def test_claude_code_env_noop_when_unset(monkeypatch):
 
     env = _claude_code_env()
     assert env == os.environ
+
+
+# ---------------------------------------------------------------------------
+# CLI-backend ask: non-blocking dispatch + concurrent-ask guard (GH issue:
+# daemon(ask) hanging the parent agent's tool turn). The handlers must
+# return promptly even when the resumed `claude --resume` / `codex exec
+# resume` process is slow/hangs, and a second ask while one is in flight
+# must be refused with a clear busy error.
+# ---------------------------------------------------------------------------
+
+
+class _FakeStream:
+    """A line-iterable stream that the test can append to live."""
+
+    def __init__(self):
+        import threading as _t
+        self._lock = _t.Lock()
+        self._lines: list[str] = []
+        self._closed = False
+        self._cond = _t.Condition(self._lock)
+
+    def feed(self, line: str) -> None:
+        with self._cond:
+            self._lines.append(line)
+            self._cond.notify_all()
+
+    def close(self) -> None:
+        with self._cond:
+            self._closed = True
+            self._cond.notify_all()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        with self._cond:
+            while not self._lines and not self._closed:
+                self._cond.wait()
+            if self._lines:
+                return self._lines.pop(0)
+            raise StopIteration
+
+
+class _FakeProc:
+    """Subprocess.Popen stand-in with controllable stdout/stderr."""
+
+    def __init__(self):
+        self.stdout = _FakeStream()
+        self.stderr = _FakeStream()
+        self.returncode: int | None = None
+        self.pid = 0  # _kill_process_group uses pid as pgid, but we override it
+        self._wait_evt = threading.Event()
+
+    def finish(self, returncode: int = 0) -> None:
+        self.returncode = returncode
+        self.stdout.close()
+        self.stderr.close()
+        self._wait_evt.set()
+
+    def wait(self, timeout=None):
+        if not self._wait_evt.wait(timeout=timeout):
+            import subprocess as _sp
+            raise _sp.TimeoutExpired(cmd=["fake"], timeout=timeout)
+        return self.returncode
+
+
+def _install_fake_popen(monkeypatch, proc: _FakeProc):
+    """Replace subprocess.Popen inside the daemon module with one that
+    returns `proc` on next call, and neutralize _kill_process_group so it
+    doesn't try to signal pid 0.
+    """
+    from lingtai.core import daemon as daemon_mod
+
+    def fake_popen(cmd, **kwargs):
+        return proc
+
+    monkeypatch.setattr(daemon_mod.subprocess, "Popen", fake_popen)
+    # Don't actually os.killpg(0) — just mark the proc finished as if killed.
+    monkeypatch.setattr(daemon_mod, "_kill_process_group",
+                        lambda p: p.finish(returncode=-15))
+
+
+def _cli_entry(mgr, agent, em_id: str, backend: str, session_id: str) -> dict:
+    """Register an em-N entry as if it had been spawned by _handle_emanate_cli,
+    with a real run_dir whose <backend>_session_id is already populated.
+    """
+    run_dir = _make_run_dir(agent, em_id=em_id)
+    # Simulate the streaming handler having captured the session id.
+    if backend == "claude-code":
+        run_dir._state["claude_session_id"] = session_id
+    elif backend == "codex":
+        run_dir._state["codex_session_id"] = session_id
+    run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+    entry = {
+        "future": MagicMock(done=MagicMock(return_value=False)),
+        "task": "primary task",
+        "start_time": time.time(),
+        "cancel_event": threading.Event(),
+        "timeout_event": threading.Event(),
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+        "backend": backend,
+        "ask_in_flight": False,
+        "ask_future": None,
+    }
+    mgr._emanations[em_id] = entry
+    return entry
+
+
+def test_ask_claude_code_returns_immediately_when_subprocess_hangs(tmp_path, monkeypatch):
+    """`daemon(ask)` against a claude-code emanation must not block the
+    parent's tool turn even when the resumed subprocess is slow."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    proc = _FakeProc()
+    _install_fake_popen(monkeypatch, proc)
+    _cli_entry(mgr, agent, "em-1", "claude-code", "claude-sess-abc")
+
+    t0 = time.monotonic()
+    result = mgr._handle_ask("em-1", "follow-up please")
+    elapsed = time.monotonic() - t0
+
+    # The handler must return synchronously and quickly — the subprocess
+    # is still hanging (no stdout fed, no finish() called). Generous bound
+    # so this passes on a loaded CI box but still fails the regression
+    # (which blocked for up to self._timeout seconds, default 3600).
+    assert elapsed < 1.0, f"ask blocked for {elapsed:.2f}s"
+    assert result["status"] == "sent"
+    assert result.get("async") is True
+    assert result["id"] == "em-1"
+
+    # The ask is tracked as in-flight until the worker observes EOF.
+    assert mgr._emanations["em-1"]["ask_in_flight"] is True
+    ask_future = mgr._emanations["em-1"]["ask_future"]
+    assert ask_future is not None and not ask_future.done()
+
+    # Drive the fake subprocess to completion and let the worker drain.
+    proc.stdout.feed(
+        '{"type":"result","result":"all done","is_error":false}\n'
+    )
+    proc.finish(returncode=0)
+    ask_future.result(timeout=5)
+
+    # Worker cleared the in-flight flag and persisted progress to the run_dir.
+    assert mgr._emanations["em-1"]["ask_in_flight"] is False
+    run_dir = mgr._emanations["em-1"]["run_dir"]
+    assert run_dir._state.get("last_output") is not None
+    # The dispatched marker + the assistant/result text should both have
+    # landed as cli_output events.
+    events_text = run_dir.events_path.read_text()
+    assert "ask dispatched" in events_text
+
+
+def test_ask_claude_code_second_ask_is_busy(tmp_path, monkeypatch):
+    """While an ask is in flight, a second concurrent ask returns busy."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    proc = _FakeProc()
+    _install_fake_popen(monkeypatch, proc)
+    _cli_entry(mgr, agent, "em-1", "claude-code", "claude-sess-abc")
+
+    first = mgr._handle_ask("em-1", "first follow-up")
+    assert first["status"] == "sent"
+
+    second = mgr._handle_ask("em-1", "second follow-up")
+    assert second["status"] == "busy"
+    assert "still" in second["message"].lower()
+    assert second["id"] == "em-1"
+
+    # Let the first one finish so the test teardown is clean.
+    proc.finish(returncode=0)
+    mgr._emanations["em-1"]["ask_future"].result(timeout=5)
+
+    # After it clears, another ask should succeed.
+    proc2 = _FakeProc()
+    _install_fake_popen(monkeypatch, proc2)
+    third = mgr._handle_ask("em-1", "third follow-up")
+    assert third["status"] == "sent"
+    proc2.finish(returncode=0)
+    mgr._emanations["em-1"]["ask_future"].result(timeout=5)
+
+
+def test_ask_codex_returns_immediately_when_subprocess_hangs(tmp_path, monkeypatch):
+    """Codex ask must also be non-blocking."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    proc = _FakeProc()
+    _install_fake_popen(monkeypatch, proc)
+    _cli_entry(mgr, agent, "em-1", "codex", "codex-thread-xyz")
+
+    t0 = time.monotonic()
+    result = mgr._handle_ask("em-1", "what next?")
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 1.0, f"codex ask blocked for {elapsed:.2f}s"
+    assert result["status"] == "sent"
+    assert result.get("async") is True
+
+    assert mgr._emanations["em-1"]["ask_in_flight"] is True
+    ask_future = mgr._emanations["em-1"]["ask_future"]
+
+    # Drive to completion with a synthetic codex JSONL stream.
+    proc.stdout.feed(
+        '{"type":"item.completed","item":{"type":"agent_message","text":"reply text"}}\n'
+    )
+    proc.stdout.feed('{"type":"turn.completed"}\n')
+    proc.finish(returncode=0)
+    ask_future.result(timeout=5)
+
+    assert mgr._emanations["em-1"]["ask_in_flight"] is False
+
+
+def test_ask_codex_second_ask_is_busy(tmp_path, monkeypatch):
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    proc = _FakeProc()
+    _install_fake_popen(monkeypatch, proc)
+    _cli_entry(mgr, agent, "em-1", "codex", "codex-thread-xyz")
+
+    first = mgr._handle_ask("em-1", "first follow-up")
+    assert first["status"] == "sent"
+
+    second = mgr._handle_ask("em-1", "second follow-up")
+    assert second["status"] == "busy"
+
+    proc.finish(returncode=0)
+    mgr._emanations["em-1"]["ask_future"].result(timeout=5)
+
+
+def test_ask_claude_code_missing_session_id_still_synchronous(tmp_path):
+    """If the session id hasn't been captured yet, the pre-flight check
+    must still respond immediately (no subprocess spawn, no busy flag)."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    # Build an entry whose run_dir has NO claude_session_id.
+    run_dir = _make_run_dir(agent, em_id="em-1")
+    mgr._emanations["em-1"] = {
+        "future": MagicMock(done=MagicMock(return_value=False)),
+        "task": "x",
+        "start_time": time.time(),
+        "cancel_event": threading.Event(),
+        "timeout_event": threading.Event(),
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+        "backend": "claude-code",
+        "ask_in_flight": False,
+        "ask_future": None,
+    }
+    result = mgr._handle_ask("em-1", "anything")
+    assert result["status"] == "error"
+    assert "session" in result["message"].lower()
+    # Must not have flipped the in-flight flag on a pre-flight failure.
+    assert mgr._emanations["em-1"]["ask_in_flight"] is False
+
+
+def test_ask_lingtai_backend_unchanged(tmp_path):
+    """The builtin lingtai backend ask still buffers into followup_buffer
+    and is unaffected by the CLI-ask refactor."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    mgr._emanations["em-1"] = {
+        "future": MagicMock(done=MagicMock(return_value=False)),
+        "task": "x",
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": None,
+        # No 'backend' key → routes to the in-process followup buffer path.
+    }
+    result = mgr._handle_ask("em-1", "buffered follow-up")
+    assert result["status"] == "sent"
+    assert mgr._emanations["em-1"]["followup_buffer"] == "buffered follow-up"
+
+
+def test_ask_claude_code_reclaim_suppresses_followup_notification(tmp_path, monkeypatch):
+    """If the emanation is reclaimed while a CLI ask is mid-flight, the
+    worker must NOT publish a follow-up notification when it eventually
+    exits — the parent has already torn the entry down."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    proc = _FakeProc()
+    _install_fake_popen(monkeypatch, proc)
+    entry = _cli_entry(mgr, agent, "em-1", "claude-code", "claude-sess-abc")
+    # Register a fake pool entry so _handle_reclaim's pool.shutdown loop
+    # doesn't hit an empty list (the cli entry helper doesn't add one).
+    mgr._pools = [(MagicMock(), threading.Event())]
+    mgr._cli_procs.append(proc)  # so reclaim's kill loop targets it too
+
+    # Count published notifications + log events.
+    published: list[tuple] = []
+    monkeypatch.setattr(
+        mgr, "_publish_daemon_notification",
+        lambda em_id, *, status, text, run_dir=None: published.append((em_id, status)),
+    )
+    logged: list[tuple] = []
+    real_log = mgr._log
+    def _log_capture(event, **fields):
+        logged.append((event, fields))
+        return real_log(event, **fields)
+    monkeypatch.setattr(mgr, "_log", _log_capture)
+
+    # Dispatch the ask — returns immediately, worker is blocked on stdout.
+    result = mgr._handle_ask("em-1", "anything")
+    assert result["status"] == "sent"
+    ask_future = entry["ask_future"]
+    assert not ask_future.done()
+
+    # Reclaim races the in-flight ask. _handle_reclaim kills _cli_procs
+    # (which marks the fake proc finished via the patched _kill_process_group).
+    mgr._handle_reclaim()
+    assert "em-1" not in mgr._emanations
+
+    # Worker finishes its drain after the kill — it would otherwise have
+    # published a "follow-up failed" notification on the non-zero returncode.
+    ask_future.result(timeout=5)
+
+    assert published == [], (
+        f"reclaimed ask must not publish follow-up notifications, got {published}"
+    )
+    post_reclaim_logs = [e for e, _ in logged if e == "daemon_ask_post_reclaim"]
+    assert post_reclaim_logs, (
+        "expected a daemon_ask_post_reclaim log event when worker tried to "
+        f"publish after reclaim; got {[e for e, _ in logged]}"
+    )
+
+
+def _run_silent_subprocess_ask_test(tmp_path, monkeypatch, backend: str):
+    """Shared body for the claude-code + codex silent-subprocess tests.
+
+    Models the regression: the resumed CLI is spawned but never writes a
+    single byte to stdout and never exits. Before this fix, the worker's
+    `for raw_line in proc.stdout` blocked the worker thread forever; the
+    `if time.monotonic() > deadline` check inside the loop never ran.
+    The fix routes stdout through a daemon reader thread + `queue.get`
+    with a deadline, so the worker observes the timeout regardless.
+    """
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    # Make the test fast — without this the default 3600s timeout would
+    # itself be the bug we'd be reproducing.
+    mgr._timeout = 0.5
+
+    proc = _FakeProc()
+    _install_fake_popen(monkeypatch, proc)
+    session_id = ("claude-sess-silent" if backend == "claude-code"
+                  else "codex-thread-silent")
+    entry = _cli_entry(mgr, agent, "em-1", backend, session_id)
+
+    published: list[tuple] = []
+    monkeypatch.setattr(
+        mgr, "_publish_daemon_notification",
+        lambda em_id, *, status, text, run_dir=None:
+            published.append((em_id, status, text)),
+    )
+    logged: list[tuple] = []
+    real_log = mgr._log
+    def _log_capture(event, **fields):
+        logged.append((event, fields))
+        return real_log(event, **fields)
+    monkeypatch.setattr(mgr, "_log", _log_capture)
+
+    t0 = time.monotonic()
+    result = mgr._handle_ask("em-1", "anything")
+    dispatch_elapsed = time.monotonic() - t0
+
+    # Dispatcher itself must still return promptly even with a silent
+    # subprocess (this part already worked before the fix).
+    assert dispatch_elapsed < 1.0
+    assert result["status"] == "sent"
+    assert result["async"] is True
+
+    ask_future = entry["ask_future"]
+    # The worker should observe the deadline (mgr._timeout=0.5s) and
+    # finish — without the fix this future.result(timeout=3) would itself
+    # time out because the worker is blocked on proc.stdout iteration.
+    worker_result = ask_future.result(timeout=3.0)
+
+    total_elapsed = time.monotonic() - t0
+    assert total_elapsed < 2.5, (
+        f"worker took {total_elapsed:.2f}s — likely still blocked on stdout. "
+        "Did _iter_stdout_with_deadline get bypassed?"
+    )
+
+    # Worker must report timeout error and clean up everything.
+    assert worker_result["status"] == "error"
+    assert "timed out" in worker_result["message"]
+    assert entry["ask_in_flight"] is False, (
+        "ask_in_flight must clear so a subsequent ask isn't permanently busy"
+    )
+    assert proc not in mgr._cli_procs, (
+        "proc must be removed from _cli_procs so reclaim/list see clean state"
+    )
+
+    # The fake _kill_process_group (installed by _install_fake_popen)
+    # marks the proc finished with returncode=-15 (simulating SIGTERM).
+    # The real implementation actually SIGTERMs the process group.
+    assert proc.returncode is not None, "subprocess must have been killed"
+
+    # Publish a "follow-up failed" notification so the parent agent sees
+    # the timeout instead of nothing.
+    failures = [p for p in published if p[1] == "follow-up failed"]
+    assert failures, f"expected a follow-up failed notification, got {published}"
+    assert "timed out" in failures[0][2]
+
+    # No post-reclaim log — reclaim didn't happen, the entry is still live.
+    post_reclaim_logs = [e for e, _ in logged if e == "daemon_ask_post_reclaim"]
+    assert not post_reclaim_logs
+
+
+def test_ask_claude_code_silent_subprocess_enforces_timeout(tmp_path, monkeypatch):
+    """REGRESSION: a silent `claude --resume` subprocess (no stdout, never
+    exits) must NOT hang the ask worker indefinitely. Worker must observe
+    self._timeout, kill the proc group, clear ask_in_flight, and publish
+    a follow-up failed notification."""
+    _run_silent_subprocess_ask_test(tmp_path, monkeypatch, "claude-code")
+
+
+def test_ask_codex_silent_subprocess_enforces_timeout(tmp_path, monkeypatch):
+    """REGRESSION: same as the claude-code case but for
+    `codex exec resume`. Symmetric worker, same fix path."""
+    _run_silent_subprocess_ask_test(tmp_path, monkeypatch, "codex")
+
+
+def test_ask_worker_exception_is_logged(tmp_path, monkeypatch):
+    """An unexpected exception in the ask worker must be logged via
+    daemon_ask_worker_error and recorded into the run_dir as a cli_output
+    line so daemon(check) shows what happened."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    proc = _FakeProc()
+    _install_fake_popen(monkeypatch, proc)
+    entry = _cli_entry(mgr, agent, "em-1", "claude-code", "claude-sess-abc")
+
+    # Replace the worker with one that raises immediately. _on_ask_done
+    # runs as the future's done-callback so the exception is surfaced
+    # rather than swallowed.
+    def boom(em_id, entry, proc, run_dir):
+        proc.finish(returncode=0)  # drain so any background reader doesn't hang
+        raise RuntimeError("simulated worker crash")
+    monkeypatch.setattr(mgr, "_run_ask_claude_code_stream", boom)
+
+    logged: list[tuple] = []
+    real_log = mgr._log
+    def _log_capture(event, **fields):
+        logged.append((event, fields))
+        return real_log(event, **fields)
+    monkeypatch.setattr(mgr, "_log", _log_capture)
+
+    mgr._handle_ask("em-1", "anything")
+    ask_future = entry["ask_future"]
+
+    # Wait for the worker future AND its done-callback to run.
+    try:
+        ask_future.result(timeout=5)
+    except RuntimeError:
+        pass  # expected
+    # add_done_callback runs synchronously after .result returns/raises,
+    # but be tolerant of scheduling.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        if any(e == "daemon_ask_worker_error" for e, _ in logged):
+            break
+        time.sleep(0.05)
+
+    err_logs = [f for e, f in logged if e == "daemon_ask_worker_error"]
+    assert err_logs, f"expected daemon_ask_worker_error, got {[e for e, _ in logged]}"
+    assert err_logs[0]["em_id"] == "em-1"
+    assert err_logs[0]["exception"] == "RuntimeError"
+    assert "simulated worker crash" in err_logs[0]["message"]
+
+    # Run_dir should have a stderr cli_output line marking the worker error.
+    events_text = entry["run_dir"].events_path.read_text()
+    assert "[ask worker error]" in events_text
+    assert "RuntimeError" in events_text
+
+    # ask_in_flight cleared even though worker raised before its finally
+    # would have run.
+    assert entry["ask_in_flight"] is False

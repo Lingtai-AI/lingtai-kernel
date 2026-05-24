@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import signal
 import subprocess
@@ -64,6 +65,68 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
             proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
             pass
+
+# Sentinel placed on the stdout-reader queue when the background reader
+# thread observes EOF on the subprocess pipe. The consumer treats this as
+# "no more lines will ever arrive — stop draining."
+_STDOUT_EOF = object()
+
+
+def _iter_stdout_with_deadline(
+    proc: subprocess.Popen,
+    deadline: float,
+    thread_name: str,
+):
+    """Yield stdout lines from *proc* until EOF, deadline, or process exit.
+
+    The fundamental problem this solves: ``for line in proc.stdout`` blocks
+    the caller's thread until the subprocess writes a newline. If the
+    resumed CLI hangs without producing output, the caller can never
+    observe the deadline. We work around it by pushing the blocking
+    read onto a small daemon thread that drops each line into a queue,
+    while the caller pulls from the queue with ``timeout=remaining``.
+
+    Yields raw lines (with trailing ``\\n`` preserved, matching the
+    original iterator semantics). Stops iterating when:
+      - the reader thread reports EOF (sentinel arrives), OR
+      - ``time.monotonic() >= deadline`` (caller is expected to
+        ``_kill_process_group`` after handling timeout — we do NOT do
+        it here so the worker can record timeout state first).
+
+    The reader thread is a daemon thread (won't block process exit) and
+    is left orphaned if the deadline fires — it will exit naturally once
+    the subprocess is killed and its pipe closes.
+    """
+    q: "queue.Queue[object]" = queue.Queue(maxsize=1024)
+
+    def _reader():
+        try:
+            assert proc.stdout is not None
+            for raw_line in proc.stdout:
+                q.put(raw_line)
+        except (ValueError, OSError):
+            # Pipe closed mid-read (e.g. after _kill_process_group). Treat
+            # as EOF — the consumer either already noticed the timeout or
+            # is about to.
+            pass
+        finally:
+            q.put(_STDOUT_EOF)
+
+    reader = threading.Thread(target=_reader, daemon=True, name=thread_name)
+    reader.start()
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return  # caller handles timeout (kill + mark)
+        try:
+            item = q.get(timeout=min(remaining, 0.5))
+        except queue.Empty:
+            continue  # re-check deadline
+        if item is _STDOUT_EOF:
+            return
+        yield item
+
 
 # Tools emanations can never use (no recursion, no spawning, no identity mutation)
 EMANATION_BLACKLIST = {"daemon", "avatar", "psyche", "skills", "knowledge"}
@@ -284,6 +347,15 @@ class DaemonManager:
         # Guarded by _cli_lock — accessed from pool workers, watchdog, and reclaim.
         self._cli_procs: list[subprocess.Popen] = []
         self._cli_lock = threading.Lock()
+        # Dedicated pool for CLI-backend `ask` follow-ups so they run off the
+        # caller's tool-dispatch thread. The agent's `daemon(action="ask")` call
+        # returns immediately while progress + final reply land in the run_dir
+        # (cli_output events, last_output, follow-up completion notification).
+        # Workers are submitted lazily so the pool is only spun up on first use.
+        self._ask_pool = ThreadPoolExecutor(
+            max_workers=max(1, max_emanations),
+            thread_name_prefix="daemon-cli-ask",
+        )
 
     def handle(self, args: dict) -> dict:
         action = args.get("action")
@@ -1184,6 +1256,72 @@ class DaemonManager:
                 error=str(e)[:200],
             )
 
+    def _publish_followup_if_live(
+        self,
+        em_id: str,
+        *,
+        status: str,
+        text: str,
+        run_dir: DaemonRunDir | None = None,
+    ) -> None:
+        """Publish a follow-up completion notification only if the emanation
+        is still tracked. A reclaim that races an in-flight CLI ask would
+        otherwise produce a "follow-up failed" notification for an entry the
+        agent has already torn down — surprising and unactionable. Run_dir
+        writes still happen unconditionally inside the worker; this gate is
+        for the parent-facing notification only.
+        """
+        if em_id not in self._emanations:
+            self._log(
+                "daemon_ask_post_reclaim",
+                em_id=em_id, status=status, text_length=len(text or ""),
+            )
+            return
+        self._publish_daemon_notification(
+            em_id, status=status, text=text, run_dir=run_dir,
+        )
+
+    def _on_ask_done(self, em_id: str, future) -> None:
+        """Done-callback for ask workers — surface any worker-thread exception.
+
+        Without this, an unexpected exception in the stream-parse loop
+        (e.g. an unhandled stdout decode error) would land silently in the
+        future and never reach the agent or the run_dir. We log the
+        exception via the standard daemon log channel and best-effort
+        record it into the emanation's run_dir as a cli_output line so a
+        later daemon(check) shows what happened.
+        """
+        try:
+            exc = future.exception()
+        except Exception:  # noqa: BLE001 — future internals raising is itself worth logging
+            exc = None
+        if exc is None:
+            return
+        self._log(
+            "daemon_ask_worker_error",
+            em_id=em_id,
+            exception=type(exc).__name__,
+            message=str(exc)[:500],
+        )
+        entry = self._emanations.get(em_id)
+        run_dir = entry.get("run_dir") if entry else None
+        if run_dir is not None:
+            try:
+                run_dir.record_cli_output(
+                    f"[ask worker error] {type(exc).__name__}: {str(exc)[:300]}",
+                    stream="stderr",
+                )
+            except OSError:
+                pass
+        # Clear ask_in_flight if the worker raised before its finally ran
+        # (very rare — finally would normally clear it). Safe to do twice.
+        if entry is not None:
+            try:
+                with entry["followup_lock"]:
+                    entry["ask_in_flight"] = False
+            except Exception:  # noqa: BLE001 — entry mutation must never re-raise
+                pass
+
     def _drain_followup(self, em_id: str) -> str | None:
         """Drain the follow-up buffer for a specific emanation."""
         entry = self._emanations.get(em_id)
@@ -1504,6 +1642,15 @@ class DaemonManager:
                 "followup_lock": threading.Lock(),
                 "run_dir": run_dir,
                 "backend": backend,
+                # Tracks whether a CLI `ask` follow-up is currently being
+                # streamed in the background. Set/cleared by the ask worker
+                # under `followup_lock`; checked by `_handle_ask_cli` /
+                # `_handle_ask_codex` to refuse a second concurrent ask
+                # against the same session (the `claude --resume` /
+                # `codex exec resume` CLIs serialize per-session and a second
+                # spawn would either error or interleave).
+                "ask_in_flight": False,
+                "ask_future": None,
             }
 
         # Start watchdog
@@ -1579,13 +1726,17 @@ class DaemonManager:
         return {"status": "sent", "id": em_id}
 
     def _handle_ask_cli(self, em_id: str, entry: dict, message: str) -> dict:
-        """Send a follow-up message to a Claude Code session via --resume.
+        """Dispatch a Claude Code `--resume` follow-up off the caller's turn.
 
-        Same stream-json parse as ``_run_claude_code_emanation``: we get
-        live ``record_cli_output`` updates during the resumed turn,
-        capture stderr separately, and pull the final reply out of the
-        ``result`` event. ``daemon(check)`` therefore shows progress
-        on follow-up asks too.
+        Returns immediately after spawning the subprocess; the stream-json
+        parse runs in ``self._ask_pool``. Progress + final reply still land
+        in ``run_dir`` (``cli_output`` events, ``last_output``, and a
+        ``follow-up completed`` notification on success), so ``daemon(check)``
+        observes the ask just as it did when this method was synchronous.
+
+        Refuses a second concurrent ask against the same emanation with
+        ``status="busy"`` — ``claude --resume`` serializes per-session and
+        a second spawn would either error or interleave reply text.
         """
         run_dir = entry.get("run_dir")
         if run_dir is None:
@@ -1597,6 +1748,16 @@ class DaemonManager:
                     "message": f"No claude session ID found for {em_id}. "
                                "The emanation may still be initializing — "
                                "wait a moment and retry."}
+
+        # Concurrent-ask guard. Checked + set under followup_lock so two
+        # parent tool calls racing on the same em_id can't both spawn.
+        with entry["followup_lock"]:
+            if entry.get("ask_in_flight"):
+                return {"status": "busy", "id": em_id,
+                        "message": f"a previous ask on {em_id} is still "
+                                   "running; wait for it or use "
+                                   f"daemon(action='check', id='{em_id}')"}
+            entry["ask_in_flight"] = True
 
         cmd = [
             "claude",
@@ -1621,14 +1782,58 @@ class DaemonManager:
                 start_new_session=True,  # own process group for reliable cleanup
             )
         except FileNotFoundError:
+            with entry["followup_lock"]:
+                entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": "'claude' CLI not found on PATH"}
         except OSError as e:
+            with entry["followup_lock"]:
+                entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": f"Failed to start claude CLI: {e}"}
         with self._cli_lock:
             self._cli_procs.append(proc)
 
+        # Surface that an ask just started so `daemon(check)` shows it
+        # immediately, even before any stream-json event arrives.
+        # record_cli_output already routes its filesystem writes through
+        # _safe (which catches OSError); the outer guard here is only for
+        # the unlikely case the call site itself raises (e.g. attribute
+        # access on a torn-down run_dir). Narrowed to OSError so real bugs
+        # propagate.
+        try:
+            run_dir.record_cli_output(
+                f"[ask dispatched] {message[:200]}", stream="stdout",
+            )
+        except OSError:
+            pass
+
+        ask_future = self._ask_pool.submit(
+            self._run_ask_claude_code_stream, em_id, entry, proc, run_dir,
+        )
+        ask_future.add_done_callback(
+            lambda f, eid=em_id: self._on_ask_done(eid, f)
+        )
+        entry["ask_future"] = ask_future
+
+        return {"status": "sent", "id": em_id, "async": True,
+                "message": "ask dispatched; check daemon(action='check', "
+                           f"id='{em_id}') for progress and final reply"}
+
+    def _run_ask_claude_code_stream(
+        self,
+        em_id: str,
+        entry: dict,
+        proc: subprocess.Popen,
+        run_dir: DaemonRunDir,
+    ) -> dict:
+        """Background worker: stream a Claude Code `--resume` subprocess.
+
+        Same stream-json parse as ``_run_claude_code_emanation``. Always
+        clears ``ask_in_flight`` and detaches ``proc`` from ``_cli_procs``.
+        Return value is captured by the future for tests/debugging; the
+        agent observes the result through the run_dir + notification.
+        """
         stderr_lines: list[str] = []
 
         def _drain_stderr() -> None:
@@ -1651,16 +1856,20 @@ class DaemonManager:
 
         final_result_text: str | None = None
         final_is_error = False
+        timed_out = False
 
         try:
             assert proc.stdout is not None
             deadline = time.monotonic() + self._timeout
-            for raw_line in proc.stdout:
-                if time.monotonic() > deadline:
-                    _kill_process_group(proc)
-                    return {"status": "error",
-                            "message": f"claude --resume timed out after "
-                                       f"{self._timeout}s"}
+            # _iter_stdout_with_deadline returns on EOF *or* deadline;
+            # we distinguish the two by checking the clock afterwards.
+            # This is the core fix for the silent-subprocess hang — the
+            # old `for raw_line in proc.stdout` blocked the worker thread
+            # indefinitely if the resumed CLI never wrote a newline.
+            for raw_line in _iter_stdout_with_deadline(
+                proc, deadline,
+                thread_name=f"daemon-claude-ask-stdout-{em_id}",
+            ):
                 line = raw_line.rstrip("\n")
                 if not line:
                     continue
@@ -1682,12 +1891,18 @@ class DaemonManager:
                     final_result_text = event.get("result") or ""
                     final_is_error = bool(event.get("is_error"))
 
-            proc.wait(timeout=max(1.0, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            _kill_process_group(proc)
-            return {"status": "error",
-                    "message": f"claude --resume timed out after "
-                               f"{self._timeout}s"}
+            if time.monotonic() >= deadline:
+                timed_out = True
+                _kill_process_group(proc)
+            else:
+                # Reader hit EOF before the deadline. The CLI usually exits
+                # within milliseconds of closing stdout, but bound the wait
+                # so a misbehaving child can't strand us here.
+                try:
+                    proc.wait(timeout=max(1.0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    _kill_process_group(proc)
         finally:
             stderr_thread.join(timeout=2.0)
             with self._cli_lock:
@@ -1695,37 +1910,48 @@ class DaemonManager:
                     self._cli_procs.remove(proc)
                 except ValueError:
                     pass  # already removed by reclaim/watchdog
+            with entry["followup_lock"]:
+                entry["ask_in_flight"] = False
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
+        if timed_out:
+            err = f"claude --resume timed out after {self._timeout}s"
+            self._publish_followup_if_live(
+                em_id, status="follow-up failed", text=err, run_dir=run_dir,
+            )
+            return {"status": "error", "id": em_id, "message": err}
+
         if proc.returncode != 0:
             detail = stderr_tail or (final_result_text or "")
-            return {"status": "error",
-                    "message": f"claude CLI exited {proc.returncode}: "
-                               f"{detail[-500:]}"}
+            err = f"claude CLI exited {proc.returncode}: {detail[-500:]}"
+            self._publish_followup_if_live(
+                em_id, status="follow-up failed", text=err, run_dir=run_dir,
+            )
+            return {"status": "error", "id": em_id, "message": err}
 
         if final_is_error:
-            return {"status": "error",
-                    "message": f"claude CLI reported is_error=true: "
-                               f"{(final_result_text or stderr_tail)[-500:]}"}
+            err = (f"claude CLI reported is_error=true: "
+                   f"{(final_result_text or stderr_tail)[-500:]}")
+            self._publish_followup_if_live(
+                em_id, status="follow-up failed", text=err, run_dir=run_dir,
+            )
+            return {"status": "error", "id": em_id, "message": err}
 
         output = (final_result_text or "").strip()
         if output:
-            self._publish_daemon_notification(
-                em_id, status="follow-up completed", text=output, run_dir=run_dir
+            self._publish_followup_if_live(
+                em_id, status="follow-up completed", text=output, run_dir=run_dir,
             )
-
         return {"status": "sent", "id": em_id, "output": output}
 
     def _handle_ask_codex(self, em_id: str, entry: dict, message: str) -> dict:
-        """Send a follow-up message to a Codex session via ``codex exec resume``.
+        """Dispatch a Codex ``exec resume`` follow-up off the caller's turn.
 
-        Parallel of ``_handle_ask_cli`` but for the Codex JSONL event
-        vocabulary: ``thread.started`` carries the (re-)opened session
-        id, ``item.completed`` with ``type=agent_message`` carries the
-        reply text, ``turn.completed`` is the terminal event. Same
-        record_cli_output / separated-stderr / live-progress behavior
-        as the claude-code ask path.
+        Mirrors ``_handle_ask_cli``: spawn, register the proc, hand the
+        JSONL stream parse to ``self._ask_pool``, return immediately.
+        Concurrent-ask guard is the same — ``codex exec resume`` is
+        single-writer per session.
         """
         run_dir = entry.get("run_dir")
         if run_dir is None:
@@ -1737,6 +1963,14 @@ class DaemonManager:
                     "message": f"No codex session ID found for {em_id}. "
                                "The emanation may still be initializing — "
                                "wait a moment and retry."}
+
+        with entry["followup_lock"]:
+            if entry.get("ask_in_flight"):
+                return {"status": "busy", "id": em_id,
+                        "message": f"a previous ask on {em_id} is still "
+                                   "running; wait for it or use "
+                                   f"daemon(action='check', id='{em_id}')"}
+            entry["ask_in_flight"] = True
 
         cmd = [
             "codex",
@@ -1760,14 +1994,52 @@ class DaemonManager:
                 start_new_session=True,  # own process group for reliable cleanup
             )
         except FileNotFoundError:
+            with entry["followup_lock"]:
+                entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": "'codex' CLI not found on PATH"}
         except OSError as e:
+            with entry["followup_lock"]:
+                entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": f"Failed to start codex CLI: {e}"}
         with self._cli_lock:
             self._cli_procs.append(proc)
 
+        # See _handle_ask_cli for the rationale on the narrowed except.
+        try:
+            run_dir.record_cli_output(
+                f"[ask dispatched] {message[:200]}", stream="stdout",
+            )
+        except OSError:
+            pass
+
+        ask_future = self._ask_pool.submit(
+            self._run_ask_codex_stream, em_id, entry, proc, run_dir,
+        )
+        ask_future.add_done_callback(
+            lambda f, eid=em_id: self._on_ask_done(eid, f)
+        )
+        entry["ask_future"] = ask_future
+
+        return {"status": "sent", "id": em_id, "async": True,
+                "message": "ask dispatched; check daemon(action='check', "
+                           f"id='{em_id}') for progress and final reply"}
+
+    def _run_ask_codex_stream(
+        self,
+        em_id: str,
+        entry: dict,
+        proc: subprocess.Popen,
+        run_dir: DaemonRunDir,
+    ) -> dict:
+        """Background worker: stream a ``codex exec resume`` subprocess.
+
+        Same JSONL event vocabulary as ``_run_codex_emanation``:
+        ``item.completed/agent_message`` for reply text, ``turn.completed``
+        for terminal acknowledgement. Always clears ``ask_in_flight`` and
+        detaches ``proc`` from ``_cli_procs``.
+        """
         stderr_lines: list[str] = []
 
         def _drain_stderr() -> None:
@@ -1790,16 +2062,17 @@ class DaemonManager:
 
         agent_message_texts: list[str] = []
         turn_completed = False
+        timed_out = False
 
         try:
             assert proc.stdout is not None
             deadline = time.monotonic() + self._timeout
-            for raw_line in proc.stdout:
-                if time.monotonic() > deadline:
-                    _kill_process_group(proc)
-                    return {"status": "error",
-                            "message": f"codex exec resume timed out after "
-                                       f"{self._timeout}s"}
+            # See _run_ask_claude_code_stream for the rationale on
+            # _iter_stdout_with_deadline — fixes the silent-CLI hang.
+            for raw_line in _iter_stdout_with_deadline(
+                proc, deadline,
+                thread_name=f"daemon-codex-ask-stdout-{em_id}",
+            ):
                 line = raw_line.rstrip("\n")
                 if not line:
                     continue
@@ -1819,16 +2092,16 @@ class DaemonManager:
                             run_dir.record_cli_output(text, stream="stdout")
                 elif etype == "turn.completed":
                     turn_completed = True
-                    # Codex spend is intentionally NOT recorded in the
-                    # token ledger — see _run_codex_emanation for the
-                    # rationale.
 
-            proc.wait(timeout=max(1.0, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            _kill_process_group(proc)
-            return {"status": "error",
-                    "message": f"codex exec resume timed out after "
-                               f"{self._timeout}s"}
+            if time.monotonic() >= deadline:
+                timed_out = True
+                _kill_process_group(proc)
+            else:
+                try:
+                    proc.wait(timeout=max(1.0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    _kill_process_group(proc)
         finally:
             stderr_thread.join(timeout=2.0)
             with self._cli_lock:
@@ -1836,26 +2109,39 @@ class DaemonManager:
                     self._cli_procs.remove(proc)
                 except ValueError:
                     pass  # already removed by reclaim/watchdog
+            with entry["followup_lock"]:
+                entry["ask_in_flight"] = False
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
+        if timed_out:
+            err = f"codex exec resume timed out after {self._timeout}s"
+            self._publish_followup_if_live(
+                em_id, status="follow-up failed", text=err, run_dir=run_dir,
+            )
+            return {"status": "error", "id": em_id, "message": err}
+
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(agent_message_texts[-3:])
-            return {"status": "error",
-                    "message": f"codex CLI exited {proc.returncode}: "
-                               f"{detail[-500:]}"}
+            err = f"codex CLI exited {proc.returncode}: {detail[-500:]}"
+            self._publish_followup_if_live(
+                em_id, status="follow-up failed", text=err, run_dir=run_dir,
+            )
+            return {"status": "error", "id": em_id, "message": err}
 
         if not turn_completed and not agent_message_texts:
-            return {"status": "error",
-                    "message": f"codex exec resume produced no turn.completed "
-                               f"event: {(stderr_tail or '[no output]')[-500:]}"}
+            err = (f"codex exec resume produced no turn.completed event: "
+                   f"{(stderr_tail or '[no output]')[-500:]}")
+            self._publish_followup_if_live(
+                em_id, status="follow-up failed", text=err, run_dir=run_dir,
+            )
+            return {"status": "error", "id": em_id, "message": err}
 
         output = "\n".join(agent_message_texts).strip()
         if output:
-            self._publish_daemon_notification(
-                em_id, status="follow-up completed", text=output, run_dir=run_dir
+            self._publish_followup_if_live(
+                em_id, status="follow-up completed", text=output, run_dir=run_dir,
             )
-
         return {"status": "sent", "id": em_id, "output": output}
 
     # Hard cap on `last` to bound memory in case events.jsonl has grown large
@@ -1965,6 +2251,14 @@ class DaemonManager:
             cancel.set()
             pool.shutdown(wait=False, cancel_futures=True)
         self._pools.clear()
+        # Tear down the dedicated CLI-ask pool too — its workers are already
+        # losing their subprocesses to the kill above, but futures may still
+        # be sitting in the queue. Rebuild a fresh pool for subsequent asks.
+        self._ask_pool.shutdown(wait=False, cancel_futures=True)
+        self._ask_pool = ThreadPoolExecutor(
+            max_workers=max(1, self._max_emanations),
+            thread_name_prefix="daemon-cli-ask",
+        )
         self._emanations.clear()
         self._next_id = 1  # handles can be re-used; folder names disambiguate
         self._log("daemon_reclaim", cancelled_count=cancelled)
