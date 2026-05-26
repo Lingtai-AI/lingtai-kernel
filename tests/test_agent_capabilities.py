@@ -85,6 +85,22 @@ def test_agent_capabilities_list(tmp_path):
     agent.stop(timeout=1.0)
 
 
+def test_read_tool_description_points_to_file_manual(tmp_path):
+    """The read tool should route hard file cases to the intrinsic file manual."""
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=tmp_path / "test",
+        capabilities=["read"],
+    )
+    try:
+        read_schema = next(schema for schema in agent._tool_schemas if schema.name == "read")
+        assert "file-manual" in read_schema.description
+        assert "non-UTF-8" in read_schema.description
+    finally:
+        agent.stop(timeout=1.0)
+
+
 def test_agent_capabilities_dict(tmp_path):
     """capabilities= as dict registers user-supplied capabilities with kwargs.
 
