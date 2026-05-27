@@ -200,12 +200,15 @@ class LocalFileIOService(FileIOService):
             return
 
         for dirpath, dirnames, filenames in os.walk(root):
-            # Wall-clock budget — checked before doing any work for this
-            # directory so a single huge dir of small files cannot blow
-            # past it.
             if walltime_s is not None and (time.monotonic() - start) > walltime_s:
                 stats.truncated_reason = "walltime"
                 break
+
+            stats.visited += 1
+            if max_visited is not None and stats.visited > max_visited:
+                stats.truncated_reason = "visited"
+                stats.elapsed_ms = int((time.monotonic() - start) * 1000)
+                return
 
             # Prune excluded dirs in place so os.walk does not descend.
             if excludes:
@@ -214,6 +217,10 @@ class LocalFileIOService(FileIOService):
                 stats.dirs_pruned += before - len(dirnames)
 
             for filename in filenames:
+                if walltime_s is not None and (time.monotonic() - start) > walltime_s:
+                    stats.truncated_reason = "walltime"
+                    stats.elapsed_ms = int((time.monotonic() - start) * 1000)
+                    return
                 stats.visited += 1
                 if max_visited is not None and stats.visited > max_visited:
                     stats.truncated_reason = "visited"

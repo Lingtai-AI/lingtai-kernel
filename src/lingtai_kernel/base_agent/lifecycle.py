@@ -410,6 +410,7 @@ def _heartbeat_loop(agent) -> None:
                     deferred_notifications=agent._deferred_notifications_count,
                     deferred_oldest_at=agent._deferred_notifications_oldest_at,
                 )
+                agent._write_status_snapshot()
                 agent._active_stuck_logged = True
 
         # Periodic snapshot (Time Machine) — off by default

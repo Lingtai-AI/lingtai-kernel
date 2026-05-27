@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import lingtai.services.file_io as file_io
 from lingtai.services.file_io import LocalFileIOService, GrepMatch
 
 
@@ -150,6 +151,18 @@ class TestTraversalBudgets:
         assert isinstance(results, list)
         assert svc.last_traversal.truncated_reason == "walltime"
 
+    def test_glob_walltime_budget_checked_inside_large_file_loop(self, svc, tmp_dir, monkeypatch):
+        for i in range(20):
+            svc.write(f"file_{i:03d}.txt", "x")
+
+        times = iter([100.0, 100.0, 101.0, 101.0])
+        monkeypatch.setattr(file_io.time, "monotonic", lambda: next(times))
+
+        results = svc.glob("**/*", walltime_s=0.5)
+
+        assert results == []
+        assert svc.last_traversal.truncated_reason == "walltime"
+
     def test_grep_visited_budget_returns_partial(self, svc, tmp_dir):
         for i in range(50):
             svc.write(f"f_{i:03d}.txt", "needle\n")
@@ -158,6 +171,15 @@ class TestTraversalBudgets:
         # the contract is "structured partial, agent not wedged".
         assert svc.last_traversal.truncated_reason in {"visited", "max_results"}
         assert svc.last_traversal.elapsed_ms >= 0
+
+    def test_visited_budget_counts_directories(self, svc, tmp_dir):
+        for i in range(20):
+            svc.write(f"dir_{i:03d}/file.txt", "x")
+
+        results = svc.glob("**/*", max_visited=5)
+
+        assert isinstance(results, list)
+        assert svc.last_traversal.truncated_reason == "visited"
 
     def test_grep_skips_oversized_files(self, svc, tmp_dir):
         svc.write("big.txt", "x" * 50)

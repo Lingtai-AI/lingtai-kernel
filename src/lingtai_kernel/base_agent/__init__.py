@@ -727,10 +727,10 @@ class BaseAgent:
             if kind is not None:
                 self._active_turn_kind = kind
                 self._active_turn_started_at = self._last_progress_at
-            # call_id is the canonical tool-call identifier across the
-            # kernel; carry it through to the active-turn block so the
-            # status snapshot can tie back to events.jsonl.
-            call_id = fields.get("call_id")
+            # ToolExecutor emits provider IDs as tool_call_id; older/manual
+            # event producers may still use call_id. Surface either one so
+            # status snapshots can tie back to events.jsonl.
+            call_id = fields.get("tool_call_id") or fields.get("call_id")
             if isinstance(call_id, str):
                 self._active_turn_id = call_id
         elif event_type == "notification_deferred_active":
@@ -1515,6 +1515,16 @@ class BaseAgent:
         from .identity import _status
         return _status(self)
 
+    def _write_status_snapshot(self) -> None:
+        """Write .status.json — live runtime snapshot consumed by TUI/portal."""
+        try:
+            (self._working_dir / ".status.json").write_text(
+                json.dumps(self.status(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning(f"[{self.agent_name}] Failed to write .status.json: {e}")
+
     # ------------------------------------------------------------------
     # Messaging (pass-throughs)
     # ------------------------------------------------------------------
@@ -1580,13 +1590,7 @@ class BaseAgent:
             self._workdir.write_manifest(self._build_manifest())
         except Exception as e:
             logger.warning(f"[{self.agent_name}] Failed to update manifest: {e}")
-        # Write .status.json — live runtime snapshot consumed by TUI/portal
-        try:
-            (self._working_dir / ".status.json").write_text(
-                json.dumps(self.status(), ensure_ascii=False, indent=2)
-            )
-        except Exception as e:
-            logger.warning(f"[{self.agent_name}] Failed to write .status.json: {e}")
+        self._write_status_snapshot()
         # Append per-call token usage to ledger
         usage, self._last_usage = self._last_usage, None
         if usage is not None:

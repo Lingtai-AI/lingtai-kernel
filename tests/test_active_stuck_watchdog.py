@@ -12,6 +12,7 @@ The watchdog protects against two real-world failure modes documented in
 
 Both cases used to be invisible to the heartbeat-only liveness check.
 """
+import json
 import time
 from unittest.mock import MagicMock
 
@@ -70,7 +71,7 @@ class TestProgressBookkeeping:
             working_dir=tmp_path / "test_agent",
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._log("tool_call", call_id="call_abc123")
+        agent._log("tool_call", tool_call_id="call_abc123")
         assert agent._active_turn_kind == "tool_call"
         assert agent._active_turn_id == "call_abc123"
 
@@ -82,7 +83,7 @@ class TestProgressBookkeeping:
             working_dir=tmp_path / "test_agent",
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._log("tool_call", call_id="call_abc")
+        agent._log("tool_call", tool_call_id="call_abc")
         agent._active_stuck_logged = True  # simulate watchdog fired
         agent._set_state(AgentState.IDLE)
         assert agent._active_turn_kind is None
@@ -224,6 +225,35 @@ class TestWatchdogFires:
         assert "no_progress_seconds" in evt
         assert "threshold_seconds" in evt
         assert evt["no_progress_seconds"] >= 30
+
+    def test_watchdog_writes_fresh_status_json_when_active_stuck(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LINGTAI_ACTIVE_STUCK_THRESHOLD_S", "30")
+
+        from lingtai_kernel import BaseAgent, AgentState
+        agent = BaseAgent(
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=tmp_path / "test_agent",
+        )
+        agent._write_status_snapshot()
+        stale_status = json.loads((agent._working_dir / ".status.json").read_text())
+        assert stale_status["runtime"]["state"] == "idle"
+
+        agent._set_state(AgentState.ACTIVE, reason="test")
+        agent._log("tool_call", tool_call_id="call_active")
+        agent._last_progress_at = time.time() - 120
+
+        try:
+            agent._start_heartbeat()
+            time.sleep(2.5)
+        finally:
+            agent._stop_heartbeat()
+
+        status = json.loads((agent._working_dir / ".status.json").read_text())
+        assert status["runtime"]["state"] == "active"
+        assert status["runtime"]["no_progress_seconds"] >= 30
+        assert status["active_turn"]["kind"] == "tool_call"
+        assert status["active_turn"]["id"] == "call_active"
 
     def test_watchdog_only_fires_once_per_stuck_episode(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LINGTAI_ACTIVE_STUCK_THRESHOLD_S", "30")
