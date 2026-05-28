@@ -117,8 +117,20 @@ class FileIOService(ABC):
         ...
 
     @abstractmethod
-    def grep(self, pattern: str, path: str | None = None, max_results: int = 50) -> list[GrepMatch]:
-        """Search file contents by regex pattern."""
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        max_results: int = 50,
+        *,
+        glob_filter: str | None = None,
+    ) -> list[GrepMatch]:
+        """Search file contents by regex pattern.
+
+        ``glob_filter`` is an optional fnmatch-style pattern matched
+        against each file's basename — implementations should use it to
+        prune the candidate set *before* opening / reading.
+        """
         ...
 
 
@@ -282,6 +294,7 @@ class LocalFileIOService(FileIOService):
         path: str | None = None,
         max_results: int = 50,
         *,
+        glob_filter: str | None = None,
         exclude_dirs: frozenset[str] | set[str] | None = None,
         walltime_s: float | None = DEFAULT_WALLTIME_S,
         max_visited: int | None = DEFAULT_MAX_VISITED,
@@ -289,15 +302,34 @@ class LocalFileIOService(FileIOService):
     ) -> list[GrepMatch]:
         """Search file contents by regex.
 
+        ``glob_filter`` (optional) — fnmatch-style pattern matched against
+        the file's *basename*. When supplied, non-matching files are
+        skipped before ``stat`` / ``open``. This lets callers (e.g. the
+        ``grep`` tool's ``glob`` argument) prune the candidate set
+        cheaply instead of post-filtering full match results. The
+        pattern ``"*"`` (or ``None``) is treated as "no filter".
+
         Per-file: skipped (counted) when larger than ``max_file_bytes``
-        or when ``read_text(utf-8)`` raises ``UnicodeDecodeError`` /
-        ``PermissionError`` / ``OSError`` (binary, unreadable). Across
-        files: bounded by ``walltime_s`` and ``max_visited``. See module
-        docstring for default values.
+        or when the file cannot be read as utf-8 / is unreadable
+        (``UnicodeDecodeError`` / ``PermissionError`` / ``OSError``).
+        Files are streamed line-by-line — we never load the whole file
+        into memory, and undecodable bytes inside an otherwise textual
+        file are skipped via ``errors="replace"`` instead of aborting
+        the entire file. Across files: bounded by ``walltime_s`` and
+        ``max_visited``. See module docstring for default values.
         """
+        import fnmatch
+        import io
         import re
 
         regex = re.compile(pattern)
+        # Pre-translate the glob to a regex once instead of letting
+        # fnmatch translate-and-cache per call. Translating ourselves
+        # also lets us cheaply detect the no-op "*" filter.
+        compiled_glob: re.Pattern[str] | None = None
+        if glob_filter and glob_filter != "*":
+            compiled_glob = re.compile(fnmatch.translate(glob_filter))
+
         self.last_traversal = TraversalStats()
         search_path = Path(path) if path else (self._root or Path("."))
         results: list[GrepMatch] = []
@@ -308,6 +340,10 @@ class LocalFileIOService(FileIOService):
             walltime_s=walltime_s,
             max_visited=max_visited,
         ):
+            # Cheapest filter first: glob match on basename. This runs
+            # before stat/open so excluded files contribute zero I/O.
+            if compiled_glob is not None and not compiled_glob.match(f.name):
+                continue
             if not f.is_file():
                 continue
             try:
@@ -317,17 +353,36 @@ class LocalFileIOService(FileIOService):
             if max_file_bytes is not None and size > max_file_bytes:
                 self.last_traversal.files_skipped_size += 1
                 continue
+            # Stream line-by-line. A cheap NUL-byte prefix sniff keeps
+            # obvious binary files out of the text decoder (mirroring
+            # ripgrep's binary detection), while ``errors="replace"``
+            # keeps mostly-text files searchable even when a few bytes are
+            # garbage. Use one binary open + TextIOWrapper so we do not
+            # load the whole file and do not open matched files twice.
             try:
-                text = f.read_text(encoding="utf-8")
+                with open(f, "rb") as raw:
+                    prefix = raw.read(4096)
+                    if b"\x00" in prefix:
+                        self.last_traversal.files_skipped_binary += 1
+                        continue
+                    raw.seek(0)
+                    text_stream = io.TextIOWrapper(raw, encoding="utf-8", errors="replace")
+                    for i, line in enumerate(text_stream, 1):
+                        # Match against the line without its trailing
+                        # newline so ``$``-anchored patterns behave as
+                        # callers expect.
+                        if line.endswith("\n"):
+                            line = line[:-1]
+                            if line.endswith("\r"):
+                                line = line[:-1]
+                        if regex.search(line):
+                            results.append(GrepMatch(path=str(f), line_number=i, line=line))
+                            if len(results) >= max_results:
+                                self.last_traversal.truncated_reason = (
+                                    self.last_traversal.truncated_reason or "max_results"
+                                )
+                                return results
             except (UnicodeDecodeError, PermissionError, OSError):
                 self.last_traversal.files_skipped_binary += 1
                 continue
-            for i, line in enumerate(text.splitlines(), 1):
-                if regex.search(line):
-                    results.append(GrepMatch(path=str(f), line_number=i, line=line))
-                    if len(results) >= max_results:
-                        self.last_traversal.truncated_reason = (
-                            self.last_traversal.truncated_reason or "max_results"
-                        )
-                        return results
         return results
