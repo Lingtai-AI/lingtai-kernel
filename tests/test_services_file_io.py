@@ -205,3 +205,161 @@ class TestTraversalBudgets:
         svc.write(".git/HEAD", "ref")
         results = svc.glob("**/*", exclude_dirs=set())
         assert any(".git" in r for r in results)
+
+
+class TestGrepGlobFilter:
+    """``glob_filter`` should prune the candidate set *before* stat/read.
+
+    Pre-filtering matters because the previous tool wrapper post-filtered
+    full ``GrepMatch`` results — every file under the search root still
+    got opened and scanned even when callers narrowed by ``glob`` (e.g.
+    ``glob="*.py"`` over a 50k-file repo). The contract these tests pin:
+
+    1. Non-matching files are not opened (no ``open`` / ``read_text``
+       calls).
+    2. Matching files still yield the same results as an unfiltered run.
+    3. ``glob_filter=None`` / ``"*"`` is a no-op (back-compat).
+    """
+
+    def test_glob_filter_skips_non_matching_files_before_open(
+        self, svc, tmp_dir, monkeypatch
+    ):
+        # Layout: one .py file that matches the regex, one .log file that
+        # would also match — but the glob filter should hide the .log.
+        svc.write("good.py", "needle here\n")
+        svc.write("noisy.log", "needle here\n")
+
+        opened: list[str] = []
+        real_open = file_io.open if hasattr(file_io, "open") else open
+        import builtins
+
+        real_builtin_open = builtins.open
+
+        def tracking_open(path, *a, **kw):
+            opened.append(str(path))
+            return real_builtin_open(path, *a, **kw)
+
+        # Patch the name resolved inside file_io.py so we observe only
+        # the grep code's opens, not those from the test harness.
+        monkeypatch.setattr(file_io, "open", tracking_open, raising=False)
+        # ``open`` isn't a module-level name in file_io.py — patch the
+        # builtin so the ``open(f, ...)`` call inside grep is intercepted.
+        monkeypatch.setattr("builtins.open", tracking_open)
+
+        results = svc.grep("needle", glob_filter="*.py")
+
+        # Only the .py file's match comes back.
+        assert len(results) == 1
+        assert results[0].path.endswith("/good.py")
+        # And the .log was never opened by grep — pre-filter pruned it.
+        opened_by_grep = [p for p in opened if p.endswith(".log")]
+        assert opened_by_grep == [], f"unexpected reads of excluded files: {opened_by_grep}"
+
+    def test_glob_filter_none_matches_all(self, svc, tmp_dir):
+        svc.write("a.py", "needle\n")
+        svc.write("b.txt", "needle\n")
+        results = svc.grep("needle", glob_filter=None)
+        files = {r.path for r in results}
+        assert any(p.endswith("/a.py") for p in files)
+        assert any(p.endswith("/b.txt") for p in files)
+
+    def test_glob_filter_star_matches_all(self, svc, tmp_dir):
+        # "*" is the schema default for the grep tool; treat it as no-op.
+        svc.write("a.py", "needle\n")
+        svc.write("b.txt", "needle\n")
+        results = svc.grep("needle", glob_filter="*")
+        assert len(results) == 2
+
+    def test_glob_filter_works_with_nested_layout(self, svc, tmp_dir):
+        svc.write("src/main.py", "needle\n")
+        svc.write("src/data.json", "needle\n")
+        svc.write("tests/test_main.py", "needle\n")
+        results = svc.grep("needle", glob_filter="*.py")
+        files = {r.path for r in results}
+        assert any(p.endswith("/src/main.py") for p in files)
+        assert any(p.endswith("/tests/test_main.py") for p in files)
+        assert not any(p.endswith(".json") for p in files)
+
+
+class TestGrepLineStreaming:
+    """Grep streams files line-by-line instead of slurping into memory.
+
+    Two invariants the tests pin:
+
+    1. A genuinely undecodable file is still skipped (no crash) and
+       counted in ``files_skipped_binary``.
+    2. A *mostly* utf-8 file with a few bad bytes mid-stream is still
+       searchable — we use ``errors="replace"`` so one rogue byte does
+       not blank the whole file the way ``read_text`` did.
+    """
+
+    def test_grep_handles_mixed_utf8_with_bad_bytes(self, svc, tmp_dir):
+        # File with a valid utf-8 needle line, plus a line containing an
+        # invalid utf-8 continuation byte. ``read_text(utf-8)`` would
+        # raise UnicodeDecodeError on the whole file; the streamed
+        # ``errors="replace"`` path keeps the good lines searchable.
+        path = tmp_dir / "mixed.txt"
+        path.write_bytes(b"needle here\n\xff\xfe garbage\nanother needle\n")
+
+        results = svc.grep("needle")
+        files = {r.path for r in results}
+        assert any(p.endswith("/mixed.txt") for p in files)
+        # Both clean ``needle`` lines should match — the garbage line in
+        # the middle does not abort the file.
+        needle_matches = [r for r in results if r.path.endswith("/mixed.txt")]
+        assert len(needle_matches) == 2
+        assert needle_matches[0].line_number == 1
+        assert needle_matches[1].line_number == 3
+
+
+    def test_grep_skips_nul_binary_files(self, svc, tmp_dir):
+        # NUL-byte prefix sniff mirrors ripgrep-style binary detection: an
+        # obvious binary file should be skipped even if it contains bytes
+        # that would otherwise decode via errors="replace".
+        path = tmp_dir / "binary.bin"
+        path.write_bytes(b"\x00needle\x00\xff\xfe\x00")
+
+        results = svc.grep("needle")
+
+        assert not any(r.path.endswith("/binary.bin") for r in results)
+        assert svc.last_traversal.files_skipped_binary >= 1
+
+    def test_grep_skips_unreadable_files_without_crashing(
+        self, svc, tmp_dir, monkeypatch
+    ):
+        svc.write("ok.txt", "needle\n")
+        svc.write("locked.txt", "needle\n")
+
+        import builtins
+        real_open = builtins.open
+
+        def selective_open(path, *a, **kw):
+            if str(path).endswith("/locked.txt"):
+                raise PermissionError("nope")
+            return real_open(path, *a, **kw)
+
+        monkeypatch.setattr("builtins.open", selective_open)
+
+        results = svc.grep("needle")
+        files = {r.path for r in results}
+        assert any(p.endswith("/ok.txt") for p in files)
+        assert not any(p.endswith("/locked.txt") for p in files)
+        assert svc.last_traversal.files_skipped_binary >= 1
+
+    def test_grep_does_not_load_whole_file_into_memory(self, svc, tmp_dir, monkeypatch):
+        # Pin the streaming contract: ``read_text`` (whole-file read)
+        # must not be called by grep. Anyone reintroducing it would
+        # regress memory behavior on large logs / jsonl.
+        svc.write("a.txt", "needle\n")
+
+        original = Path.read_text
+        calls: list[str] = []
+
+        def spy(self, *a, **kw):
+            calls.append(str(self))
+            return original(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "read_text", spy)
+        results = svc.grep("needle")
+        assert len(results) >= 1
+        assert calls == [], f"grep should stream, not call read_text: {calls}"
