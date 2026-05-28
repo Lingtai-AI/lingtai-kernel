@@ -9,7 +9,7 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 | File | LOC | Role |
 |---|---|---|
 | `__init__.py` | 1 | Docstring-only package marker |
-| `file_io.py` | 134 | `FileIOService` (ABC) + `LocalFileIOService` — backs read/edit/write/glob/grep |
+| `file_io.py` | 491 | `FileIOService` facade contract + `FileIOBackend`/`LocalFileIOBackend` — backs read/edit/write/glob/grep |
 | `mail.py` | 4 | Re-exports `MailService`, `FilesystemMailService` from `lingtai_kernel.services.mail` |
 | `mcp.py` | 431 | `MCPClient` (stdio) + `HTTPMCPClient` (streamable HTTP) — async-to-sync MCP bridges |
 
@@ -26,13 +26,14 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 
 ## Composition
 
-`file_io.py` is a pure abstraction layer (no external deps beyond stdlib). `mail.py` is a passthrough re-export. `mcp.py` is the heavy module — two parallel client classes sharing the same pattern.
+`file_io.py` is a pure stdlib abstraction layer. `LocalFileIOService` is now the tool-facing facade while `LocalFileIOBackend` owns the default Python local filesystem implementation; future native/Rust or subprocess backends should satisfy the same backend contract without changing tool schemas. `mail.py` is a passthrough re-export. `mcp.py` is the heavy module — two parallel client classes sharing the same pattern.
 
 ## State
 
 - **`MCPClient` / `HTTPMCPClient`**: each instance manages a background daemon thread (L68, 292), an asyncio event loop (`_loop`), a `ClientSession` (`_session`), and a 50-entry activity log (`_activity_log`, L54, 286). Thread-safe via `threading.Lock` and `threading.Event`.
-- **`LocalFileIOService`**: stateless beyond optional `_root` path (L64).
-- **`FileIOService` ABC**: pure interface, no state.
+- **`LocalFileIOService`**: facade over a `_backend`; exposes `last_traversal` from the backend for tool metadata.
+- **`LocalFileIOBackend`**: default Python local filesystem backend; state is optional `_root` plus `last_traversal`.
+- **`FileIOService` / `FileIOBackend` ABCs**: pure interfaces, no state.
 
 ## Notes
 

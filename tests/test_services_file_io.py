@@ -6,7 +6,14 @@ from pathlib import Path
 import pytest
 
 import lingtai.services.file_io as file_io
-from lingtai.services.file_io import LocalFileIOService, GrepMatch
+from lingtai.services.file_io import (
+    DEFAULT_MAX_FILE_BYTES,
+    DEFAULT_MAX_VISITED,
+    DEFAULT_WALLTIME_S,
+    GrepMatch,
+    LocalFileIOService,
+    TraversalStats,
+)
 
 
 @pytest.fixture
@@ -205,3 +212,68 @@ class TestTraversalBudgets:
         svc.write(".git/HEAD", "ref")
         results = svc.glob("**/*", exclude_dirs=set())
         assert any(".git" in r for r in results)
+
+
+
+class RecordingBackend:
+    """Small backend double proving LocalFileIOService is now a facade."""
+
+    def __init__(self):
+        self.last_traversal = TraversalStats(truncated_reason="backend")
+        self.calls = []
+
+    def read(self, path: str) -> str:
+        self.calls.append(("read", path))
+        return "read-result"
+
+    def write(self, path: str, content: str) -> None:
+        self.calls.append(("write", path, content))
+
+    def edit(self, path: str, old_string: str, new_string: str) -> str:
+        self.calls.append(("edit", path, old_string, new_string))
+        return "edited"
+
+    def glob(self, pattern: str, root: str | None = None, **kwargs):
+        self.calls.append(("glob", pattern, root, kwargs))
+        return ["one.py"]
+
+    def grep(self, pattern: str, path: str | None = None, max_results: int = 50, **kwargs):
+        self.calls.append(("grep", pattern, path, max_results, kwargs))
+        return [GrepMatch("one.py", 1, "needle")]
+
+
+def test_local_file_io_service_delegates_all_operations_to_backend():
+    backend = RecordingBackend()
+    svc = LocalFileIOService(backend=backend)
+
+    assert svc.read("a.txt") == "read-result"
+    svc.write("a.txt", "body")
+    assert svc.edit("a.txt", "old", "new") == "edited"
+    assert svc.glob("*.py", root="src", max_results=7) == ["one.py"]
+    assert svc.glob("*.py", root="src") == ["one.py"]
+    assert svc.grep("needle", path="src", max_results=3) == [GrepMatch("one.py", 1, "needle")]
+    assert svc.last_traversal.truncated_reason == "backend"
+
+    assert backend.calls == [
+        ("read", "a.txt"),
+        ("write", "a.txt", "body"),
+        ("edit", "a.txt", "old", "new"),
+        ("glob", "*.py", "src", {
+            "exclude_dirs": None,
+            "walltime_s": DEFAULT_WALLTIME_S,
+            "max_visited": DEFAULT_MAX_VISITED,
+            "max_results": 7,
+        }),
+        ("glob", "*.py", "src", {
+            "exclude_dirs": None,
+            "walltime_s": DEFAULT_WALLTIME_S,
+            "max_visited": DEFAULT_MAX_VISITED,
+            "max_results": 2000,
+        }),
+        ("grep", "needle", "src", 3, {
+            "exclude_dirs": None,
+            "walltime_s": DEFAULT_WALLTIME_S,
+            "max_visited": DEFAULT_MAX_VISITED,
+            "max_file_bytes": DEFAULT_MAX_FILE_BYTES,
+        }),
+    ]
