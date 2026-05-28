@@ -19,7 +19,7 @@ from .core.avatar import AvatarManager
 from lingtai_kernel.intrinsics.email import EmailManager
 
 # Services
-from .services.file_io import FileIOService, LocalFileIOService, GrepMatch
+from .services.file_io import FileIOBackend, FileIOService, GrepMatch, LocalFileIOBackend, LocalFileIOService
 from lingtai_kernel.services.mail import MailService, FilesystemMailService
 from lingtai_kernel.services.logging import LoggingService, JSONLLoggingService
 from .services.vision import VisionService, create_vision_service
@@ -43,6 +43,8 @@ __all__ = [
     "EmailManager",
     # Services
     "FileIOService",
+    "FileIOBackend",
+    "LocalFileIOBackend",
     "LocalFileIOService",
     "GrepMatch",
     "MailService",

@@ -1,12 +1,12 @@
 """FileIOService — abstract file access backing read/edit/write/glob/grep intrinsics.
 
-First implementation: LocalFileIOService (local filesystem, text files only).
-Future: RichFileIOService (PDF, images), RemoteFileIOService, SandboxedFileIOService.
+First implementation: LocalFileIOService facade over LocalFileIOBackend (local filesystem, text files only).
+Future: RichFileIOService, RemoteFileIOService, and SandboxedFileIOService can swap backends without changing tool schemas.
 
 Recursive traversal budgets (issue #164)
 ---------------------------------------
 
-``LocalFileIOService.glob`` and ``LocalFileIOService.grep`` enforce defaults
+``LocalFileIOBackend.glob`` and ``LocalFileIOBackend.grep`` enforce defaults
 that keep a single call from wedging the agent for ~17 min on a broad root
 like ``/Users/<name>/work``:
 
@@ -122,11 +122,69 @@ class FileIOService(ABC):
         ...
 
 
-class LocalFileIOService(FileIOService):
-    """Local filesystem implementation — text files only.
+class FileIOBackend(ABC):
+    """Backend protocol for concrete file operations.
 
-    This is the first and simplest implementation. It reads/writes files
-    on the local filesystem using Path operations.
+    ``FileIOService`` is the stable tool-facing contract. Backends own the
+    implementation details for read/write/edit/glob/grep: local Python today,
+    optional rg/fd or Rust/native backends later. This split keeps tool schemas
+    and safety semantics stable while allowing the execution engine underneath
+    to change.
+    """
+
+    last_traversal: TraversalStats
+
+    @abstractmethod
+    def read(self, path: str) -> str:
+        """Read file contents as text."""
+        ...
+
+    @abstractmethod
+    def write(self, path: str, content: str) -> None:
+        """Write content to a file (create or overwrite)."""
+        ...
+
+    @abstractmethod
+    def edit(self, path: str, old_string: str, new_string: str) -> str:
+        """Replace old_string with new_string in the file. Returns updated content."""
+        ...
+
+    @abstractmethod
+    def glob(
+        self,
+        pattern: str,
+        root: str | None = None,
+        *,
+        exclude_dirs: frozenset[str] | set[str] | None = None,
+        walltime_s: float | None = DEFAULT_WALLTIME_S,
+        max_visited: int | None = DEFAULT_MAX_VISITED,
+        max_results: int | None = 2000,
+    ) -> list[str]:
+        """Find files matching a glob pattern."""
+        ...
+
+    @abstractmethod
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        max_results: int = 50,
+        *,
+        exclude_dirs: frozenset[str] | set[str] | None = None,
+        walltime_s: float | None = DEFAULT_WALLTIME_S,
+        max_visited: int | None = DEFAULT_MAX_VISITED,
+        max_file_bytes: int | None = DEFAULT_MAX_FILE_BYTES,
+    ) -> list[GrepMatch]:
+        """Search file contents by regex pattern."""
+        ...
+
+
+class LocalFileIOBackend(FileIOBackend):
+    """Local Python backend — text files only.
+
+    This is the default backend. It preserves the historical LocalFileIOService
+    behavior while making the backend boundary explicit for future Rust/native
+    implementations.
     """
 
     def __init__(self, root: Path | str | None = None):
@@ -331,3 +389,103 @@ class LocalFileIOService(FileIOService):
                         )
                         return results
         return results
+
+class LocalFileIOService(FileIOService):
+    """Tool-facing file I/O service facade using a pluggable backend.
+
+    Existing agents continue to instantiate ``LocalFileIOService(root=...)`` and
+    see the same behavior. The implementation is delegated to
+    ``LocalFileIOBackend`` by default, so future Rust/native backends can be
+    introduced behind the same read/write/edit/glob/grep contract.
+    """
+
+    def __init__(
+        self,
+        root: Path | str | None = None,
+        *,
+        backend: FileIOBackend | None = None,
+    ):
+        self._backend = backend or LocalFileIOBackend(root=root)
+
+    @property
+    def last_traversal(self) -> TraversalStats:
+        return self._backend.last_traversal
+
+    @last_traversal.setter
+    def last_traversal(self, value: TraversalStats) -> None:
+        self._backend.last_traversal = value
+
+    def _resolve(self, path: str) -> Path:
+        """Compatibility shim for callers that reached into the old local service."""
+        resolver = getattr(self._backend, "_resolve", None)
+        if resolver is None:
+            raise AttributeError("configured file I/O backend does not expose _resolve")
+        return resolver(path)
+
+    def _walk_files(
+        self,
+        root: Path,
+        *,
+        exclude_dirs: frozenset[str] | set[str] | None,
+        walltime_s: float | None,
+        max_visited: int | None,
+    ) -> Iterable[Path]:
+        """Compatibility shim for callers that reached into the old local service."""
+        walker = getattr(self._backend, "_walk_files", None)
+        if walker is None:
+            raise AttributeError("configured file I/O backend does not expose _walk_files")
+        return walker(
+            root,
+            exclude_dirs=exclude_dirs,
+            walltime_s=walltime_s,
+            max_visited=max_visited,
+        )
+
+    def read(self, path: str) -> str:
+        return self._backend.read(path)
+
+    def write(self, path: str, content: str) -> None:
+        self._backend.write(path, content)
+
+    def edit(self, path: str, old_string: str, new_string: str) -> str:
+        return self._backend.edit(path, old_string, new_string)
+
+    def glob(
+        self,
+        pattern: str,
+        root: str | None = None,
+        *,
+        exclude_dirs: frozenset[str] | set[str] | None = None,
+        walltime_s: float | None = DEFAULT_WALLTIME_S,
+        max_visited: int | None = DEFAULT_MAX_VISITED,
+        max_results: int | None = 2000,
+    ) -> list[str]:
+        return self._backend.glob(
+            pattern,
+            root=root,
+            exclude_dirs=exclude_dirs,
+            walltime_s=walltime_s,
+            max_visited=max_visited,
+            max_results=max_results,
+        )
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        max_results: int = 50,
+        *,
+        exclude_dirs: frozenset[str] | set[str] | None = None,
+        walltime_s: float | None = DEFAULT_WALLTIME_S,
+        max_visited: int | None = DEFAULT_MAX_VISITED,
+        max_file_bytes: int | None = DEFAULT_MAX_FILE_BYTES,
+    ) -> list[GrepMatch]:
+        return self._backend.grep(
+            pattern,
+            path=path,
+            max_results=max_results,
+            exclude_dirs=exclude_dirs,
+            walltime_s=walltime_s,
+            max_visited=max_visited,
+            max_file_bytes=max_file_bytes,
+        )
