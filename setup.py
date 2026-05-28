@@ -126,16 +126,19 @@ def _ensure_sidecar_built() -> Path | None:
         _clear_staged_sidecar()
         return None
 
-    print(f"[lingtai] cargo build --release ({SIDECAR_CRATE})", file=sys.stderr)
+    print(f"[lingtai] cargo build --release --locked ({SIDECAR_CRATE})", file=sys.stderr)
     try:
         subprocess.run(
-            ["cargo", "build", "--release",
+            ["cargo", "build", "--release", "--locked",
              "--manifest-path", str(SIDECAR_CRATE / "Cargo.toml")],
             check=True,
         )
     except subprocess.CalledProcessError as exc:
         if os.environ.get("LINGTAI_REQUIRE_RUST_BUILD") == "1":
-            raise
+            raise RuntimeError(
+                f"cargo build failed with exit code {exc.returncode} "
+                "while LINGTAI_REQUIRE_RUST_BUILD=1 is set."
+            ) from exc
         print(f"[lingtai] cargo build failed ({exc}); continuing without bundled sidecar.",
               file=sys.stderr)
         _clear_staged_sidecar()

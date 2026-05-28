@@ -405,6 +405,9 @@ fn rel_to(base: &Path, target: &Path) -> String {
         .replace('\\', "/")
 }
 
+type LineMatch = (usize, String);
+type FileMatches = Vec<(PathBuf, Vec<LineMatch>)>;
+
 /// Search files under ``start_path`` for lines matching ``matcher``.
 ///
 /// Per-file budgets:
@@ -426,8 +429,7 @@ fn grep(
     start: &Instant,
 ) -> GrepOutcome {
     let shared = Arc::new(WalkShared::new());
-    let matches: Arc<Mutex<Vec<(PathBuf, Vec<(usize, String)>)>>> =
-        Arc::new(Mutex::new(Vec::new()));
+    let matches: Arc<Mutex<FileMatches>> = Arc::new(Mutex::new(Vec::new()));
 
     let builder = build_walker(start_path, excludes, Arc::clone(&shared.dirs_pruned));
 
@@ -548,12 +550,10 @@ fn grep(
     });
 
     let stats = Arc::try_unwrap(shared)
-        .ok()
-        .expect("shared walker state leaked")
+        .unwrap_or_else(|_| panic!("shared walker state leaked"))
         .into_stats();
 
     let raw = Arc::try_unwrap(matches)
-        .ok()
         .expect("match collection leaked")
         .into_inner()
         .expect("match lock poisoned");
@@ -679,11 +679,9 @@ fn glob_walk(
     });
 
     let stats = Arc::try_unwrap(shared)
-        .ok()
-        .expect("shared walker state leaked")
+        .unwrap_or_else(|_| panic!("shared walker state leaked"))
         .into_stats();
     let mut collected = Arc::try_unwrap(paths)
-        .ok()
         .expect("glob path collection leaked")
         .into_inner()
         .expect("glob path lock poisoned");

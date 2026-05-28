@@ -22,21 +22,24 @@ Starting with this PR, the sidecar is the **formal native backend** for
   (sdist-only builds, machines without Rust at build time, operators who
   explicitly opt out).
 
-### Wheel CI matrix — current state
+### Wheel CI matrix
 
-CI does **not yet** build wheels for the full Python × platform matrix
-(cibuildwheel, manylinux, etc.). Until that lands:
+This PR adds `.github/workflows/wheels.yml`, a `cibuildwheel` matrix for
+macOS, Linux, and Windows. Release builds install Rust in CI and set
+`LINGTAI_REQUIRE_RUST_BUILD=1`, so missing or failed sidecar builds are
+caught before artifacts are published. The resulting wheels carry the
+native sidecar binary for their target platform, so ordinary users do not
+need Rust at runtime.
 
-* `pip install lingtai` from a wheel built locally on the operator's
-  machine works end-to-end (cargo runs at build time, binary is bundled).
-* Source installs (`pip install lingtai` resolving to sdist on a
-  machine without prebuilt wheels) will require Rust at install time to
-  produce the native binary. If Rust is absent, the install still
-  succeeds and falls back to pure Python with a warning.
+Source installs (`pip install lingtai` resolving to sdist on a machine
+without a matching prebuilt wheel) still keep the soft fallback behavior:
+if Cargo/Rust is present the sidecar is built locally; if Rust is absent
+the install succeeds without the bundled binary and `auto` falls back to
+pure Python with a warning.
 
-Setting `LINGTAI_SKIP_RUST_BUILD=1` forces a pure-Python build (no
-cargo invocation, universal wheel). Set `LINGTAI_REQUIRE_RUST_BUILD=1`
-to make any cargo failure abort the build instead of fallback.
+Setting `LINGTAI_SKIP_RUST_BUILD=1` forces a pure-Python build (no cargo
+invocation, universal wheel). Set `LINGTAI_REQUIRE_RUST_BUILD=1` to make
+any cargo failure abort the build instead of fallback.
 
 ## Build manually
 
