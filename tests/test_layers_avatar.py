@@ -308,11 +308,21 @@ class TestMissionQualityGate:
         assert "confirm" in sch["properties"]
         assert sch["properties"]["confirm"]["type"] == "boolean"
 
-    def test_description_warns_against_accidental_spawn(self):
-        from lingtai.core.avatar import get_description
+    def test_description_points_to_avatar_manual_after_prompt_compaction(self):
+        """The terse tool description should route safety guidance to the manual.
+
+        Prompt-token compaction moved verbose WARNING copy out of the always-on
+        tool description and into avatar-manual. The safety contract now lives
+        in the schema gates (dry_run/confirm) plus the manual pointer, not in a
+        long description string.
+        """
+        from lingtai.core.avatar import get_description, get_schema
         desc = get_description("en")
-        assert "WARNING" in desc
-        assert "independent process" in desc.lower()
+        schema = get_schema("en")
+        assert "avatar-manual" in desc
+        assert "WARNING" not in desc
+        assert "confirm" in schema["properties"]
+        assert "dry_run" in schema["properties"]
 
 
 class TestSetupAvatar:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
 
 def test_kernel_import_is_clean():
@@ -21,7 +22,7 @@ def test_kernel_import_is_clean():
         [sys.executable, "-c", "import lingtai_kernel; print('OK')"],
         capture_output=True,
         text=True,
-        cwd="/Users/huangzesen/Documents/Github/lingtai-kernel",
+        cwd=str(Path(__file__).resolve().parents[1]),
     )
     assert result.returncode == 0, (
         f"lingtai_kernel failed to import.\n"
@@ -87,7 +88,7 @@ def test_kernel_import_does_not_pull_lingtai():
         ],
         capture_output=True,
         text=True,
-        cwd="/Users/huangzesen/Documents/Github/lingtai-kernel",
+        cwd=str(Path(__file__).resolve().parents[1]),
     )
     assert result.returncode == 0, f"Subprocess error:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     assert "CLEAN" in result.stdout, (

@@ -1151,7 +1151,9 @@ class TestRehydrateAppendixTracking:
              patch.object(agent, "_start_soul_timer") as mock_resched:
             agent._soul_whisper()
         assert mock_fire.call_count == 1
-        assert mock_resched.call_count == 1
+        # Current cadence is one-shot per IDLE transition: _soul_whisper does
+        # not reschedule itself; the next transition to IDLE starts a new timer.
+        assert mock_resched.call_count == 0
 
     def test_soul_whisper_swallows_consultation_fire_error(self, tmp_path):
         """Errors in the consultation fire must not break the cadence —
@@ -1165,7 +1167,8 @@ class TestRehydrateAppendixTracking:
                           side_effect=RuntimeError("boom")), \
              patch.object(agent, "_start_soul_timer") as mock_resched:
             agent._soul_whisper()  # must not raise
-        assert mock_resched.call_count == 1
+        # Errors are swallowed, but cadence is still one-shot; no self-reschedule.
+        assert mock_resched.call_count == 0
 
     def test_tracks_first_match_only(self, tmp_path):
         """Defensive: if somehow the history contains two soul.flow pairs

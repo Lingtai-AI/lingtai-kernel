@@ -372,5 +372,10 @@ def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
 
     flow._run_consultation_fire(agent)
 
+    # Soul flow no longer enqueues a TC wake directly; filesystem
+    # notification + heartbeat sync owns injection/wake-up. A mid-flight state
+    # change therefore must not touch tc_inbox, and the fire is allowed to
+    # publish/log through the notification path without the old
+    # consultation_discarded_state event.
     agent._tc_inbox.enqueue.assert_not_called()
-    assert any(name == "consultation_discarded_state" for name, _ in agent._logs)
+    assert any(name == "consultation_fire" for name, _ in agent._logs)
