@@ -193,11 +193,90 @@ def summarize_file(path: Path) -> dict[str, Any]:
     }
 
 
+def read_text_preview(path: Path, max_chars: int = 200) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    if len(text) > max_chars:
+        return text[:max_chars] + "..."
+    return text
+
+
+def parse_heartbeat(path: Path) -> dict[str, Any]:
+    info = summarize_file(path)
+    text = read_text_preview(path, 120)
+    if text is not None:
+        info["raw_preview"] = text
+        try:
+            # Current kernel writes Unix epoch seconds; some old runtimes wrote
+            # arbitrary heartbeat text. Keep mtime as fallback for both.
+            ts = float(text)
+        except ValueError:
+            info["parse_error"] = "not a float timestamp"
+        else:
+            now = datetime.now(timezone.utc).timestamp()
+            info["timestamp_age_seconds"] = round(max(0.0, now - ts), 1)
+            info["timestamp"] = datetime.fromtimestamp(ts, timezone.utc).isoformat(
+                timespec="seconds"
+            )
+    return info
+
+
+def newest_mtime(paths: Iterable[Path]) -> float | None:
+    newest: float | None = None
+    for path in paths:
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        if newest is None or st.st_mtime > newest:
+            newest = st.st_mtime
+    return newest
+
+
 def default_project_dir(agent_dir: Path) -> Path | None:
     # Common layout: <project>/.lingtai/<agent>. Return <project> when present.
     if agent_dir.parent.name == ".lingtai":
         return agent_dir.parent.parent
     return agent_dir.parent if agent_dir.parent != agent_dir else None
+
+
+def collect_marker_files(report: Report) -> None:
+    sec = report.section("marker files")
+    markers = [
+        ".agent.lock",
+        ".refresh",
+        ".suspend",
+        ".agent.heartbeat",
+        ".status.json",
+        ".agent.json",
+    ]
+    seen = []
+    for name in markers:
+        path = report.agent_dir / name
+        info = summarize_file(path)
+        info["name"] = name
+        if info.get("exists"):
+            seen.append(info)
+    sec.add("OK", "marker file footprint", f"Found {len(seen)} lifecycle marker file(s).", markers=seen)
+    for name in (".refresh", ".suspend"):
+        path = report.agent_dir / name
+        if path.exists():
+            sec.add(
+                "WARN",
+                f"{name} present",
+                f"{name} exists; this may indicate a pending refresh/suspension or stale lifecycle signal.",
+                file=summarize_file(path),
+            )
+    lock = report.agent_dir / ".agent.lock"
+    if lock.exists():
+        sec.add(
+            "OK",
+            ".agent.lock present",
+            "Lock file exists. Presence alone is normal for a running agent; stale locks should be interpreted with heartbeat/process evidence.",
+            file=summarize_file(lock),
+        )
 
 
 def collect_lifecycle(report: Report) -> dict[str, Any]:
@@ -241,13 +320,17 @@ def collect_lifecycle(report: Report) -> dict[str, Any]:
             sec.add("WARN", "status file is stale", f".status.json has not changed for {status_age:.0f}s.", age_seconds=round(status_age, 1))
 
     heartbeat = report.agent_dir / ".agent.heartbeat"
-    hb = summarize_file(heartbeat)
+    hb = parse_heartbeat(heartbeat)
     if not hb.get("exists"):
         sec.add("FAIL", "heartbeat missing", ".agent.heartbeat is absent; the agent may be suspended/dead or using an old runtime.")
     else:
-        hb_age = float(hb.get("age_seconds", 0.0))
+        hb_age = float(hb.get("timestamp_age_seconds", hb.get("age_seconds", 0.0)))
         sev = "OK" if hb_age <= 120 else "WARN" if hb_age <= 600 else "FAIL"
-        sec.add(sev, "heartbeat freshness", f".agent.heartbeat age is {hb_age:.0f}s.", file=hb)
+        detail = f".agent.heartbeat age is {hb_age:.0f}s."
+        if hb.get("parse_error"):
+            sev = "WARN" if sev == "OK" else sev
+            detail += f" Timestamp parse warning: {hb['parse_error']}."
+        sec.add(sev, "heartbeat freshness", detail, file=hb)
 
     return {"agent_json": agent_json, "status_json": status_json, "heartbeat": hb}
 
@@ -307,6 +390,17 @@ def collect_notifications_logs_mail(report: Report) -> None:
         info["path"] = str(path.relative_to(report.agent_dir))
         logs.append(info)
     sec.add("OK", "log files summarized", "Log mtimes/sizes collected without reading message bodies.", logs=logs)
+    heartbeat_age = age_seconds(report.agent_dir / ".agent.heartbeat")
+    newest_log = newest_mtime(path for path in log_paths if path.exists())
+    if heartbeat_age is not None and heartbeat_age <= 120 and newest_log is not None:
+        log_age = max(0.0, datetime.now(timezone.utc).timestamp() - newest_log)
+        if log_age > 3600:
+            sec.add(
+                "WARN",
+                "logs stale while heartbeat fresh",
+                f"Heartbeat is fresh but newest known log is {log_age:.0f}s old; logging may be disabled/stalled or the agent has been idle.",
+                newest_log_age_seconds=round(log_age, 1),
+            )
 
     for box_name in ("inbox", "outbox", "mailbox", "sent"):
         box = report.agent_dir / box_name
@@ -340,6 +434,7 @@ def iter_mcp_entries(agent_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
 
     reg_path = agent_dir / "mcp_registry.jsonl"
     if reg_path.exists():
+        seen_registry_names: set[str] = set()
         try:
             for idx, line in enumerate(reg_path.read_text(encoding="utf-8").splitlines(), start=1):
                 if not line.strip():
@@ -349,12 +444,24 @@ def iter_mcp_entries(agent_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
                 except json.JSONDecodeError as exc:
                     errors.append(f"mcp_registry.jsonl:{idx}: {exc}")
                     continue
-                if isinstance(obj, dict):
-                    obj = dict(obj)
-                    obj["source"] = f"mcp_registry.jsonl:{idx}"
-                    entries.append(obj)
-                else:
+                if not isinstance(obj, dict):
                     errors.append(f"mcp_registry.jsonl:{idx}: not an object")
+                    continue
+                for field_name in ("name", "summary", "transport", "source"):
+                    if not isinstance(obj.get(field_name), str) or not obj.get(field_name):
+                        errors.append(f"mcp_registry.jsonl:{idx}: missing/invalid {field_name!r}")
+                if obj.get("transport") == "stdio" and not isinstance(obj.get("command"), str):
+                    errors.append(f"mcp_registry.jsonl:{idx}: stdio entry missing string 'command'")
+                if obj.get("transport") == "stdio" and not isinstance(obj.get("args", []), list):
+                    errors.append(f"mcp_registry.jsonl:{idx}: stdio entry has non-list 'args'")
+                name = obj.get("name")
+                if isinstance(name, str):
+                    if name in seen_registry_names:
+                        errors.append(f"mcp_registry.jsonl:{idx}: duplicate name {name!r}")
+                    seen_registry_names.add(name)
+                obj = dict(obj)
+                obj["source"] = f"mcp_registry.jsonl:{idx}"
+                entries.append(obj)
         except OSError as exc:
             errors.append(f"mcp_registry.jsonl: {exc}")
 
@@ -388,6 +495,27 @@ def env_from_entry(entry: dict[str, Any]) -> dict[str, Any]:
             if isinstance(value, dict):
                 env.update(value)
     return env
+
+
+def args_from_entry(entry: dict[str, Any]) -> list[str]:
+    for key in ("args", "arguments"):
+        value = entry.get(key)
+        if isinstance(value, list):
+            return [str(item) for item in value]
+    config = entry.get("config")
+    if isinstance(config, dict):
+        for key in ("args", "arguments"):
+            value = config.get(key)
+            if isinstance(value, list):
+                return [str(item) for item in value]
+    return []
+
+
+def module_from_args(args: list[str]) -> str | None:
+    for idx, item in enumerate(args[:-1]):
+        if item == "-m" and args[idx + 1]:
+            return args[idx + 1]
+    return None
 
 
 def validate_command(command: str) -> dict[str, Any]:
@@ -478,7 +606,11 @@ def collect_mcp(report: Report) -> list[str]:
         transport = str(entry.get("transport") or entry.get("type") or "stdio")
         command = command_from_entry(entry)
         env_summary = summarize_env(env_from_entry(entry), report.agent_dir, report.project_dir)
-        if name in ADDON_MODULES:
+        args = args_from_entry(entry)
+        module = module_from_args(args)
+        if module:
+            addon_modules_to_try.add(module)
+        elif name in ADDON_MODULES:
             addon_modules_to_try.add(ADDON_MODULES[name])
 
         if transport != "stdio" and not command:
@@ -500,7 +632,17 @@ def collect_mcp(report: Report) -> list[str]:
             detail = "Command exists but is not executable."
         if hints:
             detail += " Migration hint: " + "; ".join(hints)
-        sec.add(severity, f"{name}: stdio command", detail, source=entry.get("source"), command=validation, migration_hints=hints, env=env_summary)
+        sec.add(
+            severity,
+            f"{name}: stdio command",
+            detail,
+            source=entry.get("source"),
+            command=validation,
+            args=args,
+            module=module,
+            migration_hints=hints,
+            env=env_summary,
+        )
 
         resolved = validation.get("resolved")
         if isinstance(resolved, str) and resolved and Path(resolved).name.startswith("python"):
@@ -550,6 +692,7 @@ def diagnose(agent_dir: Path, project_dir: Path | None = None) -> Report:
         sec.add("FAIL", "agent directory missing", f"{agent_dir} does not exist.")
         add_next_steps(report)
         return report
+    collect_marker_files(report)
     collect_lifecycle(report)
     collect_process(report)
     collect_notifications_logs_mail(report)
