@@ -36,6 +36,7 @@ dependencies = [
     "lingtai-telegram>=0.1.0",
     "lingtai-feishu>=0.1.0",
     "lingtai-wechat>=0.1.0",
+    "lingtai-whatsapp>=0.1.0",
 ]
 
 [project.scripts]
