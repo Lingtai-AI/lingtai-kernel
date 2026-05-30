@@ -256,8 +256,13 @@ class TestPostMoltNotificationSystemForget:
 
 class TestPostMoltContinuationSignal:
     """Issue #184 — the post-molt notification is an actionable continuation
-    signal carrying molt_id / molt_at / source_agent / next_action and an
-    ack taxonomy (continue / defer / mark-obsolete), durable until dismissed."""
+    signal carrying molt_id / molt_at / source_agent and an ack taxonomy
+    (continue / defer / obsolete), durable until dismissed with a reason.
+
+    Per PR #190 feedback there is intentionally **no** heuristic next-action
+    extraction: the agent reconstructs context itself from pad / summary /
+    human-channel messages — the kernel never excerpts or parses the summary.
+    """
 
     def test_agent_molt_carries_continuation_fields(self, tmp_path):
         agent = _make_agent_with_psyche(tmp_path)
@@ -277,20 +282,22 @@ class TestPostMoltContinuationSignal:
 
             payload = _read_post_molt(agent)
             data = payload["data"]
-            # New continuation fields are all present.
+            # Continuation identity fields are present.
             assert data.get("ack_options") == ["continue", "defer", "obsolete"]
             assert data.get("molt_id"), "continuation must carry a molt_id"
             assert data["molt_id"].startswith(f"molt-{result['molt_count']}-")
             assert data.get("molt_at"), "continuation must carry a timestamp"
             # source_agent echoes the agent's true name.
             assert data.get("source_agent") == "test"
-            # next_action surfaces the explicit marker line, not just line 1.
-            assert "open the PR" in (data.get("next_action") or "")
+            # No heuristic extraction: the kernel must NOT excerpt the summary.
+            assert "next_action" not in data
+            # summary_path is the pointer the agent reconstructs from instead.
+            assert "summary_path" in data
 
         finally:
             agent.stop()
 
-    def test_instructions_spell_out_ack_taxonomy(self, tmp_path):
+    def test_instructions_spell_out_reconstruct_then_ack(self, tmp_path):
         agent = _make_agent_with_psyche(tmp_path)
         agent.start()
         try:
@@ -303,11 +310,15 @@ class TestPostMoltContinuationSignal:
             assert result.get("status") == "ok"
 
             instr = (_read_post_molt(agent).get("instructions") or "").lower()
+            # Self-reconstruction sources are named explicitly.
+            assert "pad" in instr
+            assert "summary" in instr
+            assert "human-channel" in instr or "human channel" in instr
             # The three ack paths must be discoverable from the instructions.
             assert "continue" in instr
             assert "defer" in instr
             assert "obsolete" in instr
-            # And the concrete dismiss mechanism + reasoned ack are still referenced.
+            # Concrete dismiss mechanism + reason-required ack.
             assert "post-molt" in instr
             assert "reason='continue" in instr
             assert "reason='defer" in instr
@@ -318,15 +329,15 @@ class TestPostMoltContinuationSignal:
         finally:
             agent.stop()
 
-    def test_next_action_falls_back_to_first_line(self, tmp_path):
-        """Without an explicit marker, next_action falls back to the first
-        non-empty summary line so the field is never empty for a real summary."""
+    def test_no_next_action_field_even_with_marker_summary(self, tmp_path):
+        """A summary that looks like it has a 'next action:' marker must NOT
+        produce a next_action field — heuristic extraction is removed."""
         agent = _make_agent_with_psyche(tmp_path)
         agent.start()
         try:
             mock_interface = _setup_mock_chat(agent)
             tc_id = "toolu_cont_3"
-            summary = "Finish wiring the parser; tests are red on case 3."
+            summary = "Next step: finish wiring the parser; tests red on case 3."
             _build_molt_call_entry(mock_interface, tc_id, summary=summary)
 
             from lingtai_kernel.intrinsics.psyche._molt import _context_molt
@@ -334,7 +345,7 @@ class TestPostMoltContinuationSignal:
             assert result.get("status") == "ok"
 
             data = _read_post_molt(agent)["data"]
-            assert "Finish wiring the parser" in (data.get("next_action") or "")
+            assert "next_action" not in data
 
         finally:
             agent.stop()
@@ -352,34 +363,11 @@ class TestPostMoltContinuationSignal:
             assert data.get("molt_id", "").startswith(f"molt-{result['molt_count']}-")
             assert data.get("molt_at")
             assert data.get("source_agent") == "test"
-            # System-authored summary still yields a non-empty next_action.
-            assert data.get("next_action")
+            assert data.get("ack_options") == ["continue", "defer", "obsolete"]
+            assert "next_action" not in data
 
         finally:
             agent.stop()
-
-
-class TestPostMoltContinuationHelper:
-    """Unit coverage for the read-only next-action excerpt extractor."""
-
-    def test_marker_lines_are_preferred(self):
-        from lingtai_kernel.intrinsics.psyche._molt import _next_action_excerpt
-        assert _next_action_excerpt(
-            "Summary prose.\nNext action: open PR #185\ntail"
-        ) == "Next action: open PR #185"
-        assert _next_action_excerpt("- TODO: ship it").startswith("- TODO: ship it")
-        assert _next_action_excerpt("下一步：实现通知\n第二行") == "下一步：实现通知"
-
-    def test_fallback_and_empty(self):
-        from lingtai_kernel.intrinsics.psyche._molt import _next_action_excerpt
-        assert _next_action_excerpt("just prose\nsecond") == "just prose"
-        assert _next_action_excerpt("") == ""
-        assert _next_action_excerpt(None) == ""
-
-    def test_excerpt_is_length_bounded(self):
-        from lingtai_kernel.intrinsics.psyche._molt import _next_action_excerpt
-        long = "next action: " + "x" * 1000
-        assert len(_next_action_excerpt(long)) <= 280
 
 
 class TestPostMoltChannelIsolation:
