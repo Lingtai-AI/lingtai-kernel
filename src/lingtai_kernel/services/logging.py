@@ -238,10 +238,23 @@ class SQLiteEventIndex:
             raise ValueError("log query only accepts SELECT statements")
         with self._lock:
             conn = self._ensure_open()
-            cur = conn.execute(sql, tuple(params))
-            if cur.description is None:
-                return []
-            return [dict(row) for row in cur.fetchall()]
+            original_factory = conn.row_factory
+            try:
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA query_only=ON")
+                before_changes = conn.total_changes
+                cur = conn.execute(sql, tuple(params))
+                if cur.description is None:
+                    return []
+                rows = [dict(row) for row in cur.fetchall()]
+                if conn.total_changes != before_changes:
+                    raise ValueError("log query must not modify the sqlite index")
+                return rows
+            finally:
+                try:
+                    conn.execute("PRAGMA query_only=OFF")
+                finally:
+                    conn.row_factory = original_factory
 
     def doctor(self) -> dict[str, Any]:
         if self._disabled_reason:

@@ -263,6 +263,33 @@ class TestSQLiteEventIndex:
         finally:
             index.close()
 
+
+    def test_query_rejects_mutating_select_function(self, tmp_path):
+        sqlite_file = tmp_path / "log.sqlite"
+        index = SQLiteEventIndex(sqlite_file)
+        try:
+            raw = index._ensure_open()
+            raw.create_function(
+                "danger",
+                0,
+                lambda: raw.execute("DELETE FROM events") and 1,
+            )
+            try:
+                index.query("SELECT danger()")
+                assert False, "mutating select function should be rejected"
+            except Exception as exc:
+                message = str(exc).lower()
+                assert (
+                    "not authorized" in message
+                    or "must not modify" in message
+                    or "user-defined function raised exception" in message
+                    or "attempt to write a readonly database" in message
+                )
+            index.log_event({"type": "after_query", "ts": 1})
+            assert index.query("SELECT type FROM events") == [{"type": "after_query"}]
+        finally:
+            index.close()
+
     def test_rebuild_doctor_and_query(self, tmp_path):
         logs = tmp_path / "logs"
         logs.mkdir()
