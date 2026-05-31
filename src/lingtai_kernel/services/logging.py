@@ -212,11 +212,16 @@ class SQLiteEventIndex:
     def event_row(event: dict, *, source_file: str | None = None, source_offset: int | None = None) -> tuple[Any, ...]:
         fields = dict(event)
         event_type = fields.pop("type", "")
-        ts = fields.pop("ts", 0.0)
+        raw_ts = fields.pop("ts", 0.0)
+        try:
+            ts = float(raw_ts or 0.0)
+        except (TypeError, ValueError):
+            fields["ts_raw"] = raw_ts
+            ts = 0.0
         agent_address = fields.pop("address", None)
         agent_name = fields.pop("agent_name", None)
         return (
-            float(ts or 0.0),
+            ts,
             str(event_type),
             str(agent_address) if agent_address is not None else None,
             str(agent_name) if agent_name is not None else None,

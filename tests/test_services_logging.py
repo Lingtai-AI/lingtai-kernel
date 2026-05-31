@@ -252,7 +252,7 @@ class TestSQLiteEventIndex:
         assert json.loads(log_file.read_text().strip())["type"] == "test"
         assert index.disabled_reason == "simulated"
 
-    def test_sqlite_sidecar_fail_open_for_normalization_errors(self, tmp_path):
+    def test_sqlite_sidecar_coerces_invalid_timestamp(self, tmp_path):
         log_file = tmp_path / "events.jsonl"
         index = SQLiteEventIndex(tmp_path / "log.sqlite")
         svc = CompositeLoggingService(JSONLLoggingService(log_file), sqlite_index=index)
@@ -261,7 +261,9 @@ class TestSQLiteEventIndex:
         svc.close()
 
         assert json.loads(log_file.read_text().strip())["type"] == "bad_ts"
-        assert index.disabled_reason is not None
+        rows = index.query("SELECT ts, fields_json FROM events WHERE type='bad_ts'")
+        assert rows[0]["ts"] == 0.0
+        assert json.loads(rows[0]["fields_json"]) == {"ts_raw": "not-a-float"}
 
     def test_query_rejects_mutating_sql(self, tmp_path):
         index = SQLiteEventIndex(tmp_path / "log.sqlite")
@@ -433,24 +435,45 @@ class TestSQLiteEventIndex:
         rows = query_sqlite_event_index(tmp_path, "SELECT type FROM events ORDER BY ts")
         assert rows == [{"type": "first"}, {"type": "second"}]
 
+    def test_rebuild_tolerates_invalid_timestamp_rows(self, tmp_path):
+        logs = tmp_path / "logs"
+        logs.mkdir()
+        (logs / "events.jsonl").write_text(
+            json.dumps({"type": "bad_ts", "ts": "not-a-float"}) + "\n"
+            + json.dumps({"type": "ok", "ts": 1}) + "\n",
+            encoding="utf-8",
+        )
+
+        result = rebuild_sqlite_event_index(tmp_path)
+        assert result["event_count"] == 2
+        rows = query_sqlite_event_index(
+            tmp_path,
+            "SELECT type, ts, fields_json FROM events ORDER BY id",
+        )
+        assert rows[0]["type"] == "bad_ts"
+        assert rows[0]["ts"] == 0.0
+        assert json.loads(rows[0]["fields_json"]) == {"ts_raw": "not-a-float"}
+        assert rows[1]["type"] == "ok"
+
     def test_fail_open_continues_jsonl_logging_after_sidecar_disable(self, tmp_path):
         log_file = tmp_path / "events.jsonl"
         index = SQLiteEventIndex(tmp_path / "log.sqlite")
+        index.disable("simulated")
         svc = CompositeLoggingService(JSONLLoggingService(log_file), sqlite_index=index)
 
-        svc.log({"type": "bad_ts", "ts": "not-a-float"})
+        svc.log({"type": "after_disable_initial", "ts": 0})
         for i in range(3):
             svc.log({"type": f"after_disable_{i}", "ts": i})
         svc.close()
 
         events = [json.loads(line) for line in log_file.read_text().splitlines()]
         assert [event["type"] for event in events] == [
-            "bad_ts",
+            "after_disable_initial",
             "after_disable_0",
             "after_disable_1",
             "after_disable_2",
         ]
-        assert index.disabled_reason is not None
+        assert index.disabled_reason == "simulated"
 
     def test_rebuild_requires_offline_agent_lock(self, tmp_path):
         from lingtai_kernel.workdir import WorkingDir
