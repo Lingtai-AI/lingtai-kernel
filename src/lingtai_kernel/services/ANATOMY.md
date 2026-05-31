@@ -12,12 +12,12 @@ Kernel-side service ABCs and implementations. Services back cross-cutting kernel
   - `send()` resolves peer/absolute addresses, checks `is_agent`/`is_alive`, generates ids through `intrinsics.email._new_mailbox_id`, copies attachments, and writes `message.json` atomically (`services/mail.py:131`, `services/mail.py:165`, `services/mail.py:199-206`).
   - `listen()` starts a daemon polling thread (`services/mail.py:216`), snapshots existing inbox ids into `_seen` (`services/mail.py:224-227`), scans every 0.5s (`services/mail.py:256`), and also claims subscribed pseudo-agent outbox messages (`services/mail.py:250-253`, `services/mail.py:261-368`).
   - `stop()` sets the poll stop event and joins the thread (`services/mail.py:370-374`).
-- `services/logging.py` — structured event log and additive SQLite query index.
-  - `LoggingService` is the ABC for `log(event)` and `close()`; `log()` may return optional storage metadata such as JSONL offsets (`services/logging.py:29`, `services/logging.py:36-42`).
-  - `JSONLLoggingService` appends UTF-8 JSON lines with a lock and flush per write, returning `(source_file, source_offset)` metadata (`services/logging.py:48`, `services/logging.py:57-58`, `services/logging.py:66-77`).
-  - `SQLiteEventIndex` owns the derived `logs/log.sqlite` schema, fail-open sidecar writes, and read-only inspection opens (`services/logging.py:102`, `services/logging.py:160-195`, `services/logging.py:228-267`).
-  - `CompositeLoggingService` writes the JSONL primary first, then best-effort inserts into SQLite with the JSONL source offset (`services/logging.py:288`, `services/logging.py:295-305`).
-  - `rebuild_sqlite_event_index()`, `doctor_sqlite_event_index()`, and `query_sqlite_event_index()` back the CLI rebuild/doctor/query commands (`services/logging.py:338`, `services/logging.py:415`, `services/logging.py:427`).
+- `services/logging.py` — structured event log and additive SQLite trace query index.
+  - `LoggingService` is the ABC for `log(event)` and `close()`; `log()` may return optional storage metadata such as JSONL offsets (`services/logging.py:76`, `services/logging.py:83-89`).
+  - `JSONLLoggingService` appends UTF-8 JSON lines with a lock and flush per write, returning `(source_file, source_offset)` metadata (`services/logging.py:95`, `services/logging.py:104-111`, `services/logging.py:119-130`).
+  - `SQLiteEventIndex` owns the derived `logs/log.sqlite` schema, fail-open runtime event writes, v1→v2 migration, and read-only inspection opens (`services/logging.py:143`, `services/logging.py:213-300`, `services/logging.py:383-456`).
+  - `CompositeLoggingService` writes the top-level `logs/events.jsonl` primary first, then best-effort inserts that event into SQLite with the JSONL source offset (`services/logging.py:465`, `services/logging.py:472-482`).
+  - `rebuild_sqlite_event_index()`, `doctor_sqlite_event_index()`, and `query_sqlite_event_index()` back the CLI rebuild/doctor/query commands; rebuild scans agent events, chat history/archive, and daemon event/chat JSONL sources into one sidecar (`services/logging.py:629`, `services/logging.py:735`, `services/logging.py:747`).
 - `services/__init__.py` is an empty package marker; callers import concrete modules directly.
 
 ## Connections
@@ -36,15 +36,16 @@ Kernel-side service ABCs and implementations. Services back cross-cutting kernel
 ## State
 
 - **Persistent mail:** `<workdir>/mailbox/{inbox,outbox,sent}/<uuid>/message.json`; optional `attachments/` subdir. `FilesystemMailService.send()` writes recipient inbox payloads atomically (`services/mail.py:199-206`).
-- **Persistent log source-of-truth:** `<workdir>/logs/events.jsonl`; one JSON object per line, appended by `JSONLLoggingService.log()` (`services/logging.py:66-77`).
-- **Persistent log sidecar:** `<workdir>/logs/log.sqlite`; rebuildable/deletable SQLite index with `schema_migrations`, `import_cursors`, and `events` tables. `events.source_file/source_offset` is unique when present so JSONL replays are idempotent (`services/logging.py:160-195`).
+- **Persistent log source-of-truth:** `<workdir>/logs/events.jsonl`; one JSON object per line, appended by `JSONLLoggingService.log()` (`services/logging.py:119-130`). Chat-history and daemon traces remain authoritative in their own JSONL files (`history/chat_history*.jsonl`, `daemons/*/{logs/events.jsonl,history/chat_history.jsonl}`).
+- **Persistent log sidecar:** `<workdir>/logs/log.sqlite`; rebuildable/deletable SQLite trace index with `schema_migrations`, `import_cursors`, `events`, and `chat_entries` tables. `events` and `chat_entries` keep `source_file/source_offset/source_line` provenance so JSONL replays are idempotent and traceable (`services/logging.py:213-300`).
 - **Ephemeral mail:** `_seen` is an in-memory set of delivered UUIDs rebuilt at listen start (`services/mail.py:224-227`); `_poll_thread` is a daemon thread joined by `stop()` (`services/mail.py:370-374`).
-- **Ephemeral log:** `JSONLLoggingService` holds an open file handle and a thread lock; `SQLiteEventIndex` holds an optional sqlite connection and disables itself after sqlite errors so agent turns fail open (`services/logging.py:57-62`, `services/logging.py:106-129`).
+- **Ephemeral log:** `JSONLLoggingService` holds an open file handle and a thread lock; `SQLiteEventIndex` holds an optional sqlite connection and disables itself after sqlite errors so agent turns fail open (`services/logging.py:99-104`, `services/logging.py:154-174`).
 
 ## Notes
 
 - Pseudo-agent outbox claiming is optimistic concurrency: pollers copy to inbox, race on outbox→sent rename, and losers delete their speculative copy and clear `_seen` (`services/mail.py:326-354`).
 - The services package has two ABCs but mail and logging now differ in shape: mail still has one filesystem implementation, while logging composes the JSONL primary with optional derived indexes.
-- `get_events()` favors simplicity over hot-path performance: it re-opens and parses the whole JSONL file each call (`services/logging.py:79-94`).
-- SQLite is intentionally additive: JSONL remains the durable source of truth; rebuild requires the agent working-directory lock (offline/stopped agent), uses a temporary database and atomic replace, and checkpoints WAL before replacing so the final artifact is self-contained (`services/logging.py:338-413`).
-- Query helpers accept read-only `SELECT`/CTE/`EXPLAIN` statements, use `PRAGMA query_only=ON`, and choose immutable offline reads or WAL-aware read-only live reads to keep CLI inspection non-mutating while seeing WAL rows (`services/logging.py:130-149`, `services/logging.py:253-267`).
+- `get_events()` favors simplicity over hot-path performance: it re-opens and parses the whole JSONL file each call (`services/logging.py:133-148`).
+- SQLite is intentionally additive: JSONL remains the durable source of truth; rebuild requires the agent working-directory lock (offline/stopped agent), uses a temporary database and atomic replace, and checkpoints WAL before replacing so the final artifact is self-contained (`services/logging.py:629-732`).
+- Runtime writes only index the top-level `logs/events.jsonl` stream. Chat history, archive, and daemon JSONL are indexed during explicit rebuild, avoiding extra work on every chat-history rewrite or daemon append (`services/logging.py:472-482`, `services/logging.py:542-628`).
+- Query helpers accept read-only `SELECT`/CTE/`EXPLAIN` statements, use `PRAGMA query_only=ON`, and choose immutable offline reads or WAL-aware read-only live reads to keep CLI inspection non-mutating while seeing WAL rows (`services/logging.py:181-201`, `services/logging.py:425-440`).

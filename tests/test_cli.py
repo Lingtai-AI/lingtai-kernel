@@ -338,6 +338,7 @@ def test_log_rebuild_doctor_query_cli(tmp_path, capsys):
         main()
         doctor_out = json.loads(capsys.readouterr().out)
         assert doctor_out["event_count"] == 1
+        assert doctor_out["chat_entry_count"] == 0
 
         sys.argv = ["lingtai-agent", "log", "query", str(tmp_path), "SELECT type FROM events"]
         main()

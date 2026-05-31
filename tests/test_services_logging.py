@@ -1,5 +1,6 @@
 """Tests for lingtai.services.logging."""
 import json
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -320,6 +321,9 @@ class TestSQLiteEventIndex:
         doctor = doctor_sqlite_event_index(tmp_path)
         assert doctor["status"] == "ok"
         assert doctor["event_count"] == 2
+        assert doctor["chat_entry_count"] == 0
+        assert doctor["schema_current"] is True
+        assert 2 in doctor["schema_versions"]
 
         rows = query_sqlite_event_index(tmp_path, "SELECT type, agent_address, agent_name_snapshot, json_extract(fields_json, '$.x') AS x FROM events ORDER BY ts")
         assert rows == [
@@ -417,6 +421,127 @@ class TestSQLiteEventIndex:
         except FileNotFoundError as exc:
             assert "agent directory not found" in str(exc)
         assert not missing.exists()
+
+    def test_rebuild_indexes_chat_history_and_daemon_jsonl_sources(self, tmp_path):
+        logs = tmp_path / "logs"
+        history = tmp_path / "history"
+        daemon_logs = tmp_path / "daemons" / "em-1-20260531-030000-abcdef" / "logs"
+        daemon_history = tmp_path / "daemons" / "em-1-20260531-030000-abcdef" / "history"
+        logs.mkdir(parents=True)
+        history.mkdir()
+        daemon_logs.mkdir(parents=True)
+        daemon_history.mkdir()
+        (logs / "events.jsonl").write_text(json.dumps({"type": "agent_event", "ts": 1}) + "\n", encoding="utf-8")
+        (history / "chat_history.jsonl").write_text(
+            json.dumps({"role": "user", "content": [{"type": "text", "text": "hello agent"}], "ts": "2026-05-31T03:00:00Z"}) + "\n",
+            encoding="utf-8",
+        )
+        (history / "chat_history_archive.jsonl").write_text(
+            json.dumps({"role": "assistant", "text": "archived reply", "ts": "2026-05-31T03:01:00Z"}) + "\n",
+            encoding="utf-8",
+        )
+        (daemon_logs / "events.jsonl").write_text(json.dumps({"event": "tool_call", "name": "bash", "ts": "2026-05-31T03:02:00Z"}) + "\n", encoding="utf-8")
+        (daemon_history / "chat_history.jsonl").write_text(
+            json.dumps({"role": "assistant", "text": "daemon answer", "turn": 1, "ts": "2026-05-31T03:03:00Z"}) + "\n",
+            encoding="utf-8",
+        )
+
+        result = rebuild_sqlite_event_index(tmp_path)
+        assert result["event_count"] == 2
+        assert result["chat_entry_count"] == 3
+        assert result["source_count"] == 5
+
+        event_rows = query_sqlite_event_index(tmp_path, "SELECT type, source_kind, scope, run_id FROM events ORDER BY id")
+        assert event_rows == [
+            {"type": "agent_event", "source_kind": "agent_events", "scope": "agent", "run_id": None},
+            {"type": "tool_call", "source_kind": "daemon_events", "scope": "daemon", "run_id": "em-1-20260531-030000-abcdef"},
+        ]
+        chat_rows = query_sqlite_event_index(
+            tmp_path,
+            "SELECT role, kind, turn, content_text, source_kind, scope, run_id FROM chat_entries ORDER BY id",
+        )
+        assert chat_rows == [
+            {"role": "user", "kind": None, "turn": None, "content_text": "hello agent", "source_kind": "agent_chat", "scope": "agent", "run_id": None},
+            {"role": "assistant", "kind": None, "turn": None, "content_text": "archived reply", "source_kind": "agent_chat_archive", "scope": "agent", "run_id": None},
+            {"role": "assistant", "kind": None, "turn": 1, "content_text": "daemon answer", "source_kind": "daemon_chat", "scope": "daemon", "run_id": "em-1-20260531-030000-abcdef"},
+        ]
+
+    def test_rebuild_indexes_canonical_chat_history_shapes(self, tmp_path):
+        history = tmp_path / "history"
+        history.mkdir()
+        rows = [
+            {"role": "system", "system": "system prompt text", "timestamp": 0},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_call", "id": "tc-1", "name": "bash", "args": {"command": "echo hi"}},
+                    {"type": "tool_result", "id": "tc-1", "name": "bash", "content": {"stdout": "hi"}},
+                ],
+                "timestamp": 0,
+            },
+        ]
+        (history / "chat_history.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+
+        result = rebuild_sqlite_event_index(tmp_path)
+        assert result["event_count"] == 0
+        assert result["chat_entry_count"] == 2
+
+        chat_rows = query_sqlite_event_index(
+            tmp_path,
+            "SELECT role, ts, ts_text, content_text FROM chat_entries ORDER BY id",
+        )
+        assert chat_rows[0] == {
+            "role": "system",
+            "ts": 0.0,
+            "ts_text": "0",
+            "content_text": "system prompt text",
+        }
+        assert chat_rows[1]["role"] == "assistant"
+        assert chat_rows[1]["ts"] == 0.0
+        assert chat_rows[1]["ts_text"] == "0"
+        assert "tool_call bash" in chat_rows[1]["content_text"]
+        assert "echo hi" in chat_rows[1]["content_text"]
+        assert "tool_result bash" in chat_rows[1]["content_text"]
+        assert "hi" in chat_rows[1]["content_text"]
+
+    def test_existing_v1_sidecar_migrates_to_trace_schema(self, tmp_path):
+        sqlite_file = tmp_path / "logs" / "log.sqlite"
+        sqlite_file.parent.mkdir()
+        conn = sqlite3.connect(sqlite_file)
+        conn.executescript(
+            """
+            CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+            CREATE TABLE import_cursors(source_file TEXT PRIMARY KEY, byte_offset INTEGER NOT NULL DEFAULT 0, line_no INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
+            CREATE TABLE events(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              ts REAL NOT NULL,
+              type TEXT NOT NULL,
+              agent_address TEXT,
+              agent_name_snapshot TEXT,
+              fields_json TEXT NOT NULL,
+              source_file TEXT,
+              source_offset INTEGER,
+              inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+            INSERT INTO schema_migrations(version, name, applied_at) VALUES (1, 'initial_events_index', 'now');
+            INSERT INTO events(ts, type, fields_json) VALUES (1, 'old', '{}');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        index = SQLiteEventIndex(sqlite_file)
+        index.close()
+
+        doctor = doctor_sqlite_event_index(tmp_path)
+        assert doctor["schema_current"] is True
+        assert 2 in doctor["schema_versions"]
+        rows = query_sqlite_event_index(tmp_path, "SELECT type, source_kind FROM events")
+        assert rows == [{"type": "old", "source_kind": None}]
+        assert query_sqlite_event_index(tmp_path, "SELECT COUNT(*) AS n FROM chat_entries") == [{"n": 0}]
 
     def test_rebuild_preserves_runtime_rows_without_duplicates(self, tmp_path):
         log_file = tmp_path / "logs" / "events.jsonl"

@@ -294,7 +294,7 @@ def main() -> None:
     log_parser = sub.add_parser("log", help="Inspect the additive SQLite log index")
     log_sub = log_parser.add_subparsers(dest="log_command", required=True)
 
-    log_rebuild = log_sub.add_parser("rebuild", help="Rebuild logs/log.sqlite from logs/events.jsonl")
+    log_rebuild = log_sub.add_parser("rebuild", help="Rebuild logs/log.sqlite from agent events, chat history, and daemon JSONL")
     log_rebuild.add_argument("agent_dir", type=Path, help="Agent working directory")
 
     log_doctor = log_sub.add_parser("doctor", help="Check logs/log.sqlite integrity and counts")
