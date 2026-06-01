@@ -94,6 +94,26 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert "Nested bash-manual reference" in (
             bash_reference_dir / "scheduled-work" / "SKILL.md"
         ).read_text(encoding="utf-8")
+
+        daemon_md = (
+            workdir / ".library" / "intrinsic" / "capabilities" / "daemon" / "SKILL.md"
+        )
+        assert daemon_md.is_file()
+        daemon_body = daemon_md.read_text(encoding="utf-8")
+        assert "name: daemon-manual" in daemon_body
+        assert "Nested reference catalog" in daemon_body
+        assert "reference/forensics/SKILL.md" in daemon_body
+        assert "reference/inspection/SKILL.md" in daemon_body
+        assert "reference/cli-backends/SKILL.md" in daemon_body
+        assert "reference/cleanup/SKILL.md" in daemon_body
+
+        daemon_reference_dir = daemon_md.parent / "reference"
+        for reference_name in ("forensics", "inspection", "cli-backends", "cleanup"):
+            daemon_reference = daemon_reference_dir / reference_name / "SKILL.md"
+            assert daemon_reference.is_file()
+        assert "Nested daemon-manual reference" in (
+            daemon_reference_dir / "forensics" / "SKILL.md"
+        ).read_text(encoding="utf-8")
     finally:
         agent.stop(timeout=1.0)
 
