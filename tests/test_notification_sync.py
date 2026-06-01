@@ -550,6 +550,7 @@ def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
             self._working_dir = workdir
             self._state = AgentState.IDLE
             self._notification_fp = ()
+            self._notification_deferred_log_fp = ()
             self._notification_block_id = None
             self._pending_notification_meta = None
             self._chat_stub = chat
@@ -946,7 +947,10 @@ def test_sync_active_defers_without_committing_or_mutating_tool_result(tmp_path:
             self._working_dir = workdir
             self._state = AgentState.ACTIVE
             self._notification_fp = ()
+            self._notification_deferred_log_fp = ()
             self._notification_block_id = None
+            self._deferred_notifications_count = 0
+            self._deferred_notifications_oldest_at = None
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"
@@ -977,15 +981,19 @@ def test_sync_active_defers_without_committing_or_mutating_tool_result(tmp_path:
     fp = notification_fingerprint(tmp_path)
 
     agent._sync_notifications()
+    agent._sync_notifications()
 
     assert agent._notification_fp == ()  # not committed while ACTIVE
     assert agent._notification_fp != fp
+    assert agent._notification_deferred_log_fp == fp
     assert agent._notification_block_id is None
     assert agent.inbox.empty()
     assert len(iface.entries) == original_entry_count
     assert iface.entries[1].content[0].content == original_content
     assert not iface.entries[1].content[0].content.startswith("notifications:\n")
-    assert any(evt == "notification_deferred_active" for evt, _ in agent._logs)
+    assert [evt for evt, _ in agent._logs].count("notification_deferred_active") == 1
+    assert agent._deferred_notifications_count == 2
+    assert agent._deferred_notifications_oldest_at is not None
 
 
 def test_sync_empty_state_clears_pending_meta(tmp_path: Path) -> None:

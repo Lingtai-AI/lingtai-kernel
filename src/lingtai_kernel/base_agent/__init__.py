@@ -444,6 +444,12 @@ class BaseAgent:
         #   skeletonized in-place, not deleted).
         # See notifications.py and notification-filesystem-redesign.md.
         self._notification_fp: tuple = ()
+        # Last ACTIVE-state notification fingerprint that has already emitted
+        # ``notification_deferred_active``.  This is intentionally separate
+        # from ``_notification_fp``: ACTIVE must keep the delivery fingerprint
+        # uncommitted so the next IDLE boundary retries, but the log should not
+        # repeat the same status echo on every heartbeat.
+        self._notification_deferred_log_fp: tuple = ()
         self._notification_block_id: str | None = None
         # Monotonic counter ensuring every synthesized notification pair
         # carries unique tokens (timestamp + seq) even when the underlying
@@ -716,6 +722,29 @@ class BaseAgent:
         self._nap_wake_reason = reason
         self._nap_wake.set()
 
+    def _note_notification_deferred_active(self, fp: tuple, *, sources: list[str]) -> None:
+        """Record ACTIVE notification deferral without per-heartbeat log spam.
+
+        ACTIVE deliberately leaves ``_notification_fp`` uncommitted so delivery
+        retries at the next IDLE boundary.  Heartbeat ticks therefore rediscover
+        the same filesystem fingerprint.  Keep watchdog counters accurate for
+        every tick, but emit ``notification_deferred_active`` only once per
+        distinct notification fingerprint.
+        """
+        self._deferred_notifications_count += 1
+        if self._deferred_notifications_oldest_at is None:
+            self._deferred_notifications_oldest_at = time.time()
+
+        if fp == getattr(self, "_notification_deferred_log_fp", ()):
+            return
+
+        self._log(
+            "notification_deferred_active",
+            sources=sources,
+            _deferred_counter_already_updated=True,
+        )
+        self._notification_deferred_log_fp = fp
+
     def _log(self, event_type: str, **fields) -> None:
         """Write a structured event to the logging service, if configured.
 
@@ -724,6 +753,10 @@ class BaseAgent:
         kind/id, and ``notification_deferred_active`` events update the
         deferred-notification counters.
         """
+        deferred_counter_already_updated = bool(
+            fields.pop("_deferred_counter_already_updated", False)
+        )
+
         # Watchdog bookkeeping — done before the actual log write so the
         # bookkeeping is in place even if the log service raises.
         if event_type in _PROGRESS_EVENTS:
@@ -739,9 +772,10 @@ class BaseAgent:
             if isinstance(call_id, str):
                 self._active_turn_id = call_id
         elif event_type == "notification_deferred_active":
-            self._deferred_notifications_count += 1
-            if self._deferred_notifications_oldest_at is None:
-                self._deferred_notifications_oldest_at = time.time()
+            if not deferred_counter_already_updated:
+                self._deferred_notifications_count += 1
+                if self._deferred_notifications_oldest_at is None:
+                    self._deferred_notifications_oldest_at = time.time()
         elif event_type == "agent_state":
             # Successful injection / state transitions reset the deferral
             # storm counter — the very next state change after a deferral
@@ -975,6 +1009,7 @@ class BaseAgent:
             # history as placeholders; they are never deleted.
             skeletonize_notification_holder(self)
             self._notification_fp = fp
+            self._notification_deferred_log_fp = ()
             # Defensive cleanup for agents upgraded from the retired
             # ACTIVE-state meta-prefix delivery path.
             if hasattr(self, "_pending_notification_meta"):
@@ -1099,8 +1134,8 @@ class BaseAgent:
             # Leave the fingerprint uncommitted so the same on-disk
             # notification state is retried once the run loop transitions
             # to IDLE at the post-turn boundary.
-            self._log(
-                "notification_deferred_active",
+            self._note_notification_deferred_active(
+                fp,
                 sources=list(notifications.keys()),
             )
 
@@ -1112,8 +1147,10 @@ class BaseAgent:
         # STUCK/SUSPENDED commit here (they can't inject at all).
         if inject_ok:
             self._notification_fp = fp
+            self._notification_deferred_log_fp = ()
         elif self._state in (AgentState.STUCK, AgentState.SUSPENDED):
             self._notification_fp = fp
+            self._notification_deferred_log_fp = ()
 
     def _heal_pending_tool_calls(self, *, reason: str) -> bool:
         """Close any unanswered tool_calls on the wire with synthetic
