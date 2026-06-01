@@ -319,7 +319,7 @@ class AvatarManager:
 
         # Resolve relative file paths to absolute so avatar can find them
         for key in ("env_file", "covenant_file", "principle_file",
-                    "substrate_file", "procedures_file", "comment_file"):
+                    "substrate_file", "comment_file"):
             val = parent_init.get(key)
             if val and not os.path.isabs(val):
                 resolved = parent._working_dir / val
@@ -503,6 +503,9 @@ class AvatarManager:
         # Brief is not inherited — avatars don't need life context
         init.pop("brief", None)
         init.pop("brief_file", None)
+        # Procedures are kernel-owned; legacy parent overrides are not inherited.
+        init.pop("procedures", None)
+        init.pop("procedures_file", None)
         # Addons (IMAP, Telegram) are not inherited — each agent must be
         # explicitly configured to avoid multiple agents polling the same account
         init.pop("addons", None)

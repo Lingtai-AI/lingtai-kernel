@@ -852,6 +852,8 @@ class Agent(BaseAgent):
             self._log("refresh_init_error", error="failed to read init.json")
             return None
 
+        self._migrate_init_procedures_override(data, init_path)
+
         # Materialize active preset, if any, BEFORE validation so the manifest
         # the schema validates is the fully-resolved one the agent will run on.
         try:
@@ -891,6 +893,78 @@ class Agent(BaseAgent):
 
         resolve_paths(data, self._working_dir)
         return data
+
+    def _migrate_init_procedures_override(self, data: dict, init_path: Path) -> None:
+        """Archive and remove legacy top-level ``procedures`` overrides.
+
+        ``procedures.md`` is kernel-owned now. A legacy non-empty
+        ``init.json.procedures`` value is preserved under ``system/migrations``
+        but is never used for prompt construction.
+        """
+        if "procedures" not in data:
+            return
+
+        legacy = data.get("procedures")
+        should_archive = isinstance(legacy, str) and legacy != ""
+        archive_rel: str | None = None
+        content_hash: str | None = None
+        byte_length = 0
+        char_length = 0
+
+        if should_archive:
+            import hashlib
+
+            raw = legacy.encode("utf-8")
+            content_hash = hashlib.sha256(raw).hexdigest()
+            byte_length = len(raw)
+            char_length = len(legacy)
+            migrations_dir = self._working_dir / "system" / "migrations"
+            archive_path = migrations_dir / f"init-procedures-{content_hash}.md"
+            try:
+                migrations_dir.mkdir(parents=True, exist_ok=True)
+                archive_path.write_text(legacy, encoding="utf-8")
+                archive_rel = archive_path.relative_to(self._working_dir).as_posix()
+            except OSError as e:
+                self._log(
+                    "init_procedures_override_migration_failed",
+                    reason=str(e),
+                    content_hash=content_hash,
+                    byte_length=byte_length,
+                    char_length=char_length,
+                )
+                return
+
+        data.pop("procedures", None)
+        try:
+            import json
+            import os
+
+            tmp = init_path.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(str(tmp), str(init_path))
+        except OSError as e:
+            self._log(
+                "init_procedures_override_migration_failed",
+                reason=str(e),
+                archive_path=archive_rel,
+                content_hash=content_hash,
+                byte_length=byte_length,
+                char_length=char_length,
+            )
+            return
+
+        if should_archive:
+            self._log(
+                "init_procedures_override_migrated",
+                archive_path=archive_rel,
+                content_hash=content_hash,
+                byte_length=byte_length,
+                char_length=char_length,
+                field_removed=True,
+            )
 
     def _activate_preset(self, name: str) -> None:
         """Substitute a preset's llm + capabilities into init.json on disk.
@@ -995,7 +1069,7 @@ class Agent(BaseAgent):
         # Resolve *_file fields for top-level text content.
         # Note: "soul" / "soul_file" were retired in v0.7.6 and are now
         # stripped by strip_deprecated() before we get here.
-        for key in ("covenant", "principle", "substrate", "procedures",
+        for key in ("covenant", "principle", "substrate",
                     "brief", "pad", "prompt", "comment"):
             file_key = f"{key}_file"
             if file_key in data:
@@ -1219,7 +1293,7 @@ class Agent(BaseAgent):
                 return
             # Resolve *_file fields (brief_file, covenant_file, etc.)
             from lingtai_kernel.config_resolve import resolve_file
-            for key in ("covenant", "principle", "substrate", "procedures",
+            for key in ("covenant", "principle", "substrate",
                         "brief", "pad", "comment"):
                 file_key = f"{key}_file"
                 if file_key in data:
@@ -1312,30 +1386,23 @@ class Agent(BaseAgent):
             self._prompt_manager.write_section("principle", principle, protected=True)
 
         # --- Procedures ---
-        # Resolution precedence (mirrors substrate above; issue #133):
-        #   1. data["procedures"]          — inline init.json string (operator override)
-        #   2. packaged prompts/procedures.md — kernel default, always wins on every boot
-        #   3. system/procedures.md        — fallback only if package missing
-        #
-        # The packaged default overwrites the on-disk file on every boot so
-        # that `pip install -e .` + `system(refresh)` actually propagates
-        # kernel updates. To opt out, set `"procedures": " "` (a single
-        # space, treated as an explicit operator value by step 1).
-        procedures = data.get("procedures", "")
+        # Kernel-owned resident procedures. Legacy init.json procedures values
+        # are migrated by _read_init() and ignored here; the packaged default
+        # wins on every boot/refresh. system/procedures.md is only a packaged
+        # mirror/debug artifact, and is read as fallback if the package
+        # resource is unavailable.
+        procedures = ""
         procedures_file = system_dir / "procedures.md"
-        if procedures:
-            procedures_file.write_text(procedures)
-        else:
-            try:
-                from importlib.resources import files
-                packaged = files("lingtai.prompts").joinpath("procedures.md").read_text(encoding="utf-8")
-                procedures_file.write_text(packaged)
-                procedures = packaged
-            except (FileNotFoundError, ModuleNotFoundError, OSError):
-                if procedures_file.is_file():
-                    procedures = procedures_file.read_text(encoding="utf-8")
-                else:
-                    procedures = ""
+        try:
+            from importlib.resources import files
+            packaged = files("lingtai.prompts").joinpath("procedures.md").read_text(encoding="utf-8")
+            procedures_file.write_text(packaged)
+            procedures = packaged
+        except (FileNotFoundError, ModuleNotFoundError, OSError):
+            if procedures_file.is_file():
+                procedures = procedures_file.read_text(encoding="utf-8")
+            else:
+                procedures = ""
         if procedures:
             self._prompt_manager.write_section("procedures", procedures, protected=True)
         else:

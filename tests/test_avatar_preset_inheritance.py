@@ -181,3 +181,16 @@ def test_avatar_strips_materialized_when_active_equals_default(tmp_path):
     assert avatar_preset["active"] == "deepseek"
     assert "llm" not in avatar_init["manifest"]
     assert "capabilities" not in avatar_init["manifest"]
+
+
+def test_avatar_init_drops_legacy_procedures_override(tmp_path):
+    """Avatar init construction must not copy retired procedures overrides."""
+    parent_init = _baseline_parent_init()
+    parent_init["procedures"] = "legacy parent procedures"
+    parent_init["procedures_file"] = "relative/procedures.md"
+
+    from lingtai.core.avatar import AvatarManager
+    avatar_init = AvatarManager._make_avatar_init(parent_init, "child")
+
+    assert "procedures" not in avatar_init
+    assert "procedures_file" not in avatar_init

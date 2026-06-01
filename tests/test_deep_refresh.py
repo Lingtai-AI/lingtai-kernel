@@ -2,6 +2,7 @@
 """Tests for deep refresh (full agent reconstruct from init.json)."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -88,6 +89,28 @@ def _make_agent(tmp_path: Path, init_data: dict | None = None):
         config=AgentConfig(),
     )
     return agent
+
+
+def _packaged_procedures() -> str:
+    from importlib.resources import files
+
+    return files("lingtai.prompts").joinpath("procedures.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def _events(tmp_path: Path, event_type: str) -> list[dict]:
+    log_path = tmp_path / "logs" / "events.jsonl"
+    if not log_path.is_file():
+        return []
+    events = []
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if event.get("type") == event_type:
+            events.append(event)
+    return events
 
 
 def test_deep_refresh_loads_new_capability(tmp_path):
@@ -258,6 +281,89 @@ def test_deep_refresh_reseals(tmp_path):
     agent._setup_from_init()
 
     assert agent._sealed is True
+
+
+def test_init_procedures_override_is_migrated_not_prompted(tmp_path):
+    """Legacy init.json procedures content is archived, removed, and ignored."""
+    legacy = "LEGACY-PROCEDURES-OVERRIDE"
+    init = _make_init()
+    init["procedures"] = legacy
+    agent = _make_agent(tmp_path, init)
+
+    agent._setup_from_init()
+
+    packaged = _packaged_procedures()
+    prompt = agent._prompt_manager.render()
+    assert legacy not in prompt
+    assert packaged in prompt
+    data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
+    assert "procedures" not in data
+
+    digest = hashlib.sha256(legacy.encode("utf-8")).hexdigest()
+    archive = tmp_path / "system" / "migrations" / f"init-procedures-{digest}.md"
+    assert archive.read_text(encoding="utf-8") == legacy
+
+    events = _events(tmp_path, "init_procedures_override_migrated")
+    assert len(events) == 1
+    event = events[0]
+    assert event["archive_path"] == f"system/migrations/init-procedures-{digest}.md"
+    assert event["content_hash"] == digest
+    assert event["byte_length"] == len(legacy.encode("utf-8"))
+    assert event["char_length"] == len(legacy)
+    assert event["field_removed"] is True
+
+    agent._setup_from_init()
+    archives = list((tmp_path / "system" / "migrations").glob("init-procedures-*.md"))
+    assert archives == [archive]
+    assert len(_events(tmp_path, "init_procedures_override_migrated")) == 1
+
+
+def test_single_space_procedures_no_longer_opts_out(tmp_path):
+    """A single-space legacy procedures value is migrated, not treated as opt-out."""
+    init = _make_init()
+    init["procedures"] = " "
+    agent = _make_agent(tmp_path, init)
+
+    agent._setup_from_init()
+
+    packaged = _packaged_procedures()
+    procedures = agent._prompt_manager.read_section("procedures") or ""
+    assert procedures == packaged
+    data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
+    assert "procedures" not in data
+
+    digest = hashlib.sha256(b" ").hexdigest()
+    archive = tmp_path / "system" / "migrations" / f"init-procedures-{digest}.md"
+    assert archive.read_text(encoding="utf-8") == " "
+
+
+def test_system_procedures_is_overwritten_by_packaged_default(tmp_path):
+    """Manual system/procedures.md edits are replaced by the packaged default."""
+    agent = _make_agent(tmp_path, _make_init())
+    system_dir = tmp_path / "system"
+    system_dir.mkdir(exist_ok=True)
+    (system_dir / "procedures.md").write_text("MANUAL-PROCEDURES-EDIT", encoding="utf-8")
+
+    agent._setup_from_init()
+
+    packaged = _packaged_procedures()
+    assert (system_dir / "procedures.md").read_text(encoding="utf-8") == packaged
+    assert agent._prompt_manager.read_section("procedures") == packaged
+
+
+def test_procedures_falls_back_to_system_file_when_packaged_missing(tmp_path):
+    """If the packaged default cannot be read, system/procedures.md is fallback."""
+    fallback = "FALLBACK-PROCEDURES"
+    agent = _make_agent(tmp_path, _make_init())
+    system_dir = tmp_path / "system"
+    system_dir.mkdir(exist_ok=True)
+    (system_dir / "procedures.md").write_text(fallback, encoding="utf-8")
+
+    with patch("importlib.resources.files", side_effect=FileNotFoundError):
+        agent._setup_from_init()
+
+    assert agent._prompt_manager.read_section("procedures") == fallback
+    assert (system_dir / "procedures.md").read_text(encoding="utf-8") == fallback
 
 
 # ---------------------------------------------------------------------------
