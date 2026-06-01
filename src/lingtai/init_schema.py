@@ -22,9 +22,11 @@ TOP_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "mcp": dict,
 }
 
-# Top-level fields that were retired in past versions. strip_deprecated()
-# removes them from the data dict (and optionally from disk) so they never
-# reach validate_init().
+# Top-level fields that were retired in past versions and still have simple
+# shape-only cleanup semantics. strip_deprecated() removes them from the data
+# dict (and optionally from disk) so they never reach validate_init(). Fields
+# that need archive/event/version tracking belong in lingtai_kernel.migrate
+# agent-domain migrations instead.
 DEPRECATED_TOP_FIELDS: set[str] = {
     # "soul" / "soul_file" — retired in v0.7.6. The soul-flow voice is
     # now owned by the agent via soul(action='voice') and stored under
@@ -32,14 +34,19 @@ DEPRECATED_TOP_FIELDS: set[str] = {
     "soul", "soul_file",
 }
 
+# Legacy fields removed by version-controlled agent-domain migrations. They are
+# known to validation only so stale/restored init.json files do not look like
+# active supported schema fields and do not get type-checked as prompt sections.
+LEGACY_MIGRATED_TOP_FIELDS: set[str] = {"procedures", "procedures_file"}
+
 TOP_KNOWN: set[str] = {
     "manifest", "env_file", "venv_path", "addons", "mcp",
     "principle", "principle_file", "covenant", "covenant_file",
     "substrate", "substrate_file",
-    "procedures", "procedures_file", "brief", "brief_file",
+    "brief", "brief_file",
     "pad", "pad_file", "prompt", "prompt_file",
     "comment", "comment_file",
-} | DEPRECATED_TOP_FIELDS
+} | DEPRECATED_TOP_FIELDS | LEGACY_MIGRATED_TOP_FIELDS
 
 MANIFEST_REQUIRED: dict[str, type | tuple[type, ...]] = {
     "llm": dict,
@@ -78,15 +85,6 @@ def strip_deprecated(data: dict) -> list[str]:
         if key in data:
             del data[key]
             removed.append(key)
-
-    # Migration: remove procedures_file if it points to the old
-    # ~/.lingtai-tui/procedures/procedures.md path.  The packaged
-    # default is now the sole source; the on-disk file was a stale
-    # leftover that overwrote the packaged default on every boot.
-    pf = data.get("procedures_file")
-    if isinstance(pf, str) and "procedures/procedures.md" in pf:
-        data.pop("procedures_file", None)
-        removed.append("procedures_file")
 
     if removed:
         log.debug("stripped deprecated init.json fields: %s", ", ".join(sorted(removed)))
@@ -127,7 +125,7 @@ def validate_init(data: dict) -> list[str]:
     # attention model). Injected between covenant and tools by the prompt
     # manager. See lingtai issue #39. Opt-in: agents without substrate
     # configured render the same prompt they did before.
-    for key in ("comment", "procedures", "brief", "substrate"):
+    for key in ("comment", "brief", "substrate"):
         file_key = f"{key}_file"
         if key in data and not isinstance(data[key], str):
             raise ValueError(f"{key}: expected str, got {type(data[key]).__name__}")

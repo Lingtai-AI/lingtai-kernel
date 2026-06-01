@@ -337,6 +337,25 @@ def test_single_space_procedures_no_longer_opts_out(tmp_path):
     assert archive.read_text(encoding="utf-8") == " "
 
 
+
+def test_custom_procedures_file_is_removed_not_prompted(tmp_path):
+    """Legacy procedures_file overrides are removed even for custom paths."""
+    custom = tmp_path / "custom-procedures.md"
+    custom.write_text("CUSTOM-PROCEDURES-FILE", encoding="utf-8")
+    init = _make_init()
+    init["procedures_file"] = str(custom)
+    agent = _make_agent(tmp_path, init)
+
+    agent._setup_from_init()
+
+    packaged = _packaged_procedures()
+    prompt = agent._prompt_manager.render()
+    assert "CUSTOM-PROCEDURES-FILE" not in prompt
+    assert agent._prompt_manager.read_section("procedures") == packaged
+    data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
+    assert "procedures_file" not in data
+
+
 def test_system_procedures_is_overwritten_by_packaged_default(tmp_path):
     """Manual system/procedures.md edits are replaced by the packaged default."""
     agent = _make_agent(tmp_path, _make_init())

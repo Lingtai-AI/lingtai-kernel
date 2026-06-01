@@ -14,19 +14,19 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `cli.py` | `lingtai-agent run <dir>` / `lingtai-agent check-caps` entry points |
 | `network.py` | Read-only network topology crawler — avatar/contact/mail edge discovery |
 | `presets.py` | Compatibility shim re-exporting the kernel preset library (`lingtai_kernel.presets`) |
-| `init_schema.py` | `validate_init()` — strict schema for init.json |
+| `init_schema.py` | `validate_init()` plus `strip_deprecated()` — strict schema for active init.json fields, simple deprecated-field cleanup, and known-but-inactive legacy fields migrated by `lingtai_kernel.migrate` |
 | `venv_resolve.py` | Python venv resolution — init.json → global runtime → auto-create |
 | `intrinsic_skills/__init__.py` | Standalone skill bundles (docs-only) copied into `.library/intrinsic/` |
 
 ### Key functions / classes
 
-**`agent.py`** — `Agent(BaseAgent)`: `__init__` :33 (accept `capabilities=` + `disable=`, expand groups, `apply_core_defaults`, decompress addons, setup caps, install manuals, load MCP) · `_setup_capability` :148 · `_persist_llm_config` :123 · `_install_intrinsic_manuals` :170 · `_load_mcp_from_workdir` :372 (also tracks specs in `_mcp_init_specs`) · `_retry_failed_mcps` :520 (re-spawn dead MCPs on `system(refresh)` — issue #34) · `_read_init` :829 (read + materialize preset + validate) · `_setup_from_init` :965 (**full reconstruct** — shared by boot and live refresh; reads `manifest.disable` and re-applies `apply_core_defaults`) · `_activate_preset` :891 (runtime swap, atomic write) · `_reload_prompt_sections` :1205 (writes `covenant`/`substrate`/`rules`/`principle`/`procedures`/`brief`/`comment`; delegates `character` to `_lingtai_load` and `pad` to `_pad_load` — the canonical composers — so boot/refresh/molt are consistent and hook-order-independent) · `connect_mcp` :700 / `connect_mcp_http` :752 · `start` :693 / `stop` :798
+**`agent.py`** — `Agent(BaseAgent)`: `__init__` :33 (accept `capabilities=` + `disable=`, expand groups, `apply_core_defaults`, decompress addons, setup caps, install manuals, load MCP) · `_setup_capability` :148 · `_persist_llm_config` :127 · `_install_intrinsic_manuals` :174 · `_load_mcp_from_workdir` :376 (also tracks specs in `_mcp_init_specs`) · `_retry_failed_mcps` :524 (re-spawn dead MCPs on `system(refresh)` — issue #34) · `_read_init` :833 (runs `lingtai_kernel.migrate.run_agent_migrations()` before reading `init.json`, then materializes preset, strips plain deprecated fields, validates, and resolves paths) · `_setup_from_init` :967 (**full reconstruct** — shared by boot and live refresh; reads `manifest.disable` and re-applies `apply_core_defaults`) · `_activate_preset` :897 (runtime swap, atomic write) · `_reload_prompt_sections` :1342 (writes `covenant`/`substrate`/`rules`/`principle`/`procedures`/`brief`/`comment`; delegates `character` to `_lingtai_load` and `pad` to `_pad_load` — the canonical composers — so boot/refresh/molt are consistent and hook-order-independent) · `connect_mcp` :704 / `connect_mcp_http` :756 · `start` :697 / `stop` :802
 
 **`cli.py`**: `load_init` :21 · `build_agent` :72 · `run` :200 · `main` :246
 
 **`presets.py`**: compatibility re-export shim (`presets.py:1-21`); implementation lives in `lingtai_kernel.presets` (`load_preset` :175 · `materialize_active_preset` :290 · `expand_inherit` :444 · `discover_presets_in_dirs` :121).
 
-**`init_schema.py`**: `validate_init` :85 · `TOP_OPTIONAL` :13 · `MANIFEST_OPTIONAL` :42
+**`init_schema.py`**: `DEPRECATED_TOP_FIELDS` :28 (plain deprecated top-level fields stripped by `strip_deprecated`), `LEGACY_MIGRATED_TOP_FIELDS` :38 (legacy fields removed by version-controlled agent migrations and known only as inactive schema), `validate_init` :98, `TOP_OPTIONAL` :13, `MANIFEST_OPTIONAL` :59.
 
 **`network.py`**: `build_network` :306 · `_discover_agents` :143 · `_build_avatar_edges` :168
 
@@ -38,7 +38,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **Inbound:** `lingtai-tui` calls `cli.run()` to boot agents; imports `load_preset`, `discover_presets_in_dirs` for UI. Kernel's `BaseAgent` is the parent class.
 
-**Outbound — kernel:** `lingtai_kernel.base_agent.BaseAgent`, `.config.AgentConfig`, `.prompt.build_system_prompt`, `.handshake.resolve_address`, `.intrinsics.{email,psyche}`, `.services.mail.FilesystemMailService`, `.migrate.run_migrations`.
+**Outbound — kernel:** `lingtai_kernel.base_agent.BaseAgent`, `.config.AgentConfig`, `.prompt.build_system_prompt`, `.handshake.resolve_address`, `.intrinsics.{email,psyche}`, `.services.mail.FilesystemMailService`, `.migrate.run_migrations` (preset libraries) and `.migrate.run_agent_migrations` (agent workdir/init migrations; see `../lingtai_kernel/migrate/ANATOMY.md`).
 
 **Cross-module:** `agent.py` → `capabilities.setup_capability`, `core.mcp.{decompress_addons,read_registry,MCPInboxPoller}`, `services.mcp.{MCPClient,HTTPMCPClient}`, `llm.service.LLMService`, `presets`, `lingtai_kernel.config_resolve`, `init_schema`. `cli.py` → `agent.Agent`, `lingtai_kernel.config_resolve`, `presets`.
 
@@ -46,7 +46,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **Capability registration:** `setup_capability()` in `capabilities/__init__.py`; the registry is `_BUILTIN` (per-capability module paths) plus `CORE_DEFAULTS` (which boot automatically). Agent calls `apply_core_defaults` + `_setup_capability` (agent.py:148) during `__init__` and `_setup_from_init`. Hosts disable defaults via the `disable=[...]` kwarg or `manifest.disable` in init.json.
 
-**Preset materialization:** `materialize_active_preset` (`lingtai_kernel/presets.py:290`) called by `cli.load_init` (boot) and `Agent._read_init` (refresh). Reads `manifest.preset.active`, loads preset, substitutes `llm`+`capabilities` into manifest before validation.
+**Agent init migration + preset materialization:** `run_agent_migrations` (`lingtai_kernel/migrate/migrate.py:285`) is called by `cli.load_init` (boot) and `Agent._read_init` (refresh) before `init.json` is read/validated. Then `materialize_active_preset` (`lingtai_kernel/presets.py:290`) reads `manifest.preset.active`, loads preset, substitutes `llm`+`capabilities` into manifest before validation.
 
 ## Composition
 
@@ -56,20 +56,21 @@ Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai_kernel/` (
 
 | Path | When | What |
 |---|---|---|
-| `<workdir>/init.json` | `_activate_preset` :880, `cli.run` :200 | Preset swap (atomic write); venv_path writeback |
+| `<workdir>/init.json` | `_activate_preset` :969, `cli.run` :200, `_read_init` :833 | Preset swap (atomic write); venv_path writeback; boot/refresh cleanup of deprecated top-level fields and archive-preserving init migrations |
 | `<workdir>/system/llm.json` | `_persist_llm_config` :111 | LLM provider/model/base_url for revive |
-| `<workdir>/system/{covenant,principle,substrate,procedures,brief,rules,pad,lingtai}.md` + `pad_append.json` | `_reload_prompt_sections` :1205 | Prompt sections from init.json + disk. `covenant.md`→`covenant`, `lingtai.md`→`character` (via `_lingtai_load`), `pad.md`+`pad_append.json`→`pad` (via `_pad_load`). `character` is the agent's self-authored identity (灵台), distinct from `covenant` (operator contract) and the mechanical `identity` section. `substrate` is kernel-owned, cross-app stable (issue #39); kept compact and routed to the packaged `system-manual` skill for expanded operating guidance; auto-seeded from packaged `lingtai/prompts/substrate.md` on first boot if neither `data["substrate"]` nor `system/substrate.md` provides content — see `_setup_from_init` :965. |
+| `<workdir>/system/{covenant,principle,substrate,procedures,brief,rules,pad,lingtai}.md` + `pad_append.json` | `_reload_prompt_sections` :1283 | Prompt sections from init.json + disk. `covenant.md`→`covenant`, `lingtai.md`→`character` (via `_lingtai_load`), `pad.md`+`pad_append.json`→`pad` (via `_pad_load`). `character` is the agent's self-authored identity (灵台), distinct from `covenant` (operator contract) and the mechanical `identity` section. `substrate` is kernel-owned, cross-app stable (issue #39); kept compact and routed to the packaged `system-manual` skill for expanded operating guidance; auto-seeded from packaged `lingtai/prompts/substrate.md` on first boot if neither `data["substrate"]` nor `system/substrate.md` provides content — see `_setup_from_init` :1043. |
 | `<workdir>/.library/intrinsic/` | `_install_intrinsic_manuals` :158 | Wipe-and-rewrite every boot |
-| `<workdir>/.agent.json` | `_build_manifest` :246 via `_workdir.write_manifest` | Runtime manifest snapshot. Includes sanitized `llm` (provider/model/base_url) from the live LLMService and `preset` (active/default/allowed) read from `init.json` by `_read_preset_from_init` :284 — see issue #78. |
+| `<workdir>/.agent.json` | `_build_manifest` :250 via `_workdir.write_manifest` | Runtime manifest snapshot. Includes sanitized `llm` (provider/model/base_url) from the live LLMService and `preset` (active/default/allowed) read from `init.json` by `_read_preset_from_init` :288 — see issue #78. |
 | `<workdir>/.mcp_inbox/` | MCPInboxPoller (started at :761) | LICC events from out-of-process MCPs |
 
 ## Notes
 
-- **Boot vs refresh share one code path:** `cli.build_agent` constructs minimal `Agent`, calls `_setup_from_init()` :954. Live refresh re-enters the same method.
-- **`materialize_active_preset` is pure dict mutation** — disk write only in `_activate_preset` :880 (atomic `.tmp` → replace).
+- **Boot vs refresh share one code path:** `cli.build_agent` constructs minimal `Agent`, calls `_setup_from_init()` :1043. Live refresh re-enters the same method.
+- **Migration discipline:** `lingtai_kernel.migrate` is the kernel's version-controlled migration system for both preset-library and agent-workdir domains (`../lingtai_kernel/migrate/ANATOMY.md:5`). If an `init.json` or other workdir-local on-disk shape changes, add an agent-domain migration there and call/keep `run_agent_migrations()` before validation; do not add ad-hoc one-off helpers in `Agent._read_init()`. Use `init_schema.strip_deprecated()` only for simple discard-only fields that do not need archive/event/version tracking (`init_schema.py:82`). Keep migration tests in `tests/test_kernel_migrate.py` plus boot/refresh coverage in `tests/test_deep_refresh.py` / `tests/test_cli.py`, and update anatomy in the same PR.
+- **`materialize_active_preset` is pure dict mutation** — disk write only in `_activate_preset` :969 (atomic `.tmp` → replace).
 - **Preset implementation moved to kernel** — wrapper `presets.py` re-exports `lingtai_kernel.presets`; preset validation normalizes legacy shapes via kernel migrations before type-checking.
-- **Sensitive key stripping (capabilities):** `_build_manifest` :246 strips `api_key`, `api_key_env`, `api_secret`, `token`, `password` (`_SENSITIVE_KEYS`) from capability kwargs before writing `.agent.json`.
-- **LLM / preset safelists (issue #78):** `_build_manifest` :246 also re-applies `_LLM_PUBLIC_KEYS = ("provider", "model", "base_url", "api_compat", "context_limit")` to the kernel-supplied `llm` block as defense-in-depth, and reads `manifest.preset` from init.json via `_read_preset_from_init` :284 filtered to `_PRESET_PUBLIC_KEYS = ("active", "default", "allowed")`. Anything outside the safelists never reaches `.agent.json` or the identity prompt section. This is the central safety claim of #78 — see `tests/test_agent_preset_manifest.py::test_manifest_never_contains_api_key`.
-- **Drift hazard:** `_setup_from_init` :954 manually reconstructs `AgentConfig` with inline defaults that MUST mirror `lingtai_kernel.config.AgentConfig` (inline construction in `_setup_from_init`, nothing enforces).
-- **Addon decompression** runs BEFORE capability setup so `mcp` capability sees populated `mcp_registry.jsonl` on first reconcile (`Agent.__init__` :33, `_setup_from_init` :954).
-- **MCP retry contract (issue #34):** `_load_mcp_from_workdir` :360 records every registered init.json mcp entry into `self._mcp_init_specs` (name → `{cfg, source, client}`). `_retry_failed_mcps` :508 walks this dict, closes any dead client (`is_connected()` False), respawns with the original config, and reports `{retried, recovered, still_failed, healthy}`. `system(action="refresh")` calls it via `intrinsics/system/preset.py:_refresh` before `_perform_refresh` so the documented "fix config → refresh" recovery path works without full process restart.
+- **Sensitive key stripping (capabilities):** `_build_manifest` :250 strips `api_key`, `api_key_env`, `api_secret`, `token`, `password` (`_SENSITIVE_KEYS`) from capability kwargs before writing `.agent.json`.
+- **LLM / preset safelists (issue #78):** `_build_manifest` :250 also re-applies `_LLM_PUBLIC_KEYS = ("provider", "model", "base_url", "api_compat", "context_limit")` to the kernel-supplied `llm` block as defense-in-depth, and reads `manifest.preset` from init.json via `_read_preset_from_init` :288 filtered to `_PRESET_PUBLIC_KEYS = ("active", "default", "allowed")`. Anything outside the safelists never reaches `.agent.json` or the identity prompt section. This is the central safety claim of #78 — see `tests/test_agent_preset_manifest.py::test_manifest_never_contains_api_key`.
+- **Drift hazard:** `_setup_from_init` :1043 manually reconstructs `AgentConfig` with inline defaults that MUST mirror `lingtai_kernel.config.AgentConfig` (inline construction in `_setup_from_init`, nothing enforces).
+- **Addon decompression** runs BEFORE capability setup so `mcp` capability sees populated `mcp_registry.jsonl` on first reconcile (`Agent.__init__` :33, `_setup_from_init` :1043).
+- **MCP retry contract (issue #34):** `_load_mcp_from_workdir` :376 records every registered init.json mcp entry into `self._mcp_init_specs` (name → `{cfg, source, client}`). `_retry_failed_mcps` :524 walks this dict, closes any dead client (`is_connected()` False), respawns with the original config, and reports `{retried, recovered, still_failed, healthy}`. `system(action="refresh")` calls it via `intrinsics/system/preset.py:_refresh` before `_perform_refresh` so the documented "fix config → refresh" recovery path works without full process restart.

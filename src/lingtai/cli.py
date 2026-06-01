@@ -29,6 +29,10 @@ def load_init(working_dir: Path) -> dict:
     from lingtai_kernel.config_resolve import resolve_paths
     from lingtai.presets import materialize_active_preset
 
+    from lingtai_kernel.migrate import run_agent_migrations
+
+    run_agent_migrations(working_dir)
+
     init_path = working_dir / "init.json"
     if not init_path.is_file():
         print(f"error: {init_path} not found", file=sys.stderr)

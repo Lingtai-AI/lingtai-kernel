@@ -11,7 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from lingtai_kernel.migrate import CURRENT_VERSION, run_migrations
+from lingtai_kernel.migrate import (
+    AGENT_CURRENT_VERSION,
+    CURRENT_VERSION,
+    agent_meta_relative_path,
+    run_agent_migrations,
+    run_migrations,
+)
 from lingtai_kernel.migrate.migrate import meta_filename, reset_process_cache
 
 
@@ -239,6 +245,100 @@ def test_run_migrations_persists_across_simulated_process_restart(tmp_path):
     assert "context_limit" not in after_p2["manifest"]["llm"]
     # Meta file untouched (mtime unchanged)
     assert (plib / meta_filename()).stat().st_mtime_ns == first_meta_mtime
+
+
+# ---------------------------------------------------------------------------
+# Agent workdir migration domain
+# ---------------------------------------------------------------------------
+
+def _write_init(workdir: Path, body: dict) -> Path:
+    p = workdir / "init.json"
+    p.write_text(json.dumps(body, indent=2), encoding="utf-8")
+    return p
+
+
+def _minimal_init() -> dict:
+    return {
+        "manifest": {
+            "agent_name": "alice",
+            "llm": {"provider": "p", "model": "m"},
+            "capabilities": {},
+        },
+        "principle": "",
+        "covenant": "",
+        "pad": "",
+        "prompt": "",
+    }
+
+
+def test_run_agent_migrations_archives_and_removes_procedures_fields(tmp_path):
+    init = _minimal_init()
+    init["procedures"] = "legacy procedures text"
+    init["procedures_file"] = "legacy/procedures.md"
+    init_path = _write_init(tmp_path, init)
+
+    run_agent_migrations(tmp_path)
+
+    data = _read(init_path)
+    assert "procedures" not in data
+    assert "procedures_file" not in data
+
+    import hashlib
+    digest = hashlib.sha256(b"legacy procedures text").hexdigest()
+    archive = tmp_path / "system" / "migrations" / f"init-procedures-{digest}.md"
+    assert archive.read_text(encoding="utf-8") == "legacy procedures text"
+
+    meta = _read(tmp_path / agent_meta_relative_path())
+    assert meta == {"version": AGENT_CURRENT_VERSION, "domain": "agent"}
+
+
+def test_run_agent_migrations_version_gate_prevents_rerun_after_restart(tmp_path):
+    init = _minimal_init()
+    init["procedures"] = "first legacy"
+    init_path = _write_init(tmp_path, init)
+
+    run_agent_migrations(tmp_path)
+    assert "procedures" not in _read(init_path)
+
+    restored = _read(init_path)
+    restored["procedures"] = "restored after migration"
+    _write_init(tmp_path, restored)
+    reset_process_cache()
+
+    run_agent_migrations(tmp_path)
+
+    # Version gate is the source of truth: migrations do not rerun for a
+    # workdir already marked current, even if a stale shape is later restored.
+    assert _read(init_path)["procedures"] == "restored after migration"
+
+
+def test_run_agent_migrations_no_op_when_workdir_missing(tmp_path):
+    workdir = tmp_path / "missing"
+    run_agent_migrations(workdir)
+    assert not workdir.exists()
+
+
+def test_run_agent_migrations_no_op_when_init_missing(tmp_path):
+    run_agent_migrations(tmp_path)
+    assert not (tmp_path / agent_meta_relative_path()).exists()
+
+
+def test_run_agent_migrations_treats_non_object_meta_as_zero(tmp_path, caplog):
+    import logging
+
+    init = _minimal_init()
+    init["procedures_file"] = "legacy/procedures.md"
+    init_path = _write_init(tmp_path, init)
+    meta_path = tmp_path / agent_meta_relative_path()
+    meta_path.parent.mkdir(parents=True)
+    meta_path.write_text("null", encoding="utf-8")
+
+    caplog.set_level(logging.WARNING, logger="lingtai_kernel.migrate.migrate")
+    run_agent_migrations(tmp_path)
+
+    assert "procedures_file" not in _read(init_path)
+    assert _read(meta_path) == {"version": AGENT_CURRENT_VERSION, "domain": "agent"}
+    assert any("expected object" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

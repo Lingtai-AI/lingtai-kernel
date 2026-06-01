@@ -369,3 +369,37 @@ def test_log_query_missing_sqlite_requires_rebuild_cli(tmp_path, capsys):
         assert not (logs / "log.sqlite").exists()
     finally:
         sys.argv = old_argv
+
+
+def test_load_init_runs_agent_migrations_before_validation(tmp_path):
+    """CLI boot must normalize legacy procedures fields before validating init.json."""
+    import hashlib
+
+    from lingtai.cli import load_init
+
+    legacy = "legacy CLI procedures"
+    init = {
+        "manifest": {
+            "agent_name": "cli-agent",
+            "llm": {"provider": "p", "model": "m"},
+            "capabilities": {},
+        },
+        "principle": "",
+        "covenant": "",
+        "pad": "",
+        "prompt": "",
+        "procedures": legacy,
+        "procedures_file": "old/procedures.md",
+    }
+    (tmp_path / "init.json").write_text(json.dumps(init), encoding="utf-8")
+
+    data = load_init(tmp_path)
+
+    assert "procedures" not in data
+    assert "procedures_file" not in data
+    on_disk = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
+    assert "procedures" not in on_disk
+    assert "procedures_file" not in on_disk
+    digest = hashlib.sha256(legacy.encode("utf-8")).hexdigest()
+    archive = tmp_path / "system" / "migrations" / f"init-procedures-{digest}.md"
+    assert archive.read_text(encoding="utf-8") == legacy

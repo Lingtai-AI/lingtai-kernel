@@ -840,7 +840,10 @@ class Agent(BaseAgent):
         import json
         from .init_schema import strip_deprecated, validate_init
         from lingtai_kernel.config_resolve import resolve_paths
+        from lingtai_kernel.migrate import run_agent_migrations
         from .presets import expand_inherit, materialize_active_preset
+
+        run_agent_migrations(self._working_dir)
 
         init_path = self._working_dir / "init.json"
         if not init_path.is_file():
@@ -851,8 +854,6 @@ class Agent(BaseAgent):
         except (json.JSONDecodeError, OSError, ValueError):
             self._log("refresh_init_error", error="failed to read init.json")
             return None
-
-        self._migrate_init_procedures_override(data, init_path)
 
         # Materialize active preset, if any, BEFORE validation so the manifest
         # the schema validates is the fully-resolved one the agent will run on.
@@ -893,78 +894,6 @@ class Agent(BaseAgent):
 
         resolve_paths(data, self._working_dir)
         return data
-
-    def _migrate_init_procedures_override(self, data: dict, init_path: Path) -> None:
-        """Archive and remove legacy top-level ``procedures`` overrides.
-
-        ``procedures.md`` is kernel-owned now. A legacy non-empty
-        ``init.json.procedures`` value is preserved under ``system/migrations``
-        but is never used for prompt construction.
-        """
-        if "procedures" not in data:
-            return
-
-        legacy = data.get("procedures")
-        should_archive = isinstance(legacy, str) and legacy != ""
-        archive_rel: str | None = None
-        content_hash: str | None = None
-        byte_length = 0
-        char_length = 0
-
-        if should_archive:
-            import hashlib
-
-            raw = legacy.encode("utf-8")
-            content_hash = hashlib.sha256(raw).hexdigest()
-            byte_length = len(raw)
-            char_length = len(legacy)
-            migrations_dir = self._working_dir / "system" / "migrations"
-            archive_path = migrations_dir / f"init-procedures-{content_hash}.md"
-            try:
-                migrations_dir.mkdir(parents=True, exist_ok=True)
-                archive_path.write_text(legacy, encoding="utf-8")
-                archive_rel = archive_path.relative_to(self._working_dir).as_posix()
-            except OSError as e:
-                self._log(
-                    "init_procedures_override_migration_failed",
-                    reason=str(e),
-                    content_hash=content_hash,
-                    byte_length=byte_length,
-                    char_length=char_length,
-                )
-                return
-
-        data.pop("procedures", None)
-        try:
-            import json
-            import os
-
-            tmp = init_path.with_suffix(".json.tmp")
-            tmp.write_text(
-                json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
-            os.replace(str(tmp), str(init_path))
-        except OSError as e:
-            self._log(
-                "init_procedures_override_migration_failed",
-                reason=str(e),
-                archive_path=archive_rel,
-                content_hash=content_hash,
-                byte_length=byte_length,
-                char_length=char_length,
-            )
-            return
-
-        if should_archive:
-            self._log(
-                "init_procedures_override_migrated",
-                archive_path=archive_rel,
-                content_hash=content_hash,
-                byte_length=byte_length,
-                char_length=char_length,
-                field_removed=True,
-            )
 
     def _activate_preset(self, name: str) -> None:
         """Substitute a preset's llm + capabilities into init.json on disk.
