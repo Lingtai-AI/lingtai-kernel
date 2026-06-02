@@ -101,6 +101,7 @@ def _synthesized_abort_message(
     reason: str,
     *,
     tool_completed: bool = False,
+    tool_not_dispatched: bool = False,
     tool_call: "ToolCallBlock | None" = None,
 ) -> str:
     """Content for a heal-path placeholder ToolResultBlock.
@@ -117,9 +118,36 @@ def _synthesized_abort_message(
     executed and the real failure was the LLM continuation *after* the
     tool result.  In that case the message says so honestly instead of
     implying the tool itself failed.
+
+    ``tool_completed`` and ``tool_not_dispatched`` are mutually exclusive:
+    one says side effects likely happened, the other says dispatch never
+    happened.
     """
+    if tool_completed and tool_not_dispatched:
+        raise ValueError(
+            "tool_completed and tool_not_dispatched are mutually exclusive"
+        )
     context = _tool_call_context(tool_call)
     context_block = f"\n\nRecovery metadata:\n{context}" if context else ""
+    if tool_not_dispatched:
+        return (
+            f"[kernel notice — tool call NOT dispatched]\n"
+            f"\n"
+            f"A prior assistant call to `{tool_name}` was NOT dispatched. "
+            f"The kernel stopped the tool loop before invoking the tool "
+            f"handler.\n"
+            f"\n"
+            f"No side effects occurred from this tool call. It did not write "
+            f"files, send messages, start processes, or mutate agent state.\n"
+            f"\n"
+            f"This synthetic tool result is now visible in the conversation "
+            f"transcript. Do not retry the same blocked call unchanged. "
+            f"Summarize the blocked/completed work and either switch strategy "
+            f"or ask the human for direction.\n"
+            f"\n"
+            f"Reason recorded by the kernel: {reason}"
+            f"{context_block}"
+        )
     if tool_completed:
         return (
             f"[kernel notice — tool call completed but LLM continuation failed]\n"
@@ -411,7 +439,11 @@ class ChatInterface:
         return any(isinstance(b, ToolCallBlock) for b in last.content)
 
     def close_pending_tool_calls(
-        self, reason: str, *, tool_completed: bool = False,
+        self,
+        reason: str,
+        *,
+        tool_completed: bool = False,
+        tool_not_dispatched: bool = False,
     ) -> None:
         """Synthesize placeholder ToolResultBlocks for any unanswered tool_calls
         on the tail assistant entry. No-op if the tail has no pending calls.
@@ -428,6 +460,10 @@ class ChatInterface:
         message will say so honestly, guiding the agent to verify side
         effects rather than blindly retrying.
 
+        When ``tool_not_dispatched`` is True, the caller knows execution was
+        blocked before dispatch, so the synthesized message says no side
+        effects occurred instead of using the generic uncertain heal text.
+
         Idempotent: after one call, has_pending_tool_calls() returns False,
         and a second call no-ops.
         """
@@ -443,6 +479,7 @@ class ChatInterface:
                     b.name,
                     reason,
                     tool_completed=tool_completed,
+                    tool_not_dispatched=tool_not_dispatched,
                     tool_call=b,
                 ),
                 synthesized=True,

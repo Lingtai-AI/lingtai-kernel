@@ -526,7 +526,7 @@ def _make_chat_stub():
 
 
 def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
-    """IDLE: fingerprint change → MSG_TC_WAKE goes to the inbox.
+    """IDLE: fingerprint change -> MSG_TC_WAKE goes to the inbox.
 
     The synthesized ``(ToolCallBlock, ToolResultBlock)`` pair has
     already been spliced by ``_inject_notification_pair`` —

@@ -143,6 +143,144 @@ def _pending_tool_call_summary(iface) -> dict:
     }
 
 
+def _publish_tool_loop_guard_notification(
+    agent,
+    *,
+    reason: str,
+    detail: str,
+    ledger_source: str,
+    in_tool_loop: bool,
+    tool_call_fields: dict,
+    closed_count: int,
+) -> None:
+    workdir = getattr(agent, "_working_dir", None)
+    try:
+        from pathlib import Path
+        from ..intrinsics.system import publish_notification
+
+        publish_notification(
+            Path(workdir),
+            "tool_loop_guard",
+            header="tool loop guard interrupted work",
+            icon="!",
+            priority="normal",
+            instructions=(
+                "The kernel stopped a tool-call loop before dispatch. The "
+                "matching synthetic tool results are already visible in the "
+                "conversation transcript and say no side effects occurred "
+                "from those blocked calls. Do not re-issue the same blocked "
+                "tool call(s) unchanged. Continue with a different approach, "
+                "summarize the blocked/completed work, or ask the human for "
+                "direction, then dismiss with system(action='dismiss', "
+                "channel='tool_loop_guard', reason='handled')."
+            ),
+            data={
+                "reason": reason,
+                "detail": detail,
+                "ledger_source": ledger_source,
+                "in_tool_loop": in_tool_loop,
+                "closed_tool_result_count": closed_count,
+                **tool_call_fields,
+                "message": (
+                    "Tool loop guard stopped before dispatch. Synthetic tool "
+                    "results were committed to the transcript for the blocked "
+                    "calls; no side effects occurred from those calls. Do not "
+                    "retry the same blocked calls unchanged; switch strategy, "
+                    "summarize blocked/completed work, or ask the human."
+                ),
+            },
+        )
+    except Exception as e:
+        agent._log(
+            "tool_loop_guard_notification_failed",
+            reason=reason,
+            detail=detail,
+            error=(str(e) or repr(e))[:300],
+        )
+        return
+
+    agent._log(
+        "tool_loop_guard_notification_published",
+        reason=reason,
+        detail=detail,
+        closed_tool_result_count=closed_count,
+    )
+
+
+# Design note: this helper deliberately only closes the provider wire
+# (the ChatInterface transcript sent to the LLM) and publishes
+# .notification/tool_loop_guard.json. It does not post MSG_TC_WAKE.
+# After the turn unwinds to IDLE, BaseAgent._sync_notifications detects the
+# notification file, injects the synthetic notification call/result pair,
+# and posts MSG_TC_WAKE. _handle_tc_wake then builds a fresh ToolExecutor and
+# LoopGuard, so the tool-call limit counter resets for the follow-up turn.
+def _handle_guarded_non_dispatch(
+    agent,
+    response_tool_calls,
+    *,
+    reason: str,
+    detail: str,
+    detail_field: str,
+    ledger_source: str,
+    in_tool_loop: bool,
+    collected_text_parts: list[str],
+) -> dict:
+    tool_call_fields = _tool_call_summary(response_tool_calls)
+    agent._log(
+        "tool_calls_not_dispatched",
+        ledger_source=ledger_source,
+        in_tool_loop=in_tool_loop,
+        reason=reason,
+        detail_field=detail_field,
+        **{detail_field: detail},
+        **tool_call_fields,
+    )
+
+    closed_count = 0
+    chat = getattr(agent, "_chat", None)
+    iface = getattr(chat, "interface", None)
+    if iface is not None and iface.has_pending_tool_calls():
+        pending_fields = _pending_tool_call_summary(iface)
+        closed_count = pending_fields["pending_tool_call_count"]
+        iface.close_pending_tool_calls(
+            reason=f"{reason}: {detail}",
+            tool_not_dispatched=True,
+        )
+        agent._save_chat_history(ledger_source=ledger_source)
+        agent._log(
+            "guarded_tool_calls_closed",
+            ledger_source=ledger_source,
+            reason=reason,
+            detail=detail,
+            result_count=closed_count,
+            pending_tool_call_ids=pending_fields["pending_tool_call_ids"],
+            pending_tool_names=pending_fields["pending_tool_names"],
+        )
+    else:
+        agent._log(
+            "guarded_tool_calls_close_skipped",
+            ledger_source=ledger_source,
+            reason=reason,
+            detail=detail,
+            skipped_reason="no_chat_or_tool_calls",
+        )
+
+    _publish_tool_loop_guard_notification(
+        agent,
+        reason=reason,
+        detail=detail,
+        ledger_source=ledger_source,
+        in_tool_loop=in_tool_loop,
+        tool_call_fields=tool_call_fields,
+        closed_count=closed_count,
+    )
+    return {
+        "text": "\n".join(collected_text_parts),
+        "failed": False,
+        "errors": [],
+    }
+
+
 def _prepare_aed_retry_message(agent, err_desc: str) -> Message:
     """Build the system recovery prompt reused by transient and AED retries."""
     ts = now_iso(agent)
@@ -1166,27 +1304,29 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
 
         stop_reason = guard.check_limit(len(response.tool_calls))
         if stop_reason:
-            agent._log(
-                "tool_calls_not_dispatched",
+            return _handle_guarded_non_dispatch(
+                agent,
+                response.tool_calls,
                 ledger_source=ledger_source,
                 in_tool_loop=in_tool_loop,
                 reason="tool_loop_limit",
-                stop_reason=stop_reason,
-                **tool_call_fields,
+                detail=stop_reason,
+                detail_field="stop_reason",
+                collected_text_parts=collected_text_parts,
             )
-            break
 
         invalid_reason = guard.check_invalid_tool_limit()
         if invalid_reason:
-            agent._log(
-                "tool_calls_not_dispatched",
+            return _handle_guarded_non_dispatch(
+                agent,
+                response.tool_calls,
                 ledger_source=ledger_source,
                 in_tool_loop=in_tool_loop,
                 reason="invalid_tool_limit",
-                invalid_reason=invalid_reason,
-                **tool_call_fields,
+                detail=invalid_reason,
+                detail_field="invalid_reason",
+                collected_text_parts=collected_text_parts,
             )
-            break
 
         # Delegate to ToolExecutor
         tool_results, intercepted, intercept_text = agent._executor.execute(

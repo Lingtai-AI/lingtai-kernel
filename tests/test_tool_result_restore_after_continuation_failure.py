@@ -7,6 +7,7 @@ that loses the result payload.
 """
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 
@@ -45,9 +46,12 @@ class _FakeChat:
 
 
 class _FakeAgent:
-    def __init__(self) -> None:
+    def __init__(self, *, working_dir: Path | None = None) -> None:
         self._chat = _FakeChat()
         self._notification_live_holder = None
+        self._working_dir = working_dir or Path(
+            "/nonexistent/lingtai-test-tool-result-restore"
+        )
         self.saved = 0
         self.logs: list[tuple[str, dict]] = []
 
@@ -295,8 +299,10 @@ def test_process_response_logs_cancel_before_tool_dispatch():
         ),
     ],
 )
-def test_process_response_logs_guarded_tool_calls_not_dispatched(guard, reason, extra):
-    agent = _FakeAgent()
+def test_process_response_closes_and_notifies_guarded_tool_calls_not_dispatched(
+    tmp_path, guard, reason, extra,
+):
+    agent = _FakeAgent(working_dir=tmp_path)
     real_result = ToolResultBlock(
         id="call_1",
         name="bash",
@@ -317,20 +323,60 @@ def test_process_response_logs_guarded_tool_calls_not_dispatched(guard, reason, 
 
     assert result == {"text": "", "failed": False, "errors": []}
     assert agent._executor.calls == []
-    assert agent.logs == [
-        (
-            "tool_calls_not_dispatched",
-            {
-                "ledger_source": "test",
-                "in_tool_loop": False,
-                "reason": reason,
-                "call_count": 1,
-                "call_ids": ["call_1"],
-                "tool_names": ["bash"],
-                **extra,
-            },
-        )
+    tail = agent._chat.interface.entries[-1]
+    assert tail.role == "user"
+    assert len(tail.content) == 1
+    synthetic = tail.content[0]
+    assert synthetic.id == "call_1"
+    assert synthetic.name == "bash"
+    assert synthetic.synthesized is True
+    assert synthetic.content.startswith("[kernel notice — tool call NOT dispatched]")
+    assert "NOT dispatched" in synthetic.content
+    assert f"Reason recorded by the kernel: {reason}" in synthetic.content
+    assert "No side effects occurred from this tool call" in synthetic.content
+    assert "visible in the conversation transcript" in synthetic.content
+    assert "Do not retry the same blocked call unchanged" in synthetic.content
+    assert "MAY OR MAY NOT" not in synthetic.content
+    assert not agent._chat.interface.has_pending_tool_calls()
+    assert agent.saved == 1
+
+    log_names = [name for name, _ in agent.logs]
+    assert log_names == [
+        "tool_calls_not_dispatched",
+        "guarded_tool_calls_closed",
+        "tool_loop_guard_notification_published",
     ]
+    assert agent.logs[0] == (
+        "tool_calls_not_dispatched",
+        {
+            "ledger_source": "test",
+            "in_tool_loop": False,
+            "reason": reason,
+            "detail_field": next(iter(extra.keys())),
+            "call_count": 1,
+            "call_ids": ["call_1"],
+            "tool_names": ["bash"],
+            **extra,
+        },
+    )
+    notification_path = tmp_path / ".notification" / "tool_loop_guard.json"
+    notification = json.loads(notification_path.read_text(encoding="utf-8"))
+    assert notification["header"] == "tool loop guard interrupted work"
+    assert notification["priority"] == "normal"
+    instructions = notification["instructions"]
+    assert "already visible in the conversation transcript" in instructions
+    assert "Do not re-issue the same blocked tool call(s) unchanged" in instructions
+    data = notification["data"]
+    assert data["reason"] == reason
+    assert data["detail"] == next(iter(extra.values()))
+    assert data["ledger_source"] == "test"
+    assert data["in_tool_loop"] is False
+    assert data["closed_tool_result_count"] == 1
+    assert data["call_ids"] == ["call_1"]
+    assert data["tool_names"] == ["bash"]
+    assert "Synthetic tool results were committed to the transcript" in data["message"]
+    assert "no side effects occurred" in data["message"]
+    assert "retry the same blocked calls unchanged" in data["message"]
 
 
 # ---------------------------------------------------------------------------
