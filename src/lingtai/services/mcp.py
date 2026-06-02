@@ -55,6 +55,39 @@ class MCPClient:
         self._activity_lock = threading.Lock()
 
     # ------------------------------------------------------------------
+    # Exception helpers — never surface a blank error (issue #104)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _format_exception(exc: BaseException) -> str:
+        """Render an exception as ``ClassName: message``.
+
+        Some MCP/anyio exceptions (notably ``ClosedResourceError``) have an
+        empty ``str()``. Falling through to that empty string is what produced
+        the blank ``{"status": "error", "message": ""}`` in issue #104. When the
+        message is empty we fall back to the class name alone.
+        """
+        cls = type(exc).__name__
+        msg = str(exc).strip()
+        return f"{cls}: {msg}" if msg else cls
+
+    @staticmethod
+    def _is_stale_resource_error(exc: BaseException) -> bool:
+        """Detect a dead/closed MCP transport that warrants a restart.
+
+        Primary signal is the exception class name ``ClosedResourceError``
+        (anyio) — matched by name so we need not import anyio. As a secondary
+        signal we look for closed-stream substrings in the message.
+        """
+        if type(exc).__name__ == "ClosedResourceError":
+            return True
+        text = str(exc).lower()
+        return any(
+            marker in text
+            for marker in ("closed", "broken pipe", "stream", "transport")
+        )
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
@@ -80,6 +113,29 @@ class MCPClient:
             self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread:
             self._thread.join(timeout=5)
+
+    def restart(self) -> None:
+        """Tear down a (possibly stale) session and reconnect from scratch.
+
+        ``start()`` early-returns when it believes it is connected and never
+        clears latched startup state, so a stale ``_ready``/``_error`` or a
+        ``_closed`` flag from a prior ``close()`` would make a fresh ``start()``
+        lie (return immediately, or raise on the *old* error). This resets all
+        startup/session fields so the subsequent ``start()`` is a real reconnect.
+        Used by ``call_tool`` to recover from a closed stdio resource (issue #104).
+        """
+        self.close()
+        self._ready.clear()
+        self._error = None
+        self._closed = False
+        self._session = None
+        self._read_stream = None
+        self._write_stream = None
+        self._loop = None
+        self._thread = None
+        self._stdio_cm = None
+        self._session_cm = None
+        self.start()
 
     def is_connected(self) -> bool:
         """Check if the client has an active session."""
@@ -122,30 +178,69 @@ class MCPClient:
         if self._session is None or self._loop is None:
             raise RuntimeError("MCP client not connected")
 
-        async def _call():
-            result = await self._session.call_tool(
-                name=name,
-                arguments=args,
-                read_timeout_seconds=timedelta(seconds=timeout),
-            )
-            if result.isError:
-                error_text = (
-                    result.content[0].text if result.content else "Unknown MCP error"
+        def _attempt() -> dict:
+            async def _call():
+                result = await self._session.call_tool(
+                    name=name,
+                    arguments=args,
+                    read_timeout_seconds=timedelta(seconds=timeout),
                 )
-                return {"status": "error", "message": error_text}
+                if result.isError:
+                    error_text = (
+                        result.content[0].text
+                        if result.content
+                        else "Unknown MCP error"
+                    )
+                    return {"status": "error", "message": error_text}
 
-            if result.content:
-                for block in result.content:
-                    if hasattr(block, "text"):
-                        try:
-                            return json.loads(block.text)
-                        except (json.JSONDecodeError, TypeError):
-                            return {"status": "success", "text": block.text}
+                if result.content:
+                    for block in result.content:
+                        if hasattr(block, "text"):
+                            try:
+                                return json.loads(block.text)
+                            except (json.JSONDecodeError, TypeError):
+                                return {"status": "success", "text": block.text}
 
-            return {"status": "success", "text": ""}
+                return {"status": "success", "text": ""}
 
-        future = asyncio.run_coroutine_threadsafe(_call(), self._loop)
-        result = future.result(timeout=timeout)
+            future = asyncio.run_coroutine_threadsafe(_call(), self._loop)
+            return future.result(timeout=timeout)
+
+        try:
+            result = _attempt()
+        except Exception as exc:
+            formatted = self._format_exception(exc)
+            if not self._is_stale_resource_error(exc):
+                # Non-stale failure: surface the class name so the error is
+                # never blank (issue #104), but don't churn the subprocess.
+                result = {"status": "error", "message": formatted}
+            else:
+                # Stale/closed resource: tear down and reconnect, retry once.
+                logger.warning(
+                    "MCP tool %s hit stale resource (%s); restarting and "
+                    "retrying once", name, formatted,
+                )
+                try:
+                    self.restart()
+                except Exception as restart_exc:
+                    result = {
+                        "status": "error",
+                        "message": (
+                            f"{formatted}: MCP session closed; restart failed: "
+                            f"{self._format_exception(restart_exc)}"
+                        ),
+                    }
+                else:
+                    try:
+                        result = _attempt()
+                    except Exception as retry_exc:
+                        result = {
+                            "status": "error",
+                            "message": (
+                                f"{self._format_exception(retry_exc)}: MCP "
+                                "session closed; restarted once but retry failed"
+                            ),
+                        }
 
         # Log activity
         with self._activity_lock:
@@ -210,7 +305,9 @@ class MCPClient:
             loop.run_until_complete(self._async_connect())
             loop.run_forever()
         except Exception as e:
-            self._error = str(e)
+            # Preserve the class name so a blank str(e) (e.g. ClosedResourceError)
+            # does not produce "MCP server failed to start: " (issue #104).
+            self._error = self._format_exception(e)
             self._ready.set()
         finally:
             try:
@@ -393,7 +490,9 @@ class HTTPMCPClient:
             loop.run_until_complete(self._async_connect())
             loop.run_forever()
         except Exception as e:
-            self._error = str(e)
+            # Preserve the class name so a blank str(e) is not surfaced as an
+            # empty connect error (issue #104).
+            self._error = MCPClient._format_exception(e)
             self._ready.set()
         finally:
             try:
