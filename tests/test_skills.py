@@ -72,6 +72,10 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert "name: skills-manual" in body
         assert "Nested skill/reference pattern for umbrella manuals" in body
         assert "Nested reference catalog" in body
+        assert "## Routing table" in body
+        assert "children's routing metadata explicitly" in body
+        assert "machine-readable routing table" in body
+        assert "Do not leave the parent as only a prose list of links" in body
         assert "reference/substrate-manual/SKILL.md" in body
         assert "The catalog scanner treats a directory that already" in body
         assert "validate.py reference/topic-a/" in body

@@ -203,17 +203,34 @@ way to hide unrelated reusable skills.
 Key rule: a nested `reference/<topic>/SKILL.md` is **not automatically promoted**
 to the global skills catalog. The catalog scanner treats a directory that already
 has `SKILL.md` as a skill boundary and does not descend into that folder for
-additional catalog entries. Therefore the parent `SKILL.md` must advertise the
-children explicitly, usually with a small YAML block such as:
+additional catalog entries. Therefore the parent `SKILL.md` must inject the
+children's routing metadata explicitly and keep the heavy procedural content in
+the children.
+
+Every parent-owned nested-reference router should contain **both**:
+
+1. a `## Nested reference catalog` section with a fenced YAML list containing one
+   item per child (`name`, `location`, `description`); and
+2. a human-readable `## Routing table` (or equivalent decision table) that maps
+   user/agent needs to the same child `location`s.
+
+Preferred catalog shape:
 
 ```yaml
-Nested reference catalog:
-  - name: topic-a
-    location: reference/topic-a/SKILL.md
-    description: >
-      Nested <parent-skill> reference for ... Read this after loading
-      <parent-skill> when ...
+- name: parent-topic-a
+  location: reference/topic-a/SKILL.md
+  description: |
+    Nested <parent-skill> reference for ... Read this after loading
+    <parent-skill> when ...
+- name: parent-topic-b
+  location: reference/topic-b/SKILL.md
+  description: |
+    Nested <parent-skill> reference for ...
 ```
+
+The YAML catalog is not just decoration: it is the machine-readable routing table
+for the second layer. Keep it in sync with child frontmatter and with the human
+routing table. Do not leave the parent as only a prose list of links.
 
 Use nested references when all of these are true:
 
@@ -230,27 +247,33 @@ find directly from the top-level catalog. Those should be normal skills under
 
 Nested child conventions:
 
-- `name` should be unique within the parent and descriptive (`sqlite-log-query`,
-  `procedures-manual`), even though it is not globally cataloged.
-- `description` should start with the fact that it is nested, name the parent,
-  and give the trigger condition: `Nested system-manual reference for ...`.
-- `location` in the parent catalog should be relative to the parent folder so it
-  survives copy/install moves; agents reading the parent can resolve it next to
+- Each child `reference/<topic>/SKILL.md` must have normal skill frontmatter:
+  `name` and `description` required; `version`/`tags` optional. `name` should be
+  unique within the parent and descriptive (`system-manual-sqlite-log-query`,
+  `daily-reflection-data-collection`), even though it is not globally cataloged.
+- The child `description` and the parent catalog `description` should start with
+  the fact that it is nested, name the parent, and give the trigger condition:
+  `Nested system-manual reference for ...`.
+- `location` in the parent YAML catalog should be relative to the parent folder so
+  it survives copy/install moves; agents reading the parent can resolve it next to
   the parent `SKILL.md`.
 - The parent should remain the routing hub. Resident prompts and sibling skills
   should route to the parent first, then to the nested reference; do not bypass
   the parent unless the caller already has the parent context loaded.
-- Tests should verify both levels: the parent catalog/body mentions every nested
-  child, and the installed/copied skill tree contains each child `SKILL.md` with
-  valid frontmatter and key content.
+- Tests should verify both levels: the parent body contains the YAML catalog,
+  every child `name` and `location`, and the human routing table; the
+  installed/copied skill tree contains each child `SKILL.md` with valid
+  frontmatter and key content.
 - The bundled validator checks one skill folder at a time. For nested children,
   validate the parent and then validate each nested child folder directly, e.g.
   `python3 .../validate.py reference/topic-a/` from the parent skill folder.
 
-Reference implementation: `system-manual` is a top-level router with nested
+Reference implementations: `system-manual` is a top-level router with nested
 `reference/substrate-manual/SKILL.md`, `reference/procedures-manual/SKILL.md`,
 and `reference/sqlite-log-query/SKILL.md`, advertised through a `Nested reference
-catalog` in the parent.
+catalog` in the parent. Utility routers such as `swiss-knife`, `web-browsing`,
+and `daily-reflection` use the same two-part shape: YAML child metadata first,
+human routing table second.
 
 ### SKILL.md vs README.md
 
