@@ -35,9 +35,9 @@ operations, preset swaps, notification handling, and karma actions.
 
 ### Molt and Durable Stores
 
-**If you are about to molt, first read `psyche-manual` for the summary template
-and verification checklist.** Do this while context is still cheap; do not wait
-until the last moment.
+**If you are about to molt, first read `psyche-manual`; for consequential
+handoffs it routes to the molt-template asset and verification checklist.** Do
+this while context is still cheap; do not wait until the last moment.
 
 Before context exhaustion, update pad, knowledge, character, and skills as
 needed, then molt deliberately with a successor briefing — not a transcript.

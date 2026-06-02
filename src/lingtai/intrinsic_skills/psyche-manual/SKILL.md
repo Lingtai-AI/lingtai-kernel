@@ -1,11 +1,19 @@
 ---
 name: psyche-manual
 description: |
-  Complete operational guide for the psyche tool — molt, pad management, session journaling, and post-wipe recovery. Read this when: you are about to molt; you need to tend the four durable stores; you want guidance on writing a good summary or session journal; you wake up after a system-performed wipe with no summary; or you need to understand keep_tool_calls, keep_last, and pad.append. Covers molt rhythm, the four-store discipline, summary writing, session journals, pad tending, archiving, and post-wipe reconstruction.
-version: "1.0"
+  Router and operational guide for the psyche tool — molt, pad management, session journaling, and post-wipe recovery. Read this when: you are about to molt; you need to tend the four durable stores; you want guidance on writing a good summary or session journal; you wake up after a system-performed wipe with no summary; or you need to understand keep_tool_calls, keep_last, and pad.append. Routes consequential molt handoffs to assets/molt-template.md while keeping routine guidance compact.
+version: "1.1"
 ---
 
 # Psyche Manual
+
+This manual is the router for `psyche` operations. Keep routine guidance here; load the supporting asset only when you need the full consequential-molt scaffold.
+
+## Asset catalog
+
+| Asset | When to load | What it contains |
+|---|---|---|
+| `assets/molt-template.md` (read from this skill directory) | Consequential molt, long-running task, multiple collaborators, pending human commitments, open worktrees/artifacts, active background jobs, or any successor briefing that would be risky to improvise | 9-section summary scaffold plus pre-molt verification checklist |
 
 ## 1. Molt Overview
 
@@ -105,52 +113,22 @@ For a routine molt, include:
 - **The session journal sub-entry path** — so the next you can read the full narrative
 - **Anything else worth carrying forward** — insights, gotchas
 
-For a consequential molt — long-running task, multiple collaborators, pending human commitments, open worktrees/artifacts, or any handoff the next you could not reconstruct quickly — use this full scaffold. Fill every section; write `None` rather than omitting a section.
+For a consequential molt — long-running task, multiple collaborators, pending human commitments, open worktrees/artifacts, or any handoff the next you could not reconstruct quickly — read `assets/molt-template.md` from this skill directory and use the full scaffold there. Fill every section; write `None` rather than omitting a section.
 
-1. **Who I Am**
-   - Name/address and current role.
-   - Standing constraints, authorizations, and things not to do without explicit confirmation.
-   - Parent/peer relationships or topology that affect the task.
-2. **Accomplishments**
-   - Completed tasks and outputs.
-   - Key decisions made and why.
-   - Who has already been told, on which channel.
-3. **Outstanding Tasks**
-   - Incomplete work, status, blocker, and the next concrete step.
-   - Pending reviews, PRs, human approvals, daemon/avatar work, or external replies.
-4. **Action Checklist**
-   - Priority-ordered actions in the form: `[Immediate|Today|Pending|Optional] Action + recipient/channel + exact content/command`.
-   - Every outstanding task must have a matching action item.
-   - `Immediate` means first five minutes after wake; `Pending` means blocked on someone else and includes when/how to follow up.
-5. **Collaborators**
-   - People/agents involved, addresses/channels, roles/capabilities.
-   - Pending replies, deliverables owed by you, deliverables owed to you.
-6. **Durable Memory and Execution Notes**
-   - Pad sections, knowledge entries, skills/manuals, character changes, session-journal entries, or pinned files the next you should load.
-   - Commands, tests, environment assumptions, active daemons/bash jobs/avatars/schedules, or tool states the next you must know.
-   - Use current durable-store terms; avoid old `codex` wording unless documenting historical material.
-7. **Key Paths and Artifacts**
-   - Absolute paths for repos, worktrees, reports, drafts, logs, local deliverables, and test outputs.
-   - Include PR/issue URLs or branch names when relevant.
-8. **Lessons and Gotchas**
-   - Actionable warnings, failed approaches, verification requirements, and authorization limits.
-   - Prefer precise lessons: “run X before Y” beats “be careful”.
-9. **Context Status**
-   - Why you are molting.
-   - Leftover items not yet stored elsewhere.
-   - Unsent drafts, interrupted tool calls, or recent state that should be re-checked.
+Quick routing:
 
-Before you call `psyche(object="context", action="molt", ...)`, verify:
+| Need | Use |
+|---|---|
+| Routine molt | The short bullet list above. |
+| Consequential molt / successor handoff | Read `assets/molt-template.md` from this skill directory; use its full scaffold and checklist. |
+| Unsure whether the handoff is complex | Use the asset; extra structure is cheaper than a bad handoff. |
 
-- Pad, lingtai/character, knowledge, skills, and session journal were updated where needed before writing the summary.
-- Every outstanding task has an action checklist entry.
-- Every action names who/where and what exact content or command is needed.
-- Every collaborator has a usable address/channel and pending-reply state.
-- Every key path is absolute and still useful.
+Before you call `psyche(object="context", action="molt", ...)`, always verify at minimum:
+
+- Durable stores and session journal were updated where needed before writing the summary.
+- Every outstanding task has an explicit next action.
+- Collaborators, channels, approvals, and key paths are named where relevant.
 - Active background work is listed or explicitly absent.
-- Authorization limits, external-side-effect approvals, and secret/privacy constraints are explicit.
-- Every lesson/gotcha is actionable.
-- Pending human/peer contacts have been acknowledged if the molt will delay them.
 - The first five minutes after wake are obvious.
 
 **`keep_tool_calls`** — optional list of tool-call IDs to preserve across molt. Each named pair (tool_use + tool_result) is replayed into the fresh session right after the summary, in the order you list them. If any ID is not found, the molt is refused. Keep this list short — the durable stores are the primary persistence.

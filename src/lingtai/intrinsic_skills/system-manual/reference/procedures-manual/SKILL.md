@@ -124,11 +124,12 @@ A good molt summary is not a transcript. It is an operational briefing for the
 next self: what to do first, what is done, what remains, what is forbidden
 without authorization, who is waiting, and where the durable state lives.
 
-Use the full consequential scaffold in `psyche-manual` when a long task is
-mid-stream, multiple collaborators are active, human commitments are pending, or
-the next self would otherwise need to reconstruct state from logs. Resident
-`procedures.md` only carries the compact cue; `psyche-manual` is the canonical
-place for the full summary template and pre-molt verification checklist.
+Use `psyche-manual` when a long task is mid-stream, multiple collaborators are
+active, human commitments are pending, or the next self would otherwise need to
+reconstruct state from logs. Resident `procedures.md` only carries the compact
+cue; `psyche-manual` routes consequential handoffs to its
+`assets/molt-template.md` file, which holds the full summary template and
+pre-molt verification checklist.
 
 Minimum handoff checks:
 

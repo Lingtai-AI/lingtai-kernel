@@ -187,6 +187,41 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "external side effects" in procedures_body
         assert "Resident procedures maintenance" in procedures_body
 
+        psyche_md = (
+            workdir
+            / ".library"
+            / "intrinsic"
+            / "capabilities"
+            / "psyche-manual"
+            / "SKILL.md"
+        )
+        assert psyche_md.is_file()
+        psyche_body = psyche_md.read_text(encoding="utf-8")
+        assert "name: psyche-manual" in psyche_body
+        assert "## Asset catalog" in psyche_body
+        assert "assets/molt-template.md" in psyche_body
+        assert "9-section summary scaffold" in psyche_body
+        assert "9. **Context Status**" not in psyche_body
+
+        molt_template_asset = psyche_md.parent / "assets" / "molt-template.md"
+        assert molt_template_asset.is_file()
+        molt_template_body = molt_template_asset.read_text(encoding="utf-8")
+        assert "# Consequential Molt Summary Template" in molt_template_body
+        assert "## Summary scaffold" in molt_template_body
+        for section in (
+            "1. **Who I Am**",
+            "2. **Accomplishments**",
+            "3. **Outstanding Tasks**",
+            "4. **Action Checklist**",
+            "5. **Collaborators**",
+            "6. **Durable Memory and Execution Notes**",
+            "7. **Key Paths and Artifacts**",
+            "8. **Lessons and Gotchas**",
+            "9. **Context Status**",
+        ):
+            assert section in molt_template_body
+        assert "## Pre-molt verification checklist" in molt_template_body
+
         sqlite_log_query_ref = system_manual_md.parent / "reference" / "sqlite-log-query" / "SKILL.md"
         assert sqlite_log_query_ref.is_file()
         sqlite_log_query_body = sqlite_log_query_ref.read_text(encoding="utf-8")
