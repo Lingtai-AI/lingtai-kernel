@@ -179,21 +179,74 @@ def _build_tools(schemas: list[FunctionSchema] | None) -> list[dict] | None:
     ]
 
 
-# Top-level JSON-Schema combinators that the Responses API rejects on
-# function-tool `parameters`. Allowed inside individual properties, just
-# not as a top-level key. Scrubbing is shallow on purpose — we only
-# remove these when they appear at the schema root.
+# Top-level JSON-Schema combinators the Responses API rejects on a
+# function-tool `parameters` root. `enum` is only disallowed at the root —
+# it is valid (and common) inside individual properties.
 _RESPONSES_DISALLOWED_TOP_LEVEL = ("allOf", "oneOf", "anyOf", "not", "enum")
+
+
+# Keys that, if present on a schema node, already establish its kind so it
+# does not need a synthesized `type`. The Codex backend rejects a property
+# schema that carries none of these (a "typeless" property, e.g. one with
+# only a `description`), so such nodes are coerced to `{"type": "string"}`.
+_SCHEMA_KIND_KEYS = (
+    "type", "enum", "const", "$ref",
+    "anyOf", "allOf", "oneOf", "not",
+    "properties", "items",
+)
+
+
+def _scrub_responses_schema(node: Any) -> Any:
+    """Recursively normalize a JSON schema for the Codex Responses backend.
+
+    Empirically, `/backend-api/codex/responses` rejects three constructs even
+    when nested inside a property, returning an opaque `server_error`:
+
+      1. `oneOf` / `not` combinators  -> `oneOf` rewritten to the accepted
+         `anyOf`; `not` dropped (no accepted equivalent).
+      2. Typeless property schemas    -> a node with a `description` but no
+         type-establishing key (see `_SCHEMA_KIND_KEYS`) gets `type:
+         "string"`. This covers the nested `secondary.args.*` fields LingTai
+         emits with only a description.
+      3. `{"type": "object"}` with no `properties` key (a free-form object,
+         e.g. `daemon`'s `tasks[].backend_options`) -> an empty
+         `properties: {}` is added. An empty `properties` map is accepted.
+
+    `enum`/`anyOf`/`allOf` are left untouched (the backend accepts them
+    nested). Walks dicts and lists so all fixes apply at any depth.
+    """
+    if isinstance(node, dict):
+        out: dict = {}
+        for key, value in node.items():
+            if key == "oneOf":
+                out["anyOf"] = [_scrub_responses_schema(v) for v in value]
+            elif key == "not":
+                continue  # no accepted equivalent — drop it
+            else:
+                out[key] = _scrub_responses_schema(value)
+        # Coerce typeless property schemas: a node describing a value (has a
+        # description) but lacking any kind key. Skip bare containers like an
+        # empty {} or {"required": [...]} that aren't value descriptors.
+        if "description" in out and not any(k in out for k in _SCHEMA_KIND_KEYS):
+            out["type"] = "string"
+        # A typed object with no `properties` is rejected; give it an empty map.
+        if out.get("type") == "object" and "properties" not in out:
+            out["properties"] = {}
+        return out
+    if isinstance(node, list):
+        return [_scrub_responses_schema(v) for v in node]
+    return node
 
 
 def _build_responses_tools(schemas: list[FunctionSchema] | None) -> list[dict] | None:
     """Convert FunctionSchema list to Responses API tool format.
 
     Responses uses a flat shape (`type: function`, fields hoisted) instead
-    of Chat Completions' nested `{type: function, function: {...}}`. Also
-    scrubs top-level JSON-Schema combinators that the Responses API
-    rejects on tool parameters; combinators inside individual properties
-    are left alone.
+    of Chat Completions' nested `{type: function, function: {...}}`. Scrubs
+    top-level combinators the Responses API rejects at the parameters root,
+    then runs `_scrub_responses_schema` to fix the constructs the Codex
+    backend rejects even nested in a property (`oneOf`/`not` combinators and
+    typeless property schemas).
     """
     if not schemas:
         return None
@@ -202,6 +255,7 @@ def _build_responses_tools(schemas: list[FunctionSchema] | None) -> list[dict] |
         params = dict(s.parameters or {})
         for key in _RESPONSES_DISALLOWED_TOP_LEVEL:
             params.pop(key, None)
+        params = _scrub_responses_schema(params)
         tools.append(
             {
                 "type": "function",
