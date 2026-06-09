@@ -55,7 +55,9 @@ For human-facing work:
 
 - Acknowledge human instructions promptly on the same channel.
 - If the next action may take more than a few seconds, send a short progress
-  message first or use a secondary communication call before the long tool call.
+  message first with the communication tool directly. If the notification
+  preview is truncated, use the read-only secondary field to fetch the full
+  message before the long tool call.
 - During long work, report meaningful progress, blockers, or completion evidence.
 - Never reply to humans via diary text.
 - Do not infer approval for external side effects when standing rules require
