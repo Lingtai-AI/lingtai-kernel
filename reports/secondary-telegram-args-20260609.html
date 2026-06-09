@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Secondary Telegram args validation PR explainer</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,"Noto Sans SC",sans-serif;line-height:1.55;margin:32px;color:#1f2937}h1{font-size:26px}h2{font-size:19px;margin-top:26px;border-bottom:1px solid #e5e7eb;padding-bottom:6px}.box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px}.ok{background:#f0fdf4;border-color:#86efac}.warn{background:#fff7ed;border-color:#fdba74}code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#f3f4f6;padding:1px 4px;border-radius:4px}pre{background:#0f172a;color:#e2e8f0;border-radius:8px;padding:12px;overflow:auto}table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid #e5e7eb;padding:8px;vertical-align:top}th{background:#f9fafb}.small{color:#6b7280;font-size:13px}</style>
+</head>
+<body>
+<h1>Secondary Telegram args validation</h1>
+<p class="small">Repo: <code>Lingtai-AI/lingtai-kernel</code> · Branch: <code>fix/secondary-telegram-args</code> · 2026-06-09</p>
+<div class="box ok">
+<b>结论：</b>这个 PR 针对调查中发现的高频 Telegram secondary 参数畸形问题，在 kernel secondary 层做本地 normalize/validate。当前 <code>origin/main</code> 已经把 secondary 改为 read-only，所以本 PR 不重新允许 nested send/reply，只修 read 路径的目标字段和类型。
+</div>
+<h2>背景</h2>
+<p>dev-1/dev-3 日志里出现大量 secondary Telegram 失败，例如 <code>chat_id:""</code> 或 <code>chat_id:"6859932159"</code> 直接进入 Telegram MCP，最终由 MCP schema 报 <code>'' is not of type 'integer'</code> / <code>'6859932159' is not of type 'integer'</code>。</p>
+<p>根因是 secondary 的 provider-facing schema 是跨工具共享的轻量 schema，runtime 只检查 tool/action/递归，不按目标工具/action 做必填字段和类型校验。</p>
+<h2>变更</h2>
+<table>
+<tr><th>文件</th><th>变更</th></tr>
+<tr><td><code>src/lingtai_kernel/secondary_tools.py</code></td><td>新增 <code>SECONDARY_READ_TARGET_FIELDS</code> 和 <code>normalize_secondary_args()</code>：剔除空字符串与 <code>limit=0</code> 占位；校验 read 目标字段；Telegram digit-string <code>chat_id</code> 转 int；非整数 Telegram chat_id 本地拒绝。</td></tr>
+<tr><td><code>src/lingtai_kernel/tool_executor.py</code></td><td><code>_validate_secondary()</code> 在 action/递归检查后调用 normalize/validate；失败时返回本地 <code>_secondary.status=error</code>，不 dispatch 到 MCP。</td></tr>
+<tr><td><code>tests/test_tool_executor.py</code></td><td>新增回归测试：Telegram digit-string chat_id normalize；空 chat_id 本地拒绝；email.read 空 email_id 本地拒绝。</td></tr>
+</table>
+<h2>行为示例</h2>
+<pre>{"action":"read", "chat_id":"6859932159", "limit":0}
+→ {"action":"read", "chat_id":6859932159}
+
+{"action":"read", "chat_id":""}
+→ _secondary error: secondary telegram.read requires chat_id
+
+{"action":"read", "email_id":""}
+→ _secondary error: secondary email.read requires email_id</pre>
+<h2>验证</h2>
+<div class="box">
+<pre>git diff --check
+PYTHONPATH=src /Users/huangzesen/anaconda3/bin/python -m pytest -q tests/test_tool_executor.py tests/test_secondary_schema.py
+# 39 passed
+PYTHONPATH=src /Users/huangzesen/anaconda3/bin/python -m py_compile src/lingtai_kernel/secondary_tools.py src/lingtai_kernel/tool_executor.py</pre>
+</div>
+<h2>风险与边界</h2>
+<ul>
+<li>不影响 top-level Telegram send/reply/read。</li>
+<li>不重新开放 secondary send/reply；current main 的 read-only policy 保持不变。</li>
+<li>对 Telegram 数字字符串 chat_id 做宽容转换；对空目标字段做本地错误，避免 MCP noise。</li>
+<li>Feishu/WhatsApp chat_id 仅要求存在；没有强制 int，因为这些 channel 的 ID 格式可能不是 Telegram 风格。</li>
+</ul>
+</body>
+</html>

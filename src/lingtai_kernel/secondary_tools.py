@@ -28,6 +28,14 @@ SECONDARY_ALLOWED_ACTIONS: dict[str, set[str]] = {
     "whatsapp": {"read"},
 }
 
+SECONDARY_READ_TARGET_FIELDS: dict[str, str] = {
+    "email": "email_id",
+    "telegram": "chat_id",
+    "wechat": "user_id",
+    "feishu": "chat_id",
+    "whatsapp": "chat_id",
+}
+
 # Maximum serialized size of a ``read`` result body forwarded under
 # ``_secondary.result``. The full read response stays in the producer's own
 # storage; this is just a preview-into-the-primary slice so the agent does
@@ -45,7 +53,9 @@ _SECONDARY_ARGS_PROPERTIES: dict[str, Any] = {
         ),
     },
     "email_id": {"description": "Internal email id/list to read (used by email read)."},
-    "chat_id": {"description": "Telegram/feishu chat id to read."},
+    "chat_id": {
+        "description": "Telegram/Feishu/WhatsApp chat id to read. Telegram chat_id should be an integer; digit strings are normalized at runtime."
+    },
     "user_id": {"type": "string", "description": "WeChat user id to read."},
     "limit": {
         "type": "integer",
@@ -110,3 +120,46 @@ def is_secondary_primary_eligible(tool_name: str) -> bool:
 def secondary_schema_property() -> dict[str, Any]:
     """Return a fresh copy of the JSON-schema property for ``secondary``."""
     return copy.deepcopy(SECONDARY_SCHEMA_PROPERTY)
+
+
+def normalize_secondary_args(tool_name: str, args: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """Return normalized secondary args and an optional validation error.
+
+    The provider-facing secondary schema is intentionally small and shared
+    across communication tools, so runtime validation must still enforce the
+    target tool/action contract before dispatching to MCP handlers. This keeps
+    obviously malformed model output (empty target ids, string Telegram
+    ``chat_id`` values, ``limit=0`` placeholders) from surfacing as noisy MCP
+    schema errors.
+    """
+
+    normalized: dict[str, Any] = {}
+    for key, value in args.items():
+        if value is None:
+            continue
+        if isinstance(value, str) and value == "":
+            continue
+        # Models often emit optional numeric placeholders as zero; for read
+        # limits, omission is safer because channel tools apply their defaults.
+        if key == "limit" and value == 0:
+            continue
+        normalized[key] = value
+
+    action = normalized.get("action")
+    if action != "read":
+        # The caller already reports disallowed actions. Keep this helper
+        # focused on the read contract.
+        return normalized, None
+
+    required_field = SECONDARY_READ_TARGET_FIELDS.get(tool_name)
+    if required_field and required_field not in normalized:
+        return normalized, f"secondary {tool_name}.read requires {required_field}"
+
+    if tool_name == "telegram":
+        chat_id = normalized.get("chat_id")
+        if isinstance(chat_id, str) and chat_id.isdigit():
+            normalized["chat_id"] = int(chat_id)
+        elif not isinstance(chat_id, int):
+            return normalized, "secondary telegram.read requires integer chat_id"
+
+    return normalized, None

@@ -233,6 +233,94 @@ def test_secondary_executes_before_primary_and_is_stripped():
     assert payload["_secondary"]["action"] == "read"
 
 
+
+def test_secondary_telegram_digit_string_chat_id_is_normalized():
+    seen = []
+
+    def dispatch(tc):
+        seen.append((tc.name, dict(tc.args)))
+        if tc.name == "telegram":
+            return {"status": "ok", "messages": []}
+        return {"status": "ok"}
+
+    executor = make_executor(dispatch_fn=dispatch, known_tools={"read", "telegram"})
+    calls = [ToolCall(
+        name="read",
+        args={
+            "secondary": {
+                "tool": "telegram",
+                "args": {"action": "read", "chat_id": "6859932159", "limit": 0},
+            },
+        },
+        id="tc1",
+    )]
+
+    results, intercepted, _ = executor.execute(calls)
+
+    assert not intercepted
+    assert seen[0] == ("telegram", {"action": "read", "chat_id": 6859932159})
+    assert results[0]["result"]["_secondary"]["status"] == "success"
+
+
+def test_secondary_telegram_empty_chat_id_is_rejected_before_dispatch():
+    seen = []
+
+    def dispatch(tc):
+        seen.append(tc.name)
+        return {"status": "ok"}
+
+    executor = make_executor(dispatch_fn=dispatch, known_tools={"read", "telegram"})
+    calls = [ToolCall(
+        name="read",
+        args={
+            "secondary": {
+                "tool": "telegram",
+                "args": {"action": "read", "chat_id": "", "limit": 0},
+            },
+        },
+        id="tc1",
+    )]
+
+    results, intercepted, _ = executor.execute(calls)
+
+    assert not intercepted
+    assert seen == ["read"]
+    payload = results[0]["result"]
+    assert payload["_secondary"]["status"] == "error"
+    assert payload["_secondary"]["tool"] == "telegram"
+    assert payload["_secondary"]["action"] == "read"
+    assert "chat_id" in payload["_secondary"]["message"]
+
+
+def test_secondary_email_read_requires_email_id_before_dispatch():
+    seen = []
+
+    def dispatch(tc):
+        seen.append(tc.name)
+        return {"status": "ok"}
+
+    executor = make_executor(dispatch_fn=dispatch, known_tools={"read", "email"})
+    calls = [ToolCall(
+        name="read",
+        args={
+            "secondary": {
+                "tool": "email",
+                "args": {"action": "read", "email_id": ""},
+            },
+        },
+        id="tc1",
+    )]
+
+    results, intercepted, _ = executor.execute(calls)
+
+    assert not intercepted
+    assert seen == ["read"]
+    payload = results[0]["result"]
+    assert payload["_secondary"]["status"] == "error"
+    assert payload["_secondary"]["tool"] == "email"
+    assert payload["_secondary"]["action"] == "read"
+    assert "email_id" in payload["_secondary"]["message"]
+
 def test_secondary_send_action_is_rejected():
     """The secondary channel is read-only — send must be rejected at runtime
     without blocking the primary."""

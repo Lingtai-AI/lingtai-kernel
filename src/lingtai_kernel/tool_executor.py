@@ -15,6 +15,7 @@ from .secondary_tools import (
     SECONDARY_ALLOWED_TOOLS,
     SECONDARY_EXCLUDED_PRIMARY_TOOLS,
     SECONDARY_READ_RESULT_MAX_BYTES,
+    normalize_secondary_args,
 )
 from .tool_result_artifacts import (
     PREVENTIVE_MAX_CHARS as _DEFAULT_MAX_RESULT_CHARS,
@@ -245,6 +246,14 @@ class ToolExecutor:
                 action=action,
                 status="error",
                 message="recursive secondary calls are forbidden",
+            )
+        sanitized_args, validation_error = normalize_secondary_args(tool_name, sanitized_args)
+        if validation_error is not None:
+            return tool_name, sanitized_args, _secondary_summary(
+                tool=tool_name,
+                action=action,
+                status="error",
+                message=validation_error,
             )
         return tool_name, sanitized_args, None
 
