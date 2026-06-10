@@ -76,5 +76,7 @@
   "email.unread_digest.more": "(showing first {shown} of {total})",
   "email.unread_digest.no_subject": "(no subject)",
   "system_tool.channel_description": "Notification channel to dismiss (e.g. soul, system, mcp.telegram). Required for action='dismiss'. Use producer-specific verbs for guarded channels such as email.",
-  "system_tool.force_description": "Optional for action='dismiss'. When true, bypasses a producer-registered generic-dismiss guard (currently email). Use only to knowingly clear a stale mirror; producer-owned state is untouched."
+  "system_tool.force_description": "Optional for action='dismiss'. When true, bypasses a producer-registered generic-dismiss guard (currently email). Use only to knowingly clear a stale mirror; producer-owned state is untouched.",
+  "system_tool.event_id_description": "Optional with action='dismiss' and channel='system': remove only the matching system notification event_id instead of clearing all of system.json.",
+  "system_tool.ref_id_description": "Optional with action='dismiss' and channel='system': remove system notification events with this producer reference id (for example goal:<id>)."
 }

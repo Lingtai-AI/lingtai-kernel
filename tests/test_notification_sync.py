@@ -86,11 +86,11 @@ def test_collect_mixed_files(tmp_path: Path) -> None:
 
 
 def test_collect_skips_malformed_silently(tmp_path: Path) -> None:
-    publish(tmp_path, "good", {"x": 1})
+    publish(tmp_path, "soul", {"x": 1})
     bad_path = tmp_path / ".notification" / "bad.json"
     bad_path.write_text("not json {")
     out = collect_notifications(tmp_path)
-    assert out == {"good": {"x": 1}}
+    assert out == {"soul": {"x": 1}}
 
 
 def test_collect_skips_non_json_files(tmp_path: Path) -> None:
@@ -118,7 +118,7 @@ def test_publish_atomic_no_tmp_residue(tmp_path: Path) -> None:
 
 def test_clear_idempotent(tmp_path: Path) -> None:
     # Clearing a non-existent file should not raise.
-    clear(tmp_path, "ghost")
+    clear(tmp_path, "soul")
     publish(tmp_path, "email", {"x": 1})
     clear(tmp_path, "email")
     assert not (tmp_path / ".notification" / "email.json").exists()
@@ -130,7 +130,7 @@ def test_concurrent_publish_atomicity(tmp_path: Path) -> None:
     """10 threads × 50 iterations.  Every collect snapshot must return
     parseable JSON for every source (no partial-write reads, no
     corrupted files)."""
-    sources = [f"src_{i}" for i in range(10)]
+    sources = [f"mcp.src_{i}" for i in range(10)]
 
     def worker(source: str) -> None:
         for i in range(50):
@@ -424,13 +424,13 @@ def test_submit_writes_envelope(tmp_path: Path) -> None:
     """``submit`` builds the documented envelope and writes the file."""
     from lingtai_kernel.notifications import submit
 
-    submit(tmp_path, "demo",
+    submit(tmp_path, "system",
            header="hello", icon="✨",
            data={"x": 1, "y": [2, 3]})
 
     out = collect_notifications(tmp_path)
-    assert "demo" in out
-    payload = out["demo"]
+    assert "system" in out
+    payload = out["system"]
     assert payload["header"] == "hello"
     assert payload["icon"] == "✨"
     assert payload["priority"] == "normal"
@@ -443,11 +443,11 @@ def test_submit_writes_envelope(tmp_path: Path) -> None:
 def test_submit_priority_override(tmp_path: Path) -> None:
     from lingtai_kernel.notifications import submit
 
-    submit(tmp_path, "urgent",
+    submit(tmp_path, "nudge",
            header="oh no", icon="🚨",
            priority="high", data={})
 
-    assert collect_notifications(tmp_path)["urgent"]["priority"] == "high"
+    assert collect_notifications(tmp_path)["nudge"]["priority"] == "high"
 
 
 def test_submit_via_system_alias(tmp_path: Path) -> None:
@@ -461,15 +461,15 @@ def test_submit_via_system_alias(tmp_path: Path) -> None:
     assert publish_notification is submit
     assert clear_notification is clear
 
-    publish_notification(tmp_path, "via_system",
+    publish_notification(tmp_path, "system",
                          header="via", icon="🛰",
                          data={"ok": True})
     out = collect_notifications(tmp_path)
-    assert out["via_system"]["data"] == {"ok": True}
+    assert out["system"]["data"] == {"ok": True}
 
-    clear_notification(tmp_path, "via_system")
+    clear_notification(tmp_path, "system")
     out = collect_notifications(tmp_path)
-    assert "via_system" not in out
+    assert "system" not in out
 
 
 # ---------------------------------------------------------------------------

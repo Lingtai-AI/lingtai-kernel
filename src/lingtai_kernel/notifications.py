@@ -27,6 +27,36 @@ from pathlib import Path
 
 _CHANNEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
+# Notification channels are intentionally allowlisted.  Unknown files in
+# `.notification/` are ignored by readers and cannot be published/cleared
+# through kernel helpers.  MCP bridge channels are allowlisted as a family
+# because server names are dynamic but still owned by the MCP inbox contract.
+_NOTIFICATION_CHANNEL_ALLOWLIST: set[str] = {
+    "bash",
+    "btw",
+    "cron",
+    "email",
+    "goal",
+    "molt",
+    "nudge",
+    "post-molt",
+    "soul",
+    "system",
+    "tool_loop_guard",
+}
+_NOTIFICATION_CHANNEL_PREFIX_ALLOWLIST: tuple[str, ...] = ("mcp.",)
+
+# Channels that are valid notification surfaces but must not be cleared via
+# generic system.dismiss because they are source-of-truth files.
+_PROTECTED_GENERIC_DISMISS: dict[str, str] = {
+    "goal": (
+        "Goal state lives in .notification/goal.json. Do not dismiss it. "
+        "To cancel the goal, delete .notification/goal.json; to complete it, "
+        "mark its status done/superseded or replace/delete the file. See the "
+        "goal manual under system-manual for details."
+    ),
+}
+
 # Channels whose generic dismissal would leak producer-owned state.
 # Producers with durable unread/state mirrors register themselves here at
 # import time so system(action="dismiss", channel=...) can refuse unsafe
@@ -35,12 +65,12 @@ _GENERIC_DISMISS_GUARDED: dict[str, str] = {}
 
 
 def validate_channel_name(channel: str) -> None:
-    """Validate a `.notification/<channel>.json` channel name.
+    """Validate the syntax of a `.notification/<channel>.json` channel name.
 
     The notification filesystem treats the channel as a filename stem.
     Generic dismiss accepts agent-supplied channel names, so it validates
-    them before constructing a path. Existing producer-side publish/clear
-    calls keep their historical permissive behavior for v1 compatibility.
+    them before constructing a path. Producer-side publish/clear additionally
+    validate allowlist membership before touching the filesystem.
     """
     if not isinstance(channel, str) or not channel:
         raise ValueError("channel must be a non-empty string")
@@ -50,6 +80,35 @@ def validate_channel_name(channel: str) -> None:
         raise ValueError(
             "channel must match ^[A-Za-z0-9][A-Za-z0-9_.-]*$"
         )
+
+
+def is_channel_allowed(channel: str) -> bool:
+    """Return whether ``channel`` is on the notification allowlist."""
+    try:
+        validate_channel_name(channel)
+    except ValueError:
+        return False
+    if channel in _NOTIFICATION_CHANNEL_ALLOWLIST:
+        return True
+    return any(channel.startswith(prefix) for prefix in _NOTIFICATION_CHANNEL_PREFIX_ALLOWLIST)
+
+
+def validate_allowed_channel(channel: str) -> None:
+    """Validate syntax and allowlist membership for a notification channel."""
+    validate_channel_name(channel)
+    if not is_channel_allowed(channel):
+        allowed = sorted(_NOTIFICATION_CHANNEL_ALLOWLIST)
+        prefixes = list(_NOTIFICATION_CHANNEL_PREFIX_ALLOWLIST)
+        raise ValueError(
+            "notification channel is not allowlisted: "
+            f"{channel!r}; allowed={allowed}; allowed_prefixes={prefixes}"
+        )
+
+
+def register_notification_channel(channel: str) -> None:
+    """Allow an in-process producer to register an exact notification channel."""
+    validate_channel_name(channel)
+    _NOTIFICATION_CHANNEL_ALLOWLIST.add(channel)
 
 
 def register_generic_dismiss_guard(channel: str, suggested_verb: str) -> None:
@@ -69,7 +128,7 @@ def is_generic_dismiss_guarded(channel: str) -> str | None:
 
 
 def notification_fingerprint(workdir: Path) -> tuple:
-    """Compute a fingerprint of `.notification/*.json`.
+    """Compute a fingerprint of allowlisted `.notification/*.json`.
 
     Returns a tuple of ``(name, mtime_ns, size)`` triples sorted by name.
     Empty tuple if the directory is absent or empty.  Used to detect
@@ -85,7 +144,7 @@ def notification_fingerprint(workdir: Path) -> tuple:
     return tuple(sorted(
         (f.name, f.stat().st_mtime_ns, f.stat().st_size)
         for f in notif_dir.iterdir()
-        if f.is_file() and f.suffix == ".json"
+        if f.is_file() and f.suffix == ".json" and is_channel_allowed(f.stem)
     ))
 
 
@@ -106,6 +165,8 @@ def collect_notifications(workdir: Path) -> dict:
         return {}
     out = {}
     for f in sorted(notif_dir.glob("*.json")):
+        if not is_channel_allowed(f.stem):
+            continue
         try:
             out[f.stem] = json.loads(f.read_bytes())
         except (json.JSONDecodeError, OSError):
@@ -123,6 +184,7 @@ def publish(workdir: Path, tool_name: str, payload: dict) -> None:
     while a producer is mid-write would see truncated JSON.  ``tmp +
     rename`` makes the rename appear atomically to readers.
     """
+    validate_allowed_channel(tool_name)
     notif_dir = workdir / ".notification"
     notif_dir.mkdir(exist_ok=True)
     target = notif_dir / f"{tool_name}.json"
@@ -138,6 +200,7 @@ def clear(workdir: Path, tool_name: str) -> None:
     count drops to 0).  Deletion changes the directory fingerprint, so
     the kernel's next sync tick will strip the wire's notification block.
     """
+    validate_allowed_channel(tool_name)
     target = workdir / ".notification" / f"{tool_name}.json"
     try:
         target.unlink()
@@ -152,7 +215,7 @@ def clear_with_result(workdir: Path, channel: str) -> bool:
     idempotent no-op. Other ``OSError`` subclasses propagate to the caller
     so agent-facing dismiss can surface honest failures.
     """
-    validate_channel_name(channel)
+    validate_allowed_channel(channel)
     target = workdir / ".notification" / f"{channel}.json"
     try:
         target.unlink()
@@ -231,6 +294,8 @@ def dismiss_channel(
     invoked_by: str,
     force: bool = False,
     reason: str | None = None,
+    event_id: str | None = None,
+    ref_id: str | None = None,
 ) -> dict:
     """Shared agent-facing notification dismissal helper.
 
@@ -244,7 +309,7 @@ def dismiss_channel(
     issue #184.
     """
     try:
-        validate_channel_name(channel)
+        validate_allowed_channel(channel)
     except ValueError as e:
         try:
             agent._log(
@@ -280,6 +345,40 @@ def dismiss_channel(
                 "post-molt continuation reminders require an acknowledgement "
                 "reason. Use reason='<continue|defer|obsolete>: ...'."
             ),
+        }
+
+    protected_message = _PROTECTED_GENERIC_DISMISS.get(channel)
+    if protected_message:
+        try:
+            agent._log(
+                "notification_dismiss_protected",
+                channel=channel,
+                invoked_by=invoked_by,
+                forced=bool(force),
+            )
+            if invoked_by == "system":
+                agent._log(
+                    "system_dismiss_protected",
+                    channel=channel,
+                    forced=bool(force),
+                )
+        except Exception:
+            pass
+        return {
+            "status": "error",
+            "reason": "protected_channel",
+            "channel": channel,
+            "message": protected_message,
+        }
+
+    if (event_id or ref_id) and channel != "system":
+        return {
+            "status": "error",
+            "reason": "atomic_dismiss_requires_system_channel",
+            "channel": channel,
+            "event_id": event_id,
+            "ref_id": ref_id,
+            "message": "event_id/ref_id dismiss is only supported for channel='system'.",
         }
 
     suggested = is_generic_dismiss_guarded(channel)
@@ -328,6 +427,21 @@ def dismiss_channel(
                         current=current,
                     )
 
+        goal_reminder_cleared_by_whole_system_dismiss = False
+        if channel == "system":
+            try:
+                payload = json.loads((agent._working_dir / ".notification" / "system.json").read_text(encoding="utf-8"))
+                data_obj = payload.get("data") if isinstance(payload, dict) else {}
+                events = data_obj.get("events", []) if isinstance(data_obj, dict) else []
+                goal_reminder_cleared_by_whole_system_dismiss = any(
+                    isinstance(ev, dict)
+                    and ev.get("source") == "goal.reminder"
+                    and str(ev.get("ref_id", "")).startswith("goal:")
+                    for ev in (events if isinstance(events, list) else [])
+                )
+            except Exception:
+                goal_reminder_cleared_by_whole_system_dismiss = False
+
         try:
             existed = clear_with_result(agent._working_dir, channel)
         except OSError as e:
@@ -347,6 +461,13 @@ def dismiss_channel(
                 "channel": channel,
                 "message": str(e),
             }
+
+        if existed and goal_reminder_cleared_by_whole_system_dismiss:
+            try:
+                import time as _time
+                agent._goal_reminder_last_dismissed_at = _time.time()
+            except Exception:
+                pass
 
         # Any pending ACTIVE-state payload may contain the dismissed channel.
         # Invalidate after a successful clear attempt; stale refusals above
@@ -388,9 +509,181 @@ def dismiss_channel(
             result["reason"] = ack_reason
         return result
 
+    def _dismiss_system_event() -> dict:
+        if not (event_id or ref_id):
+            return _clear_current_channel()
+
+        if not force:
+            fp = notification_fingerprint(agent._working_dir)
+            current = _channel_fingerprint_entry(fp, channel)
+            if current is not None:
+                delivered = _channel_fingerprint_entry(
+                    getattr(agent, "_notification_fp", ()),
+                    channel,
+                )
+                if delivered != current:
+                    return _stale_channel_refusal(
+                        agent,
+                        channel,
+                        invoked_by=invoked_by,
+                        delivered=delivered,
+                        current=current,
+                    )
+
+        target = agent._working_dir / ".notification" / "system.json"
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            payload = {}
+        except (json.JSONDecodeError, OSError) as e:
+            return {
+                "status": "error",
+                "reason": "read_failed",
+                "channel": channel,
+                "message": str(e),
+            }
+
+        data_obj = payload.get("data")
+        events = data_obj.get("events", []) if isinstance(data_obj, dict) else []
+        if not isinstance(events, list):
+            events = []
+
+        def _match(ev: object) -> bool:
+            if not isinstance(ev, dict):
+                return False
+            if event_id and ev.get("event_id") == event_id:
+                return True
+            if ref_id and ev.get("ref_id") == ref_id:
+                return True
+            return False
+        removed_events = [ev for ev in events if _match(ev)]
+        kept = [ev for ev in events if not _match(ev)]
+        removed = len(removed_events)
+
+        if removed == 0:
+            try:
+                agent._log(
+                    "notification_event_dismiss",
+                    channel=channel,
+                    invoked_by=invoked_by,
+                    event_id=event_id,
+                    ref_id=ref_id,
+                    removed=0,
+                    forced=bool(force),
+                    reason=ack_reason or None,
+                )
+                if invoked_by == "system":
+                    agent._log(
+                        "system_event_dismiss",
+                        event_id=event_id,
+                        ref_id=ref_id,
+                        removed=0,
+                        forced=bool(force),
+                        reason=ack_reason or None,
+                    )
+            except Exception:
+                pass
+            result = {
+                "status": "ok",
+                "channel": channel,
+                "cleared": False,
+                "removed": 0,
+                "remaining": len(kept),
+                "forced": bool(force),
+            }
+            if event_id:
+                result["event_id"] = event_id
+            if ref_id:
+                result["ref_id"] = ref_id
+            if ack_reason:
+                result["reason"] = ack_reason
+            return result
+
+        try:
+            if kept:
+                from datetime import datetime, timezone
+                payload["header"] = (
+                    f"{len(kept)} system notification"
+                    f"{'s' if len(kept) != 1 else ''}"
+                )
+                payload["published_at"] = datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                )
+                data = payload.get("data")
+                if not isinstance(data, dict):
+                    data = {}
+                data["events"] = kept
+                payload["data"] = data
+                publish(agent._working_dir, "system", payload)
+            else:
+                clear_with_result(agent._working_dir, "system")
+        except OSError as e:
+            return {
+                "status": "error",
+                "reason": "clear_failed",
+                "channel": channel,
+                "message": str(e),
+            }
+
+        if hasattr(agent, "_pending_notification_meta"):
+            agent._pending_notification_meta = None
+        if hasattr(agent, "_pending_notification_fp"):
+            agent._pending_notification_fp = None
+
+        try:
+            if any(
+                isinstance(ev, dict)
+                and ev.get("source") == "goal.reminder"
+                and str(ev.get("ref_id", "")).startswith("goal:")
+                for ev in removed_events
+            ):
+                import time as _time
+                agent._goal_reminder_last_dismissed_at = _time.time()
+        except Exception:
+            pass
+
+        try:
+            agent._log(
+                "notification_event_dismiss",
+                channel=channel,
+                invoked_by=invoked_by,
+                event_id=event_id,
+                ref_id=ref_id,
+                removed=removed,
+                forced=bool(force),
+                reason=ack_reason or None,
+            )
+            if invoked_by == "system":
+                agent._log(
+                    "system_event_dismiss",
+                    event_id=event_id,
+                    ref_id=ref_id,
+                    removed=removed,
+                    forced=bool(force),
+                    reason=ack_reason or None,
+                )
+        except Exception:
+            pass
+
+        result = {
+            "status": "ok",
+            "channel": channel,
+            "cleared": bool(removed),
+            "removed": removed,
+            "remaining": len(kept),
+            "forced": bool(force),
+        }
+        if event_id:
+            result["event_id"] = event_id
+        if ref_id:
+            result["ref_id"] = ref_id
+        if ack_reason:
+            result["reason"] = ack_reason
+        return result
+
     if channel == "system":
         with agent._system_notification_lock:
-            return _clear_current_channel()
+            return _dismiss_system_event()
 
     return _clear_current_channel()
 

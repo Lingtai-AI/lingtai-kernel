@@ -2,9 +2,11 @@
 something needs the agent's attention.
 
 Each check is a self-contained module exposing ``check(agent) -> None``.
-The check owns its own throttle state (stored as an attribute on the
-agent instance) and decides whether to upsert or remove its entry in
-the shared ``.notification/nudge.json`` payload.
+The check owns its own throttle/dedupe state (stored as attributes on the
+agent instance) and decides which notification surface it owns. Most nudges
+upsert/remove entries in the shared ``.notification/nudge.json`` payload;
+goal reminders read protected ``.notification/goal.json`` and publish short
+``goal.reminder`` events into ``.notification/system.json``.
 
 Channel ``.notification/nudge.json`` carries a list of active nudges:
 
@@ -33,7 +35,7 @@ otherwise lose entries. The lock is created lazily on first use.
 from __future__ import annotations
 import threading
 
-from . import kernel_version
+from . import kernel_version, goal
 
 
 __all__ = ["run_checks", "upsert", "remove"]
@@ -47,6 +49,7 @@ def run_checks(agent) -> None:
     not block subsequent checks.
     """
     _run_one(agent, "kernel_version", kernel_version.check)
+    _run_one(agent, "goal", goal.check)
 
 
 def _run_one(agent, name: str, fn) -> None:

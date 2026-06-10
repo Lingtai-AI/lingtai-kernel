@@ -77,5 +77,7 @@
   "email.unread_digest.no_subject": "（无题）",
   "soul.dismiss_description": "销心流之告。action='dismiss' 时用。",
   "system_tool.channel_description": "欲清之通知频道（如 soul、system、mcp.telegram）。action='dismiss' 必需。email 等受护频道，当用其主之本动词。",
-  "system_tool.force_description": "action='dismiss' 可选。为 true 则越过生产者所登记之通清护栏（今为 email）。唯明知清陈镜时用之；生产者自有状态不变。"
+  "system_tool.force_description": "action='dismiss' 可选。为 true 则越过生产者所登记之通清护栏（今为 email）。唯明知清陈镜时用之；生产者自有状态不变。",
+  "system_tool.event_id_description": "配 action='dismiss' 且 channel='system' 可选：只清匹配之 system notification event_id，非清尽 system.json。",
+  "system_tool.ref_id_description": "配 action='dismiss' 且 channel='system' 可选：清具此生产者 ref_id 之 system notification events（如 goal:<id>）。"
 }

@@ -37,4 +37,6 @@ def _dismiss(agent, args: dict) -> dict:
         invoked_by=args.get("_invoked_by", "system"),
         force=bool(args.get("force", False)),
         reason=args.get("reason"),
+        event_id=args.get("event_id"),
+        ref_id=args.get("ref_id"),
     )

@@ -77,5 +77,7 @@
   "email.unread_digest.no_subject": "（无主题）",
   "soul.dismiss_description": "消除心流通知。action='dismiss' 时使用。",
   "system_tool.channel_description": "要清除的通知频道（如 soul、system、mcp.telegram）。action='dismiss' 时必需。对 email 等受保护频道应使用生产者自己的动词。",
-  "system_tool.force_description": "action='dismiss' 的可选项。为 true 时绕过生产者注册的通用清除保护（当前为 email）。仅在明确清理陈旧镜像时使用；生产者自有状态不会改变。"
+  "system_tool.force_description": "action='dismiss' 的可选项。为 true 时绕过生产者注册的通用清除保护（当前为 email）。仅在明确清理陈旧镜像时使用；生产者自有状态不会改变。",
+  "system_tool.event_id_description": "action='dismiss' 且 channel='system' 时可选：只删除匹配的 system notification event_id，而不是清空整个 system.json。",
+  "system_tool.ref_id_description": "action='dismiss' 且 channel='system' 时可选：删除具有该生产者引用 id 的 system notification events（例如 goal:<id>）。"
 }

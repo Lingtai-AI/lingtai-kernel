@@ -41,6 +41,14 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "boolean",
                 "description": t(lang, "system_tool.force_description"),
             },
+            "event_id": {
+                "type": "string",
+                "description": t(lang, "system_tool.event_id_description"),
+            },
+            "ref_id": {
+                "type": "string",
+                "description": t(lang, "system_tool.ref_id_description"),
+            },
         },
         "required": ["action"],
     }

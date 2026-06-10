@@ -1,9 +1,10 @@
 # Nudge
 
-Per-agent periodic checks that emit a notification on the shared
-`.notification/nudge.json` channel when something needs the agent's
-attention. Today: kernel version skew. Designed so additional checks
-land as small additions (e.g. MCP version drift, addon updates).
+Per-agent periodic checks that emit notification nudges or reminders when
+something needs the agent's attention. Kernel-version nudges share
+`.notification/nudge.json`; goal reminders read protected `.notification/goal.json`
+and publish short dismissible events into `.notification/system.json`. Designed so
+additional checks land as small additions (e.g. MCP version drift, addon updates).
 
 ## Entry point
 
@@ -16,11 +17,17 @@ bad check never breaks the loop). It dispatches to each check's
 
 - `__init__.py` — dispatcher (`run_checks`), shared upsert/remove
   helpers (`upsert`, `remove`) that operate on the `nudge.json`
-  multi-entry payload under a lazy per-agent lock.
-- `kernel_version.py` — the only check today. Compares
-  `lingtai.__version__` (frozen at import time) against
-  `importlib.metadata.version("lingtai")` (rescans dist-info on each
-  call). Emits when they differ; clears when they re-agree.
+  multi-entry payload under a lazy per-agent lock. Runs `kernel_version.check`
+  and then `goal.check` once per heartbeat tick.
+- `kernel_version.py` — compares `lingtai.__version__` (frozen at import time)
+  against `importlib.metadata.version("lingtai")` (rescans dist-info on each
+  call). Emits into `nudge.json` when they differ; clears when they re-agree.
+- `goal.py` — IDLE-only goal reminder check. It reads the allowlisted protected
+  `.notification/goal.json`; if and only if that file exists, is active, and the
+  idle delay has elapsed, it publishes one short `goal.reminder` event into
+  `.notification/system.json` saying to read `goal.json` and the goal manual.
+  It dedupes an existing reminder with the same `ref_id` and waits another delay
+  after that reminder is dismissed.
 - `ANATOMY.md` — this file.
 
 ## The shared channel
@@ -84,8 +91,7 @@ the meta-block alongside any other active notifications.
 ## Failure isolation
 
 The heartbeat-loop call site wraps `run_checks` in try/except and logs
-to the kernel logger on failure. A bug in any individual check is
-caught inside `run_checks` (each check call is independent — a failing
-check doesn't block subsequent ones, but the dispatcher doesn't wrap
-individual calls either, so add per-check try/except inside `check()`
-if a check does anything risky in its body).
+to the kernel logger on failure. `run_checks` also dispatches each check through
+`_run_one`, so a bug in one individual check is logged as `nudge_check_error`
+and does not block subsequent checks. Add local try/except inside a check only
+when it needs more specific cleanup or telemetry.

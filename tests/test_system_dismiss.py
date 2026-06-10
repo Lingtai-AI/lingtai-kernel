@@ -342,3 +342,102 @@ def test_system_compare_and_clear_uses_system_notification_lock(tmp_path: Path) 
     assert res["status"] == "ok"
     assert lock.entered is True
     assert "system" not in collect_notifications(tmp_path)
+
+
+def test_unknown_notification_channel_is_not_dismissible(tmp_path: Path) -> None:
+    agent = _StubAgent(tmp_path)
+    result = sys_intrinsic.handle(agent, {"action": "dismiss", "channel": "random"})
+    assert result["status"] == "error"
+    assert result["reason"] == "invalid_channel"
+    assert "not allowlisted" in result["message"]
+
+
+def test_goal_channel_is_protected_from_generic_dismiss(tmp_path: Path) -> None:
+    agent = _StubAgent(tmp_path)
+    publish(tmp_path, "goal", {"data": {"status": "active"}})
+    agent._notification_fp = notification_fingerprint(tmp_path)
+
+    result = sys_intrinsic.handle(agent, {"action": "dismiss", "channel": "goal", "force": True})
+
+    assert result["status"] == "error"
+    assert result["reason"] == "protected_channel"
+    assert (tmp_path / ".notification" / "goal.json").exists()
+    assert "delete .notification/goal.json" in result["message"]
+
+
+def test_system_event_dismiss_by_event_id_preserves_other_events(tmp_path: Path) -> None:
+    agent = _StubAgent(tmp_path)
+    publish(
+        tmp_path,
+        "system",
+        {
+            "header": "2 system notifications",
+            "icon": "🔔",
+            "priority": "normal",
+            "published_at": "2026-06-10T00:00:00Z",
+            "data": {
+                "events": [
+                    {"event_id": "evt_a", "source": "daemon", "ref_id": "a", "body": "A"},
+                    {"event_id": "evt_b", "source": "goal.reminder", "ref_id": "goal:current", "body": "B"},
+                ]
+            },
+        },
+    )
+    agent._notification_fp = notification_fingerprint(tmp_path)
+
+    result = sys_intrinsic.handle(
+        agent,
+        {"action": "dismiss", "channel": "system", "event_id": "evt_b"},
+    )
+
+    assert result["status"] == "ok"
+    assert result["removed"] == 1
+    payload = collect_notifications(tmp_path)["system"]
+    assert payload["header"] == "1 system notification"
+    assert payload["data"]["events"] == [
+        {"event_id": "evt_a", "source": "daemon", "ref_id": "a", "body": "A"}
+    ]
+    assert getattr(agent, "_goal_reminder_last_dismissed_at", 0) > 0
+
+
+def test_system_event_dismiss_by_ref_id_clears_file_when_last_event(tmp_path: Path) -> None:
+    agent = _StubAgent(tmp_path)
+    publish(
+        tmp_path,
+        "system",
+        {"data": {"events": [{"event_id": "evt_a", "source": "goal.reminder", "ref_id": "goal:current"}]}},
+    )
+    agent._notification_fp = notification_fingerprint(tmp_path)
+
+    result = sys_intrinsic.handle(
+        agent,
+        {"action": "dismiss", "channel": "system", "ref_id": "goal:current"},
+    )
+
+    assert result["status"] == "ok"
+    assert result["removed"] == 1
+    assert result["remaining"] == 0
+    assert not (tmp_path / ".notification" / "system.json").exists()
+
+
+def test_system_event_dismiss_with_malformed_data_is_noop(tmp_path: Path) -> None:
+    agent = _StubAgent(tmp_path)
+    publish(
+        tmp_path,
+        "system",
+        {
+            "header": "malformed system notification",
+            "data": ["not", "a", "dict"],
+        },
+    )
+    agent._notification_fp = notification_fingerprint(tmp_path)
+
+    result = sys_intrinsic.handle(
+        agent,
+        {"action": "dismiss", "channel": "system", "event_id": "evt_a"},
+    )
+
+    assert result["status"] == "ok"
+    assert result["removed"] == 0
+    assert result["remaining"] == 0
+    assert collect_notifications(tmp_path)["system"]["data"] == ["not", "a", "dict"]
