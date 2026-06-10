@@ -38,6 +38,34 @@ from lingtai_kernel.llm.streaming import StreamingAccumulator
 logger = get_logger()
 
 
+class _ContextOverflowEmptyResponseError(RuntimeError):
+    """Provider returned an empty 200 response for an over-window prompt.
+
+    Some OpenAI-compatible gateways do not surface context overflow as a
+    400-class error.  They return a structurally valid ChatCompletion with
+    no text, no tool calls, zero output tokens, and prompt_tokens already past
+    the configured context window.  Treat that as the same recoverable
+    overflow signal as a canonical context_length_exceeded error so the
+    adapter trims and retries before committing an empty assistant turn.
+    """
+
+    def __init__(
+        self,
+        *,
+        input_tokens: int,
+        context_window: int,
+        raw: Any,
+    ):
+        self.input_tokens = input_tokens
+        self.context_window = context_window
+        self.raw = raw
+        super().__init__(
+            "context window exceeded: provider returned empty completion "
+            f"with {input_tokens} input tokens over configured context window "
+            f"{context_window}"
+        )
+
+
 _CODEX_RESPONSES_TRACE_ENV = "LINGTAI_CODEX_RESPONSES_TRACE"
 _CODEX_RESPONSES_TRACE_PATH_ENV = "LINGTAI_CODEX_RESPONSES_TRACE_PATH"
 _CODEX_RESPONSES_TRACE_FILE = "codex_responses_trace.jsonl"
@@ -303,6 +331,31 @@ def _parse_tool_calls(raw_tool_calls) -> list[ToolCall]:
     return result
 
 
+def _chat_completion_is_empty(raw) -> bool:
+    """Return True when a ChatCompletion has no usable assistant payload."""
+    choices = getattr(raw, "choices", None) or []
+    if not choices:
+        return True
+    message = getattr(choices[0], "message", None)
+    if message is None:
+        return True
+    reasoning = (
+        getattr(message, "reasoning_content", None)
+        or getattr(message, "reasoning", None)
+    )
+    return (
+        not getattr(message, "content", None)
+        and not getattr(message, "tool_calls", None)
+        and not reasoning
+    )
+
+
+def _prompt_tokens(raw) -> int:
+    usage = getattr(raw, "usage", None)
+    value = getattr(usage, "prompt_tokens", 0) if usage is not None else 0
+    return value or 0
+
+
 def _parse_response(raw) -> LLMResponse:
     """Parse a raw OpenAI ChatCompletion into a provider-agnostic LLMResponse."""
     if not raw.choices:
@@ -522,6 +575,8 @@ class OpenAIChatSession(ChatSession):
         loose string-match heuristics used by compatible vendors (DeepSeek,
         Together, Groq, etc.) that often only signal via the message body.
         """
+        if isinstance(exc, _ContextOverflowEmptyResponseError):
+            return True
         if not isinstance(exc, openai.BadRequestError):
             return False
         # Canonical OpenAI code on the body's error object.
@@ -552,6 +607,29 @@ class OpenAIChatSession(ChatSession):
     # _trim_context_one_round, _run_with_overflow_recovery, and
     # _inject_overflow_notice are inherited from ChatSession (base class).
     # Only _is_context_overflow_error needs to be provider-specific.
+
+    def _raise_for_empty_context_overflow(self, raw) -> None:
+        """Treat empty 200 responses past the configured window as overflow.
+
+        This is intentionally narrow.  A zero-token empty completion can mean
+        many things, so we only convert it to context-overflow recovery when
+        the provider's own usage says the prompt has exceeded the model window
+        supplied by the preset/config.  The check runs before assistant
+        history is recorded; if recovery succeeds, no empty assistant turn is
+        ever committed.
+        """
+        if self._context_window <= 0:
+            return
+        input_tokens = _prompt_tokens(raw)
+        if input_tokens <= self._context_window:
+            return
+        if not _chat_completion_is_empty(raw):
+            return
+        raise _ContextOverflowEmptyResponseError(
+            input_tokens=input_tokens,
+            context_window=self._context_window,
+            raw=raw,
+        )
 
     def _pair_orphan_tool_calls(self, messages: list[dict]) -> list[dict]:
         """Final wire-layer guard: synthesize placeholder tool messages for
@@ -676,7 +754,9 @@ class OpenAIChatSession(ChatSession):
         # 3. Make the API call (with auto-recovery on context overflow);
         #    revert interface on any other error.
         def _do_call():
-            return self._client.chat.completions.create(**_build_kwargs())
+            raw = self._client.chat.completions.create(**_build_kwargs())
+            self._raise_for_empty_context_overflow(raw)
+            return raw
 
         try:
             raw, total_dropped, rounds = self._run_with_overflow_recovery(_do_call)

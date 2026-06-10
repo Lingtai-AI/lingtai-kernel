@@ -21,14 +21,14 @@ from lingtai_kernel.llm.interface import (
 )
 
 
-def _make_raw_response(content="ok"):
+def _make_raw_response(content="ok", *, prompt_tokens=10, completion_tokens=5):
     msg = SimpleNamespace(content=content, tool_calls=[])
     choice = SimpleNamespace(message=msg)
     return SimpleNamespace(
         choices=[choice],
         usage=SimpleNamespace(
-            prompt_tokens=10,
-            completion_tokens=5,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
             completion_tokens_details=None,
             prompt_tokens_details=None,
         ),
@@ -43,7 +43,7 @@ def _make_overflow_error(msg="This model's maximum context length is 128000 toke
     return openai.BadRequestError(message=msg, response=response, body=body)
 
 
-def _make_session(client, interface=None):
+def _make_session(client, interface=None, *, context_window=0):
     if interface is None:
         interface = ChatInterface()
         interface.add_system("you are helpful")
@@ -55,6 +55,7 @@ def _make_session(client, interface=None):
         tool_choice=None,
         extra_kwargs={},
         client_kwargs={},
+        context_window=context_window,
     )
 
 
@@ -291,6 +292,58 @@ def test_send_recovers_and_injects_kernel_notice():
                 found = True
                 break
     assert found, "expected a [kernel] molt-recommendation notice in interface"
+
+
+def test_send_recovers_from_empty_200_when_usage_exceeds_context_window():
+    """Some OpenAI-compatible gateways return an empty successful completion
+    instead of a 400 context_length_exceeded error. When their usage metadata
+    shows the prompt already exceeded the configured window, treat it as the
+    same overflow signal and retry before recording any assistant turn."""
+    iface = ChatInterface()
+    iface.add_system("sys")
+    _seed_history(iface, n_pairs=20)
+
+    client = MagicMock()
+    client.chat.completions.create.side_effect = [
+        _make_raw_response(
+            content="",
+            prompt_tokens=250_000,
+            completion_tokens=0,
+        ),
+        _make_raw_response(content="ok", prompt_tokens=180_000),
+    ]
+    session = _make_session(client=client, interface=iface, context_window=200_000)
+
+    response = session.send("a brand new question")
+    assert response.text == "ok"
+    assert client.chat.completions.create.call_count == 2
+
+    empty_assistant_turns = [
+        entry for entry in iface._entries
+        if entry.role == "assistant"
+        and len(entry.content) == 1
+        and isinstance(entry.content[0], TextBlock)
+        and entry.content[0].text == ""
+    ]
+    assert empty_assistant_turns == []
+
+
+def test_send_does_not_treat_empty_200_within_context_window_as_overflow():
+    iface = ChatInterface()
+    iface.add_system("sys")
+    _seed_history(iface, n_pairs=3)
+
+    client = MagicMock()
+    client.chat.completions.create.return_value = _make_raw_response(
+        content="",
+        prompt_tokens=50_000,
+        completion_tokens=0,
+    )
+    session = _make_session(client=client, interface=iface, context_window=200_000)
+
+    response = session.send("hi")
+    assert response.text == ""
+    assert client.chat.completions.create.call_count == 1
 
 
 def test_send_passes_through_when_no_overflow():
