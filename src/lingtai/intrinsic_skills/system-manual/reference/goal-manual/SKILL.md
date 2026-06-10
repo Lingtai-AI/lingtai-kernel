@@ -4,7 +4,7 @@ description: >
   Goal notification manual: `.notification/goal.json` source-of-truth, fields,
   instructions, idle reminders, protected dismiss behavior, and cancellation or
   completion semantics.
-version: 0.1.0
+version: 0.2.0
 tags: [lingtai, goal, notifications, reminders]
 ---
 
@@ -13,6 +13,59 @@ tags: [lingtai, goal, notifications, reminders]
 A goal is represented by `.notification/goal.json`. This file is the protected
 source of truth for the agent's current active goal. The short reminder event only
 points the agent back to this file; it does not contain the goal details.
+
+
+## Guided setup via `/goal`
+
+`/goal` is the TUI entry point for human-guided goal creation. It does **not**
+write `.notification/goal.json` directly. Instead, the TUI appends a system event
+to `.notification/system.json` so the running agent can guide the human before
+creating or changing the goal file:
+
+```json
+{
+  "source": "goal.request",
+  "ref_id": "goal.request:<timestamp>",
+  "body": "Human wants to set or revise an active goal..."
+}
+```
+
+When you receive a `source="goal.request"` event:
+
+1. **Read this manual first.** The event is a request to guide goal creation, not
+   permission to invent goal details.
+2. **Explain the mechanism briefly to the human.** Tell them that an active goal
+   lives in `.notification/goal.json`, idle reminders are short
+   `goal.reminder` system events, and dismissing a reminder only hides the
+   reminder.
+3. **Ask for the missing goal fields.** At minimum, clarify:
+   - objective: what should be accomplished;
+   - criteria: how the human and agent will know it is done;
+   - status/id: a stable `data.id` and active status if the goal should start
+     now;
+   - reminder cadence: optional `data.reminder_delay_seconds`;
+   - constraints: deadlines, channels to report on, what not to do, or approval
+     gates.
+4. **Explain cancellation and completion before writing.** Canceling the goal
+   means deleting `.notification/goal.json` or marking `data.status`
+   `inactive`/`cancelled`/`canceled`. Completing or superseding it means marking
+   status `done`/`complete`/`completed`/`superseded`, or deleting/replacing the
+   file. Dismissing a `goal.reminder` does **not** cancel the goal.
+5. **Write `.notification/goal.json` only after confirmation.** If the human gave
+   a complete inline draft with `/goal <text>`, restate the structured goal and
+   ask for confirmation unless the instruction explicitly and unambiguously says
+   to create it now.
+6. **Dismiss the request after handling it.** Use the event `ref_id` so other
+   system events survive:
+
+```text
+system(action="dismiss", channel="system", ref_id="goal.request:<timestamp>")
+```
+
+If the human changes their mind during setup, dismiss the `goal.request` event
+without creating `goal.json`. If a previous active goal exists, do not overwrite
+it silently; explain the existing goal and ask whether to complete, cancel, or
+replace it.
 
 ## Minimal goal file
 
