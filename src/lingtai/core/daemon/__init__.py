@@ -230,10 +230,14 @@ def _backend_options_to_argv(options: dict | None) -> list[str]:
     return argv
 
 
-_CLAUDE_RESERVED_BACKEND_FLAGS = {
+_CLAUDE_COMMON_RESERVED_BACKEND_FLAGS = {
     "--settings",
     "--print",
     "--output-format",
+}
+_CLAUDE_INTERACTIVE_RESERVED_BACKEND_FLAGS = {
+    "--append-system-prompt",
+    "--append-system-prompt-file",
 }
 
 
@@ -243,13 +247,16 @@ def _validate_claude_backend_argv(backend: str, argv: list[str]) -> None:
     ``backend_options`` is a pass-through for CLI-specific flags, but Claude
     daemon backends own their execution mode: print-mode owns ``--print`` /
     ``--output-format stream-json`` and interactive mode owns ``--settings``
-    hooks. Allowing callers to override those would silently break daemon
-    progress/result extraction.
+    hooks plus its managed-workspace system prompt. Allowing callers to
+    override those would silently break daemon progress/result extraction.
     """
     if backend not in ("claude", "claude-interactive", "claude-p", "claude-code"):
         return
+    reserved = set(_CLAUDE_COMMON_RESERVED_BACKEND_FLAGS)
+    if backend in ("claude", "claude-interactive"):
+        reserved.update(_CLAUDE_INTERACTIVE_RESERVED_BACKEND_FLAGS)
     for token in argv:
-        if token in _CLAUDE_RESERVED_BACKEND_FLAGS:
+        if token in reserved:
             raise ValueError(f"{token} is reserved by the {backend} daemon backend")
 
 

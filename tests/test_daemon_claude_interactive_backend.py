@@ -3,14 +3,17 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 import textwrap
 import threading
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from lingtai.agent import Agent
 from lingtai.core.daemon import get_schema
-from lingtai.core.daemon.claude_interactive import run_claude_interactive
+from lingtai.core.daemon.claude_interactive import ClaudeInteractiveError, run_claude_interactive
 from lingtai.core.daemon.run_dir import DaemonRunDir
 from lingtai_kernel.config import AgentConfig
 
@@ -228,6 +231,25 @@ def test_claude_reserved_backend_options_are_rejected(tmp_path):
     assert mgr._emanations == {}
 
 
+def test_claude_interactive_system_prompt_backend_option_is_rejected(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "claude",
+        "tasks": [{
+            "task": "should not spawn",
+            "tools": [],
+            "backend_options": {"append_system_prompt_file": "/tmp/override.md"},
+        }],
+    })
+
+    assert result["status"] == "error"
+    assert "--append-system-prompt-file is reserved" in result["message"]
+    assert mgr._emanations == {}
+
+
 def test_run_claude_interactive_fake_cli_hooks_and_transcript(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -259,3 +281,191 @@ def test_run_claude_interactive_fake_cli_hooks_and_transcript(tmp_path, monkeypa
     assert "fake interactive answer" in events
     assert "claude interactive SessionStart" in events
     assert "claude interactive Stop" in events
+
+
+
+
+def test_run_claude_interactive_rejects_invalid_managed_worktree_source(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "claude"
+    fake.write_text("#!/bin/sh\necho should-not-run >&2\nexit 1\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("LINGTAI_CLAUDE_MANAGED_ROOT", str(tmp_path / "managed-claude"))
+
+    run_dir = _make_run_dir(tmp_path)
+    with pytest.raises(ClaudeInteractiveError, match="managed-worktree-from must point inside a git repository"):
+        run_claude_interactive(
+            em_id="em-1",
+            run_dir=run_dir,
+            working_dir=tmp_path / "daemon-agent",
+            task="interactive task",
+            cancel_event=threading.Event(),
+            backend_argv=["--managed-worktree-from", str(tmp_path / "not-a-repo")],
+            env=os.environ.copy(),
+        )
+
+
+def test_run_claude_interactive_checks_out_explicit_managed_worktree_source(tmp_path, monkeypatch):
+    source = tmp_path / "source-repo"
+    source.mkdir()
+    subprocess.run(["git", "-C", str(source), "init"], check=True, stdout=subprocess.PIPE)
+    subprocess.run(["git", "-C", str(source), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(source), "config", "user.name", "Tester"], check=True)
+    (source / "tracked.txt").write_text("from explicit source\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(source), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(source), "commit", "-m", "seed"], check=True, stdout=subprocess.PIPE)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_fake_claude(bin_dir, transcript_text="explicit managed source answer")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("LINGTAI_CLAUDE_MANAGED_ROOT", str(tmp_path / "managed-claude"))
+
+    run_dir = _make_run_dir(tmp_path)
+    result = run_claude_interactive(
+        em_id="em-1",
+        run_dir=run_dir,
+        working_dir=tmp_path / "daemon-agent",
+        task="interactive task",
+        cancel_event=threading.Event(),
+        backend_argv=["--managed-worktree-from", str(source)],
+        env=os.environ.copy(),
+    )
+
+    assert result.final_text == "explicit managed source answer"
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    worktree = Path(state["claude_interactive_managed_worktree"])
+    assert (worktree / "tracked.txt").read_text(encoding="utf-8") == "from explicit source\n"
+    assert state["claude_interactive_managed_source"] == str(source)
+    assert state["claude_interactive_managed_source_request"] == str(source)
+
+def test_run_claude_interactive_auto_trusts_only_managed_workspace(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "claude"
+    fake.write_text(r'''#!/usr/bin/env python3
+from __future__ import annotations
+import json
+import os
+import subprocess
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+args = sys.argv[1:]
+settings = None
+system_prompt_path = None
+i = 0
+while i < len(args):
+    if args[i] == "--settings":
+        settings = json.loads(args[i + 1])
+        i += 2
+    elif args[i] == "--append-system-prompt-file":
+        system_prompt_path = Path(args[i + 1])
+        i += 2
+    else:
+        i += 1
+if settings is None:
+    raise SystemExit("missing --settings")
+if system_prompt_path is None or not system_prompt_path.exists():
+    raise SystemExit("missing managed system prompt")
+if "LingTai-managed ephemeral workspace" not in system_prompt_path.read_text():
+    raise SystemExit("unexpected system prompt")
+
+managed_root = Path(os.environ["LINGTAI_CLAUDE_MANAGED_ROOT"]).resolve()
+cwd = Path.cwd().resolve()
+if not cwd.is_relative_to(managed_root / "runs"):
+    raise SystemExit(f"cwd not in managed root: {cwd}")
+if cwd.name != "worktree":
+    raise SystemExit(f"cwd is not managed worktree: {cwd}")
+
+def hook_command(event):
+    for group in settings["hooks"][event]:
+        for hook in group["hooks"]:
+            return hook["command"]
+    raise SystemExit(f"missing hook {event}")
+
+# Simulate Claude Code's workspace trust prompt. The bridge may answer
+# this only because cwd is inside the LingTai-managed workspace root.
+# Claude's Ink TUI may repaint the same prompt before consuming the answer;
+# duplicate frames must not make LingTai fail as if this were an arbitrary cwd.
+for _ in range(2):
+    sys.stdout.write("Quick safety check: Is this a project you created or one you trust?\n")
+    sys.stdout.write("1. Yes, I trust this folder\n2. No, exit\n")
+    sys.stdout.flush()
+    time.sleep(0.05)
+answer = sys.stdin.buffer.read(2)
+if answer not in (b"1\r", b"1\n"):
+    raise SystemExit(f"trust answer not received: {answer!r}")
+
+session_id = "managed-session-123"
+transcript = Path.cwd() / "managed-transcript.jsonl"
+subprocess.run(
+    hook_command("SessionStart"),
+    input=json.dumps({"session_id": session_id}),
+    text=True,
+    shell=True,
+    check=True,
+)
+
+got = bytearray()
+deadline = time.time() + 5
+while time.time() < deadline:
+    ch = sys.stdin.buffer.read(1)
+    if not ch:
+        time.sleep(0.01)
+        continue
+    got += ch
+    if ch in (b"\r", b"\n"):
+        break
+if b"interactive task" not in got:
+    raise SystemExit(f"prompt not received: {got!r}")
+
+with transcript.open("w", encoding="utf-8") as f:
+    f.write(json.dumps({
+        "type": "assistant",
+        "session_id": session_id,
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "managed trust answer"}],
+        },
+    }) + "\n")
+subprocess.run(
+    hook_command("Stop"),
+    input=json.dumps({
+        "session_id": session_id,
+        "transcript_path": str(transcript),
+        "last_assistant_message": "managed trust answer",
+    }),
+    text=True,
+    shell=True,
+    check=True,
+)
+''', encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("LINGTAI_CLAUDE_MANAGED_ROOT", str(tmp_path / "managed-claude"))
+
+    run_dir = _make_run_dir(tmp_path)
+    result = run_claude_interactive(
+        em_id="em-1",
+        run_dir=run_dir,
+        working_dir=tmp_path / "daemon-agent",
+        task="interactive task",
+        cancel_event=threading.Event(),
+        env=os.environ.copy(),
+    )
+
+    assert result.final_text == "managed trust answer"
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert state["claude_interactive_managed_trust_answered"] is True
+    assert Path(state["claude_interactive_managed_worktree"]).exists()
+    assert Path(state["claude_interactive_system_prompt"]).exists()
+    assert Path(state["claude_interactive_raw_pty_log"]).is_relative_to(
+        tmp_path / "managed-claude" / "runs"
+    )
+    events = run_dir.events_path.read_text(encoding="utf-8")
+    assert "auto-selected workspace trust" in events
