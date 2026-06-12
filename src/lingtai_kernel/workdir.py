@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,101 @@ else:
 
 _LOCK_FILE = ".agent.lock"
 _MANIFEST_FILE = ".agent.json"
+
+_RESOLVED_MANIFEST_FILE = "manifest.resolved.json"
+_RESOLVED_MANIFEST_SCHEMA = "lingtai.manifest.resolved/v1"
+
+# Key names that carry (or point at) secret material — dropped recursively
+# before the resolved manifest is published. `*_env` names are included to
+# stay consistent with the `.agent.json` `_SENSITIVE_KEYS` hygiene. The token
+# alternative is anchored on `_`/edges so plural "tokens" fields
+# (e.g. `max_tokens`) survive.
+_SECRET_KEY_RE = re.compile(
+    r"(^|_)(api_?key|secret|secrets|password|passwd|credential|credentials"
+    r"|private_key|access_key|token)(_|$)",
+    re.IGNORECASE,
+)
+
+
+def _is_secret_key(key: Any) -> bool:
+    """Return whether a mapping key likely names secret material.
+
+    Handles snake/kebab case through ``_SECRET_KEY_RE`` and common compact or
+    camelCase spellings such as ``apiKey``, ``appSecret``, and ``botToken``
+    without treating ordinary words like ``secretary`` or ``max_tokens`` as
+    secrets.
+    """
+    raw = str(key)
+    normalized = re.sub(r"[^a-z0-9]+", "_", raw.lower()).strip("_")
+    if _SECRET_KEY_RE.search(normalized):
+        return True
+    compact = re.sub(r"[^a-z0-9]+", "", raw.lower())
+    if compact in {"apikey", "password", "passwd", "credential", "credentials", "privatekey", "accesskey"}:
+        return True
+    return compact.endswith("secret") or compact.endswith("token")
+
+
+def _redact_secrets(value: Any) -> Any:
+    """Return a deep copy of *value* with secret-bearing keys removed.
+
+    Recurses through dicts and lists; any dict key matching
+    ``_SECRET_KEY_RE`` is dropped entirely (value and all). Non-container
+    leaves are returned as-is.
+    """
+    if isinstance(value, dict):
+        return {
+            k: _redact_secrets(v)
+            for k, v in value.items()
+            if not _is_secret_key(k)
+        }
+    if isinstance(value, list):
+        return [_redact_secrets(v) for v in value]
+    return value
+
+
+def write_resolved_manifest(working_dir: Path | str, data: dict) -> Path | None:
+    """Publish the kernel-resolved manifest as a derived runtime artifact.
+
+    Writes ``<working_dir>/system/manifest.resolved.json`` from fully-resolved
+    init data (after preset materialization, validation, and path resolution).
+    init.json stays user-owned input; this artifact is regenerated on every
+    boot/refresh, safe to delete, and is what TUI/portal consumers should read
+    instead of re-implementing the preset merge over the raw snapshot
+    (issue #259).
+
+    Secrets (api_key/password/token-like fields) are removed recursively.
+    The write is atomic (``.tmp`` → ``os.replace``) and best-effort: returns
+    the artifact path on success, None when *data* has no manifest or the
+    write failed.
+    """
+    manifest = data.get("manifest") if isinstance(data, dict) else None
+    if not isinstance(manifest, dict):
+        return None
+
+    artifact: dict[str, Any] = {
+        "schema": _RESOLVED_MANIFEST_SCHEMA,
+        "schema_version": 1,
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": "kernel",
+        "manifest": _redact_secrets(manifest),
+    }
+    preset = manifest.get("preset")
+    if isinstance(preset, dict):
+        artifact["preset"] = _redact_secrets(preset)
+
+    try:
+        system_dir = Path(working_dir) / "system"
+        system_dir.mkdir(parents=True, exist_ok=True)
+        target = system_dir / _RESOLVED_MANIFEST_FILE
+        tmp = system_dir / (_RESOLVED_MANIFEST_FILE + ".tmp")
+        tmp.write_text(
+            json.dumps(artifact, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(str(tmp), str(target))
+        return target
+    except (OSError, TypeError, ValueError):
+        return None
 
 
 class WorkingDir:

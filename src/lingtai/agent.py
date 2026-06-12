@@ -836,6 +836,10 @@ class Agent(BaseAgent):
         If ``manifest.preset.active`` is set, materialize the named preset's
         ``llm`` and ``capabilities`` into the manifest before validation. The
         running agent thus always sees a fully resolved manifest.
+
+        On success, the resolved (secret-redacted) manifest is also published
+        to ``system/manifest.resolved.json`` via
+        ``lingtai_kernel.workdir.write_resolved_manifest`` (issue #259).
         """
         import json
         from .init_schema import strip_deprecated, validate_init
@@ -895,6 +899,17 @@ class Agent(BaseAgent):
             self._log("refresh_init_warning", warning=w)
 
         resolve_paths(data, self._working_dir)
+
+        # Publish the fully-resolved manifest as a derived runtime artifact
+        # (issue #259). Boot, live refresh, and post-molt reload all pass
+        # through here, so system/manifest.resolved.json always reflects the
+        # config the agent actually runs on — consumers read it instead of
+        # re-implementing preset materialization over the raw init.json
+        # snapshot. init.json itself stays user-owned input.
+        from lingtai_kernel.workdir import write_resolved_manifest
+        if write_resolved_manifest(self._working_dir, data) is None:
+            self._log("resolved_manifest_write_failed")
+
         return data
 
     def _activate_preset(self, name: str) -> None:
