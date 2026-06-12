@@ -34,7 +34,7 @@ dependencies = [
     # catalog → registry → activation chain that wires them up.
     "lingtai-imap>=0.1.0",
     "lingtai-telegram>=0.1.0",
-    "lingtai-feishu>=0.1.0",
+    "lingtai-feishu>=0.2.1",
     "lingtai-wechat>=0.1.0",
     "lingtai-whatsapp>=0.1.0",
 ]
