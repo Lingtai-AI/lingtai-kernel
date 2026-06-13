@@ -90,9 +90,42 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert "reference/scheduled-work/SKILL.md" in bash_body
         assert "reference/notification-reminders/SKILL.md" in bash_body
         assert "reference/debugging-cleanup/SKILL.md" in bash_body
+        for moved_reference in (
+            "reference/bash-claude-code/SKILL.md",
+            "reference/bash-openai-codex/SKILL.md",
+            "reference/bash-opencode/SKILL.md",
+            "reference/bash-cursor-agent/SKILL.md",
+            "reference/bash-mimocode/SKILL.md",
+            "reference/bash-qwen-code/SKILL.md",
+            "reference/bash-oh-my-pi/SKILL.md",
+            "reference/bash-gemini-cli/SKILL.md",
+            "reference/bash-aider/SKILL.md",
+            "reference/bash-goose/SKILL.md",
+            "reference/bash-openhands/SKILL.md",
+            "reference/bash-crush/SKILL.md",
+            "reference/bash-zed-acp/SKILL.md",
+        ):
+            assert moved_reference in bash_body
 
         bash_reference_dir = bash_md.parent / "reference"
-        for reference_name in ("scheduled-work", "notification-reminders", "debugging-cleanup"):
+        for reference_name in (
+            "scheduled-work",
+            "notification-reminders",
+            "debugging-cleanup",
+            "bash-claude-code",
+            "bash-openai-codex",
+            "bash-opencode",
+            "bash-cursor-agent",
+            "bash-mimocode",
+            "bash-qwen-code",
+            "bash-oh-my-pi",
+            "bash-gemini-cli",
+            "bash-aider",
+            "bash-goose",
+            "bash-openhands",
+            "bash-crush",
+            "bash-zed-acp",
+        ):
             bash_reference = bash_reference_dir / reference_name / "SKILL.md"
             assert bash_reference.is_file()
         assert "Nested bash-manual reference" in (

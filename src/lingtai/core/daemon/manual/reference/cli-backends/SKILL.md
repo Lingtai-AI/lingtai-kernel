@@ -20,6 +20,32 @@ inspecting `daemon(action="list")`, or passing CLI flags through `backend_option
 (completed/failed/cancelled) emanations don't appear in `list` — find them by
 inspecting the agent's `daemons/` folder.
 
+
+## Bash harness subskills
+
+Daemon backend integration and user-facing shell execution guidance now split by
+ownership:
+
+- This page owns the daemon API contract: backend names, `daemon(...)` behavior,
+  `backend_options`, result/session capture, `ask`/resume, and backend-specific
+  parser caveats.
+- `bash-manual` owns the shell subprocess recipes for the underlying CLIs. Before
+  launching or troubleshooting a long-running coding CLI directly from bash,
+  read the matching nested bash reference:
+  - Claude Code: `bash-manual` → `reference/bash-claude-code/SKILL.md`
+  - OpenAI Codex: `bash-manual` → `reference/bash-openai-codex/SKILL.md`
+  - OpenCode: `bash-manual` → `reference/bash-opencode/SKILL.md`
+  - Cursor Agent: `bash-manual` → `reference/bash-cursor-agent/SKILL.md`
+  - MiMo Code: `bash-manual` → `reference/bash-mimocode/SKILL.md`
+  - Qwen Code: `bash-manual` → `reference/bash-qwen-code/SKILL.md`
+  - Oh-My-Pi / Pi Coding Agent: `bash-manual` →
+    `reference/bash-oh-my-pi/SKILL.md`
+
+Candidate harnesses that are not daemon backends yet (Gemini CLI, Aider, Goose,
+OpenHands, Crush, and Zed/ACP bridges) are tracked under `bash-manual` as
+`reference/bash-*/SKILL.md` pages until their command/session contracts are
+stable enough for backend promotion.
+
 ## CLI backends
 
 The `backend` parameter selects the execution engine for emanations. Default is

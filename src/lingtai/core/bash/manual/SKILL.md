@@ -2,7 +2,8 @@
 name: bash-manual
 description: >
   **Read this before running long-lived agent/coding CLIs (`claude -p`,
-  `codex exec`, `opencode run`, Cursor agent CLI), or before setting up cron,
+  `codex exec`, `opencode run`, Cursor Agent, Gemini CLI, Aider, Goose,
+  OpenHands, Crush, or similar harnesses), or before setting up cron,
   launchd, systemd timers, crontab jobs, or scheduled reminders.** Router for
   Bash-related operational depth beyond the bash tool schema: async + poll
   discipline for long-running child agents, host-scheduler setup, LingTai
@@ -10,7 +11,7 @@ description: >
   reminders, debugging silent jobs, and safe cleanup. Start here for any
   long-running agent CLI, time-driven recurring work ("every hour", "weekdays at
   9", "remind me later"), or when a scheduled job misbehaves.
-version: 1.4.0
+version: 1.5.0
 ---
 
 # Bash Manual — Router
@@ -49,13 +50,76 @@ files, not standalone top-level skills.
     Debugging and cleanup for scheduled jobs: scheduler fired, script ran, work
     landed, agent saw mail, worked launchd diagnosis, retiring cron jobs, and
     bash work footprint hygiene.
+- name: bash-claude-code
+  location: reference/bash-claude-code/SKILL.md
+  description: |
+    Claude Code CLI as a long-running bash subprocess: explicit model selection,
+    async/poll discipline, allowed tools, JSON output, and stuck-run recovery.
+- name: bash-openai-codex
+  location: reference/bash-openai-codex/SKILL.md
+  description: |
+    OpenAI Codex CLI (`codex exec`) subprocess usage: sandbox/approval flags,
+    model selection, async handling, and automation caveats.
+- name: bash-opencode
+  location: reference/bash-opencode/SKILL.md
+  description: |
+    OpenCode CLI (`opencode run` / `opencode serve`) subprocess usage, provider
+    configuration, JSON output, session caveats, and daemon-harness notes.
+- name: bash-cursor-agent
+  location: reference/bash-cursor-agent/SKILL.md
+  description: |
+    Cursor Agent CLI subprocess usage and daemon-harness checks.
+- name: bash-mimocode
+  location: reference/bash-mimocode/SKILL.md
+  description: |
+    MiMo Code CLI subprocess usage; provider discovery stays with swiss-knife,
+    while shell execution hygiene lives here.
+- name: bash-qwen-code
+  location: reference/bash-qwen-code/SKILL.md
+  description: |
+    Qwen Code CLI subprocess usage and daemon-harness checks.
+- name: bash-oh-my-pi
+  location: reference/bash-oh-my-pi/SKILL.md
+  description: |
+    Oh-My-Pi / Pi Coding Agent (`omp`) subprocess usage, JSON mode, approval
+    mode, and session-resume caveats.
+- name: bash-gemini-cli
+  location: reference/bash-gemini-cli/SKILL.md
+  description: |
+    Gemini CLI as a candidate coding harness: non-interactive prompt mode,
+    approval flags, resume questions, and promotion checklist.
+- name: bash-aider
+  location: reference/bash-aider/SKILL.md
+  description: |
+    Aider as a scriptable coding harness: `--message` mode, git behavior,
+    one-shot automation, and daemon suitability caveats.
+- name: bash-goose
+  location: reference/bash-goose/SKILL.md
+  description: |
+    Goose CLI as a candidate coding harness: session/no-session modes and
+    daemon promotion checklist.
+- name: bash-openhands
+  location: reference/bash-openhands/SKILL.md
+  description: |
+    OpenHands CLI headless mode as a candidate harness: `--task`/`--file`, JSONL,
+    dependency footprint, and daemon promotion checklist.
+- name: bash-crush
+  location: reference/bash-crush/SKILL.md
+  description: |
+    Charm Crush CLI as a candidate harness: `crush run`, permission/session
+    questions, and daemon promotion checklist.
+- name: bash-zed-acp
+  location: reference/bash-zed-acp/SKILL.md
+  description: |
+    Zed/ACP external-agent bridge notes: ecosystem integration, not a direct
+    daemon backend unless a headless ACP client command is available.
 ```
 
 ## Router table
 
 | Need / keywords | Read |
 |---|---|
-| Running a long-running agent/coding CLI as a sub-process: `claude -p`, `codex exec`, `opencode run`, Cursor agent CLI; "run an agent in the background"; avoid blocking the turn | "Core rules to keep resident" below (use `bash(async=true)` + poll) |
+| Running a long-running agent/coding CLI as a sub-process: `claude -p`, `codex exec`, `opencode run`, Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Gemini CLI, Aider, Goose, OpenHands, Crush; "run an agent in the background"; avoid blocking the turn | `reference/bash-claude-code/SKILL.md`, `reference/bash-openai-codex/SKILL.md`, `reference/bash-opencode/SKILL.md`, or the matching `reference/bash-*/SKILL.md`; keep the core async/poll rules below resident |
 | Human asks for time-driven recurring work: "every hour", "daily", "weekdays at 9", "write/check/send on a schedule"; choose cron vs event watcher; create launchd/systemd/crontab wiring; understand wake-by-mailbox-drop; write scheduler prompt/script hygiene | `reference/scheduled-work/SKILL.md` |
 | Need a one-shot reminder or wakeup nudge while work is pending; `.notification/cron.json`; atomic reminder writer; rest checklist | `reference/notification-reminders/SKILL.md` |
 | Scheduled job is silent, fires twice, exits immediately, gets killed by launchd, fails to deliver mail, or must be retired/cleaned up | `reference/debugging-cleanup/SKILL.md` |
@@ -66,7 +130,8 @@ files, not standalone top-level skills.
    `grep`, a quick build)? Use `bash` synchronously; this manual is not needed
    unless the command is risky, scheduled, or failing mysteriously.
 2. **Long-running agent/coding CLI** (`claude -p`, `codex exec`, `opencode run`,
-   Cursor agent CLI, or any sub-agent that may think/run tools for minutes)?
+   Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Gemini CLI, Aider, Goose,
+   OpenHands, Crush, or any sub-agent that may think/run tools for minutes)?
    **Never run it synchronously.** Use `bash(async=true)` and poll — see the
    resident rule below.
 3. **Time itself is the trigger?** Read `reference/scheduled-work/SKILL.md`.
