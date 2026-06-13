@@ -1,9 +1,9 @@
 """Mechanical redaction for durable trajectory data.
 
 The live LLM conversation may contain user-provided credentials while a turn is
-running. Durable trajectory surfaces (events JSONL, SQLite indexes, chat-history
-JSONL, daemon traces) must not persist those raw values. This module provides a
-small, deterministic, fail-open redactor used immediately before writing or
+running. Durable trajectory surfaces written by the kernel (events JSONL, SQLite indexes,
+and chat-history JSONL) must not persist those raw values. This module provides
+a small, deterministic, fail-open redactor used immediately before writing or
 indexing trajectory records.
 """
 from __future__ import annotations
