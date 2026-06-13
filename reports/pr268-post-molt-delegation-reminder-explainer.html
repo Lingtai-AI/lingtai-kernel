@@ -29,12 +29,12 @@
 <body>
 <main>
   <h1>Issue #256 — Post-molt delegation reminder</h1>
-  <div class="meta">Prepared for the LingTai kernel PR. Branch: <code>fix/post-molt-delegation-reminder</code>. Final local HEAD at time of report: <code>dab938d</code> after rebasing onto canonical <code>main</code> <code>8e92650</code>.</div>
+  <div class="meta">Prepared for LingTai kernel PR #268. Branch: <code>fix/post-molt-delegation-reminder</code>. Rebased for conflict resolution onto canonical <code>main</code> <code>68e1d00</code>; conflict-fix daemon verified branch state at <code>a9eab25</code> before this report-only refresh.</div>
 
   <section class="card">
     <h2>TL;DR</h2>
     <p>This change adds a separate <code>post-child-delegation</code> notification after both agent-initiated and system-forced molts. It reminds the post-molt agent that direct delegated work may still exist, without blocking molt and without taking lifecycle action automatically.</p>
-    <p><span class="ok">PR-ready locally:</span> an independent Codex daemon review found one real bounded-scan bug, patched it, and both daemon and orchestrator validation now pass after rebasing onto canonical <code>Lingtai-AI/lingtai-kernel</code> main.</p>
+    <p><span class="ok">PR-ready locally:</span> an independent Codex daemon review found one real bounded-scan bug, patched it, and a later conflict-resolution daemon rebased the branch onto current canonical <code>Lingtai-AI/lingtai-kernel</code> main with focused validation passing.</p>
   </section>
 
   <section>
@@ -81,12 +81,15 @@
     <table>
       <thead><tr><th>Check</th><th>Result</th></tr></thead>
       <tbody>
-        <tr><td><code>uv run --no-sync --with pytest pytest -q tests/test_post_molt_delegation_reminder.py tests/test_post_molt_notification.py tests/test_molt_notification_persistence.py tests/test_notification_sync.py tests/test_system_dismiss.py tests/test_messaging_notification_format.py tests/test_system_notifications.py tests/test_goal_notification.py</code></td><td><span class="ok">119 passed in 49.22s</span> after rebase onto canonical main.</td></tr>
+        <tr><td><code>uv run --no-sync --with pytest pytest tests/test_post_molt_delegation_reminder.py</code></td><td><span class="ok">8 passed in 16.65s</span> after rebasing onto canonical main <code>68e1d00</code>.</td></tr>
+        <tr><td><code>uv run --no-sync --with pytest pytest tests/test_post_molt_notification.py tests/test_molt_notification_persistence.py tests/test_notification_sync.py::test_sync_idle_injects_post_molt_after_molt_batch_deferred_stamp tests/test_notification_sync.py::test_context_molt_batch_skips_active_notification_stamp tests/test_notification_sync.py::test_non_molt_batch_after_molt_can_consume_post_molt tests/test_trace_redaction.py::test_save_chat_history_redacts_persisted_copy_without_mutation</code></td><td><span class="ok">20 passed in 30.06s</span>.</td></tr>
+        <tr><td><code>uv run --no-sync --with pytest pytest tests/test_psyche.py tests/test_molt_task_persistence.py tests/test_trace_redaction.py</code></td><td><span class="ok">40 passed in 37.00s</span>.</td></tr>
         <tr><td><code>git diff --check canonical/main...HEAD</code></td><td><span class="ok">passed</span>.</td></tr>
-        <tr><td>Independent Codex daemon review</td><td><span class="ok">PR-ready</span> after patch <code>dab938d</code>; report at <code>.lingtai/codex/tmp/reports/issue256-final-daemon-review.md</code>.</td></tr>
+        <tr><td>Independent Codex daemon review</td><td><span class="ok">PR-ready</span>; final review report at <code>.lingtai/codex/tmp/reports/issue256-final-daemon-review.md</code>.</td></tr>
+        <tr><td>Conflict-resolution Codex daemon</td><td><span class="ok">Only conflict was mechanical in <code>src/lingtai_kernel/ANATOMY.md</code></span>: kept upstream notification fingerprint/redaction wording and added <code>post-child-delegation</code>. Report at <code>.lingtai/codex/tmp/reports/issue256-pr268-conflict-fix.md</code>.</td></tr>
       </tbody>
     </table>
-    <p class="small"><span class="warn">Environment note:</span> after rebasing onto canonical main, plain <code>uv run --with pytest ...</code> attempted to resolve/sync <code>onnxruntime==1.26.0</code>, which currently has no wheel for this macOS x86_64 environment. Validation used <code>--no-sync</code> to avoid mutating dependencies while running the already-focused test set.</p>
+    <p class="small"><span class="warn">Environment note:</span> after rebasing onto canonical main, plain <code>uv run pytest ...</code> attempted to resolve/sync <code>onnxruntime==1.26.0</code>, which currently has no wheel for this macOS x86_64 environment. Validation used <code>--no-sync</code> to avoid mutating dependencies while running the already-focused test set.</p>
   </section>
 
   <section>
@@ -113,7 +116,7 @@
     <ul>
       <li><code>src/lingtai_kernel/intrinsics/psyche/_molt.py</code> — publisher, avatar scan, daemon scan, integration after post-molt notification.</li>
       <li><code>src/lingtai_kernel/notifications.py</code> — channel allowlist.</li>
-      <li><code>src/lingtai_kernel/ANATOMY.md</code> — anatomy update for the new reminder behavior.</li>
+      <li><code>src/lingtai_kernel/ANATOMY.md</code> — anatomy update for the new reminder behavior; conflict resolution also preserved upstream notification fingerprint/redaction wording.</li>
       <li><code>tests/test_post_molt_delegation_reminder.py</code> — focused regression and safety tests.</li>
     </ul>
   </section>
