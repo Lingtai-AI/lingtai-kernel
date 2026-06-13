@@ -47,6 +47,7 @@ lingtai-feishu = "lingtai.mcp_servers.feishu.__main__:main"
 lingtai-wechat = "lingtai.mcp_servers.wechat.__main__:main"
 lingtai-wechat-bootstrap = "lingtai.mcp_servers.wechat.login:_bootstrap_main"
 lingtai-whatsapp = "lingtai.mcp_servers.whatsapp.__main__:main"
+lingtai-cloud-mail = "lingtai.mcp_servers.cloud_mail.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

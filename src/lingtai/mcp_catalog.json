@@ -59,5 +59,17 @@
     ],
     "source": "lingtai-curated",
     "homepage": "https://github.com/Lingtai-AI/lingtai-whatsapp"
+  },
+  "cloud_mail": {
+    "name": "cloud_mail",
+    "summary": "Cloud Mail REST email client — Cloudflare Workers Cloud Mail polling with LICC inbox callback.",
+    "transport": "stdio",
+    "command": "{python}",
+    "args": [
+      "-m",
+      "lingtai.mcp_servers.cloud_mail"
+    ],
+    "source": "lingtai-curated",
+    "homepage": "https://github.com/maillab/cloud-mail"
   }
 }

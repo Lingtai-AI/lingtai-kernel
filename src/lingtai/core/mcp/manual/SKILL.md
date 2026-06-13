@@ -4,11 +4,11 @@ description: >
   Operational guide for the `mcp` capability — register, activate, update,
   deregister, and troubleshoot MCP (Model Context Protocol) servers in your
   agent. Single source of truth for both generic MCP setup AND the five
-  kernel-curated LingTai addon MCPs (`imap`, `telegram`, `feishu`, `wechat`, `whatsapp`).
+  kernel-curated LingTai addon MCPs (`imap`, `telegram`, `feishu`, `wechat`, `whatsapp`, `cloud_mail`).
 
   Reach for this manual when:
     - The human asks to install, set up, configure, or remove an MCP server.
-      Decision tree: is it kernel-curated (imap/telegram/feishu/wechat/whatsapp) → the
+      Decision tree: is it kernel-curated (imap/telegram/feishu/wechat/whatsapp/cloud_mail) → the
       `addons:` + `init.json mcp.<name>` workflow using modules shipped inside
       the `lingtai` wheel is here. Is it third-party → the registry route OR the legacy
       `mcp/servers.json` route, both documented here.
@@ -45,7 +45,7 @@ version: 3.2.0
 
 # MCP Capability — How To Use It
 
-The `mcp` capability is your interface to Model Context Protocol (MCP) servers — both generic third-party servers and the five kernel-curated LingTai addons (`imap`, `telegram`, `feishu`, `wechat`, `whatsapp`). Like the `library` capability, it is **pure presentation**: registered MCPs are listed in your system prompt under `<registered_mcp>`, and the registry itself is a JSONL file you edit directly with `write` / `edit` / `bash`.
+The `mcp` capability is your interface to Model Context Protocol (MCP) servers — both generic third-party servers and the six kernel-curated LingTai addons (`imap`, `telegram`, `feishu`, `wechat`, `whatsapp`, `cloud_mail`). Like the `library` capability, it is **pure presentation**: registered MCPs are listed in your system prompt under `<registered_mcp>`, and the registry itself is a JSONL file you edit directly with `write` / `edit` / `bash`.
 
 This is the router. Detail lives in `reference/`. Load only what you need.
 
@@ -53,7 +53,7 @@ This is the router. Detail lives in `reference/`. Load only what you need.
 
 For any MCP server, relative to this agent:
 
-1. **In the kernel catalog** — LingTai blesses it. Reference template ships with the kernel. The five curated addons live here: `imap`, `telegram`, `feishu`, `wechat`, `whatsapp`.
+1. **In the kernel catalog** — LingTai blesses it. Reference template ships with the kernel. The six curated addons live here: `imap`, `telegram`, `feishu`, `wechat`, `whatsapp`, `cloud_mail`.
 2. **Officially registered** — appears as a line in `mcp_registry.jsonl` (sibling to `init.json`). The system prompt's `<registered_mcp>` lists it.
 3. **Active** — the MCP server subprocess is running, its tools are mounted in your tool surface.
 
@@ -63,7 +63,7 @@ Promotion path: catalog → registry → active. You move things along by editin
 
 | Task | Read |
 |---|---|
-| Set up an `imap` / `telegram` / `feishu` / `wechat` addon | `reference/curated-addons.md` |
+| Set up an `imap` / `telegram` / `feishu` / `wechat` / `whatsapp` / `cloud_mail` addon | `reference/curated-addons.md` |
 | Add a third-party MCP (`npx`/`uvx`/HTTP) | `reference/third-party-and-legacy.md` |
 | Wire up a server quickly via `mcp/servers.json` (legacy/ungated) | `reference/third-party-and-legacy.md` |
 | MCP not behaving / cryptic boot errors / `KeyError: 'foo'` | `reference/troubleshooting.md` |
@@ -107,6 +107,7 @@ Curated addon modules shipped by the `lingtai` wheel:
 | `feishu`      | formerly `lingtai-feishu`   | `lingtai.mcp_servers.feishu`   |
 | `wechat`      | formerly `lingtai-wechat`   | `lingtai.mcp_servers.wechat`   |
 | `whatsapp`    | formerly `lingtai-whatsapp` | `lingtai.mcp_servers.whatsapp` |
+| `cloud_mail`  | (no standalone distribution) | `lingtai.mcp_servers.cloud_mail` |
 
 ### 2. Homepage URL (fallback)
 
