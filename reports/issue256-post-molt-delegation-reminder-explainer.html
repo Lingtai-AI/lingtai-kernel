@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Issue #256 — Post-molt delegation reminder</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f7f7fb; --card: #ffffff; --text: #1d2433; --muted: #5c667a; --line: #d9deea; --accent: #365cff; --good: #087f5b; --warn: #b7791f; --code: #f0f3fa; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #0f1320; --card: #171c2b; --text: #edf1fb; --muted: #a9b2c7; --line: #30384d; --accent: #8ea2ff; --good: #63e6be; --warn: #ffd43b; --code: #111827; } }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); line-height: 1.55; }
+    main { max-width: 980px; margin: 0 auto; padding: 40px 20px 64px; }
+    h1 { font-size: 2rem; margin: 0 0 8px; }
+    h2 { margin-top: 34px; padding-top: 18px; border-top: 1px solid var(--line); }
+    h3 { margin-top: 22px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 20px 22px; box-shadow: 0 10px 30px rgba(0,0,0,.06); margin: 18px 0; }
+    .meta { color: var(--muted); margin-bottom: 22px; }
+    .pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; margin: 2px 4px 2px 0; color: var(--muted); font-size: .9rem; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    code { background: var(--code); padding: 1px 5px; border-radius: 5px; }
+    pre { background: var(--code); padding: 14px 16px; border-radius: 12px; overflow-x: auto; border: 1px solid var(--line); }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: var(--code); }
+    .ok { color: var(--good); font-weight: 700; }
+    .warn { color: var(--warn); font-weight: 700; }
+    .small { color: var(--muted); font-size: .94rem; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Issue #256 — Post-molt delegation reminder</h1>
+  <div class="meta">Prepared for the LingTai kernel PR. Branch: <code>fix/post-molt-delegation-reminder</code>. Final local HEAD at time of report: <code>dab938d</code> after rebasing onto canonical <code>main</code> <code>8e92650</code>.</div>
+
+  <section class="card">
+    <h2>TL;DR</h2>
+    <p>This change adds a separate <code>post-child-delegation</code> notification after both agent-initiated and system-forced molts. It reminds the post-molt agent that direct delegated work may still exist, without blocking molt and without taking lifecycle action automatically.</p>
+    <p><span class="ok">PR-ready locally:</span> an independent Codex daemon review found one real bounded-scan bug, patched it, and both daemon and orchestrator validation now pass after rebasing onto canonical <code>Lingtai-AI/lingtai-kernel</code> main.</p>
+  </section>
+
+  <section>
+    <h2>Baseline</h2>
+    <p>Before this patch, molt already had a post-molt continuation reminder via <code>.notification/post-molt.json</code>, and normal notification sync could wake/surface it after context shedding. But molt did not create a structured reminder for delegated work that might still be alive after the parent’s conversation context was replaced.</p>
+    <p>Issue #256’s clean design target is not to refuse or delay molt. The safer behavior is: finish the molt, then surface a bounded awareness snapshot so the new session can choose whether and how to inspect children or daemons.</p>
+  </section>
+
+  <section>
+    <h2>What was done</h2>
+    <h3>1. New notification channel</h3>
+    <p><code>src/lingtai_kernel/notifications.py</code> now allowlists <code>post-child-delegation</code>, keeping this reminder distinct from both the pressure-warning <code>molt</code> channel and the existing <code>post-molt</code> continuation channel.</p>
+
+    <h3>2. Awareness-only post-molt publisher</h3>
+    <p><code>src/lingtai_kernel/intrinsics/psyche/_molt.py</code> adds <code>_publish_post_child_delegation_reminder()</code>, called immediately after <code>_publish_post_molt()</code> in:</p>
+    <ul>
+      <li>agent-initiated <code>_context_molt(...)</code></li>
+      <li>system-forced <code>context_forget(...)</code></li>
+    </ul>
+    <p>The payload includes:</p>
+    <p>
+      <span class="pill"><code>schema_version</code></span>
+      <span class="pill"><code>source_agent</code></span>
+      <span class="pill"><code>initiator</code></span>
+      <span class="pill"><code>source</code></span>
+      <span class="pill"><code>molt_count</code></span>
+      <span class="pill"><code>awareness_only: true</code></span>
+      <span class="pill"><code>automatic_lifecycle_actions: false</code></span>
+      <span class="pill"><code>descendant_scan: "direct_only"</code></span>
+      <span class="pill"><code>counts</code></span>
+      <span class="pill"><code>limits</code></span>
+    </p>
+
+    <h3>3. Bounded direct-child scan</h3>
+    <p>Avatar scan reads only the parent’s <code>delegates/ledger.jsonl</code> and each direct child’s <code>.agent.json</code> / <code>.agent.heartbeat</code>. It does not recurse into child ledgers and does not read child history, mailbox, notifications, knowledge, or other private stores.</p>
+    <p>Daemon scan reads only parent-side <code>daemons/*/daemon.json</code> and <code>.heartbeat</code>. It does not read daemon transcripts, events, history, result files, or outputs beyond the bounded fields already present in <code>daemon.json</code>.</p>
+
+    <h3>4. Tail-window fix from final review</h3>
+    <p>The first implementation read the first 1000 avatar ledger lines. Because <code>delegates/ledger.jsonl</code> is append-only, that could omit newer direct children for a long-lived parent. The final review daemon patched this: <code>_read_avatar_ledger_tail()</code> now reads the newest bounded window, walks it newest-first, and keeps the freshest record per child. A regression test covers a ledger with 1000 old records followed by a recent live child.</p>
+  </section>
+
+  <section>
+    <h2>Validation</h2>
+    <table>
+      <thead><tr><th>Check</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td><code>uv run --no-sync --with pytest pytest -q tests/test_post_molt_delegation_reminder.py tests/test_post_molt_notification.py tests/test_molt_notification_persistence.py tests/test_notification_sync.py tests/test_system_dismiss.py tests/test_messaging_notification_format.py tests/test_system_notifications.py tests/test_goal_notification.py</code></td><td><span class="ok">119 passed in 49.22s</span> after rebase onto canonical main.</td></tr>
+        <tr><td><code>git diff --check canonical/main...HEAD</code></td><td><span class="ok">passed</span>.</td></tr>
+        <tr><td>Independent Codex daemon review</td><td><span class="ok">PR-ready</span> after patch <code>dab938d</code>; report at <code>.lingtai/codex/tmp/reports/issue256-final-daemon-review.md</code>.</td></tr>
+      </tbody>
+    </table>
+    <p class="small"><span class="warn">Environment note:</span> after rebasing onto canonical main, plain <code>uv run --with pytest ...</code> attempted to resolve/sync <code>onnxruntime==1.26.0</code>, which currently has no wheel for this macOS x86_64 environment. Validation used <code>--no-sync</code> to avoid mutating dependencies while running the already-focused test set.</p>
+  </section>
+
+  <section>
+    <h2>Risks and decisions</h2>
+    <ul>
+      <li><strong>Direct-only is intentional.</strong> The payload explicitly says <code>descendant_scan: "direct_only"</code>. Recursive descendant scanning can be added later with separate depth/node/truncation semantics.</li>
+      <li><strong>Counts are bounded-window counts.</strong> If a parent has more than 1000 avatar ledger records, older children outside the newest window may be omitted. <code>limits.avatars_truncated</code> / <code>limits.truncated</code> make this visible.</li>
+      <li><strong>No automatic lifecycle action.</strong> The notification tells the agent not to CPR, interrupt, reclaim, suspend, or message children automatically.</li>
+      <li><strong>Privacy boundary is narrow.</strong> The implementation avoids child private stores and daemon detailed artifacts.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Next steps</h2>
+    <ol>
+      <li>Review the PR diff and confirm the notification schema is the desired public contract.</li>
+      <li>If accepted, merge normally. No migration is needed.</li>
+      <li>If recursive delegation awareness is desired later, design it as a separate depth-limited extension rather than broadening this MVP silently.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Source index</h2>
+    <ul>
+      <li><code>src/lingtai_kernel/intrinsics/psyche/_molt.py</code> — publisher, avatar scan, daemon scan, integration after post-molt notification.</li>
+      <li><code>src/lingtai_kernel/notifications.py</code> — channel allowlist.</li>
+      <li><code>src/lingtai_kernel/ANATOMY.md</code> — anatomy update for the new reminder behavior.</li>
+      <li><code>tests/test_post_molt_delegation_reminder.py</code> — focused regression and safety tests.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
