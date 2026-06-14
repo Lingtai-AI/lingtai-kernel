@@ -4,7 +4,7 @@ Daemon capability (分神) — dispatch ephemeral subagents (分神) that operat
 in parallel on the agent's working directory. Each LingTai-backend emanation
 is a disposable `ChatSession` with a curated tool surface, not an agent; the
 parent may add a per-task oneshot `system_prompt` as the behavior contract for
-role, constraints, and tool-use policy; the daemon-eligible `email` intrinsic is
+role, constraints, and tool-use policy, and per-task `skills` paths render into a compact skill catalog; the daemon-eligible `email` intrinsic is
 available by default, but daemon tool calls still pass through the kernel
 `ToolExecutor`/`ToolCallGuard` path before any handler runs. Each `daemon.emanate` batch gets a stable `group_id` shared by every run in
 that batch, while each daemon still keeps its own `run_id`. Results are

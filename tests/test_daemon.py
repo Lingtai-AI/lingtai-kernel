@@ -228,13 +228,16 @@ def test_build_tool_surface_inherits_mcp_tools(tmp_path):
     assert "my_mcp_tool" in names
 
 
-def test_daemon_schema_accepts_task_system_prompt():
-    """Task items expose only the current oneshot system_prompt field."""
+def test_daemon_schema_accepts_task_system_prompt_and_skills():
+    """Task items expose current oneshot system_prompt plus selected skills."""
     from lingtai.core.daemon import get_schema
 
     task_props = get_schema("en")["properties"]["tasks"]["items"]["properties"]
     assert "system_prompt" in task_props
     assert task_props["system_prompt"]["type"] == "string"
+    assert "skills" in task_props
+    assert task_props["skills"]["type"] == "array"
+    assert task_props["skills"]["items"]["type"] == "string"
     assert "custom_system_prompt" not in task_props
 
 
@@ -262,7 +265,7 @@ def test_build_emanation_prompt_includes_oneshot_system_prompt(tmp_path):
         system_prompt="Only inspect Python files and write no files.",
     )
 
-    assert "Parent-provided daemon system prompt" in prompt
+    assert "Parent-provided daemon context" in prompt
     assert "Only inspect Python files" in prompt
     assert prompt.index("Only inspect Python files") < prompt.index("Your task:")
 
@@ -276,6 +279,75 @@ def test_task_system_prompt_allows_blank_string(tmp_path):
 
     assert mgr._task_system_prompt({"task": "x", "tools": [], "system_prompt": ""}) is None
     assert mgr._task_system_prompt({"task": "x", "tools": [], "system_prompt": "   "}) is None
+
+
+def test_task_skills_render_compact_catalog_from_dir_and_file(tmp_path):
+    """Task skills accept either a skill directory or a direct SKILL.md path."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    skill_dir = agent._working_dir / "local-skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(
+        "---\n"
+        "name: demo-skill\n"
+        "description: >\n"
+        "  Demo workflow for daemon skill injection.\n"
+        "version: 1.0.0\n"
+        "---\n"
+        "# Demo\n",
+        encoding="utf-8",
+    )
+
+    from_dir = mgr._task_skill_catalog({"task": "x", "tools": [], "skills": ["local-skills/demo"]})
+    from_file = mgr._task_skill_catalog({"task": "x", "tools": [], "skills": [str(skill_file)]})
+
+    for rendered in (from_dir, from_file):
+        assert rendered is not None
+        assert "skills:" in rendered
+        assert "- name: demo-skill" in rendered
+        assert f"location: {skill_file}" in rendered
+        assert "Demo workflow for daemon skill injection." in rendered
+
+
+def test_task_skills_reject_invalid_path(tmp_path):
+    """Task skills fail before scheduling when a path is not a skill."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    try:
+        mgr._task_skill_catalog({"task": "x", "tools": [], "skills": ["missing-skill"]})
+    except ValueError as e:
+        assert "skill path does not resolve to a file" in str(e)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("missing skill path should fail")
+
+
+def test_build_emanation_prompt_includes_selected_skills(tmp_path):
+    """Selected skills are rendered into the daemon prompt before the task."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    skill_dir = agent._working_dir / "local-skills" / "review"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: review-skill\n"
+        "description: Review daemon outputs carefully.\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    schemas, _ = mgr._build_tool_surface(["file"])
+    context = mgr._combine_oneshot_context(
+        "Stay read-only.",
+        mgr._task_skill_catalog({"task": "x", "tools": [], "skills": ["local-skills/review"]}),
+    )
+
+    prompt = mgr._build_emanation_prompt("Review the report", schemas, system_prompt=context)
+
+    assert "Stay read-only." in prompt
+    assert "## Parent-selected skills" in prompt
+    assert "- name: review-skill" in prompt
+    assert prompt.index("- name: review-skill") < prompt.index("Your task:")
 
 
 def test_build_emanation_prompt_includes_task(tmp_path):

@@ -19,6 +19,7 @@ import signal
 import subprocess
 import threading
 import time
+import yaml
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -41,6 +42,7 @@ PROVIDERS = {"providers": [], "default": "builtin"}
 # Agents may request a smaller per-batch value via daemon(max_turns=...), but
 # larger values are capped here.
 DEFAULT_MAX_TURNS = 1000
+_DAEMON_SKILL_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
 
 
 def _kill_process_group(proc: subprocess.Popen) -> None:
@@ -383,6 +385,11 @@ def get_schema(lang: str = "en") -> dict:
                     "properties": {
                         "task": {"type": "string"},
                         "tools": {"type": "array", "items": {"type": "string"}},
+                        "skills": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": t(lang, "daemon.tasks.skills"),
+                        },
                         "preset": {
                             "type": "string",
                             "description": t(lang, "daemon.tasks.preset"),
@@ -618,6 +625,92 @@ class DaemonManager:
         return schemas, handlers
 
     @staticmethod
+    def _resolve_task_skill_path(raw_path: str, working_dir: Path) -> Path:
+        """Resolve one daemon task skill path to a concrete SKILL.md file."""
+        p = Path(raw_path).expanduser()
+        if not p.is_absolute():
+            p = (working_dir / p).resolve(strict=False)
+        if p.is_dir():
+            p = p / "SKILL.md"
+        if not p.is_file():
+            raise ValueError(f"skill path does not resolve to a file: {raw_path}")
+        if p.name != "SKILL.md":
+            raise ValueError(f"skill file path must point to SKILL.md: {raw_path}")
+        return p
+
+    @staticmethod
+    def _parse_task_skill_file(skill_file: Path) -> dict:
+        """Parse a selected SKILL.md into the compact daemon skill catalog row."""
+        try:
+            text = skill_file.read_text(encoding="utf-8")
+        except OSError as e:
+            raise ValueError(f"cannot read skill file {skill_file}: {e}") from e
+        m = _DAEMON_SKILL_FRONTMATTER_RE.match(text)
+        if not m:
+            raise ValueError(f"skill file missing YAML frontmatter: {skill_file}")
+        try:
+            loaded = yaml.safe_load(m.group(1)) or {}
+        except yaml.YAMLError as e:
+            raise ValueError(f"skill file has invalid YAML frontmatter: {skill_file}: {e}") from e
+        if not isinstance(loaded, dict):
+            raise ValueError(f"skill file frontmatter must be a mapping: {skill_file}")
+        name = " ".join(str(loaded.get("name", "")).split())
+        description = " ".join(str(loaded.get("description", "")).split())
+        if not name:
+            raise ValueError(f"skill file missing required frontmatter field: name: {skill_file}")
+        if not description:
+            raise ValueError(f"skill file missing required frontmatter field: description: {skill_file}")
+        return {"name": name, "location": str(skill_file), "description": description}
+
+    @staticmethod
+    def _render_task_skill_catalog(skills: list[dict]) -> str | None:
+        if not skills:
+            return None
+        lines = [
+            "The parent selected these skills for this daemon run. Read/apply them only when relevant to your task:",
+            "skills:",
+        ]
+        for sk in skills:
+            lines.append(f"  - name: {sk['name']}")
+            lines.append(f"    location: {sk['location']}")
+            lines.append("    description: |")
+            desc_lines = sk["description"].splitlines() or [""]
+            for dl in desc_lines:
+                lines.append(f"      {dl}" if dl else "      ")
+        return "\n".join(lines)
+
+    def _task_skill_catalog(self, spec: dict) -> str | None:
+        """Return rendered YAML skill context selected for one daemon task."""
+        raw = spec.get("skills")
+        if raw is None:
+            return None
+        if not isinstance(raw, list):
+            raise ValueError("skills must be an array of skill directory or SKILL.md paths")
+        rows: list[dict] = []
+        seen: set[Path] = set()
+        for idx, item in enumerate(raw):
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(f"skills[{idx}] must be a non-empty string path")
+            skill_file = self._resolve_task_skill_path(item.strip(), self._agent._working_dir)
+            if skill_file in seen:
+                continue
+            seen.add(skill_file)
+            rows.append(self._parse_task_skill_file(skill_file))
+        return self._render_task_skill_catalog(rows)
+
+    @staticmethod
+    def _combine_oneshot_context(
+        system_prompt: str | None,
+        skill_catalog: str | None,
+    ) -> str | None:
+        parts = []
+        if system_prompt:
+            parts.append(system_prompt)
+        if skill_catalog:
+            parts.append("## Parent-selected skills\n" + skill_catalog)
+        return "\n\n".join(parts) or None
+
+    @staticmethod
     def _task_system_prompt(spec: dict) -> str | None:
         """Return the task-level oneshot daemon prompt.
 
@@ -640,8 +733,8 @@ class DaemonManager:
         if not system_prompt:
             return task
         return (
-            "Parent-provided daemon behavior contract (oneshot; bounded to "
-            "this daemon run and unable to override tool/safety limits):\n"
+            "Parent-provided daemon context (oneshot; bounded to this "
+            "daemon run and unable to override tool/safety limits):\n"
             f"{system_prompt}\n\n"
             "Task:\n"
             f"{task}"
@@ -866,12 +959,13 @@ class DaemonManager:
 
         if system_prompt:
             lines.append("")
-            lines.append("## Parent-provided daemon system prompt (oneshot)")
+            lines.append("## Parent-provided daemon context (oneshot)")
             lines.append(
-                "These parent instructions apply only to this daemon run. "
-                "They may narrow how you complete the task, but they do not "
-                "override the daemon lifecycle, cancellation/timeout limits, "
-                "available tool schema, or tool execution/approval guard."
+                "These parent instructions and selected skills apply only to "
+                "this daemon run. They may narrow how you complete the task, "
+                "but they do not override the daemon lifecycle, cancellation/"
+                "timeout limits, available tool schema, or tool execution/"
+                "approval guard."
             )
             lines.append(system_prompt)
 
@@ -1871,10 +1965,14 @@ class DaemonManager:
                     spec["tools"], preset_surface=preset_surface,
                 )
                 task_system_prompt = self._task_system_prompt(spec)
+                task_skill_catalog = self._task_skill_catalog(spec)
             except ValueError as e:
                 return {"status": "error", "message": str(e)}
+            task_context = self._combine_oneshot_context(
+                task_system_prompt, task_skill_catalog
+            )
             system_prompt = self._build_emanation_prompt(
-                spec["task"], schemas, system_prompt=task_system_prompt
+                spec["task"], schemas, system_prompt=task_context
             )
 
             # Effective model for this emanation (preset overrides if present)
@@ -1961,12 +2059,14 @@ class DaemonManager:
         # batch with a clear message instead of leaving half-spawned daemons.
         resolved_backend_argv: list[list[str]] = []
         task_system_prompts: list[str | None] = []
+        task_skill_catalogs: list[str | None] = []
         for i, spec in enumerate(tasks):
             try:
                 task_system_prompts.append(self._task_system_prompt(spec))
+                task_skill_catalogs.append(self._task_skill_catalog(spec))
             except ValueError as e:
                 return {"status": "error",
-                        "message": f"tasks[{i}].system_prompt: {e}"}
+                        "message": f"tasks[{i}]: {e}"}
             raw_opts = spec.get("backend_options")
             if raw_opts is None:
                 resolved_backend_argv.append([])
@@ -1997,13 +2097,17 @@ class DaemonManager:
             backend_options = spec.get("backend_options") or None
 
             task_system_prompt = task_system_prompts[i]
+            task_skill_catalog = task_skill_catalogs[i]
+            task_context = self._combine_oneshot_context(
+                task_system_prompt, task_skill_catalog
+            )
             system_prompt = f"[{backend} backend — task delegated to external CLI]"
-            if task_system_prompt:
+            if task_context:
                 system_prompt += (
-                    "\n\nParent-provided daemon system prompt (oneshot):\n"
-                    + task_system_prompt
+                    "\n\nParent-provided daemon context (oneshot):\n"
+                    + task_context
                 )
-            cli_task = self._compose_cli_task(spec["task"], task_system_prompt)
+            cli_task = self._compose_cli_task(spec["task"], task_context)
             try:
                 run_dir = DaemonRunDir(
                     parent_working_dir=self._agent._working_dir,

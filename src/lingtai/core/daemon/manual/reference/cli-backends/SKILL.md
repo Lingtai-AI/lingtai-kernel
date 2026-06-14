@@ -70,8 +70,11 @@ available:
 as the parent agent's one-run behavior contract: the daemon's role, constraints,
 tool-use policy, collaboration boundaries, safety posture, and interpretation
 rules. Keep `task` focused on the concrete objective and deliverable; put the
-explanation of *how to behave while doing it* in `system_prompt`. Omit it or
-leave it blank for the default daemon persona. For the built-in `lingtai` backend
+explanation of *how to behave while doing it* in `system_prompt`. When the
+daemon needs a workflow, pass `skills: [...]` as skill directories or direct
+`SKILL.md` paths; the daemon runtime renders them into a compact YAML skill list
+in the one-run prompt. Omit `system_prompt` or leave it blank for the default
+daemon persona. For the built-in `lingtai` backend
 it is appended to the daemon's system prompt as a bounded oneshot parent
 instruction; it cannot override lifecycle limits, tool schemas, or the
 ToolExecutor/ToolCallGuard execution gate. For CLI backends, the same text is

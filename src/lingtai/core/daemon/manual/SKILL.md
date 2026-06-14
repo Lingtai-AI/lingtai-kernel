@@ -87,21 +87,28 @@ files, not standalone top-level skills.
     the parent's one-run role, constraints, safety posture, interpretation
     rules, collaboration boundaries, and tool-use policy. Omit it or leave it
     blank for the default daemon persona. It can guide or narrow behavior, but
-    cannot override lifecycle limits, available tool schema, or the
-    ToolExecutor/ToolCallGuard execution gates.
+    cannot override lifecycle limits, available tool schema, selected skills,
+    or the ToolExecutor/ToolCallGuard execution gates.
   - `tools` answers **what the daemon can technically use** for this run. The
     parent still uses `system_prompt` to say when and how those tools should be
     used (for example: read-only file access, no network, write only to one
     report path, or ask a named peer before guessing). `email` is
     daemon-eligible communication and is available by default; other tool names
     still matter for file/bash/web/etc. access.
+  - `skills` answers **which workflows the daemon should know about**. It is an
+    optional list of strings. Each string may be either a skill directory
+    containing `SKILL.md` or a direct `SKILL.md` path; relative paths resolve
+    against the parent agent working directory. The runtime parses each skill's
+    frontmatter and injects a compact YAML skill list into the daemon prompt.
+    Use `system_prompt` to say when/how those selected skills should be applied.
   - `preset`: optional body/model/tool-shape override for this daemon.
   - `backend_options`: raw CLI flags for CLI backends only.
-- Treat `system_prompt` as the parent's behavioral contract for **all** tools,
-  not only for communication. If a daemon receives `bash`, say whether it may
-  run mutating commands; if it receives file access, say what it may read/write;
-  if it receives web/MCP tools, say what external calls are allowed; if it can
-  communicate, say who it may contact and what context it may share.
+- Treat `system_prompt` as the parent's behavioral contract for **all** tools
+  and selected skills, not only for communication. If a daemon receives `bash`,
+  say whether it may run mutating commands; if it receives file access, say what
+  it may read/write; if it receives web/MCP tools, say what external calls are
+  allowed; if it can communicate, say who it may contact and what context it may
+  share; if `skills` are selected, say when to read/apply them.
 - `email` is available by default because a daemon is still part of the local
   agent network: it may need to report to peers, ask a sibling for context, or
   hand off a result. Availability is not authorization to broadcast. The parent
@@ -143,13 +150,18 @@ contract:
 ```json
 {
   "task": "Audit the daemon manual changes and write a concise review to reports/daemon-manual-review.md.",
-  "system_prompt": "Act as a documentation reviewer. Stay read-only except for the requested report file. You may use email only to ask dev-2 for missing daemon context; do not contact the human. If you email dev-2, state the exact question, include only the relevant snippet, and summarize the exchange in your final report. Do not use web tools unless the local docs are insufficient.",
-  "tools": ["file", "bash"]
+  "system_prompt": "Act as a documentation reviewer. Stay read-only except for the requested report file. Use the selected daemon-manual skills only when you need exact daemon semantics. You may use email only to ask dev-2 for missing daemon context; do not contact the human. If you email dev-2, state the exact question, include only the relevant snippet, and summarize the exchange in your final report. Do not use web tools unless the local docs are insufficient.",
+  "tools": ["file", "bash"],
+  "skills": [
+    "src/lingtai/core/daemon/manual",
+    "src/lingtai/core/daemon/manual/reference/cli-backends/SKILL.md"
+  ]
 }
 ```
 
 The same pattern applies to non-email tools: `tools` grants a capability surface;
-`system_prompt` tells the daemon how to exercise that surface in this one run.
+`skills` grants a selected workflow catalog; `system_prompt` tells the daemon how
+to exercise both in this one run.
 
 ## Maintenance
 
