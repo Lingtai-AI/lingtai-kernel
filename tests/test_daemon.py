@@ -65,6 +65,163 @@ def _write_daemon_json(tmp_path, run_id, **overrides):
     return daemon_json
 
 
+
+def test_daemon_cli_local_sigterm_reason_marks_timeout_and_records_event(tmp_path):
+    """A LingTai-recorded SIGTERM reason classifies the later 143/-15 exit."""
+    from types import SimpleNamespace
+
+    from lingtai.core import daemon as daemon_mod
+
+    logs = []
+    agent = SimpleNamespace(
+        service=SimpleNamespace(model="mock-model"),
+        _working_dir=tmp_path / "daemon-agent",
+        _log=lambda event, **fields: logs.append((event, fields)),
+    )
+    mgr = daemon_mod.DaemonManager(agent)
+    run_dir = _make_run_dir(agent)
+    proc = SimpleNamespace(pid=4242, returncode=-15)
+
+    mgr._track_cli_proc(proc, em_id="em-test", run_dir=run_dir)
+    mgr._mark_cli_proc_terminating(proc, reason="timeout")
+
+    assert mgr._local_cli_signal_result(proc, run_dir) == "[cancelled]"
+
+    state = json.loads(run_dir.daemon_json_path.read_text(encoding="utf-8"))
+    assert state["state"] == "timeout"
+    events = [json.loads(line) for line in run_dir.events_path.read_text(encoding="utf-8").splitlines()]
+    terminate = [e for e in events if e.get("event") == "daemon_cli_terminate"]
+    assert terminate[-1]["em_id"] == "em-test"
+    assert terminate[-1]["pid"] == 4242
+    assert terminate[-1]["signal"] == "SIGTERM"
+    assert terminate[-1]["reason"] == "timeout"
+    assert any(
+        event == "daemon_cli_terminate"
+        and fields["em_id"] == "em-test"
+        and fields["reason"] == "timeout"
+        for event, fields in logs
+    )
+
+
+def test_daemon_cli_unattributed_143_remains_external_unknown_failure(tmp_path):
+    """A 143/-15 exit without a local reason stays a failure, but is labelled."""
+    from types import SimpleNamespace
+
+    from lingtai.core import daemon as daemon_mod
+
+    agent = SimpleNamespace(
+        service=SimpleNamespace(model="mock-model"),
+        _working_dir=tmp_path / "daemon-agent",
+        _log=lambda *args, **kwargs: None,
+    )
+    mgr = daemon_mod.DaemonManager(agent)
+    proc = SimpleNamespace(pid=4243, returncode=143)
+
+    detail = mgr._cli_signal_failure_detail(proc, "codex", "stderr tail")
+
+    assert detail == (
+        "codex CLI terminated by external/unknown SIGTERM "
+        "(code 143): stderr tail"
+    )
+
+
+def test_daemon_lifecycle_shutdown_records_reason_before_kill(tmp_path, monkeypatch):
+    """Bulk shutdown records the local termination reason before SIGTERM."""
+    from types import SimpleNamespace
+
+    from lingtai.core import daemon as daemon_mod
+
+    logs = []
+    agent = SimpleNamespace(
+        service=SimpleNamespace(model="mock-model"),
+        _working_dir=tmp_path / "daemon-agent",
+        _log=lambda event, **fields: logs.append((event, fields)),
+    )
+    mgr = daemon_mod.DaemonManager(agent)
+    run_dir = _make_run_dir(agent)
+    proc = SimpleNamespace(pid=5252)
+    mgr._track_cli_proc(proc, em_id="em-test", run_dir=run_dir)
+
+    killed = []
+    monkeypatch.setattr(
+        daemon_mod,
+        "_kill_process_group",
+        lambda proc: killed.append(proc.pid),
+    )
+
+    report = mgr.shutdown_for_agent_stop(reason="agent_stop", wait_timeout=0.0)
+
+    assert report["cli_processes_killed"] == 1
+    assert killed == [5252]
+    events = [json.loads(line) for line in run_dir.events_path.read_text(encoding="utf-8").splitlines()]
+    terminate = [e for e in events if e.get("event") == "daemon_cli_terminate"]
+    assert terminate[-1]["reason"] == "agent_stop"
+    assert terminate[-1]["signal"] == "SIGTERM"
+    assert any(
+        event == "daemon_cli_terminate" and fields["reason"] == "agent_stop"
+        for event, fields in logs
+    )
+
+
+def test_daemon_ask_worker_exception_kills_and_clears_cli_metadata(tmp_path, monkeypatch):
+    """Unexpected async ask worker errors clean up the tracked CLI process."""
+    import io
+    from types import SimpleNamespace
+
+    from lingtai.core import daemon as daemon_mod
+
+    logs = []
+    agent = SimpleNamespace(
+        service=SimpleNamespace(model="mock-model"),
+        _working_dir=tmp_path / "daemon-agent",
+        _log=lambda event, **fields: logs.append((event, fields)),
+    )
+    mgr = daemon_mod.DaemonManager(agent)
+    run_dir = _make_run_dir(agent)
+
+    class FakeProc:
+        pid = 6262
+        returncode = None
+        stdout = io.StringIO('"json scalar, not an object"\n')
+        stderr = io.StringIO("")
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    proc = FakeProc()
+    entry = {"followup_lock": threading.Lock(), "ask_in_flight": True}
+    mgr._track_cli_proc(proc, em_id="em-test", run_dir=run_dir)
+
+    killed = []
+    monkeypatch.setattr(
+        daemon_mod,
+        "_kill_process_group",
+        lambda proc: killed.append(proc.pid),
+    )
+
+    try:
+        mgr._run_ask_claude_code_stream("em-test", entry, proc, run_dir)
+    except AttributeError as exc:
+        assert "get" in str(exc)
+    else:
+        raise AssertionError("malformed JSON scalar should escape as worker error")
+
+    assert killed == [6262]
+    assert proc not in mgr._cli_procs
+    assert id(proc) not in mgr._cli_proc_info
+    assert entry["ask_in_flight"] is False
+
+    events = [json.loads(line) for line in run_dir.events_path.read_text(encoding="utf-8").splitlines()]
+    terminate = [e for e in events if e.get("event") == "daemon_cli_terminate"]
+    assert terminate[-1]["reason"] == "exception_cleanup"
+    assert terminate[-1]["signal"] == "SIGTERM"
+    assert any(
+        event == "daemon_cli_terminate"
+        and fields["reason"] == "exception_cleanup"
+        and fields["em_id"] == "em-test"
+        for event, fields in logs
+    )
+
 def test_daemon_registers_tool(tmp_path):
     agent = _make_agent(tmp_path, ["daemon"])
     tool_names = {s.name for s in agent._tool_schemas}

@@ -314,6 +314,34 @@ class DaemonRunDir:
     _CLI_OUTPUT_EVENT_MAX = 4000
     _LAST_OUTPUT_MAX = 1000
 
+    def record_cli_terminate(
+        self,
+        *,
+        reason: str,
+        pid: int | None,
+        signal_name: str = "SIGTERM",
+    ) -> None:
+        """Record that LingTai is about to terminate a CLI process group."""
+
+        def _write():
+            ts = self._now_iso()
+            self._state["elapsed_s"] = self._now_secs()
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._append_jsonl(
+                self.events_path,
+                {
+                    "event": "daemon_cli_terminate",
+                    "em_id": self._handle,
+                    "pid": pid,
+                    "signal": signal_name,
+                    "reason": reason,
+                    "elapsed_s": self._state["elapsed_s"],
+                    "ts": ts,
+                },
+            )
+            self.heartbeat_path.touch()
+        self._safe("record_cli_terminate", _write)
+
     def record_cli_output(self, text: str, *, stream: str = "stdout") -> None:
         """Record one stdout/stderr progress line from an external CLI backend.
 

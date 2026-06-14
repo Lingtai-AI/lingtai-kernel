@@ -484,6 +484,7 @@ class DaemonManager:
         # CLI process tracking for direct process-group kill on reclaim/timeout.
         # Guarded by _cli_lock — accessed from pool workers, watchdog, and reclaim.
         self._cli_procs: list[subprocess.Popen] = []
+        self._cli_proc_info: dict[int, dict] = {}
         self._cli_lock = threading.Lock()
         # Dedicated pool for CLI-backend `ask` follow-ups so they run off the
         # caller's tool-dispatch thread. The agent's `daemon(action="ask")` call
@@ -555,6 +556,153 @@ class DaemonManager:
                 os.replace(tmp_path, daemon_json_path)
             except OSError:
                 continue
+
+    def _track_cli_proc(
+        self,
+        proc: subprocess.Popen,
+        *,
+        em_id: str,
+        run_dir: DaemonRunDir | None,
+    ) -> None:
+        with self._cli_lock:
+            if proc not in self._cli_procs:
+                self._cli_procs.append(proc)
+            self._cli_proc_info[id(proc)] = {
+                "em_id": em_id,
+                "run_dir": run_dir,
+                "termination_reason": None,
+            }
+
+    def _untrack_cli_proc(self, proc: subprocess.Popen) -> None:
+        with self._cli_lock:
+            try:
+                self._cli_procs.remove(proc)
+            except ValueError:
+                pass  # already removed by reclaim/watchdog/shutdown
+            # Keep _cli_proc_info until returncode classification has run;
+            # _track_cli_proc overwrites by id for future subprocesses.
+
+    def _mark_cli_proc_terminating(
+        self,
+        proc: subprocess.Popen,
+        *,
+        reason: str,
+    ) -> None:
+        with self._cli_lock:
+            info = self._cli_proc_info.setdefault(
+                id(proc),
+                {"em_id": None, "run_dir": None, "termination_reason": None},
+            )
+            # Preserve the first causal reason; later cleanup kills should not
+            # overwrite timeout/reclaim/agent_stop attribution.
+            if info.get("termination_reason") is None:
+                info["termination_reason"] = reason
+            reason_to_record = info.get("termination_reason") or reason
+            em_id = info.get("em_id")
+            run_dir = info.get("run_dir")
+        pid = getattr(proc, "pid", None)
+        self._log(
+            "daemon_cli_terminate",
+            em_id=em_id,
+            pid=pid,
+            signal="SIGTERM",
+            reason=reason_to_record,
+        )
+        if run_dir is not None:
+            try:
+                run_dir.record_cli_terminate(
+                    reason=reason_to_record,
+                    pid=pid,
+                    signal_name="SIGTERM",
+                )
+            except Exception:
+                pass
+
+    def _kill_cli_proc(self, proc: subprocess.Popen, *, reason: str) -> None:
+        self._mark_cli_proc_terminating(proc, reason=reason)
+        _kill_process_group(proc)
+
+    def _snapshot_cli_procs_for_termination(self, *, reason: str) -> list[subprocess.Popen]:
+        with self._cli_lock:
+            procs = list(self._cli_procs)
+            self._cli_procs.clear()
+            for proc in procs:
+                info = self._cli_proc_info.setdefault(
+                    id(proc),
+                    {"em_id": None, "run_dir": None, "termination_reason": None},
+                )
+                if info.get("termination_reason") is None:
+                    info["termination_reason"] = reason
+        for proc in procs:
+            self._mark_cli_proc_terminating(proc, reason=reason)
+        return procs
+
+    def _cli_termination_reason(self, proc: subprocess.Popen) -> str | None:
+        with self._cli_lock:
+            info = self._cli_proc_info.get(id(proc)) or {}
+            reason = info.get("termination_reason")
+        return reason if isinstance(reason, str) and reason else None
+
+    def _clear_cli_proc_info(self, proc: subprocess.Popen) -> None:
+        with self._cli_lock:
+            self._cli_proc_info.pop(id(proc), None)
+
+    @staticmethod
+    def _cli_signal_name(returncode: int | None) -> str | None:
+        if returncode in (-15, 143):
+            return "SIGTERM"
+        if returncode in (-9, 137):
+            return "SIGKILL"
+        return None
+
+    def _local_cli_signal_result(
+        self,
+        proc: subprocess.Popen,
+        run_dir: DaemonRunDir,
+        *,
+        timeout_event: threading.Event | None = None,
+    ) -> str | None:
+        signal_name = self._cli_signal_name(getattr(proc, "returncode", None))
+        if signal_name is None:
+            self._clear_cli_proc_info(proc)
+            return None
+        reason = self._cli_termination_reason(proc)
+        if reason is None:
+            return None
+        try:
+            if reason == "timeout" or (timeout_event is not None and timeout_event.is_set()):
+                run_dir.mark_timeout()
+            else:
+                run_dir.mark_cancelled()
+            return "[cancelled]"
+        finally:
+            self._clear_cli_proc_info(proc)
+
+    def _cli_signal_failure_detail(
+        self,
+        proc: subprocess.Popen,
+        backend_name: str,
+        detail: str,
+    ) -> str | None:
+        signal_name = self._cli_signal_name(getattr(proc, "returncode", None))
+        if signal_name is None:
+            self._clear_cli_proc_info(proc)
+            return None
+        reason = self._cli_termination_reason(proc)
+        try:
+            if reason:
+                prefix = (
+                    f"{backend_name} CLI terminated by LingTai {signal_name} "
+                    f"(reason: {reason}, code {proc.returncode})"
+                )
+            else:
+                prefix = (
+                    f"{backend_name} CLI terminated by external/unknown {signal_name} "
+                    f"(code {proc.returncode})"
+                )
+            return f"{prefix}: {detail}" if detail else prefix
+        finally:
+            self._clear_cli_proc_info(proc)
 
     def handle(self, args: dict) -> dict:
         action = args.get("action")
@@ -1029,8 +1177,7 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start claude CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        self._track_cli_proc(proc, em_id=em_id, run_dir=run_dir)
 
         # Drain stderr in a background thread so diagnostic messages reach
         # the run dir even while the main thread is parsing stdout events.
@@ -1123,8 +1270,17 @@ class DaemonManager:
             assert proc.stdout is not None
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
-                    _kill_process_group(proc)
-                    return _exit_cancelled()
+                    self._kill_cli_proc(
+                        proc,
+                        reason=(
+                            "timeout"
+                            if timeout_event is not None and timeout_event.is_set()
+                            else "cancelled"
+                        ),
+                    )
+                    result = _exit_cancelled()
+                    self._clear_cli_proc_info(proc)
+                    return result
 
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -1168,27 +1324,34 @@ class DaemonManager:
 
             proc.wait()
         except Exception as e:
-            _kill_process_group(proc)
+            self._kill_cli_proc(proc, reason="exception_cleanup")
             run_dir.mark_failed(e)
+            self._clear_cli_proc_info(proc)
             raise
         finally:
             # Give the stderr drainer a moment to finish reading any
             # remaining bytes before the pipe closes on us.
             stderr_thread.join(timeout=2.0)
             # Remove from tracked procs to prevent PID recycling issues
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass  # already removed by reclaim/watchdog
+            self._untrack_cli_proc(proc)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
+        local_signal_result = self._local_cli_signal_result(
+            proc, run_dir, timeout_event=timeout_event,
+        )
+        if local_signal_result is not None:
+            return local_signal_result
+
         if proc.returncode != 0:
             detail = stderr_tail or (final_result_text or "")
+            signal_detail = self._cli_signal_failure_detail(proc, "claude", detail[-500:])
             exc = RuntimeError(
-                f"claude CLI exited with code {proc.returncode}: "
-                f"{detail[-500:]}"
+                signal_detail
+                or (
+                    f"claude CLI exited with code {proc.returncode}: "
+                    f"{detail[-500:]}"
+                )
             )
             run_dir.mark_failed(exc)
             raise exc
@@ -1340,8 +1503,7 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start codex CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        self._track_cli_proc(proc, em_id=em_id, run_dir=run_dir)
 
         stderr_lines: list[str] = []
 
@@ -1379,8 +1541,17 @@ class DaemonManager:
             assert proc.stdout is not None
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
-                    _kill_process_group(proc)
-                    return _exit_cancelled()
+                    self._kill_cli_proc(
+                        proc,
+                        reason=(
+                            "timeout"
+                            if timeout_event is not None and timeout_event.is_set()
+                            else "cancelled"
+                        ),
+                    )
+                    result = _exit_cancelled()
+                    self._clear_cli_proc_info(proc)
+                    return result
 
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -1420,25 +1591,32 @@ class DaemonManager:
 
             proc.wait()
         except Exception as e:
-            _kill_process_group(proc)
+            self._kill_cli_proc(proc, reason="exception_cleanup")
             run_dir.mark_failed(e)
+            self._clear_cli_proc_info(proc)
             raise
         finally:
             stderr_thread.join(timeout=2.0)
             # Remove from tracked procs to prevent PID recycling issues
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass  # already removed by reclaim/watchdog
+            self._untrack_cli_proc(proc)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
+        local_signal_result = self._local_cli_signal_result(
+            proc, run_dir, timeout_event=timeout_event,
+        )
+        if local_signal_result is not None:
+            return local_signal_result
+
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(agent_message_texts[-3:])
+            signal_detail = self._cli_signal_failure_detail(proc, "codex", detail[-500:])
             exc = RuntimeError(
-                f"codex CLI exited with code {proc.returncode}: "
-                f"{detail[-500:]}"
+                signal_detail
+                or (
+                    f"codex CLI exited with code {proc.returncode}: "
+                    f"{detail[-500:]}"
+                )
             )
             run_dir.mark_failed(exc)
             raise exc
@@ -2198,8 +2376,7 @@ class DaemonManager:
                 entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": f"Failed to start claude CLI: {e}"}
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        self._track_cli_proc(proc, em_id=em_id, run_dir=run_dir)
 
         # Surface that an ask just started so `daemon(check)` shows it
         # immediately, even before any stream-json event arrives.
@@ -2300,7 +2477,7 @@ class DaemonManager:
 
             if time.monotonic() >= deadline:
                 timed_out = True
-                _kill_process_group(proc)
+                self._kill_cli_proc(proc, reason="timeout")
             else:
                 # Reader hit EOF before the deadline. The CLI usually exits
                 # within milliseconds of closing stdout, but bound the wait
@@ -2309,14 +2486,16 @@ class DaemonManager:
                     proc.wait(timeout=max(1.0, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
                     timed_out = True
-                    _kill_process_group(proc)
+                    self._kill_cli_proc(proc, reason="timeout")
+        except Exception:
+            try:
+                self._kill_cli_proc(proc, reason="exception_cleanup")
+            finally:
+                self._clear_cli_proc_info(proc)
+            raise
         finally:
             stderr_thread.join(timeout=2.0)
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass  # already removed by reclaim/watchdog
+            self._untrack_cli_proc(proc)
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
 
@@ -2327,11 +2506,22 @@ class DaemonManager:
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
+            self._clear_cli_proc_info(proc)
             return {"status": "error", "id": em_id, "message": err}
+
+        local_signal_result = self._local_cli_signal_result(proc, run_dir)
+        if local_signal_result is not None:
+            if em_id not in self._emanations:
+                self._publish_followup_if_live(
+                    em_id, status="follow-up cancelled", text=local_signal_result, run_dir=run_dir,
+                )
+            return {"status": "cancelled", "id": em_id, "message": local_signal_result}
 
         if proc.returncode != 0:
             detail = stderr_tail or (final_result_text or "")
-            err = f"claude CLI exited {proc.returncode}: {detail[-500:]}"
+            err = self._cli_signal_failure_detail(proc, "claude", detail[-500:])
+            if err is None:
+                err = f"claude CLI exited {proc.returncode}: {detail[-500:]}"
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
@@ -2410,8 +2600,7 @@ class DaemonManager:
                 entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": f"Failed to start codex CLI: {e}"}
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        self._track_cli_proc(proc, em_id=em_id, run_dir=run_dir)
 
         # See _handle_ask_cli for the rationale on the narrowed except.
         try:
@@ -2502,20 +2691,22 @@ class DaemonManager:
 
             if time.monotonic() >= deadline:
                 timed_out = True
-                _kill_process_group(proc)
+                self._kill_cli_proc(proc, reason="timeout")
             else:
                 try:
                     proc.wait(timeout=max(1.0, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
                     timed_out = True
-                    _kill_process_group(proc)
+                    self._kill_cli_proc(proc, reason="timeout")
+        except Exception:
+            try:
+                self._kill_cli_proc(proc, reason="exception_cleanup")
+            finally:
+                self._clear_cli_proc_info(proc)
+            raise
         finally:
             stderr_thread.join(timeout=2.0)
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass  # already removed by reclaim/watchdog
+            self._untrack_cli_proc(proc)
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
 
@@ -2526,11 +2717,22 @@ class DaemonManager:
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
+            self._clear_cli_proc_info(proc)
             return {"status": "error", "id": em_id, "message": err}
+
+        local_signal_result = self._local_cli_signal_result(proc, run_dir)
+        if local_signal_result is not None:
+            if em_id not in self._emanations:
+                self._publish_followup_if_live(
+                    em_id, status="follow-up cancelled", text=local_signal_result, run_dir=run_dir,
+                )
+            return {"status": "cancelled", "id": em_id, "message": local_signal_result}
 
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(agent_message_texts[-3:])
-            err = f"codex CLI exited {proc.returncode}: {detail[-500:]}"
+            err = self._cli_signal_failure_detail(proc, "codex", detail[-500:])
+            if err is None:
+                err = f"codex CLI exited {proc.returncode}: {detail[-500:]}"
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
@@ -2731,8 +2933,7 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start {backend_name} CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        self._track_cli_proc(proc, em_id=em_id, run_dir=run_dir)
 
         stderr_lines: list[str] = []
 
@@ -2778,8 +2979,17 @@ class DaemonManager:
             assert proc.stdout is not None
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
-                    _kill_process_group(proc)
-                    return _exit_cancelled()
+                    self._kill_cli_proc(
+                        proc,
+                        reason=(
+                            "timeout"
+                            if timeout_event is not None and timeout_event.is_set()
+                            else "cancelled"
+                        ),
+                    )
+                    result = _exit_cancelled()
+                    self._clear_cli_proc_info(proc)
+                    return result
 
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -2822,24 +3032,31 @@ class DaemonManager:
 
             proc.wait()
         except Exception as e:
-            _kill_process_group(proc)
+            self._kill_cli_proc(proc, reason="exception_cleanup")
             run_dir.mark_failed(e)
+            self._clear_cli_proc_info(proc)
             raise
         finally:
             stderr_thread.join(timeout=2.0)
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass  # already removed by reclaim/watchdog
+            self._untrack_cli_proc(proc)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
+        local_signal_result = self._local_cli_signal_result(
+            proc, run_dir, timeout_event=timeout_event,
+        )
+        if local_signal_result is not None:
+            return local_signal_result
+
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
+            signal_detail = self._cli_signal_failure_detail(proc, backend_name, detail[-500:])
             exc = RuntimeError(
-                f"{backend_name} CLI exited with code {proc.returncode}: "
-                f"{detail[-500:]}"
+                signal_detail
+                or (
+                    f"{backend_name} CLI exited with code {proc.returncode}: "
+                    f"{detail[-500:]}"
+                )
             )
             run_dir.mark_failed(exc)
             raise exc
@@ -2970,8 +3187,7 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start qwen-code CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        self._track_cli_proc(proc, em_id=em_id, run_dir=run_dir)
 
         stdout_lines: list[str] = []
         stderr_lines: list[str] = []
@@ -2998,8 +3214,17 @@ class DaemonManager:
             assert proc.stdout is not None
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
-                    _kill_process_group(proc)
-                    return _exit_cancelled()
+                    self._kill_cli_proc(
+                        proc,
+                        reason=(
+                            "timeout"
+                            if timeout_event is not None and timeout_event.is_set()
+                            else "cancelled"
+                        ),
+                    )
+                    result = _exit_cancelled()
+                    self._clear_cli_proc_info(proc)
+                    return result
                 line = raw_line.rstrip("\n")
                 if not line:
                     continue
@@ -3010,25 +3235,32 @@ class DaemonManager:
                     pass
             proc.wait()
         except Exception as e:
-            _kill_process_group(proc)
+            self._kill_cli_proc(proc, reason="exception_cleanup")
             run_dir.mark_failed(e)
+            self._clear_cli_proc_info(proc)
             raise
         finally:
             stderr_thread.join(timeout=2.0)
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass
+            self._untrack_cli_proc(proc)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
         output = "\n".join(stdout_lines).strip()
 
+        local_signal_result = self._local_cli_signal_result(
+            proc, run_dir, timeout_event=timeout_event,
+        )
+        if local_signal_result is not None:
+            return local_signal_result
+
         if proc.returncode != 0:
             detail = stderr_tail or output
+            signal_detail = self._cli_signal_failure_detail(proc, "qwen-code", detail[-500:])
             exc = RuntimeError(
-                f"qwen-code CLI exited with code {proc.returncode}: "
-                f"{detail[-500:]}"
+                signal_detail
+                or (
+                    f"qwen-code CLI exited with code {proc.returncode}: "
+                    f"{detail[-500:]}"
+                )
             )
             run_dir.mark_failed(exc)
             raise exc
@@ -3108,8 +3340,7 @@ class DaemonManager:
                 entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": f"Failed to start {backend_name} CLI: {e}"}
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        self._track_cli_proc(proc, em_id=em_id, run_dir=run_dir)
 
         try:
             run_dir.record_cli_output(
@@ -3239,20 +3470,22 @@ class DaemonManager:
 
             if time.monotonic() >= deadline:
                 timed_out = True
-                _kill_process_group(proc)
+                self._kill_cli_proc(proc, reason="timeout")
             else:
                 try:
                     proc.wait(timeout=max(1.0, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
                     timed_out = True
-                    _kill_process_group(proc)
+                    self._kill_cli_proc(proc, reason="timeout")
+        except Exception:
+            try:
+                self._kill_cli_proc(proc, reason="exception_cleanup")
+            finally:
+                self._clear_cli_proc_info(proc)
+            raise
         finally:
             stderr_thread.join(timeout=2.0)
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass  # already removed by reclaim/watchdog
+            self._untrack_cli_proc(proc)
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
 
@@ -3263,11 +3496,22 @@ class DaemonManager:
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
+            self._clear_cli_proc_info(proc)
             return {"status": "error", "id": em_id, "message": err}
+
+        local_signal_result = self._local_cli_signal_result(proc, run_dir)
+        if local_signal_result is not None:
+            if em_id not in self._emanations:
+                self._publish_followup_if_live(
+                    em_id, status="follow-up cancelled", text=local_signal_result, run_dir=run_dir,
+                )
+            return {"status": "cancelled", "id": em_id, "message": local_signal_result}
 
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
-            err = f"{backend_name} CLI exited {proc.returncode}: {detail[-500:]}"
+            err = self._cli_signal_failure_detail(proc, backend_name, detail[-500:])
+            if err is None:
+                err = f"{backend_name} CLI exited {proc.returncode}: {detail[-500:]}"
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
@@ -3363,8 +3607,7 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start Cursor CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        self._track_cli_proc(proc, em_id=em_id, run_dir=run_dir)
 
         stderr_lines: list[str] = []
 
@@ -3405,8 +3648,17 @@ class DaemonManager:
             assert proc.stdout is not None
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
-                    _kill_process_group(proc)
-                    return _exit_cancelled()
+                    self._kill_cli_proc(
+                        proc,
+                        reason=(
+                            "timeout"
+                            if timeout_event is not None and timeout_event.is_set()
+                            else "cancelled"
+                        ),
+                    )
+                    result = _exit_cancelled()
+                    self._clear_cli_proc_info(proc)
+                    return result
 
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -3446,24 +3698,31 @@ class DaemonManager:
 
             proc.wait()
         except Exception as e:
-            _kill_process_group(proc)
+            self._kill_cli_proc(proc, reason="exception_cleanup")
             run_dir.mark_failed(e)
+            self._clear_cli_proc_info(proc)
             raise
         finally:
             stderr_thread.join(timeout=2.0)
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass
+            self._untrack_cli_proc(proc)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
+        local_signal_result = self._local_cli_signal_result(
+            proc, run_dir, timeout_event=timeout_event,
+        )
+        if local_signal_result is not None:
+            return local_signal_result
+
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
+            signal_detail = self._cli_signal_failure_detail(proc, "Cursor", detail[-500:])
             exc = RuntimeError(
-                f"Cursor CLI exited with code {proc.returncode}: "
-                f"{detail[-500:]}"
+                signal_detail
+                or (
+                    f"Cursor CLI exited with code {proc.returncode}: "
+                    f"{detail[-500:]}"
+                )
             )
             run_dir.mark_failed(exc)
             raise exc
@@ -3541,8 +3800,7 @@ class DaemonManager:
                 entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": f"Failed to start Cursor CLI: {e}"}
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        self._track_cli_proc(proc, em_id=em_id, run_dir=run_dir)
 
         try:
             run_dir.record_cli_output(
@@ -3636,20 +3894,22 @@ class DaemonManager:
 
             if time.monotonic() >= deadline:
                 timed_out = True
-                _kill_process_group(proc)
+                self._kill_cli_proc(proc, reason="timeout")
             else:
                 try:
                     proc.wait(timeout=max(1.0, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
                     timed_out = True
-                    _kill_process_group(proc)
+                    self._kill_cli_proc(proc, reason="timeout")
+        except Exception:
+            try:
+                self._kill_cli_proc(proc, reason="exception_cleanup")
+            finally:
+                self._clear_cli_proc_info(proc)
+            raise
         finally:
             stderr_thread.join(timeout=2.0)
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass
+            self._untrack_cli_proc(proc)
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
 
@@ -3660,11 +3920,22 @@ class DaemonManager:
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
+            self._clear_cli_proc_info(proc)
             return {"status": "error", "id": em_id, "message": err}
+
+        local_signal_result = self._local_cli_signal_result(proc, run_dir)
+        if local_signal_result is not None:
+            if em_id not in self._emanations:
+                self._publish_followup_if_live(
+                    em_id, status="follow-up cancelled", text=local_signal_result, run_dir=run_dir,
+                )
+            return {"status": "cancelled", "id": em_id, "message": local_signal_result}
 
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
-            err = f"Cursor CLI exited {proc.returncode}: {detail[-500:]}"
+            err = self._cli_signal_failure_detail(proc, "Cursor", detail[-500:])
+            if err is None:
+                err = f"Cursor CLI exited {proc.returncode}: {detail[-500:]}"
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
@@ -3820,9 +4091,7 @@ class DaemonManager:
         # Kill all tracked CLI process groups first — this terminates child
         # shells/tools that cancel_event alone cannot reach (GH #122).
         # Snapshot under lock, kill outside to avoid holding lock during wait.
-        with self._cli_lock:
-            procs_to_kill = list(self._cli_procs)
-            self._cli_procs.clear()
+        procs_to_kill = self._snapshot_cli_procs_for_termination(reason=reason)
         for proc in procs_to_kill:
             try:
                 _kill_process_group(proc)
@@ -3941,9 +4210,7 @@ class DaemonManager:
         # reading stdout from a long child command and cannot check
         # cancel_event until that command finishes.
         # Snapshot under lock, kill outside to avoid holding lock during wait.
-        with self._cli_lock:
-            procs_to_kill = list(self._cli_procs)
-            self._cli_procs.clear()
+        procs_to_kill = self._snapshot_cli_procs_for_termination(reason="timeout")
         for proc in procs_to_kill:
             _kill_process_group(proc)
 
