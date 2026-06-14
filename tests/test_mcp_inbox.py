@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -59,6 +60,18 @@ def _write_event(workdir: Path, mcp_name: str, event_id: str, event: dict) -> Pa
     tmp.write_text(json.dumps(event), encoding="utf-8")
     tmp.rename(final)
     return final
+
+
+def _capture_logs(agent):
+    events: list[tuple[str, dict]] = []
+    agent._log = lambda event, **fields: events.append((event, fields))
+    return events
+
+
+def _only_mcp_event(logs: list[tuple[str, dict]]) -> dict:
+    matches = [fields for event, fields in logs if event == "mcp_inbox_event"]
+    assert len(matches) == 1
+    return matches[0]
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +159,61 @@ def test_scan_dispatches_valid_event_to_notification(tmp_path):
 
     # File was deleted on success.
     assert not (inbox_root / "telegram" / "ev1.json").exists()
+
+
+def test_scan_logs_drain_latency_and_producer_lag(tmp_path):
+    agent, workdir = _mk_agent(tmp_path)
+    logs = _capture_logs(agent)
+    received_at = (
+        datetime.now(timezone.utc) - timedelta(seconds=2)
+    ).isoformat().replace("+00:00", "Z")
+    _write_event(workdir, "telegram", "ev1", {
+        "from": "alice",
+        "subject": "hi",
+        "body": "hello",
+        "received_at": received_at,
+    })
+
+    assert _scan_once(agent, workdir / INBOX_DIRNAME) == 1
+
+    fields = _only_mcp_event(logs)
+    assert "drain_latency_s" in fields
+    assert fields["drain_latency_s"] >= 0
+    assert "producer_lag_s" in fields
+    assert fields["producer_lag_s"] >= 0
+
+
+def test_scan_legacy_event_logs_drain_latency_without_producer_lag(tmp_path):
+    agent, workdir = _mk_agent(tmp_path)
+    logs = _capture_logs(agent)
+    _write_event(workdir, "telegram", "ev1", {
+        "from": "alice", "subject": "hi", "body": "hello",
+    })
+
+    assert _scan_once(agent, workdir / INBOX_DIRNAME) == 1
+
+    fields = _only_mcp_event(logs)
+    assert "drain_latency_s" in fields
+    assert fields["drain_latency_s"] >= 0
+    assert "producer_lag_s" not in fields
+
+
+def test_scan_invalid_received_at_does_not_dead_letter_or_log_lag(tmp_path):
+    agent, workdir = _mk_agent(tmp_path)
+    logs = _capture_logs(agent)
+    _write_event(workdir, "telegram", "ev1", {
+        "from": "alice",
+        "subject": "hi",
+        "body": "hello",
+        "received_at": "not-a-timestamp",
+    })
+
+    assert _scan_once(agent, workdir / INBOX_DIRNAME) == 1
+
+    fields = _only_mcp_event(logs)
+    assert fields["drain_latency_s"] >= 0
+    assert "producer_lag_s" not in fields
+    assert not (workdir / INBOX_DIRNAME / "telegram" / DEAD_DIRNAME).exists()
 
 
 def test_scan_coalesces_multiple_events_into_one_notification(tmp_path):

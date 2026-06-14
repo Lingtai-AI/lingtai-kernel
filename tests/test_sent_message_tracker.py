@@ -1,7 +1,9 @@
 """Tests for SentMessageTracker — dedup and poll backoff."""
 from __future__ import annotations
 
+import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -418,6 +420,100 @@ class TestCheckPollBackoff:
         tc = self._make_tc("email", {"action": "check"})
         for _ in range(5):
             assert not _check_poll_backoff(agent, [tc])
+
+
+    def test_poll_backoff_exit_closes_pending_tool_calls_after_commit(self, tmp_path, monkeypatch):
+        from lingtai_kernel.base_agent import turn
+        from lingtai_kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
+
+        class _Guard:
+            def check_limit(self, _count):
+                return None
+
+            def check_invalid_tool_limit(self):
+                return None
+
+            def record_calls(self, _count):
+                pass
+
+            def clear_progress_notice(self):
+                pass
+
+        class _Executor:
+            def __init__(self):
+                self.guard = _Guard()
+
+            def execute(self, *_args, **_kwargs):
+                return (
+                    [ToolResultBlock(id="tc-poll", name="telegram", content={})],
+                    False,
+                    "",
+                )
+
+        class _Chat:
+            def __init__(self, tc):
+                self.interface = ChatInterface()
+                self.interface.add_system("system")
+                self.interface.add_user_message("poll")
+                self.interface.add_assistant_message([tc])
+                self.committed = []
+
+            def commit_tool_results(self, results):
+                self.committed.append(list(results))
+                # Deliberately leave the pending tail in place to exercise
+                # the poll_backoff_exit defensive cleanup branch.
+
+        tc = ToolCallBlock(id="tc-poll", name="telegram", args={"action": "check"})
+        chat = _Chat(tc)
+        agent = SimpleNamespace(
+            _cancel_event=threading.Event(),
+            _executor=_Executor(),
+            _on_tool_result_hook=None,
+            _notification_live_holder=None,
+            _chat=chat,
+            _sent_tracker=SentMessageTracker(),
+            _working_dir=tmp_path,
+            logs=[],
+            save_sources=[],
+        )
+        agent._log = lambda event, **fields: agent.logs.append((event, fields))
+        agent._save_chat_history = (
+            lambda *, ledger_source=None: agent.save_sources.append(ledger_source)
+        )
+        agent._sent_tracker.record_poll("telegram", found_new=False)
+        agent._sent_tracker.record_poll("telegram", found_new=False)
+        monkeypatch.setattr(
+            turn,
+            "attach_active_notifications",
+            lambda _agent, _results, prior_holder=None: prior_holder,
+        )
+
+        response = SimpleNamespace(
+            text="",
+            thoughts=[],
+            tool_calls=[tc],
+            usage=SimpleNamespace(),
+            raw=None,
+        )
+        result = turn._process_response(agent, response, ledger_source="test")
+
+        assert result == {"text": "", "failed": False, "errors": []}
+        assert chat.committed
+        assert not chat.interface.has_pending_tool_calls()
+        assert agent.save_sources == ["test", "test"]
+        heal_logs = [
+            fields for event, fields in agent.logs
+            if event == "heal_pending_tool_calls"
+        ]
+        assert heal_logs == [{
+            "reason": "poll_backoff_exit",
+            "pending_tool_call_count": 1,
+            "pending_tool_call_ids": ["tc-poll"],
+            "pending_tool_names": ["telegram"],
+        }]
+        tail_result = chat.interface.entries[-1].content[0]
+        assert tail_result.synthesized is True
+        assert "Reason recorded by the kernel: poll_backoff_exit" in tail_result.content
 
 
 # ---------------------------------------------------------------------------

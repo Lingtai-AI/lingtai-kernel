@@ -14,7 +14,7 @@ into the agent's inbox. The contract:
         "body": "full message body (required)",
         "metadata": {...optional},
         "wake": true,                 // optional, default true
-        "received_at": "ISO 8601"     // optional, kernel fills in if missing
+        "received_at": "ISO 8601"     // optional producer timestamp for lag telemetry
       }
 - The kernel polls all subdirs at the same cadence as the mailbox listener
   (0.5s), validates each file, dispatches to the agent's inbox via
@@ -84,6 +84,7 @@ _PREVIEW_FIELD_CAP = 10000  # chars of body to inline as the snippet (raised for
 # stuffs a kilobyte into `conversation_ref` won't bloat the notification.
 _PREVIEW_META_FIELDS = ("conversation_ref", "message_ref", "platform")
 _PREVIEW_META_FIELD_CAP = 200
+_TELEMETRY_ROUND_DIGITS = 3
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +174,59 @@ def _extract_preview_meta(event: dict) -> dict:
     return out
 
 
-def _consume_event(agent: "BaseAgent", mcp_name: str, event: dict) -> tuple[bool, dict]:
+def _bounded_elapsed_s(start_ts: float, end_ts: float) -> float:
+    """Return a rounded nonnegative elapsed duration in seconds."""
+    return round(max(0.0, end_ts - start_ts), _TELEMETRY_ROUND_DIGITS)
+
+
+def _parse_received_at_ts(value: object) -> float | None:
+    """Parse a producer supplied top-level received_at timestamp.
+
+    LICC producers emit timezone-aware ISO 8601 strings. Accept the common
+    ``Z`` UTC suffix plus explicit offsets; return None for missing, naive,
+    or malformed values so legacy/sloppy events still dispatch.
+    """
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return None
+    return dt.timestamp()
+
+
+def _event_telemetry_fields(
+    event: dict,
+    *,
+    queued_at_ts: float | None,
+    consumed_at_ts: float,
+) -> dict:
+    """Build additive per-event timing fields for the mcp_inbox_event log."""
+    baseline_ts = consumed_at_ts if queued_at_ts is None else queued_at_ts
+    fields = {
+        "drain_latency_s": _bounded_elapsed_s(baseline_ts, consumed_at_ts),
+    }
+    producer_ts = _parse_received_at_ts(event.get("received_at"))
+    if producer_ts is not None:
+        fields["producer_lag_s"] = _bounded_elapsed_s(producer_ts, consumed_at_ts)
+    return fields
+
+
+def _consume_event(
+    agent: "BaseAgent",
+    mcp_name: str,
+    event: dict,
+    *,
+    queued_at_ts: float | None = None,
+    consumed_at_ts: float | None = None,
+) -> tuple[bool, dict]:
     """Record the per-event log entry; return (wake, preview).
 
     The preview surfaces sender, subject, and a bounded body preview so the
@@ -201,12 +254,18 @@ def _consume_event(agent: "BaseAgent", mcp_name: str, event: dict) -> tuple[bool
     sender = event["from"]
     subject = event["subject"]
     body = event["body"]
+    consumed_at = time.time() if consumed_at_ts is None else consumed_at_ts
     agent._log(
         "mcp_inbox_event",
         mcp=mcp_name,
         sender=sender,
         subject=subject,
         wake=wake,
+        **_event_telemetry_fields(
+            event,
+            queued_at_ts=queued_at_ts,
+            consumed_at_ts=consumed_at,
+        ),
     )
     preview = {
         "from": sender,
@@ -375,7 +434,17 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
 
             # Consume (log per-event + collect wake intent + preview) and delete on success.
             try:
-                wake, preview = _consume_event(agent, mcp_name, event)
+                try:
+                    queued_at_ts = entry.stat().st_mtime
+                except OSError:
+                    queued_at_ts = None
+                wake, preview = _consume_event(
+                    agent,
+                    mcp_name,
+                    event,
+                    queued_at_ts=queued_at_ts,
+                    consumed_at_ts=time.time(),
+                )
             except Exception as e:
                 _dead_letter(entry, f"dispatch failed: {e}")
                 continue

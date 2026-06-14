@@ -458,6 +458,48 @@ def _restore_tool_results_after_continuation_failure(
     return True
 
 
+def _close_pending_tool_calls_after_poll_backoff(
+    agent,
+    *,
+    ledger_source: str,
+) -> None:
+    """Defensively close any tail tool_calls left after poll-backoff commit.
+
+    Normal adapters append the real tool results via ``commit_tool_results``,
+    so this is a no-op. If an adapter leaves the assistant tool-call tail
+    pending, close it here with a distinct reason before the later IDLE
+    notification path can attribute the cleanup to generic idle injection.
+    """
+    chat = getattr(agent, "_chat", None)
+    iface = getattr(chat, "interface", None)
+    if iface is None or not iface.has_pending_tool_calls():
+        return
+
+    pending_fields = _pending_tool_call_summary(iface)
+    phase = "close_pending_tool_calls"
+    try:
+        iface.close_pending_tool_calls(
+            reason="poll_backoff_exit",
+            tool_completed=True,
+        )
+        phase = "save_chat_history"
+        agent._save_chat_history(ledger_source=ledger_source)
+        agent._log(
+            "heal_pending_tool_calls",
+            reason="poll_backoff_exit",
+            **pending_fields,
+        )
+    except Exception as e:
+        fields = {
+            "reason": "poll_backoff_exit",
+            "failed_at": phase,
+            "error": (str(e) or repr(e))[:200],
+        }
+        if phase == "save_chat_history":
+            fields["side_effect"] = "memory_state_may_be_ahead_of_disk"
+        agent._log("heal_pending_tool_calls_failed", **fields)
+
+
 def _run_loop(agent) -> None:
     """Wait for messages, process them. Agent persists between messages."""
     from ..state import AgentState
@@ -1178,9 +1220,8 @@ def _check_poll_backoff(agent, tool_calls, tool_results=None) -> bool:
     the same turn. After ``max_poll_retries`` consecutive checks on the
     same channel, returns True to signal the agent should go IDLE.
 
-    The counter resets when a send action occurs, when new messages
-    arrive via the notification system, or when a check/read action
-    actually returns messages (found_new=True).
+    The counter resets when a send action occurs, or when a check/read
+    action actually returns messages (found_new=True).
     """
     # Build a lookup from tool-call id to result for found-new detection.
     # ToolResultBlock stores the correlated tool-call id on `.id` (the same
@@ -1427,6 +1468,10 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 # and the post-turn save in _run_loop can see a stale wire
                 # and heal the (already-committed) tool calls.
                 agent._save_chat_history(ledger_source=ledger_source)
+                _close_pending_tool_calls_after_poll_backoff(
+                    agent,
+                    ledger_source=ledger_source,
+                )
             agent._log("idle_after_poll_backoff",
                        reason="poll_retries_exhausted")
             return {
