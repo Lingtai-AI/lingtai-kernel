@@ -74,6 +74,30 @@ def test_initial_daemon_json_fields(tmp_path):
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", data["started_at"])
 
 
+def test_record_peer_event_appends_jsonl(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    rd.record_peer_event("peer_send", {"group_id": "dg-1", "to_handle": "claude",
+                                       "body_bytes": 12})
+    lines = rd.events_path.read_text().splitlines()
+    peer_lines = [json.loads(l) for l in lines if json.loads(l)["event"] == "peer_send"]
+    assert len(peer_lines) == 1
+    entry = peer_lines[0]
+    assert entry["group_id"] == "dg-1"
+    assert entry["to_handle"] == "claude"
+    assert entry["body_bytes"] == 12
+    assert "ts" in entry
+
+
+def test_record_peer_event_does_not_log_body(tmp_path):
+    # Helper records only what the caller passes; it must not invent a body
+    # field. (Plan: never persist full peer body by default — record body_bytes.)
+    rd = _make_run_dir(tmp_path)
+    rd.record_peer_event("peer_delivered", {"group_id": "dg-1", "body_bytes": 5})
+    lines = [json.loads(l) for l in rd.events_path.read_text().splitlines()]
+    delivered = [e for e in lines if e["event"] == "peer_delivered"]
+    assert delivered and "body" not in delivered[0]
+
+
 def test_prompt_written_verbatim(tmp_path):
     prompt = "You are a daemon emanation.\nYour task is X.\nUse tools wisely."
     rd = _make_run_dir(tmp_path, system_prompt=prompt)

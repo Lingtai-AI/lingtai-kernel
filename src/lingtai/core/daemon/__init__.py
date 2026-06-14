@@ -20,6 +20,7 @@ import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
     from ...agent import Agent
 
 from lingtai_kernel.llm.base import FunctionSchema
+from . import peer
 from .run_dir import DaemonRunDir
 from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
 
@@ -297,6 +299,51 @@ def _normalize_backend(backend: str | None) -> str:
     return _BACKEND_ALIASES.get(backend, backend)
 
 
+# External CLI backends permitted to author peer sends via the strict stdout
+# sentinel contract (Checkpoint D). This mirrors ``peer.PEER_AUTHOR_BACKENDS``
+# minus the in-process ``lingtai`` author, which uses the native ``peer_send``
+# tool rather than stdout sentinels. ``claude-p`` is intentionally absent: the
+# approved ``peer_author`` schema doc and ``peer.PEER_AUTHOR_BACKENDS`` both name
+# ``claude-code`` as the author backend, and ``_handle_emanate`` already rejects
+# ``peer_author`` for ``claude-p`` at emanate time. (See report — the
+# claude-p/claude-code naming overlap is flagged as a possible follow-up.)
+_CLI_PEER_AUTHOR_BACKENDS = frozenset({"claude-code", "codex"})
+
+
+def _cli_initial_prompt_with_peer_contract(
+    backend: str, task: str, peer_author: bool
+) -> str:
+    """Return the CLI initial prompt, prepending the strict peer-author sentinel
+    contract when this task opted into authoring on an allowed CLI backend.
+
+    Pure (no I/O / no manager state) so the prompt-assembly rule can be unit
+    tested without driving a ThreadPool or any subprocess. Unsupported author
+    backends fall through unchanged — they never receive the contract.
+    """
+    if peer_author and backend in _CLI_PEER_AUTHOR_BACKENDS:
+        contract = peer.build_peer_author_contract(backend=backend)
+        return f"{contract}\n\n{task}"
+    return task
+
+
+def _normalize_cli_peer_to_handle(raw: str) -> str:
+    """Normalize a CLI sentinel ``to`` handle by stripping one leading ``@``.
+
+    DaemonGroup roster notices display peers as ``@handle``, so a real CLI
+    author may echo that display form in the sentinel's ``to`` field while the
+    roster is keyed on bare handles (``beta``). Strip exactly one leading ``@``,
+    and only when the remainder is non-empty and does not itself start with
+    ``@`` — so malformed/ambiguous forms (``@`` / ``@@beta``) pass through
+    untouched and remain denied under the existing fail-closed authorization.
+
+    This narrowing lives on the CLI sentinel path ONLY. The native in-process
+    ``peer_send(to_handle=...)`` path stays strict/bare and is never normalized.
+    """
+    if raw.startswith("@") and len(raw) > 1 and raw[1] != "@":
+        return raw[1:]
+    return raw
+
+
 def _validate_claude_backend_argv(backend: str, argv: list[str]) -> None:
     """Refuse user flags that would override a daemon backend's own harness.
 
@@ -370,7 +417,10 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["emanate", "list", "ask", "check", "reclaim"],
+                "enum": [
+                    "emanate", "list", "ask", "check", "reclaim",
+                    "group_create", "group_reclaim", "group_status",
+                ],
                 "description": t(lang, "daemon.action"),
             },
             "tasks": {
@@ -387,6 +437,16 @@ def get_schema(lang: str = "en") -> dict:
                         "backend_options": {
                             "type": "object",
                             "description": t(lang, "daemon.tasks.backend_options"),
+                        },
+                        "peer_author": {
+                            "type": "boolean",
+                            "description": (
+                                "Opt this daemon into the dormant peer-authoring "
+                                "affordance (default false). Only allowed for "
+                                "'lingtai', 'claude-code', and 'codex' backends. It "
+                                "does not make the daemon a group member; the parent "
+                                "still controls all routing via group_create."
+                            ),
                         },
                     },
                     "required": ["task", "tools"],
@@ -454,6 +514,42 @@ def get_schema(lang: str = "en") -> dict:
                     "CLI backends use external tools with no LLM overhead from the parent."
                 ),
             },
+            "members": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "handle": {"type": "string"},
+                        "role": {"type": "string"},
+                        "can_author_peer_send": {"type": "boolean"},
+                        "can_receive_peer_message": {"type": "boolean"},
+                    },
+                    "required": ["id", "handle"],
+                },
+                "description": (
+                    "group_create only: explicit DaemonGroup roster. Each member "
+                    "names an existing daemon by 'id' (em id) and a unique peer "
+                    "'handle' (^[A-Za-z][A-Za-z0-9_-]{0,31}$), plus optional 'role', "
+                    "'can_author_peer_send', and 'can_receive_peer_message'."
+                ),
+            },
+            "policy": {
+                "type": "object",
+                "description": (
+                    "group_create only: optional group policy. Fields: "
+                    "'max_message_bytes', 'default_hop_budget', "
+                    "'max_messages_per_group', and 'allow_pairs' (list of "
+                    "[from_handle, to_handle] pairs; omit/null to allow all pairs)."
+                ),
+            },
+            "group_id": {
+                "type": "string",
+                "description": (
+                    "group_reclaim / group_status: the target DaemonGroup id. "
+                    "group_status without it returns a summary of all groups."
+                ),
+            },
         },
         "required": ["action"],
     }
@@ -479,6 +575,13 @@ class DaemonManager:
         # Emanation registry: em_id → entry dict
         self._emanations: dict[str, dict] = {}
         self._next_id = 1
+        # Parent-owned DaemonGroup state (peer messaging v0). The parent is the
+        # only router; these are in-memory only — no durable store. Routing
+        # identity is the stable run_id, not the reusable em_id.
+        self._groups: dict[str, peer.DaemonGroup] = {}
+        self._group_by_run_id: dict[str, str] = {}
+        self._group_lock = threading.Lock()
+        self._group_seq = 0
         # Pool tracking for reclaim
         self._pools: list[tuple[ThreadPoolExecutor, threading.Event]] = []
         # CLI process tracking for direct process-group kill on reclaim/timeout.
@@ -578,6 +681,12 @@ class DaemonManager:
             )
         elif action == "reclaim":
             return self._handle_reclaim()
+        elif action == "group_create":
+            return self._handle_group_create(args)
+        elif action == "group_reclaim":
+            return self._handle_group_reclaim(args.get("group_id", ""))
+        elif action == "group_status":
+            return self._handle_group_status(args.get("group_id"))
         else:
             return {"status": "error", "message": f"Unknown action: {action}"}
 
@@ -585,6 +694,9 @@ class DaemonManager:
         self,
         requested: list[str],
         preset_surface: tuple[dict, dict] | None = None,
+        *,
+        peer_author: bool = False,
+        source_em_id: str | None = None,
     ) -> tuple[list[FunctionSchema], dict]:
         """Build filtered tool schemas and dispatch map for an emanation.
 
@@ -594,6 +706,14 @@ class DaemonManager:
         with the parent's MCP tools (those don't bind to an LLM, so they
         carry over). When ``preset_surface`` is None, the parent's currently
         registered tool surface is used (today's behavior).
+
+        When ``peer_author`` is true, the native ``peer_send`` schema/handler is
+        appended in *both* construction paths after blacklist filtering, so the
+        in-process tool exists from session start (ChatSession tool schemas are
+        frozen at ``create_session``). The handler closure captures
+        ``source_em_id`` only — the run directory does not exist yet, so the
+        stable ``run_id`` is resolved at call time. Group membership/revocation
+        is enforced at call time (fail-closed), not by mutating the live surface.
         """
         from ...capabilities import _GROUPS
 
@@ -635,6 +755,7 @@ class DaemonManager:
                     schemas.append(parent_schema_map[n])
                     if n in self._agent._tool_handlers:
                         dispatch[n] = self._agent._tool_handlers[n]
+            self._maybe_append_peer_send(schemas, dispatch, peer_author, source_em_id)
             return schemas, dispatch
 
         # Default path: emanation runs on parent's tool surface
@@ -654,7 +775,27 @@ class DaemonManager:
         schemas = [schema_map[n] for n in sorted(tool_names) if n in schema_map]
         dispatch = {n: self._agent._tool_handlers[n]
                     for n in tool_names if n in self._agent._tool_handlers}
+        self._maybe_append_peer_send(schemas, dispatch, peer_author, source_em_id)
         return schemas, dispatch
+
+    def _maybe_append_peer_send(
+        self,
+        schemas: list[FunctionSchema],
+        dispatch: dict,
+        peer_author: bool,
+        source_em_id: str | None,
+    ) -> None:
+        """Append the native ``peer_send`` schema + handler to a built surface.
+
+        Shared by both ``_build_tool_surface`` construction paths so they cannot
+        drift. ``peer_send`` is never in ``EMANATION_BLACKLIST`` (it is a daemon
+        affordance, not the full ``daemon`` tool), so it is appended after — and
+        independent of — blacklist filtering, only when ``peer_author`` is true.
+        """
+        if not peer_author:
+            return
+        schemas.append(peer.build_peer_send_schema())
+        dispatch["peer_send"] = self._make_peer_send_handler(source_em_id)
 
     def _expand_requested_tools(self, requested: list[str]) -> set[str]:
         """Expand requested daemon tools after group aliases and blacklist."""
@@ -1214,6 +1355,10 @@ class DaemonManager:
 
         text = (final_result_text or "").strip() or "[no output]"
         run_dir.mark_done(text)
+        # Post-turn: route at most one peer-send sentinel from the COMPLETE
+        # terminal text. Safe (never raises into this runner); no-op unless the
+        # emanation is a CLI peer author in an active group.
+        self._route_cli_peer_intent_after_turn(em_id, text)
         return text
 
     def _run_claude_interactive_emanation(
@@ -1457,6 +1602,9 @@ class DaemonManager:
 
         text = "\n".join(agent_message_texts).strip() or "[no output]"
         run_dir.mark_done(text)
+        # Post-turn: route at most one peer-send sentinel from the COMPLETE
+        # terminal text (see _run_claude_code_emanation).
+        self._route_cli_peer_intent_after_turn(em_id, text)
         return text
 
     _NOTIFICATION_PREVIEW_MAX = 500
@@ -1591,6 +1739,22 @@ class DaemonManager:
         backend = _normalize_backend(backend)
         if not tasks:
             return {"status": "error", "message": "No tasks provided"}
+
+        # Peer-author opt-in is only valid for backends that can author peer
+        # sends. Reject the whole batch up front for unsupported source
+        # backends (e.g. opencode, cursor) — gating only; no authoring path is
+        # wired in this checkpoint. Spelling tracks peer.PEER_AUTHOR_BACKENDS.
+        if backend not in peer.PEER_AUTHOR_BACKENDS and any(
+            bool(spec.get("peer_author", False)) for spec in tasks
+        ):
+            return {
+                "status": "error",
+                "reason": "unsupported_author_backend",
+                "message": (
+                    f"peer_author is not supported for backend {backend!r}; "
+                    f"allowed: {sorted(peer.PEER_AUTHOR_BACKENDS)}"
+                ),
+            }
 
         # Per-batch limit overrides — capped at the manager's ceilings.
         # Author-set ceilings (self._max_turns, self._timeout) are the upper
@@ -1730,6 +1894,8 @@ class DaemonManager:
             try:
                 schemas, dispatch = self._build_tool_surface(
                     spec["tools"], preset_surface=preset_surface,
+                    peer_author=bool(spec.get("peer_author", False)),
+                    source_em_id=em_id,
                 )
             except ValueError as e:
                 return {"status": "error", "message": str(e)}
@@ -1783,6 +1949,11 @@ class DaemonManager:
                 "followup_buffer": "",
                 "followup_lock": threading.Lock(),
                 "run_dir": run_dir,
+                # Per-task opt-in to the dormant peer-authoring affordance.
+                # Stored here so group_create can gate can_author_peer_send.
+                # Storing/gating only in this checkpoint — no peer_send tool,
+                # prompt block, router, or delivery is wired yet.
+                "peer_author": bool(spec.get("peer_author", False)),
             }
 
         # Start watchdog — sets timeout_event AND cancel_event when timer fires
@@ -1844,6 +2015,16 @@ class DaemonManager:
             ids.append(em_id)
             backend_argv = resolved_backend_argv[i]
             backend_options = spec.get("backend_options") or None
+            peer_author = bool(spec.get("peer_author", False))
+
+            # When this task opted into peer authoring on an allowed CLI author
+            # backend, prepend the strict sentinel author contract to the prompt
+            # the CLI subprocess actually runs. The run_dir keeps the raw task
+            # (what the agent asked for); only the spawned prompt carries the
+            # contract. Unsupported author backends fall through unchanged —
+            # peer_author for them is already refused in _handle_emanate.
+            effective_task = _cli_initial_prompt_with_peer_contract(
+                backend, spec["task"], peer_author)
 
             system_prompt = f"[{backend} backend — task delegated to external CLI]"
             try:
@@ -1898,7 +2079,7 @@ class DaemonManager:
                 run_fn = self._run_claude_code_emanation
             future = pool.submit(
                 run_fn,
-                em_id, run_dir, spec["task"],
+                em_id, run_dir, effective_task,
                 cancel_event, timeout_event,
                 backend_argv,
             )
@@ -1916,6 +2097,11 @@ class DaemonManager:
                 "followup_lock": threading.Lock(),
                 "run_dir": run_dir,
                 "backend": backend,
+                # Per-task opt-in to the peer-authoring affordance, gated by
+                # group_create. For allowed CLI author backends the initial
+                # prompt now carries the sentinel contract and terminal turns
+                # are routed via _maybe_handle_cli_peer_intent.
+                "peer_author": peer_author,
                 # Tracks whether a CLI `ask` follow-up is currently being
                 # streamed in the background. Set/cleared by the ask worker
                 # under `followup_lock`; checked by `_handle_ask_cli` /
@@ -2350,6 +2536,9 @@ class DaemonManager:
             self._publish_followup_if_live(
                 em_id, status="follow-up completed", text=output, run_dir=run_dir,
             )
+        # Post-turn: route at most one peer-send sentinel from the resumed
+        # turn's COMPLETE terminal text (see _run_claude_code_emanation).
+        self._route_cli_peer_intent_after_turn(em_id, output)
         return {"status": "sent", "id": em_id, "output": output}
 
     def _handle_ask_codex(self, em_id: str, entry: dict, message: str) -> dict:
@@ -2370,6 +2559,22 @@ class DaemonManager:
                     "message": f"No codex session ID found for {em_id}. "
                                "The emanation may still be initializing — "
                                "wait a moment and retry."}
+
+        # Resume race: Codex emits `thread.started.thread_id` (captured above as
+        # codex_session_id) *before* the initial rollout is fully resumable. If
+        # the initial CLI turn's future is still running, `codex exec resume`
+        # would fail with "thread/resume failed: no rollout found for thread id
+        # ...". Refuse as busy until the initial turn completes. Codex-specific:
+        # other backends capture their session id only once the turn is durably
+        # resumable, so they don't need this guard.
+        initial_future = entry.get("future")
+        if initial_future is not None and not initial_future.done():
+            return {"status": "busy", "id": em_id,
+                    "message": f"the initial Codex turn for {em_id} is still "
+                               "running; its session is not resumable yet. Wait "
+                               "for it to finish (check with "
+                               f"daemon(action='check', id='{em_id}')) before "
+                               "asking."}
 
         with entry["followup_lock"]:
             if entry.get("ask_in_flight"):
@@ -2549,6 +2754,9 @@ class DaemonManager:
             self._publish_followup_if_live(
                 em_id, status="follow-up completed", text=output, run_dir=run_dir,
             )
+        # Post-turn: route at most one peer-send sentinel from the resumed
+        # turn's COMPLETE terminal text (see _run_claude_code_emanation).
+        self._route_cli_peer_intent_after_turn(em_id, output)
         return {"status": "sent", "id": em_id, "output": output}
 
     # ------------------------------------------------------------------
@@ -3884,10 +4092,616 @@ class DaemonManager:
         self._log("daemon_lifecycle_shutdown", **report)
         return report
 
+    # ------------------------------------------------------------------
+    # DaemonGroup lifecycle (peer messaging v0) — parent is the only router.
+    # No delivery/router/CLI-authoring here; those are later checkpoints.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _group_error(reason: str, message: str) -> dict:
+        return {"status": "error", "reason": reason, "message": message}
+
+    def _build_group_policy(self, spec: dict | None) -> peer.GroupPolicy:
+        spec = spec or {}
+        allow = spec.get("allow_pairs")
+        pairs = None
+        if allow is not None:
+            pairs = {(p[0], p[1]) for p in allow}
+        return peer.GroupPolicy(
+            max_message_bytes=spec.get("max_message_bytes", 8192),
+            default_hop_budget=spec.get("default_hop_budget", 1),
+            max_messages_per_group=spec.get("max_messages_per_group", 32),
+            allow_pairs=pairs,
+        )
+
+    # ------------------------------------------------------------------
+    # Native in-process peer_send surface (Checkpoint C1: gate only)
+    # ------------------------------------------------------------------
+
+    def _make_peer_send_handler(self, source_em_id: str | None):
+        """Return the ``peer_send`` tool handler bound to one source emanation.
+
+        The closure captures only ``source_em_id`` (a stable string). The run
+        directory does not exist when the surface is built, so the routing
+        identity (``run_id``) is resolved from the live entry at call time. The
+        daemon never supplies its own identity; any identity/routing keys in the
+        tool args are ignored.
+        """
+        def handler(args: dict) -> dict:
+            return self._peer_send_from_tool(source_em_id, args)
+        return handler
+
+    def _peer_send_from_tool(self, source_em_id: str | None, args: dict) -> dict:
+        """Call-time gate for a native ``peer_send`` tool invocation.
+
+        Identity is always derived from the bound ``source_em_id`` / current run
+        and never from daemon-supplied args. The source must be in an active
+        group (fail-closed otherwise: before group creation, after
+        ``group_reclaim``, or after global ``reclaim``).
+
+        Checkpoint C2a wires the authorized in-process success path: build the
+        envelope from live identity, authorize via the single
+        ``peer.authorize_peer_message`` gate, and — when authorized and the
+        target is a live in-process peer — append a provenance-bannered message
+        to the target's existing follow-up buffer under the target's lock,
+        returning ``sent`` (accepted into the follow-up path, not answered). The
+        broad denial/status matrix and CLI delivery remain out of scope.
+        """
+        # Resolve the live entry + run directory. The surface may outlive its
+        # entry (cleared after completion/reclaim) or be bound to an em_id that
+        # no longer exists; either way, fail closed.
+        entry = self._emanations.get(source_em_id) if source_em_id else None
+        run_dir = entry.get("run_dir") if entry else None
+        if entry is None or run_dir is None:
+            return {"status": "not_in_group", "reason": "no_source_entry"}
+
+        # Routing identity is the stable run_id, resolved now (never from args).
+        source_run_id = run_dir.run_id
+
+        # Author-supplied payload only; identity/routing keys are ignored.
+        to_handle = args.get("to_handle")
+        body = args.get("body")
+        in_reply_to = args.get("in_reply_to")
+        if not isinstance(to_handle, str) or not to_handle:
+            return {"status": "error", "reason": "missing_to_handle"}
+        if not isinstance(body, str) or not body:
+            return {"status": "error", "reason": "missing_or_empty_body"}
+        if in_reply_to is not None and not isinstance(in_reply_to, str):
+            return {"status": "error", "reason": "bad_in_reply_to"}
+
+        # --- Critical section 1: authorize under the group lock ONLY. --------
+        # Resolve the active group + roster, build the envelope, and run the
+        # single authorization gate under ``_group_lock``. We deliberately do
+        # NOT acquire the target's ``followup_lock`` or mutate ``message_count``
+        # here: holding ``_group_lock`` while taking a target follow-up lock is a
+        # lock-order hazard (final-plan lock discipline — the two locks must
+        # never nest). We snapshot only the immutable routing/identity basis
+        # needed to deliver and re-check outside the lock. Event logging is also
+        # deferred until after the lock is released (no I/O under ``_group_lock``).
+        with self._group_lock:
+            state, group = self._peer_group_state_for_run(source_run_id)
+            if state != "active":
+                # Fail closed. ``group_reclaimed`` when a reclaimed group still
+                # remembers this run; ``not_in_group`` otherwise.
+                return {"status": state, "reason": "source_not_in_active_group"}
+
+            src = group.roster_by_run_id.get(source_run_id)
+            tgt = group.roster_by_handle.get(to_handle)
+            to_run_id = tgt.run_id if tgt is not None else ""
+
+            env = peer.PeerMessageEnvelope(
+                message_id=peer.new_message_id(datetime.now(timezone.utc)),
+                group_id=group.group_id,
+                from_run_id=source_run_id,
+                from_handle=src.handle if src is not None else "",
+                to_run_id=to_run_id,
+                to_handle=to_handle,
+                body=body,
+                hop_budget=group.policy.default_hop_budget,
+                source_adapter="inproc",
+                created_at=datetime.now(timezone.utc).isoformat(),
+                in_reply_to=in_reply_to,
+            )
+
+            authz = peer.authorize_peer_message(group, env)
+            authz_status = authz.status
+            authz_reason = authz.reason
+            # Snapshot for use outside the lock. ``tgt`` is guaranteed non-None
+            # once authorization passed (target-exists is an authz step); the
+            # guards stay defensive.
+            group_id = group.group_id
+            target_em_id = tgt.em_id if tgt is not None else None
+            target_run_id_snapshot = tgt.run_id if tgt is not None else None
+        # ---- ``_group_lock`` released. No target lock was taken under it. ----
+
+        body_bytes = len(body.encode("utf-8"))
+
+        if authz_status != "sent":
+            self._log("peer_send_denied", group_id=group_id,
+                      from_handle=env.from_handle, to_handle=to_handle,
+                      message_id=env.message_id, status=authz_status,
+                      reason=authz_reason, body_bytes=body_bytes)
+            return {"status": authz_status, "reason": authz_reason,
+                    "message_id": env.message_id}
+
+        # --- Re-check the target's LIVE state outside the group lock. ---------
+        # The target entry may have completed, been cleared, or been re-emanated
+        # (new run_id) since the snapshot. C2b distinguishes the cases instead of
+        # collapsing them into one generic ``not_ready`` — there is still no
+        # queue/retry in v0, so every non-``sent`` outcome here is terminal.
+        #
+        # Evaluation order is deliberate (fail closed, most-specific first):
+        #   1. entry/run_dir gone     -> not_ready / target_missing
+        #   2. run_id no longer matches the authorized snapshot
+        #                             -> not_ready / target_not_live
+        #      (``future.done()`` is only meaningful for the run we authorized
+        #       against; a mismatched run_id is a *different* run, so its future
+        #       is irrelevant and must not be consulted.)
+        #   3. that authorized run has completed (future resolved)
+        #                             -> target_done / target_completed
+        #   4. no live follow-up channel on the entry
+        #                             -> not_ready / target_no_followup
+        target_entry = self._emanations.get(target_em_id) if target_em_id else None
+        target_run_dir = target_entry.get("run_dir") if target_entry else None
+
+        def _undelivered(status: str, reason: str) -> dict:
+            self._log("peer_send_undelivered", group_id=group_id,
+                      from_handle=env.from_handle, to_handle=to_handle,
+                      message_id=env.message_id, status=status,
+                      reason=reason, body_bytes=body_bytes)
+            return {"status": status, "reason": reason,
+                    "message_id": env.message_id}
+
+        if target_entry is None or target_run_dir is None:
+            return _undelivered("not_ready", "target_missing")
+        if target_run_dir.run_id != target_run_id_snapshot:
+            return _undelivered("not_ready", "target_not_live")
+        if target_entry["future"].done():
+            return _undelivered("target_done", "target_completed")
+        if "followup_lock" not in target_entry or "followup_buffer" not in target_entry:
+            return _undelivered("not_ready", "target_no_followup")
+
+        # --- Deliver under the TARGET follow-up lock ONLY. -------------------
+        # Same buffer/lock discipline ``_handle_ask`` uses and the run loop
+        # drains via ``_drain_followup``. ``_group_lock`` is NOT held here.
+        #
+        # Busy is an atomic check-and-set under a single lock hold: if the
+        # target already has unread follow-up text we must NOT append a second
+        # hidden message (no implicit queue) — we return ``busy`` and leave the
+        # buffer exactly as we found it. Only an empty buffer is written.
+        banner = peer.build_provenance_banner(env)
+        with target_entry["followup_lock"]:
+            if target_entry["followup_buffer"]:
+                busy = True
+            else:
+                target_entry["followup_buffer"] = banner
+                busy = False
+        # ---- target ``followup_lock`` released. ----------------------------
+
+        if busy:
+            return _undelivered("busy", "peer_busy")
+
+        # --- Critical section 2: minimal message-cap counter update. ---------
+        # The message is already accepted into the target's buffer; this is just
+        # bookkeeping for the per-group cap. Re-acquire ``_group_lock`` alone and
+        # increment only if the group is still the same active group. If it was
+        # reclaimed/remapped while we delivered, record the delivery as accepted
+        # but do NOT corrupt counters or resurrect a dead group (fail-closed on
+        # the counter, ``sent`` on the delivery). The authz cap check (critical
+        # section 1) and this increment are no longer atomic, so concurrent sends
+        # may transiently over-count the per-group total by the number of
+        # in-flight deliveries; that bounded slack is accepted for v0 as the
+        # price of never nesting ``_group_lock`` and the target ``followup_lock``.
+        with self._group_lock:
+            live_group = self._groups.get(group_id)
+            if live_group is not None and live_group.state == "active":
+                live_group.message_count += 1
+
+        # Metadata only — never the full body — recorded after acceptance.
+        self._log("peer_send_sent", group_id=group_id,
+                  from_handle=env.from_handle, to_handle=to_handle,
+                  message_id=env.message_id, status="sent",
+                  in_reply_to=in_reply_to,
+                  body_bytes=body_bytes)
+        return {"status": "sent", "message_id": env.message_id,
+                "to_handle": to_handle}
+
+    def _peer_group_state_for_run(self, run_id: str):
+        """Classify a run's current peer-group state. Call under ``_group_lock``.
+
+        Returns ``("active", group)`` when the run is in an active group;
+        ``("group_reclaimed", None)`` when only a reclaimed group still lists it;
+        ``("not_in_group", None)`` otherwise.
+        """
+        group_id = self._group_by_run_id.get(run_id)
+        if group_id is not None:
+            group = self._groups.get(group_id)
+            if group is not None and group.state == "active":
+                return "active", group
+        # Not actively indexed. Distinguish "reclaimed group remembers it" from
+        # "never grouped / globally reclaimed" for a clearer fail-closed status.
+        for group in self._groups.values():
+            if group.state == "reclaimed" and run_id in group.roster_by_run_id:
+                return "group_reclaimed", None
+        return "not_in_group", None
+
+    # ------------------------------------------------------------------
+    # CLI sentinel authoring — post-turn parse + routing (Checkpoint D)
+    # ------------------------------------------------------------------
+
+    def _route_cli_peer_intent_after_turn(self, em_id: str, terminal_text: str) -> None:
+        """Safe entry point from a CLI terminal-assembly site.
+
+        Looks up the live entry and routes at most one peer-send sentinel from
+        the COMPLETE terminal turn text. Wrapped so peer-routing can never raise
+        into the emanation/ask runner — a routing failure must not fail the
+        underlying CLI turn. Called only after the terminal result is durable
+        (``mark_done`` / follow-up publish), never while streaming partials.
+        """
+        try:
+            entry = self._emanations.get(em_id)
+            self._maybe_handle_cli_peer_intent(em_id, entry, terminal_text)
+        except Exception as e:  # noqa: BLE001 — never propagate into the runner
+            self._log("peer_intent_error", em_id=em_id, error=str(e)[:200])
+
+    def _maybe_handle_cli_peer_intent(
+        self, em_id: str, entry: dict | None, terminal_text: str
+    ) -> None:
+        """Parse + route at most one CLI peer-send sentinel from terminal text.
+
+        Fail-closed in every ambiguous case. No-op unless the source emanation
+        opted into ``peer_author`` AND runs on an allowed CLI author backend.
+
+        Source identity is derived solely from ``entry['run_dir'].run_id`` plus
+        live group membership — never from daemon-authored text. Authorization
+        flows through the single ``peer.authorize_peer_message`` gate. Delivery
+        reuses ``_handle_ask`` (the existing follow-up path) — no parallel
+        queue, outbox, retry, or fanout. All logs/events are metadata-only; the
+        message body is never logged.
+        """
+        if entry is None or not entry.get("peer_author"):
+            return
+        if entry.get("backend") not in _CLI_PEER_AUTHOR_BACKENDS:
+            return
+        run_dir = entry.get("run_dir")
+        if run_dir is None:
+            return
+
+        # Every peer event goes to BOTH the canonical parent log (the cross-run
+        # sink the in-process path uses) AND the source's own run_dir trace.
+        # The run_dir trace matters specifically for CLI authors: unlike the
+        # in-process author, a CLI author gets no synchronous return value, so
+        # this body-free local trace is its only way to learn the send outcome
+        # via ``daemon(check)``. Metadata only — never the body.
+        def _emit(event: str, **fields) -> None:
+            self._log(event, em_id=em_id, **fields)
+            try:
+                run_dir.record_peer_event(event, fields)
+            except Exception:  # noqa: BLE001 — local trace is best-effort
+                pass
+
+        # 1. Strict sentinel parse over the COMPLETE terminal text. Any parser
+        #    error (malformed / multiple / unterminated) fails closed with a
+        #    metadata-only rejection. No block at all is a silent no-op — not
+        #    every terminal turn authors a peer message. No NL parsing, ever.
+        intent, errors = peer.parse_peer_send_contract(terminal_text)
+        if errors:
+            _emit("peer_intent_rejected", source_adapter="cli-stdout",
+                  reason=(errors[0].get("reason") if errors else "rejected"))
+            return
+        if intent is None:
+            return
+
+        source_run_id = run_dir.run_id
+        # Roster keys are bare handles, but roster notices display peers as
+        # ``@handle`` so a CLI author may echo that form. Normalize exactly one
+        # leading ``@`` here (CLI path only); malformed/ambiguous forms pass
+        # through and stay denied by the authorization gate below.
+        raw_to_handle = intent.to
+        to_handle = _normalize_cli_peer_to_handle(raw_to_handle)
+        body = intent.body
+        in_reply_to = intent.in_reply_to
+        body_bytes = len(body.encode("utf-8"))
+
+        # The sentinel parsed and is structurally valid (identity not yet bound).
+        # ``raw_to_handle`` is added only when normalization changed it — a
+        # handle is body-safe, and it preserves evidence of the ``@`` form.
+        parsed_fields = {}
+        if raw_to_handle != to_handle:
+            parsed_fields["raw_to_handle"] = raw_to_handle
+        _emit("peer_intent_parsed", to_handle=to_handle,
+              source_adapter="cli-stdout", body_bytes=body_bytes,
+              has_reply_to=bool(in_reply_to), **parsed_fields)
+
+        # 2. Authorize under the group lock ONLY. Identity/routing is derived
+        #    from the live roster (anti-spoof); any identity keys in daemon text
+        #    were already rejected by the parser. No target lock is nested under
+        #    the group lock and no I/O happens while it is held (lock discipline
+        #    mirrors the in-process peer_send path).
+        with self._group_lock:
+            state, group = self._peer_group_state_for_run(source_run_id)
+            if state != "active":
+                # Capture and defer the emit until the lock is released — no I/O
+                # (parent log or run_dir trace) happens while ``_group_lock`` is
+                # held, matching the in-process path's discipline.
+                inactive_state = state
+                env = None
+            else:
+                inactive_state = None
+                src = group.roster_by_run_id.get(source_run_id)
+                tgt = group.roster_by_handle.get(to_handle)
+                env = peer.PeerMessageEnvelope(
+                    message_id=peer.new_message_id(datetime.now(timezone.utc)),
+                    group_id=group.group_id,
+                    from_run_id=source_run_id,
+                    from_handle=src.handle if src is not None else "",
+                    to_run_id=tgt.run_id if tgt is not None else "",
+                    to_handle=to_handle,
+                    body=body,
+                    hop_budget=group.policy.default_hop_budget,
+                    source_adapter="cli-stdout",
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                    in_reply_to=in_reply_to,
+                )
+                authz = peer.authorize_peer_message(group, env)
+                authz_status = authz.status
+                authz_reason = authz.reason
+                group_id = group.group_id
+                target_em_id = tgt.em_id if tgt is not None else None
+                target_run_id_snapshot = tgt.run_id if tgt is not None else None
+        # ---- ``_group_lock`` released. No target lock was taken under it. ----
+
+        if inactive_state is not None:
+            _emit("peer_send_denied", to_handle=to_handle, status=inactive_state,
+                  reason="source_not_in_active_group",
+                  source_adapter="cli-stdout", body_bytes=body_bytes)
+            return
+
+        def _undelivered(status: str, reason: str) -> None:
+            _emit("peer_send_undelivered", group_id=group_id,
+                  from_handle=env.from_handle, to_handle=to_handle,
+                  message_id=env.message_id, status=status, reason=reason,
+                  source_adapter="cli-stdout", body_bytes=body_bytes)
+
+        if authz_status != "sent":
+            _emit("peer_send_denied", group_id=group_id,
+                  from_handle=env.from_handle, to_handle=to_handle,
+                  message_id=env.message_id, status=authz_status,
+                  reason=authz_reason, source_adapter="cli-stdout",
+                  body_bytes=body_bytes)
+            return
+
+        # 3. Live target re-check OUTSIDE the group lock (same evaluation order
+        #    as the in-process path). Every non-``sent`` outcome is terminal —
+        #    there is no queue/retry in v0.
+        target_entry = self._emanations.get(target_em_id) if target_em_id else None
+        target_run_dir = target_entry.get("run_dir") if target_entry else None
+        if target_entry is None or target_run_dir is None:
+            return _undelivered("not_ready", "target_missing")
+        if target_run_dir.run_id != target_run_id_snapshot:
+            return _undelivered("not_ready", "target_not_live")
+
+        # Completed in-process LingTai targets are not resumable -> target_done.
+        # Completed CLI targets MAY still receive via session resume; that is
+        # left to _handle_ask's existing behavior (which fails closed if no
+        # resumable session exists). target_done is decided ONLY here, by
+        # future.done(), never by string-matching _handle_ask output.
+        target_is_lingtai = target_entry.get("backend") in (None, "lingtai")
+        if target_is_lingtai and target_entry["future"].done():
+            return _undelivered("target_done", "target_completed")
+
+        # A CLI target already streaming a follow-up resume is busy. No queue,
+        # no retry — map straight to busy/peer_busy without spawning a second
+        # resume (which _handle_ask would also refuse as busy).
+        if not target_is_lingtai and target_entry.get("ask_in_flight"):
+            return _undelivered("busy", "peer_busy")
+
+        # 4. Deliver by REUSING _handle_ask — the single existing follow-up
+        #    path. The provenance banner is the body handed to the target,
+        #    exactly what an in-process peer delivery would receive. No parallel
+        #    outbox/queue is created.
+        banner = peer.build_provenance_banner(env)
+        try:
+            ask_result = self._handle_ask(target_em_id, banner)
+        except Exception:  # noqa: BLE001 — treat any delivery failure as terminal
+            return _undelivered("error", "ask_raised")
+
+        ask_status = (ask_result or {}).get("status")
+        if ask_status == "busy":
+            return _undelivered("busy", "peer_busy")
+        if ask_status != "sent":
+            # Every other non-sent _handle_ask outcome (no run_dir, no resumable
+            # session, "not running", ...) maps to not_ready. We never inspect
+            # the human-readable message to manufacture a more specific status.
+            return _undelivered(
+                "not_ready", (ask_result or {}).get("reason") or "delivery_failed")
+
+        # 5. Delivered. Minimal per-group cap counter bump under ``_group_lock``
+        #    alone, only if the group is still the same active group (mirrors
+        #    the in-process success path; fail-closed on the counter).
+        with self._group_lock:
+            live_group = self._groups.get(group_id)
+            if live_group is not None and live_group.state == "active":
+                live_group.message_count += 1
+
+        _emit("peer_send_sent", group_id=group_id,
+              from_handle=env.from_handle, to_handle=to_handle,
+              message_id=env.message_id, status="sent",
+              in_reply_to=in_reply_to, source_adapter="cli-stdout",
+              body_bytes=body_bytes)
+
+    def _handle_group_create(self, args: dict) -> dict:
+        members_spec = args.get("members")
+        if not isinstance(members_spec, list):
+            return self._group_error("bad_members", "members must be a list")
+        if len(members_spec) < 2:
+            return self._group_error(
+                "too_few_members", "a DaemonGroup needs at least two members")
+
+        policy = self._build_group_policy(args.get("policy"))
+
+        # All membership validation + mutation happens under the group lock so
+        # two concurrent group_create calls cannot both claim the same run_id.
+        with self._group_lock:
+            seen_handles: set[str] = set()
+            resolved: list[peer.GroupMember] = []
+            for spec in members_spec:
+                if not isinstance(spec, dict):
+                    return self._group_error(
+                        "bad_member", "each member must be an object")
+                em_id = spec.get("id")
+                handle = spec.get("handle")
+                if not peer.validate_handle(handle):
+                    return self._group_error(
+                        "unsafe_handle", f"invalid peer handle: {handle!r}")
+                if handle in seen_handles:
+                    return self._group_error(
+                        "duplicate_handle", f"duplicate handle: {handle}")
+
+                entry = self._emanations.get(em_id)
+                run_dir = entry.get("run_dir") if entry else None
+                if entry is None or run_dir is None:
+                    return self._group_error(
+                        "unknown_member", f"no live daemon with id {em_id!r}")
+
+                run_id = run_dir.run_id
+                backend = _normalize_backend(entry.get("backend", "lingtai"))
+                can_author = bool(spec.get("can_author_peer_send", False))
+                can_receive = bool(spec.get("can_receive_peer_message", True))
+
+                # Completed in-process LingTai sessions are not resumable, so
+                # they cannot be receivers or authors. (Completed CLI members
+                # are eligible — their resume is checked at delivery time.)
+                if backend == "lingtai" and entry["future"].done():
+                    return self._group_error(
+                        "completed_lingtai_member",
+                        f"completed in-process daemon {em_id!r} is not resumable")
+
+                if can_author:
+                    if backend not in peer.PEER_AUTHOR_BACKENDS:
+                        return self._group_error(
+                            "unsupported_author_backend",
+                            f"backend {backend!r} cannot author peer sends in v0")
+                    if not entry.get("peer_author"):
+                        return self._group_error(
+                            "author_without_optin",
+                            f"daemon {em_id!r} was not emanated with "
+                            "peer_author=true")
+
+                if run_id in self._group_by_run_id:
+                    return self._group_error(
+                        "already_in_group",
+                        f"daemon {em_id!r} is already in an active group")
+
+                seen_handles.add(handle)
+                resolved.append(peer.GroupMember(
+                    em_id=em_id,
+                    run_id=run_id,
+                    handle=handle,
+                    backend=backend,
+                    role=spec.get("role"),
+                    can_author_peer_send=can_author,
+                    can_receive_peer_message=can_receive,
+                ))
+
+            self._group_seq += 1
+            group_id = peer.new_group_id(datetime.now(timezone.utc))
+            group = peer.DaemonGroup(
+                group_id=group_id,
+                state="active",
+                roster_by_handle={m.handle: m for m in resolved},
+                roster_by_run_id={m.run_id: m for m in resolved},
+                policy=policy,
+                message_count=0,
+            )
+            self._groups[group_id] = group
+            for m in resolved:
+                self._group_by_run_id[m.run_id] = group_id
+
+            roster_notices = {
+                m.handle: peer.build_roster_notice(group, m) for m in resolved
+            }
+            members_out = [
+                {"id": m.em_id, "run_id": m.run_id, "handle": m.handle,
+                 "backend": m.backend, "role": m.role}
+                for m in resolved
+            ]
+
+        # Log outside the lock (lock discipline: never log/deliver while held).
+        self._log("group_created", group_id=group_id, members=members_out,
+                  policy={
+                      "max_message_bytes": policy.max_message_bytes,
+                      "default_hop_budget": policy.default_hop_budget,
+                      "max_messages_per_group": policy.max_messages_per_group,
+                      "allow_pairs": (sorted(list(policy.allow_pairs))
+                                      if policy.allow_pairs is not None else None),
+                  })
+        return {
+            "status": "created",
+            "group_id": group_id,
+            "members": members_out,
+            "roster_notices": roster_notices,
+        }
+
+    def _handle_group_reclaim(self, group_id: str) -> dict:
+        with self._group_lock:
+            group = self._groups.get(group_id)
+            if group is None:
+                return self._group_error(
+                    "unknown_group", f"no group with id {group_id!r}")
+            group.state = "reclaimed"
+            member_count = len(group.roster_by_run_id)
+            for run_id in list(group.roster_by_run_id):
+                if self._group_by_run_id.get(run_id) == group_id:
+                    del self._group_by_run_id[run_id]
+
+        self._log("group_reclaimed", group_id=group_id,
+                  member_count=member_count, reason="group_reclaim")
+        return {"status": "reclaimed", "group_id": group_id,
+                "members": member_count}
+
+    def _handle_group_status(self, group_id: str | None) -> dict:
+        with self._group_lock:
+            if group_id is None:
+                groups = [self._group_summary(g) for g in self._groups.values()]
+                return {"status": "ok", "groups": groups}
+            group = self._groups.get(group_id)
+            if group is None:
+                return self._group_error(
+                    "unknown_group", f"no group with id {group_id!r}")
+            summary = self._group_summary(group)
+        summary["status"] = "ok"
+        return summary
+
+    @staticmethod
+    def _group_summary(group: peer.DaemonGroup) -> dict:
+        return {
+            "group_id": group.group_id,
+            "state": group.state,
+            "sent_count": group.message_count,
+            "members": [
+                {"id": m.em_id, "run_id": m.run_id, "handle": m.handle,
+                 "backend": m.backend, "role": m.role,
+                 "can_author_peer_send": m.can_author_peer_send,
+                 "can_receive_peer_message": m.can_receive_peer_message}
+                for m in group.roster_by_handle.values()
+            ],
+        }
+
     def _handle_reclaim(self) -> dict:
         report = self.shutdown_for_agent_stop(reason="reclaim", wait_timeout=0.0)
         cancelled = report.get("cancelled", 0)
-        self._log("daemon_reclaim", cancelled_count=cancelled)
+        # Global reclaim also tears down every DaemonGroup and its run-id
+        # indexes, on top of the emanation cleanup above. em_ids/run_ids are
+        # now gone, so any surviving group reference would be stale.
+        with self._group_lock:
+            group_count = len(self._groups)
+            for group in self._groups.values():
+                group.state = "reclaimed"
+            self._groups.clear()
+            self._group_by_run_id.clear()
+        self._log("daemon_reclaim", cancelled_count=cancelled,
+                  groups_cleared=group_count)
         return {"status": "reclaimed", "cancelled": cancelled}
 
     def _on_emanation_done(self, em_id: str, task_summary: str, future) -> None:

@@ -357,6 +357,20 @@ class DaemonRunDir:
             self.heartbeat_path.touch()
         self._safe("record_cli_output", _write)
 
+    def record_peer_event(self, event: str, fields: dict) -> None:
+        """Append one peer/group event line to this run's events.jsonl.
+
+        Thin, best-effort, source-side wrapper around the append-jsonl
+        primitive. The parent ``DaemonManager._log`` remains the canonical peer
+        event sink; this is a secondary local trace. Callers must pass only
+        non-sensitive fields (e.g. ``body_bytes``) — never the full peer body.
+        """
+        def _write():
+            entry = {"event": event, "ts": self._now_iso()}
+            entry.update(fields)
+            self._append_jsonl(self.events_path, entry)
+        self._safe("record_peer_event", _write)
+
     # ------------------------------------------------------------------
     # Token accounting — dual ledger writes
     # ------------------------------------------------------------------

@@ -1275,7 +1275,12 @@ def _cli_entry(mgr, agent, em_id: str, backend: str, session_id: str) -> dict:
         run_dir._state["codex_session_id"] = session_id
     run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
     entry = {
-        "future": MagicMock(done=MagicMock(return_value=False)),
+        # The initial CLI turn has completed by the time a follow-up `ask` is
+        # issued — this is the realistic precondition for resume. (Codex now
+        # guards `ask` against a still-running initial future; see
+        # `_handle_ask_codex`. A non-done future here would correctly be
+        # refused as busy before reaching the resume spawn path.)
+        "future": MagicMock(done=MagicMock(return_value=True)),
         "task": "primary task",
         "start_time": time.time(),
         "cancel_event": threading.Event(),

@@ -9,28 +9,32 @@ request text.
 
 ## Components
 
-- `daemon/__init__.py` — public capability surface. `get_description`, `get_schema`, and `setup`; the core class is `DaemonManager`, which manages the full emanation lifecycle and parent-stop cleanup. Key internals: `_ToolCollector` (`daemon/__init__.py:257-284`) intercepts `add_tool` calls during preset-driven capability setup to build a sandboxed tool surface without mutating the parent's registry. `EMANATION_BLACKLIST` (`daemon/__init__.py:133`) prevents recursion by blocking `daemon`, `avatar`, `psyche`, `skills`, and deprecated `codex` tools in subagents.
+- `daemon/__init__.py` — public capability surface. `get_description`, `get_schema`, and `setup`; the core class is `DaemonManager`, which manages the full emanation lifecycle and parent-stop cleanup. Key internals: `_ToolCollector` (`daemon/__init__.py:257-284`) intercepts `add_tool` calls during preset-driven capability setup to build a sandboxed tool surface without mutating the parent's registry. `EMANATION_BLACKLIST` (`daemon/__init__.py:133`) prevents recursion by blocking `daemon`, `avatar`, `psyche`, `skills`, and deprecated `codex` tools in subagents. `DaemonManager` also owns the expanded DaemonGroup v0 parent router: `group_create`/`group_reclaim`/`group_status` schema dispatch (`daemon/__init__.py:422`, `daemon/__init__.py:684-685`), native in-process `peer_send`, CLI sentinel parsing after complete Codex/Claude Code turns (`daemon/__init__.py:4347`), and group membership creation/locking (`daemon/__init__.py:4533`).
+- `daemon/peer.py` — pure DaemonGroup v0 peer primitives. It defines `DaemonGroup` (`daemon/peer.py:81`), `PeerMessageEnvelope` (`daemon/peer.py:99`), the strict CLI sentinel parser (`daemon/peer.py:145`), the single authorization gate (`daemon/peer.py:228`), provenance/roster rendering, and the CLI peer-author prompt contract (`daemon/peer.py:380`). The module has no daemon process/thread ownership; `DaemonManager` calls into it and remains the only router.
 - `daemon/claude_interactive.py` — interactive Claude Code daemon backend. `ClaudeInteractiveBridge` (`daemon/claude_interactive.py:103`) runs normal interactive `claude` under a PTY from a LingTai-managed workspace, writes the managed system prompt (`daemon/claude_interactive.py:80-96`), prepares empty or explicit-source detached worktrees (`daemon/claude_interactive.py:250-309`), answers terminal probes, injects `SessionStart`/`Stop` hooks via inline `--settings`, relays hook payloads through a FIFO, auto-selects workspace trust only inside the verified managed root (`daemon/claude_interactive.py:535-559`), and parses Claude transcript JSONL into daemon progress/result state.
-- `daemon/run_dir.py` — per-emanation filesystem run directory. `DaemonRunDir` owns every filesystem effect for one run: folder layout, `daemon.json` atomic writes, JSONL appends, CLI progress events, heartbeat touches, `result.txt`, and terminal state markers. The `DaemonManager` calls into a `DaemonRunDir` at every lifecycle hook without itself touching the filesystem.
+- `daemon/run_dir.py` — per-emanation filesystem run directory. `DaemonRunDir` owns every filesystem effect for one run: folder layout, `daemon.json` atomic writes, JSONL appends, CLI progress events, heartbeat touches, `result.txt`, and terminal state markers. It also records body-free peer routing events for CLI authors via `record_peer_event` (`daemon/run_dir.py:360`). The `DaemonManager` calls into a `DaemonRunDir` at every lifecycle hook without itself touching the filesystem.
 
 ## Public API
 
-The `daemon` tool exposes five actions:
+The `daemon` tool exposes the ordinary emanation lifecycle plus explicit DaemonGroup v0 actions:
 
 | Action     | Description |
 |------------|-------------|
-| `emanate`  | Spawn one or more subagents with specified task + tools + optional preset |
+| `emanate`  | Spawn one or more subagents with specified task + tools + optional preset; `peer_author` opt-in marks LingTai/Codex/Claude Code emanations as potential group authors but grants no routing power until `group_create` |
 | `list`     | List running/completed/failed emanations with status and elapsed time |
-| `ask`      | Send a follow-up message to a running emanation |
+| `ask`      | Send a follow-up message to a running emanation; CLI asks are non-blocking and Codex asks return `busy` while the initial Codex turn is not yet resumable |
 | `check`    | Read-only progress tail: `daemon.json` state + last N events from `events.jsonl` |
-| `reclaim`  | Cancel all running emanations, shut down CLI process groups/thread pools through the same runtime-shutdown helper used by agent stop, reset ID counter |
+| `reclaim`  | Cancel all running emanations, reclaim active groups, shut down CLI process groups/thread pools through the same runtime-shutdown helper used by agent stop, reset ID counter |
+| `group_create` | Create an explicit parent-owned DaemonGroup over live emanation run ids, with per-member handles/roles/author/receive flags and optional allowlist/size/rate policy |
+| `group_status` | Read group membership/message-count/reclaimed state without exposing message bodies |
+| `group_reclaim` | Revoke a group so future peer sends fail closed at call time |
 
 ## Internal Module Layout
 
 ```
 daemon/__init__.py
   ├── DaemonManager.__init__        — stores agent ref, config ceilings, emanation registry
-  ├── handle()                      — top-level dispatcher (emanate/list/ask/check/reclaim)
+  ├── handle()                      — top-level dispatcher (emanate/list/ask/check/reclaim/group_create/group_status/group_reclaim)
   ├── _build_tool_surface()         — filters requested tools against blacklist, expands groups
   ├── _instantiate_preset_capabilities() — sets up preset tool surface in a sandbox
   ├── _build_emanation_prompt()     — composes the subagent's system prompt
@@ -49,10 +53,13 @@ daemon/__init__.py
   ├── _handle_ask()                 — dispatcher: routes resumable CLI backends (interactive Claude, claude-p/claude-code, codex, opencode, mimocode, oh-my-pi, and cursor) to their async follow-up handlers; returns an explicit unsupported error for qwen-code; routes lingtai asks to the in-process followup buffer
   ├── _handle_ask_cli()             — claude-code follow-up via `claude --resume <claude_session_id>`. Spawns the subprocess, hands the stream-json parse to `_ask_pool`, returns `{"status":"sent","async":true}` immediately so the parent's tool turn isn't held for the duration of the follow-up
   ├── _run_ask_claude_code_stream() — background worker for the claude-code ask. Same stream-json parse as `_run_claude_code_emanation`; clears `ask_in_flight` on exit
-  ├── _handle_ask_codex()           — codex follow-up via `codex exec resume <codex_session_id> --json`. Symmetric with `_handle_ask_cli`: spawns + dispatches to `_ask_pool`, returns immediately
+  ├── _handle_ask_codex()           — codex follow-up via `codex exec resume <codex_session_id> --json`. Symmetric with `_handle_ask_cli`: spawns + dispatches to `_ask_pool`, returns immediately. Codex-specific guard: if the initial Codex future is not done yet, returns `busy` before spawning because `thread.started.thread_id` can appear before the rollout is resumable.
   ├── _run_ask_codex_stream()       — background worker for the codex ask. Same JSONL parse as `_run_codex_emanation`; `daemon(check)` therefore sees progress on follow-ups too
   ├── _handle_ask_opencode()        — OpenCode-family follow-up via `opencode run --session <opencode_session_id> --format json <message>` by default; callers such as oh-my-pi can pass `build_resume_cmd` to customize the resume argv (`omp --mode json --approval-mode yolo --session <oh_my_pi_session_id> <message>`). Symmetric with claude-code / codex ask: spawns, dispatches to `_ask_pool`, returns immediately. Returns a clear error if the backend-specific session id has not been captured yet.
   ├── _run_ask_opencode_stream()    — background worker for the opencode ask. Same defensive JSON-line parse as `_run_opencode_emanation`; clears `ask_in_flight` on exit; terminal-shaped events override intermediate text
+  ├── _handle_group_create/status/reclaim — parent-owned DaemonGroup lifecycle. Groups snapshot live emanation `run_id`s, handles, roles, author/receive flags, and policy under `_group_lock`; reclaim revokes future peer sends at call time rather than mutating tool schemas.
+  ├── _handle_peer_send()           — native LingTai-backend peer tool handler. It derives source identity from live run_dir/group membership, authorizes through `peer.authorize_peer_message`, and delivers via the existing follow-up path without a hidden queue.
+  ├── _maybe_handle_cli_peer_intent() — Codex/Claude Code post-turn parser. It scans the complete terminal turn for one strict sentinel, normalizes one display-form `@handle` target, then routes through the same envelope/policy/delivery core with body-free events.
   ├── _watchdog()                   — timeout enforcement thread
   ├── _publish_daemon_notification() — publishes compact system notifications
   └── _drain_followup()             — drains per-emanation follow-up buffer (lingtai backend only)
@@ -65,9 +72,17 @@ daemon/run_dir.py
   ├── set_current_tool()            — marks tool dispatch starting (daemon.json + events + heartbeat)
   ├── clear_current_tool()          — marks tool dispatch finished
   ├── record_cli_output()           — records CLI backend stdout/stderr as cli_output events
+  ├── record_peer_event()           — appends body-free peer routing events (parsed/sent/denied/undelivered) to a CLI author's run_dir so `daemon(check)` can explain peer-send outcomes
   ├── append_tokens()               — dual-ledger token accounting (daemon's + parent's)
   ├── mark_done/failed/cancelled/timeout — terminal state markers (result.txt + preview on done)
   └── _atomic_write_json()          — tempfile + os.replace for crash-safe writes
+
+daemon/peer.py
+  ├── DaemonGroup / GroupMember / PeerPolicy — immutable-ish group roster + policy dataclasses used by the parent router
+  ├── parse_peer_send_contract()    — strict CLI sentinel parser; rejects malformed/multiple/unterminated blocks and daemon-authored identity fields
+  ├── authorize_peer_message()      — single policy gate for source/target/allow-pair/size/rate/hop checks
+  ├── build_provenance_banner() / build_roster_notice() — untrusted-input banners for delivered peer bodies and group membership notices
+  └── build_peer_author_contract() / get_peer_send_tool_schema() — CLI prompt contract and native LingTai tool schema for opt-in authors
 ```
 
 ## Key Invariants

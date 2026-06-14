@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DaemonGroup v0 peer_send feature PR explainer</title>
+  <style>
+    :root { --bg:#0f172a; --panel:#111827; --ink:#e5e7eb; --muted:#9ca3af; --ok:#22c55e; --warn:#f59e0b; --accent:#38bdf8; --line:#334155; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); line-height:1.55; }
+    main { max-width:1080px; margin:0 auto; padding:36px 22px 60px; }
+    h1 { font-size:2rem; margin:0 0 8px; }
+    h2 { margin-top:34px; padding-top:18px; border-top:1px solid var(--line); }
+    code, pre { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    pre { background:#020617; border:1px solid var(--line); border-radius:10px; padding:14px; overflow:auto; }
+    .panel { background:rgba(17,24,39,.82); border:1px solid var(--line); border-radius:14px; padding:18px 20px; margin:18px 0; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:14px; }
+    .pill { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:3px 10px; margin:2px; color:var(--muted); }
+    .ok { color:var(--ok); font-weight:700; } .warn { color:var(--warn); font-weight:700; } .accent { color:var(--accent); font-weight:700; }
+    ul { padding-left:1.25rem; } a { color:var(--accent); }
+    table { width:100%; border-collapse:collapse; margin:12px 0; } th,td { border:1px solid var(--line); padding:8px; text-align:left; vertical-align:top; } th { background:#1f2937; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>DaemonGroup v0: daemon-authored <code>peer_send</code></h1>
+  <p class="muted">Prepared 2026-06-14 for the LingTai kernel PR from <code>feat/daemon-group-v0-peer-send</code>.</p>
+
+  <section class="panel">
+    <h2 style="margin-top:0;border-top:0;padding-top:0">Conclusion</h2>
+    <p><span class="ok">Ready for PR review.</span> This feature adds explicit parent-owned DaemonGroups where opt-in LingTai, Codex, and Claude Code daemons can send bounded peer messages to sibling daemons through one parent-mediated policy and delivery core.</p>
+    <p>The prior blocker — Codex resume failing with <code>no rollout found</code> — was real. The root cause was a race: Codex emits <code>thread.started.thread_id</code> before the initial rollout is fully resumable. The fix returns <code>busy</code> until the initial Codex future is done, then resumes normally.</p>
+  </section>
+
+  <section class="grid">
+    <div class="panel"><strong>Fresh worktree</strong><br>Implemented in an isolated temporary worktree; not in the developer's live checkout.</div>
+    <div class="panel"><strong>Branch</strong><br><code>feat/daemon-group-v0-peer-send</code></div>
+    <div class="panel"><strong>Base</strong><br><code>canonical/main c43434f</code></div>
+  </section>
+
+  <h2>What changed</h2>
+  <ul>
+    <li>Added <code>src/lingtai/core/daemon/peer.py</code>: pure dataclasses and helpers for group roster, peer message envelopes, strict CLI sentinel parsing, policy authorization, provenance banners, roster notices, and author contracts.</li>
+    <li>Extended <code>DaemonManager</code> with <code>group_create</code>, <code>group_status</code>, and <code>group_reclaim</code>.</li>
+    <li>Added opt-in <code>peer_author</code> support for LingTai in-process daemons, Codex CLI daemons, and Claude Code CLI daemons.</li>
+    <li>Added native in-process <code>peer_send</code> tool for LingTai authors; parent remains the only router.</li>
+    <li>Added strict post-turn CLI sentinel parsing for Codex/Claude Code authors: one block only, no natural-language parser, daemon-authored identity fields rejected.</li>
+    <li>Added body-free peer routing traces into the parent log and CLI author's run dir so <code>daemon(check)</code> can explain send outcomes without leaking message text.</li>
+    <li>Added Codex resume guard: do not spawn <code>codex exec resume</code> while the initial Codex future is still running.</li>
+    <li>Updated <code>src/lingtai/core/daemon/ANATOMY.md</code> for the new peer module, group APIs, and routing flow.</li>
+  </ul>
+
+  <h2>Safety model</h2>
+  <table>
+    <tr><th>Boundary</th><th>Behavior</th></tr>
+    <tr><td>Parent-only routing</td><td>Daemons never get the full daemon tool and cannot directly address process internals. All peer sends pass through the parent.</td></tr>
+    <tr><td>Explicit groups</td><td>Only members in <code>group_create</code> can send/receive. Groups snapshot stable <code>run_id</code>s, not reusable handles alone.</td></tr>
+    <tr><td>Call-time revocation</td><td><code>group_reclaim</code> revokes by policy check; no dynamic tool-schema mutation is required.</td></tr>
+    <tr><td>No hidden queue</td><td><code>sent</code> means accepted into the target follow-up path. Busy/done/not-ready are terminal outcomes for v0.</td></tr>
+    <tr><td>Metadata-only logs</td><td>Events record handles, statuses, ids, byte counts, and reasons, but not peer message bodies.</td></tr>
+  </table>
+
+  <h2>Real smoke evidence</h2>
+  <div class="panel">
+    <p><span class="ok">Claude Code author smoke:</span> local verification artifact <code>daemon-group-v0-real-smoke.json</code> (not committed; summarized here).</p>
+    <ul>
+      <li>Real Claude Code daemon emitted a sentinel targeting <code>@lingtai</code>.</li>
+      <li>Parent normalized to bare <code>lingtai</code> and logged <code>peer_send_sent</code>.</li>
+      <li>LingTai daemon observed <code>REAL_SMOKE_CLAUDE_TO_LINGTAI</code>.</li>
+    </ul>
+  </div>
+  <div class="panel">
+    <p><span class="ok">Codex author smoke:</span> local verification artifact <code>daemon-group-v0-codex-author-smoke.json</code> (not committed; summarized here).</p>
+    <ul>
+      <li>Real Codex CLI daemon authored the peer message after the resume-race guard.</li>
+      <li>Parent logged <code>peer_send_sent</code> from <code>codex</code> to <code>lingtai</code>.</li>
+      <li>LingTai daemon observed <code>REAL_SMOKE_CODEX_TO_LINGTAI</code>.</li>
+      <li>Busy target and group-reclaim fail-closed branches were also observed.</li>
+    </ul>
+  </div>
+
+  <h2>Verification</h2>
+  <pre>.venv/bin/pytest tests/test_daemon_peer.py tests/test_daemon_peer_surface.py \
+  tests/test_daemon_group.py tests/test_daemon_peer_delivery.py \
+  tests/test_daemon_run_dir.py tests/test_daemon_peer_cli_authoring.py \
+  tests/test_daemon.py -q
+
+255 passed in 16.98s</pre>
+  <p>Codex review daemon independently ran the same targeted suite: <code>255 passed in 16.58s</code>.</p>
+
+  <h2>Known non-goals / follow-ups</h2>
+  <ul>
+    <li>No durable outbox/scanner/ack/dedupe in v0.</li>
+    <li>No broadcast or fanout.</li>
+    <li>No multi-group/cross-group routing.</li>
+    <li>No free-form natural-language parser; CLI authors must emit the strict sentinel.</li>
+    <li>OpenCode/Cursor are receive-only for v0 unless a future author contract is designed for them.</li>
+  </ul>
+
+  <h2>Review artifacts</h2>
+  <ul>
+    <li>Final plan, Claude implementation reports, Codex review reports, and raw smoke JSON were produced as local review artifacts and summarized above. They are intentionally not committed because they include machine-local execution paths.</li>
+  </ul>
+</main>
+</body>
+</html>
