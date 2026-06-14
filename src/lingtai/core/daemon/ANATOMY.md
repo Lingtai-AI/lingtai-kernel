@@ -3,9 +3,10 @@
 Daemon capability (分神) — dispatch ephemeral subagents (分神) that operate
 in parallel on the agent's working directory. Each LingTai-backend emanation
 is a disposable `ChatSession` with a curated tool surface, not an agent; the
-parent may add a per-task oneshot `system_prompt`; the daemon-eligible `email`
-intrinsic is available by default, but daemon tool calls still pass through the
-kernel `ToolExecutor`/`ToolCallGuard` path before any handler runs. Each `daemon.emanate` batch gets a stable `group_id` shared by every run in
+parent may add a per-task oneshot `system_prompt` as the behavior contract for
+role, constraints, and tool-use policy; the daemon-eligible `email` intrinsic is
+available by default, but daemon tool calls still pass through the kernel
+`ToolExecutor`/`ToolCallGuard` path before any handler runs. Each `daemon.emanate` batch gets a stable `group_id` shared by every run in
 that batch, while each daemon still keeps its own `run_id`. Results are
 persisted in per-run daemon folders; terminal completion/failure is surfaced as
 a compact `.notification/system.json` event instead of ordinary parent request
@@ -77,7 +78,7 @@ daemon/run_dir.py
 
 ## Key Invariants
 
-- **No recursion:** `EMANATION_BLACKLIST` prevents emanations from spawning sub-emanations, avatars, psyche, the skill catalog, or deprecated codex.
+- **No recursion:** `EMANATION_BLACKLIST` prevents emanations from spawning sub-emanations, avatars, psyche, the skill catalog, or codex-style recursive agent execution.
 - **Tool surface isolation:** `_ToolCollector` ensures preset-driven capability setup does not mutate the parent agent's tool registry.
 - **Filesystem isolation:** Each emanation gets its own `daemons/em-<N>-<YYYYMMDD-HHMMSS>-<hash6>/` directory. `DaemonRunDir` uses atomic `os.replace` for `daemon.json` and single-writer append-only JSONL for events/chat history.
 - **Startup reaps stale parent-owned records:** `DaemonManager.__init__` scans only the current agent working directory's `daemons/*/daemon.json` files and marks `running`/`active` records as `failed` when their recorded `parent_pid` no longer exists. It does not reconstruct in-memory registry entries from disk.

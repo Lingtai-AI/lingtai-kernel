@@ -67,19 +67,26 @@ available:
 | `cursor` | `agent -p <prompt>` | `agent -p --resume <cursor_session_id> ...` via `ask` (async) | Cursor Agent CLI backend. |
 
 **Per-task system prompt.** Every task item may include `system_prompt`. Use it
-when this daemon should temporarily act as a focused reviewer, researcher,
-implementer, translator, or other one-run role. Omit it or leave it blank for the
-default daemon persona. For the built-in `lingtai` backend it is appended to the
-daemon's system prompt as a bounded oneshot parent instruction; it cannot
-override lifecycle limits, tool schemas, or the ToolExecutor/ToolCallGuard
-execution gate. For CLI backends, the same text is also embedded at the top of the
-task prompt and persisted in the daemon `.prompt` file for forensics.
+as the parent agent's one-run behavior contract: the daemon's role, constraints,
+tool-use policy, collaboration boundaries, safety posture, and interpretation
+rules. Keep `task` focused on the concrete objective and deliverable; put the
+explanation of *how to behave while doing it* in `system_prompt`. Omit it or
+leave it blank for the default daemon persona. For the built-in `lingtai` backend
+it is appended to the daemon's system prompt as a bounded oneshot parent
+instruction; it cannot override lifecycle limits, tool schemas, or the
+ToolExecutor/ToolCallGuard execution gate. For CLI backends, the same text is
+also embedded at the top of the task prompt and persisted in the daemon `.prompt`
+file for forensics.
 
 **LingTai backend tool surface.** The built-in `lingtai` backend uses preset
 resolution plus daemon tool curation. MCP tools still auto-inherit from the
 parent. The daemon-eligible `email` intrinsic is available by default so an
 emanation can communicate in the local agent network when the task requires it;
 other intrinsics remain unavailable to keep daemon lightweight and non-recursive.
+As with file/bash/web/MCP tools, technical availability is not a policy by
+itself: the parent should use `system_prompt` to say when and how the daemon may
+use any available tool, including who it may contact and what context it may
+share if email is involved.
 
 **When to use CLI backends:** Use them when the task benefits from a different
 agent runtime's tool surface (for example Claude Code's built-in file editing or

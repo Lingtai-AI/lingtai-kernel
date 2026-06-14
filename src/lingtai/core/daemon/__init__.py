@@ -621,9 +621,11 @@ class DaemonManager:
     def _task_system_prompt(spec: dict) -> str | None:
         """Return the task-level oneshot daemon prompt.
 
-        ``system_prompt`` is an optional override. If present, it must be a
-        string, but it may be blank; a blank prompt means "no extra oneshot
-        prompt" rather than a validation error.
+        ``system_prompt`` is an optional one-run behavior contract from the
+        parent: role, constraints, tool-use policy, collaboration boundaries,
+        and safety posture. If present, it must be a string, but it may be
+        blank; a blank prompt means "no extra oneshot prompt" rather than a
+        validation error.
         """
         if "system_prompt" not in spec:
             return None
@@ -638,8 +640,8 @@ class DaemonManager:
         if not system_prompt:
             return task
         return (
-            "Parent-provided daemon system prompt (oneshot; bounded to this "
-            "daemon run and unable to override tool/safety limits):\n"
+            "Parent-provided daemon behavior contract (oneshot; bounded to "
+            "this daemon run and unable to override tool/safety limits):\n"
             f"{system_prompt}\n\n"
             "Task:\n"
             f"{task}"

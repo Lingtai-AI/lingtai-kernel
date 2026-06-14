@@ -79,24 +79,39 @@ files, not standalone top-level skills.
 - Keep daemon lightweight. If the task needs long-lived persona, molt/pad,
   durable knowledge, or ongoing ownership, spawn an avatar/agent instead of
   stretching daemon.
-- Think of each task item as **what to do** plus optional execution shape:
-  - `task`: the objective and deliverable. Put the concrete work here.
-  - `system_prompt`: optional one-run daemon persona/constraints. Omit it or
-    leave it blank for the default daemon persona. Use it to narrow style,
-    role, or safety posture; it cannot override lifecycle limits, available
-    tool schema, or tool execution/approval guards.
-  - `tools`: capability groups/tools the daemon should have for the task.
-    `email` is daemon-eligible communication and is available by default;
-    tools still matter for file/bash/web/etc. access.
+- Think of each task item as **task objective + behavior guidance + tool
+  surface**:
+  - `task` answers **what to do**: concrete objective, inputs, expected output,
+    destination path, and verification checklist. Keep it task-shaped.
+  - `system_prompt` answers **how this daemon should behave while doing it**:
+    the parent's one-run role, constraints, safety posture, interpretation
+    rules, collaboration boundaries, and tool-use policy. Omit it or leave it
+    blank for the default daemon persona. It can guide or narrow behavior, but
+    cannot override lifecycle limits, available tool schema, or the
+    ToolExecutor/ToolCallGuard execution gates.
+  - `tools` answers **what the daemon can technically use** for this run. The
+    parent still uses `system_prompt` to say when and how those tools should be
+    used (for example: read-only file access, no network, write only to one
+    report path, or ask a named peer before guessing). `email` is
+    daemon-eligible communication and is available by default; other tool names
+    still matter for file/bash/web/etc. access.
   - `preset`: optional body/model/tool-shape override for this daemon.
   - `backend_options`: raw CLI flags for CLI backends only.
+- Treat `system_prompt` as the parent's behavioral contract for **all** tools,
+  not only for communication. If a daemon receives `bash`, say whether it may
+  run mutating commands; if it receives file access, say what it may read/write;
+  if it receives web/MCP tools, say what external calls are allowed; if it can
+  communicate, say who it may contact and what context it may share.
+- `email` is available by default because a daemon is still part of the local
+  agent network: it may need to report to peers, ask a sibling for context, or
+  hand off a result. Availability is not authorization to broadcast. The parent
+  should specify communication rules in `system_prompt`: allowed recipients,
+  purpose, tone, thread/reply discipline, information boundaries, whether the
+  daemon may ask questions or only report, how to report back to the parent, and
+  when not to send mail.
 - LingTai-backend daemon tool calls go through the kernel `ToolExecutor` /
   `ToolCallGuard` path before dispatch, so guarded side effects are not allowed
   to bypass normal proposal/execution policy just because they run in a daemon.
-- `email` is available by default because a daemon is still part of the local
-  agent network: it may need to report to peers, ask a sibling for context, or
-  hand off a result. The parent task/prompt still defines who it should contact
-  and why; daemon email is not a license to broadcast.
 - Every `daemon.emanate` call returns a batch `group_id` shared by all daemon
   runs launched in that same call. Use `group_id` for logical batch context and
   audit. It is not a hard security boundary; use each daemon's `run_id` for
@@ -119,6 +134,22 @@ files, not standalone top-level skills.
   event activity before reclaiming.
 - CLI backend flags are passthroughs. Verify the current CLI's `--help` before
   relying on a flag.
+
+### Example: separate task from behavior guidance
+
+Use `task` for the deliverable and `system_prompt` for the daemon's operating
+contract:
+
+```json
+{
+  "task": "Audit the daemon manual changes and write a concise review to reports/daemon-manual-review.md.",
+  "system_prompt": "Act as a documentation reviewer. Stay read-only except for the requested report file. You may use email only to ask dev-2 for missing daemon context; do not contact the human. If you email dev-2, state the exact question, include only the relevant snippet, and summarize the exchange in your final report. Do not use web tools unless the local docs are insufficient.",
+  "tools": ["file", "bash"]
+}
+```
+
+The same pattern applies to non-email tools: `tools` grants a capability surface;
+`system_prompt` tells the daemon how to exercise that surface in this one run.
 
 ## Maintenance
 
