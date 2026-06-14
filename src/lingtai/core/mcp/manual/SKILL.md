@@ -3,7 +3,7 @@ name: mcp-manual
 description: >
   Operational guide for the `mcp` capability — register, activate, update,
   deregister, and troubleshoot MCP (Model Context Protocol) servers in your
-  agent. Single source of truth for both generic MCP setup AND the five
+  agent. Single source of truth for both generic MCP setup AND the six
   kernel-curated LingTai addon MCPs (`imap`, `telegram`, `feishu`, `wechat`, `whatsapp`, `cloud_mail`).
 
   Reach for this manual when:

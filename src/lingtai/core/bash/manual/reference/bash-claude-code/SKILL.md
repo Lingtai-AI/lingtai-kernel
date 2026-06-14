@@ -21,7 +21,7 @@ Delegate code work to [Claude Code](https://docs.anthropic.com/en/docs/claude-co
 
 ## Prerequisites
 
-- Claude Code installed: `which claude` → `/Users/huangzesen/.local/bin/claude`
+- Claude Code installed: `which claude` → `${HOME}/.local/bin/claude`
 - Uses the human's **Claude Max subscription** — no additional API costs
 - Rate limit tier: `default_claude_max_20x` (effectively unlimited for typical use)
 
@@ -247,7 +247,7 @@ claude -p "generate a patch for issue #42" \
 |-------|-----|
 | Timeout after 30s | For a genuinely short inline task, set an explicit modest bash timeout (for example 300s). For long/complex work, prefer a daemon or supervised background wrapper instead of blocking the agent turn. |
 | Agent appears stuck while `claude -p` runs | You likely used synchronous CLI for work that should have been daemon-backed or supervised in the background. Inspect/kill the child if needed, then resume with a non-blocking wrapper. |
-| Claude Code not found | Check `which claude` → `/Users/huangzesen/.local/bin/claude` |
+| Claude Code not found | Check `which claude` → `${HOME}/.local/bin/claude` |
 | Permission errors | Always include `--dangerously-skip-permissions` |
 | Output truncated | Check if Claude hit the budget limit |
 | Rate limited | Wait and retry; Max tier has generous limits |

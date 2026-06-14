@@ -80,8 +80,8 @@ Fields the agent will care about:
 External scripts should write via `tmp + rename` so the kernel never sees truncated JSON:
 
 ```bash
-export AGENT_DIR="/Users/huangzesen/work/lingtai-dev/.lingtai/codex-gpt5.5"
-export REMINDER_ID="plot-caption-$(date +%Y%m%d-%H%M%S)"
+export AGENT_DIR="/Users/<you>/work/<project>/.lingtai/<agent>"
+export REMINDER_ID="task-followup-$(date +%Y%m%d-%H%M%S)"
 
 /usr/bin/python3 - <<'PY'
 import json, os, pathlib, time
@@ -92,14 +92,14 @@ notif = agent / ".notification"
 notif.mkdir(exist_ok=True)
 now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 payload = {
-    "header": "Cron reminder: check Codex plot run",
+    "header": "Cron reminder: check pending task",
     "icon": "⏰",
     "priority": "normal",
     "published_at": now,
     "data": {
         "source": "cron-reminder",
-        "message": "Codex active. Plot regenerated (362KB, 23:38) — waiting for caption + commit.",
-        "todo": "Check Codex status, inspect caption, commit if ready.",
+        "message": "Background job still running — waiting for output + commit.",
+        "todo": "Check job status, inspect output, commit if ready.",
         "reminder_id": os.environ.get("REMINDER_ID", "cron-reminder"),
         "epoch": int(time.time()),
     },
@@ -117,7 +117,7 @@ For a short local reminder where the machine is expected to stay awake, a detach
 
 ```bash
 DELAY_SECONDS=240
-nohup /bin/bash -lc 'sleep '"$DELAY_SECONDS"'; export AGENT_DIR="/Users/huangzesen/work/lingtai-dev/.lingtai/codex-gpt5.5"; /usr/bin/python3 - <<"PY"
+nohup /bin/bash -lc 'sleep '"$DELAY_SECONDS"'; export AGENT_DIR="/Users/<you>/work/<project>/.lingtai/<agent>"; /usr/bin/python3 - <<"PY"
 import json, os, pathlib, time
 from datetime import datetime, timezone
 notif = pathlib.Path(os.environ["AGENT_DIR"]) / ".notification"
