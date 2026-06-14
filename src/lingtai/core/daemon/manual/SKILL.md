@@ -87,6 +87,9 @@ files, not standalone top-level skills.
 - LingTai-backend daemon tool calls go through the kernel `ToolExecutor` /
   `ToolCallGuard` path before dispatch, so guarded side effects are not allowed
   to bypass normal proposal/execution policy just because they run in a daemon.
+- Every `daemon.emanate` call returns a batch `group_id` shared by all daemon
+  runs launched in that same call. Use `group_id` for logical batch grouping; use
+  each daemon's `run_id` for per-run filesystem/audit identity.
 - Each emanation is disposable memory but durable evidence: its folder persists
   after completion or reclaim until cleanup.
 - `daemon(action="list")` is a status overview, not a full transcript.

@@ -1843,6 +1843,7 @@ class DaemonManager:
         self._pools.append((pool, cancel_event))
 
         ids = []
+        group_id = DaemonRunDir.new_group_id()
         parent_addr = self._agent._working_dir.name
         parent_pid = os.getpid()
 
@@ -1891,6 +1892,7 @@ class DaemonManager:
                     parent_addr=parent_addr,
                     parent_pid=parent_pid,
                     system_prompt=system_prompt,
+                    group_id=group_id,
                     log_callback=self._log,
                     preset_name=resolved["name"] if resolved else None,
                     preset_provider=resolved["llm"].get("provider") if resolved else None,
@@ -1930,10 +1932,11 @@ class DaemonManager:
         )
         watchdog.start()
 
-        self._log("daemon_emanate", ids=ids, count=len(tasks),
+        self._log("daemon_emanate", ids=ids, group_id=group_id, count=len(tasks),
                   tasks=[{"task": s["task"][:80], "tools": s["tools"]} for s in tasks])
 
-        return {"status": "dispatched", "count": len(tasks), "ids": ids}
+        return {"status": "dispatched", "count": len(tasks), "ids": ids,
+                "group_id": group_id}
 
     def _handle_emanate_cli(
         self,
@@ -1978,6 +1981,7 @@ class DaemonManager:
         self._pools.append((pool, cancel_event))
 
         ids = []
+        group_id = DaemonRunDir.new_group_id()
         parent_addr = self._agent._working_dir.name
         parent_pid = os.getpid()
 
@@ -2008,6 +2012,7 @@ class DaemonManager:
                     parent_addr=parent_addr,
                     parent_pid=parent_pid,
                     system_prompt=system_prompt,
+                    group_id=group_id,
                     log_callback=self._log,
                     backend=backend,
                 )
@@ -2085,12 +2090,12 @@ class DaemonManager:
         )
         watchdog.start()
 
-        self._log("daemon_emanate", ids=ids, count=len(tasks), backend=backend,
+        self._log("daemon_emanate", ids=ids, group_id=group_id, count=len(tasks), backend=backend,
                   tasks=[{"task": s["task"][:80], "tools": s.get("tools", [])}
                          for s in tasks])
 
         return {"status": "dispatched", "count": len(tasks), "ids": ids,
-                "backend": backend}
+                "group_id": group_id, "backend": backend}
 
     def _handle_list(self) -> dict:
         emanations = []
@@ -2115,6 +2120,7 @@ class DaemonManager:
             run_dir = entry.get("run_dir")
             if run_dir is not None:
                 info["run_id"] = run_dir.run_id
+                info["group_id"] = run_dir.state_snapshot().get("group_id")
                 info["path"] = str(run_dir.path)
             emanations.append(info)
         return {

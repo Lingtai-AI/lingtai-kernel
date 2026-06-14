@@ -50,6 +50,7 @@ class DaemonRunDir:
         preset_provider: str | None = None,
         preset_model: str | None = None,
         backend: str = "lingtai",
+        group_id: str | None = None,
     ):
         self._handle = handle
         self._parent_token_ledger = parent_working_dir / "logs" / "token_ledger.jsonl"
@@ -76,6 +77,7 @@ class DaemonRunDir:
         self._state = {
             "handle": handle,
             "run_id": self._run_id,
+            "group_id": group_id,
             "parent_addr": parent_addr,
             "parent_pid": parent_pid,
             "task": task,
@@ -160,6 +162,12 @@ class DaemonRunDir:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def new_group_id() -> str:
+        """Return a daemon batch group id shared by one emanate call."""
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        return f"dg-{timestamp}-{secrets.token_hex(3)}"
 
     @staticmethod
     def _now_iso() -> str:

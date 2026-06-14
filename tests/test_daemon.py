@@ -448,6 +448,18 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
     assert result["status"] == "dispatched"
     assert result["count"] == 2
     assert result["ids"] == ["em-1", "em-2"]
+    assert re.fullmatch(r"dg-\d{8}-\d{6}-[0-9a-f]{6}", result["group_id"])
+
+    group_ids = []
+    for em_id in result["ids"]:
+        run_dir = mgr._emanations[em_id]["run_dir"]
+        data = json.loads(run_dir.daemon_json_path.read_text())
+        group_ids.append(data["group_id"])
+    assert group_ids == [result["group_id"], result["group_id"]]
+
+    list_result = mgr._handle_list()
+    listed_groups = {item["id"]: item.get("group_id") for item in list_result["emanations"]}
+    assert listed_groups == {"em-1": result["group_id"], "em-2": result["group_id"]}
 
     time.sleep(1)
 

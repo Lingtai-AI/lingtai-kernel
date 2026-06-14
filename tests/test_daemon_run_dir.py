@@ -55,6 +55,7 @@ def test_initial_daemon_json_fields(tmp_path):
     data = json.loads(rd.daemon_json_path.read_text())
     assert data["handle"] == "em-3"
     assert data["run_id"] == rd.run_id
+    assert data["group_id"] is None
     assert data["parent_addr"] == "parent"
     assert data["parent_pid"] == 12345
     assert data["task"] == "find todos"
@@ -72,6 +73,20 @@ def test_initial_daemon_json_fields(tmp_path):
     assert data["error"] is None
     # started_at is ISO 8601 UTC
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", data["started_at"])
+
+
+
+
+def test_initial_daemon_json_records_group_id(tmp_path):
+    group_id = "dg-20260614-145500-abcdef"
+    rd = _make_run_dir(tmp_path, group_id=group_id)
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["group_id"] == group_id
+
+
+def test_new_group_id_format():
+    group_id = DaemonRunDir.new_group_id()
+    assert re.fullmatch(r"dg-\d{8}-\d{6}-[0-9a-f]{6}", group_id)
 
 
 def test_prompt_written_verbatim(tmp_path):

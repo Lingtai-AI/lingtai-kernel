@@ -5,7 +5,8 @@ in parallel on the agent's working directory. Each LingTai-backend emanation
 is a disposable `ChatSession` with a curated tool surface, not an agent; the
 parent may add a per-task oneshot `system_prompt` and may explicitly opt the
 daemon into the `email` intrinsic, but daemon tool calls still pass through the
-kernel `ToolExecutor`/`ToolCallGuard` path before any handler runs. Results are
+kernel `ToolExecutor`/`ToolCallGuard` path before any handler runs. Each `daemon.emanate` batch gets a stable `group_id` shared by every run in
+that batch, while each daemon still keeps its own `run_id`. Results are
 persisted in per-run daemon folders; terminal completion/failure is surfaced as
 a compact `.notification/system.json` event instead of ordinary parent request
 text.
@@ -14,7 +15,7 @@ text.
 
 - `daemon/__init__.py` — public capability surface. `get_description`, `get_schema`, and `setup`; the core class is `DaemonManager`, which manages the full emanation lifecycle and parent-stop cleanup. Key internals: `_ToolCollector` (`daemon/__init__.py:336-363`) intercepts `add_tool` calls during preset-driven capability setup to build a sandboxed tool surface without mutating the parent's registry. `EMANATION_BLACKLIST` (`daemon/__init__.py:141`) prevents recursion by blocking `daemon`, `avatar`, `psyche`, `skills`, and `knowledge`; `_daemon_intrinsic_surface()` (`daemon/__init__.py:595`) is the narrow opt-in intrinsic bridge for `email` only.
 - `daemon/claude_interactive.py` — interactive Claude Code daemon backend. `ClaudeInteractiveBridge` (`daemon/claude_interactive.py:103`) runs normal interactive `claude` under a PTY from a LingTai-managed workspace, writes the managed system prompt (`daemon/claude_interactive.py:80-96`), prepares empty or explicit-source detached worktrees (`daemon/claude_interactive.py:250-309`), answers terminal probes, injects `SessionStart`/`Stop` hooks via inline `--settings`, relays hook payloads through a FIFO, auto-selects workspace trust only inside the verified managed root (`daemon/claude_interactive.py:535-559`), and parses Claude transcript JSONL into daemon progress/result state.
-- `daemon/run_dir.py` — per-emanation filesystem run directory. `DaemonRunDir` owns every filesystem effect for one run: folder layout, `daemon.json` atomic writes, JSONL appends, CLI progress events, heartbeat touches, `result.txt`, and terminal state markers. The `DaemonManager` calls into a `DaemonRunDir` at every lifecycle hook without itself touching the filesystem.
+- `daemon/run_dir.py` — per-emanation filesystem run directory. `DaemonRunDir` owns every filesystem effect for one run: folder layout, `daemon.json` atomic writes, batch `group_id` metadata (`DaemonRunDir.new_group_id()`), JSONL appends, CLI progress events, heartbeat touches, `result.txt`, and terminal state markers. The `DaemonManager` calls into a `DaemonRunDir` at every lifecycle hook without itself touching the filesystem.
 
 ## Public API
 
