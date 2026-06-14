@@ -5,6 +5,8 @@ serializes to disk, and how it reports runtime status.
 """
 from __future__ import annotations
 
+import platform
+import sys
 import time
 
 
@@ -257,6 +259,12 @@ def _status(agent) -> dict:
             "state_changed_at", "last_progress_at", "no_progress_seconds",
         ),
     )
+
+    # Issue #178 — expose runtime fingerprint for drift detection
+    fp = getattr(agent, "_runtime_fingerprint", None)
+    runtime_block["fingerprint"] = fp if isinstance(fp, dict) else None
+    runtime_block["python_version"] = sys.version.split()[0]
+    runtime_block["platform"] = platform.system().lower()
 
     result = {
         "identity": {

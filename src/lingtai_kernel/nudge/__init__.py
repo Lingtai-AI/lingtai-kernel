@@ -35,7 +35,7 @@ otherwise lose entries. The lock is created lazily on first use.
 from __future__ import annotations
 import threading
 
-from . import kernel_version, goal
+from . import kernel_version, goal, source_drift
 
 
 __all__ = ["run_checks", "upsert", "remove"]
@@ -49,6 +49,7 @@ def run_checks(agent) -> None:
     not block subsequent checks.
     """
     _run_one(agent, "kernel_version", kernel_version.check)
+    _run_one(agent, "source_drift", source_drift.check)
     _run_one(agent, "goal", goal.check)
 
 

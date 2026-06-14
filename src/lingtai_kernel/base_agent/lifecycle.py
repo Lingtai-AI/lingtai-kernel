@@ -7,10 +7,81 @@ snapshots.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import subprocess
+import sys
 import time
 import threading
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+# Key source files to hash for the runtime fingerprint.  A small curated
+# list keeps startup cost low (<5ms) while still catching the most common
+# source-level drift vectors.
+_FP_KEY_FILES: list[str] = [
+    "base_agent/__init__.py",
+    "base_agent/lifecycle.py",
+    "base_agent/turn.py",
+    "nudge/__init__.py",
+    "nudge/kernel_version.py",
+    "intrinsics/system/__init__.py",
+    "meta_block.py",
+    "notifications.py",
+    "workdir.py",
+]
+
+
+def _capture_runtime_fingerprint() -> dict:
+    """Capture a dual fingerprint of the running lingtai_kernel source.
+
+    Returns a dict with:
+      - ``git_rev``: short git HEAD hash, or ``None`` if unavailable
+      - ``source_digest``: SHA-256 hex prefix (12 chars) of key source files
+      - ``captured_at``: ISO-8601 timestamp
+    """
+    # Resolve the lingtai_kernel package source directory
+    try:
+        import lingtai_kernel
+        pkg_dir = Path(lingtai_kernel.__file__).resolve().parent  # type: ignore[arg-type]
+    except Exception:
+        pkg_dir = None
+
+    # git rev-parse --short HEAD
+    git_rev: str | None = None
+    if pkg_dir is not None:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=str(pkg_dir),
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if result.returncode == 0:
+                git_rev = result.stdout.strip() or None
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+
+    # Hash key source files
+    source_digest: str | None = None
+    if pkg_dir is not None:
+        h = hashlib.sha256()
+        for rel in _FP_KEY_FILES:
+            fp = pkg_dir / rel
+            try:
+                h.update(fp.read_bytes())
+            except OSError:
+                h.update(b"\x00")  # missing file marker
+        source_digest = h.hexdigest()[:12]
+
+    return {
+        "git_rev": git_rev,
+        "source_digest": source_digest,
+        "captured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
 
 
 def _active_stuck_threshold_s() -> float:
@@ -78,6 +149,12 @@ def _start(agent) -> None:
             agent._mail_service.listen(on_message=lambda payload: agent._on_mail_received(payload))
         except RuntimeError:
             pass  # Already listening — that's fine
+
+    # Capture runtime fingerprint for drift detection
+    try:
+        agent._runtime_fingerprint = _capture_runtime_fingerprint()
+    except Exception:
+        agent._runtime_fingerprint = None
 
     agent._thread = threading.Thread(
         target=agent._run_loop,

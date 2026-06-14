@@ -320,6 +320,44 @@ def collect_lifecycle(report: Report) -> dict[str, Any]:
         if status_age is not None and status_age > 300:
             sec.add("WARN", "status file is stale", f".status.json has not changed for {status_age:.0f}s.", age_seconds=round(status_age, 1))
 
+        # Issue #178 — read nested runtime fingerprint for drift visibility
+        runtime_block = status_json.get("runtime")
+        if isinstance(runtime_block, dict):
+            fp = runtime_block.get("fingerprint")
+            if isinstance(fp, dict):
+                fp_fields = {
+                    "git_rev": fp.get("git_rev"),
+                    "source_digest": fp.get("source_digest"),
+                    "captured_at": fp.get("captured_at"),
+                }
+                python_ver = runtime_block.get("python_version")
+                plat = runtime_block.get("platform")
+                if python_ver:
+                    fp_fields["python_version"] = python_ver
+                if plat:
+                    fp_fields["platform"] = plat
+                sec.add(
+                    "OK",
+                    "runtime fingerprint available",
+                    f"Fingerprint captured at {fp.get('captured_at', 'unknown')}; "
+                    f"git={fp.get('git_rev', 'n/a')}, digest={fp.get('source_digest', 'n/a')}.",
+                    fingerprint=fp_fields,
+                )
+            else:
+                sec.add(
+                    "WARN",
+                    "runtime fingerprint missing",
+                    "The .status.json runtime block does not contain a fingerprint; "
+                    "the agent may be running an older kernel version that predates issue #178.",
+                )
+        else:
+            sec.add(
+                "WARN",
+                "runtime fingerprint missing",
+                "The .status.json does not contain a runtime block; "
+                "the agent may be running an older kernel version that predates issue #178.",
+            )
+
     heartbeat = report.agent_dir / ".agent.heartbeat"
     hb = parse_heartbeat(heartbeat)
     if not hb.get("exists"):
