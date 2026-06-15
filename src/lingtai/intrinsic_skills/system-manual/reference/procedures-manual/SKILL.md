@@ -86,6 +86,28 @@ research, or spawn/contact an avatar when the capability should persist. For the
 runtime model, read `reference/substrate-manual/SKILL.md`; for a specific tool, read
 that tool's manual.
 
+### Daemon workflow discipline
+
+Protect the main agent's context. The parent agent should stay in the strategic
+seat: decide the objective, negate the first plan before acting, write the
+workflow, and keep the durable state. Daemons should carry the noisy execution:
+file scans, deterministic transformations, read-only reviews, batch conversion,
+log mining, and other work whose details would pollute the main context.
+
+Before dispatching substantial daemon work:
+
+1. Write the workflow in pad (or a task artifact when it is too large): objective,
+   assumptions to test, daemon task split, expected artifacts, and stop criteria.
+2. Choose the cheapest capable body. Prefer low-tier or CLI-backed daemons for
+   deterministic or mechanical work; reserve the main/premium model for planning,
+   synthesis, and decisions that need the full context.
+3. Constrain the daemon prompt. Ask for the artifact path, summary shape, and
+   evidence needed; tell it what not to do. The parent coordinates; the daemon
+   executes.
+4. Reclaim only the grain. Read the daemon's report/artifact, verify key claims,
+   and deposit durable results in pad/knowledge/skills. Do not drag every daemon
+   transcript back into the main conversation.
+
 Tool results may carry `_advisory.type == "duplicate_tool_call"` when the same
 semantic tool call repeats more than the free-pass threshold. This is
 advisory-only: the tool already ran and the kernel did not block it. Treat it as
