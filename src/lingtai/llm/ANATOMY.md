@@ -9,7 +9,8 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 20 | Re-exports kernel types (`ChatSession`, `LLMResponse`, `ToolCall`, `FunctionSchema`, `ChatInterface`) + `LLMAdapter` from `base.py`. Triggers `register_all_adapters()` on import. |
-| `_register.py` | 117 | Registers adapter factories for all providers with `LLMService.register_adapter()` |
+| `_register.py` | 131 | Registers adapter factories for all providers with `LLMService.register_adapter()` |
+| `claude_code/` | — | `claude-code` provider: drives the local `claude` CLI as a stateless reasoning core on a Claude subscription (`adapter.py`, `defaults.py`). |
 | `api_gate.py` | 112 | `APICallGate` — RPM rate limiter with deque timestamps, `ThreadPoolExecutor`, daemon gate thread |
 | `base.py` | 150 | `LLMAdapter` ABC (4 abstract methods), `_GatedSession` proxy |
 | `interface_converters.py` | 335 | Bidirectional converters: `to_*` / `from_*` for Anthropic, OpenAI, OpenAI Responses API, Gemini |
@@ -19,7 +20,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 
 - **Kernel types** — `__init__.py:3` imports `ChatSession`, `LLMResponse`, `ToolCall`, `FunctionSchema` from `lingtai_kernel.llm.base`; `ChatInterface` from `lingtai_kernel.llm.interface`.
 - **ABC chain** — `LLMAdapter` (`base.py:53`) → abstract `create_chat`, `generate`, `make_tool_result_message`, `is_quota_error`. `LLMService` (`service.py:97`) extends `lingtai_kernel.llm.service.LLMService` ABC.
-- **Adapter registration** — `_register.py` registers 7 dedicated factories + 6 generic-routed providers (`grok`, `qwen`, `glm`, `zhipu`, `kimi`, `mimo`) via dedicated or `_custom` factories (`_register.py:91-106`).
+- **Adapter registration** — `_register.py` registers 8 dedicated factories (including the two subscription/OAuth providers `codex` and `claude-code`) + 6 generic-routed providers (`grok`, `qwen`, `glm`, `zhipu`, `kimi`, `mimo`) via dedicated or `_custom` factories.
 - **Interface converters** — imported by adapter session modules (e.g. `openai.adapter` imports `to_openai`, `to_responses_input` from `interface_converters.py:120`).
 - **Rate gating** — `LLMAdapter._setup_gate(max_rpm)` creates `APICallGate`; `_wrap_with_gate()` returns `_GatedSession` proxy for sessions.
 
@@ -30,6 +31,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 - **Session tracking** — `LLMService._sessions` dict maps `st_<12-hex>` session IDs to `ChatSession` instances (`service.py:144`). Untracked sessions get `session_id=""`.
 - **Gated sessions** — `_GatedSession` (`base.py:19`) proxies `send()` and `send_stream()` through `APICallGate.submit()`. Attribute writes land on the proxy; reads fall through to inner session via `__getattr__`.
 - **Codex factory** — `_register.py:54` builds `CodexOpenAIAdapter`, monkey-patches `create_chat` and `generate` to refresh OAuth tokens before each call via `CodexTokenManager.get_access_token()`.
+- **Claude Code factory** — `_register.py:_claude_code` builds `ClaudeCodeAdapter` (drops `api_key`/`base_url`: the `claude` CLI owns auth). The adapter drives `claude -p --output-format json` as a *stateless reasoning core* — each turn serialises the canonical `ChatInterface` (system prompt + tools + conversation) into one prompt, the CLI emits a single JSON action (`tool_call`/`tool_calls`/`final`) which is parsed back into an `LLMResponse`; LingTai's own loop executes the tools. The child env strips `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` so usage stays on the subscription/OAuth path; built-in CLI tools are disabled so it acts as a pure brain. See `claude_code/adapter.py`.
 
 ## State
 

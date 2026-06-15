@@ -88,6 +88,19 @@ def register_all_adapters() -> None:
 
     LLMService.register_adapter("codex", _codex)
 
+    def _claude_code(*, model=None, defaults=None, **kw):
+        # Drive the local `claude` CLI as the agent brain on a Claude
+        # subscription. The CLI owns auth (stored OAuth / CLAUDE_CODE_OAUTH_TOKEN),
+        # so there is no api_key/base_url — drop any env-resolved ones.
+        from .claude_code.adapter import ClaudeCodeAdapter
+        kw.pop("model", None)
+        kw.pop("api_key", None)
+        kw.pop("base_url", None)
+        kw.pop("default_headers", None)
+        return ClaudeCodeAdapter(model=model, **{k: v for k, v in kw.items() if v is not None})
+
+    LLMService.register_adapter("claude-code", _claude_code)
+
     def _deepseek(*, model=None, defaults=None, **kw):
         from .deepseek.adapter import DeepSeekAdapter
         kw.pop("model", None)
