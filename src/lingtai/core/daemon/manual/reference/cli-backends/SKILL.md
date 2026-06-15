@@ -20,10 +20,13 @@ folders. By default it scans `daemons/*/daemon.json` and returns completed,
 failed, cancelled, timed-out, and running entries with `run_id`, `group_id`,
 `status`, `backend`, task preview, visible call parameters (`task`, `tools`,
 `skills`, redacted `mcp`, system-prompt preview when recorded), result preview,
-and filesystem paths. Use `contains` for case-insensitive substring search over
-that visible index, `status` for status filtering, `last` as a positive result
-limit, and `include_done=false` when you only want currently tracked in-memory
-runs. This is the first layer of progressive disclosure; read the returned
+and filesystem paths. If a historical run folder has no `daemon.json`, has
+invalid JSON, or has a mismatched `data_version`, `list` lazily writes a
+best-effort replacement using the folder name, `.prompt`, `result.txt`,
+`.heartbeat`/mtimes, and recent `events.jsonl`. Use `contains` for
+case-insensitive substring search over that visible index, `status` for status
+filtering, `last` as a positive result limit, and `include_done=false` when
+you only want currently tracked in-memory runs. This is the first layer of progressive disclosure; read the returned
 `.prompt`/`result.txt` paths for detail, and grep `events.jsonl` /
 `chat_history.jsonl` / `token_ledger.jsonl` only for forensic depth.
 

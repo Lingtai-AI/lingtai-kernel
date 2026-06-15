@@ -26,7 +26,7 @@ This means: when an emanation looks stuck, you can read its actual state instead
 
 ```
 daemons/em-3-20260427-094215-a1b2c3/
-├── daemon.json                  ← identity card + live status snapshot + visible call parameters
+├── daemon.json                  ← versioned identity card + live status snapshot + visible call parameters
 ├── result.txt                   ← full terminal result when available
 ├── .prompt                      ← system prompt as built (forensic)
 ├── .heartbeat                   ← mtime touched on every write
@@ -39,10 +39,13 @@ daemons/em-3-20260427-094215-a1b2c3/
 
 Progressive disclosure starts with `daemon(action="list")`: it reads these
 per-run JSON/files and returns a compact searchable index (metadata, visible call
-parameters, prompt/result previews, paths). If the index is not enough, read the
-returned `.prompt` or `result.txt` directly. Only then drop to full forensic grep
-over `logs/events.jsonl`, `history/chat_history.jsonl`, or
-`logs/token_ledger.jsonl`.
+parameters, prompt/result previews, paths). `daemon.json` carries a
+`data_version`; if the file is missing, corrupt, or stale, list-time lazy
+migration rebuilds a best-effort replacement from the folder name, `.prompt`,
+`result.txt`, mtimes, and recent `events.jsonl`, recording a `migration`
+reason. If the index is not enough, read the returned `.prompt` or
+`result.txt` directly. Only then drop to full forensic grep over
+`logs/events.jsonl`, `history/chat_history.jsonl`, or `logs/token_ledger.jsonl`.
 
 ## Inspection patterns
 

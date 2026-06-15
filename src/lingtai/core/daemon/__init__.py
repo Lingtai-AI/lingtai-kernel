@@ -20,6 +20,7 @@ import subprocess
 import threading
 import time
 import yaml
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -2471,7 +2472,7 @@ class DaemonManager:
             size = prompt_path.stat().st_size
             with open(prompt_path, encoding="utf-8") as f:
                 text = f.read(limit + 1)
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             return None, None
         return self._truncate_list_string(text, limit), size
 
@@ -2501,6 +2502,8 @@ class DaemonManager:
             "id": state.get("handle"),
             "task": self._truncate_list_string(state.get("task", ""), 120),
             "status": status,
+            "data_version": state.get("data_version"),
+            "migration": state.get("migration"),
             "elapsed_s": active_elapsed if active_elapsed is not None else state.get("elapsed_s"),
             "run_id": state.get("run_id"),
             "group_id": state.get("group_id"),
@@ -2522,18 +2525,270 @@ class DaemonManager:
             info["error"] = state.get("error")
         return {k: v for k, v in info.items() if v is not None}
 
-    def _iter_daemon_history_states(self) -> list[tuple[Path, dict]]:
+    @staticmethod
+    def _utc_iso_from_timestamp(ts: float) -> str:
+        return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    @staticmethod
+    def _started_at_from_run_id(run_id: str) -> str | None:
+        match = re.match(r"^em-\d+-(\d{8}-\d{6})-[0-9a-fA-F]+$", run_id)
+        if not match:
+            return None
+        try:
+            dt = datetime.strptime(match.group(1), "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    @staticmethod
+    def _handle_from_run_id(run_id: str) -> str | None:
+        match = re.match(r"^(em-\d+)-", run_id)
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _atomic_write_daemon_json(path: Path, state: dict) -> None:
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        tmp_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp_path, path)
+
+    @staticmethod
+    def _looks_like_daemon_run_dir(run_path: Path) -> bool:
+        return (
+            run_path.is_dir()
+            and (
+                run_path.name.startswith("em-")
+                or (run_path / ".prompt").exists()
+                or (run_path / "result.txt").exists()
+                or (run_path / "logs" / "events.jsonl").exists()
+            )
+        )
+
+    def _read_daemon_events_tail(self, run_path: Path, max_lines: int = 80) -> list[dict]:
+        events_path = run_path / "logs" / "events.jsonl"
+        try:
+            size = events_path.stat().st_size
+            with open(events_path, "rb") as f:
+                f.seek(max(0, size - 65536))
+                raw = f.read()
+            text = raw.decode("utf-8", errors="replace")
+            lines = text.splitlines()[-max_lines:]
+        except OSError:
+            return []
+        events: list[dict] = []
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                events.append(event)
+        return events
+
+    def _infer_task_from_prompt(self, run_path: Path) -> str | None:
+        prompt_path = run_path / ".prompt"
+        try:
+            with open(prompt_path, encoding="utf-8") as f:
+                text = f.read(20000)
+        except (OSError, UnicodeDecodeError):
+            return None
+        markers = ["\nYour task:\n", "\nTask:\n"]
+        best = None
+        best_idx = -1
+        for marker in markers:
+            idx = text.rfind(marker)
+            if idx > best_idx:
+                best = marker
+                best_idx = idx
+        if best is None or best_idx < 0:
+            return None
+        task = text[best_idx + len(best):].strip()
+        if not task:
+            return None
+        return str(self._truncate_list_string(task, 2000))
+
+    def _infer_terminal_state_from_events(self, events: list[dict]) -> tuple[str | None, str | None, object | None]:
+        for event in reversed(events):
+            name = event.get("event")
+            if name == "daemon_done":
+                return "done", event.get("ts"), None
+            if name == "daemon_error":
+                error = {
+                    "type": event.get("exception") or "DaemonError",
+                    "message": event.get("message") or "daemon failed",
+                }
+                return "failed", event.get("ts"), error
+            if name == "daemon_cancelled":
+                return "cancelled", event.get("ts"), None
+            if name == "daemon_timeout":
+                return "timeout", event.get("ts"), None
+        return None, None, None
+
+    def _result_preview_from_file(self, run_path: Path) -> tuple[str | None, str | None]:
+        result_path = run_path / "result.txt"
+        try:
+            with open(result_path, encoding="utf-8") as f:
+                text = f.read(201)
+        except (OSError, UnicodeDecodeError):
+            return None, None
+        preview = text[:200]
+        return preview, str(result_path)
+
+    def _build_reconstructed_daemon_state(
+        self,
+        run_path: Path,
+        existing_state: dict | None,
+        *,
+        reason: str,
+    ) -> dict:
+        old = dict(existing_state or {})
+        run_id = str(old.get("run_id") or run_path.name)
+        handle = str(old.get("handle") or self._handle_from_run_id(run_id) or run_id.split("-")[0] or run_id)
+        events = self._read_daemon_events_tail(run_path)
+        inferred_state, inferred_finished_at, inferred_error = self._infer_terminal_state_from_events(events)
+        result_preview, result_path = self._result_preview_from_file(run_path)
+        task = old.get("task")
+        call_params = old.get("call_parameters") if isinstance(old.get("call_parameters"), dict) else {}
+        if not isinstance(task, str) or not task:
+            task = call_params.get("task") if isinstance(call_params.get("task"), str) else None
+        if not task:
+            task = self._infer_task_from_prompt(run_path) or ""
+        tools = old.get("tools")
+        if not isinstance(tools, list):
+            tools = call_params.get("tools") if isinstance(call_params.get("tools"), list) else []
+        daemon_state = old.get("state") if isinstance(old.get("state"), str) else None
+        if inferred_state and daemon_state in (None, "", "running", "active", "unknown"):
+            daemon_state = inferred_state
+        if result_path and daemon_state in (None, "", "running", "active", "unknown"):
+            daemon_state = "done"
+        if not daemon_state:
+            daemon_state = "unknown"
+        started_at = old.get("started_at") if isinstance(old.get("started_at"), str) else None
+        if not started_at:
+            started_at = self._started_at_from_run_id(run_id)
+        if not started_at:
+            try:
+                started_at = self._utc_iso_from_timestamp(run_path.stat().st_mtime)
+            except OSError:
+                started_at = DaemonRunDir._now_iso()
+        finished_at = old.get("finished_at") if isinstance(old.get("finished_at"), str) else None
+        if not finished_at and daemon_state in {"done", "failed", "cancelled", "timeout"}:
+            finished_at = inferred_finished_at
+            if not finished_at:
+                terminal_path = Path(result_path) if result_path else (run_path / "logs" / "events.jsonl")
+                try:
+                    finished_at = self._utc_iso_from_timestamp(terminal_path.stat().st_mtime)
+                except OSError:
+                    finished_at = DaemonRunDir._now_iso()
+        if not isinstance(call_params, dict):
+            call_params = {}
+        if task and not call_params.get("task"):
+            call_params["task"] = task
+        if tools and not call_params.get("tools"):
+            call_params["tools"] = tools
+        state = {
+            "data_version": DaemonRunDir.DATA_VERSION,
+            "handle": handle,
+            "run_id": run_id,
+            "group_id": old.get("group_id"),
+            "parent_addr": old.get("parent_addr"),
+            "parent_pid": old.get("parent_pid"),
+            "task": task,
+            "tools": tools,
+            "call_parameters": call_params,
+            "model": old.get("model") or old.get("preset_model") or "unknown",
+            "max_turns": old.get("max_turns"),
+            "timeout_s": old.get("timeout_s"),
+            "state": daemon_state,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "elapsed_s": old.get("elapsed_s") if old.get("elapsed_s") is not None else 0.0,
+            "turn": old.get("turn") if old.get("turn") is not None else 0,
+            "current_tool": old.get("current_tool"),
+            "tool_call_count": old.get("tool_call_count") if old.get("tool_call_count") is not None else 0,
+            "tokens": old.get("tokens") if isinstance(old.get("tokens"), dict) else {"input": 0, "output": 0, "thinking": 0, "cached": 0},
+            "result_preview": old.get("result_preview") or result_preview,
+            "result_path": old.get("result_path") or result_path,
+            "last_output": old.get("last_output"),
+            "last_output_at": old.get("last_output_at"),
+            "error": old.get("error") or inferred_error,
+            "preset_name": old.get("preset_name"),
+            "preset_provider": old.get("preset_provider"),
+            "preset_model": old.get("preset_model"),
+            "backend": old.get("backend") or "unknown",
+            "claude_session_id": old.get("claude_session_id"),
+            "codex_session_id": old.get("codex_session_id"),
+            "opencode_session_id": old.get("opencode_session_id"),
+            "mimocode_session_id": old.get("mimocode_session_id"),
+            "oh_my_pi_session_id": old.get("oh_my_pi_session_id"),
+            "cursor_session_id": old.get("cursor_session_id"),
+            "migration": {
+                "reason": reason,
+                "rebuilt_at": DaemonRunDir._now_iso(),
+                "source": "daemon_list_best_effort",
+            },
+        }
+        # Preserve fields added by specific backends or future versions (for
+        # example backend_options/backend_argv/session ids) while still
+        # normalizing the fields list relies on above.  data_version itself is
+        # deliberately overwritten to the current version.
+        for key, value in old.items():
+            if key != "data_version" and key not in state:
+                state[key] = value
+        return state
+
+    @staticmethod
+    def _has_current_daemon_data_version(state: dict) -> bool:
+        version = state.get("data_version")
+        return (
+            isinstance(version, int)
+            and not isinstance(version, bool)
+            and version == DaemonRunDir.DATA_VERSION
+        )
+
+    def _load_or_rebuild_daemon_state(self, run_path: Path) -> dict | None:
+        daemon_json_path = run_path / "daemon.json"
+        existing: dict | None = None
+        reason: str | None = None
+        try:
+            loaded = json.loads(daemon_json_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+            else:
+                reason = "daemon_json_not_object"
+        except FileNotFoundError:
+            reason = "daemon_json_missing"
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            reason = "daemon_json_invalid"
+        except OSError:
+            return None
+        if reason is None and existing is not None:
+            if self._has_current_daemon_data_version(existing):
+                return existing
+            reason = "daemon_json_data_version_mismatch"
+        rebuilt = self._build_reconstructed_daemon_state(run_path, existing, reason=reason or "daemon_json_rebuild")
+        try:
+            self._atomic_write_daemon_json(daemon_json_path, rebuilt)
+        except OSError:
+            pass
+        return rebuilt
+
+    def _iter_daemon_history_states(self, skip_run_ids: set[str] | None = None) -> list[tuple[Path, dict]]:
         daemons_dir = self._agent._working_dir / "daemons"
         if not daemons_dir.is_dir():
             return []
+        skip_run_ids = skip_run_ids or set()
         rows: list[tuple[Path, dict]] = []
-        for daemon_json_path in daemons_dir.glob("*/daemon.json"):
-            try:
-                state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+        for run_path in daemons_dir.iterdir():
+            # Active runs are represented by their live DaemonRunDir object above.
+            # Do not lazy-rebuild their daemon.json here: an active writer thread
+            # may be updating it concurrently, and the live state is fresher.
+            if run_path.name in skip_run_ids:
                 continue
+            if not self._looks_like_daemon_run_dir(run_path):
+                continue
+            state = self._load_or_rebuild_daemon_state(run_path)
             if isinstance(state, dict):
-                rows.append((daemon_json_path.parent, state))
+                rows.append((run_path, state))
         return rows
 
     def _handle_list(
@@ -2591,10 +2846,7 @@ class DaemonManager:
             emanations.append(info)
 
         if include_done:
-            for run_path, state in self._iter_daemon_history_states():
-                run_id = state.get("run_id")
-                if isinstance(run_id, str) and run_id in active_run_ids:
-                    continue
+            for run_path, state in self._iter_daemon_history_states(skip_run_ids=active_run_ids):
                 info = self._daemon_list_entry_from_state(state, run_path)
                 if info.get("status") == "running":
                     running += 1

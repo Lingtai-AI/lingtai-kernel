@@ -908,6 +908,143 @@ def test_handle_list_filters_history_by_contains_status_and_last(tmp_path):
     assert hidden_history["history_included"] is False
 
 
+def test_daemon_run_dir_writes_current_data_version(tmp_path):
+    """New daemon.json records carry a version for future lazy migration."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    rd = _make_run_dir(agent, em_id="em-version")
+    state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    from lingtai.core.daemon.run_dir import DaemonRunDir
+    assert state["data_version"] == DaemonRunDir.DATA_VERSION
+
+
+def test_handle_list_rebuilds_missing_daemon_json_best_effort(tmp_path):
+    """list lazily rebuilds a minimal daemon.json when a run folder lost it."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    run_path = agent._working_dir / "daemons" / "em-7-20260102-030405-abcdef"
+    (run_path / "logs").mkdir(parents=True)
+    (run_path / "history").mkdir()
+    (run_path / ".prompt").write_text(
+        "daemon prompt\n\nYour task:\nrecover missing daemon json task",
+        encoding="utf-8",
+    )
+    (run_path / "result.txt").write_text("recovered result body", encoding="utf-8")
+    (run_path / "logs" / "events.jsonl").write_text(
+        json.dumps({"event": "daemon_done", "ts": "2026-01-02T03:05:00Z"}) + "\n",
+        encoding="utf-8",
+    )
+
+    listing = mgr._handle_list(contains="recover missing")
+    assert listing["total_matches"] == 1
+    em = listing["emanations"][0]
+    assert em["run_id"] == "em-7-20260102-030405-abcdef"
+    assert em["id"] == "em-7"
+    assert em["status"] == "done"
+    assert em["task"] == "recover missing daemon json task"
+    assert em["data_version"] == 1
+    assert em["migration"]["reason"] == "daemon_json_missing"
+    assert "recovered result" in em["result_preview"]
+
+    rebuilt = json.loads((run_path / "daemon.json").read_text(encoding="utf-8"))
+    from lingtai.core.daemon.run_dir import DaemonRunDir
+    assert rebuilt["data_version"] == DaemonRunDir.DATA_VERSION
+    assert rebuilt["migration"]["reason"] == "daemon_json_missing"
+    assert rebuilt["task"] == "recover missing daemon json task"
+    assert rebuilt["result_path"].endswith("result.txt")
+
+
+def test_handle_list_rebuilds_invalid_daemon_json_best_effort(tmp_path):
+    """list also rebuilds corrupt daemon.json files instead of dropping the run."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    run_path = agent._working_dir / "daemons" / "em-8-20260102-030405-fedcba"
+    (run_path / "logs").mkdir(parents=True)
+    (run_path / "history").mkdir()
+    (run_path / ".prompt").write_text("daemon prompt\n\nYour task:\nrecover corrupt json task", encoding="utf-8")
+    (run_path / "daemon.json").write_text("{not-json", encoding="utf-8")
+
+    listing = mgr._handle_list(contains="corrupt json")
+    assert listing["total_matches"] == 1
+    em = listing["emanations"][0]
+    assert em["run_id"] == "em-8-20260102-030405-fedcba"
+    assert em["migration"]["reason"] == "daemon_json_invalid"
+
+    rebuilt = json.loads((run_path / "daemon.json").read_text(encoding="utf-8"))
+    assert rebuilt["task"] == "recover corrupt json task"
+    assert rebuilt["migration"]["reason"] == "daemon_json_invalid"
+
+
+def test_handle_list_rebuilds_non_utf8_daemon_json(tmp_path):
+    """A non-UTF-8 daemon.json is treated as invalid and rebuilt best-effort."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    run_path = agent._working_dir / "daemons" / "em-9-20260102-030405-a1b2c3"
+    (run_path / "logs").mkdir(parents=True)
+    (run_path / "history").mkdir()
+    (run_path / ".prompt").write_text("daemon prompt\n\nYour task:\nrecover non utf daemon json", encoding="utf-8")
+    (run_path / "result.txt").write_text("non utf rebuilt result", encoding="utf-8")
+    (run_path / "daemon.json").write_bytes(b"\xff\xfe\x00bad-json")
+
+    listing = mgr._handle_list(contains="non utf")
+    assert listing["total_matches"] == 1
+    em = listing["emanations"][0]
+    assert em["status"] == "done"
+    assert em["migration"]["reason"] == "daemon_json_invalid"
+
+    rebuilt = json.loads((run_path / "daemon.json").read_text(encoding="utf-8"))
+    assert rebuilt["task"] == "recover non utf daemon json"
+    assert rebuilt["migration"]["reason"] == "daemon_json_invalid"
+
+
+def test_handle_list_rebuild_reads_only_events_tail(tmp_path):
+    """Best-effort rebuild can infer terminal state from the tail of a large event log."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    run_path = agent._working_dir / "daemons" / "em-10-20260102-030405-1a2b3c"
+    (run_path / "logs").mkdir(parents=True)
+    (run_path / "history").mkdir()
+    (run_path / ".prompt").write_text("daemon prompt\n\nYour task:\nlarge events tail task", encoding="utf-8")
+    events_path = run_path / "logs" / "events.jsonl"
+    padding = json.dumps({"event": "cli_output", "text": "x" * 2000}) + "\n"
+    events_path.write_text(padding * 40 + json.dumps({"event": "daemon_timeout", "ts": "2026-01-02T03:06:00Z"}) + "\n", encoding="utf-8")
+
+    listing = mgr._handle_list(contains="large events tail")
+    assert listing["total_matches"] == 1
+    em = listing["emanations"][0]
+    assert em["status"] == "timeout"
+    assert em["migration"]["reason"] == "daemon_json_missing"
+
+    rebuilt = json.loads((run_path / "daemon.json").read_text(encoding="utf-8"))
+    assert rebuilt["state"] == "timeout"
+    assert rebuilt["finished_at"] == "2026-01-02T03:06:00Z"
+
+
+def test_handle_list_rebuilds_stale_daemon_json_version(tmp_path):
+    """list upgrades stale daemon.json records and preserves backend extras."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    rd = _make_run_dir(agent, em_id="em-stale", task="stale version task")
+    rd.mark_done("stale version result")
+    state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    state["data_version"] = -1
+    state["backend_options"] = {"search": True}
+    state["future_backend_field"] = {"preserve": True}
+    rd.daemon_json_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+    listing = mgr._handle_list(contains="stale version", status_filter="done")
+    assert listing["total_matches"] == 1
+    em = listing["emanations"][0]
+    assert em["run_id"] == rd.run_id
+    assert em["status"] == "done"
+
+    rebuilt = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    from lingtai.core.daemon.run_dir import DaemonRunDir
+    assert rebuilt["data_version"] == DaemonRunDir.DATA_VERSION
+    assert rebuilt["migration"]["reason"] == "daemon_json_data_version_mismatch"
+    assert rebuilt["backend_options"] == {"search": True}
+    assert rebuilt["future_backend_field"] == {"preserve": True}
+
+
 def test_handle_list_rejects_non_positive_last(tmp_path):
     """list reuses last as a positive limit, not a zero/negative slice."""
     agent = _make_agent(tmp_path, ["daemon"])

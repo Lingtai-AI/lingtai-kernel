@@ -150,8 +150,10 @@ files, not standalone top-level skills.
 - `daemon(action="list")` is the first layer of progressive disclosure: it
   reads active in-memory runs plus historical `daemons/*/daemon.json` run
   records, returning compact metadata, prompt/result previews, paths, and
-  optional `contains`/`status`/`last` filtering. It is not a full transcript;
-  use the returned paths for details.
+  optional `contains`/`status`/`last` filtering. If a historical
+  `daemon.json` is missing, invalid, or has an old `data_version`, list
+  does a best-effort lazy rebuild from the run folder before indexing it.
+  It is not a full transcript; use the returned paths for details.
 - Completion is push-notified; do not poll only to ask "is it done yet".
 - **Idle care before resting: completion is push-notified, but do not rest on
   that alone.** With daemon work pending and unverified-healthy, arm at least
