@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PR2A WorkerStillRunning Poison Guard + Refresh Recovery</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18212b;
+      --muted: #5d6a75;
+      --line: #d9e0e5;
+      --paper: #fbfcfd;
+      --panel: #ffffff;
+      --accent: #0f766e;
+      --accent-soft: #e7f4f2;
+      --warn: #a65300;
+      --warn-soft: #fff3df;
+      --code: #26313d;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 36px 22px 56px;
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 24px;
+      margin-bottom: 26px;
+    }
+    .kicker {
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      margin: 0 0 8px;
+    }
+    h1 {
+      font-size: 34px;
+      line-height: 1.12;
+      margin: 0;
+      letter-spacing: 0;
+    }
+    .lede {
+      color: var(--muted);
+      max-width: 820px;
+      margin: 14px 0 0;
+      font-size: 17px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 16px;
+      margin: 20px 0;
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      box-shadow: 0 1px 2px rgba(24, 33, 43, .04);
+    }
+    .span-4 { grid-column: span 4; }
+    .span-6 { grid-column: span 6; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: span 12; }
+    h2 {
+      font-size: 18px;
+      margin: 0 0 12px;
+      letter-spacing: 0;
+    }
+    h3 {
+      font-size: 14px;
+      margin: 16px 0 8px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+    p {
+      margin: 0 0 10px;
+    }
+    ul, ol {
+      margin: 8px 0 0;
+      padding-left: 20px;
+    }
+    li {
+      margin: 6px 0;
+    }
+    code {
+      color: var(--code);
+      background: #eef2f5;
+      border: 1px solid #dfe6eb;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: .92em;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .step {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 122px;
+      background: #f9fbfc;
+    }
+    .step b {
+      display: block;
+      margin-bottom: 6px;
+    }
+    .pill {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 3px 9px;
+      margin: 2px 4px 2px 0;
+      background: var(--accent-soft);
+      color: #07564f;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .warn {
+      background: var(--warn-soft);
+      border-color: #f0d3a7;
+    }
+    .warn .pill {
+      background: #f5d7ad;
+      color: #6b3600;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 6px;
+      font-size: 14px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 9px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+    .small {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    @media (max-width: 820px) {
+      main {
+        padding: 26px 14px 42px;
+      }
+      h1 {
+        font-size: 28px;
+      }
+      .grid, .flow {
+        display: block;
+      }
+      section, .step {
+        margin-bottom: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="kicker">LingTai kernel PR2A implementation note</p>
+    <h1>WorkerStillRunning poison guard + forced refresh recovery</h1>
+    <p class="lede">
+      PR2A treats <code>WorkerStillRunningError</code> as a hard process-local poison event:
+      the old in-memory chat interface is no longer safe to mutate, serialize, heal, or reuse.
+      Recovery is durable enough to explain what happened, then moves to a forced refresh/relaunch.
+    </p>
+  </header>
+
+  <div class="grid">
+    <section class="span-8">
+      <h2>Runtime Semantics</h2>
+      <div class="flow">
+        <div class="step">
+          <span class="pill">1</span>
+          <b>Detect</b>
+          The run loop catches <code>WorkerStillRunningError</code> centrally in the AED loop.
+        </div>
+        <div class="step">
+          <span class="pill">2</span>
+          <b>Poison</b>
+          <code>BaseAgent</code> stores a process-local flag marking the current worker interface unsafe.
+        </div>
+        <div class="step">
+          <span class="pill">3</span>
+          <b>Persist</b>
+          A bounded redacted JSON artifact is written under <code>history/unfinished_turns/</code>.
+        </div>
+        <div class="step">
+          <span class="pill">4</span>
+          <b>Recover</b>
+          A high-priority system notification is published and refresh is requested without chat save.
+        </div>
+      </div>
+    </section>
+
+    <section class="span-4 warn">
+      <h2>Key Rule</h2>
+      <p>
+        Once poisoned, code must not touch the old <code>ChatInterface</code>. In backend terms,
+        the shared in-memory object may still be owned by another worker thread, so the safe move is
+        to abandon it and rebuild from durable disk state.
+      </p>
+      <span class="pill">no heal</span>
+      <span class="pill">no save</span>
+      <span class="pill">no wake injection</span>
+    </section>
+
+    <section class="span-6">
+      <h2>Poison Guards Added</h2>
+      <ul>
+        <li><code>_sync_notifications()</code> skips before notification collection, injection, heal, wake enqueue, and fingerprint commit.</li>
+        <li><code>_inject_notification_pair()</code> refuses to append synthetic notification pairs when poisoned.</li>
+        <li><code>_heal_pending_tool_calls()</code>, ASLEEP pre-sleep heal, and legacy <code>tc_inbox</code> drains skip unsafe interface repair.</li>
+        <li><code>_handle_request()</code> and <code>_handle_tc_wake()</code> return early and request refresh when the current process is poisoned.</li>
+      </ul>
+    </section>
+
+    <section class="span-6">
+      <h2>Durable Recovery</h2>
+      <ul>
+        <li>Artifacts use schema version <code>1</code> and status <code>open</code>.</li>
+        <li>Request previews are redacted and capped at 500 characters.</li>
+        <li>No raw chat history, tool arguments, or tool results are written.</li>
+        <li>Startup rehydrates the newest open artifact into <code>.notification/system.json</code> if needed.</li>
+        <li>The next safe text request can receive a one-shot kernel recovery notice.</li>
+      </ul>
+    </section>
+
+    <section class="span-12">
+      <h2>Source Index</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Area</th>
+            <th>File</th>
+            <th>Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Coordinator state</td>
+            <td><code>src/lingtai_kernel/base_agent/__init__.py</code></td>
+            <td>Poison fields, notification guard checkpoints, system notification pass-through.</td>
+          </tr>
+          <tr>
+            <td>Recovery helper</td>
+            <td><code>src/lingtai_kernel/base_agent/worker_recovery.py</code></td>
+            <td>Artifact schema, poison marking, high-priority notification, refresh request, startup rehydration, next-request prompt.</td>
+          </tr>
+          <tr>
+            <td>Run loop</td>
+            <td><code>src/lingtai_kernel/base_agent/turn.py</code></td>
+            <td>Central WorkerStillRunning branch and residual guards for requests, wakes, and pre-sleep heal.</td>
+          </tr>
+          <tr>
+            <td>Refresh</td>
+            <td><code>src/lingtai_kernel/base_agent/lifecycle.py</code></td>
+            <td>Refresh skips chat history save when the worker interface is poisoned.</td>
+          </tr>
+          <tr>
+            <td>Notification producer</td>
+            <td><code>src/lingtai_kernel/base_agent/messaging.py</code></td>
+            <td>System events can carry structured fields and high-priority envelope state.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="span-6">
+      <h2>Focused Tests</h2>
+      <ul>
+        <li>Poisoned <code>_sync_notifications()</code> skips interface mutation and refreshes.</li>
+        <li>Poisoned refresh skips <code>_save_chat_history()</code>.</li>
+        <li><code>_handle_tc_wake()</code> does not heal/save after WorkerStillRunning.</li>
+        <li>Artifact schema and redaction are bounded and do not persist raw unsafe data.</li>
+        <li>Worker-hang system notifications are high priority.</li>
+      </ul>
+    </section>
+
+    <section class="span-6">
+      <h2>Non-Goals</h2>
+      <p>
+        PR2A does not implement PR2B. Provider cancellation, provider interface isolation, and
+        broader cancellation APIs remain future work. This patch is intentionally smaller: once the
+        current process observes an unsafe worker, it stops touching that interface and asks the
+        existing refresh machinery to rebuild cleanly.
+      </p>
+    </section>
+
+    <section class="span-12">
+      <h2>Operational Meaning</h2>
+      <p>
+        "Process-local" means the poison flag lives only in the current Python process. It is not a
+        persisted runtime setting. The persisted part is the unfinished-turn artifact plus the system
+        notification, which explains why the previous turn was abandoned after restart.
+      </p>
+      <p class="small">
+        Generated for branch <code>codex-colleague/pr2a-worker-poison-refresh-20260615</code>.
+      </p>
+    </section>
+  </div>
+</main>
+</body>
+</html>

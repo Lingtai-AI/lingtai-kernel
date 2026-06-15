@@ -436,6 +436,18 @@ class BaseAgent:
         # system.notification pairs. Bounce/MCP/soul notifications still
         # use system.notification but don't need per-ref tracking.
 
+        # LLM worker poison state. Set when WorkerStillRunningError means the
+        # current in-memory ChatInterface may still be mutated by a worker
+        # thread. Process-local only; refresh/relaunch restores from disk.
+        self._llm_worker_interface_poisoned: bool = False
+        self._llm_worker_poison_reason: str | None = None
+        self._llm_worker_poison_artifact: str | None = None
+        self._llm_worker_poisoned_at: str | None = None
+        self._llm_worker_poison_api_call_id: str | None = None
+        self._llm_worker_poison_turn_entry: str | None = None
+        self._llm_worker_refresh_requested: bool = False
+        self._llm_worker_refresh_source: str | None = None
+
         # Notification sync state (filesystem-as-protocol redesign).
         # _notification_fp: last-seen `.notification/` fingerprint for
         #   change-detection between heartbeat ticks.
@@ -817,9 +829,24 @@ class BaseAgent:
         from .messaging import _on_normal_mail
         _on_normal_mail(self, payload)
 
-    def _enqueue_system_notification(self, *, source: str, ref_id: str, body: str) -> str:
+    def _enqueue_system_notification(
+        self,
+        *,
+        source: str,
+        ref_id: str,
+        body: str,
+        priority: str = "normal",
+        extra: dict | None = None,
+    ) -> str:
         from .messaging import _enqueue_system_notification
-        return _enqueue_system_notification(self, source=source, ref_id=ref_id, body=body)
+        return _enqueue_system_notification(
+            self,
+            source=source,
+            ref_id=ref_id,
+            body=body,
+            priority=priority,
+            extra=extra,
+        )
 
     def notify(self, sender: str, text: str) -> None:
         from .messaging import _notify
@@ -854,6 +881,13 @@ class BaseAgent:
         splice into the wire mid-task instead of waiting for the outer
         turn to end.
         """
+        from .worker_recovery import is_worker_interface_poisoned
+        if is_worker_interface_poisoned(self):
+            self._log(
+                "tc_inbox_drain_skipped_poisoned_interface",
+                artifact=getattr(self, "_llm_worker_poison_artifact", None),
+            )
+            return
         if self._chat is None:
             try:
                 self._session.ensure_session()
@@ -941,6 +975,14 @@ class BaseAgent:
         future producer enqueues during drain. This variant just splices
         and returns.
         """
+        from .worker_recovery import is_worker_interface_poisoned
+        if is_worker_interface_poisoned(self):
+            self._log(
+                "tc_inbox_drain_skipped_poisoned_interface",
+                artifact=getattr(self, "_llm_worker_poison_artifact", None),
+                from_hook=True,
+            )
+            return
         if self._chat is None:
             return
         result = self._tc_inbox.drain_into(
@@ -998,14 +1040,40 @@ class BaseAgent:
         """
         from ..notifications import notification_fingerprint, collect_notifications
         from ..meta_block import skeletonize_notification_holder
+        from .worker_recovery import (
+            is_worker_interface_poisoned,
+            request_worker_hang_refresh,
+        )
+
+        def _skip_poisoned_sync(*, phase: str) -> bool:
+            if not is_worker_interface_poisoned(self):
+                return False
+            artifact = getattr(self, "_llm_worker_poison_artifact", None)
+            self._log(
+                "notification_sync_skipped_poisoned_interface",
+                phase=phase,
+                artifact=artifact,
+                action="refresh_requested",
+            )
+            request_worker_hang_refresh(
+                self,
+                artifact_relpath=artifact,
+                source="notification_sync",
+            )
+            return True
 
         fp = notification_fingerprint(self._working_dir)
         if fp == self._notification_fp:
             return
 
+        if _skip_poisoned_sync(phase="before_collect"):
+            return
+
         notifications = collect_notifications(self._working_dir)
 
         if not notifications:
+            if _skip_poisoned_sync(phase="before_empty_skeletonize"):
+                return
             # All channels cleared.  Skeletonize the current live holder
             # (whether it is a normal tool-result dict or a synthesized
             # pair content dict) so no history block keeps advertising
@@ -1028,6 +1096,8 @@ class BaseAgent:
         inject_ok = False
 
         if self._state == AgentState.ASLEEP:
+            if _skip_poisoned_sync(phase="asleep_before_wake"):
+                return
             # Notification arrival wakes the agent, then inject as IDLE.
             # The synthesized (call, result) pair impersonates a
             # voluntary system(action="notification") call; MSG_TC_WAKE
@@ -1055,11 +1125,19 @@ class BaseAgent:
             # until this new injection succeeds; otherwise a blocked append
             # would discard the only live payload even though _notification_fp
             # remains uncommitted for retry.
+            if _skip_poisoned_sync(phase="asleep_before_inject"):
+                return
             inject_ok = self._inject_notification_pair(notifications)
             if not inject_ok:
+                if _skip_poisoned_sync(phase="asleep_before_heal"):
+                    return
                 self._heal_pending_tool_calls(reason="wake_inject_blocked")
+                if _skip_poisoned_sync(phase="asleep_before_reinject"):
+                    return
                 inject_ok = self._inject_notification_pair(notifications)
             if inject_ok:
+                if _skip_poisoned_sync(phase="asleep_before_wake_enqueue"):
+                    return
                 from ..message import _make_message, MSG_TC_WAKE
                 try:
                     wake_msg = _make_message(MSG_TC_WAKE, "system", "")
@@ -1101,6 +1179,8 @@ class BaseAgent:
                 self._notification_fp = fp
 
         elif self._state == AgentState.IDLE:
+            if _skip_poisoned_sync(phase="idle_before_inject"):
+                return
             # Skeletonize + reinject AND post MSG_TC_WAKE.  IDLE is
             # "between turns, run loop blocked on inbox.get()" — without
             # a wake message the loop sits forever, the wire pair never
@@ -1122,9 +1202,15 @@ class BaseAgent:
             # remains uncommitted for retry.
             inject_ok = self._inject_notification_pair(notifications)
             if not inject_ok:
+                if _skip_poisoned_sync(phase="idle_before_heal"):
+                    return
                 self._heal_pending_tool_calls(reason="idle_inject_blocked")
+                if _skip_poisoned_sync(phase="idle_before_reinject"):
+                    return
                 inject_ok = self._inject_notification_pair(notifications)
             if inject_ok:
+                if _skip_poisoned_sync(phase="idle_before_wake_enqueue"):
+                    return
                 from ..message import _make_message, MSG_TC_WAKE
                 try:
                     wake_msg = _make_message(MSG_TC_WAKE, "system", "")
@@ -1149,6 +1235,8 @@ class BaseAgent:
         # --- Commit fingerprint only if injection succeeded ---
         # ACTIVE deliberately defers without committing; only
         # STUCK/SUSPENDED commit here (they can't inject at all).
+        if _skip_poisoned_sync(phase="before_fingerprint_commit"):
+            return
         if inject_ok:
             self._notification_fp = fp
             self._notification_deferred_log_fp = ()
@@ -1173,6 +1261,14 @@ class BaseAgent:
         already clean (or the session isn't ready, in which case there's
         nothing we can do here).
         """
+        from .worker_recovery import is_worker_interface_poisoned
+        if is_worker_interface_poisoned(self):
+            self._log(
+                "heal_pending_tool_calls_skipped_poisoned_interface",
+                reason=reason,
+                artifact=getattr(self, "_llm_worker_poison_artifact", None),
+            )
+            return False
         if self._chat is None:
             return False
         iface = self._chat.interface
@@ -1228,6 +1324,15 @@ class BaseAgent:
         """
         import secrets
         from ..llm.interface import ToolCallBlock, ToolResultBlock
+        from .worker_recovery import is_worker_interface_poisoned
+
+        if is_worker_interface_poisoned(self):
+            self._log(
+                "notification_inject_skipped_poisoned_interface",
+                sources=list(notifications.keys()),
+                artifact=getattr(self, "_llm_worker_poison_artifact", None),
+            )
+            return False
 
         if self._chat is None:
             try:
@@ -1457,9 +1562,18 @@ class BaseAgent:
     # Refresh / preset (pass-throughs to lifecycle.py)
     # ------------------------------------------------------------------
 
-    def _perform_refresh(self) -> None:
+    def _perform_refresh(
+        self,
+        *,
+        skip_chat_history_save: bool = False,
+        skip_save_reason: str | None = None,
+    ) -> None:
         from .lifecycle import _perform_refresh
-        _perform_refresh(self)
+        _perform_refresh(
+            self,
+            skip_chat_history_save=skip_chat_history_save,
+            skip_save_reason=skip_save_reason,
+        )
 
     def _activate_preset(self, name: str) -> None:
         """Swap to a named preset — override in subclasses that support presets.

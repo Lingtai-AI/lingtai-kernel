@@ -10,6 +10,7 @@ mutating ChatInterface) — no filesystem sentinel involved.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import queue
 import threading
 from types import SimpleNamespace
@@ -29,6 +30,8 @@ class _FakeAgent:
     _asleep: threading.Event = field(default_factory=threading.Event)
     _logs: list[tuple[str, dict]] = field(default_factory=list)
     _states: list[AgentState] = field(default_factory=list)
+    _notifications: list[dict] = field(default_factory=list)
+    refresh_calls: list[dict] = field(default_factory=list)
     # ``_chat`` is read by ``_run_loop`` when ``_asleep`` is set (to heal
     # dangling tool_calls before sleeping). Default to None — fake agents
     # in this suite never have a live chat session.
@@ -41,6 +44,32 @@ class _FakeAgent:
         self._state = new_state
         self._states.append(new_state)
         self._log("agent_state", new=new_state.value, reason=reason)
+
+    def _enqueue_system_notification(
+        self,
+        *,
+        source: str,
+        ref_id: str,
+        body: str,
+        priority: str = "normal",
+        extra: dict | None = None,
+    ):
+        event_id = f"evt_{len(self._notifications) + 1}"
+        self._notifications.append({
+            "event_id": event_id,
+            "source": source,
+            "ref_id": ref_id,
+            "body": body,
+            "priority": priority,
+            "extra": extra or {},
+        })
+        return event_id
+
+    def _perform_refresh(self, *, skip_chat_history_save=False, skip_save_reason=None):
+        self.refresh_calls.append({
+            "skip_chat_history_save": skip_chat_history_save,
+            "skip_save_reason": skip_save_reason,
+        })
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +99,21 @@ def test_run_loop_skips_chat_history_save_after_worker_still_running(tmp_path, m
     assert agent.saves == 0
     assert any(name == "chat_history_save_skipped" for name, _ in agent._logs)
     assert any(name == "llm_worker_still_running" for name, _ in agent._logs)
+    assert agent._llm_worker_interface_poisoned is True
+    assert agent._llm_worker_poison_artifact
+    artifact = tmp_path / agent._llm_worker_poison_artifact
+    assert artifact.is_file()
+    artifact_payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert artifact_payload["type"] == "worker_still_running_recovery"
+    assert artifact_payload["status"] == "open"
+    assert artifact_payload["recovery"]["chat_history_saved_after_error"] is False
+    assert artifact_payload["recovery"]["notification_ref_id"].startswith("worker_still_running:")
+    assert agent._notifications
+    assert agent._notifications[-1]["priority"] == "high"
+    assert agent.refresh_calls[-1] == {
+        "skip_chat_history_save": True,
+        "skip_save_reason": "worker_still_running_interface_unsafe",
+    }
     assert agent._asleep.is_set()
     # Both STUCK and ASLEEP must be written to .agent.json so the TUI's
     # state read is accurate and the heartbeat AED timeout doesn't see a
@@ -77,6 +121,38 @@ def test_run_loop_skips_chat_history_save_after_worker_still_running(tmp_path, m
     assert AgentState.STUCK in agent._states
     assert AgentState.ASLEEP in agent._states
     assert not (tmp_path / ".llm_hang").exists()
+
+
+def test_worker_hang_request_artifact_is_bounded_and_redacted(tmp_path):
+    from lingtai_kernel.base_agent.worker_recovery import (
+        build_worker_hang_context,
+        write_worker_hang_artifact,
+    )
+
+    agent = _make_run_loop_agent(tmp_path)
+    secret = "sk-" + ("a" * 40)
+    content = f"please use token={secret}\n" + ("x" * 2000)
+    msg = _make_message(MSG_REQUEST, "human", content)
+    exc = WorkerStillRunningError(elapsed=300.0, grace=5.0, agent_name="test")
+
+    context = build_worker_hang_context(agent, msg, exc)
+    relpath = write_worker_hang_artifact(agent, exc, context)
+
+    assert relpath is not None
+    artifact = json.loads((tmp_path / relpath).read_text(encoding="utf-8"))
+    request = artifact["request"]
+    assert request["content_chars"] == len(content)
+    assert len(request["content_preview_redacted"]) <= 500
+    assert secret not in request["content_preview_redacted"]
+    assert secret not in json.dumps(artifact, ensure_ascii=False)
+    assert request["content_sha256"]
+    assert artifact["privacy"] == {
+        "raw_chat_history_included": False,
+        "raw_tool_args_included": False,
+        "raw_tool_results_included": False,
+        "previews_redacted": True,
+        "max_preview_chars": 500,
+    }
 
 
 # ---------------------------------------------------------------------------

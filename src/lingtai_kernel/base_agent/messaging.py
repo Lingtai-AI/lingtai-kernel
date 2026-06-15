@@ -116,7 +116,15 @@ def _rerender_unread_digest(agent) -> str | None:
     return "email"
 
 
-def _enqueue_system_notification(agent, *, source: str, ref_id: str, body: str) -> str:
+def _enqueue_system_notification(
+    agent,
+    *,
+    source: str,
+    ref_id: str,
+    body: str,
+    priority: str = "normal",
+    extra: dict | None = None,
+) -> str:
     """Append a system event to ``.notification/system.json``.
 
     The system intrinsic owns this single file and multiplexes its
@@ -136,6 +144,8 @@ def _enqueue_system_notification(agent, *, source: str, ref_id: str, body: str) 
         source: "email", "email.bounce", "daemon", "mcp.<name>", etc.
         ref_id: External reference (mail_id for email arrival, etc.).
         body: The localized prose for the agent to read.
+        priority: Notification envelope priority. Defaults to ``"normal"``.
+        extra: Optional structured event fields merged into this event only.
 
     Returns:
         An identifier for the event (for logging and back-compat with
@@ -156,15 +166,31 @@ def _enqueue_system_notification(agent, *, source: str, ref_id: str, body: str) 
         current = collect_notifications(agent._working_dir).get("system", {})
         events = list(current.get("data", {}).get("events", []))
 
-        events.append({
+        event = {
             "event_id": event_id,
             "source": source,
             "ref_id": ref_id,
             "body": body,
             "at": received_at,
-        })
+        }
+        if isinstance(extra, dict):
+            event.update(extra)
+        events.append(event)
         # Cap at the 20 most recent.
         events = events[-20:]
+
+        envelope_priority = (
+            "high"
+            if priority == "high" or any(
+                isinstance(event, dict)
+                and (
+                    event.get("severity") == "high"
+                    or event.get("priority") == "high"
+                )
+                for event in events
+            )
+            else "normal"
+        )
 
         publish_notification(
             agent._working_dir, "system",
@@ -173,6 +199,7 @@ def _enqueue_system_notification(agent, *, source: str, ref_id: str, body: str) 
                 f"{'s' if len(events) != 1 else ''}"
             ),
             icon="🔔",
+            priority=envelope_priority,
             data={"events": events},
         )
 

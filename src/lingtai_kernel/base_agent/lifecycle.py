@@ -63,6 +63,18 @@ def _start(agent) -> None:
         except Exception as e:
             from ..logging import get_logger
             get_logger().warning(f"[{agent.agent_name}] Failed to restore chat history: {e}")
+
+    try:
+        from .worker_recovery import rehydrate_worker_hang_recovery
+
+        rehydrated = rehydrate_worker_hang_recovery(agent)
+        if rehydrated:
+            agent._log("worker_hang_recovery_rehydrated", count=rehydrated)
+    except Exception as e:
+        try:
+            agent._log("worker_hang_recovery_rehydrate_failed", error=str(e)[:300])
+        except Exception:
+            pass
     # Restore token state from ledger (lifetime accumulator)
     try:
         ledger_path = agent._working_dir / "logs" / "token_ledger.jsonl"
@@ -465,7 +477,12 @@ def _heartbeat_loop(agent) -> None:
         time.sleep(1.0)
 
 
-def _perform_refresh(agent) -> None:
+def _perform_refresh(
+    agent,
+    *,
+    skip_chat_history_save: bool = False,
+    skip_save_reason: str | None = None,
+) -> None:
     """Refresh = .refresh handshake + deferred relaunch.
 
     Self-sufficient across all call sites — heartbeat, tool-call (intrinsic
@@ -485,8 +502,21 @@ def _perform_refresh(agent) -> None:
     import subprocess
     import sys
 
-    agent._log("refresh_start")
-    agent._save_chat_history()
+    poisoned = bool(getattr(agent, "_llm_worker_interface_poisoned", False))
+    effective_skip_save = skip_chat_history_save or poisoned
+    effective_skip_reason = (
+        skip_save_reason
+        or ("worker_still_running_interface_unsafe" if poisoned else None)
+    )
+    agent._log(
+        "refresh_start",
+        skip_chat_history_save=effective_skip_save,
+        skip_save_reason=effective_skip_reason,
+    )
+    if effective_skip_save:
+        agent._log("refresh_chat_history_save_skipped", reason=effective_skip_reason)
+    else:
+        agent._save_chat_history()
     # Bound-method dispatch — _build_launch_cmd lives on BaseAgent (returns
     # None) and Agent (returns the real `lingtai-agent run` cmd). A prior version
     # called a module-level _build_launch_cmd shadow that always returned

@@ -476,7 +476,12 @@ def _run_loop(agent) -> None:
                 # appendable from a fresh wake. Common cause: cancel
                 # mid-batch leaves the just-arrived assistant response
                 # with tool_calls on the wire but no results yet.
-                if (
+                if getattr(agent, "_llm_worker_interface_poisoned", False):
+                    agent._log(
+                        "sleep_heal_skipped_poisoned_interface",
+                        artifact=getattr(agent, "_llm_worker_poison_artifact", None),
+                    )
+                elif (
                     agent._chat is not None
                     and agent._chat.interface.has_pending_tool_calls()
                 ):
@@ -534,6 +539,24 @@ def _run_loop(agent) -> None:
             skip_post_turn_save = False
             while True:
                 try:
+                    if getattr(agent, "_llm_worker_interface_poisoned", False):
+                        from .worker_recovery import request_worker_hang_refresh
+
+                        artifact = getattr(agent, "_llm_worker_poison_artifact", None)
+                        agent._log(
+                            "turn_skipped_poisoned_interface",
+                            message_type=getattr(msg, "type", "unknown"),
+                            artifact=artifact,
+                        )
+                        request_worker_hang_refresh(
+                            agent,
+                            artifact_relpath=artifact,
+                            source="run_loop_poison_guard",
+                        )
+                        agent._asleep.set()
+                        sleep_state = AgentState.ASLEEP
+                        skip_post_turn_save = True
+                        break
                     _handle_message(agent, msg)
                     transient_attempts = 0
                     break  # success (chat saved after each session.send inside)
@@ -544,15 +567,43 @@ def _run_loop(agent) -> None:
 
                     if isinstance(e, WorkerStillRunningError):
                         # Worker future is still alive — ChatInterface is
-                        # unsafe to mutate from this thread. Skip chat
-                        # save and put the agent to sleep; a refresh will
-                        # bring up a fresh interface.
-                        agent._log("llm_worker_still_running", error=err_desc[:300])
+                        # unsafe to mutate from this thread. Mark it poisoned,
+                        # write recovery state from safe locals, skip chat save,
+                        # and request forced refresh/relaunch.
+                        from .worker_recovery import (
+                            build_worker_hang_context,
+                            mark_worker_interface_poisoned,
+                            publish_worker_hang_notification,
+                            request_worker_hang_refresh,
+                            write_worker_hang_artifact,
+                        )
+
+                        context = build_worker_hang_context(agent, msg, e)
+                        artifact_relpath = write_worker_hang_artifact(agent, e, context)
+                        mark_worker_interface_poisoned(
+                            agent,
+                            e,
+                            context=context,
+                            artifact_relpath=artifact_relpath,
+                        )
+                        publish_worker_hang_notification(agent, artifact_relpath, context)
+                        agent._log(
+                            "llm_worker_still_running",
+                            error=err_desc[:300],
+                            artifact=artifact_relpath,
+                            turn_entry=(context.get("turn") or {}).get("entry"),
+                            api_call_id=context.get("api_call_id"),
+                        )
                         agent._set_state(AgentState.STUCK, reason=err_desc)
+                        request_worker_hang_refresh(
+                            agent,
+                            artifact_relpath=artifact_relpath,
+                            source="worker_still_running",
+                        )
                         agent._asleep.set()
                         agent._set_state(
                             AgentState.ASLEEP,
-                            reason="LLM worker still running; refresh recommended",
+                            reason="LLM worker still running; refresh/relaunch requested",
                         )
                         sleep_state = AgentState.ASLEEP
                         skip_post_turn_save = True
@@ -706,7 +757,7 @@ def _run_loop(agent) -> None:
                 agent._save_chat_history()
 
             # Auto-insight: fire after N turns
-            if agent._config.insights_interval > 0:
+            if not skip_post_turn_save and agent._config.insights_interval > 0:
                 agent._insight_turn_counter += 1
                 if agent._insight_turn_counter >= agent._config.insights_interval:
                     agent._insight_turn_counter = 0
@@ -886,6 +937,22 @@ def _batch_includes_context_molt(tool_calls) -> bool:
 
 def _handle_request(agent, msg: Message) -> None:
     """Send request to LLM, process response with tool calls."""
+    if getattr(agent, "_llm_worker_interface_poisoned", False):
+        from .worker_recovery import request_worker_hang_refresh
+
+        artifact = getattr(agent, "_llm_worker_poison_artifact", None)
+        agent._log(
+            "request_skipped_poisoned_interface",
+            artifact=artifact,
+            message_type=getattr(msg, "type", "unknown"),
+        )
+        request_worker_hang_refresh(
+            agent,
+            artifact_relpath=artifact,
+            source="handle_request_poison_guard",
+        )
+        return
+
     # Splice any queued involuntary tool-call pairs
     agent._drain_tc_inbox()
 
@@ -908,6 +975,12 @@ def _handle_request(agent, msg: Message) -> None:
         working_dir=agent._working_dir,
     )
     content = agent._pre_request(msg)
+    try:
+        from .worker_recovery import maybe_prepend_worker_hang_recovery_prompt
+
+        content = maybe_prepend_worker_hang_recovery_prompt(agent, content)
+    except Exception:
+        pass
     meta = build_meta(agent)
 
     # Molt pressure — warn agent when context is getting full.
@@ -951,6 +1024,18 @@ def _handle_tc_wake(agent, msg: Message) -> None:
     of no-op-and-return — the previous "tc_inbox_empty" silent
     no-op was the bug that left spliced notification pairs unread.
     """
+    if getattr(agent, "_llm_worker_interface_poisoned", False):
+        from .worker_recovery import request_worker_hang_refresh
+
+        artifact = getattr(agent, "_llm_worker_poison_artifact", None)
+        agent._log("tc_wake_skipped_poisoned_interface", artifact=artifact)
+        request_worker_hang_refresh(
+            agent,
+            artifact_relpath=artifact,
+            source="tc_wake_poison_guard",
+        )
+        return
+
     if agent._chat is None:
         try:
             agent._session.ensure_session()
@@ -1012,7 +1097,11 @@ def _handle_tc_wake(agent, msg: Message) -> None:
             agent._log("tc_wake_dispatch", source=item.source, call_id=item.call.id)
             try:
                 response = agent._session.send([item.result])
-            except Exception:
+            except Exception as send_err:
+                from ..llm_utils import WorkerStillRunningError
+
+                if isinstance(send_err, WorkerStillRunningError):
+                    raise
                 # The spliced tool result was passed into send() and the
                 # adapter rolled the user entry back when the API call
                 # failed. Restore the real result before the catch-all
@@ -1028,6 +1117,19 @@ def _handle_tc_wake(agent, msg: Message) -> None:
             agent._save_chat_history(ledger_source="tc_wake")
             _process_response(agent, response, ledger_source="tc_wake")
         except Exception as splice_err:
+            from ..llm_utils import WorkerStillRunningError
+
+            if isinstance(splice_err, WorkerStillRunningError):
+                agent._log(
+                    "tc_wake_send_error",
+                    source=item.source,
+                    call_id=item.call.id,
+                    error=str(splice_err)[:300],
+                    worker_still_running=True,
+                )
+                for remaining in items[idx + 1:]:
+                    agent._tc_inbox.enqueue(remaining)
+                raise
             if iface.has_pending_tool_calls():
                 # tool_completed=True: the tool result was produced by the
                 # notification system and passed in as item.result — the
@@ -1086,6 +1188,15 @@ def _handle_tc_wake(agent, msg: Message) -> None:
         except Exception:
             pass
     except Exception as e:
+        from ..llm_utils import WorkerStillRunningError
+
+        if isinstance(e, WorkerStillRunningError):
+            agent._log(
+                "tc_wake_error",
+                error=str(e)[:300],
+                worker_still_running=True,
+            )
+            raise
         if iface.has_pending_tool_calls():
             # tool_completed=True: the wire-drive path only fires when the
             # tail is already user[ToolResultBlock] — the tool results

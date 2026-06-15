@@ -8,7 +8,7 @@ This file is a navigation hub. Each sub-package has its own `ANATOMY.md` with co
 
 ## Components
 
-- `intrinsics/__init__.py` — registry. Imports the four sub-packages and exposes `ALL_INTRINSICS = {"email": email, "system": system, "psyche": psyche, "soul": soul}`. `BaseAgent._wire_intrinsics()` (`base_agent/__init__.py:495`) consumes this dict and binds each module's `handle()` into the agent's tool surface.
+- `intrinsics/__init__.py` — registry. Imports the four sub-packages and exposes `ALL_INTRINSICS = {"email": email, "system": system, "psyche": psyche, "soul": soul}`. `BaseAgent._wire_intrinsics()` (`base_agent/__init__.py:581`) consumes this dict and binds each module's `handle()` into the agent's tool surface.
 
 - [`intrinsics/email/`](email/ANATOMY.md) — filesystem mailbox. Inbox/outbox/sent/archive folders, contacts, recurring schedules, mail delivery via daemon threads. `.notification/email.json` is a **live mirror** of the current unread set: any read-state mutation (`_read`, `_dismiss`, `_archive`, `_delete`) re-renders the digest so the wire's notification reflects the new state on the next heartbeat sync. The digest body inlines each entry's mailbox ID directly under the subject so the agent can pass it to `email_id` without a separate `check` call. Each entry preview is up to 200 chars; truncated previews end with `... (N more chars)`. The agent dismisses handled mails via `email(action="read", email_id=[...])` (returns bodies + clears) or `email(action="dismiss", email_id=[...])` (clears only, no bodies). On bounce, merges into `.notification/system.json` events list. Decomposed in `d229efe` from a 1,530-line `email.py` into a 5-module sub-package (`__init__.py`, `primitives.py`, `schema.py`, `manager.py`).
 
@@ -46,7 +46,7 @@ Detailed file/path lists belong in each sub-anatomy's State section. High-level 
 
 ## Notes
 
-- **Intrinsics are kernel primitives, not optional capabilities.** Capabilities (in the wrapper layer at `lingtai/core/`) may wrap or override them via `BaseAgent.override_intrinsic()` (`base_agent/__init__.py:759`).
+- **Intrinsics are kernel primitives, not optional capabilities.** Capabilities (in the wrapper layer at `lingtai/core/`) may wrap or override them via `BaseAgent.override_intrinsic()` (`base_agent/__init__.py:1639`).
 - **Uniform public shape**: every intrinsic exposes `get_schema(lang)`, `get_description(lang)`, `handle(agent, args)`. Boot hooks are optional (`psyche.boot`, `email.boot`).
 - **`notification` action is agent-callable but does not return channel data directly**: `system.handle()` returns a placeholder dict (`_notification_placeholder: True` + explanatory message); the canonical live payload (`notifications` + `_notification_guidance`) is stamped onto that same result by `attach_active_notifications` post-hook. Kernel-synthesized notification reads use the same canonical payload shape but additionally carry `_synthesized: True` in the JSON body and on the `ToolResultBlock.synthesized` flag. There is one and only one live notification payload in conversation history at any moment.
 - **Decomposition rationale**: each of the four hit a complexity threshold where its internal subsystems no longer fit cleanly in one file (mailbox I/O vs delivery vs scheduling for email; molt vs pad vs snapshot for psyche; flow vs consultation vs config for soul; nap vs preset vs karma vs deprecation shim for system). Sub-anatomies document the per-package internal layout.

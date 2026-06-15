@@ -1,0 +1,388 @@
+"""WorkerStillRunning recovery helpers.
+
+These helpers keep the PR2A safety rule in one place: once a worker thread is
+still running after timeout + grace, the live ChatInterface is poisoned for this
+process and recovery must happen from durable state after refresh.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import secrets
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from ..message import MSG_REQUEST, MSG_TC_WAKE, MSG_USER_INPUT, Message
+from ..trace_redaction import redact_text
+
+
+MAX_PREVIEW_CHARS = 500
+_ARTIFACT_GLOB = "worker_still_running_*.json"
+_ISSUE_REFS = ["Lingtai-AI/lingtai-kernel#195", "Lingtai-AI/lingtai-kernel#238"]
+_SAFETY_INVARIANT = (
+    "Worker future still alive after timeout + grace; poisoned ChatInterface "
+    "must not be retried, healed, serialized, or saved."
+)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _now_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _safe_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        return repr(value)
+
+
+def _write_json_atomic(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
+def _artifact_id_from_relpath(artifact_relpath: str | None) -> str:
+    if not artifact_relpath:
+        return "unknown"
+    return Path(artifact_relpath).stem
+
+
+def _artifact_ref_id(artifact_relpath: str | None) -> str:
+    return f"worker_still_running:{_artifact_id_from_relpath(artifact_relpath)}"
+
+
+def _message_preview(msg: Message) -> dict:
+    raw = _safe_text(getattr(msg, "content", ""))
+    redacted = redact_text(raw)
+    return {
+        "content_chars": len(raw),
+        "content_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        "content_preview_redacted": redacted[:MAX_PREVIEW_CHARS],
+    }
+
+
+def _collect_notification_metadata(agent) -> dict:
+    try:
+        from ..notifications import collect_notifications
+
+        notifications = collect_notifications(agent._working_dir)
+    except Exception:
+        return {"notification_sources": [], "notification_ref_ids": []}
+
+    ref_ids: list[str] = []
+    for payload in notifications.values():
+        if not isinstance(payload, dict):
+            continue
+        candidates = [payload]
+        data = payload.get("data")
+        if isinstance(data, dict):
+            candidates.append(data)
+            events = data.get("events")
+            if isinstance(events, list):
+                candidates.extend(ev for ev in events if isinstance(ev, dict))
+        for candidate in candidates:
+            for key in ("ref_id", "event_id", "id"):
+                value = candidate.get(key)
+                if value is not None:
+                    ref_ids.append(str(value)[:200])
+    return {
+        "notification_sources": sorted(str(k) for k in notifications.keys()),
+        "notification_ref_ids": ref_ids[:20],
+    }
+
+
+def build_worker_hang_context(agent, msg: Message, exc: BaseException) -> dict:
+    message_type = getattr(msg, "type", "unknown")
+    if message_type in (MSG_REQUEST, MSG_USER_INPUT):
+        entry = "request"
+    elif message_type == MSG_TC_WAKE:
+        entry = "tc_wake_wire"
+    else:
+        entry = "unknown"
+
+    context = {
+        "turn": {
+            "entry": entry,
+            "message_type": message_type,
+            "sender": str(getattr(msg, "sender", ""))[:200],
+        },
+        "error": {
+            "class": type(exc).__name__,
+            "message": (str(exc) or repr(exc))[:500],
+            "elapsed_s": getattr(exc, "elapsed", None),
+            "grace_s": getattr(exc, "grace", None),
+            "agent_name": getattr(exc, "agent_name", getattr(agent, "agent_name", None)),
+        },
+    }
+    if message_type in (MSG_REQUEST, MSG_USER_INPUT):
+        context["request"] = _message_preview(msg)
+    elif message_type == MSG_TC_WAKE:
+        context["tc_wake"] = {
+            "mode": "wire_drive",
+            **_collect_notification_metadata(agent),
+        }
+    return context
+
+
+def write_worker_hang_artifact(agent, exc: BaseException, context: dict) -> str | None:
+    created_at = _now_iso()
+    artifact_id = f"worker_still_running_{_now_stamp()}_{secrets.token_hex(3)}"
+    relpath = f"history/unfinished_turns/{artifact_id}.json"
+    path = agent._working_dir / relpath
+    payload = {
+        "schema_version": 1,
+        "type": "worker_still_running_recovery",
+        "status": "open",
+        "created_at": created_at,
+        "issue_refs": _ISSUE_REFS,
+        "safety_invariant": _SAFETY_INVARIANT,
+        "error": context.get("error", {}),
+        "turn": context.get("turn", {}),
+        "recovery": {
+            "poison_flag_set": True,
+            "refresh_requested": True,
+            "chat_history_saved_after_error": False,
+            "notification_ref_id": f"worker_still_running:{artifact_id}",
+        },
+        "privacy": {
+            "raw_chat_history_included": False,
+            "raw_tool_args_included": False,
+            "raw_tool_results_included": False,
+            "previews_redacted": True,
+            "max_preview_chars": MAX_PREVIEW_CHARS,
+        },
+    }
+    for key in ("request", "tc_wake", "predecessor_tools"):
+        if key in context:
+            payload[key] = context[key]
+    try:
+        _write_json_atomic(path, payload)
+    except Exception as artifact_err:
+        try:
+            agent._log(
+                "worker_hang_artifact_write_failed",
+                error=(str(artifact_err) or repr(artifact_err))[:300],
+            )
+        except Exception:
+            pass
+        return None
+    return relpath
+
+
+def mark_worker_interface_poisoned(
+    agent,
+    exc: BaseException,
+    *,
+    context: dict | None = None,
+    artifact_relpath: str | None = None,
+) -> None:
+    context = context or {}
+    poisoned_at = _now_iso()
+    agent._llm_worker_interface_poisoned = True
+    agent._llm_worker_poison_reason = (str(exc) or repr(exc))[:500]
+    agent._llm_worker_poison_artifact = artifact_relpath
+    agent._llm_worker_poisoned_at = poisoned_at
+    agent._llm_worker_poison_api_call_id = context.get("api_call_id")
+    turn = context.get("turn") if isinstance(context.get("turn"), dict) else {}
+    agent._llm_worker_poison_turn_entry = turn.get("entry")
+    try:
+        agent._log(
+            "llm_worker_interface_poisoned",
+            artifact=artifact_relpath,
+            poisoned_at=poisoned_at,
+            turn_entry=turn.get("entry"),
+        )
+    except Exception:
+        pass
+
+
+def is_worker_interface_poisoned(agent) -> bool:
+    return bool(getattr(agent, "_llm_worker_interface_poisoned", False))
+
+
+def _system_event_exists(agent, ref_id: str) -> bool:
+    try:
+        from ..notifications import collect_notifications
+
+        system_payload = collect_notifications(agent._working_dir).get("system", {})
+        events = system_payload.get("data", {}).get("events", [])
+    except Exception:
+        return False
+    if not isinstance(events, list):
+        return False
+    return any(isinstance(event, dict) and event.get("ref_id") == ref_id for event in events)
+
+
+def publish_worker_hang_notification(
+    agent,
+    artifact_relpath: str | None,
+    context: dict | None = None,
+) -> str | None:
+    context = context or {}
+    ref_id = _artifact_ref_id(artifact_relpath)
+    if _system_event_exists(agent, ref_id):
+        return None
+    turn = context.get("turn") if isinstance(context.get("turn"), dict) else {}
+    error = context.get("error") if isinstance(context.get("error"), dict) else {}
+    body = (
+        "Previous LLM worker exceeded timeout plus grace and the interface was "
+        "poisoned. Kernel skipped unsafe chat save and requested refresh. "
+        f"Recovery artifact: {artifact_relpath or 'unavailable'}. Continue only "
+        "from restored history/artifact; do not assume the abandoned LLM response exists."
+    )
+    extra = {
+        "severity": "high",
+        "artifact": artifact_relpath,
+        "turn_entry": turn.get("entry"),
+        "elapsed_s": error.get("elapsed_s"),
+        "grace_s": error.get("grace_s"),
+        "recommended_action": "wait_for_refresh_then_continue_from_restored_history",
+    }
+    try:
+        enqueue = getattr(agent, "_enqueue_system_notification")
+        return enqueue(
+            source="kernel.llm_worker_hang",
+            ref_id=ref_id,
+            body=body,
+            priority="high",
+            extra=extra,
+        )
+    except Exception as notif_err:
+        try:
+            agent._log(
+                "worker_hang_notification_publish_failed",
+                ref_id=ref_id,
+                error=(str(notif_err) or repr(notif_err))[:300],
+            )
+        except Exception:
+            pass
+        return None
+
+
+def request_worker_hang_refresh(
+    agent,
+    *,
+    artifact_relpath: str | None = None,
+    source: str,
+) -> None:
+    if getattr(agent, "_llm_worker_refresh_requested", False):
+        try:
+            agent._log(
+                "worker_hang_refresh_already_requested",
+                source=source,
+                artifact=artifact_relpath or getattr(agent, "_llm_worker_poison_artifact", None),
+            )
+        except Exception:
+            pass
+        return
+    agent._llm_worker_refresh_requested = True
+    agent._llm_worker_refresh_source = source
+    try:
+        agent._log(
+            "worker_hang_refresh_requested",
+            source=source,
+            artifact=artifact_relpath,
+        )
+    except Exception:
+        pass
+    try:
+        agent._perform_refresh(
+            skip_chat_history_save=True,
+            skip_save_reason="worker_still_running_interface_unsafe",
+        )
+    except Exception as refresh_err:
+        try:
+            agent._log(
+                "worker_hang_refresh_request_failed",
+                source=source,
+                artifact=artifact_relpath,
+                error=(str(refresh_err) or repr(refresh_err))[:300],
+            )
+        except Exception:
+            pass
+
+
+def _open_artifacts(agent) -> list[tuple[str, Path, dict]]:
+    directory = agent._working_dir / "history" / "unfinished_turns"
+    if not directory.is_dir():
+        return []
+    out: list[tuple[str, Path, dict]] = []
+    for path in directory.glob(_ARTIFACT_GLOB):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if payload.get("status") != "open" or payload.get("resolved_at"):
+            continue
+        created_at = str(payload.get("created_at") or "")
+        out.append((created_at, path, payload))
+    return sorted(out, key=lambda item: (item[0], item[1].name), reverse=True)
+
+
+def rehydrate_worker_hang_recovery(agent) -> int:
+    artifacts = _open_artifacts(agent)
+    if not artifacts:
+        return 0
+    _created_at, path, payload = artifacts[0]
+    try:
+        artifact_relpath = path.relative_to(agent._working_dir).as_posix()
+    except ValueError:
+        artifact_relpath = str(path)
+    ref_id = payload.get("recovery", {}).get("notification_ref_id") or _artifact_ref_id(artifact_relpath)
+    if _system_event_exists(agent, ref_id):
+        return 0
+    event_id = publish_worker_hang_notification(agent, artifact_relpath, payload)
+    return 1 if event_id else 0
+
+
+def maybe_prepend_worker_hang_recovery_prompt(agent, content: str) -> str:
+    if not isinstance(content, str):
+        return content
+    artifacts = [
+        item for item in _open_artifacts(agent)
+        if not item[2].get("prompt_injected_at")
+    ]
+    if not artifacts:
+        return content
+    _created_at, path, payload = artifacts[0]
+    try:
+        artifact_relpath = path.relative_to(agent._working_dir).as_posix()
+    except ValueError:
+        artifact_relpath = str(path)
+    injected_at = _now_iso()
+    payload["prompt_injected_at"] = injected_at
+    payload["prompt_injected_on"] = "next_safe_text_request"
+    try:
+        _write_json_atomic(path, payload)
+    except Exception as mark_err:
+        try:
+            agent._log(
+                "worker_hang_prompt_mark_failed",
+                artifact=artifact_relpath,
+                error=(str(mark_err) or repr(mark_err))[:300],
+            )
+        except Exception:
+            pass
+    notice = (
+        "[Kernel recovery notice]\n"
+        "A previous LLM call was abandoned because its worker was still running "
+        "after timeout plus grace. The kernel skipped saving the unsafe chat "
+        "interface and refreshed/rebuilt from the last safe on-disk history. "
+        "Do not assume the abandoned LLM response exists. If task context is "
+        f"missing, inspect {artifact_relpath}, current notifications, mail, "
+        "and pad, then continue or ask for direction.\n"
+        "[/Kernel recovery notice]"
+    )
+    return f"{notice}\n\n{content}"

@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+
 from lingtai_kernel.base_agent.turn import _handle_tc_wake
 from lingtai_kernel.llm.interface import (
     ChatInterface,
@@ -229,6 +231,96 @@ def test_pending_tool_calls_logs_diagnostic_with_pending_ids():
         "pending_tool_call_ids": ["call_pending"],
         "pending_tool_names": ["bash"],
     }
+
+
+def test_tc_wake_worker_still_running_does_not_touch_iface_in_except(tmp_path):
+    from lingtai_kernel.llm_utils import WorkerStillRunningError
+    from lingtai_kernel.message import Message, MSG_TC_WAKE
+
+    iface = ChatInterface()
+    iface.add_assistant_message([
+        ToolCallBlock(id="notif_call", name="system", args={"action": "notification"})
+    ])
+    iface.add_tool_results([
+        ToolResultBlock(id="notif_call", name="system", content={"status": "ok"})
+    ])
+
+    pending_checks = {"count": 0}
+
+    def has_pending_once():
+        pending_checks["count"] += 1
+        if pending_checks["count"] > 1:
+            raise AssertionError("exception path must not inspect poisoned interface")
+        return False
+
+    iface.has_pending_tool_calls = has_pending_once
+
+    @dataclass
+    class _ChatHolder:
+        interface: ChatInterface
+
+    @dataclass
+    class _Session:
+        chat: _ChatHolder
+
+        def ensure_session(self):
+            return self.chat
+
+        def send(self, payload):
+            assert payload is None
+            raise WorkerStillRunningError(elapsed=300.0, grace=5.0, agent_name="test")
+
+    @dataclass
+    class _Agent:
+        _chat: _ChatHolder
+        _session: _Session
+        _tc_inbox: TCInbox = field(default_factory=TCInbox)
+        _appendix_ids_by_source: dict = field(default_factory=dict)
+        _intrinsics: dict = field(default_factory=dict)
+        _tool_handlers: dict = field(default_factory=dict)
+        _PARALLEL_SAFE_TOOLS: set = field(default_factory=set)
+        _working_dir: Any = tmp_path
+        _logs: list[tuple[str, dict]] = field(default_factory=list)
+        saves: int = 0
+
+        class _ConfigStub:
+            provider = "openai"
+            language = "en"
+
+        _config = _ConfigStub()
+
+        class _ServiceStub:
+            def make_tool_result(self, name, result, **kw):
+                return ToolResultBlock(
+                    id=kw.get("tool_call_id") or "",
+                    name=name,
+                    content=result,
+                )
+
+        service = _ServiceStub()
+
+        def _dispatch_tool(self, _call):
+            return {"status": "ok"}
+
+        def _log(self, event_type, **fields):
+            self._logs.append((event_type, fields))
+
+        def _save_chat_history(self, *, ledger_source=None):
+            self.saves += 1
+
+    chat = _ChatHolder(iface)
+    agent = _Agent(_chat=chat, _session=_Session(chat))
+    wake_msg = Message(type=MSG_TC_WAKE, sender="kernel", content="", timestamp=0.0)
+
+    with pytest.raises(WorkerStillRunningError):
+        _handle_tc_wake(agent, wake_msg)
+
+    assert pending_checks["count"] == 1
+    assert agent.saves == 0
+    assert any(
+        event == "tc_wake_error" and fields.get("worker_still_running") is True
+        for event, fields in agent._logs
+    )
 
 
 def test_empty_queue_short_circuits_before_ensure_session():
