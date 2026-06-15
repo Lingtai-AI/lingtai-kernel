@@ -525,3 +525,17 @@ def test_preset_block_unmigrated_init_points_at_m029():
     with pytest.raises(ValueError, match="m029") as exc_info:
         validate_init(data)
     assert "lingtai-tui" in str(exc_info.value)
+
+
+def test_context_hard_pressure_valid_range():
+    data = _valid_init()
+    data["manifest"]["context_hard_pressure"] = 0.98
+    validate_init(data)
+
+
+@pytest.mark.parametrize("value", [0, -0.1, 1.1, True, float("inf"), float("nan")])
+def test_context_hard_pressure_rejects_invalid_values(value):
+    data = _valid_init()
+    data["manifest"]["context_hard_pressure"] = value
+    with pytest.raises(ValueError, match="context_hard_pressure"):
+        validate_init(data)

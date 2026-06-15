@@ -543,6 +543,25 @@ class BaseAgent:
         self._sent_tracker = SentMessageTracker()
 
         # Session manager — LLM session, token tracking, compaction
+        def _pre_send_compact(*, source: str):
+            from ..tool_result_artifacts import compact_oversized_history
+            chat = self._session.chat if self._session is not None else None
+            interface = getattr(chat, "interface", None)
+            stats = compact_oversized_history(
+                interface,
+                working_dir=self._working_dir,
+                logger_fn=self._log,
+            )
+            self._log("context_hard_gate_compacted", source=source,
+                      **stats.to_log_fields())
+            if stats.compacted_blocks > 0:
+                self._save_chat_history(ledger_source="hard_ceiling_compaction")
+            return stats
+
+        def _pre_send_context_forget(*, source: str):
+            from ..intrinsics import psyche as _psyche
+            return _psyche.context_forget(self, source=source)
+
         self._session = SessionManager(
             llm_service=service,
             config=self._config,
@@ -552,6 +571,9 @@ class BaseAgent:
             build_tool_schemas_fn=self._build_tool_schemas,
             logger_fn=self._log,
             build_system_batches_fn=self._build_system_prompt_batches,
+            compact_history_fn=_pre_send_compact,
+            force_context_forget_fn=_pre_send_context_forget,
+            save_local_state_fn=self._save_chat_history,
         )
 
         # Boot the psyche intrinsic

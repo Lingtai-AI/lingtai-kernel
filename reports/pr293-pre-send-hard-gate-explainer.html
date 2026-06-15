@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Issue #193 — Pre-send hard context gate</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f9fc;
+      --card: #ffffff;
+      --ink: #182235;
+      --muted: #5d6b82;
+      --line: #d9e1ef;
+      --blue: #2754c5;
+      --green: #147d52;
+      --amber: #986a13;
+      --red: #b42318;
+      --code: #102a43;
+    }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); line-height: 1.55; }
+    main { max-width: 1050px; margin: 0 auto; padding: 32px 20px 56px; }
+    header { background: linear-gradient(135deg, #173b8f, #2b6ef3); color: white; border-radius: 20px; padding: 30px; box-shadow: 0 16px 36px rgba(23,59,143,.20); }
+    h1 { margin: 0 0 8px; font-size: clamp(28px, 4vw, 44px); line-height: 1.08; }
+    h2 { margin: 0 0 14px; font-size: 24px; }
+    h3 { margin: 20px 0 8px; font-size: 17px; }
+    p { margin: 0 0 12px; }
+    .subtitle { font-size: 18px; opacity: .92; max-width: 850px; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 18px 0 0; }
+    .metric { background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.25); border-radius: 14px; padding: 14px; }
+    .metric strong { display: block; font-size: 20px; }
+    section { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 22px; margin-top: 18px; box-shadow: 0 6px 22px rgba(16,42,67,.05); }
+    ul { margin: 8px 0 0 22px; padding: 0; }
+    li { margin: 7px 0; }
+    code { background: #eef3fb; color: var(--code); border-radius: 6px; padding: 1px 5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; }
+    pre { overflow-x: auto; background: #0f172a; color: #e2e8f0; padding: 14px; border-radius: 12px; font-size: 13px; }
+    .tag { display: inline-block; border-radius: 999px; padding: 3px 9px; font-weight: 700; font-size: 12px; letter-spacing: .02em; }
+    .tag.pass { background: #e8f7ef; color: var(--green); }
+    .tag.scope { background: #eef3ff; color: var(--blue); }
+    .tag.warn { background: #fff7e6; color: var(--amber); }
+    .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .callout { border-left: 4px solid var(--blue); background: #f3f7ff; padding: 12px 14px; border-radius: 12px; }
+    .risk { border-left-color: var(--amber); background: #fff9ed; }
+    .ok { border-left-color: var(--green); background: #effaf4; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 9px 8px; vertical-align: top; }
+    th { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+    footer { color: var(--muted); margin-top: 22px; font-size: 13px; }
+    @media (max-width: 760px) { .grid, .twocol { grid-template-columns: 1fr; } header { padding: 22px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Issue #193: stop over-budget turns before provider dispatch</h1>
+    <p class="subtitle">This PR adds a local hard context ceiling in <code>SessionManager.send()</code> so LingTai recovers or blocks before making an LLM API call that is already estimated to exceed the configured context budget.</p>
+    <div class="grid">
+      <div class="metric"><strong>Default ceiling</strong><span>98% of effective context window</span></div>
+      <div class="metric"><strong>Provider calls avoided</strong><span>No <code>llm_call</code> is logged on local hard-gate block</span></div>
+      <div class="metric"><strong>Validation</strong><span>271 focused/adjacent tests passing</span></div>
+    </div>
+  </header>
+
+  <section>
+    <h2><span class="tag scope">Context</span> Why this matters</h2>
+    <p>Issue #193 reported that the runtime could show extreme context pressure but still try to send another request. Existing warning and provider-overflow recovery paths were reactive: they either warned the agent or handled a provider rejection after an oversized request was attempted.</p>
+    <p>The safer behavior is to perform a deterministic pre-send estimate of the canonical wire plus the pending message, then either reduce local history or stop locally before provider dispatch.</p>
+  </section>
+
+  <section>
+    <h2><span class="tag scope">Root cause</span> Warning-only pressure handling</h2>
+    <div class="callout risk">
+      Before this change, request handling could publish context pressure warnings and still proceed into <code>SessionManager.send(...)</code>. Tool-loop continuations and wire-drive sends likewise had no central hard gate that accounted for pending text/tool-result payloads before the API call boundary.
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="tag scope">What changed</span> Implementation summary</h2>
+    <div class="twocol">
+      <div>
+        <h3>Central hard gate</h3>
+        <ul>
+          <li>Adds <code>AgentConfig.context_hard_pressure</code>, defaulting to <code>0.98</code>.</li>
+          <li>Checks the gate in <code>SessionManager.send()</code> after prompt/tool refresh and health checks, but before <code>llm_call</code> and provider dispatch.</li>
+          <li>Estimates current canonical wire plus pending <code>str</code>, <code>None</code>, or completed <code>ToolResultBlock</code> list messages.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Bounded local recovery</h3>
+        <ul>
+          <li>Runs one deterministic oversized-tool-result compaction attempt through an injected callback.</li>
+          <li>For replayable user text only, may force a system-authored <code>context_forget(source="hard_ceiling")</code> and retry the estimate.</li>
+          <li>If still over budget, returns a local terminal assistant response without calling the provider.</li>
+        </ul>
+      </div>
+    </div>
+    <h3>Tool-result safety on local block</h3>
+    <p>If a post-tool continuation is blocked, the completed tool results are committed locally first. This preserves side effects already performed by tools and prevents the agent from blindly re-running them on the next turn.</p>
+    <h3>Server-side session consistency</h3>
+    <p>After recording a local hard-gate assistant note, the session is rebuilt from canonical history. The OpenAI Responses server-side adapter now seeds its next request from canonical history when there is no <code>previous_response_id</code> chain, including any pre-request hook entries drained before that first post-rebuild request.</p>
+  </section>
+
+  <section>
+    <h2><span class="tag scope">Configuration</span> New hard-pressure knob</h2>
+    <table>
+      <tr><th>Surface</th><th>Behavior</th></tr>
+      <tr><td><code>manifest.context_hard_pressure</code></td><td>Validated as a finite number in <code>(0, 1]</code>.</td></tr>
+      <tr><td>Preset <code>manifest.llm.context_hard_pressure</code></td><td>Validated during preset load and materialized to the init manifest root, mirroring <code>context_limit</code>.</td></tr>
+      <tr><td>Invalid runtime value</td><td>Defaults to <code>0.98</code> and logs <code>context_hard_gate invalid_threshold_defaulted</code>.</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2><span class="tag warn">Non-goals</span> What this PR intentionally does not do</h2>
+    <ul>
+      <li>It does not change the human/agent warning ladder UX beyond adding the pre-send hard stop.</li>
+      <li>It does not replace provider-specific overflow handling; provider rejections can still occur for estimator mismatch or provider-side accounting differences.</li>
+      <li>It does not add new wake notifications on hard-gate block; the block is returned as local model-visible assistant text in the active turn.</li>
+      <li>It does not broaden context compaction beyond the existing deterministic oversized-tool-result artifact path.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="tag pass">Validation</span> Tests and checks</h2>
+    <pre>git diff --check
+python3 -m py_compile src/lingtai/agent.py src/lingtai/init_schema.py src/lingtai/llm/openai/adapter.py \
+  src/lingtai_kernel/base_agent/__init__.py src/lingtai_kernel/config.py \
+  src/lingtai_kernel/presets.py src/lingtai_kernel/session.py \
+  tests/test_init_schema.py tests/test_preset_materialization.py \
+  tests/test_pre_send_hard_gate.py tests/test_openai_prompt_cache_key.py
+PYTHONPATH=$PWD/src .../.venv/bin/pytest -q \
+  tests/test_pre_send_hard_gate.py tests/test_init_schema.py \
+  tests/test_preset_materialization.py tests/test_openai_prompt_cache_key.py \
+  tests/test_retroactive_history_compaction.py tests/test_tool_result_spill.py \
+  tests/test_openai_overflow_recovery.py tests/test_openai_compact_threshold.py \
+  tests/test_openai_responses_streaming.py tests/test_tc_wake_orphan_heal.py \
+  tests/test_notification_sync.py tests/test_aed_recovery.py
+# 271 passed</pre>
+  </section>
+
+  <section>
+    <h2><span class="tag scope">Reviewer notes</span> Areas to inspect</h2>
+    <ul>
+      <li><code>src/lingtai_kernel/session.py</code>: recovery ladder ordering, local block response, tool-result preservation, no <code>llm_call</code> on block.</li>
+      <li><code>src/lingtai/llm/openai/adapter.py</code>: lazy canonical seed after server-side Responses session rebuild.</li>
+      <li><code>src/lingtai_kernel/presets.py</code> and <code>src/lingtai/init_schema.py</code>: hard-pressure validation/materialization.</li>
+      <li><code>tests/test_pre_send_hard_gate.py</code>: behavior coverage for allow/block/compact/forget/tool-result/streaming paths.</li>
+    </ul>
+  </section>
+
+  <footer>
+    Generated for the LingTai kernel issue #193 PR. This file is self-contained and uses no remote assets.
+  </footer>
+</main>
+</body>
+</html>

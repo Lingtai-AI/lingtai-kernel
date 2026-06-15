@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "soul": dict,
     "stamina": (int, float),
     "context_limit": (int, type(None)),
+    "context_hard_pressure": (int, float),
     "molt_pressure": (int, float),
     "molt_prompt": str,
     "max_turns": int,
@@ -143,6 +145,18 @@ def validate_init(data: dict) -> list[str]:
     manifest = data["manifest"]
     _require_keys(manifest, MANIFEST_REQUIRED, prefix="manifest")
     _optional_keys(manifest, MANIFEST_OPTIONAL, prefix="manifest")
+    if "context_hard_pressure" in manifest:
+        hard_pressure = manifest["context_hard_pressure"]
+        if isinstance(hard_pressure, bool):
+            raise ValueError("manifest.context_hard_pressure: expected number, got bool")
+        if (
+            not isinstance(hard_pressure, (int, float))
+            or not math.isfinite(float(hard_pressure))
+            or not (0.0 < float(hard_pressure) <= 1.0)
+        ):
+            raise ValueError(
+                "manifest.context_hard_pressure: expected finite number in (0, 1]"
+            )
 
     # Validate manifest.preset umbrella if present.
     #

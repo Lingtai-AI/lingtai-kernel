@@ -997,15 +997,23 @@ class Agent(BaseAgent):
         preset_manifest = preset.get("manifest", {})
 
         preset_llm = dict(preset_manifest.get("llm") or manifest.get("llm") or {})
-        # context_limit lives inside manifest.llm in the preset, but stays
-        # at manifest root in init.json — strip it from the llm dict before
-        # substitution and write it to the root.
+        # context_limit and context_hard_pressure live inside manifest.llm in
+        # presets, but stay at manifest root in init.json — strip them from
+        # the llm dict before substitution and write them to the root.
         preset_ctx = preset_llm.pop("context_limit", None)
+        preset_hard_pressure = preset_llm.pop("context_hard_pressure", None)
         manifest["llm"] = preset_llm
         manifest["capabilities"] = preset_manifest.get(
             "capabilities", manifest.get("capabilities", {}))
         if preset_ctx is not None:
             manifest["context_limit"] = preset_ctx
+        if preset_hard_pressure is not None:
+            manifest["context_hard_pressure"] = preset_hard_pressure
+        else:
+            # Preset-owned threshold must not be history-dependent across
+            # swaps. If the new preset omits it, fall back to AgentConfig's
+            # default instead of retaining a previous preset's root value.
+            manifest.pop("context_hard_pressure", None)
 
         # Set active in the umbrella. Preserve default if already set; otherwise
         # initialize default to the same value as active (first activation).
@@ -1171,6 +1179,7 @@ class Agent(BaseAgent):
             language=m.get("language", "en"),
             activeness=m.get("activeness", "balanced"),
             context_limit=m.get("context_limit"),
+            context_hard_pressure=m.get("context_hard_pressure", 0.98),
             molt_pressure=m.get("molt_pressure", 0.8),
             molt_prompt=m.get("molt_prompt", ""),
             snapshot_interval=m.get("snapshot_interval"),

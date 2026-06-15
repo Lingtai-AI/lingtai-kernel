@@ -312,3 +312,72 @@ def test_chat_session_omits_cache_key_when_unset():
 
     sent = _chat_kwargs(session._client)
     assert "prompt_cache_key" not in sent
+
+
+def test_responses_session_seeds_existing_interface_after_rebuild_once():
+    """A rebuilt server-side Responses session must replay canonical history.
+
+    SessionManager may rebuild a local OpenAI Responses session after recording
+    a local hard-gate block.  With no ``previous_response_id`` chain, the first
+    request from the rebuilt session must seed the provider with the canonical
+    transcript once, then resume normal server-side chaining.
+    """
+    from lingtai_kernel.llm.interface import ChatInterface, TextBlock
+
+    iface = ChatInterface()
+    iface.add_user_message("already in canonical history")
+    iface.add_assistant_message([TextBlock(text="local hard-gate notice")])
+    client = _FakeResponsesClient()
+    session = OpenAIResponsesSession(
+        client=client,
+        model="gpt-5.5",
+        instructions="system prompt",
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+        previous_response_id=None,
+        interface=iface,
+    )
+
+    session.send_stream("next user turn")
+    session.send_stream("second live turn")
+
+    first_input = client.responses.kwargs[0]["input"]
+    assert first_input == [
+        {"role": "user", "content": "already in canonical history"},
+        {"role": "assistant", "content": "local hard-gate notice"},
+        {"role": "user", "content": "next user turn"},
+    ]
+    second = client.responses.kwargs[1]
+    assert second["input"] == [{"role": "user", "content": "second live turn"}]
+    assert second["previous_response_id"] == "resp_fake"
+
+
+def test_responses_seed_is_computed_after_pre_request_hook():
+    """Rebuilt Responses sessions include freshly drained canonical entries."""
+    from lingtai_kernel.llm.interface import ChatInterface, TextBlock
+
+    iface = ChatInterface()
+    iface.add_user_message("existing")
+    iface.add_assistant_message([TextBlock(text="assistant ack")])
+    client = _FakeResponsesClient()
+    session = OpenAIResponsesSession(
+        client=client,
+        model="gpt-5.5",
+        instructions="system prompt",
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+        previous_response_id=None,
+        interface=iface,
+    )
+    session.pre_request_hook = lambda live_iface: live_iface.add_user_message("drained")
+
+    session.send_stream("live")
+
+    assert client.responses.kwargs[0]["input"] == [
+        {"role": "user", "content": "existing"},
+        {"role": "assistant", "content": "assistant ack"},
+        {"role": "user", "content": "drained"},
+        {"role": "user", "content": "live"},
+    ]

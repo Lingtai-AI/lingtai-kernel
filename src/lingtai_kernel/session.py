@@ -6,6 +6,8 @@ BaseAgent delegates all session operations here.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import json
+import math
 import uuid
 from typing import Any, Callable, TYPE_CHECKING
 
@@ -48,6 +50,9 @@ class SessionManager:
         build_tool_schemas_fn: Callable[[], list[FunctionSchema]],
         logger_fn: Callable[..., None] | None,
         build_system_batches_fn: Callable[[], list[str]] | None = None,
+        compact_history_fn: Callable[..., Any] | None = None,
+        force_context_forget_fn: Callable[..., dict] | None = None,
+        save_local_state_fn: Callable[..., None] | None = None,
     ):
         self._llm_service = llm_service
         self._config = config
@@ -57,6 +62,9 @@ class SessionManager:
         self._build_system_prompt_fn = build_system_prompt_fn
         self._build_tool_schemas_fn = build_tool_schemas_fn
         self._logger_fn = logger_fn
+        self._compact_history_fn = compact_history_fn
+        self._force_context_forget_fn = force_context_forget_fn
+        self._save_local_state_fn = save_local_state_fn
         # Optional batched system-prompt builder. When provided, adapters
         # that support per-block caching receive mutation-frequency batches
         # and can place cache breakpoints between them. When absent, the
@@ -194,6 +202,301 @@ class SessionManager:
             )
             self._log("health_check", check="pre_send_pairing", action="auto_heal")
 
+    def _message_kind(self, message: Any) -> str:
+        if message is None:
+            return "none"
+        if isinstance(message, str):
+            return "text"
+        if isinstance(message, list):
+            return "tool_results"
+        return type(message).__name__
+
+    def _estimate_pending_tokens(self, message: Any) -> int:
+        """Estimate tokens that ``message`` will append before provider dispatch.
+
+        The canonical interface estimate covers committed history, system,
+        and tools.  Pre-send gating also has to account for the message that
+        the adapter is about to append: request text, explicit tool results,
+        or nothing for wire-drive ``send(None)`` continuations.
+        """
+        if message is None:
+            return 0
+        if isinstance(message, str):
+            return count_tokens(message)
+        if isinstance(message, list):
+            total = 0
+            for block in message:
+                content = getattr(block, "content", block)
+                content_str = content if isinstance(content, str) else json.dumps(content, default=str)
+                # Include the tool name/id as a small overhead proxy so list
+                # estimates are closer to the canonical serialized wire.
+                name = getattr(block, "name", "")
+                block_id = getattr(block, "id", "")
+                total += count_tokens(f"{name}:{block_id}:{content_str}")
+            return total
+        return count_tokens(json.dumps(message, default=str))
+
+    def estimate_context_tokens_with_pending(self, message: Any = None) -> int:
+        """Return local context estimate for current wire plus pending message."""
+        if self._chat is None:
+            return 0
+        return self._chat.interface.estimate_context_tokens() + self._estimate_pending_tokens(message)
+
+    def _hard_gate_limit(self) -> tuple[int, float, int]:
+        """Return (context_window, threshold_fraction, hard_token_limit)."""
+        if self._chat is None:
+            return 0, 0.0, 0
+        ctx_window = self._config.context_limit or self._chat.context_window()
+        raw_threshold = getattr(self._config, "context_hard_pressure", 0.98)
+        try:
+            threshold = float(raw_threshold)
+        except (TypeError, ValueError):
+            threshold = 0.98
+        if not math.isfinite(threshold) or threshold <= 0 or threshold > 1:
+            self._log(
+                "context_hard_gate",
+                action="invalid_threshold_defaulted",
+                configured_threshold=repr(raw_threshold),
+                default_threshold=0.98,
+            )
+            threshold = 0.98
+        if ctx_window <= 0:
+            return ctx_window, threshold, 0
+        hard_limit = max(1, int(ctx_window * threshold))
+        return ctx_window, threshold, hard_limit
+
+    def _is_tool_result_message(self, message: Any) -> bool:
+        if not isinstance(message, list):
+            return False
+        try:
+            from .llm.interface import ToolResultBlock
+        except Exception:
+            return False
+        return bool(message) and all(isinstance(item, ToolResultBlock) for item in message)
+
+    def _canonical_has_tool_results(self, ids: set[str]) -> bool:
+        if self._chat is None or not ids:
+            return False
+        try:
+            from .llm.interface import ToolResultBlock
+            for entry in self._chat.interface.entries:
+                if entry.role != "user":
+                    continue
+                for block in entry.content:
+                    if isinstance(block, ToolResultBlock) and block.id in ids:
+                        ids.discard(block.id)
+                        if not ids:
+                            return True
+        except Exception:
+            return False
+        return not ids
+
+    def _commit_blocked_tool_results(self, message: Any) -> None:
+        """Commit completed tool results before a local hard-gate block.
+
+        A post-tool continuation can be blocked after local side effects already
+        happened. Preserve those real results through the session API first so
+        adapters that keep provider-private state can update it, then fall back
+        to the canonical interface if the adapter implementation was a no-op.
+        """
+        if not self._is_tool_result_message(message) or self._chat is None:
+            return
+        ids = {str(getattr(block, "id", "")) for block in message if getattr(block, "id", None)}
+        try:
+            self._chat.commit_tool_results(message)
+        except Exception as exc:  # noqa: BLE001 - preserve canonical truth below
+            self._log(
+                "context_hard_gate",
+                action="commit_tool_results_failed",
+                error=f"{type(exc).__name__}: {exc}"[:300],
+            )
+        if not self._canonical_has_tool_results(set(ids)):
+            self._chat.interface.add_tool_results(message)
+
+    def _context_block_response(
+        self,
+        message: Any,
+        *,
+        estimated_tokens: int,
+        context_window: int,
+        threshold: float,
+        hard_limit: int,
+        stage: str,
+    ) -> LLMResponse:
+        """Return a local terminal response without calling the provider."""
+        self._commit_blocked_tool_results(message)
+
+        pressure = estimated_tokens / context_window if context_window > 0 else 0.0
+        self._log(
+            "context_hard_gate",
+            action="blocked",
+            stage=stage,
+            message_kind=self._message_kind(message),
+            estimated_tokens=estimated_tokens,
+            context_window=context_window,
+            hard_limit_tokens=hard_limit,
+            threshold=threshold,
+            pressure=pressure,
+        )
+        text = (
+            "[system] The runtime stopped this turn before calling the LLM "
+            "because the estimated context would exceed the configured hard "
+            "context ceiling. Oversized historical tool results were compacted "
+            "once first; if the turn contained completed tool results, those "
+            "results were committed locally so side effects are not repeated. "
+            "Please molt/clear context or reduce the pending input before "
+            "continuing."
+        )
+        from .llm.interface import TextBlock
+
+        if self._chat is not None:
+            try:
+                self._chat.interface.add_assistant_message([TextBlock(text=text)])
+                # Provider-private/server-side sessions may have seen a prior
+                # assistant tool-call without the locally blocked continuation.
+                # Rebuild from canonical history so the next send starts from
+                # the truthful local wire rather than stale provider state.
+                self._rebuild_session(self._chat.interface)
+            except Exception as exc:  # noqa: BLE001 - terminal response still returns
+                self._log(
+                    "context_hard_gate",
+                    action="local_history_record_failed",
+                    error=f"{type(exc).__name__}: {exc}"[:300],
+                )
+        if self._save_local_state_fn is not None:
+            try:
+                self._save_local_state_fn(ledger_source="context_hard_gate")
+            except Exception as exc:  # noqa: BLE001 - best-effort persistence
+                self._log(
+                    "context_hard_gate",
+                    action="local_state_save_failed",
+                    error=f"{type(exc).__name__}: {exc}"[:300],
+                )
+
+        return LLMResponse(
+            text=text,
+            usage=None,
+            raw={
+                "context_hard_gate": {
+                    "action": "blocked",
+                    "stage": stage,
+                    "estimated_tokens": estimated_tokens,
+                    "context_window": context_window,
+                    "hard_limit_tokens": hard_limit,
+                    "threshold": threshold,
+                    "pressure": pressure,
+                    "message_kind": self._message_kind(message),
+                }
+            },
+        )
+
+    def _enforce_context_hard_gate(self, message: Any) -> LLMResponse | None:
+        """Enforce the pre-send hard context ceiling before any provider call.
+
+        Recovery ladder is deliberately LLM-free and bounded:
+        1. estimate current wire + pending message;
+        2. if over budget, run one deterministic tool-result compaction pass;
+        3. if still over and the pending message can survive a context reset,
+           force a system-authored ``context_forget(source="hard_ceiling")``;
+        4. if still over (or pending tool-results would be invalidated by a
+           reset), return a local terminal response without logging ``llm_call``.
+        """
+        if self._chat is None:
+            return None
+        context_window, threshold, hard_limit = self._hard_gate_limit()
+        if hard_limit <= 0:
+            return None
+
+        estimated = self.estimate_context_tokens_with_pending(message)
+        if estimated <= hard_limit:
+            return None
+
+        pressure = estimated / context_window if context_window > 0 else 0.0
+        self._log(
+            "context_hard_gate",
+            action="compact_attempt",
+            stage="initial",
+            message_kind=self._message_kind(message),
+            estimated_tokens=estimated,
+            context_window=context_window,
+            hard_limit_tokens=hard_limit,
+            threshold=threshold,
+            pressure=pressure,
+        )
+
+        if self._compact_history_fn is not None:
+            try:
+                self._compact_history_fn(source="hard_ceiling")
+            except Exception as exc:  # noqa: BLE001 - gate must remain local
+                self._log(
+                    "context_hard_gate",
+                    action="compaction_failed",
+                    error=f"{type(exc).__name__}: {exc}"[:300],
+                )
+
+        estimated = self.estimate_context_tokens_with_pending(message)
+        if estimated <= hard_limit:
+            self._log(
+                "context_hard_gate",
+                action="allow_after_compaction",
+                message_kind=self._message_kind(message),
+                estimated_tokens=estimated,
+                context_window=context_window,
+                hard_limit_tokens=hard_limit,
+                threshold=threshold,
+                pressure=estimated / context_window if context_window > 0 else 0.0,
+            )
+            return None
+
+        if (
+            self._force_context_forget_fn is not None
+            and isinstance(message, str)
+        ):
+            try:
+                result = self._force_context_forget_fn(source="hard_ceiling")
+                self._log(
+                    "context_hard_gate",
+                    action="forced_context_forget",
+                    message_kind=self._message_kind(message),
+                    estimated_tokens_before_forget=estimated,
+                    context_window=context_window,
+                    hard_limit_tokens=hard_limit,
+                    threshold=threshold,
+                    molt_count=result.get("molt_count") if isinstance(result, dict) else None,
+                )
+            except Exception as exc:  # noqa: BLE001 - fall through to block
+                self._log(
+                    "context_hard_gate",
+                    action="forced_context_forget_failed",
+                    error=f"{type(exc).__name__}: {exc}"[:300],
+                )
+            else:
+                # context_forget swaps the live chat; refresh hard-limit data
+                # and only proceed if the fresh wire + pending message now fits.
+                context_window, threshold, hard_limit = self._hard_gate_limit()
+                estimated = self.estimate_context_tokens_with_pending(message)
+                if hard_limit > 0 and estimated <= hard_limit:
+                    self._log(
+                        "context_hard_gate",
+                        action="allow_after_forced_context_forget",
+                        message_kind=self._message_kind(message),
+                        estimated_tokens=estimated,
+                        context_window=context_window,
+                        hard_limit_tokens=hard_limit,
+                        threshold=threshold,
+                        pressure=estimated / context_window if context_window > 0 else 0.0,
+                    )
+                    return None
+
+        return self._context_block_response(
+            message,
+            estimated_tokens=estimated,
+            context_window=context_window,
+            threshold=threshold,
+            hard_limit=hard_limit,
+            stage="after_recovery",
+        )
+
     def send(self, message: Any) -> LLMResponse:
         """Send a message to the LLM, reusing the persistent chat session.
 
@@ -217,6 +520,9 @@ class SessionManager:
         self._chat.update_tools(self._build_tool_schemas_fn() or None)
 
         self._health_check(message)
+        blocked_response = self._enforce_context_hard_gate(message)
+        if blocked_response is not None:
+            return blocked_response
 
         api_call_id = f"api_{uuid.uuid4().hex[:12]}"
         self._log(

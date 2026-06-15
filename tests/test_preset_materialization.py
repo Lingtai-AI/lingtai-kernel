@@ -741,3 +741,109 @@ def test_read_init_recovers_when_active_preset_missing(tmp_path, monkeypatch):
     data = a._read_init()
     assert data is not None
     assert data["manifest"]["llm"]["provider"] == "minimax"
+
+
+def test_materialize_picks_up_context_hard_pressure_from_llm_block(tmp_path, monkeypatch):
+    plib = _make_preset_lib(tmp_path, {
+        "narrow": {
+            "name": "narrow",
+            "description": {"summary": "narrow context"},
+            "manifest": {
+                "llm": {
+                    "provider": "p",
+                    "model": "m",
+                    "api_key": None,
+                    "api_key_env": "PKEY",
+                    "context_limit": 16384,
+                    "context_hard_pressure": 0.97,
+                },
+                "capabilities": {"file": {}},
+            },
+        },
+    })
+    wd = _make_workdir(tmp_path, active_preset=str(plib / "narrow.json"),
+                       presets_path=str(plib))
+    monkeypatch.setenv("PKEY", "sk-test")
+
+    a = _make_probe_agent(wd)
+    data = a._read_init()
+    assert data is not None
+    assert data["manifest"]["context_limit"] == 16384
+    assert data["manifest"]["context_hard_pressure"] == 0.97
+    assert "context_limit" not in data["manifest"]["llm"]
+    assert "context_hard_pressure" not in data["manifest"]["llm"]
+
+
+def test_preset_context_hard_pressure_rejects_invalid_values(tmp_path):
+    from lingtai_kernel.presets import load_preset
+
+    plib = _make_preset_lib(tmp_path, {
+        "bad": {
+            "name": "bad",
+            "description": {"summary": "bad context hard pressure"},
+            "manifest": {
+                "llm": {
+                    "provider": "p",
+                    "model": "m",
+                    "context_hard_pressure": 2.0,
+                },
+                "capabilities": {},
+            },
+        },
+    })
+
+    with pytest.raises(ValueError, match="context_hard_pressure"):
+        load_preset(str(plib / "bad.json"), working_dir=tmp_path)
+
+
+def test_materialize_clears_stale_context_hard_pressure_when_preset_omits_it(tmp_path, monkeypatch):
+    plib = _make_preset_lib(tmp_path, {
+        "plain": {
+            "name": "plain",
+            "description": {"summary": "plain preset"},
+            "manifest": {
+                "llm": {
+                    "provider": "p",
+                    "model": "m",
+                    "api_key": None,
+                    "api_key_env": "PKEY",
+                },
+                "capabilities": {"file": {}},
+            },
+        },
+    })
+    wd = _make_workdir(
+        tmp_path,
+        active_preset=str(plib / "plain.json"),
+        presets_path=str(plib),
+        manifest_extra={"context_hard_pressure": 0.97},
+    )
+    monkeypatch.setenv("PKEY", "sk-test")
+
+    a = _make_probe_agent(wd)
+    data = a._read_init()
+
+    assert data is not None
+    assert "context_hard_pressure" not in data["manifest"]
+    assert "context_hard_pressure" not in data["manifest"]["llm"]
+
+
+def test_activate_preset_clears_stale_context_hard_pressure_when_target_omits_it(tmp_path):
+    plib = _make_preset_lib(tmp_path, {
+        "plain": {
+            "name": "plain",
+            "description": {"summary": "plain preset"},
+            "manifest": {
+                "llm": {"provider": "p", "model": "m"},
+                "capabilities": {"file": {}},
+            },
+        },
+    })
+    wd = _make_workdir(tmp_path, manifest_extra={"context_hard_pressure": 0.97})
+    a = _make_probe_agent(wd)
+
+    a._activate_preset(str(plib / "plain.json"))
+
+    data = json.loads((wd / "init.json").read_text())
+    assert "context_hard_pressure" not in data["manifest"]
+    assert "context_hard_pressure" not in data["manifest"]["llm"]

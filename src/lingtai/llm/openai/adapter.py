@@ -1028,6 +1028,12 @@ class OpenAIResponsesSession(ChatSession):
         self._response_id: str | None = previous_response_id
         self._compact_threshold = _validate_compact_threshold(compact_threshold)
         self._interface = interface or ChatInterface()
+        # When a server-side Responses session is rebuilt without a
+        # ``previous_response_id`` chain, seed the next request from the
+        # canonical interface. Compute this lazily after the pre-request hook
+        # so queued notification/tool-call inbox pairs drained at the next
+        # safe boundary are included in the seed.
+        self._seed_interface_on_next_send = previous_response_id is None
         # Optional OpenAI Responses ``prompt_cache_key`` — opts the request
         # into cross-request prompt caching keyed by a stable string. Sent
         # only when set; ``None`` leaves it off (default OpenAI behavior).
@@ -1076,19 +1082,19 @@ class OpenAIResponsesSession(ChatSession):
 
     def send(self, message) -> LLMResponse:
         """Send a user message (str) or tool results (list of dicts)."""
-        # Pre-request hook — fired for the kernel-side drain. NOTE: this
-        # session uses server-side state (previous_response_id) and does
-        # NOT commit message content to the canonical ChatInterface, so a
-        # pair the hook splices is only visible to the LLM on the *next*
-        # turn (when the interface re-syncs). This is acceptable because
-        # the agent's local view is updated immediately for persistence
-        # and inspection. Most agents using this session use it via Codex
-        # OAuth (CodexResponsesSession), which DOES replay the full
-        # interface and gets same-turn delivery.
+        # Pre-request hook — fired for the kernel-side drain. In normal
+        # server-side chaining (``previous_response_id`` set), this session
+        # does NOT commit message content to the canonical ChatInterface, so
+        # a pair the hook splices is only visible to the LLM on the next
+        # re-sync. When the session was rebuilt with no response chain, the
+        # first request seeds from the canonical interface after this hook,
+        # so freshly drained pairs are included in that same request.
         if self.pre_request_hook is not None:
             self.pre_request_hook(self._interface)
 
         input_items = self._convert_input(message)
+        if self._seed_interface_on_next_send:
+            input_items = [*to_responses_input(self._interface), *input_items]
 
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -1111,6 +1117,7 @@ class OpenAIResponsesSession(ChatSession):
             kwargs["prompt_cache_key"] = self._prompt_cache_key
 
         raw = self._client.responses.create(**kwargs)
+        self._seed_interface_on_next_send = False
         self._response_id = raw.id
         return _parse_responses_api_response(raw)
 
@@ -1121,6 +1128,8 @@ class OpenAIResponsesSession(ChatSession):
             self.pre_request_hook(self._interface)
 
         input_items = self._convert_input(message)
+        if self._seed_interface_on_next_send:
+            input_items = [*to_responses_input(self._interface), *input_items]
 
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -1186,6 +1195,7 @@ class OpenAIResponsesSession(ChatSession):
                         cached_tokens=cached_tokens,
                     )
 
+        self._seed_interface_on_next_send = False
         self._response_id = response_id
         return acc.finalize(usage=usage)
 

@@ -36,6 +36,7 @@ the kernel surfaces the whole object verbatim to the agent.
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -307,6 +308,18 @@ def load_preset(
             f"preset {name!r} ({p}): context_limit must be an integer (got {type(ctx_limit).__name__})"
         )
 
+    hard_pressure = llm.get("context_hard_pressure")
+    if hard_pressure is not None:
+        if (
+            isinstance(hard_pressure, bool)
+            or not isinstance(hard_pressure, (int, float))
+            or not math.isfinite(float(hard_pressure))
+            or not (0.0 < float(hard_pressure) <= 1.0)
+        ):
+            raise ValueError(
+                f"preset {name!r} ({p}): context_hard_pressure must be a finite number in (0, 1]"
+            )
+
     caps = manifest.get("capabilities", {})
     if not isinstance(caps, dict):
         raise ValueError(f"preset {name!r} ({p}): manifest.capabilities must be an object")
@@ -425,11 +438,12 @@ def materialize_active_preset(
             raise
     preset_manifest = preset.get("manifest", {})
 
-    # context_limit lives inside manifest.llm in the preset, but at manifest
-    # root in init.json — strip it from the llm dict before substitution and
-    # write it to the root.
+    # context_limit and context_hard_pressure live inside manifest.llm in
+    # presets, but at manifest root in init.json — strip them from the llm
+    # dict before substitution and write them to the root.
     preset_llm = dict(preset_manifest.get("llm") or manifest.get("llm") or {})
     preset_ctx = preset_llm.pop("context_limit", None)
+    preset_hard_pressure = preset_llm.pop("context_hard_pressure", None)
     manifest["llm"] = preset_llm
 
     # The preset chooses *which* opt-in capabilities run (atomic swap is the
@@ -504,6 +518,13 @@ def materialize_active_preset(
     manifest["capabilities"] = new_caps
     if preset_ctx is not None:
         manifest["context_limit"] = preset_ctx
+    if preset_hard_pressure is not None:
+        manifest["context_hard_pressure"] = preset_hard_pressure
+    else:
+        # Preset-owned threshold must not be history-dependent across
+        # swaps. If the new preset omits it, fall back to AgentConfig's
+        # default instead of retaining a previous preset's root value.
+        manifest.pop("context_hard_pressure", None)
 
 
 # ---------------------------------------------------------------------------
