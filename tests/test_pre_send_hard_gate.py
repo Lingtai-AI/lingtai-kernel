@@ -301,3 +301,129 @@ def test_pre_send_gate_does_not_force_context_forget_for_tool_results():
         name == "context_hard_gate" and fields.get("action") == "forced_context_forget"
         for name, fields in events
     )
+
+
+class _ResponsesClient:
+    def __init__(self, event_batches):
+        self.responses = self
+        self.event_batches = list(event_batches)
+        self.kwargs = []
+
+    def create(self, **kwargs):
+        self.kwargs.append(kwargs)
+        if not self.event_batches:
+            raise AssertionError("unexpected Responses API call")
+        return iter(self.event_batches.pop(0))
+
+
+def _responses_completed(response_id="resp-1"):
+    usage = SimpleNamespace(
+        input_tokens=1,
+        output_tokens=1,
+        input_tokens_details=SimpleNamespace(cached_tokens=0),
+        output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+    )
+    return SimpleNamespace(
+        type="response.completed",
+        response=SimpleNamespace(id=response_id, usage=usage),
+        delta=None,
+        item=None,
+        item_id=None,
+        text=None,
+    )
+
+
+class _ResponsesService:
+    model = "gpt-5.5"
+
+    def __init__(self, client):
+        self.client = client
+
+    def create_session(self, **kwargs):
+        from lingtai.llm.openai.adapter import OpenAIResponsesSession
+
+        return OpenAIResponsesSession(
+            client=self.client,
+            model=kwargs.get("model") or "gpt-5.5",
+            instructions=kwargs.get("system_prompt") or "",
+            tools=None,
+            tool_choice=None,
+            extra_kwargs={},
+            previous_response_id=None,
+            interface=kwargs.get("interface"),
+        )
+
+
+def make_responses_manager(*, context_limit, hard_pressure, client):
+    events = []
+    manager = SessionManager(
+        llm_service=_ResponsesService(client),
+        config=AgentConfig(
+            context_limit=context_limit,
+            context_hard_pressure=hard_pressure,
+            model="gpt-5.5",
+        ),
+        agent_name="tester",
+        streaming=True,
+        build_system_prompt_fn=lambda: "",
+        build_tool_schemas_fn=lambda: [],
+        logger_fn=lambda event_type, **fields: events.append((event_type, fields)),
+    )
+    return manager, events
+
+
+def test_openai_responses_server_side_transcript_feeds_hard_gate_before_second_call():
+    client = _ResponsesClient([[ _responses_completed("resp-1") ]])
+    manager, events = make_responses_manager(
+        context_limit=15,
+        hard_pressure=0.8,
+        client=client,
+    )
+
+    first = manager.send("x" * 10)
+    second = manager.send("y" * 5)
+
+    assert first.text == ""
+    assert len(client.kwargs) == 1
+    assert client.kwargs[0]["input"] == [{"role": "user", "content": "x" * 10}]
+    assert second.raw["context_hard_gate"]["action"] == "blocked"
+    assert "llm_call" not in [
+        name for name, fields in events
+        if name == "llm_call" and fields.get("api_call_id") != first.api_call_id
+    ]
+
+
+def test_openai_responses_blocked_tool_results_rebuild_with_valid_pairing():
+    tool_item = SimpleNamespace(type="function_call", call_id="call-1", name="bash")
+    first_batch = [
+        SimpleNamespace(type="response.output_item.added", item=tool_item),
+        SimpleNamespace(type="response.function_call_arguments.delta", delta='{"action":"run"}', item=None),
+        SimpleNamespace(type="response.output_item.done", item=tool_item),
+        _responses_completed("resp-1"),
+    ]
+    client = _ResponsesClient([first_batch])
+    manager, events = make_responses_manager(
+        context_limit=40,
+        hard_pressure=0.8,
+        client=client,
+    )
+
+    first = manager.send("run")
+    result = ToolResultBlock(id="call-1", name="bash", content="z" * 80)
+    blocked = manager.send([result])
+
+    assert first.tool_calls and first.tool_calls[0].id == "call-1"
+    assert len(client.kwargs) == 1
+    assert blocked.raw["context_hard_gate"]["action"] == "blocked"
+    from lingtai.llm.interface_converters import to_responses_input
+
+    rebuilt_seed = to_responses_input(manager.chat.interface)
+    function_call_ids = {item["call_id"] for item in rebuilt_seed if item.get("type") == "function_call"}
+    output_ids = {item["call_id"] for item in rebuilt_seed if item.get("type") == "function_call_output"}
+    assert "call-1" in function_call_ids
+    assert "call-1" in output_ids
+    assert not (output_ids - function_call_ids)
+    assert "llm_call" not in [
+        name for name, fields in events
+        if name == "llm_call" and fields.get("api_call_id") != first.api_call_id
+    ]

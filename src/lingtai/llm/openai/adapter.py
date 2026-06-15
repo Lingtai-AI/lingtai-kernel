@@ -1074,27 +1074,102 @@ class OpenAIResponsesSession(ChatSession):
                             "output": item["content"],
                         }
                     )
+                elif isinstance(item, ToolResultBlock):
+                    output = (
+                        item.content
+                        if isinstance(item.content, str)
+                        else json.dumps(item.content, default=str)
+                    )
+                    items.append({
+                        "type": "function_call_output",
+                        "call_id": item.id,
+                        "output": output,
+                    })
                 else:
                     items.append(item)
             return items
         else:
             raise TypeError(f"Unsupported message type: {type(message)}")
 
+    def _record_pending_input(self, message) -> bool:
+        """Record pending input into the canonical transcript.
+
+        Server-side Responses uses ``previous_response_id`` for provider state,
+        but the kernel still needs a complete local canonical transcript for
+        pre-send hard-gate estimates and for rebuilding a valid session after a
+        local hard-gate block. Returns True when ``message`` was represented in
+        ``self._interface`` and should therefore not be appended separately to a
+        full seed payload.
+        """
+        if message is None:
+            return True
+        if isinstance(message, str):
+            self._interface.add_user_message(message)
+            return True
+        if (
+            isinstance(message, list)
+            and message
+            and all(isinstance(item, ToolResultBlock) for item in message)
+        ):
+            self._interface.add_tool_results(message)
+            return True
+        if isinstance(message, list) and not message:
+            return True
+        if isinstance(message, (dict, list)):
+            # Legacy/prebuilt wire inputs are still sent, but there is no
+            # lossless canonical representation to append here.
+            return False
+        raise TypeError(f"Unsupported message type: {type(message)}")
+
+    def _record_response_result(self, result: LLMResponse) -> None:
+        """Append a parsed Responses API assistant result to canonical history."""
+        blocks: list = []
+        if result.thoughts:
+            joined = "\n".join(t for t in result.thoughts if t)
+            if joined:
+                blocks.append(ThinkingBlock(text=joined))
+        if result.text:
+            blocks.append(TextBlock(text=result.text))
+        for tc in result.tool_calls:
+            blocks.append(ToolCallBlock(id=tc.id or "", name=tc.name, args=tc.args))
+        if not blocks:
+            blocks.append(TextBlock(text=""))
+        usage = result.usage or UsageMetadata()
+        self._interface.add_assistant_message(
+            blocks,
+            model=self._model,
+            provider="openai-responses",
+            usage={
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "thinking_tokens": usage.thinking_tokens,
+            },
+        )
+
+    def commit_tool_results(self, tool_results: list) -> None:
+        """Append completed tool results locally without an API call."""
+        if tool_results:
+            self._interface.add_tool_results(tool_results)
+
     def send(self, message) -> LLMResponse:
         """Send a user message (str) or tool results (list of dicts)."""
+        start_len = len(self._interface.entries)
+        recorded_pending = self._record_pending_input(message)
+
         # Pre-request hook — fired for the kernel-side drain. In normal
-        # server-side chaining (``previous_response_id`` set), this session
-        # does NOT commit message content to the canonical ChatInterface, so
-        # a pair the hook splices is only visible to the LLM on the next
-        # re-sync. When the session was rebuilt with no response chain, the
-        # first request seeds from the canonical interface after this hook,
-        # so freshly drained pairs are included in that same request.
+        # server-side chaining (``previous_response_id`` set), the hook updates
+        # local canonical history immediately; those drained pairs become part
+        # of future hard-gate estimates and any later rebuild seed. When the
+        # session was rebuilt with no response chain, the first request seeds
+        # from the canonical interface after this hook, so freshly drained
+        # pairs are included in that same request.
         if self.pre_request_hook is not None:
             self.pre_request_hook(self._interface)
 
         input_items = self._convert_input(message)
         if self._seed_interface_on_next_send:
-            input_items = [*to_responses_input(self._interface), *input_items]
+            seed_items = to_responses_input(self._interface)
+            input_items = seed_items if recorded_pending else [*seed_items, *input_items]
 
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -1116,20 +1191,30 @@ class OpenAIResponsesSession(ChatSession):
         if self._prompt_cache_key:
             kwargs["prompt_cache_key"] = self._prompt_cache_key
 
-        raw = self._client.responses.create(**kwargs)
+        try:
+            raw = self._client.responses.create(**kwargs)
+        except Exception:
+            del self._interface.entries[start_len:]
+            raise
         self._seed_interface_on_next_send = False
         self._response_id = raw.id
-        return _parse_responses_api_response(raw)
+        result = _parse_responses_api_response(raw)
+        self._record_response_result(result)
+        return result
 
     def send_stream(self, message, on_chunk=None) -> LLMResponse:
         """Send a streaming request."""
+        start_len = len(self._interface.entries)
+        recorded_pending = self._record_pending_input(message)
+
         # Pre-request hook — see send() above for contract + caveat.
         if self.pre_request_hook is not None:
             self.pre_request_hook(self._interface)
 
         input_items = self._convert_input(message)
         if self._seed_interface_on_next_send:
-            input_items = [*to_responses_input(self._interface), *input_items]
+            seed_items = to_responses_input(self._interface)
+            input_items = seed_items if recorded_pending else [*seed_items, *input_items]
 
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -1157,47 +1242,53 @@ class OpenAIResponsesSession(ChatSession):
         usage = UsageMetadata()
         seen_reasoning_summary_items: set[str] = set()
 
-        stream = self._client.responses.create(**kwargs)
-        for event in stream:
-            if _handle_responses_reasoning_event(event, acc, seen_reasoning_summary_items):
-                continue
-            if event.type == "response.output_text.delta":
-                acc.add_text(event.delta)
-                if on_chunk:
-                    on_chunk(event.delta)
-            elif event.type == "response.function_call_arguments.delta":
-                acc.add_tool_args(event.delta)
-            elif event.type == "response.output_item.added":
-                if getattr(event.item, "type", None) == "function_call":
-                    acc.start_tool(id=event.item.call_id, name=event.item.name)
-            elif event.type == "response.output_item.done":
-                if getattr(event.item, "type", None) == "function_call":
-                    acc.finish_tool()
-            elif event.type == "response.completed":
-                response_id = event.response.id
-                if event.response.usage:
-                    cached = getattr(event.response.usage, "input_tokens_details", None)
-                    cached_tokens = (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
-                    usage = UsageMetadata(
-                        input_tokens=getattr(event.response.usage, "input_tokens", 0)
-                        or 0,
-                        output_tokens=getattr(event.response.usage, "output_tokens", 0)
-                        or 0,
-                        thinking_tokens=getattr(
-                            event.response.usage, "output_tokens_details", None
+        try:
+            stream = self._client.responses.create(**kwargs)
+            for event in stream:
+                if _handle_responses_reasoning_event(event, acc, seen_reasoning_summary_items):
+                    continue
+                if event.type == "response.output_text.delta":
+                    acc.add_text(event.delta)
+                    if on_chunk:
+                        on_chunk(event.delta)
+                elif event.type == "response.function_call_arguments.delta":
+                    acc.add_tool_args(event.delta)
+                elif event.type == "response.output_item.added":
+                    if getattr(event.item, "type", None) == "function_call":
+                        acc.start_tool(id=event.item.call_id, name=event.item.name)
+                elif event.type == "response.output_item.done":
+                    if getattr(event.item, "type", None) == "function_call":
+                        acc.finish_tool()
+                elif event.type == "response.completed":
+                    response_id = event.response.id
+                    if event.response.usage:
+                        cached = getattr(event.response.usage, "input_tokens_details", None)
+                        cached_tokens = (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
+                        usage = UsageMetadata(
+                            input_tokens=getattr(event.response.usage, "input_tokens", 0)
+                            or 0,
+                            output_tokens=getattr(event.response.usage, "output_tokens", 0)
+                            or 0,
+                            thinking_tokens=getattr(
+                                event.response.usage, "output_tokens_details", None
+                            )
+                            and getattr(
+                                event.response.usage.output_tokens_details,
+                                "reasoning_tokens",
+                                0,
+                            )
+                            or 0,
+                            cached_tokens=cached_tokens,
                         )
-                        and getattr(
-                            event.response.usage.output_tokens_details,
-                            "reasoning_tokens",
-                            0,
-                        )
-                        or 0,
-                        cached_tokens=cached_tokens,
-                    )
+        except Exception:
+            del self._interface.entries[start_len:]
+            raise
 
         self._seed_interface_on_next_send = False
         self._response_id = response_id
-        return acc.finalize(usage=usage)
+        result = acc.finalize(usage=usage)
+        self._record_response_result(result)
+        return result
 
     def get_history(self) -> list[dict]:
         """Return minimal state for session persistence (server-side)."""

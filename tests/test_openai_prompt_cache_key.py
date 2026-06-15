@@ -378,6 +378,6 @@ def test_responses_seed_is_computed_after_pre_request_hook():
     assert client.responses.kwargs[0]["input"] == [
         {"role": "user", "content": "existing"},
         {"role": "assistant", "content": "assistant ack"},
-        {"role": "user", "content": "drained"},
         {"role": "user", "content": "live"},
+        {"role": "user", "content": "drained"},
     ]

@@ -57,7 +57,7 @@
     <div class="grid">
       <div class="metric"><strong>Default ceiling</strong><span>98% of effective context window</span></div>
       <div class="metric"><strong>Provider calls avoided</strong><span>No <code>llm_call</code> is logged on local hard-gate block</span></div>
-      <div class="metric"><strong>Validation</strong><span>271 focused/adjacent tests passing</span></div>
+      <div class="metric"><strong>Validation</strong><span>273 focused/adjacent tests passing</span></div>
     </div>
   </header>
 
@@ -98,6 +98,9 @@
     <p>If a post-tool continuation is blocked, the completed tool results are committed locally first. This preserves side effects already performed by tools and prevents the agent from blindly re-running them on the next turn.</p>
     <h3>Server-side session consistency</h3>
     <p>After recording a local hard-gate assistant note, the session is rebuilt from canonical history. The OpenAI Responses server-side adapter now seeds its next request from canonical history when there is no <code>previous_response_id</code> chain, including any pre-request hook entries drained before that first post-rebuild request.</p>
+
+    <h3>Follow-up: server-side OpenAI Responses transcript</h3>
+    <p>After review, the PR was updated so server-side OpenAI Responses sessions also maintain the local canonical transcript while continuing to use <code>previous_response_id</code> for provider state. This makes the hard-gate estimate include turns hidden behind the provider response chain and ensures a rebuild after a blocked tool-result continuation seeds a valid assistant function-call / tool-result pair.</p>
   </section>
 
   <section>
@@ -135,7 +138,7 @@ PYTHONPATH=$PWD/src .../.venv/bin/pytest -q \
   tests/test_openai_overflow_recovery.py tests/test_openai_compact_threshold.py \
   tests/test_openai_responses_streaming.py tests/test_tc_wake_orphan_heal.py \
   tests/test_notification_sync.py tests/test_aed_recovery.py
-# 271 passed</pre>
+# 273 passed</pre>
   </section>
 
   <section>
