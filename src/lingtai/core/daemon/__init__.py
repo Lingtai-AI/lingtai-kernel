@@ -491,6 +491,82 @@ def get_schema(lang: str = "en") -> dict:
     }
 
 
+def _classify_terminal_state(
+    entry: dict | None,
+    future_succeeded: bool,
+    text: str,
+    timeout_s: float,
+) -> str:
+    """Determine the true terminal state for an emanation result.
+
+    Returns one of: "timeout", "cancelled", "failed", "done".
+
+    This is the PR3A terminal-state priority gate.  Its sole job is to
+    detect non-normal terminal states so that ``_on_emanation_done`` can
+    prevent them from being silently swallowed by the ``suppressed_short``
+    check.
+
+    Priority order (first match wins):
+      P1: run_dir state snapshot (most authoritative)
+      P2: timeout_event.is_set()
+      P3: cancel_event.is_set() (only if timeout not set)
+      P4: ``[cancelled]`` sentinel backstop
+      P5: elapsed-near-timeout backstop (``[no output]`` near deadline)
+      P6: ``"done"`` (default -- genuine success)
+
+    This function is called ONLY when ``future.result()`` succeeded (i.e.
+    the ``except`` branch was NOT taken).  When the future raises,
+    status is already ``"failed"`` and the error classifier (PR3B)
+    handles it.
+    """
+    # --- P1: run_dir state (most authoritative) ---
+    run_dir = entry.get("run_dir") if entry else None
+    if run_dir is not None:
+        try:
+            rd_state = run_dir.state_snapshot().get("state")
+        except Exception:
+            rd_state = None
+        if rd_state == "timeout":
+            return "timeout"
+        if rd_state == "cancelled":
+            return "cancelled"
+        if rd_state == "failed":
+            return "failed"
+
+    # --- P2: timeout_event ---
+    timeout_event = entry.get("timeout_event") if entry else None
+    if timeout_event is not None:
+        try:
+            if timeout_event.is_set():
+                return "timeout"
+        except Exception:
+            pass
+
+    # --- P3: cancel_event (only when timeout not set) ---
+    cancel_event = entry.get("cancel_event") if entry else None
+    if cancel_event is not None:
+        try:
+            if cancel_event.is_set():
+                return "cancelled"
+        except Exception:
+            pass
+
+    # --- P4: [cancelled] sentinel backstop ---
+    if text == "[cancelled]":
+        return "cancelled"
+
+    # --- P5: elapsed-near-timeout backstop ---
+    if text == "[no output]" and timeout_s > 0:
+        start_time = entry.get("start_time") if entry else None
+        if start_time is not None:
+            elapsed = time.time() - start_time
+            if elapsed >= timeout_s * 0.9:
+                return "timeout"
+
+    # --- P6: genuine success ---
+    return "done"
+
+
 class DaemonManager:
     """Manages subagent (emanation) lifecycle."""
 
@@ -2255,6 +2331,7 @@ class DaemonManager:
                 "followup_buffer": "",
                 "followup_lock": threading.Lock(),
                 "run_dir": run_dir,
+                "timeout_s": effective_timeout,
             }
 
         # Start watchdog — sets timeout_event AND cancel_event when timer fires
@@ -2425,6 +2502,7 @@ class DaemonManager:
                 "followup_lock": threading.Lock(),
                 "run_dir": run_dir,
                 "backend": backend,
+                "timeout_s": effective_timeout,
                 # Tracks whether a CLI `ask` follow-up is currently being
                 # streamed in the background. Set/cleared by the ask worker
                 # under `followup_lock`; checked by `_handle_ask_cli` /
@@ -4800,28 +4878,42 @@ class DaemonManager:
         return {"status": "reclaimed", "cancelled": cancelled}
 
     def _on_emanation_done(self, em_id: str, task_summary: str, future) -> None:
-        elapsed = 0.0
         entry = self._emanations.get(em_id)
-        if entry:
-            elapsed = time.time() - entry["start_time"]
-        status = "done"
+        elapsed = time.time() - entry["start_time"] if entry else 0.0
+        timeout_s = entry.get("timeout_s", self._timeout) if entry else self._timeout
+
+        # --- Phase 1: Extract result ---
+        future_succeeded = False
+        text = ""
+        exc = None
         try:
             text = future.result()
-            self._log("daemon_result", em_id=em_id, status="done",
-                      text_length=len(text), elapsed_ms=round(elapsed * 1000))
+            future_succeeded = True
         except Exception as e:
-            status = "failed"
+            exc = e
             text = f"Failed: {e}"
-            self._log("daemon_error", em_id=em_id,
-                      exception=type(e).__name__, exception_message=str(e))
 
-        # Suppress notifications for short successful results to prevent
-        # notification storms. Failures always notify.
+        # --- Phase 2: Classify terminal state ---
+        if future_succeeded:
+            status = _classify_terminal_state(entry, future_succeeded, text, timeout_s)
+        else:
+            status = "failed"
+
+        # --- Phase 3: Log ---
+        self._log("daemon_result", em_id=em_id, status=status,
+                  text_length=len(text), elapsed_ms=round(elapsed * 1000),
+                  timeout_s=timeout_s)
+        if not future_succeeded and exc is not None:
+            self._log("daemon_error", em_id=em_id,
+                      exception=type(exc).__name__, exception_message=str(exc))
+
+        # --- Phase 4: Suppress short results ONLY for genuine "done" ---
         if status == "done" and len(text) < self._notify_threshold:
             self._log("daemon_result", em_id=em_id, status="suppressed_short",
                       text_length=len(text))
             return
 
+        # --- Phase 5: Notify ---
         run_dir = entry.get("run_dir") if entry else None
         self._publish_daemon_notification(
             em_id, status=status, text=text, run_dir=run_dir
