@@ -1051,6 +1051,15 @@ class TelegramManager:
         account = self._resolve_account(args)
         inbox = self._list_messages(account, "inbox")
         sent = self._list_messages(account, "sent")
+        # Tag folder origin so outgoing (bot-sent) messages are never counted
+        # as unread/[NEW]. Sent messages are never written to read.json, so
+        # without this guard every bot reply would surface as unread (issue
+        # #170 point 7). The folder the record was loaded from is the
+        # authoritative direction marker.
+        for m in inbox:
+            m["_folder"] = "inbox"
+        for m in sent:
+            m["_folder"] = "sent"
         messages = inbox + sent
         messages.sort(key=lambda m: m.get("date", ""), reverse=True)
         read_ids = self._read_ids(account)
@@ -1077,7 +1086,15 @@ class TelegramManager:
                     "unread": 0,
                 }
             conversations[cid]["total"] += 1
-            if msg.get("id") and msg["id"] not in read_ids:
+            # Outgoing/bot-sent messages are never "unread" for the agent:
+            # they originate from this bot, not from a human. Counting them
+            # unread made every bot reply surface as [NEW] (issue #170 pt 7).
+            # Inbound unread behavior is unchanged.
+            if (
+                msg.get("_folder") != "sent"
+                and msg.get("id")
+                and msg["id"] not in read_ids
+            ):
                 conversations[cid]["unread"] += 1
 
         return {
