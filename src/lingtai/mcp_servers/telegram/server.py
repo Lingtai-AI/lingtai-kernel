@@ -630,11 +630,20 @@ def build_manager() -> tuple[TelegramManager, Path]:
     # reach it. Same pattern as the legacy addon's lambda + mgr_ref dance.
     mgr_ref: list[TelegramManager | None] = [None]
 
+    def _on_idle_tick() -> None:
+        # Periodic, message-independent reconcile so durable unread Telegram
+        # messages resurface after a context molt even when no fresh inbound
+        # message arrives (issue #111). Best-effort.
+        mgr = mgr_ref[0]
+        if mgr is not None:
+            mgr.reconcile_notifications()
+
     svc = TelegramService(
         working_dir=working_dir,
         accounts_config=accounts,
         on_message=lambda alias, update: mgr_ref[0].on_incoming(alias, update),
         config_source=os.environ.get("LINGTAI_TELEGRAM_CONFIG"),
+        on_idle_tick=_on_idle_tick,
     )
 
     mgr = TelegramManager(
