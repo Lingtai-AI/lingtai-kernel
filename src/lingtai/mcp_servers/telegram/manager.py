@@ -38,6 +38,21 @@ def _load_notification_header_template() -> str:
 
 
 _NOTIFICATION_HEADER_TEMPLATE = _load_notification_header_template()
+_NOTIFICATION_CHANNEL = "mcp.telegram"
+_COMPOUND_ID_RE = re.compile(r"#([^\s:#]+:-?\d+:\d+)\b")
+
+
+def _looks_like_compound_id(value: str) -> bool:
+    parts = value.split(":")
+    if len(parts) != 3 or not parts[0]:
+        return False
+    try:
+        int(parts[1])
+        int(parts[2])
+    except ValueError:
+        return False
+    return True
+
 
 # Emoji reactions for different states (Bot API 7.0+)
 REACTION_SEEN = [{"type": "emoji", "emoji": "👀"}]      # Message received
@@ -576,6 +591,18 @@ class TelegramManager:
                     "message_id": payload.get("id"),
                     "account": account_alias,
                     "chat_id": payload.get("chat", {}).get("id"),
+                    # LICC preview metadata copied into .notification/mcp.telegram.json.
+                    # Keep both the legacy Telegram-specific keys above and the
+                    # generic chat keys below so the producer can later clear a
+                    # handled notification mirror without re-reading Telegram.
+                    "platform": "telegram",
+                    "conversation_ref": f"{account_alias}:{payload.get('chat', {}).get('id')}",
+                    # Callback queries reuse the message_id of the inline-keyboard
+                    # message, so the compound ID is not unique per callback event.
+                    # Leave those mirrors for explicit handling rather than
+                    # auto-clearing a fresh callback because an older callback on
+                    # the same Telegram message was already read.
+                    "message_ref": payload.get("id") if update_type != "callback_query" else None,
                     "has_media": payload.get("media") is not None,
                     "has_callback": payload.get("callback_query") is not None,
                     "callback_data": payload.get("callback_query"),
@@ -846,6 +873,106 @@ class TelegramManager:
             if os.path.exists(tmp):
                 os.unlink(tmp)
             raise
+
+    def _notification_message_ids(self, payload: dict) -> set[str] | None:
+        """Return Telegram compound IDs referenced by an MCP notification mirror.
+
+        New Telegram events publish ``message_ref`` in LICC preview metadata.
+        Older notifications only have the bounded conversation preview body,
+        whose lines include ``#account:chat:message`` anchors; parse those as a
+        best-effort migration path so stale mirrors can be cleared after read.
+
+        Returns ``None`` when any preview entry lacks an identifiable Telegram
+        message ID. In that case clearing the coalesced notification could hide
+        another unread event, so the mirror is left for explicit handling.
+        """
+        data = payload.get("data") if isinstance(payload, dict) else None
+        previews = data.get("previews") if isinstance(data, dict) else None
+        if not isinstance(previews, list) or not previews:
+            return None
+
+        ids: set[str] = set()
+        for preview in previews:
+            if not isinstance(preview, dict):
+                return None
+
+            subject = preview.get("subject")
+            if isinstance(subject, str) and "callback_query" in subject:
+                # Telegram callback queries reuse the message_id of the inline
+                # keyboard message, so a compound ID is not a unique event ID.
+                # Keep these mirrors for explicit handling rather than clearing
+                # a fresh callback just because an older callback on that
+                # message was read.
+                return None
+
+            ref = preview.get("message_ref")
+            if isinstance(ref, str) and _looks_like_compound_id(ref):
+                ids.add(ref)
+                continue
+
+            # Backward compatibility for notification files produced before
+            # Telegram populated the generic LICC ``message_ref`` field.
+            body_preview = preview.get("preview")
+            matches = (
+                [
+                    match
+                    for match in _COMPOUND_ID_RE.findall(body_preview)
+                    if _looks_like_compound_id(match)
+                ]
+                if isinstance(body_preview, str)
+                else []
+            )
+            if not matches:
+                return None
+            ids.update(matches)
+        return ids
+
+    def _all_notification_ids_read(self, compound_ids: set[str]) -> bool:
+        read_by_account: dict[str, set[str]] = {}
+        for compound_id in compound_ids:
+            try:
+                account, _chat_id, _msg_id = self._parse_compound_id(compound_id)
+            except ValueError:
+                return False
+            if account not in read_by_account:
+                read_by_account[account] = self._read_ids(account)
+            if compound_id not in read_by_account[account]:
+                return False
+        return bool(compound_ids)
+
+    def _clear_notification_if_handled(self) -> None:
+        """Clear stale ``mcp.telegram`` notification mirrors once handled.
+
+        LICC notification files are wake-up mirrors, not Telegram's source of
+        truth. If every Telegram message referenced by the current mirror is
+        now in the producer's durable ``read.json`` state, remove the mirror so
+        a later wake/molt does not re-deliver the same handled message.
+        """
+        target = self._working_dir / ".notification" / f"{_NOTIFICATION_CHANNEL}.json"
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except (json.JSONDecodeError, OSError) as exc:
+            log.debug("cannot inspect Telegram notification mirror: %s", exc)
+            return
+
+        notification_ids = self._notification_message_ids(payload)
+        if notification_ids is None:
+            return
+        if not self._all_notification_ids_read(notification_ids):
+            return
+
+        try:
+            from lingtai_kernel.notifications import clear as clear_notification
+
+            clear_notification(self._working_dir, _NOTIFICATION_CHANNEL)
+            log.info(
+                "telegram notification mirror cleared after read: ids=%s",
+                sorted(notification_ids),
+            )
+        except Exception as exc:
+            log.debug("failed to clear Telegram notification mirror: %s", exc)
 
     def _load_contacts(self, account: str) -> dict:
         path = self._account_dir(account) / "contacts.json"
@@ -1200,6 +1327,7 @@ class TelegramManager:
         compound_ids = [m["id"] for m in recent if m.get("id")]
         if compound_ids:
             self._mark_read(account, compound_ids)
+            self._clear_notification_if_handled()
 
         # Strip internal fields
         cleaned = []
@@ -1228,7 +1356,7 @@ class TelegramManager:
             return {"error": "text is required"}
 
         account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
-        return self._send({
+        result = self._send({
             "account": account,
             "chat_id": chat_id,
             "text": text,
@@ -1242,6 +1370,10 @@ class TelegramManager:
             # We need to pass reply_to_message_id through
             "_reply_to_message_id": tg_msg_id,
         })
+        if result.get("status") == "sent":
+            self._mark_read(account, [compound_id])
+            self._clear_notification_if_handled()
+        return result
 
     def _search(self, args: dict) -> dict:
         query = args.get("query", "")
