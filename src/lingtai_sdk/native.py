@@ -40,7 +40,7 @@ attributes (see ``lingtai_sdk.__getattr__``).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Mapping
 
 from .errors import NativeRuntimeConfigurationError
 from .runtime import (
@@ -69,6 +69,13 @@ _SAFE_AGENT_FIELDS = ("agent_name", "capabilities", "addons", "streaming")
 #: the ``Agent`` constructor.
 _LLM_FIELDS = ("provider", "model", "base_url", "api_key")
 
+#: Fields read from ``manifest['llm']`` to seed the merged LLM config. Explicit
+#: ``RuntimeOptions`` fields of the same name take precedence; the manifest
+#: only fills gaps. ``api_key`` is included here (so a manifest can carry the
+#: secret) but is treated as a secret everywhere downstream — it is consumed
+#: into the service and never echoed onto a public surface.
+_MANIFEST_LLM_FIELDS = ("provider", "model", "base_url", "api_key")
+
 
 def _agent_kwargs_from_options(
     options: RuntimeOptions,
@@ -94,20 +101,117 @@ def _agent_kwargs_from_options(
             agent_kwargs[field] = value
 
     # Public/deferred LLM fields intentionally omit api_key. The secret remains
-    # only on RuntimeOptions until the lazy service builder consumes it.
-    llm = {
-        f: getattr(options, f)
-        for f in _LLM_FIELDS
-        if f != "api_key" and getattr(options, f) is not None
-    }
+    # only on RuntimeOptions (or inside manifest['llm']) until the lazy service
+    # builder consumes it. Manifest-derived fields are surfaced here too so the
+    # deferred view reflects what will be merged at start().
+    merged = _llm_config_from_options(options)
+    llm = {f: merged[f] for f in _LLM_FIELDS if f != "api_key" and merged.get(f)}
 
     deferred: dict[str, Any] = {
         "llm": llm,
-        "manifest": dict(options.manifest or {}),
+        "manifest": _sanitized_manifest(options.manifest),
         "system_prompt_overrides": dict(options.system_prompt_overrides or {}),
         "extra": dict(options.extra or {}),
     }
     return agent_kwargs, deferred
+
+
+def _sanitized_manifest(manifest: Any) -> dict[str, Any]:
+    """Return a copy of ``manifest`` with any LLM ``api_key`` redacted.
+
+    ``manifest['llm']['api_key']`` may carry a secret (init.json shape). The
+    public ``session.deferred['manifest']`` mirror must not retain it verbatim,
+    so it is dropped from the copied ``llm`` block. The original
+    ``RuntimeOptions.manifest`` is left untouched — only this copy is sanitized.
+    """
+    out = dict(manifest or {})
+    llm = out.get("llm")
+    if isinstance(llm, dict):
+        llm = dict(llm)
+        llm.pop("api_key", None)
+        # ``default_headers`` may legitimately include authorization-like
+        # values for custom providers. The public deferred manifest is an
+        # inspectable mirror, not the source of truth, so drop headers entirely
+        # rather than trying to distinguish safe from secret header names.
+        llm.pop("default_headers", None)
+        out["llm"] = llm
+    return out
+
+
+def _manifest_llm(options: RuntimeOptions) -> dict[str, Any]:
+    """Return ``manifest['llm']`` as a dict (empty if absent/ill-typed)."""
+    manifest = options.manifest or {}
+    llm = manifest.get("llm") if isinstance(manifest, Mapping) else None
+    return dict(llm) if isinstance(llm, Mapping) else {}
+
+
+def _llm_config_from_options(options: RuntimeOptions) -> dict[str, Any]:
+    """Merge explicit ``RuntimeOptions`` LLM fields over ``manifest['llm']``.
+
+    Precedence: an explicit, non-``None`` ``RuntimeOptions`` field wins; the
+    manifest only fills fields the caller left unset. The result is a plain
+    dict with the four ``_MANIFEST_LLM_FIELDS`` keys present only when a value
+    was found (so callers can treat absence uniformly). Pure — never imports
+    ``lingtai``.
+    """
+    manifest_llm = _manifest_llm(options)
+    merged: dict[str, Any] = {}
+    for field in _MANIFEST_LLM_FIELDS:
+        explicit = getattr(options, field, None)
+        if explicit is not None:
+            merged[field] = explicit
+        elif manifest_llm.get(field) is not None:
+            merged[field] = manifest_llm[field]
+    return merged
+
+
+def _max_rpm_from_options_or_manifest(options: RuntimeOptions) -> int:
+    """Resolve ``max_rpm`` for provider-defaults, searching in precedence order.
+
+    ``options.extra['native']['max_rpm']`` → ``options.extra['max_rpm']`` →
+    ``manifest['max_rpm']`` → ``manifest['llm']['max_rpm']``. Returns ``0`` when
+    unset — unlike the CLI (which defaults to 60), the SDK does not impose RPM
+    gating unless a host opts in, so embedders are not surprised by throttling.
+    Pure — never imports ``lingtai``.
+    """
+    extra = options.extra or {}
+    native_extra = extra.get("native") if isinstance(extra, Mapping) else None
+    manifest = options.manifest or {}
+    for value in (
+        native_extra.get("max_rpm") if isinstance(native_extra, Mapping) else None,
+        extra.get("max_rpm") if isinstance(extra, Mapping) else None,
+        manifest.get("max_rpm") if isinstance(manifest, Mapping) else None,
+        _manifest_llm(options).get("max_rpm"),
+    ):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return 0
+
+
+def _context_window_from_options_or_manifest(
+    options: RuntimeOptions,
+) -> int | None:
+    """Resolve an optional ``context_window``, searching in precedence order.
+
+    ``manifest['llm']['context_window']`` → ``manifest['context_limit']`` →
+    ``options.extra['native']['context_window']`` →
+    ``options.extra['context_window']``. Returns ``None`` when unset, so the
+    ``LLMService`` keeps its own default. Pure — never imports ``lingtai``.
+    """
+    extra = options.extra or {}
+    native_extra = extra.get("native") if isinstance(extra, Mapping) else None
+    manifest = options.manifest or {}
+    for value in (
+        _manifest_llm(options).get("context_window"),
+        manifest.get("context_limit") if isinstance(manifest, Mapping) else None,
+        native_extra.get("context_window")
+        if isinstance(native_extra, Mapping)
+        else None,
+        extra.get("context_window") if isinstance(extra, Mapping) else None,
+    ):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
 
 
 def _default_agent_factory(**kwargs: Any) -> Any:
@@ -139,13 +243,22 @@ def _llm_service_from_options(options: RuntimeOptions) -> Any:
     ``NativeRuntime`` stay provider-free; the providers load only here, when a
     session is actually started through the default factory.
 
-    Requires both ``provider`` and ``model`` (non-empty). Raises
+    **Stage-3 manifest translation.** Provider/model/base_url/api_key are taken
+    from the merged config (explicit ``RuntimeOptions`` fields override
+    ``manifest['llm']``; the manifest fills gaps). When a ``manifest['llm']``
+    block is present, recognized provider defaults (``api_compat``,
+    ``default_headers``, ``compact_threshold``, ``max_rpm``) are plumbed through
+    ``build_provider_defaults_from_manifest_llm`` scoped to the merged provider,
+    and an optional ``context_window`` is passed too.
+
+    Requires both ``provider`` and ``model`` (non-empty) after the merge. Raises
     :class:`NativeRuntimeConfigurationError` otherwise — never the raw missing-
     ``service`` ``TypeError`` from ``Agent``. The error message deliberately
     does not echo ``api_key``.
     """
-    provider = (options.provider or "").strip()
-    model = (options.model or "").strip()
+    config = _llm_config_from_options(options)
+    provider = str(config.get("provider") or "").strip()
+    model = str(config.get("model") or "").strip()
     if not provider or not model:
         missing = [
             name
@@ -153,21 +266,48 @@ def _llm_service_from_options(options: RuntimeOptions) -> Any:
             if not val
         ]
         raise NativeRuntimeConfigurationError(
-            "NativeRuntime default factory requires RuntimeOptions.provider and "
-            "model (or an injected agent_factory/service) until init.json "
-            f"translation lands. Missing/empty: {', '.join(missing)}."
+            "NativeRuntime default factory requires a provider and model — set "
+            "RuntimeOptions.provider/model or manifest['llm'] "
+            "(or inject an agent_factory/service). "
+            f"Missing/empty after manifest merge: {', '.join(missing)}."
         )
 
     # Lazy: importing lingtai.llm registers the built-in adapters and pulls the
     # active provider's SDK. Kept out of module scope to preserve import purity.
-    from lingtai.llm.service import LLMService
-
-    return LLMService(
-        provider=provider,
-        model=model,
-        api_key=options.api_key,
-        base_url=options.base_url,
+    from lingtai.llm.service import (
+        LLMService,
+        build_provider_defaults_from_manifest_llm,
     )
+
+    # Provider defaults are derived from manifest['llm'], but scoped to the
+    # *merged* provider so an explicit RuntimeOptions.provider override does not
+    # leave the defaults stranded under the manifest's provider key.
+    manifest_llm = _manifest_llm(options)
+    provider_defaults = None
+    if manifest_llm:
+        scoped = dict(manifest_llm)
+        scoped["provider"] = provider
+        provider_defaults = build_provider_defaults_from_manifest_llm(
+            scoped, max_rpm=_max_rpm_from_options_or_manifest(options)
+        )
+    else:
+        max_rpm = _max_rpm_from_options_or_manifest(options)
+        if max_rpm > 0:
+            provider_defaults = {provider.lower(): {"max_rpm": max_rpm}}
+
+    kwargs: dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "api_key": config.get("api_key"),
+        "base_url": config.get("base_url"),
+    }
+    if provider_defaults is not None:
+        kwargs["provider_defaults"] = provider_defaults
+    context_window = _context_window_from_options_or_manifest(options)
+    if context_window is not None:
+        kwargs["context_window"] = context_window
+
+    return LLMService(**kwargs)
 
 
 class NativeRuntimeSession(RuntimeSession):

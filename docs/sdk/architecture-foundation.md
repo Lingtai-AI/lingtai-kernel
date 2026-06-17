@@ -328,12 +328,12 @@ the session, surfaced in any `RuntimeEvent`, echoed in
 `NativeRuntimeConfigurationError`, or written to `session.applied`. The applied
 record is built by `_public_llm_fields`, which drops `api_key` by construction.
 
-### Out of scope (still deferred)
+### Out of scope (deferred past stage 2)
 
-- init.json-level manifest translation — only `provider`/`model`/`base_url`/
-  `api_key` are plumbed into the default-factory service. `api_compat`,
-  `default_headers`, `compact_threshold`, `max_rpm`, etc.
-  (`build_provider_defaults_from_manifest_llm`) are not yet wired.
+- init.json-level manifest translation — stage 2 plumbs only
+  `provider`/`model`/`base_url`/`api_key`; `api_compat`, `default_headers`,
+  `compact_threshold`, `max_rpm`, `context_window`, etc.
+  (`build_provider_defaults_from_manifest_llm`) land in **stage 3 (§12)**.
 - A non-native backend, a live event bridge, and any kernel turn-loop change.
 
 ### Tested without a model
@@ -343,3 +343,70 @@ monkeypatched with a fake, the default factory is exercised through a fake agent
 that mirrors the real `service`-required contract, and a subprocess test asserts
 that constructing a `NativeRuntime` and a session with LLM options stays
 provider-free (`tests/test_sdk_native_runtime_llm.py`).
+
+## 12. Stage 3 — manifest.llm translation (stacked PR)
+
+Stage 3 is a small PR **stacked on top of stage 2**. It picks up the
+init.json-level manifest translation that stage 2 left out of scope: the default
+factory can now derive its `LLMService` config (and recognized provider defaults
+/ context window) from `RuntimeOptions.manifest`, especially `manifest['llm']`,
+when the explicit `RuntimeOptions` fields are absent.
+
+### What it adds
+
+- **`_llm_config_from_options(options)`** — a pure helper that merges the LLM
+  config. Explicit `RuntimeOptions.provider/model/base_url/api_key` win; the
+  `manifest['llm']` block fills only the fields the caller left unset. Never
+  imports `lingtai`.
+- **`_max_rpm_from_options_or_manifest(options)`** — resolves `max_rpm` in
+  precedence order: `extra['native']['max_rpm']` → `extra['max_rpm']` →
+  `manifest['max_rpm']` → `manifest['llm']['max_rpm']`. Returns `0` when unset —
+  unlike the CLI (which defaults to 60), the SDK does **not** impose RPM gating
+  unless a host opts in.
+- **`_context_window_from_options_or_manifest(options)`** — resolves an optional
+  `context_window`: `manifest['llm']['context_window']` →
+  `manifest['context_limit']` → `extra['native']['context_window']` →
+  `extra['context_window']`. Returns `None` (service keeps its own default) when
+  unset.
+- **`_llm_service_from_options` (updated)** — uses the merged config, and when a
+  `manifest['llm']` block is present, plumbs recognized provider defaults
+  through `build_provider_defaults_from_manifest_llm` **scoped to the merged
+  provider** (so an explicit `provider` override does not strand the defaults
+  under the manifest's provider key), and passes `context_window` when resolved.
+  Both `LLMService` and the defaults builder are lazily imported — module-load
+  import purity is unchanged.
+- **Sanitized deferred manifest** — `session.deferred['manifest']` is a copy
+  with `manifest['llm']['api_key']` redacted, so a manifest-carried secret never
+  reaches the public deferred surface. The original `RuntimeOptions.manifest` is
+  left untouched.
+
+### Applied vs. deferred (stage 3)
+
+| `RuntimeOptions` source | Default factory |
+|---|---|
+| explicit `provider`/`model`/`base_url` **or** `manifest['llm'].*` | merged (explicit wins), built into `LLMService`, recorded in `session.applied['llm']` |
+| explicit `api_key` **or** `manifest['llm']['api_key']` | consumed into the `LLMService`; **never** stored on the session, in events, or in errors/reprs; redacted from `session.deferred['manifest']` |
+| `manifest` provider defaults (`api_compat`, `default_headers`, `compact_threshold`, `max_rpm`) | passed to `LLMService(provider_defaults=...)`, scoped to the merged provider |
+| `context_window` / `context_limit` | passed to `LLMService(context_window=...)` when resolved |
+
+If both explicit and manifest LLM config are absent/partial, the merge still
+yields no `provider`/`model` and `_llm_service_from_options` raises
+`NativeRuntimeConfigurationError` (session stays `PENDING`, message never echoes
+`api_key`) — same contract as stage 2, now evaluated *after* the manifest merge.
+
+### Out of scope (still deferred)
+
+- Migrating `system` / `psyche` / `soul` into `BundleManifest` form.
+- A non-native (e.g. Anthropic) backend.
+- A live event bridge from the agent's output stream onto `RuntimeEvent`.
+- Any kernel turn-loop / BaseAgent / Agent change.
+
+### Tested without a model
+
+Stage-3 tests run with no API key and no network: a fake `LLMService` and a fake
+`build_provider_defaults_from_manifest_llm` are monkeypatched onto
+`lingtai.llm.service` to capture their arguments, the default factory is
+exercised through a `service`-required fake agent, the pure merge/`max_rpm`/
+`context_window` helpers are asserted directly, and a subprocess test confirms
+constructing a `NativeRuntime` and a session with a `manifest['llm']` block stays
+provider-free (`tests/test_sdk_native_runtime_manifest.py`).
