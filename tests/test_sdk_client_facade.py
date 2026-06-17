@@ -158,6 +158,7 @@ def test_open_session_keeps_session_live_for_multiple_messages(tmp_path):
 
     session.send("one").send("two", sender="ops")
     assert session.text() == "echo:oneecho:two"
+    assert session.events() == ()
     assert runtime.sessions[0].sent[0].content == "one"
     assert runtime.sessions[0].sent[1].sender == "ops"
     final_events = session.close()
