@@ -1,62 +1,16 @@
-"""Glob capability — find files by pattern.
+"""Compatibility shim — the glob capability moved to lingtai_sdk (SDK-02).
 
-Usage: Agent(capabilities=["glob"]) or capabilities=["file"]
+The implementation now lives in
+:mod:`lingtai_sdk.capabilities.file.glob`. This module rebinds that SDK
+module into ``sys.modules`` under the historical name
+``lingtai.core.glob`` so ``from lingtai.core.glob import setup`` (and
+``get_schema``/``get_description``/``PROVIDERS``) keep resolving to the same
+module object.
 """
 from __future__ import annotations
 
-from pathlib import Path
-from typing import TYPE_CHECKING
+import sys
 
-from ...i18n import t
+from lingtai_sdk.capabilities.file import glob as _impl
 
-if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
-
-
-def get_description(lang: str = "en") -> str:
-    return t(lang, "glob.description")
-
-
-def get_schema(lang: str = "en") -> dict:
-    return {
-        "type": "object",
-        "properties": {
-            "pattern": {"type": "string", "description": t(lang, "glob.pattern")},
-            "path": {"type": "string", "description": t(lang, "glob.path")},
-        },
-        "required": ["pattern"],
-    }
-
-
-
-def setup(agent: "BaseAgent") -> None:
-    """Set up the glob capability on an agent."""
-    lang = agent._config.language
-
-    def handle_glob(args: dict) -> dict:
-        pattern = args.get("pattern", "")
-        if not pattern:
-            return {"status": "error", "message": "pattern is required"}
-        search_dir = args.get("path", str(agent._working_dir))
-        if not Path(search_dir).is_absolute():
-            search_dir = str(agent._working_dir / search_dir)
-        try:
-            matches = agent._file_io.glob(pattern, root=search_dir)
-            result: dict = {"matches": matches, "count": len(matches)}
-            # Issue #164: surface traversal budget / exclusion info so the
-            # LLM can react to partial results instead of treating them
-            # as definitive ("no files found anywhere").
-            stats = getattr(agent._file_io, "last_traversal", None)
-            if stats is not None and stats.truncated_reason is not None:
-                result["truncated"] = True
-                result["truncated_reason"] = stats.truncated_reason
-                result["traversal"] = {
-                    "visited": stats.visited,
-                    "elapsed_ms": stats.elapsed_ms,
-                    "dirs_pruned": stats.dirs_pruned,
-                }
-            return result
-        except Exception as e:
-            return {"status": "error", "message": f"Glob failed: {e}"}
-
-    agent.add_tool("glob", schema=get_schema(lang), handler=handle_glob, description=get_description(lang))
+sys.modules[__name__] = _impl
