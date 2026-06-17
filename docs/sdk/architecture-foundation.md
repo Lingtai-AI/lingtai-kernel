@@ -1061,3 +1061,45 @@ What Stage 13 deliberately is **not**:
 - no kernel turn-loop, wrapper, provider, or core bundle behavior change;
 - no change to the runtime DTO/ABC definitions themselves; this only exposes
   existing contract names at the public root.
+
+## 22. Stage 14 — NativeRuntime lifecycle & boot-failure hardening (stacked PR)
+
+Stage 14 hardens the failure paths of `NativeRuntimeSession` so a botched boot,
+a failed enqueue, or an unclean shutdown surface as a clear SDK error / event
+instead of leaking a half-built session or an opaque underlying exception. It
+adds no new runtime behavior on the happy path.
+
+A new error type joins the SDK error surface (`lingtai_sdk.errors`, re-exported
+from the root next to its siblings):
+
+- `NativeRuntimeStartError(LingTaiSDKError)` — raised when `start()` fails to
+  boot the agent. It is **distinct** from `NativeRuntimeConfigurationError`,
+  which stays the *pre-build* error for partial/absent LLM config (raised before
+  any agent is constructed, leaving the session untouched).
+
+Three lifecycle methods are hardened:
+
+- **`start()` rollback.** If the agent factory raises, agent construction
+  raises, or `agent.start()` raises, the session rolls back to a safe state —
+  `_agent` cleared, any LLM-apply reversed back to `deferred`, state normalized
+  to `PENDING` — emits a **fatal** `ERROR` `RuntimeEvent`, then raises
+  `NativeRuntimeStartError` chaining the original via `__cause__`. The rolled-back
+  session is restartable (a later successful `start()` works). The raised error's
+  message is generic; it never echoes `api_key`/secrets even when the chained
+  cause does. The pre-build `NativeRuntimeConfigurationError` path is unchanged.
+- **`send()` guard.** If the underlying `agent.send(...)` raises, `send()` emits
+  a **non-fatal** `ERROR` event and returns instead of propagating — a failed
+  enqueue does not crash the caller's loop, and the session stays `ACTIVE`. The
+  pre-existing not-active behavior (a non-fatal error when the session is not
+  active) is unchanged.
+- **Dirty-stop signal.** After `agent.stop(timeout)`, if the agent's loop thread
+  (`getattr(agent, "_thread", None)`, guarded by a callable `is_alive()`) is
+  still alive, `stop()` emits a **non-fatal** `ERROR` event flagging the unclean
+  join. State still becomes `STOPPED` — the session is unusable either way.
+
+What Stage 14 deliberately is **not**:
+
+- no kernel turn-loop, wrapper `Agent`, provider, or core bundle behavior change;
+- no change to the happy-path lifecycle or to event payload shapes beyond the
+  added error events;
+- no new retry/backoff policy — rollback only makes a manual retry *possible*.

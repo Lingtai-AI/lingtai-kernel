@@ -47,7 +47,7 @@ from typing import Any, Callable, Iterator, Mapping
 from .capabilities import BundleManifest
 from .capability_host import NativeBundleHost, ToolHandler
 from .core_bundles import core_bundle_manifests, native_core_hosts
-from .errors import NativeRuntimeConfigurationError
+from .errors import NativeRuntimeConfigurationError, NativeRuntimeStartError
 from .runtime import (
     EventKind,
     Runtime,
@@ -407,16 +407,59 @@ class NativeRuntimeSession(RuntimeSession):
         # its own agent/service, so it is left untouched. Service building runs
         # BEFORE any agent is constructed, so a bad LLM config raises a clear
         # SDK error and the session stays PENDING (no partial ACTIVE state).
+        #
+        # ``_llm_service_from_options`` raises ``NativeRuntimeConfigurationError``
+        # for partial/absent config; that is a *pre-build* contract error and is
+        # left to propagate unchanged (the session is still untouched/PENDING).
         if self._uses_default_factory:
             service = _llm_service_from_options(self._options)
             kwargs["service"] = service
-            self.applied["llm"] = _public_llm_fields(self.deferred.get("llm", {}))
-            self.deferred["llm"] = {}  # no longer deferred — it's applied
-        self._agent = self._agent_factory(**kwargs)
-        if self._bridge_events:
-            self._install_event_bridge(self._agent)
-        self._agent.start()
+            applied_llm = _public_llm_fields(self.deferred.get("llm", {}))
+        else:
+            applied_llm = None
+
+        # Boot the agent. A failure here (factory raise, agent construction, or
+        # agent.start()) must NOT leave a half-built session: roll back the
+        # agent/state/applied mutations, emit a fatal ERROR event (secret-free),
+        # and raise NativeRuntimeStartError chaining the original cause.
+        try:
+            if applied_llm is not None:
+                self.applied["llm"] = applied_llm
+                self.deferred["llm"] = {}  # no longer deferred — it's applied
+            self._agent = self._agent_factory(**kwargs)
+            if self._bridge_events:
+                self._install_event_bridge(self._agent)
+            self._agent.start()
+        except Exception as exc:
+            self._rollback_failed_start(applied_llm is not None)
+            self._emit(
+                RuntimeEvent.error(
+                    "NativeRuntime failed to start the agent",
+                    fatal=True,
+                    source=self.source,
+                )
+            )
+            # Generic message only — the original (which may embed a secret in
+            # its own text) is chained as __cause__ for diagnosis, not echoed.
+            raise NativeRuntimeStartError(
+                "NativeRuntime failed to start the agent"
+            ) from exc
         self._set_state(RuntimeState.ACTIVE)
+
+    def _rollback_failed_start(self, llm_was_applied: bool) -> None:
+        """Restore a clean pre-start state after a failed boot.
+
+        Drops any half-built agent and reverses the LLM apply so the session is
+        ``PENDING`` with no agent — safe to retry. State is left as-is (it is
+        only advanced to ACTIVE *after* a clean boot), but normalized defensively
+        in case a future change emits an intermediate state.
+        """
+        self._agent = None
+        if llm_was_applied:
+            # Move the (secret-free) LLM config back to deferred and clear it
+            # from applied, mirroring the un-started session shape.
+            self.deferred["llm"] = self.applied.pop("llm", {})
+        self._state = RuntimeState.PENDING
 
     def send(self, message: RuntimeMessage | str) -> None:
         if self._state is not RuntimeState.ACTIVE or self._agent is None:
@@ -433,7 +476,20 @@ class NativeRuntimeSession(RuntimeSession):
         else:
             content, sender = message, "user"
         # Fire-and-forget enqueue onto the agent's inbox (no synchronous turn).
-        self._agent.send(content, sender)
+        # A raise from the underlying agent is surfaced as a non-fatal ERROR
+        # event rather than propagated: a failed enqueue should not crash the
+        # caller's send loop, and the session stays ACTIVE for retries.
+        try:
+            self._agent.send(content, sender)
+        except Exception:
+            self._emit(
+                RuntimeEvent.error(
+                    f"send() failed: agent could not enqueue from {sender}",
+                    fatal=False,
+                    source=self.source,
+                )
+            )
+            return
         self._emit(
             RuntimeEvent(
                 EventKind.NOTIFICATION,
@@ -458,6 +514,20 @@ class NativeRuntimeSession(RuntimeSession):
             return
         if self._agent is not None:
             self._agent.stop(timeout=timeout)
+            # Dirty-join probe: if the agent's loop thread is still alive after
+            # its stop()/join window, the join timed out. Surface a non-fatal
+            # ERROR event so a host can notice the unclean shutdown — but still
+            # transition to STOPPED (the session is no longer usable either way).
+            thread = getattr(self._agent, "_thread", None)
+            is_alive = getattr(thread, "is_alive", None)
+            if callable(is_alive) and is_alive():
+                self._emit(
+                    RuntimeEvent.error(
+                        "stop() timed out: agent loop thread did not join cleanly",
+                        fatal=False,
+                        source=self.source,
+                    )
+                )
         self._set_state(RuntimeState.STOPPED)
 
     # -- event bridge (stage 4) --------------------------------------------
