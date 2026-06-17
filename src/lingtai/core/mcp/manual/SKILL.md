@@ -18,8 +18,13 @@ description: >
       needed, inspect the shipped module docs/resources or the catalog homepage.
       Field names like `email_password`, `bot_token`, `app_id`/`app_secret`,
       and gewechat hosts are documented by the addon docs — do NOT guess.
-    - You want to know what MCPs you currently have. `mcp(action="show")`
-      returns the registry plus health; this manual explains the output.
+    - You want to know what MCPs you currently have, or to register / remove
+      one through a validated API. `mcp(action="list")` reports state;
+      `add` registers + activates an MCP in one step and `remove` deregisters +
+      deactivates it in one step; then `system(action="refresh")` commits it.
+      This manual explains the three actions and their output. Anything beyond
+      list/add/remove — fine-grained config edits, troubleshooting — goes
+      through this manual plus `write`/`edit`/`bash`, not the tool.
     - An MCP isn't behaving — registry validation, `problems` list,
       refresh-after-edit verification, common boot errors are here.
     - You're exploring an unfamiliar third-party MCP. The doc-discovery flow
@@ -29,8 +34,8 @@ description: >
   registry → active), the curated-vs-third-party install paths, the legacy
   `mcp/servers.json` direct mount route (still functional, ungated), HTTP
   and stdio server configurations, where the registry file
-  (`mcp_registry.jsonl`) lives and how to mutate it (`write` / `edit` /
-  `bash` — the `mcp` capability is read-only), the `<homepage>` field as
+  (`mcp_registry.jsonl`) lives and how to mutate it (the `mcp` control-plane
+  `add`/`remove` actions, or `write` / `edit` / `bash` directly), the `<homepage>` field as
   fallback documentation, and the relationship between `init.json`'s
   `addons:` list, `mcp:` activation entries, and the registry. Replaces the
   deprecated `lingtai-mcp` skill.
@@ -40,12 +45,12 @@ description: >
   variables), the LICC v1 inbox callback contract, and the validator's
   internal logic all live in `lingtai-kernel-anatomy reference/mcp-protocol.md`.
   Read this for *what to do*; read anatomy for *how it works*.
-version: 3.2.0
+version: 4.0.0
 ---
 
 # MCP Capability — How To Use It
 
-The `mcp` capability is your interface to Model Context Protocol (MCP) servers — both generic third-party servers and the six kernel-curated LingTai addons (`imap`, `telegram`, `feishu`, `wechat`, `whatsapp`, `cloud_mail`). Like the `library` capability, it is **pure presentation**: registered MCPs are listed in your system prompt under `<registered_mcp>`, and the registry itself is a JSONL file you edit directly with `write` / `edit` / `bash`.
+The `mcp` capability is your interface to Model Context Protocol (MCP) servers — both generic third-party servers and the six kernel-curated LingTai addons (`imap`, `telegram`, `feishu`, `wechat`, `whatsapp`, `cloud_mail`). It is a deliberately **minimal control plane** with exactly three actions — `list`, `add`, `remove`. Registered MCPs are listed in your system prompt under `<registered_mcp>`, and the registry is a JSONL file. `add` registers an MCP **and** writes its `init.json` activation in one step; `remove` deregisters **and** strips its `init.json` activation in one step. Anything more granular — editing a single config field, troubleshooting a stuck server, hand-crafting an unusual registration — is done through this manual plus `write` / `edit` / `bash` on `mcp_registry.jsonl` / `init.json` directly, then `system(action="refresh")`. **Desired-state edits only take effect after a refresh, and refresh belongs to the `system` tool, not `mcp`.**
 
 This is the router. Detail lives in `reference/`. Load only what you need.
 
@@ -119,9 +124,26 @@ If neither path yields docs, fall back to the MCP's own runtime self-description
 
 ## Tool surface
 
-One action: `mcp(action="show")`. Returns this manual body, the current registry contents, and a runtime health snapshot (registry path, count, problems).
+The `mcp` tool is a **minimal control plane** with exactly three actions. `list`
+inspects state; `add`/`remove` edit *desired state* (the registry **and**
+init.json activation together) and return `needs_refresh: true`.
 
-All registry mutations happen via `write` / `edit` / `bash`. The `mcp` capability never writes to the registry.
+| Action | Use |
+|---|---|
+| `mcp(action="list")` | Registry summary + activation summary (what's enabled/gated in init.json). Secrets redacted. No manual body. |
+| `mcp(action="add", name="<catalog>")` or `add, record={...}` | Register an MCP **and** activate it in init.json in one step — by catalog name or a full record; optional `config` overrides the derived activation. Rejects duplicates. |
+| `mcp(action="remove", name="<name>")` | Deregister an MCP **and** strip its init.json activation (and its `addons:` entry) in one step. |
+
+**Refresh-after-desired-state discipline:** `add`/`remove` only edit files —
+nothing changes in your live tool surface until you call
+`system(action="refresh")`. Refresh is **not** part of `mcp`; it belongs to the
+`system` tool. Batch your desired-state edits, then refresh **once**. Mutations
+return `needs_refresh: true` and a `system(action="refresh")` reminder.
+
+For anything beyond list/add/remove — fine-grained config edits, troubleshooting,
+unusual registrations — hand-edit `mcp_registry.jsonl` / `init.json` with
+`write` / `edit` / `bash` and call `system(action="refresh")`. The three actions
+are a validated convenience for the common case, not a full editor.
 
 ## See also
 

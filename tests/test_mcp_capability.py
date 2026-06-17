@@ -241,21 +241,21 @@ def test_addons_dict_still_works_for_legacy(tmp_path):
     assert not registry_path.exists()
 
 
-def test_mcp_show_action_returns_health_snapshot(tmp_path):
+def test_mcp_list_action_reports_registry(tmp_path):
     agent, workdir = _mk_agent(tmp_path, addons=["imap"])
     handler = agent._tool_handlers.get("mcp")
     assert handler is not None
-    result = handler({"action": "show"})
+    result = handler({"action": "list"})
     assert result["status"] == "ok"
-    assert result["registered_count"] == 1
-    assert result["registered"][0]["name"] == "imap"
-    assert "mcp_manual" in result and result["mcp_manual"]  # umbrella SKILL.md body
+    names = [r["name"] for r in result["registry"]]
+    assert names == ["imap"]
+    assert "mcp_manual" not in result  # list never carries the manual body
 
 
-def test_mcp_show_unknown_action_returns_error(tmp_path):
+def test_mcp_unknown_action_returns_error(tmp_path):
     agent, workdir = _mk_agent(tmp_path, addons=["imap"])
     handler = agent._tool_handlers.get("mcp")
-    result = handler({"action": "register"})  # not supported in slice
+    result = handler({"action": "register"})  # not supported
     assert result["status"] == "error"
 
 

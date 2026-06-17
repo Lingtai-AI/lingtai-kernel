@@ -12,11 +12,10 @@ For any non-curated MCP — typically `npx`/`uvx`-launched servers from the broa
      .library/intrinsic/capabilities/mcp/scripts/find_readme.py <pkg-name>
    ```
    Otherwise (npx/uvx servers), `web_read` the homepage URL. Either way, get the install command, env vars, and config schema before writing any config.
-2. Append a single JSON record to `mcp_registry.jsonl` (one line, atomic write). For the schema, see `lingtai-kernel-anatomy reference/file-formats.md` §6.5.
-3. Add an `init.json` `mcp.<name>` activation entry.
-4. Run `system(action="refresh")`.
+2. Register + activate it. Easiest: `mcp(action="add", record={...})` writes both the `mcp_registry.jsonl` record **and** the `init.json` `mcp.<name>` activation in one step (pass `config={...}` to override the derived activation). For the record schema, see `lingtai-kernel-anatomy reference/file-formats.md` §6.5. Equivalently, hand-append the registry line and the `init.json` entry with `write`/`edit`.
+3. Run `system(action="refresh")`.
 
-Benefits: gives you the `<homepage>` field (used by `SKILL.md` §Reading an MCP's README → fallback URL), allow-listing, and registry health diagnostics via `mcp(action="show")`.
+Benefits: gives you the `<homepage>` field (used by `SKILL.md` §Reading an MCP's README → fallback URL), allow-listing, and registry health diagnostics via `mcp(action="list")`.
 
 ## Legacy `mcp/servers.json` route
 
