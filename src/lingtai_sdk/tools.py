@@ -68,6 +68,13 @@ def builtin_tool_names() -> tuple[str, ...]:
     return tuple(sorted(set(_BUILTIN) | set(_GROUPS)))
 
 
-#: Snapshot of built-in tool names at import time. Prefer ``builtin_tool_names()``
-#: for a live read; this constant is a convenience for quick membership checks.
-BUILTIN_TOOLS: tuple[str, ...] = builtin_tool_names()
+def __getattr__(name: str) -> Any:
+    """Lazily expose ``BUILTIN_TOOLS`` without importing the runtime at module load.
+
+    ``builtin_tool_names()`` reads ``lingtai.capabilities``. Keeping the legacy
+    constant name behind ``__getattr__`` preserves ``from lingtai_sdk.tools import
+    BUILTIN_TOOLS`` while keeping a plain ``import lingtai_sdk.tools`` contract-only.
+    """
+    if name == "BUILTIN_TOOLS":
+        return builtin_tool_names()
+    raise AttributeError(name)

@@ -36,7 +36,6 @@ except Exception:  # pragma: no cover - distribution metadata absent (editable e
     __version__ = "0+unknown"
 
 from .tools import (
-    BUILTIN_TOOLS,
     PermissionMode,
     ToolResult,
     ToolSpec,
@@ -54,6 +53,19 @@ from .options import LingTaiOptions, SystemPromptAssets
 from .runtime import build_llm_service, options_to_agent_kwargs
 from .client import LingTaiClient
 from .query import query
+
+
+def __getattr__(name: str):
+    """Lazy top-level compatibility exports.
+
+    ``BUILTIN_TOOLS`` reads the live runtime capability registry, so resolve it
+    only when callers explicitly ask for it rather than during ``import
+    lingtai_sdk``.
+    """
+    if name == "BUILTIN_TOOLS":
+        return builtin_tool_names()
+    raise AttributeError(name)
+
 
 __all__ = [
     "__version__",
