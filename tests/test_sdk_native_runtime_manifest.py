@@ -214,7 +214,7 @@ def test_explicit_options_override_manifest(tmp_path, patched_llm):
 
 def test_manifest_fills_only_absent_explicit_fields(tmp_path, patched_llm):
     # provider explicit, model from manifest; base_url explicit, api_key manifest
-    session = _start(
+    _start(
         tmp_path,
         provider="openai",
         base_url="https://explicit.example",
@@ -270,7 +270,7 @@ def test_provider_defaults_passed_through(tmp_path, patched_llm):
 def test_max_rpm_from_options_extra_native_without_manifest_llm(tmp_path, patched_llm):
     # No manifest['llm'] block, so the manifest defaults builder is not invoked;
     # the SDK still scopes the opted-in max_rpm onto provider_defaults directly.
-    session = _start(
+    _start(
         tmp_path,
         provider="anthropic",
         model="claude-opus-4-8",
@@ -284,7 +284,7 @@ def test_max_rpm_from_options_extra_native_without_manifest_llm(tmp_path, patche
 def test_max_rpm_from_options_extra_native_with_manifest_llm(tmp_path, patched_llm):
     # With a manifest['llm'] block, max_rpm from extra['native'] flows through
     # the manifest-defaults builder (extra wins over manifest['max_rpm']).
-    session = _start(
+    _start(
         tmp_path,
         manifest={
             "max_rpm": 99,
@@ -297,7 +297,7 @@ def test_max_rpm_from_options_extra_native_with_manifest_llm(tmp_path, patched_l
 
 
 def test_context_window_from_manifest_llm(tmp_path, patched_llm):
-    session = _start(
+    _start(
         tmp_path,
         manifest={
             "llm": {
@@ -312,7 +312,7 @@ def test_context_window_from_manifest_llm(tmp_path, patched_llm):
 
 
 def test_context_window_from_manifest_context_limit(tmp_path, patched_llm):
-    session = _start(
+    _start(
         tmp_path,
         manifest={
             "context_limit": 250_000,
@@ -324,7 +324,7 @@ def test_context_window_from_manifest_context_limit(tmp_path, patched_llm):
 
 
 def test_context_window_from_options_extra(tmp_path, patched_llm):
-    session = _start(
+    _start(
         tmp_path,
         provider="anthropic",
         model="claude-opus-4-8",

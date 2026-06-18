@@ -5,15 +5,11 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-import pytest
-
 import lingtai_kernel.tool_executor as tool_executor_module
 from lingtai_kernel.llm.base import ToolCall
-from lingtai_kernel.llm.interface import ToolResultBlock
 from lingtai_kernel.loop_guard import LoopGuard
 from lingtai_kernel.tool_call_guard import GuardDecision, ToolCallGuard
 from lingtai_kernel.tool_executor import ToolExecutor
-from lingtai_kernel.types import UnknownToolError
 
 
 def make_executor(
@@ -27,7 +23,10 @@ def make_executor(
     tool_call_guard=None,
 ):
     if dispatch_fn is None:
-        dispatch_fn = lambda tc: {"status": "ok", "result": f"ran {tc.name}"}
+
+        def dispatch_fn(tc):
+            return {"status": "ok", "result": f"ran {tc.name}"}
+
     make_result = MagicMock(side_effect=lambda name, result, **kw: {"name": name, "result": result})
     guard = guard or LoopGuard(max_total_calls=50)
     return ToolExecutor(
@@ -863,7 +862,6 @@ def test_unknown_tool_with_known_tools():
 
 def test_guard_property():
     executor = make_executor()
-    old_guard = executor.guard
     new_guard = LoopGuard(max_total_calls=10)
     executor.guard = new_guard
     assert executor.guard is new_guard

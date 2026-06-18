@@ -158,7 +158,7 @@ def test_agent_state_change_surfaces_as_state_event(tmp_path):
     # The agent runs its own loop thread; the bridge samples agent._state when
     # events() is read and emits a STATE event when it changed.
     agent._state = "active"
-    kinds_before = list(session.events())  # sample once
+    list(session.events())  # sample once
     agent._state = "asleep"
     states = [e for e in session.events() if e.kind is rt.EventKind.STATE]
     values = [e.data["state"] for e in states]

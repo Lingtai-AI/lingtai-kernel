@@ -17,8 +17,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from lingtai_sdk import native
 from lingtai_sdk import runtime as rt
 
