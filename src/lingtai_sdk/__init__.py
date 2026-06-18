@@ -45,7 +45,12 @@ from .types import (
     MSG_USER_INPUT,
     ToolCall,
 )
-from .errors import LingTaiSDKError, NativeRuntimeConfigurationError, UnknownToolError
+from .errors import (
+    LingTaiSDKError,
+    NativeRuntimeConfigurationError,
+    NativeRuntimeStartError,
+    UnknownToolError,
+)
 
 # --- Wrapper-backed surface (lazy; resolved on first attribute access) ----
 # Maps SDK attribute name -> (wrapper module, attribute). Each is pulled in only
@@ -169,6 +174,7 @@ __all__ = [
     # Errors
     "LingTaiSDKError",
     "NativeRuntimeConfigurationError",
+    "NativeRuntimeStartError",
     "UnknownToolError",
     # Services (wrapper-backed, lazy)
     "FileIOService",
