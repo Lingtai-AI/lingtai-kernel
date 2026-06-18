@@ -13,6 +13,7 @@ native session is started.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable
 
 from .runtime import (
@@ -96,7 +97,7 @@ class LingTaiSession:
         return self._session.state
 
     @property
-    def working_dir(self):
+    def working_dir(self) -> Path:
         return self._session.working_dir
 
     def send(
@@ -122,7 +123,12 @@ class LingTaiSession:
         return tuple(self._session.events())
 
     def text(self) -> str:
-        """Drain currently available events and concatenate their TEXT chunks."""
+        """Drain currently available events and concatenate only TEXT chunks.
+
+        Non-text events drained by this helper are intentionally discarded from
+        the returned string. Call :meth:`events` directly when state, tool,
+        usage, error, or raw event data must be preserved.
+        """
 
         return _collect_text(self.events())
 
@@ -158,7 +164,6 @@ class LingTaiClient:
     ) -> None:
         self.runtime = runtime if runtime is not None else _default_runtime()
         self.options = options
-
 
     def open_session(
         self, options: RuntimeOptions | None = None

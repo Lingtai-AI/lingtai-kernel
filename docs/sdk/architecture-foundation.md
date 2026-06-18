@@ -994,8 +994,41 @@ New pieces:
 - module-level `open_session(...)` — a one-shot helper mirroring `query(...)` but
   returning a live session.
 
+`LingTaiSession.text()` is a convenience drain for text-only callers: it polls
+the currently available events and concatenates only `TEXT` chunks. Any non-text
+events drained during that call are discarded from the returned string, so
+callers that need state/tool/usage/error/raw data should call `events()` and
+inspect the full `RuntimeEvent` tuple instead. The context manager closes the
+session on exit and discards the final events; callers that need those final
+events should call `close()` explicitly.
+
 This is still only a facade over the runtime contract. It adds no backend, no
 blocking turn loop, and no wrapper/provider behavior. Tests use the existing
 fake runtime; they verify multiple sends, event polling, explicit/context close,
 missing-options errors, and root lazy exports without importing the `lingtai`
 wrapper.
+
+
+## 20. Stage 12 — session facade polish (stacked PR)
+
+Stage 12 is a narrow follow-up to the Stage-11 GLM review nits. It does not add
+new runtime behavior. It clarifies the public contract around the existing
+session facade:
+
+- `LingTaiSession.working_dir` now carries the same `Path` return annotation as
+  the underlying `RuntimeSession.working_dir` contract.
+- `LingTaiSession.text()` documents that it drains currently available events but
+  returns only concatenated `TEXT` chunks; callers that need state/tool/usage/
+  error/raw events should call `events()` directly.
+- The Stage-11 documentation explicitly notes that context-manager exit closes
+  the session and discards final events; callers needing final events should call
+  `close()` explicitly.
+- The client facade formatting is cleaned up and tests assert that `text()`
+  drains the fake session event queue.
+
+What Stage 12 deliberately is **not**:
+
+- no Anthropic / Claude Code / non-native backend;
+- no kernel turn-loop, wrapper, provider, or core bundle behavior change;
+- no change to the runtime contract shape beyond the public return annotation on
+  the facade property.
