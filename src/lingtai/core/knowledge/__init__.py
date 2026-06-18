@@ -30,7 +30,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import yaml
 
@@ -420,6 +420,38 @@ def get_schema(lang: str = "en") -> dict:
     }
 
 
+def make_handler(agent: "BaseAgent") -> Callable[[dict], dict]:
+    """Build the ``knowledge`` tool handler bound to *agent*.
+
+    Single source of truth for the ``knowledge`` tool's behavior: both
+    ``setup()`` (the normal capability-registration path) and the SDK
+    knowledge bundle bridge (``lingtai.core.knowledge_bundle``) obtain the
+    handler through this factory, so the bundle-hosted ``knowledge`` tool runs
+    byte-identical logic to the one ``setup()`` registers — against the same
+    ``agent`` state (``agent._working_dir`` and the rendered ``knowledge``
+    system-prompt section).
+
+    The returned handler takes a single ``args: dict`` and supports the one
+    ``info`` action (re-reconcile: scan ``<agent>/knowledge/``, re-render the
+    prompt section, return the health snapshot). Any other action returns the
+    same shape-stable error dict the live tool returns. The handler is pure
+    presentation: it scans the catalog and re-renders the prompt — it never
+    writes inside ``knowledge/`` (the sole exception is the one-time legacy
+    JSON migration ``_reconcile`` performs, identical on both paths).
+    """
+
+    def handle_knowledge(args: dict) -> dict:
+        action = args.get("action", "")
+        if action == "info":
+            return _reconcile(agent)
+        return {
+            "status": "error",
+            "message": f"unknown action: {action!r}, only 'info' is supported",
+        }
+
+    return handle_knowledge
+
+
 def setup(agent: "BaseAgent", **_ignored) -> None:
     """Set up the knowledge capability.
 
@@ -434,18 +466,9 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
 
     _reconcile(agent)
 
-    def handle_knowledge(args: dict) -> dict:
-        action = args.get("action", "")
-        if action == "info":
-            return _reconcile(agent)
-        return {
-            "status": "error",
-            "message": f"unknown action: {action!r}, only 'info' is supported",
-        }
-
     agent.add_tool(
         "knowledge",
         schema=get_schema(lang),
-        handler=handle_knowledge,
+        handler=make_handler(agent),
         description=get_description(lang),
     )
