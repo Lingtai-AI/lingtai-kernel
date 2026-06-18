@@ -1202,6 +1202,114 @@ This is the low-state half of the capability-bundle migration that complements
 the deferred privileged-core work (§16): the non-privileged file/query tools are
 now declared and hosted through the same boundary, with the wrapper bridge
 proving the execution pattern against real behavior. The remaining low-state
-tools (`write` / `edit` and other read-only/query surfaces) can follow this
-exact template; the high-state tools (`system` / `email` / `daemon` / `mcp`) and
-any live wiring into the turn loop remain later, higher-risk PRs.
+tools (`write` / `edit`, adopted in §24 stage 3B, and other read-only/query
+surfaces) follow this exact template; the high-state tools (`system` / `email` /
+`daemon` / `mcp`) and any live wiring into the turn loop remain later,
+higher-risk PRs.
+
+## 24. Stage 3B — side-effecting file-mutation tool bundle (stacked PR)
+
+Stage 3B is stacked on stage 3A (§23) and extends the file-tool bundle template
+from the *read-only / query* tools to the two **side-effecting** low-state file
+tools the wrapper already ships: `write` and `edit`. It is the first adoption
+where the declared **danger posture matters**, because — unlike read/glob/grep —
+these tools mutate the filesystem.
+
+### What it adds
+
+- **`lingtai_sdk.file_mutation_tools`** (import-pure) — the side-effecting
+  counterpart of `file_tools`. It declares `write_bundle()` / `edit_bundle()` as
+  non-privileged, freely `REPLACEABLE`, `in_process` `BundleManifest`s, each
+  declaring exactly its one public tool and carrying a language-neutral copy of
+  the tool's argument schema plus a `side_effect: True` metadata marker. The host
+  seam `file_mutation_tool_host(manifest, handler)` /
+  `file_mutation_tool_hosts(handlers)` wires an injected handler per tool through
+  the non-native `capability_host.BundleHost`, exactly as stage 3A does. It
+  imports no wrapper and calls no real file tool.
+- **A single source of truth for handler behavior.** `lingtai.core.{write,edit}`
+  now each expose a `make_handler(agent)` factory; their `setup()` wires *that
+  same* closure via `agent.add_tool(...)`. The tool schema and the registered
+  behavior are byte-for-byte unchanged — `setup()` remains the live registration
+  path.
+- **`lingtai.core.file_bundle` (extended)** — the same wrapper-side bridge now
+  also injects the real `write` / `edit` `make_handler(agent)` closures via
+  `file_mutation_tool_bundle_hosts(agent)`. `host.invoke("write", file_path=...,
+  content=...)` then runs the real overwrite, and `host.invoke("edit", ...)` the
+  real read-modify-write, through the declared manifest — proving the
+  side-effect bundle-execution pattern against actual behavior.
+
+### Why a sibling SDK module, not an extension of `file_tools`
+
+`file_tools` carries an invariant stage 3B must break: *every* manifest it ships
+is read-only / `SecurityDanger.SAFE`, built through one shared all-`SAFE`
+`_file_tool_manifest` helper. Write/edit are side-effecting and do **not** share
+one danger posture, so they cannot flow through that helper without destroying
+its guarantee. A sibling module (`file_mutation_tools`) keeps `file_tools` "all
+SAFE" and gives the side-effect posture a clean, explicit home.
+
+### The side-effect danger posture (the heart of stage 3B)
+
+The two tools differ in declared `SecurityDanger`, mirroring how the privileged
+core (§16) graded `system` vs `psyche`/`soul`:
+
+- **`write` → `DESTRUCTIVE`.** `write` creates a file *or silently overwrites an
+  existing one wholesale* — an irreversible clobber of prior content. This is the
+  same posture the `system` core bundle uses for its irreversible-teardown
+  actions.
+- **`edit` → `CAUTION`.** `edit` performs a *bounded, in-place string
+  replacement* in an existing file and refuses ambiguous edits (`old_string` not
+  found, or found more than once without `replace_all`). It is a real side effect
+  with lasting effects, but not a wholesale clobber — the same posture
+  `psyche` / `soul` use for lasting-but-not-destructive actions.
+
+This posture is a **declaration only**. Stage 3B installs **no** guard and does
+not change live dispatch. The observable consequence is what the existing
+stage-17 guard bridge (§ guard-bridge, `lingtai_sdk.guard_bridge`) *would* derive
+from these manifests if a later stage chose to install it:
+
+```
+write (destructive) -> BLOCKING mode: DENY     | ADVISORY mode: allow + warn
+edit  (caution)     -> BLOCKING mode: allow+warn | ADVISORY mode: allow + warn
+read/glob/grep (safe) -> clean pass-through (no advisory) in either mode
+```
+
+`tests/test_sdk_file_mutation_tools.py` pins exactly this — feeding the write/edit
+manifests to `guard_bridge.guard_check_from_manifests(...)` denies `write` in
+BLOCKING, warns it in ADVISORY, and always warns `edit` — without this stage
+wiring any guard into an `Agent`. The host itself does **not** enforce danger: a
+non-native `BundleHost` accepts a `destructive` `write` bundle exactly as it
+accepts a `safe` `read` bundle, because gating is the guard bridge's job, not the
+host's. This keeps the host a thin executor and the danger posture a pure
+declaration.
+
+### What it deliberately is NOT
+
+- It does **not** migrate, move, rewrite, import, or call the real `write` /
+  `edit` *from the SDK*; the implementations stay in the wrapper, bound to
+  `agent._file_io` / `agent._working_dir`, with their overwrite / read-modify-write
+  / ambiguity-refusal / error-structure semantics intact.
+- It does **not** change the agent's live tool registration or dispatch, and it
+  does **not** install or wire any guard — `setup()` is the untouched live path;
+  the bundle host and the guard-posture declaration are additive, observable
+  seams.
+- It does **not** touch high-state tools, the kernel turn loop, the wrapper
+  `Agent`, providers, or distribution/package naming.
+
+### Import purity
+
+`lingtai_sdk.file_mutation_tools` imports only the import-pure `.capabilities` /
+`.capability_host` / `.errors` siblings; a bare `import
+lingtai_sdk.file_mutation_tools` pulls in no `lingtai` wrapper module (asserted by
+`tests/test_sdk_file_mutation_tools.py::test_file_mutation_tools_import_is_pure_and_migrates_nothing`).
+The wrapper bridge imports the SDK, never the reverse.
+
+### Tested without a model
+
+`tests/test_sdk_file_mutation_tools.py` exercises the SDK declarations + host seam
+with dummy handlers, the danger-posture / guard-bridge invariant, and the purity
+subprocess (no API key, no agent). The *end-to-end* proof against the real
+behavior is added to `tests/test_file_bundle_bridge.py`: it builds an `Agent`
+with a mock LLM service and asserts that invoking each tool through the bundle
+host actually creates/overwrites/edits real files, returns exactly what the
+agent's registered handler returns (parity), and preserves the overwrite,
+ambiguity-refusal, and error structures through the bundle path.

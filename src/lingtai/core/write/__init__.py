@@ -29,9 +29,16 @@ def get_schema(lang: str = "en") -> dict:
 
 
 
-def setup(agent: "BaseAgent") -> None:
-    """Set up the write capability on an agent."""
-    lang = agent._config.language
+def make_handler(agent: "BaseAgent"):
+    """Build the ``write`` tool handler bound to *agent*.
+
+    Single source of truth for the write behavior: both ``setup()`` (the normal
+    capability-registration path) and the SDK file-mutation bundle bridge
+    (``lingtai.core.file_bundle``) wire this same closure, so the bundle-hosted
+    tool runs byte-identical logic to the registered tool — including the same
+    overwrite (``agent._file_io.write``) side effect against the same
+    ``agent._working_dir`` path resolution.
+    """
 
     def handle_write(args: dict) -> dict:
         path = args.get("file_path", "")
@@ -46,4 +53,15 @@ def setup(agent: "BaseAgent") -> None:
         except Exception as e:
             return {"status": "error", "message": f"Cannot write {path}: {e}"}
 
-    agent.add_tool("write", schema=get_schema(lang), handler=handle_write, description=get_description(lang))
+    return handle_write
+
+
+def setup(agent: "BaseAgent") -> None:
+    """Set up the write capability on an agent."""
+    lang = agent._config.language
+    agent.add_tool(
+        "write",
+        schema=get_schema(lang),
+        handler=make_handler(agent),
+        description=get_description(lang),
+    )
