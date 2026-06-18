@@ -128,6 +128,28 @@ class Agent(BaseAgent):
         if self._capabilities:
             self._workdir.write_manifest(self._build_manifest())
 
+        # Advisory-first SDK guard wiring (stage 18, C3). Installs an advisory
+        # ToolCallGuard from any declared bundle manifests onto the Stage-16
+        # `_tool_call_guard` seam. Default registry is empty, so this is a
+        # behaviour-neutral pass-through for existing agents; fail-open.
+        self._wire_bundle_guard()
+
+    def _wire_bundle_guard(self) -> None:
+        """Install the advisory SDK bundle guard onto the Stage-16 seam.
+
+        Thin, fail-open delegation to :func:`lingtai.guard_wiring.wire_agent_guard`.
+        Advisory-first: declared destructive tools warn, never block, by default;
+        the default (empty) manifest registry leaves the seam a pure
+        ``default_allow`` pass-through, so existing/default agents are unaffected.
+        Kept as a method so reconstruct (``_setup_from_init``) and any subclass
+        can share one wiring path. Never raises.
+        """
+        try:
+            from .guard_wiring import wire_agent_guard
+            wire_agent_guard(self)
+        except Exception as e:  # fail open — never break construction
+            self._log("guard_wiring_failed", reason=str(e))
+
     def _persist_llm_config(self) -> None:
         """Persist LLM config to llm.json for agent revive.
 
@@ -1274,6 +1296,11 @@ class Agent(BaseAgent):
 
         # Re-write manifest and identity
         self._update_identity()
+
+        # Re-wire the advisory SDK bundle guard for the reconstructed capability
+        # set (stage 18, C3). Reconstruct rebuilds `_capabilities` from scratch,
+        # so re-derive the guard from the new manifests; fail-open.
+        self._wire_bundle_guard()
 
         # Re-seal
         self._sealed = True

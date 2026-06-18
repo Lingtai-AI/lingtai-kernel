@@ -12,6 +12,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `__main__.py` | `python -m lingtai` → `cli.main()` |
 | `agent.py` | **THE key file.** `Agent(BaseAgent)` — layer-2 agent with capability composition, preset swap, MCP, init.json refresh |
 | `cli.py` | `lingtai-agent run <dir>` / `lingtai-agent check-caps` entry points |
+| `guard_wiring.py` | Advisory-first wrapper wiring of the SDK guard bridge (stage 18, C3) — installs an advisory `ToolCallGuard` built from declared bundle manifests onto the Stage-16 `BaseAgent._tool_call_guard` seam. Default registry is empty (behaviour-neutral); fail-open |
 | `network.py` | Read-only network topology crawler — avatar/contact/mail edge discovery |
 | `presets.py` | Compatibility shim re-exporting the kernel preset library (`lingtai_kernel.presets`) |
 | `init_schema.py` | `validate_init()` plus `strip_deprecated()` — strict schema for active init.json fields, simple deprecated-field cleanup, and known-but-inactive legacy fields migrated by `lingtai_kernel.migrate` |
@@ -24,6 +25,8 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 **`agent.py`** — `Agent(BaseAgent)`: `__init__` :33 (accept `capabilities=` + `disable=`, expand groups, `apply_core_defaults`, decompress addons, setup caps, install manuals, load MCP) · `_setup_capability` :152 · `_persist_llm_config` :127 · `_install_intrinsic_manuals` :174 · `_load_mcp_from_workdir` :376 (also tracks specs in `_mcp_init_specs`) · `_retry_failed_mcps` :524 (re-spawn dead MCPs on `system(refresh)` — issue #34) · `_read_init` :833 (runs `lingtai_kernel.migrate.run_agent_migrations()` before reading `init.json`, then materializes preset, strips plain deprecated fields, validates, resolves paths, and publishes the resolved manifest to `system/manifest.resolved.json` via `lingtai_kernel.workdir.write_resolved_manifest` — issue #259) · `_setup_from_init` :989 (**full reconstruct** — shared by boot and live refresh; reads `manifest.disable` and re-applies `apply_core_defaults`) · `_activate_preset` :915 (runtime swap, atomic write) · `_reload_prompt_sections` :1229 (writes `covenant`/`substrate`/`rules`/`principle`/`procedures`/`brief`/`comment`; delegates `character` to `_lingtai_load` and `pad` to `_pad_load` — the canonical composers — so boot/refresh/molt are consistent and hook-order-independent) · `connect_mcp` :704 / `connect_mcp_http` :756 · `start` :697 / `stop` :802
 
 **`cli.py`**: `load_init` :21 · `build_agent` :77 · `run` :202 · `main` :287
+
+**`guard_wiring.py`** — `DEFAULT_LIVE_GUARD_MODE` (advisory) · `default_manifest_registry` (empty) · `collect_agent_bundle_manifests` (walk `_capabilities`, fail-open per provider) · `install_bundle_guard` (build advisory `ToolCallGuard` via `lingtai_sdk.guard_bridge.tool_call_guard_from_manifests`, write to `_tool_call_guard`) · `wire_agent_guard` (live entry point; fail-open). Invoked by `Agent._wire_bundle_guard` near the end of `__init__` and `_setup_from_init`.
 
 **`presets.py`**: compatibility re-export shim (`presets.py:1-21`); implementation lives in `lingtai_kernel.presets` (`load_preset` :174 · `materialize_active_preset` :289 · `expand_inherit` :503 · `discover_presets_in_dirs` :121).
 
@@ -41,7 +44,9 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **Outbound — kernel:** `lingtai_kernel.base_agent.BaseAgent`, `.config.AgentConfig`, `.prompt.build_system_prompt`, `.handshake.resolve_address`, `.intrinsics.{email,psyche}`, `.services.mail.FilesystemMailService`, `.migrate.run_migrations` (preset libraries) and `.migrate.run_agent_migrations` (agent workdir/init migrations; see `../lingtai_kernel/migrate/ANATOMY.md`).
 
-**Cross-module:** `agent.py` → `capabilities.setup_capability`, `core.mcp.{decompress_addons,read_registry,MCPInboxPoller}`, `services.mcp.{MCPClient,HTTPMCPClient}`, `llm.service.LLMService`, `presets`, `lingtai_kernel.config_resolve`, `init_schema`. `cli.py` → `agent.Agent`, `lingtai_kernel.config_resolve`, `presets`.
+**Cross-module:** `agent.py` → `capabilities.setup_capability`, `core.mcp.{decompress_addons,read_registry,MCPInboxPoller}`, `services.mcp.{MCPClient,HTTPMCPClient}`, `llm.service.LLMService`, `presets`, `lingtai_kernel.config_resolve`, `init_schema`, `guard_wiring.wire_agent_guard`. `cli.py` → `agent.Agent`, `lingtai_kernel.config_resolve`, `presets`.
+
+**Outbound — SDK (wrapper → SDK edge, allowed):** `guard_wiring.py` → `lingtai_sdk.guard_bridge.{GuardPolicyMode, tool_call_guard_from_manifests}` and `lingtai_sdk.capabilities.BundleManifest`. The wrapper may depend on the SDK; the kernel must never import the SDK, so the guard chain is built wrapper-side and installed onto the kernel's `_tool_call_guard` seam — no `lingtai_kernel → lingtai_sdk` inversion.
 
 **Agent → BaseAgent:** Three-layer hierarchy: `BaseAgent` (kernel) → `Agent` (capabilities) → `CustomAgent` (domain). Agent adds capability registration, MCP auto-loading, preset swap, full init.json reconstruct.
 
