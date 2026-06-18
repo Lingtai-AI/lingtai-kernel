@@ -16,10 +16,11 @@ Behaviour contract (deliberately advisory-first / fail-open)
   ``destructive`` tool is surfaced as a *warning*, never denied, in default live
   wiring. Blocking is reachable only by an explicit ``mode=`` opt-in and is never
   the wrapper default.
-* **Default/existing agents stay pass-through.** The default capability→manifest
-  registry (:func:`default_manifest_registry`) is empty, so nothing is wired
-  unless a capability genuinely declares a bundle manifest. A freshly built
-  agent therefore keeps the unchanged ``default_allow`` pass-through.
+* **Default agents get core advisories only.** The default capability→manifest
+  registry (:func:`default_manifest_registry`) is still empty, but Stage 20
+  default wiring also collects the always-present core manifests
+  (``system``/``psyche``/``soul``). Those declared core tools warn in advisory
+  mode; undeclared/MCP/add-tool surfaces remain pass-through.
 * **Unknown / unmanifested tools fail open.** MCP tools, ``add_tool`` tools, and
   any capability tool without a manifest are unknown to the bridge and pass
   through cleanly — this slice can only ever *add advisories* for explicitly
@@ -42,6 +43,12 @@ from typing import Any, Callable, Iterable
 
 from lingtai_kernel.tool_call_guard import ToolCallGuard
 from lingtai_sdk.capabilities import BundleManifest
+from lingtai_sdk.core_bundles import (
+    core_bundle_names,
+    psyche_bundle,
+    soul_bundle,
+    system_bundle,
+)
 from lingtai_sdk.guard_bridge import (
     GuardPolicyMode,
     tool_call_guard_from_manifests,
@@ -68,15 +75,79 @@ DEFAULT_LIVE_GUARD_MODE: GuardPolicyMode = GuardPolicyMode.ADVISORY
 
 
 def default_manifest_registry() -> ManifestRegistry:
-    """The default capability→manifest registry — empty.
+    """The default capability→manifest registry — still empty.
 
-    No shipping capability declares an SDK bundle manifest yet, so the default
-    registry is empty and live wiring is behaviour-neutral: existing/default
-    agents keep the unchanged ``default_allow`` pass-through. A capability gains
-    advisory posture only by registering a provider here (or by passing a
-    ``registry`` into :func:`wire_agent_guard`).
+    No shipping *capability* declares an SDK bundle manifest yet, so capability
+    manifests remain opt-in via this registry (or a caller-supplied one). Stage
+    20 core manifests are collected through :func:`collect_core_bundle_manifests`
+    instead, because ``system`` / ``psyche`` / ``soul`` are kernel intrinsics,
+    not wrapper capabilities listed in ``_capabilities``.
     """
     return {}
+
+
+def core_manifest_registry() -> ManifestRegistry:
+    """The populated core capability→manifest registry (Stage 20).
+
+    Maps each of the three privileged core surfaces — ``system`` / ``psyche`` /
+    ``soul`` — to the SDK provider that returns its declared
+    :class:`~lingtai_sdk.capabilities.BundleManifest`
+    (:mod:`lingtai_sdk.core_bundles`). This is the actual registry *population*:
+    the providers are the real, evidence-based core danger postures
+    (``system`` → destructive, ``psyche`` / ``soul`` → caution).
+
+    This is deliberately a **separate, named** registry — NOT the capability
+    default registry. The core surfaces are kernel *intrinsics* (always present,
+    never listed in an agent's ``_capabilities``), so the capability-walk
+    collector (:func:`collect_agent_bundle_manifests`) never reaches them.
+    Stage 20 default live wiring therefore calls
+    :func:`collect_core_bundle_manifests` explicitly (unless ``include_core`` is
+    ``False``) to make the Stage-18 guard behaviour-active for real core tools
+    while preserving advisory-only/fail-open semantics.
+    """
+    return {
+        "system": system_bundle,
+        "psyche": psyche_bundle,
+        "soul": soul_bundle,
+    }
+
+
+def collect_core_bundle_manifests(
+    agent: Any,
+    *,
+    registry: ManifestRegistry | None = None,
+) -> list[BundleManifest]:
+    """Collect the core bundle manifests directly.
+
+    Unlike :func:`collect_agent_bundle_manifests`, this does **not** gate on the
+    agent's ``_capabilities`` — the three core surfaces are kernel intrinsics
+    that are always present (registered in
+    ``lingtai_kernel.intrinsics.__init__``), never declared as wrapper
+    capabilities. Stage 20 default wiring calls this seam unless
+    ``include_core=False`` is passed to :func:`wire_agent_guard`.
+
+    Fail-open like the capability collector: a provider that raises is skipped
+    (logged via the agent's ``_log`` if available) rather than aborting
+    collection, so one broken core manifest can never block construction. The
+    ``agent`` is accepted only for fail-open logging symmetry; collection itself
+    does not read agent state.
+    """
+    if registry is None:
+        registry = core_manifest_registry()
+    manifests: list[BundleManifest] = []
+    for name in core_bundle_names():
+        provider = registry.get(name)
+        if provider is None:
+            continue
+        try:
+            manifest = provider()
+        except Exception as exc:  # fail open — never block construction
+            _safe_log(agent, "guard_wiring_core_manifest_skipped",
+                      capability=name, reason=str(exc))
+            continue
+        if isinstance(manifest, BundleManifest):
+            manifests.append(manifest)
+    return manifests
 
 
 def collect_agent_bundle_manifests(
@@ -182,26 +253,54 @@ def wire_agent_guard(
     *,
     registry: ManifestRegistry | None = None,
     mode: GuardPolicyMode = DEFAULT_LIVE_GUARD_MODE,
+    include_core: bool = True,
 ) -> None:
-    """Live entry point: collect an agent's declared manifests and install them.
+    """Live entry point: collect an agent's manifests and install an advisory guard.
 
     Called once near the end of wrapper ``Agent`` construction (and reconstruct).
     Advisory-first and fail-open:
 
-    * collects manifests for enabled capabilities from ``registry`` (default:
-      the empty :func:`default_manifest_registry`, i.e. behaviour-neutral);
-    * installs an advisory guard (default ``mode``) onto the Stage-16 seam;
+    * collects capability-declared manifests from ``registry`` (default: the
+      empty :func:`default_manifest_registry` — no *capability* declares an SDK
+      manifest yet);
+    * **Stage 20 (behaviour-active):** unless ``include_core=False``, also
+      collects the three always-present core manifests (``system`` / ``psyche`` /
+      ``soul``) via :func:`collect_core_bundle_manifests`. These surfaces are
+      kernel intrinsics — always present, never listed in ``_capabilities`` — so
+      the capability walk alone never reaches them; this is the seam that makes
+      the Stage-18 wiring *behaviour-active* on every agent instead of dormant;
+    * installs an **advisory** guard (default ``mode``) onto the Stage-16 seam:
+      ``system`` (destructive) and ``psyche`` / ``soul`` (caution) become a
+      *warning*, never a denial. No lifecycle/system tool is blocked by default;
+    * unknown / unmanifested tools (MCP, ``add_tool``, capability tools without a
+      manifest) remain unknown to the bridge and fail open — this slice only ever
+      *adds advisories* for the declared core surfaces;
     * when **no** manifests are collected, resets *only* a previously
       wrapper-installed bundle guard back to a pass-through (Stage 19), leaving
       any host/subclass manually-installed guard untouched;
     * on **any** error leaves the seam untouched (safe pass-through) rather than
       failing closed.
 
-    A default (empty-registry) call on a default agent leaves the seam a pure
-    pass-through, so existing/default agents are unaffected.
+    Pass ``include_core=False`` (and the default empty ``registry``) to recover
+    the pre-Stage-20 pure pass-through (e.g. a host that wants no advisories).
+    Blocking remains opt-in only (an explicit ``mode=BLOCKING``); it is never the
+    default, so default wiring can never deny a core tool.
     """
     try:
+        if _has_manual_guard(agent):
+            # A host/subclass installed its own guard before wiring ran (non-empty
+            # chain, no wrapper provenance). Stage 19's guarantee — never clobber a
+            # manual guard — extends to the Stage-20 default install: leave it
+            # untouched rather than overwriting it with core advisories.
+            _safe_log(agent, "guard_wiring_skipped_manual_guard")
+            return
         manifests = collect_agent_bundle_manifests(agent, registry=registry)
+        if include_core:
+            # Core surfaces are intrinsics (always present), not capabilities, so
+            # they are collected directly rather than via the capability walk.
+            core_manifests = collect_core_bundle_manifests(agent)
+            have = {m.name for m in manifests}
+            manifests.extend(m for m in core_manifests if m.name not in have)
         if not manifests:
             # Nothing declared. Only reset a guard *this wrapper* previously
             # installed (provenance flag set); never clobber a host/subclass
@@ -217,6 +316,30 @@ def wire_agent_guard(
         install_bundle_guard(agent, manifests=manifests, mode=mode)
     except Exception as exc:  # fail open — never break construction
         _safe_log(agent, "guard_wiring_failed", reason=str(exc))
+
+
+def _has_manual_guard(agent: Any) -> bool:
+    """True iff the agent already owns a *host/subclass* manually-installed guard.
+
+    A manual guard is a non-empty :class:`ToolCallGuard` chain that this wrapper
+    did **not** install (no :data:`PROVENANCE_FLAG` set to ``True``). A default
+    empty guard (no checks) and a wrapper-derived guard (provenance set) are both
+    *not* manual, so re-wiring is free to install/replace/reset them. Stage 20's
+    default core install consults this so it never overwrites a host guard.
+
+    Conservative and total: any error inspecting the seam yields ``False`` (treat
+    as not-manual) so a quirky stand-in can never wedge wiring — the worst case is
+    that wiring proceeds, which for a genuine manual guard is prevented here, and
+    for a non-guard object simply installs the advisory chain as before.
+    """
+    try:
+        if getattr(agent, PROVENANCE_FLAG, False) is True:
+            return False  # wrapper-owned, not manual
+        guard = getattr(agent, "_tool_call_guard", None)
+        checks = getattr(guard, "_checks", None)
+        return bool(checks)
+    except Exception:
+        return False
 
 
 def _safe_log(agent: Any, event: str, **fields: Any) -> None:
@@ -236,6 +359,8 @@ __all__ = [
     "PROVENANCE_FLAG",
     "PROVENANCE_SOURCE",
     "default_manifest_registry",
+    "core_manifest_registry",
+    "collect_core_bundle_manifests",
     "collect_agent_bundle_manifests",
     "install_bundle_guard",
     "reset_bundle_guard",

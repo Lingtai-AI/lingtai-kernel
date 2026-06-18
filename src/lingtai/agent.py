@@ -128,19 +128,19 @@ class Agent(BaseAgent):
         if self._capabilities:
             self._workdir.write_manifest(self._build_manifest())
 
-        # Advisory-first SDK guard wiring (stage 18, C3). Installs an advisory
-        # ToolCallGuard from any declared bundle manifests onto the Stage-16
-        # `_tool_call_guard` seam. Default registry is empty, so this is a
-        # behaviour-neutral pass-through for existing agents; fail-open.
+        # Advisory-first SDK guard wiring (stages 18-20). Installs an advisory
+        # ToolCallGuard from declared bundle manifests onto the Stage-16 seam.
+        # The capability registry is still empty, but Stage 20 default wiring
+        # adds advisory-only core manifests (system/psyche/soul); fail-open.
         self._wire_bundle_guard()
 
     def _wire_bundle_guard(self) -> None:
         """Install the advisory SDK bundle guard onto the Stage-16 seam.
 
         Thin, fail-open delegation to :func:`lingtai.guard_wiring.wire_agent_guard`.
-        Advisory-first: declared destructive tools warn, never block, by default;
-        the default (empty) manifest registry leaves the seam a pure
-        ``default_allow`` pass-through, so existing/default agents are unaffected.
+        Advisory-first: declared destructive tools warn, never block, by default.
+        Stage 20 makes the core intrinsic tools behaviour-active as warnings;
+        undeclared/non-core tools remain pass-through.
         Kept as a method so reconstruct (``_setup_from_init``) and any subclass
         can share one wiring path. Never raises.
         """

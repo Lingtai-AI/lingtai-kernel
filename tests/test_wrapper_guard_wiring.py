@@ -7,10 +7,8 @@ behaviour-visible but **advisory-first**:
 
 * default live wiring NEVER introduces a blocking denial — a manifest-declared
   ``destructive`` tool becomes a *warning*, not a block, in default live mode;
-* default/existing agents stay pure pass-through — nothing is wired unless a
-  capability actually declares a bundle manifest, and the default registry is
-  empty, so a freshly built agent's guard is the unchanged ``default_allow``
-  pass-through;
+* default agents get advisory-only core warnings for ``system``/``psyche``/
+  ``soul`` (Stage 20), while undeclared/non-core tools stay pass-through;
 * unknown / unmanifested tools (MCP, add_tool, capability tools without a
   manifest) fail open — they are never blocked by this slice;
 * the installed guard is actually threaded through the Stage-16 seam to the
@@ -138,18 +136,41 @@ def test_install_bundle_guard_blocking_mode_is_opt_in_only():
 # --- wire_agent_guard: the live construction entry point ---------------------
 
 
-def test_wire_agent_guard_default_registry_keeps_pass_through():
-    """With the default (empty) registry, wiring a live agent leaves the seam a
-    pure pass-through — destructive-free, advisory-free, behaviour-neutral."""
+def test_wire_agent_guard_no_capability_manifests_and_no_core_is_pass_through():
+    """With the default (empty) *capability* registry and core wiring opted out
+    (``include_core=False``), wiring a live agent leaves the seam a pure
+    pass-through — this isolates the capability-only path (pre-Stage-20)."""
     agent = MagicMock()
     agent._tool_call_guard = ToolCallGuard()
     agent._capabilities = [("psyche", {}), ("vision", {})]
 
-    gw.wire_agent_guard(agent)
+    gw.wire_agent_guard(agent, include_core=False)
 
-    decision = agent._tool_call_guard.evaluate(_proposal("psyche"))
+    # No capability declares a manifest, and core wiring is opted out → the
+    # capability tool name (here a non-core 'vision') is unknown → pass-through.
+    decision = agent._tool_call_guard.evaluate(_proposal("vision"))
     assert decision.allowed is True
     assert decision.approval_mode == "pass_through"
+
+
+def test_wire_agent_guard_default_advises_core_tools_never_blocks():
+    """Stage 20 behaviour-active default: a default-registry wiring still installs
+    advisory guards for the always-present core surfaces. ``system`` (destructive)
+    and ``psyche``/``soul`` (caution) WARN, never deny — no lifecycle block."""
+    agent = MagicMock()
+    agent._tool_call_guard = ToolCallGuard()
+    agent._capabilities = [("vision", {})]  # core surfaces are NOT capabilities
+
+    gw.wire_agent_guard(agent)  # default registry, include_core defaults True
+
+    for tool, danger in (("system", "destructive"), ("psyche", "caution"), ("soul", "caution")):
+        decision = agent._tool_call_guard.evaluate(_proposal(tool))
+        assert decision.allowed is True, f"{tool} must never be blocked by default"
+        assert decision.action == "warn"
+        assert decision.metadata["danger"] == danger
+        assert decision.metadata["policy_mode"] == "advisory"
+    # A non-core capability tool with no manifest still fails open.
+    assert agent._tool_call_guard.evaluate(_proposal("vision")).approval_mode == "pass_through"
 
 
 def test_wire_agent_guard_advises_declared_destructive_capability_tool():
@@ -230,9 +251,11 @@ def test_wire_agent_guard_fails_open_on_registry_error():
 # --- live Agent construction: end-to-end seam wiring ------------------------
 
 
-def test_live_agent_default_construction_is_pass_through(tmp_path):
-    """A real wrapper ``Agent`` built with the default registry owns a
-    pass-through guard — no behaviour change for existing/default agents."""
+def test_live_agent_default_construction_advises_core_but_never_blocks(tmp_path):
+    """Stage 20: a real wrapper ``Agent`` built with the default registry owns an
+    *advisory* guard for the always-present core surfaces — ``psyche``/``soul``
+    warn (caution), ``system`` warns (destructive), and NONE is ever blocked.
+    Unknown / non-core tools still fail open (pass-through)."""
     from lingtai.agent import Agent
 
     agent = Agent(
@@ -243,9 +266,14 @@ def test_live_agent_default_construction_is_pass_through(tmp_path):
     )
     guard = agent._tool_call_guard
     assert isinstance(guard, ToolCallGuard)
-    decision = guard.evaluate(_proposal("psyche"))
-    assert decision.allowed is True
-    assert decision.approval_mode == "pass_through"
+    for tool in ("system", "psyche", "soul"):
+        decision = guard.evaluate(_proposal(tool))
+        assert decision.allowed is True, f"{tool} must never be blocked"
+        assert decision.action == "warn"
+    # An unknown / non-core tool (e.g. an MCP or add_tool tool) fails open.
+    unknown = guard.evaluate(_proposal("some_unmanifested_tool"))
+    assert unknown.allowed is True
+    assert unknown.approval_mode == "pass_through"
 
 
 def test_installed_guard_threads_through_stage16_seam_to_executor(tmp_path):
@@ -337,7 +365,11 @@ def test_install_bundle_guard_empty_manifests_does_not_mark_provenance():
 
 def test_wire_agent_guard_resets_stale_bundle_guard_when_no_manifests():
     """A previously wrapper-installed (bundle-derived) guard is reset to a
-    pass-through when a subsequent wiring call collects no manifests."""
+    pass-through when a subsequent wiring call collects no manifests.
+
+    Uses ``include_core=False`` to isolate the capability-only reset path — with
+    Stage-20 core wiring on (the default), the always-present core manifests
+    would otherwise keep the collection non-empty (covered separately)."""
     agent = MagicMock()
     agent._tool_call_guard = ToolCallGuard()
     agent._capabilities = [("scary", {})]
@@ -347,14 +379,14 @@ def test_wire_agent_guard_resets_stale_bundle_guard_when_no_manifests():
         )
     }
     # First wiring installs a bundle-derived advisory guard.
-    gw.wire_agent_guard(agent, registry=registry)
+    gw.wire_agent_guard(agent, registry=registry, include_core=False)
     assert agent._tool_call_guard.evaluate(_proposal("wipe")).action == "warn"
     assert getattr(agent, "_bundle_guard_installed", False) is True
 
     # Now capabilities/registry go empty (refresh/reconstruct). Re-wiring must
     # clear the stale bundle-derived guard back to a clean pass-through.
     agent._capabilities = []
-    gw.wire_agent_guard(agent)
+    gw.wire_agent_guard(agent, include_core=False)
 
     decision = agent._tool_call_guard.evaluate(_proposal("wipe"))
     assert decision.allowed is True
@@ -363,9 +395,11 @@ def test_wire_agent_guard_resets_stale_bundle_guard_when_no_manifests():
     assert getattr(agent, "_bundle_guard_installed", False) is False
 
 
-def test_wire_agent_guard_does_not_clobber_manual_guard_when_no_manifests():
-    """A host/subclass manually-installed guard (no wrapper provenance) is left
-    untouched when wiring collects no manifests — never clobbered."""
+def test_wire_agent_guard_does_not_clobber_manual_guard_even_with_core_default():
+    """A host/subclass manually-installed guard (non-empty chain, no wrapper
+    provenance) is left untouched — even under Stage-20 default core wiring, which
+    would otherwise install advisory core guards. The Stage-19 guarantee holds:
+    a manual guard is never clobbered."""
     from lingtai_kernel.tool_call_guard import GuardDecision
 
     def _deny_check(proposal):
@@ -374,13 +408,17 @@ def test_wire_agent_guard_does_not_clobber_manual_guard_when_no_manifests():
     manual_guard = ToolCallGuard([_deny_check])
     agent = MagicMock()
     agent._tool_call_guard = manual_guard
-    agent._capabilities = []  # no manifests will be collected
+    agent._capabilities = []
 
-    gw.wire_agent_guard(agent)  # default empty registry → no manifests
+    # Default wiring (include_core=True): core manifests WOULD be collected, but
+    # the manual guard must still be preserved.
+    gw.wire_agent_guard(agent)
 
-    # The host's manual guard object is preserved untouched.
+    # The host's manual guard object is preserved untouched — core advisories did
+    # NOT overwrite it, and 'system' is still denied by the host's own guard.
     assert agent._tool_call_guard is manual_guard
     assert agent._tool_call_guard.evaluate(_proposal("anything")).allowed is False
+    assert agent._tool_call_guard.evaluate(_proposal("system")).allowed is False
 
 
 def test_wire_agent_guard_rederives_bundle_guard_when_manifests_change():
@@ -422,7 +460,7 @@ def test_wire_agent_guard_reset_failure_is_fail_open():
             "scary", ("wipe",), cap.SecurityDanger.DESTRUCTIVE.value
         )
     }
-    gw.wire_agent_guard(agent, registry=registry)
+    gw.wire_agent_guard(agent, registry=registry, include_core=False)
 
     # Make assignment to the seam blow up to simulate a pathological reset.
     class _Boom:
@@ -436,8 +474,9 @@ def test_wire_agent_guard_reset_failure_is_fail_open():
     object.__setattr__(boom, "_bundle_guard_installed", True)
     object.__setattr__(boom, "_tool_call_guard", agent._tool_call_guard)
 
-    # Must not raise.
-    gw.wire_agent_guard(boom)
+    # Emptied capabilities + core opted out → reset path; the reset raises but
+    # wiring must fail open (not propagate).
+    gw.wire_agent_guard(boom, include_core=False)
 
 
 def test_agent_rewire_clears_stale_bundle_guard_on_emptied_capabilities():
@@ -466,19 +505,219 @@ def test_agent_rewire_clears_stale_bundle_guard_on_emptied_capabilities():
             "scary", ("wipe",), cap.SecurityDanger.DESTRUCTIVE.value
         )
     }
-    # Install a bundle-derived guard via the shared seam.
+    # Install a bundle-derived guard via the shared seam (scary capability +
+    # the always-present core surfaces under the Stage-20 default).
     gw.wire_agent_guard(stub, registry=registry)
     assert getattr(stub, "_bundle_guard_installed", False) is True
+    assert stub._tool_call_guard.evaluate(_proposal("wipe")).action == "warn"
 
     # Capabilities go empty; the agent re-wires via its own (default-registry)
-    # path — the stale bundle guard must be reset to pass-through.
+    # path. The stale *capability* posture (``wipe``) must be dropped — but the
+    # always-present core surfaces are re-derived, so the guard is core-only now.
     stub._capabilities = []
     stub._wire_bundle_guard()
 
-    decision = stub._tool_call_guard.evaluate(_proposal("wipe"))
+    # The vanished capability's tool is no longer advised (re-derived away).
+    wipe = stub._tool_call_guard.evaluate(_proposal("wipe"))
+    assert wipe.allowed is True
+    assert wipe.approval_mode == "pass_through"
+    # Core surfaces remain advised (Stage 20 default), never blocked.
+    assert stub._tool_call_guard.evaluate(_proposal("system")).action == "warn"
+    # Provenance is still claimed (now by the core manifests).
+    assert getattr(stub, "_bundle_guard_installed", False) is True
+    assert "system" in (getattr(stub, "_bundle_guard_source", None) or ())
+
+
+# --- Stage 20: core manifest registry population ----------------------------
+#
+# Stages 17-19 built the bridge, the advisory wiring, and provenance/reset, but
+# ``default_manifest_registry`` stayed empty so *no* manifest was ever
+# discovered. Stage 20 populates the actual core capability manifest providers
+# (``system`` / ``psyche`` / ``soul``) into a named ``core_manifest_registry``
+# and adds ``collect_core_bundle_manifests`` for the intrinsic core surfaces.
+#
+# The core surfaces are kernel *intrinsics* (registered in
+# ``lingtai_kernel.intrinsics.__init__``), always present and NOT listed in an
+# agent's ``_capabilities``. The capability-walk collector therefore never
+# reaches them; default live wiring explicitly includes the core collector so
+# default agents warn for declared core tools while remaining advisory-only and
+# fail-open. ``include_core=False`` is the explicit opt-out/pass-through path.
+
+
+def test_core_manifest_registry_has_three_core_providers():
+    """The core registry maps each core bundle name to a provider that returns
+    that bundle's manifest — the actual Stage 20 population."""
+    registry = gw.core_manifest_registry()
+    assert set(registry) == set(core.core_bundle_names())
+    for name, provider in registry.items():
+        manifest = provider()
+        assert isinstance(manifest, cap.BundleManifest)
+        assert manifest.name == name
+        assert core.is_core_manifest(manifest)
+
+
+def test_default_registry_stays_empty_and_distinct_from_core():
+    """Stage 20 must NOT auto-populate the *capability* registry — core
+    manifests live in a separate registry and are collected by the core seam."""
+    assert gw.default_manifest_registry() == {}
+    assert gw.core_manifest_registry() != {}
+
+
+def test_collect_core_bundle_manifests_returns_all_three():
+    """The core collector returns the three core manifests directly,
+    independent of the agent's ``_capabilities`` (core surfaces are intrinsics,
+    always present, never listed as capabilities)."""
+    agent = MagicMock()
+    agent._capabilities = []  # core surfaces are NOT capabilities
+    manifests = gw.collect_core_bundle_manifests(agent)
+    names = {m.name for m in manifests}
+    assert names == set(core.core_bundle_names())
+
+
+def test_collect_core_bundle_manifests_fails_open_on_provider_error():
+    """A core provider that raises is skipped (fail open), never aborting
+    collection — one broken core manifest can't break construction."""
+    agent = MagicMock()
+    agent._capabilities = []
+    bad_registry = {
+        "system": core.system_bundle,
+        "psyche": lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+        "soul": core.soul_bundle,
+    }
+    manifests = gw.collect_core_bundle_manifests(agent, registry=bad_registry)
+    names = {m.name for m in manifests}
+    # psyche skipped; the others still collected.
+    assert "psyche" not in names
+    assert {"system", "soul"}.issubset(names)
+
+
+def test_wire_agent_guard_with_core_registry_advises_core_tools_never_blocks():
+    """The core registry surfaces declared core tools as *advisories* (warn),
+    never blocks them — even ``system`` (destructive)."""
+    agent = MagicMock()
+    agent._tool_call_guard = ToolCallGuard()
+    # Exercise the capability-walk path too; default agents collect the same
+    # core manifests directly via include_core=True.
+    agent._capabilities = [("system", {}), ("psyche", {}), ("soul", {})]
+
+    gw.wire_agent_guard(agent, registry=gw.core_manifest_registry())
+
+    for tool, expect_danger in (
+        ("system", "destructive"),
+        ("psyche", "caution"),
+        ("soul", "caution"),
+    ):
+        decision = agent._tool_call_guard.evaluate(_proposal(tool))
+        assert decision.allowed is True, f"{tool} must never be blocked"
+        assert decision.action == "warn"
+        assert decision.severity == "warning"
+        assert decision.metadata["danger"] == expect_danger
+        assert decision.metadata["policy_mode"] == "advisory"
+
+
+def test_core_registry_only_advises_declared_core_actions_not_unknown():
+    """With the core registry wired, only the three declared core *tool* names
+    are advised; an unknown / unmanifested tool still fails open."""
+    agent = MagicMock()
+    agent._tool_call_guard = ToolCallGuard()
+    agent._capabilities = [("system", {})]
+
+    gw.wire_agent_guard(agent, registry=gw.core_manifest_registry())
+
+    # Declared core tool → advised.
+    assert agent._tool_call_guard.evaluate(_proposal("system")).action == "warn"
+    # Unknown MCP / add_tool style tool → clean pass-through (fail open).
+    unknown = agent._tool_call_guard.evaluate(_proposal("some_mcp_tool"))
+    assert unknown.allowed is True
+    assert unknown.approval_mode == "pass_through"
+    # A core *action* string (not a tool name) is not a declared tool surface —
+    # the core manifests declare one tool each (``system``/``psyche``/``soul``),
+    # so action verbs like ``nirvana`` are unknown and fail open.
+    nirvana = agent._tool_call_guard.evaluate(_proposal("nirvana"))
+    assert nirvana.allowed is True
+    assert nirvana.approval_mode == "pass_through"
+
+
+def test_core_registry_wiring_preserves_stage19_provenance_and_reset():
+    """A core-registry-derived guard carries provenance and is reset like any
+    wrapper-derived guard when a later wiring collects no manifests (Stage 19)."""
+    agent = MagicMock()
+    agent._tool_call_guard = ToolCallGuard()
+    agent._capabilities = [("system", {})]
+
+    gw.wire_agent_guard(agent, registry=gw.core_manifest_registry())
+    assert getattr(agent, gw.PROVENANCE_FLAG, False) is True
+    assert "system" in (getattr(agent, gw.PROVENANCE_SOURCE, None) or ())
+    assert agent._tool_call_guard.evaluate(_proposal("system")).action == "warn"
+
+    # A later wiring that collects NO manifests (capabilities empty AND core
+    # opted out) resets the wrapper-derived guard back to pass-through and clears
+    # provenance — the Stage-19 reset path, unchanged by Stage 20.
+    agent._capabilities = []
+    gw.wire_agent_guard(agent, include_core=False)
+    decision = agent._tool_call_guard.evaluate(_proposal("system"))
     assert decision.allowed is True
     assert decision.approval_mode == "pass_through"
-    assert getattr(stub, "_bundle_guard_installed", False) is False
+    assert getattr(agent, gw.PROVENANCE_FLAG, False) is False
+
+
+def test_core_registry_blocking_is_opt_in_only_never_default():
+    """Even with the core registry, blocking is reachable only by explicit
+    ``mode=BLOCKING`` opt-in; the default live mode stays advisory."""
+    agent = MagicMock()
+    agent._tool_call_guard = ToolCallGuard()
+    agent._capabilities = [("system", {})]
+
+    # Default mode: advisory — system warns, never blocks (no lifecycle block).
+    gw.wire_agent_guard(agent, registry=gw.core_manifest_registry())
+    assert agent._tool_call_guard.evaluate(_proposal("system")).allowed is True
+
+    # Explicit opt-in blocking mode: now system is denied (host's deliberate choice).
+    gw.wire_agent_guard(
+        agent, registry=gw.core_manifest_registry(), mode=GuardPolicyMode.BLOCKING
+    )
+    assert agent._tool_call_guard.evaluate(_proposal("system")).allowed is False
+
+
+def test_wire_agent_guard_include_core_false_recovers_pass_through():
+    """``include_core=False`` with the default empty capability registry recovers
+    the pre-Stage-20 pure pass-through — an explicit opt-out for a host that wants
+    no advisories at all. Core surfaces then fail open like any unknown tool."""
+    agent = MagicMock()
+    agent._tool_call_guard = ToolCallGuard()
+    agent._capabilities = [("psyche", {}), ("vision", {})]
+
+    gw.wire_agent_guard(agent, include_core=False)
+
+    for tool in ("system", "psyche", "soul", "anything"):
+        decision = agent._tool_call_guard.evaluate(_proposal(tool))
+        assert decision.allowed is True
+        assert decision.approval_mode == "pass_through"
+
+
+def test_core_advisory_does_not_block_lifecycle_actions_end_to_end(tmp_path):
+    """Lifecycle safety: a real default-constructed Agent advises the core
+    ``system`` tool (warn) but never denies it — and unknown lifecycle-ish action
+    names that are not declared tool surfaces fail open. No lifecycle path is
+    blocked by Stage-20 default wiring."""
+    from lingtai.agent import Agent
+
+    agent = Agent(
+        service=_make_mock_service(),
+        agent_name="t-core",
+        working_dir=tmp_path / "agent-core",
+        capabilities=["psyche"],
+    )
+    # The declared core 'system' tool warns, never blocks.
+    sys_decision = agent._tool_call_guard.evaluate(_proposal("system"))
+    assert sys_decision.allowed is True
+    assert sys_decision.action == "warn"
+    # Action verbs (refresh/sleep/nirvana) are NOT tool surfaces — they are
+    # arguments to the 'system' tool — so they are unknown and fail open.
+    for action in ("refresh", "sleep", "nirvana", "cpr"):
+        decision = agent._tool_call_guard.evaluate(_proposal(action))
+        assert decision.allowed is True
+        assert decision.approval_mode == "pass_through"
 
 
 # --- import direction: kernel stays SDK-free --------------------------------
