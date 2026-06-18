@@ -4,6 +4,8 @@
 
 The **public SDK doorway** — a curated, import-light front door for building and embedding LingTai agents. It re-exports the two implementation packages (`lingtai_kernel`, `lingtai`) under one stable path and carries the *seed contracts* (runtime, capability-bundle manifest) that later PRs will implement. This is a foundation package: it ships shapes and a doorway, not a live runtime.
 
+> **Human-facing docs.** The developer guide for this package — what the SDK is / is not yet, canonical vs legacy import paths, and runnable quick examples — lives at [`docs/sdk/README.md`](../../docs/sdk/README.md), with runnable example scripts under [`docs/sdk/examples/`](../../docs/sdk/examples/) (validated by `tests/test_sdk_docs_examples.py`). The full staged engineering log is [`docs/sdk/architecture-foundation.md`](../../docs/sdk/architecture-foundation.md).
+
 > **What is an `ANATOMY.md`?** See the canonical convention at `src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md`. This file follows the same 6-section template as every other anatomy in the tree.
 
 ## Directory shape
