@@ -6,6 +6,7 @@ BaseAgent delegates all session operations here.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import time
 import uuid
 from typing import Any, Callable, TYPE_CHECKING
 
@@ -28,6 +29,11 @@ logger = get_logger()
 
 if TYPE_CHECKING:
     from .llm.interface import ChatInterface
+
+
+def _elapsed_ms(start: float) -> int:
+    """Return non-negative elapsed milliseconds from a monotonic start."""
+    return max(0, int((time.monotonic() - start) * 1000))
 
 
 class SessionManager:
@@ -210,11 +216,20 @@ class SessionManager:
         # update_system_prompt_batches concatenates and delegates to
         # update_system_prompt, so providers without per-block caching
         # see the exact same byte stream.
+        prompt_start = time.monotonic()
         if self._build_system_batches_fn is not None:
-            self._chat.update_system_prompt_batches(self._build_system_batches_fn())
+            prompt_batches = self._build_system_batches_fn()
+            prompt_build_ms = _elapsed_ms(prompt_start)
+            self._chat.update_system_prompt_batches(prompt_batches)
         else:
-            self._chat.update_system_prompt(self._build_system_prompt_fn())
-        self._chat.update_tools(self._build_tool_schemas_fn() or None)
+            system_prompt = self._build_system_prompt_fn()
+            prompt_build_ms = _elapsed_ms(prompt_start)
+            self._chat.update_system_prompt(system_prompt)
+
+        tool_schema_start = time.monotonic()
+        tool_schemas = self._build_tool_schemas_fn() or None
+        tool_schema_build_ms = _elapsed_ms(tool_schema_start)
+        self._chat.update_tools(tool_schemas)
 
         self._health_check(message)
 
@@ -227,6 +242,7 @@ class SessionManager:
 
         retry_timeout = self._config.retry_timeout
 
+        provider_start = time.monotonic()
         if self._streaming:
             response = self._send_streaming(message, retry_timeout)
         else:
@@ -238,9 +254,17 @@ class SessionManager:
                 agent_name=self._display_name,
                 logger=logger,
             )
+        provider_wait_ms = _elapsed_ms(provider_start)
 
         response.api_call_id = api_call_id
-        self._track_usage(response)
+        self._track_usage(
+            response,
+            timing_fields={
+                "prompt_build_ms": prompt_build_ms,
+                "tool_schema_build_ms": tool_schema_build_ms,
+                "provider_wait_ms": provider_wait_ms,
+            },
+        )
         # Preserve interaction ID for session reuse
         if hasattr(self._chat, "interaction_id") and self._chat.interaction_id:
             self._interaction_id = self._chat.interaction_id
@@ -300,13 +324,19 @@ class SessionManager:
         self._tools_tokens = count_tool_tokens(self._build_tool_schemas_fn())
         self._token_decomp_dirty = False
 
-    def _track_usage(self, response: LLMResponse) -> None:
+    def _track_usage(
+        self,
+        response: LLMResponse,
+        *,
+        timing_fields: dict[str, int | float] | None = None,
+    ) -> None:
         """Accumulate token usage from an LLMResponse.
 
         If the provider returns all-zero usage, falls back to the local
         tokenizer (tiktoken / gemini / char estimate) and sets
         ``token_fallback_used`` so the TUI can warn the user.
         """
+        usage_start = time.monotonic()
         if self._token_decomp_dirty:
             self._update_token_decomposition()
 
@@ -367,6 +397,9 @@ class SessionManager:
         self._api_calls = token_state["api_calls"]
         if response.usage:
             self._latest_input_tokens = response.usage.input_tokens
+            usage_track_ms = _elapsed_ms(usage_start)
+            telemetry_fields = dict(timing_fields or {})
+            telemetry_fields["usage_track_ms"] = usage_track_ms
             self._log(
                 "llm_response",
                 input_tokens=response.usage.input_tokens,
@@ -375,6 +408,7 @@ class SessionManager:
                 cached_tokens=response.usage.cached_tokens,
                 estimated=fallback,
                 api_call_id=response.api_call_id,
+                **telemetry_fields,
             )
 
     def get_token_usage(self) -> dict:
