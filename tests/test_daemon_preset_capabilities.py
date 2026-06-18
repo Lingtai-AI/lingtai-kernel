@@ -185,6 +185,95 @@ def test_instantiate_skips_intrinsic_names_in_capabilities(tmp_path):
     assert "soul" not in schemas
 
 
+def _skip_events(log_mock):
+    """daemon_preset_capability_skipped calls recorded on a mocked _log."""
+    return [
+        c for c in log_mock.call_args_list
+        if c.args and c.args[0] == "daemon_preset_capability_skipped"
+    ]
+
+
+def test_intrinsic_skips_do_not_log(tmp_path):
+    """Known non-composable names (intrinsics + 'library') are an expected,
+    static fact for "full" presets. They must NOT emit
+    daemon_preset_capability_skipped — logging them on every emanation buried
+    real setup failures (GH lingtai-kernel #197)."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    mgr._log = MagicMock()
+    schemas, _ = mgr._instantiate_preset_capabilities(
+        {
+            "read": {},
+            "email": {},      # intrinsic
+            "library": {},    # legacy non-capability label — #197's top noise
+            "system": {},     # intrinsic
+            "soul": {},       # intrinsic
+        },
+        {"provider": "mock", "model": "mock"},
+    )
+    assert "read" in schemas
+    assert _skip_events(mgr._log) == [], (
+        "expected intrinsics to be skipped silently, not logged"
+    )
+
+
+def test_intrinsic_skips_do_not_log_across_repeated_emanations(tmp_path):
+    """The static skips stay silent no matter how many emanations run — this is
+    the #197 repro where the same two rows logged on every emanation."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    mgr._log = MagicMock()
+    preset_caps = {"read": {}, "email": {}, "library": {}}
+    for _ in range(5):
+        mgr._instantiate_preset_capabilities(
+            preset_caps, {"provider": "mock", "model": "mock"}
+        )
+    assert _skip_events(mgr._log) == []
+
+
+def test_unknown_capability_logs_once_then_dedupes(tmp_path):
+    """A genuinely unknown name may be a misconfiguration, so it is still
+    logged — but at most once per name per manager, so it cannot flood the
+    event log on every emanation either (#197)."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    mgr._log = MagicMock()
+    preset_caps = {"read": {}, "nonsense_capability": {}}
+    for _ in range(4):
+        mgr._instantiate_preset_capabilities(
+            preset_caps, {"provider": "mock", "model": "mock"}
+        )
+    events = _skip_events(mgr._log)
+    assert len(events) == 1, f"expected one skip log, got {len(events)}"
+    assert events[0].kwargs["capability"] == "nonsense_capability"
+    assert "unknown" in events[0].kwargs["reason"]
+
+
+def test_genuine_setup_failure_still_logs_every_time(tmp_path, monkeypatch):
+    """The noise fix must NOT touch the genuine setup-failure path: a known
+    capability whose setup() raises (and which this task did not require) is
+    still logged on every emanation, because each failure is a real event an
+    operator may need to see. Only the static intrinsic/unknown skips were
+    quieted (#197)."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    mgr._log = MagicMock()
+
+    def boom(target, name, **kwargs):
+        raise ValueError("simulated broken vision")
+
+    monkeypatch.setattr("lingtai.capabilities.setup_capability", boom)
+    for _ in range(3):
+        mgr._instantiate_preset_capabilities(
+            {"vision": {"provider": "codex", "api_key_env": "IGNORED"}},
+            {"provider": "mock", "model": "mock"},
+            required_tools={"read"},  # vision not required → skipped, not raised
+        )
+    events = _skip_events(mgr._log)
+    assert len(events) == 3, f"expected a log per emanation, got {len(events)}"
+    assert all("setup failed" in e.kwargs["reason"] for e in events)
+
+
 def test_instantiate_still_raises_on_broken_known_capability(tmp_path, monkeypatch):
     """A KNOWN capability that fails inside its setup() must still abort the
     batch — we only tolerate UNKNOWN names. This guards against the lingtai

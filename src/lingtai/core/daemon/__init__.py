@@ -151,6 +151,34 @@ EMANATION_BLACKLIST = {
     "knowledge",
 }
 
+# Preset-capability names that are known to be non-composable and are NOT a
+# bug when they appear in ``manifest.capabilities``. The TUI preset wizard and
+# legacy "full" user presets routinely write these into the capabilities map
+# even though they are intrinsics (kernel always-on) or a non-capability label
+# like ``library``. Skipping them is expected and static — logging the skip on
+# every emanation produces thousands of low-value rows (GH lingtai-kernel #197)
+# that bury the much smaller number of genuine setup failures. So these skips
+# are silent; only a genuinely *unknown* name is worth surfacing (and even then
+# at most once per name per manager — see ``_instantiate_preset_capabilities``).
+#
+# Built from ``ALL_INTRINSICS`` (email/system/psyche/soul) plus known legacy
+# preset labels. ``EMANATION_BLACKLIST`` entries are also expected skips, but
+# they are filtered out earlier (before the composable-skip path) so they need
+# not be repeated here.
+def _expected_noncomposable_names() -> frozenset[str]:
+    try:
+        from lingtai_kernel.intrinsics import ALL_INTRINSICS
+        intrinsics = set(ALL_INTRINSICS)
+    except Exception:  # pragma: no cover - defensive: registry import failure
+        intrinsics = {"email", "system", "psyche", "soul"}
+    # ``library`` is a legacy preset label for the agent skill/knowledge library;
+    # it is not a composable capability and never has been. It is the single
+    # largest noise source in #197 (~1.9k rows).
+    return frozenset(intrinsics | {"library"})
+
+
+EXPECTED_NONCOMPOSABLE_CAPABILITIES = _expected_noncomposable_names()
+
 # Env vars that override Claude Code's normal first-party OAuth credentials.
 # LingTai loads ``.env`` from ``~/.lingtai-tui/`` early, so auth intended for
 # another LLM adapter can leak into spawned ``claude`` subprocesses.
@@ -508,6 +536,10 @@ class DaemonManager:
         # Emanation registry: em_id → entry dict
         self._emanations: dict[str, dict] = {}
         self._next_id = 1
+        # Unknown preset-capability names already logged as skipped, so the
+        # daemon_preset_capability_skipped event fires at most once per name
+        # for the life of this manager instead of on every emanation (#197).
+        self._logged_capability_skips: set[str] = set()
         # Pool tracking for reclaim
         self._pools: list[tuple[ThreadPoolExecutor, threading.Event]] = []
         # CLI process tracking for direct process-group kill on reclaim/timeout.
@@ -1121,11 +1153,21 @@ class DaemonManager:
             # the daemon sandbox must replicate that tolerance or "full" user
             # presets become unusable as daemon presets. See lingtai #29.
             if name not in _BUILTIN:
-                self._log(
-                    "daemon_preset_capability_skipped",
-                    capability=name,
-                    reason="not a composable capability (intrinsic or unknown)",
-                )
+                # Known non-composable names (intrinsics, 'library') are an
+                # expected, static fact for any "full" preset. Logging them on
+                # every emanation produced ~3.7k low-value rows that buried real
+                # setup failures (#197), so skip them silently. A genuinely
+                # *unknown* name may be a misconfiguration worth surfacing — log
+                # it, but at most once per name for this manager so it cannot
+                # flood the event log either.
+                if name not in EXPECTED_NONCOMPOSABLE_CAPABILITIES:
+                    if name not in self._logged_capability_skips:
+                        self._logged_capability_skips.add(name)
+                        self._log(
+                            "daemon_preset_capability_skipped",
+                            capability=name,
+                            reason="not a composable capability (intrinsic or unknown)",
+                        )
                 continue
             if not isinstance(kwargs, dict):
                 kwargs = {}
