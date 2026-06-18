@@ -84,20 +84,20 @@ def test_safe_tool_allowed_clean_pass_through():
     assert decision is None or decision.allowed is True
 
 
-# --- caution tool: allow but warn ------------------------------------------
+# --- caution/destructive core tools -----------------------------------------
 
 
 def test_caution_tool_allowed_with_warning_advisory():
-    guard = gb.tool_call_guard_from_manifests([core.psyche_bundle()])
-    decision = guard.evaluate(_proposal("psyche"))
+    guard = gb.tool_call_guard_from_manifests([core.soul_bundle()])
+    decision = guard.evaluate(_proposal("soul"))
     assert decision.allowed is True
     assert decision.action == "warn"
     assert decision.severity == "warning"
-    advisory = decision.advisory_metadata(_proposal("psyche"))
+    advisory = decision.advisory_metadata(_proposal("soul"))
     assert advisory is not None
     assert advisory["type"] == "tool_call_guard"
     assert advisory["metadata"]["danger"] == "caution"
-    assert advisory["metadata"]["bundle"] == "psyche"
+    assert advisory["metadata"]["bundle"] == "soul"
 
 
 # --- destructive tool: blocking vs advisory --------------------------------
@@ -156,11 +156,11 @@ def test_caution_core_advisory_summary_labels_bundle():
     guard = gb.tool_call_guard_from_manifests(
         core.core_bundle_manifests(), mode=gb.GuardPolicyMode.ADVISORY
     )
-    summary = guard.evaluate(_proposal("psyche")).advisory_summary()
+    summary = guard.evaluate(_proposal("soul")).advisory_summary()
     assert summary is not None
-    assert summary["bundle"] == "psyche"
+    assert summary["bundle"] == "soul"
     assert summary["danger"] == "caution"
-    assert summary["source"] == "bundle:psyche:caution"
+    assert summary["source"] == "bundle:soul:caution"
 
 
 def test_safe_passthrough_has_no_advisory_summary():
@@ -190,15 +190,17 @@ def test_no_manifests_allows_everything():
 # --- core manifest posture maps deterministically --------------------------
 
 
-def test_core_manifests_map_system_destructive_psyche_soul_caution():
+def test_core_manifests_map_system_psyche_destructive_soul_caution():
     blocking = gb.tool_call_guard_from_manifests(core.core_bundle_manifests())
-    # system is destructive -> denied under default BLOCKING
-    assert blocking.evaluate(_proposal("system")).allowed is False
-    # psyche / soul are caution -> allowed-with-warning
-    for caution_tool in ("psyche", "soul"):
-        decision = blocking.evaluate(_proposal(caution_tool))
-        assert decision.allowed is True
-        assert decision.action == "warn"
+    # system / psyche are destructive -> denied under default BLOCKING
+    for destructive_tool in ("system", "psyche"):
+        decision = blocking.evaluate(_proposal(destructive_tool))
+        assert decision.allowed is False
+        assert decision.action == "deny"
+    # soul is caution -> allowed-with-warning
+    decision = blocking.evaluate(_proposal("soul"))
+    assert decision.allowed is True
+    assert decision.action == "warn"
 
 
 def test_proof_bundle_safe_tool_is_clean():
@@ -226,7 +228,7 @@ def test_conflicting_danger_takes_most_dangerous():
 def test_tool_danger_index_collects_named_tools():
     index = gb.tool_danger_index(core.core_bundle_manifests())
     assert index["system"] is cap.SecurityDanger.DESTRUCTIVE
-    assert index["psyche"] is cap.SecurityDanger.CAUTION
+    assert index["psyche"] is cap.SecurityDanger.DESTRUCTIVE
     assert index["soul"] is cap.SecurityDanger.CAUTION
 
 

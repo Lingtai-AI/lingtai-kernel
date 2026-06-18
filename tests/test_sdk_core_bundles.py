@@ -72,7 +72,7 @@ def test_core_manifest_validates_strictly(name):
 def test_core_danger_postures():
     # system is highest-risk; psyche and soul both persist protected preferences/state.
     assert core.system_bundle().security.danger == cap.SecurityDanger.DESTRUCTIVE.value
-    assert core.psyche_bundle().security.danger == cap.SecurityDanger.CAUTION.value
+    assert core.psyche_bundle().security.danger == cap.SecurityDanger.DESTRUCTIVE.value
     assert core.soul_bundle().security.danger == cap.SecurityDanger.CAUTION.value
 
 

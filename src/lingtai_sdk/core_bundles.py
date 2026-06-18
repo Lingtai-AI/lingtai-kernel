@@ -24,7 +24,7 @@ declares exactly one public tool (``system`` / ``psyche`` / ``soul``). They
 differ only in their declared danger posture, mirroring the real surfaces:
 
 * ``system`` — ``destructive`` (lifecycle control incl. irreversible teardown);
-* ``psyche`` — ``caution`` (identity + context shedding has lasting effects);
+* ``psyche`` — ``destructive`` (identity/context control includes set-once true-name writes);
 * ``soul``   — ``caution`` (inner-voice consultation plus persisted flow/voice config).
 
 See ``docs/sdk/architecture-foundation.md`` (stage 8).
@@ -116,14 +116,15 @@ def psyche_bundle() -> BundleManifest:
 
     Declares the public ``psyche`` tool: edit/load identity (``lingtai.md``) and
     the pad sketchboard, molt (shed conversation context while keeping a
-    briefing), and naming. Context shedding has lasting effects, hence
-    ``danger=caution``. **Manifest only** — the real handler is injected later.
+    briefing), and naming. The surface includes ``name.set``, a set-once true-name
+    write, so the bundle-level posture is ``danger=destructive`` (the strongest
+    per-action grade). **Manifest only** — the real handler is injected later.
     """
     return _core_manifest(
         "psyche",
         summary="Identity, pad, and context management — edit/load identity "
         "and pad, molt, and naming.",
-        danger=SecurityDanger.CAUTION,
+        danger=SecurityDanger.DESTRUCTIVE,
         actions=("lingtai", "pad", "context", "name"),
         role="The agent's identity and working-context surface.",
     )
