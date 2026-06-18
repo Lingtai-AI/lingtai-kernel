@@ -328,6 +328,12 @@ class ToolExecutor:
         }
         if decision.is_structured:
             fields["guard_decision"] = decision.to_payload()
+            # Stage 21: inline a stable, source-labeled advisory summary so a
+            # warn-but-allow decision (e.g. a default core bundle advisory) is
+            # observable and attributable without cracking open guard_decision.
+            summary = decision.advisory_summary()
+            if summary is not None:
+                fields["guard_advisory"] = summary
         self._log_lifecycle("tool_call_approved", **fields)
 
     def _attach_guard_advisory(

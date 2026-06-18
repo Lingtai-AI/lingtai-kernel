@@ -124,6 +124,49 @@ class GuardDecision:
         payload["message"] = self.reason
         return payload
 
+    def advisory_summary(self) -> dict[str, Any] | None:
+        """A stable, flat, source-labeled summary of a structured decision.
+
+        Returns ``None`` for a pure ``default_allow`` pass-through (nothing to
+        observe), otherwise a small flat dict suitable for inlining directly
+        into a log/trace event so an advisory or denial is queryable *without*
+        cracking open the nested ``guard_decision`` payload:
+
+        * ``check`` — the firing check name (e.g. ``bundle_manifest_guard``);
+        * ``action`` / ``severity`` — the decision posture (``warn`` / ``deny``);
+        * ``allowed`` — whether the call still proceeds (advisory warnings do);
+        * ``source`` — the labeled origin of the decision, lifted from
+          ``metadata`` when the bridge attributed it (``bundle`` + ``danger`` for
+          a manifest-derived advisory), else the check name. This is the field
+          Stage 21 guarantees survives so a default-core advisory is visibly
+          attributed to the bundle that declared it.
+
+        The summary is deliberately additive and side-effect free: it only reads
+        already-populated fields, so emitting it can never change a decision.
+        """
+        if not self.is_structured:
+            return None
+        bundle = self.metadata.get("bundle") if isinstance(self.metadata, dict) else None
+        danger = self.metadata.get("danger") if isinstance(self.metadata, dict) else None
+        if bundle:
+            source = f"bundle:{bundle}"
+            if danger:
+                source = f"{source}:{danger}"
+        else:
+            source = self.check_name
+        summary: dict[str, Any] = {
+            "check": self.check_name,
+            "action": self.action,
+            "severity": self.severity,
+            "allowed": self.allowed,
+            "source": source,
+        }
+        if bundle:
+            summary["bundle"] = bundle
+        if danger:
+            summary["danger"] = danger
+        return summary
+
 
 GuardCheck = Callable[[ToolProposal], GuardDecision | bool | None]
 

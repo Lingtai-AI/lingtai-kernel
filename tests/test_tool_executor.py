@@ -223,6 +223,64 @@ def test_tool_call_guard_warning_allows_dispatch_and_adds_advisory():
     assert approved["guard_decision"]["action"] == "warn"
 
 
+def test_tool_call_guard_advisory_is_source_labeled_on_approval_log():
+    """Stage 21: a bundle-derived advisory surfaces a flat, source-labeled
+    ``guard_advisory`` summary on the ``tool_call_approved`` lifecycle event,
+    so an advisory decision is observable and attributable without parsing the
+    nested ``guard_decision`` payload."""
+    logs = []
+
+    def warn(proposal):
+        return GuardDecision.allow(
+            check_name="bundle_manifest_guard",
+            reason="tool 'system' is declared destructive by bundle 'system' (advisory mode)",
+            action="warn",
+            severity="warning",
+            metadata={"danger": "destructive", "bundle": "system", "policy_mode": "advisory"},
+        )
+
+    executor = make_executor(
+        known_tools={"system"},
+        logger_fn=lambda event_type, **fields: logs.append((event_type, fields)),
+        tool_call_guard=ToolCallGuard([warn]),
+    )
+
+    results, intercepted, _ = executor.execute([
+        ToolCall(name="system", args={"action": "refresh"}, id="guard-core"),
+    ])
+
+    assert not intercepted
+    # Advisory never blocks: the tool still ran.
+    assert results[0]["result"]["status"] == "ok"
+    approved = logs[_log_index(logs, "tool_call_approved", trace_id="guard-core")][1]
+    summary = approved["guard_advisory"]
+    assert summary["action"] == "warn"
+    assert summary["severity"] == "warning"
+    assert summary["allowed"] is True
+    assert summary["bundle"] == "system"
+    assert summary["danger"] == "destructive"
+    assert summary["source"] == "bundle:system:destructive"
+
+
+def test_tool_call_guard_pass_through_emits_no_advisory_summary():
+    """Stage 21 non-disruption: a clean default-allow pass-through carries no
+    ``guard_advisory`` field — observability is added only for real advisories."""
+    logs = []
+    executor = make_executor(
+        known_tools={"read"},
+        logger_fn=lambda event_type, **fields: logs.append((event_type, fields)),
+    )
+
+    results, intercepted, _ = executor.execute([
+        ToolCall(name="read", args={"path": "/tmp"}, id="guard-clean"),
+    ])
+
+    assert not intercepted
+    approved = logs[_log_index(logs, "tool_call_approved", trace_id="guard-clean")][1]
+    assert approved["approval_mode"] == "pass_through"
+    assert "guard_advisory" not in approved
+    assert "guard_decision" not in approved
+
 
 def test_tool_call_guard_warning_survives_sequential_dispatch_exception():
     def warn(proposal):

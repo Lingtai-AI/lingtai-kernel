@@ -126,6 +126,50 @@ def test_destructive_tool_warned_in_advisory_mode():
     assert decision.metadata["danger"] == "destructive"
 
 
+# --- Stage 21: advisory observability is source-labeled ---------------------
+
+
+def test_default_core_advisory_is_source_labeled():
+    """A default-core advisory exposes a flat, bundle-attributed summary.
+
+    The Stage-21 observability guarantee: a warn-but-allow decision for the
+    always-present ``system`` core surface carries a stable ``advisory_summary``
+    whose ``source`` names the originating bundle and declared danger, without
+    requiring a consumer to crack open the nested ``guard_decision`` payload.
+    """
+    guard = gb.tool_call_guard_from_manifests(
+        core.core_bundle_manifests(), mode=gb.GuardPolicyMode.ADVISORY
+    )
+    decision = guard.evaluate(_proposal("system"))
+    assert decision.allowed is True  # advisory never blocks
+    summary = decision.advisory_summary()
+    assert summary is not None
+    assert summary["action"] == "warn"
+    assert summary["severity"] == "warning"
+    assert summary["allowed"] is True
+    assert summary["bundle"] == "system"
+    assert summary["danger"] == "destructive"
+    assert summary["source"] == "bundle:system:destructive"
+
+
+def test_caution_core_advisory_summary_labels_bundle():
+    guard = gb.tool_call_guard_from_manifests(
+        core.core_bundle_manifests(), mode=gb.GuardPolicyMode.ADVISORY
+    )
+    summary = guard.evaluate(_proposal("psyche")).advisory_summary()
+    assert summary is not None
+    assert summary["bundle"] == "psyche"
+    assert summary["danger"] == "caution"
+    assert summary["source"] == "bundle:psyche:caution"
+
+
+def test_safe_passthrough_has_no_advisory_summary():
+    """A clean pass-through must not be mistaken for an advisory."""
+    guard = gb.tool_call_guard_from_manifests(core.core_bundle_manifests())
+    decision = guard.evaluate(_proposal("totally_unknown_tool"))
+    assert decision.advisory_summary() is None
+
+
 # --- unknown tool: fail open ------------------------------------------------
 
 
