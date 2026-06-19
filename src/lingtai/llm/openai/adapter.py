@@ -92,10 +92,11 @@ def _codex_thread_id(session_id: str, thread_salt: str) -> str:
     """Derive a stable, UUID-shaped Codex ``thread-id``.
 
     Threads are namespaced under their ``session_id`` and varied by
-    ``thread_salt`` — the agent's last molt time (e.g. the latest molt
-    summary's ``created_at``) — so a new continuous-context thread starts
-    whenever the agent molts and resummarizes its history, while the session
-    id stays stable.
+    ``thread_salt`` — the agent's last LLM API call id — so a new
+    continuous-context thread starts whenever the token ledger records a new
+    main LLM call, while the session id stays stable. The adapter is
+    salt-source-agnostic; the host wiring chooses the salt (see
+    ``build_provider_defaults_from_manifest_llm``).
     """
     return str(uuid.uuid5(uuid.UUID(session_id), f"thread:{thread_salt}"))
 
@@ -1595,8 +1596,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
     ):
         super().__init__(*args, **kwargs)
         # Stable Codex REST cache-affinity headers. The adapter normally
-        # supplies derived UUID-shaped values (from the agent path + last molt
-        # time); ``None`` for either means "don't send that header", so a bare
+        # supplies derived UUID-shaped values (from the agent path + last LLM
+        # API call id); ``None`` for either means "don't send that header", so a bare
         # directly-constructed session (e.g. in a unit test) sends neither.
         self._session_id = session_id
         self._thread_id = thread_id
@@ -1695,7 +1696,6 @@ class CodexResponsesSession(OpenAIResponsesSession):
                     **affinity_headers,
                     **kwargs.get("extra_headers", {}),
                 }
-
             acc = StreamingAccumulator()
             response_id = None
             usage = UsageMetadata()
@@ -1752,6 +1752,10 @@ class CodexResponsesSession(OpenAIResponsesSession):
                             )
                             or 0,
                             cached_tokens=cached_tokens,
+                            extra={
+                                "codex_session_id": affinity_headers.get("session-id"),
+                                "codex_thread_id": affinity_headers.get("thread-id"),
+                            } if affinity_headers else {},
                         )
         except Exception:
             # Revert the trailing user entry we just added so the next retry
@@ -1825,9 +1829,9 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         #   (neither set)            -> no session-id/thread-id (bare/test path)
         #
         # ``codex_thread_salt`` varies the derived thread-id within a session —
-        # the agent's last molt time, so a post-molt thread gets a fresh id;
-        # ``None`` uses a stable default salt so a single continuous thread keeps
-        # one thread-id.
+        # the agent's last LLM API call id, so a fresh continuous-context thread
+        # starts whenever the token ledger records a new main LLM call; ``None`` uses a stable default
+        # salt so a single continuous thread keeps one thread-id.
         if codex_session_id:
             self._codex_session_id: str | None = str(codex_session_id)
         elif codex_session_anchor:
@@ -1842,7 +1846,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         Returns ``(None, None)`` only when no per-agent identity was passed in
         (e.g. a bare adapter built directly in a test). In the normal host path
         the agent path is always supplied, so a session-id is present and the
-        thread-id is derived from it plus the last-molt-time thread salt.
+        thread-id is derived from it plus the last-call-id thread salt.
         """
         if not self._codex_session_id:
             return None, None
@@ -1910,7 +1914,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             # or a ``prompt_cache_key=False`` disable passed to the adapter.
             prompt_cache_key=self._resolve_prompt_cache_key(model),
             # Stable REST cache-affinity headers (issue #378). Derived from the
-            # agent path (session-id) + last molt time (thread-id) passed down
+            # agent path (session-id) + last LLM API call id (thread-id) passed down
             # by the host; ``(None, None)`` only for a bare/test adapter.
             session_id=session_id,
             thread_id=thread_id,

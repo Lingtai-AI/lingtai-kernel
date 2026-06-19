@@ -1126,8 +1126,9 @@ class Agent(BaseAgent):
         # 60 RPM cap by default. Set to 0 in init.json to disable gating.
         new_max_rpm = m.get("max_rpm", 60)
         # Pass working_dir so a Codex agent's per-agent session/thread identity
-        # (agent path + latest last-molt time) is re-resolved on every refresh —
-        # a post-molt refresh picks up the new molt time as a fresh thread salt.
+        # (agent path + last ledgered main LLM API call id) is re-resolved on
+        # every refresh — a refresh picks up the latest call id as a fresh
+        # thread salt.
         new_provider_defaults = build_provider_defaults_from_manifest_llm(
             llm, max_rpm=new_max_rpm, working_dir=self._working_dir
         )
@@ -1135,9 +1136,10 @@ class Agent(BaseAgent):
         cur_provider_defaults_bucket = getattr(
             self.service, "_provider_defaults", {}
         ).get(new_provider.lower(), {})
-        # Compare the resolved Codex thread salt (last molt time) so a refresh
-        # after a molt rebuilds the service onto the new thread-id while the
-        # session-id (agent path) stays stable.
+        # Compare the resolved Codex thread salt (last ledgered main LLM API
+        # call id) so a refresh that picks up a new call id rebuilds the
+        # service onto the new thread-id
+        # while the session-id (agent path) stays stable.
         new_codex_salt = (new_provider_defaults or {}).get(
             new_provider.lower(), {}
         ).get("codex_thread_salt")

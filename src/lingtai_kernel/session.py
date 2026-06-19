@@ -240,6 +240,8 @@ class SessionManager:
             )
 
         response.api_call_id = api_call_id
+        if response.usage is not None:
+            response.usage.extra.setdefault("api_call_id", api_call_id)
         self._track_usage(response)
         # Preserve interaction ID for session reuse
         if hasattr(self._chat, "interaction_id") and self._chat.interaction_id:
@@ -327,7 +329,10 @@ class SessionManager:
             usage = UsageMetadata(
                 input_tokens=estimated_input,
                 output_tokens=estimated_output,
+                extra=dict(getattr(response.usage, "extra", {}) or {}),
             )
+            if response.api_call_id:
+                usage.extra.setdefault("api_call_id", response.api_call_id)
             response = LLMResponse(
                 text=response.text,
                 tool_calls=response.tool_calls,
