@@ -35,7 +35,7 @@ from lingtai_sdk.errors import BundleHostError
 
 # The guard bridge maps a manifest's danger posture onto kernel guard
 # primitives; ToolProposal is the kernel-side type the resulting check consumes.
-from lingtai_kernel.tool_call_guard import ToolProposal
+from lingtai.kernel.tool_call_guard import ToolProposal
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src"
@@ -283,7 +283,7 @@ def test_file_mutation_tools_import_is_pure_and_migrates_nothing():
         "assert h.invoke('write') == 'dummy'\n"
         # importing file_mutation_tools must NOT pull in the lingtai wrapper, i.e.
         # the real write/edit implementation is not migrated/imported.
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        "bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]\n"
         "assert not bad, bad\n"
         "print('OK')\n"
     )

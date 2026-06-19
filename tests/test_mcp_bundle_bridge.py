@@ -27,7 +27,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.base_agent import BaseAgent
+from lingtai.kernel.base_agent import BaseAgent
 from lingtai.core import mcp as mcpmod
 from lingtai.core import mcp_bundle
 from lingtai_sdk import mcp_tools as mt

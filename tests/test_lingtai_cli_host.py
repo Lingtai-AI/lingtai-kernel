@@ -85,7 +85,7 @@ def test_import_lingtai_cli_does_not_load_wrapper_or_providers():
     code = (
         "import sys, lingtai_cli\n"
         f"providers = {_HEAVY_PROVIDERS!r}\n"
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        "bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]\n"
         "bad += [m for m in sys.modules "
         "if any(m == p or m.startswith(p + '.') for p in providers)]\n"
         "assert not bad, bad\n"

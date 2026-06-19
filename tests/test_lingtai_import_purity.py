@@ -73,6 +73,9 @@ def test_import_lingtai_does_not_load_wrapper_or_providers():
         "assert not bad, bad\n"
         "assert hasattr(lingtai, 'BaseAgent')\n"
         "assert lingtai.__version__\n"
+        # The kernel is the dependency-light core and MUST load eagerly: it now
+        # lives at lingtai.kernel (relocated from the old top-level package).
+        "assert 'lingtai.kernel' in sys.modules, 'kernel must load eagerly'\n"
         "print('OK')\n"
     )
     r = _run(code)

@@ -4,7 +4,7 @@ A :class:`~lingtai_sdk.capabilities.BundleManifest` already declares a per-bundl
 :class:`~lingtai_sdk.capabilities.SecurityDanger` posture (``safe`` / ``caution``
 / ``destructive``) over its named tools. This module is the thin, import-light
 adapter that turns one or more manifests into kernel
-:mod:`lingtai_kernel.tool_call_guard` primitives — a :data:`GuardCheck` callable
+:mod:`lingtai.kernel.tool_call_guard` primitives — a :data:`GuardCheck` callable
 and a ready :class:`ToolCallGuard` chain — so the existing ``ToolExecutor`` guard
 seam (stage 16) can consult declared bundle posture *before* a tool is
 dispatched, without any executor / ``BaseAgent`` / wrapper ``Agent`` change.
@@ -40,7 +40,7 @@ from __future__ import annotations
 import enum
 from typing import Iterable
 
-from lingtai_kernel.tool_call_guard import (
+from lingtai.kernel.tool_call_guard import (
     GuardCheck,
     GuardDecision,
     ToolCallGuard,

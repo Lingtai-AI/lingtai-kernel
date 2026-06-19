@@ -15,7 +15,7 @@ of the invariant: a buggy gatekeeper must not become an open gate.
 """
 from __future__ import annotations
 
-from lingtai_kernel.tool_call_guard import (
+from lingtai.kernel.tool_call_guard import (
     GuardDecision,
     ToolCallGuard,
     ToolProposal,

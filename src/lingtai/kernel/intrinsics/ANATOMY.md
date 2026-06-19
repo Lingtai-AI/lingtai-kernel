@@ -31,7 +31,7 @@ This file is a navigation hub. Each sub-package has its own `ANATOMY.md` with co
 
 ## Composition
 
-- **Parent:** `src/lingtai_kernel/` (see `src/lingtai_kernel/ANATOMY.md`).
+- **Parent:** `src/lingtai/kernel/` (see `src/lingtai/kernel/ANATOMY.md`).
 - **Sub-packages:** all four intrinsics are now packages (post-`d229efe`/`1195f55`/`e206dbc`). There are no flat-file intrinsics remaining.
 - **Siblings:** `llm/` for canonical block/session types, `services/` for mailbox/logging service implementations, `i18n/` for localized strings, `base_agent/` for the coordinator that wires intrinsics in.
 

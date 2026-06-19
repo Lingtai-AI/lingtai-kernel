@@ -17,13 +17,13 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from lingtai_kernel.llm.base import (
+from lingtai.kernel.llm.base import (
     ChatSession,
     FunctionSchema,
     LLMResponse,
 )
-from lingtai_kernel.llm.interface import ChatInterface, ToolResultBlock
-from lingtai_kernel.llm.service import LLMService as LLMServiceABC
+from lingtai.kernel.llm.interface import ChatInterface, ToolResultBlock
+from lingtai.kernel.llm.service import LLMService as LLMServiceABC
 
 from .base import LLMAdapter
 

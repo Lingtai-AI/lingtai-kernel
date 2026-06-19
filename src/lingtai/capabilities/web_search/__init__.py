@@ -15,7 +15,7 @@ from ...i18n import t
 from ...services.websearch import SearchService, create_search_service
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
 PROVIDERS = {
     "providers": ["duckduckgo", "minimax", "zhipu", "gemini", "anthropic", "openai"],

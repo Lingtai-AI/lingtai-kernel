@@ -35,7 +35,7 @@ from lingtai_sdk import guard_bridge as gb
 from lingtai_sdk import skill_tools as st
 from lingtai_sdk.errors import BundleHostError
 
-from lingtai_kernel.tool_call_guard import ToolProposal
+from lingtai.kernel.tool_call_guard import ToolProposal
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src"
@@ -187,7 +187,7 @@ def test_skill_tools_import_is_pure_and_migrates_no_wrapper():
         "assert h.invoke('skills') == 's'\n"
         "assert st.skills_action_risk('info').value == 'safe'\n"
         "assert st.skills_action_risk('nope').value == 'destructive'\n"
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        "bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]\n"
         "assert not bad, bad\n"
         "print('OK')\n"
     )

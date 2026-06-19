@@ -144,7 +144,7 @@ def test_runtime_concrete_subclass_drives_contract():
 def test_runtime_module_import_is_pure():
     code = (
         "import sys, lingtai_sdk.runtime\n"
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        "bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]\n"
         "assert not bad, bad\n"
         "print('OK')\n"
     )

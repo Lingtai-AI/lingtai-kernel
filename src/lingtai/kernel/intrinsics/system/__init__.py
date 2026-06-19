@@ -52,7 +52,7 @@ from .notification import _dismiss  # noqa: F401
 # Re-exported here because ``system`` owns the notification surface
 # conceptually: every producer's file is aggregated into a single
 # ``system(action="notification")`` wire pair by the kernel sync.  The
-# function lives in ``lingtai_kernel.notifications`` (single source of
+# function lives in ``lingtai.kernel.notifications`` (single source of
 # truth, accessible to non-intrinsic call sites and external producers
 # that import the module directly).
 from ...notifications import (  # noqa: F401

@@ -42,7 +42,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
     from lingtai_sdk.bundles.host import BundleHost
 
 # The wrapper's real handler factories — the single source of truth for each

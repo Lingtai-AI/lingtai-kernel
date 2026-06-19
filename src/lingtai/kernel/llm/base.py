@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from lingtai_kernel.logging import get_logger
+from lingtai.kernel.logging import get_logger
 
 from .interface import ChatInterface, ToolResultBlock
 

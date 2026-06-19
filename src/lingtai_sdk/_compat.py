@@ -1,15 +1,17 @@
-"""Migration map from legacy import paths to the SDK public surface.
+"""Migration map from canonical import paths to the SDK public surface.
 
 The machine-readable contract behind the compatibility strategy: each entry
-says "the name you used to import from *here* is now canonically reachable from
-*there*, and both still work." It powers the migration table in the docs and a
-round-trip test that asserts every legacy path resolves to the *same object*
-the SDK exports — compatibility by re-export, never by a parallel fork.
+says "the name reachable from *here* is the SAME object the SDK exports from
+*there*." It powers the migration table in the docs and a round-trip test that
+asserts every active path resolves to the *same object* the SDK exports —
+re-export, never a parallel fork.
 
-No name is removed here. Repo policy is that the kernel public API is additive
-within a major; this map records the recommended path without breaking the old
-one. A name graduates from alias to removed only across a major bump, at which
-point ``removed_in`` is filled.
+Every ``legacy`` path listed here MUST still resolve. The kernel was relocated
+from the top-level ``lingtai_kernel`` package to ``lingtai.kernel`` as a hard
+cut (no compatibility shim): the old ``lingtai_kernel.*`` import paths no longer
+exist and are therefore NOT carried here. The canonical kernel import root is
+``lingtai.kernel``; the curated public surface is ``lingtai_sdk``. This map
+proves the two agree by object identity.
 """
 from __future__ import annotations
 
@@ -35,11 +37,11 @@ _SDK_INTRODUCED = "0.12.3"
 
 DEPRECATIONS: tuple[Deprecation, ...] = (
     Deprecation(
-        legacy="lingtai_kernel.BaseAgent",
+        legacy="lingtai.kernel.BaseAgent",
         current="lingtai_sdk.BaseAgent",
         symbol="BaseAgent",
         since=_SDK_INTRODUCED,
-        note="Kernel coordinator. Still exported by lingtai_kernel and lingtai.",
+        note="Kernel coordinator. Still exported by lingtai.kernel and lingtai.",
     ),
     Deprecation(
         legacy="lingtai.Agent",
@@ -49,25 +51,25 @@ DEPRECATIONS: tuple[Deprecation, ...] = (
         note="Batteries-included agent. Lives in the wrapper; SDK re-exports lazily.",
     ),
     Deprecation(
-        legacy="lingtai_kernel.config.AgentConfig",
+        legacy="lingtai.kernel.config.AgentConfig",
         current="lingtai_sdk.types.AgentConfig",
         symbol="AgentConfig",
         since=_SDK_INTRODUCED,
     ),
     Deprecation(
-        legacy="lingtai_kernel.state.AgentState",
+        legacy="lingtai.kernel.state.AgentState",
         current="lingtai_sdk.types.AgentState",
         symbol="AgentState",
         since=_SDK_INTRODUCED,
     ),
     Deprecation(
-        legacy="lingtai_kernel.message.Message",
+        legacy="lingtai.kernel.message.Message",
         current="lingtai_sdk.types.Message",
         symbol="Message",
         since=_SDK_INTRODUCED,
     ),
     Deprecation(
-        legacy="lingtai_kernel.types.UnknownToolError",
+        legacy="lingtai.kernel.types.UnknownToolError",
         current="lingtai_sdk.errors.UnknownToolError",
         symbol="UnknownToolError",
         since=_SDK_INTRODUCED,

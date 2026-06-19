@@ -41,7 +41,7 @@ What this module is NOT
 -----------------------
 Exactly as in stages 3A/3B/3C/8, it does **not** migrate, move, rewrite, import,
 or call the real ``soul`` implementation. The real handler is a *kernel intrinsic*
-(``lingtai_kernel.intrinsics.soul.handle(agent, args)``), wired live by
+(``lingtai.kernel.intrinsics.soul.handle(agent, args)``), wired live by
 ``BaseAgent._wire_intrinsics``; importing it here would break SDK import-purity
 and is unnecessary — this module ships *declarations + an injection seam* only.
 The wrapper-side bridge that supplies the handler lives in

@@ -34,7 +34,7 @@ The kernel's message catalog — a flat key-value string table covering tool des
 
 ## Composition
 
-- **Parent:** `src/lingtai_kernel/` (see `ANATOMY.md`).
+- **Parent:** `src/lingtai/kernel/` (see `ANATOMY.md`).
 - **Siblings:** `intrinsics/` is the main consumer; other kernel modules call `t()` where they render user-facing system text.
 - **No subfolders.** This is a flat leaf.
 

@@ -5,11 +5,11 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-import lingtai_kernel.tool_executor as tool_executor_module
-from lingtai_kernel.llm.base import ToolCall
-from lingtai_kernel.loop_guard import LoopGuard
-from lingtai_kernel.tool_call_guard import GuardDecision, ToolCallGuard
-from lingtai_kernel.tool_executor import ToolExecutor
+import lingtai.kernel.tool_executor as tool_executor_module
+from lingtai.kernel.llm.base import ToolCall
+from lingtai.kernel.loop_guard import LoopGuard
+from lingtai.kernel.tool_call_guard import GuardDecision, ToolCallGuard
+from lingtai.kernel.tool_executor import ToolExecutor
 
 
 def make_executor(

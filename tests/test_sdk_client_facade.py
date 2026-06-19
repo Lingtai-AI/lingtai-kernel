@@ -160,7 +160,7 @@ helper = lingtai_sdk.query
 assert Client.__name__ == 'LingTaiClient'
 assert Result.__name__ == 'QueryResult'
 assert callable(helper)
-bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]
+bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]
 assert not bad, bad
 print('OK')
 """
@@ -245,7 +245,7 @@ Session = lingtai_sdk.LingTaiSession
 open_session = lingtai_sdk.open_session
 assert Session.__name__ == 'LingTaiSession'
 assert callable(open_session)
-bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]
+bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]
 assert not bad, bad
 assert 'LingTaiSession' in dir(lingtai_sdk)
 assert 'open_session' in dir(lingtai_sdk)
@@ -282,7 +282,7 @@ assert Runtime.__name__ == 'Runtime'
 assert Session.__name__ == 'RuntimeSession'
 opts = Options(working_dir={str(tmp_path)!r})
 assert str(opts.working_dir).endswith({tmp_path.name!r})
-bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]
+bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]
 assert not bad, bad
 for name in ('RuntimeOptions', 'RuntimeMessage', 'RuntimeEvent', 'RuntimeState', 'EventKind', 'Runtime', 'RuntimeSession'):
     assert name in dir(lingtai_sdk)

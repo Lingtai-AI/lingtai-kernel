@@ -43,7 +43,7 @@ pip install lingtai-kernel
 ## 快速开始
 
 ```python
-from lingtai_kernel import BaseAgent
+from lingtai.kernel import BaseAgent
 
 # 调用者提供 LLM 服务（抽象基类的任意实现）
 agent = BaseAgent(

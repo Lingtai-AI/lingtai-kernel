@@ -3,14 +3,14 @@
 A single curated import path with a stable, typed public API that re-exports
 from the two implementation packages underneath it:
 
-- ``lingtai_kernel`` — the minimal standalone runtime (zero hard deps), and
+- ``lingtai.kernel`` — the minimal standalone runtime (zero hard deps), and
 - ``lingtai``        — the batteries-included wrapper (adapters, capabilities, CLI).
 
 Layering and the lazy boundary
 ------------------------------
 ``lingtai_sdk`` imports only the **kernel** at module load. The kernel has no
 hard heavy third-party dependencies, so ``import lingtai_sdk`` is as cheap and
-side-effect-free as ``import lingtai_kernel`` — safe in tooling and in
+side-effect-free as ``import lingtai.kernel`` — safe in tooling and in
 environments where the wrapper's provider SDKs are not installed.
 
 Wrapper-backed names (``Agent`` and the service classes) resolve lazily via
@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING
 from ._version import __version__
 
 # --- Kernel-backed surface (eager; no heavy third-party deps) -------------
-from lingtai_kernel.base_agent import BaseAgent
+from lingtai.kernel.base_agent import BaseAgent
 from .types import (
     AgentConfig,
     AgentState,

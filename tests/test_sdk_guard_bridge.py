@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from lingtai_kernel.tool_call_guard import (
+from lingtai.kernel.tool_call_guard import (
     ToolCallGuard,
     ToolProposal,
 )
@@ -240,11 +240,11 @@ def test_guard_bridge_import_is_pure_no_wrapper():
         "import sys, lingtai_sdk.guard_bridge as gb\n"
         "from lingtai_sdk import core_bundles as core\n"
         "guard = gb.tool_call_guard_from_manifests(core.core_bundle_manifests())\n"
-        "from lingtai_kernel.tool_call_guard import ToolProposal\n"
+        "from lingtai.kernel.tool_call_guard import ToolProposal\n"
         "d = guard.evaluate(ToolProposal(tool_name='system', tool_args={}))\n"
         "assert d.allowed is False\n"
         # importing guard_bridge must NOT pull in the lingtai wrapper.
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        "bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]\n"
         "assert not bad, bad\n"
         "print('OK')\n"
     )
@@ -264,7 +264,7 @@ def test_kernel_does_not_import_sdk():
     # drag in lingtai_sdk (no import inversion).
     code = (
         "import sys\n"
-        "import lingtai_kernel.tool_call_guard\n"
+        "import lingtai.kernel.tool_call_guard\n"
         "bad = [m for m in sys.modules if m == 'lingtai_sdk' "
         "or m.startswith('lingtai_sdk.')]\n"
         "assert not bad, bad\n"

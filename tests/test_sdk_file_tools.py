@@ -211,7 +211,7 @@ def test_file_tools_import_is_pure_and_migrates_nothing():
         "assert h.invoke('read') == 'dummy'\n"
         # importing file_tools must NOT pull in the lingtai wrapper, i.e. the
         # real read/glob/grep implementation is not migrated/imported.
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        "bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]\n"
         "assert not bad, bad\n"
         "print('OK')\n"
     )

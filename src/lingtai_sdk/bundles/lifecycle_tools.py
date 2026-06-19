@@ -41,7 +41,7 @@ encoding is therefore: keep the **bundle-level posture at its strongest action**
 **graded action table as metadata** so a host that wants finer-than-bundle
 grading can read it *without* any live runtime gate. The grading mirrors the
 authority the real kernel intrinsic already enforces in code
-(``lingtai_kernel.intrinsics.system.karma._KARMA_ACTIONS`` /
+(``lingtai.kernel.intrinsics.system.karma._KARMA_ACTIONS`` /
 ``_NIRVANA_ACTIONS``); it is a *declaration of* that posture, never a second
 gate.
 
@@ -49,7 +49,7 @@ What this module is NOT
 -----------------------
 Exactly as in stages 3A/3B/8, it does **not** migrate, move, rewrite, import, or
 call the real ``system`` implementation. The real handler is a *kernel intrinsic*
-(``lingtai_kernel.intrinsics.system.handle(agent, args)``), wired live by
+(``lingtai.kernel.intrinsics.system.handle(agent, args)``), wired live by
 ``BaseAgent._wire_intrinsics``; importing it here would break SDK import-purity
 (the SDK must not eagerly pull the kernel intrinsic surface) and is unnecessary —
 this module ships *declarations + an injection seam* only:

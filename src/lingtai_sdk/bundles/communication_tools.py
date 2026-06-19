@@ -7,7 +7,7 @@ the seam for the next two high-state surfaces — the ones with **external or
 process side effects**:
 
 * ``email`` — the agent's communication surface. A **kernel intrinsic**
-  (``lingtai_kernel.intrinsics.email.handle``), wired live by
+  (``lingtai.kernel.intrinsics.email.handle``), wired live by
   ``BaseAgent._wire_intrinsics`` exactly like ``system``. It can send mail to
   *external* SMTP/IMAP recipients (a real outside-world side effect) as well as
   deliver internally between agents. Native-carried and privileged (it touches
@@ -103,7 +103,7 @@ DAEMON_TOOL_NAME = "daemon"
 # --- declared argument schemas (structural copies, descriptions i18n'd live) --
 
 # Language-neutral copy of the shape returned by
-# ``lingtai_kernel.intrinsics.email.schema.get_schema``. The wrapper's own
+# ``lingtai.kernel.intrinsics.email.schema.get_schema``. The wrapper's own
 # ``get_schema(lang)`` remains the registration path; this copy lives in the
 # manifest metadata so a host inspecting the manifest can see the argument
 # contract without importing the kernel intrinsic. Descriptions are i18n'd at

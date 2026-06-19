@@ -31,15 +31,15 @@ from typing import TYPE_CHECKING
 from ._version import __version__
 
 # --- Kernel-backed surface (eager; dependency-light, no heavy provider SDKs) ---
-from lingtai_kernel.types import UnknownToolError
-from lingtai_kernel.config import AgentConfig
-from lingtai_kernel.base_agent import BaseAgent
-from lingtai_kernel.state import AgentState
-from lingtai_kernel.message import Message, MSG_REQUEST, MSG_USER_INPUT
+from lingtai.kernel.types import UnknownToolError
+from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.base_agent import BaseAgent
+from lingtai.kernel.state import AgentState
+from lingtai.kernel.message import Message, MSG_REQUEST, MSG_USER_INPUT
 # EmailManager is exported by the kernel intrinsic; re-export for backwards compat.
-from lingtai_kernel.intrinsics.email import EmailManager
-from lingtai_kernel.services.mail import MailService, FilesystemMailService
-from lingtai_kernel.services.logging import LoggingService, JSONLLoggingService
+from lingtai.kernel.intrinsics.email import EmailManager
+from lingtai.kernel.services.mail import MailService, FilesystemMailService
+from lingtai.kernel.services.logging import LoggingService, JSONLLoggingService
 
 # --- Wrapper-backed surface (lazy; resolved on first attribute access) ---------
 # Maps exported attribute name -> (wrapper submodule, attribute). Each is pulled

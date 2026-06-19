@@ -10,9 +10,12 @@
 
 The repository ships two packages inside one `lingtai` PyPI wheel:
 
-- **`lingtai_kernel`** (`src/lingtai_kernel/`) — the minimal agent runtime.
+- **`lingtai.kernel`** (`src/lingtai/kernel/`) — the minimal agent runtime.
   Dependency-light, usable standalone. Owns `BaseAgent`, intrinsics, the LLM
-  protocol ABCs + service, mail/logging services, and core utilities.
+  protocol ABCs + service, mail/logging services, and core utilities. Relocated
+  here from the former top-level `lingtai_kernel` package as a **hard cut** — no
+  compatibility shim, and `lingtai_kernel` is no longer an importable alias; the
+  canonical kernel import root is `lingtai.kernel`.
 - **`lingtai`** (`src/lingtai/`) — the batteries-included wrapper. Depends on
   the kernel one-directionally. Owns `Agent`, the 19 capabilities, LLM adapter
   implementations, FileIO/Vision/Search services, MCP, the CLI, and addons.
@@ -28,10 +31,10 @@ never a dependency of them:
 
 ```
 lingtai_sdk  ──imports──▶  lingtai          (lazy)
-            ──imports──▶  lingtai_kernel   (eager)
+            ──imports──▶  lingtai.kernel   (eager)
 
-lingtai      ──imports──▶  lingtai_kernel
-lingtai_kernel              (imports neither)
+lingtai      ──imports──▶  lingtai.kernel
+lingtai.kernel              (imports neither)
 ```
 
 The SDK package is shipped inside the existing `lingtai` wheel for now; a
@@ -47,7 +50,7 @@ distribution/package rename is a later step (see roadmap).
 
 ## 3. Import purity: eager kernel, lazy wrapper
 
-`import lingtai_sdk` must stay as dependency-light as `import lingtai_kernel` —
+`import lingtai_sdk` must stay as dependency-light as `import lingtai.kernel` —
 safe in tooling, type stubs, and environments where the wrapper's provider SDKs
 (anthropic, openai, google-genai, mcp, …) are not installed.
 
@@ -84,12 +87,12 @@ every active alias resolves to the same object on both sides.
 
 | Legacy path | SDK path | Symbol |
 |---|---|---|
-| `lingtai_kernel.BaseAgent` | `lingtai_sdk.BaseAgent` | `BaseAgent` |
+| `lingtai.kernel.BaseAgent` | `lingtai_sdk.BaseAgent` | `BaseAgent` |
 | `lingtai.Agent` | `lingtai_sdk.Agent` | `Agent` |
-| `lingtai_kernel.config.AgentConfig` | `lingtai_sdk.types.AgentConfig` | `AgentConfig` |
-| `lingtai_kernel.state.AgentState` | `lingtai_sdk.types.AgentState` | `AgentState` |
-| `lingtai_kernel.message.Message` | `lingtai_sdk.types.Message` | `Message` |
-| `lingtai_kernel.types.UnknownToolError` | `lingtai_sdk.errors.UnknownToolError` | `UnknownToolError` |
+| `lingtai.kernel.config.AgentConfig` | `lingtai_sdk.types.AgentConfig` | `AgentConfig` |
+| `lingtai.kernel.state.AgentState` | `lingtai_sdk.types.AgentState` | `AgentState` |
+| `lingtai.kernel.message.Message` | `lingtai_sdk.types.Message` | `Message` |
+| `lingtai.kernel.types.UnknownToolError` | `lingtai_sdk.errors.UnknownToolError` | `UnknownToolError` |
 
 The legacy paths keep working — this table records the *recommended* move, not a
 breaking change.
@@ -252,7 +255,7 @@ PR, sequenced so contracts stabilize before implementations depend on them.
 - An Anthropic (or other non-native) backend.
 - Migration of core `system` / `psyche` / `soul` bundles.
 - Distribution / package rename.
-- Changes to the CLI or to existing `lingtai` / `lingtai_kernel` runtime
+- Changes to the CLI or to existing `lingtai` / `lingtai.kernel` runtime
   behavior.
 
 ## 9. Files
@@ -1331,7 +1334,7 @@ Two structural differences drive the design:
 
 - **`system` is a kernel intrinsic, not a wrapper capability.** The file tools
   (`read`/`write`/…) are wrapper capabilities with a `make_handler(agent)` factory
-  in `lingtai.core.{...}`. `system` is `lingtai_kernel.intrinsics.system.handle(agent, args)`,
+  in `lingtai.core.{...}`. `system` is `lingtai.kernel.intrinsics.system.handle(agent, args)`,
   wired live by `BaseAgent._wire_intrinsics` as
   `self._intrinsics["system"] = lambda args: system.handle(self, args)`. There is
   no wrapper `make_handler` to extract, and nothing in the kernel may be made to
@@ -1407,7 +1410,7 @@ stays in the kernel intrinsic.
 `.core_bundles` / `.errors`; a bare `import lingtai_sdk.lifecycle_tools` pulls in
 no `lingtai` wrapper module (asserted by
 `tests/test_sdk_lifecycle_tools.py::test_lifecycle_tools_import_is_pure_and_migrates_no_wrapper`).
-Like `core_bundles`, it transitively loads `lingtai_kernel.intrinsics.*` — *kernel*,
+Like `core_bundles`, it transitively loads `lingtai.kernel.intrinsics.*` — *kernel*,
 not the forbidden wrapper. The wrapper bridge `lingtai.core.system_bundle` imports
 the SDK lazily inside its functions, so a bare import of the bridge leaves
 `lingtai_sdk` unloaded (asserted by
@@ -1439,7 +1442,7 @@ pattern as 3C, applied to two surfaces that ride *different* live carriers.
 The key insight is that these two high-state surfaces are wired live by **different
 mechanisms**, and the bundle declaration must mirror each:
 
-- **`email` is a kernel intrinsic** (`lingtai_kernel.intrinsics.email.handle(agent,
+- **`email` is a kernel intrinsic** (`lingtai.kernel.intrinsics.email.handle(agent,
   args)`), wired by `BaseAgent._wire_intrinsics` exactly like `system`. It is
   native-carried and privileged (it touches the agent's mailbox / notification
   state and the configured mail service), but **not** `native_only` — a backend
@@ -1603,7 +1606,7 @@ the standard network-removal seam):
   to a deny (fail closed) — pinned directly on `ToolCallGuard.evaluate` by
   `tests/test_tool_call_guard.py` and at the executor level by
   `tests/test_tool_executor.py::test_tool_call_guard_check_exception_denies_without_crashing_parallel_batch`.
-  The dual posture is documented on `ToolCallGuard` itself (`src/lingtai_kernel/tool_call_guard.py`).
+  The dual posture is documented on `ToolCallGuard` itself (`src/lingtai/kernel/tool_call_guard.py`).
 - **SDK ↔ live wrapper schema parity.** Each wrapper bundle bridge test pins its
   SDK declaration to the *live* core wrapper `get_schema()` — not a hardcoded
   literal — so an SDK enum/property/`required` drift from the live wrapper is

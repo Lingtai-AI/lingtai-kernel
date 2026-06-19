@@ -7,16 +7,16 @@ kernel (cheap, side-effect-free — no heavy provider SDK is loaded).
 """
 from __future__ import annotations
 
-from lingtai_kernel.config import AgentConfig
-from lingtai_kernel.state import AgentState
-from lingtai_kernel.message import Message, MSG_REQUEST, MSG_USER_INPUT
-from lingtai_kernel.llm.base import (
+from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.state import AgentState
+from lingtai.kernel.message import Message, MSG_REQUEST, MSG_USER_INPUT
+from lingtai.kernel.llm.base import (
     ChatSession,
     FunctionSchema,
     LLMResponse,
     ToolCall,
 )
-from lingtai_kernel.llm.service import LLMService
+from lingtai.kernel.llm.service import LLMService
 
 __all__ = [
     "AgentConfig",

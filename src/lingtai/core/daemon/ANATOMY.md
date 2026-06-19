@@ -105,14 +105,14 @@ daemon/run_dir.py
 
 ## Dependencies
 
-- `lingtai_kernel.llm.base.FunctionSchema` — tool schema type
+- `lingtai.kernel.llm.base.FunctionSchema` — tool schema type
 - `BaseAgent._enqueue_system_notification` — compact daemon completion/failure events
-- `lingtai_kernel.token_ledger` — `append_token_entry` for token accounting
+- `lingtai.kernel.token_ledger` — `append_token_entry` for token accounting
 - `lingtai.i18n` — `t()` for localized strings
 - `lingtai.capabilities` — `setup_capability`, `_GROUPS` for preset sandbox instantiation
-- `lingtai_kernel.presets` — `load_preset`, `expand_inherit` for per-emanation preset resolution
-- `lingtai_kernel.preset_connectivity` — `check_connectivity` for LLM reachability pre-flight
-- `lingtai_kernel.config_resolve` — `resolve_env` for API key resolution
+- `lingtai.kernel.presets` — `load_preset`, `expand_inherit` for per-emanation preset resolution
+- `lingtai.kernel.preset_connectivity` — `check_connectivity` for LLM reachability pre-flight
+- `lingtai.kernel.config_resolve` — `resolve_env` for API key resolution
 - `lingtai.llm.service` — `LLMService` for dedicated preset LLM services
 - `lingtai.agent.Agent` — parent agent type (TYPE_CHECKING only)
 

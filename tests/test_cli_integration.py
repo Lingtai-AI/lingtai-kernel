@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from lingtai.cli import load_init, build_agent
-from lingtai_kernel.state import AgentState
+from lingtai.kernel.state import AgentState
 
 
 def _write_init(tmp_path: Path) -> None:

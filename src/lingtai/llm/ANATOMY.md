@@ -18,8 +18,8 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 
 ## Connections
 
-- **Kernel types** — `__init__.py:3` imports `ChatSession`, `LLMResponse`, `ToolCall`, `FunctionSchema` from `lingtai_kernel.llm.base`; `ChatInterface` from `lingtai_kernel.llm.interface`.
-- **ABC chain** — `LLMAdapter` (`base.py:53`) → abstract `create_chat`, `generate`, `make_tool_result_message`, `is_quota_error`. `LLMService` (`service.py:98`) extends `lingtai_kernel.llm.service.LLMService` ABC.
+- **Kernel types** — `__init__.py:3` imports `ChatSession`, `LLMResponse`, `ToolCall`, `FunctionSchema` from `lingtai.kernel.llm.base`; `ChatInterface` from `lingtai.kernel.llm.interface`.
+- **ABC chain** — `LLMAdapter` (`base.py:53`) → abstract `create_chat`, `generate`, `make_tool_result_message`, `is_quota_error`. `LLMService` (`service.py:98`) extends `lingtai.kernel.llm.service.LLMService` ABC.
 - **Adapter registration** — `_register.py` registers 7 dedicated factories + 6 generic-routed providers (`grok`, `qwen`, `glm`, `zhipu`, `kimi`, `mimo`) via dedicated or `_custom` factories, plus the `claude-agent-sdk` / `claude_agent_sdk` aliases via `_claude_agent_sdk` (which drops `api_key`/`base_url` since the SDK uses CLI-login auth).
 - **Interface converters** — imported by adapter session modules (e.g. `openai.adapter` imports `to_openai`, `to_responses_input` from `interface_converters.py:120`).
 - **Rate gating** — `LLMAdapter._setup_gate(max_rpm)` creates `APICallGate`; `_wrap_with_gate()` returns `_GatedSession` proxy for sessions.

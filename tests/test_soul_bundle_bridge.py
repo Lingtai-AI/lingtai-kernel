@@ -27,8 +27,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.base_agent import BaseAgent
-from lingtai_kernel.intrinsics import soul as soulintr
+from lingtai.kernel.base_agent import BaseAgent
+from lingtai.kernel.intrinsics import soul as soulintr
 from lingtai.core import soul_bundle
 
 

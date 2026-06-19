@@ -25,7 +25,7 @@ runtime and contains no privileged behavior. It explains four things:
 `lingtai_sdk` is the **public doorway**. It re-exports two implementation
 packages under one stable, typed path:
 
-- `lingtai_kernel` — the minimal standalone runtime, with zero hard heavy
+- `lingtai.kernel` — the minimal standalone runtime, with zero hard heavy
   third-party dependencies.
 - `lingtai` — the batteries-included wrapper: adapters, capabilities, CLI, and
   the provider SDKs (`anthropic` / `openai` / `google-genai` / `mcp` / …).
@@ -33,7 +33,7 @@ packages under one stable, typed path:
 The dependency direction is **one-way**:
 
 ```
-lingtai_sdk  ->  (lingtai, lingtai_kernel)
+lingtai_sdk  ->  (lingtai, lingtai.kernel)
 ```
 
 The kernel and wrapper must never import `lingtai_sdk`. The SDK is a consumer of
@@ -42,7 +42,7 @@ the other two, never a dependency of them.
 ### Import purity (eager kernel, lazy wrapper)
 
 `import lingtai_sdk` loads the dependency-light kernel only — it is as cheap and
-side-effect-free as `import lingtai_kernel`. Wrapper-backed names (`Agent`, the
+side-effect-free as `import lingtai.kernel`. Wrapper-backed names (`Agent`, the
 service classes) resolve **lazily** via PEP 562 `__getattr__`: touching
 `lingtai_sdk.Agent` imports `lingtai` on first access. So a pure-kernel consumer,
 or tooling that only reads contracts and assets, never pays for the wrapper's

@@ -6,7 +6,7 @@ kernel's ``UnknownToolError``. Kept in a leaf module with no heavy imports so
 """
 from __future__ import annotations
 
-from lingtai_kernel.types import UnknownToolError
+from lingtai.kernel.types import UnknownToolError
 
 
 class LingTaiSDKError(Exception):

@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import lingtai_kernel.base_agent.turn as turn_module
-from lingtai_kernel.base_agent import BaseAgent
-from lingtai_kernel.base_agent.turn import _handle_request, _handle_tc_wake
-from lingtai_kernel.message import _make_message, MSG_REQUEST
-from lingtai_kernel.tool_call_guard import GuardDecision, ToolCallGuard
+import lingtai.kernel.base_agent.turn as turn_module
+from lingtai.kernel.base_agent import BaseAgent
+from lingtai.kernel.base_agent.turn import _handle_request, _handle_tc_wake
+from lingtai.kernel.message import _make_message, MSG_REQUEST
+from lingtai.kernel.tool_call_guard import GuardDecision, ToolCallGuard
 
 
 def _make_service():

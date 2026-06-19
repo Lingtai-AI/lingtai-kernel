@@ -1,4 +1,4 @@
-# lingtai_kernel
+# lingtai.kernel
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues (mail or `discussions/<name>-patch.md`); do not silently fix.
 
@@ -37,7 +37,7 @@ The kernel root holds the coordinator (`base_agent/`) plus a flat collection of 
 
 ## Connections
 
-- **Kernel must never import from the wrapper.** `lingtai_kernel` is standalone; `lingtai` (the wrapper at `src/lingtai/`) depends on it strictly one-directionally.
+- **Kernel must never import from the wrapper.** `lingtai.kernel` is standalone; `lingtai` (the wrapper at `src/lingtai/`) depends on it strictly one-directionally.
 - The kernel exposes its public surface through `__init__.py`. Anything not re-exported there is implementation detail.
 - The wrapper layer registers LLM adapters into `llm.service` at import time, registers capabilities into `Agent` (which subclasses `BaseAgent`), and provides MCP, FileIO, Vision, Search, and the CLI.
 
@@ -89,7 +89,7 @@ At most ONE live notification payload exists in the wire history at any time. Th
 In-process producers call **`publish_notification`** (re-exported by the `system` intrinsic from `notifications.submit`) — the canonical helper that wraps `notifications.publish` with the standard envelope:
 
 ```python
-from lingtai_kernel.intrinsics.system import publish_notification, clear_notification
+from lingtai.kernel.intrinsics.system import publish_notification, clear_notification
 
 publish_notification(
     agent._working_dir, "email",

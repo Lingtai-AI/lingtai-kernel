@@ -73,7 +73,7 @@ bash/__init__.py
 ## Dependencies
 
 - `lingtai.i18n` — `t()` for localized strings
-- `lingtai_kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
+- `lingtai.kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
 
 ## Composition
 

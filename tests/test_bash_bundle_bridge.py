@@ -27,7 +27,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.base_agent import BaseAgent
+from lingtai.kernel.base_agent import BaseAgent
 from lingtai.core import bash as bashmod
 from lingtai.core import bash_bundle
 from lingtai_sdk import bash_tools as bt

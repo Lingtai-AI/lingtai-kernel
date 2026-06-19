@@ -41,12 +41,12 @@ from lingtai_sdk.errors import BundleHostError
 
 # The guard bridge maps a manifest's danger posture onto kernel guard
 # primitives; ToolProposal is the kernel-side type the resulting check consumes.
-from lingtai_kernel.tool_call_guard import ToolProposal
+from lingtai.kernel.tool_call_guard import ToolProposal
 
 # The real kernel intrinsic action sets — the source the SDK risk table mirrors.
 # Importing the kernel intrinsic here is allowed (kernel, not wrapper) and lets
 # the test pin the declaration against the live authority gate.
-from lingtai_kernel.intrinsics.system.karma import _KARMA_ACTIONS, _NIRVANA_ACTIONS
+from lingtai.kernel.intrinsics.system.karma import _KARMA_ACTIONS, _NIRVANA_ACTIONS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src"
@@ -250,7 +250,7 @@ def test_lifecycle_tools_import_is_pure_and_migrates_no_wrapper():
         "assert lt.action_risk('nirvana').value == 'destructive'\n"
         # importing lifecycle_tools must NOT pull in the lingtai wrapper, i.e.
         # the real system implementation is not migrated/imported from the SDK.
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        "bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]\n"
         "assert not bad, bad\n"
         "print('OK')\n"
     )

@@ -244,7 +244,7 @@ class AvatarManager:
                 }
 
         # Check if this peer already exists and is live
-        from lingtai_kernel.handshake import is_alive
+        from lingtai.kernel.handshake import is_alive
         for record in self._read_ledger():
             if record.get("name") == peer_name:
                 wd = record.get("working_dir", "")
@@ -723,7 +723,7 @@ class AvatarManager:
         against the *parent agent's parent directory* since avatars live as
         siblings in .lingtai/. Returns absolute Paths of live descendant dirs.
         """
-        from lingtai_kernel.handshake import resolve_address
+        from lingtai.kernel.handshake import resolve_address
 
         visited: set[str] = {str(Path(root))}
         queue: list[Path] = [Path(root)]

@@ -30,10 +30,10 @@ from ...i18n import t
 if TYPE_CHECKING:
     from ...agent import Agent
 
-from lingtai_kernel.llm.base import FunctionSchema
-from lingtai_kernel.loop_guard import LoopGuard
-from lingtai_kernel.meta_block import build_meta
-from lingtai_kernel.tool_executor import ToolExecutor
+from lingtai.kernel.llm.base import FunctionSchema
+from lingtai.kernel.loop_guard import LoopGuard
+from lingtai.kernel.meta_block import build_meta
+from lingtai.kernel.tool_executor import ToolExecutor
 from .run_dir import DaemonRunDir
 from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
 
@@ -632,7 +632,7 @@ class DaemonManager:
         narrow exception so a parent can grant a running daemon local-network
         communication when the task prompt calls for it.
         """
-        from lingtai_kernel.intrinsics import ALL_INTRINSICS
+        from lingtai.kernel.intrinsics import ALL_INTRINSICS
 
         allowed = {"email"}
         schemas: dict[str, FunctionSchema] = {}
@@ -1084,7 +1084,7 @@ class DaemonManager:
         a tool-level error and refuses the whole batch.
         """
         from ...capabilities import setup_capability, _GROUPS, _BUILTIN
-        from lingtai_kernel.presets import expand_inherit
+        from lingtai.kernel.presets import expand_inherit
 
         # Resolve provider:"inherit" sentinels against the preset's LLM
         # (not the parent's). expand_inherit mutates in place — work on a
@@ -1226,7 +1226,7 @@ class DaemonManager:
         if preset_llm:
             # Build a dedicated LLM service for this emanation from the preset.
             from lingtai.llm.service import LLMService
-            from lingtai_kernel.config_resolve import resolve_env
+            from lingtai.kernel.config_resolve import resolve_env
             api_key = resolve_env(preset_llm.get("api_key"), preset_llm.get("api_key_env"))
             service = LLMService(
                 provider=preset_llm["provider"],
@@ -1254,7 +1254,7 @@ class DaemonManager:
         def _dispatch_daemon_tool(tc):
             handler = dispatch.get(tc.name)
             if handler is None:
-                from lingtai_kernel.types import UnknownToolError
+                from lingtai.kernel.types import UnknownToolError
                 raise UnknownToolError(tc.name)
             args = dict(tc.args or {})
             if tc.name in intrinsic_tool_names:
@@ -2091,8 +2091,8 @@ class DaemonManager:
         # Pre-flight: resolve any per-task presets BEFORE scheduling.
         # If any preset is invalid, refuse the whole batch. Presets are
         # identified by path (~/foo.json, ./foo.json, or absolute).
-        from lingtai_kernel.presets import load_preset
-        from lingtai_kernel.preset_connectivity import check_connectivity
+        from lingtai.kernel.presets import load_preset
+        from lingtai.kernel.preset_connectivity import check_connectivity
 
         resolved_presets: list[dict | None] = []  # one entry per task — None means inherit
         for spec in tasks:

@@ -28,7 +28,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.tool_call_guard import ToolCallGuard, ToolProposal
+from lingtai.kernel.tool_call_guard import ToolCallGuard, ToolProposal
 from lingtai_sdk import capabilities as cap
 from lingtai_sdk import core_bundles as core
 from lingtai_sdk.guard_bridge import GuardPolicyMode
@@ -284,9 +284,9 @@ def test_live_agent_default_construction_advises_core_but_never_blocks(tmp_path)
 def test_installed_guard_threads_through_stage16_seam_to_executor(tmp_path):
     """The guard installed on the wrapper seam is the very object the Stage-16
     turn loop hands to the ``ToolExecutor`` — proving the wiring is live."""
-    import lingtai_kernel.base_agent.turn as turn_module
-    from lingtai_kernel.base_agent.turn import _handle_request
-    from lingtai_kernel.message import _make_message, MSG_REQUEST
+    import lingtai.kernel.base_agent.turn as turn_module
+    from lingtai.kernel.base_agent.turn import _handle_request
+    from lingtai.kernel.message import _make_message, MSG_REQUEST
     from lingtai.agent import Agent
 
     agent = Agent(
@@ -405,7 +405,7 @@ def test_wire_agent_guard_does_not_clobber_manual_guard_even_with_core_default()
     provenance) is left untouched — even under Stage-20 default core wiring, which
     would otherwise install advisory core guards. The Stage-19 guarantee holds:
     a manual guard is never clobbered."""
-    from lingtai_kernel.tool_call_guard import GuardDecision
+    from lingtai.kernel.tool_call_guard import GuardDecision
 
     def _deny_check(proposal):
         return GuardDecision(allowed=False, check_name="host_manual", reason="nope")
@@ -542,7 +542,7 @@ def test_agent_rewire_clears_stale_bundle_guard_on_emptied_capabilities():
 # and adds ``collect_core_bundle_manifests`` for the intrinsic core surfaces.
 #
 # The core surfaces are kernel *intrinsics* (registered in
-# ``lingtai_kernel.intrinsics.__init__``), always present and NOT listed in an
+# ``lingtai.kernel.intrinsics.__init__``), always present and NOT listed in an
 # agent's ``_capabilities``. The capability-walk collector therefore never
 # reaches them; default live wiring explicitly includes the core collector so
 # default agents warn for declared core tools while remaining advisory-only and
@@ -739,9 +739,9 @@ def test_wrapper_guard_wiring_import_does_not_invert_into_kernel():
     code = (
         "import sys\n"
         "import lingtai.guard_wiring\n"
-        "import lingtai_kernel.tool_call_guard\n"
-        "kernel_loaded = [m for m in sys.modules if m == 'lingtai_kernel' "
-        "or m.startswith('lingtai_kernel.')]\n"
+        "import lingtai.kernel.tool_call_guard\n"
+        "kernel_loaded = [m for m in sys.modules if m == 'lingtai.kernel' "
+        "or m.startswith('lingtai.kernel.')]\n"
         "assert kernel_loaded, 'kernel not loaded?'\n"
         "print('OK')\n"
     )
@@ -797,8 +797,8 @@ def _real_turn_loop_executor(agent, logs):
     assertion while still flowing through the agent's real logging path. Returns
     the live executor.
     """
-    from lingtai_kernel.loop_guard import LoopGuard
-    from lingtai_kernel.tool_executor import ToolExecutor
+    from lingtai.kernel.loop_guard import LoopGuard
+    from lingtai.kernel.tool_executor import ToolExecutor
 
     real_log = agent._log
 
@@ -830,7 +830,7 @@ def test_e2e_default_core_manifest_becomes_source_labeled_lifecycle_advisory(tmp
     ``wire_agent_guard`` (real installed core guard) → ``ToolExecutor.evaluate``
     (real Stage-16 seam) → ``_log_guard_approval`` → ``advisory_summary`` (Stage 21).
     """
-    from lingtai_kernel.llm.base import ToolCall
+    from lingtai.kernel.llm.base import ToolCall
     from lingtai.agent import Agent
 
     agent = Agent(
@@ -882,7 +882,7 @@ def test_e2e_unmanifested_tool_emits_no_guard_advisory(tmp_path):
     core guard never matches an undeclared surface. This is the advisory-first
     safety invariant: the slice only ever *adds* advisories for declared core
     tools and never gates an unmanifested one."""
-    from lingtai_kernel.llm.base import ToolCall
+    from lingtai.kernel.llm.base import ToolCall
     from lingtai.agent import Agent
 
     agent = Agent(
@@ -918,7 +918,7 @@ def test_kernel_guard_import_is_sdk_free_in_isolation():
     """Kernel ``tool_call_guard`` imported alone must not load the SDK."""
     code = (
         "import sys\n"
-        "import lingtai_kernel.tool_call_guard  # noqa: F401\n"
+        "import lingtai.kernel.tool_call_guard  # noqa: F401\n"
         "bad = [m for m in sys.modules if m == 'lingtai_sdk' "
         "or m.startswith('lingtai_sdk.')]\n"
         "assert not bad, bad\n"

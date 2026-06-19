@@ -42,11 +42,11 @@ from lingtai_sdk.errors import BundleHostError
 
 # The guard bridge maps a manifest's danger posture onto kernel guard primitives;
 # ToolProposal is the kernel-side type the resulting check consumes.
-from lingtai_kernel.tool_call_guard import ToolProposal
+from lingtai.kernel.tool_call_guard import ToolProposal
 
 # The real kernel intrinsic schema — the source the SDK action table mirrors.
 # Importing the kernel intrinsic here is allowed (kernel, not wrapper).
-from lingtai_kernel.intrinsics import soul as _soul
+from lingtai.kernel.intrinsics import soul as _soul
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src"
@@ -244,7 +244,7 @@ def test_soul_tools_import_is_pure_and_migrates_no_wrapper():
         "assert st.action_risk('nope').value == 'destructive'\n"
         # importing soul_tools must NOT pull in the lingtai wrapper, i.e. the real
         # soul implementation is not migrated/imported from the SDK.
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        "bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]\n"
         "assert not bad, bad\n"
         "print('OK')\n"
     )

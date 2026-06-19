@@ -11,7 +11,7 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 | `__init__.py` | 1 | Docstring-only package marker |
 | `file_io.py` | 491 | `FileIOService` facade contract + `FileIOBackend`/`LocalFileIOBackend` — backs read/edit/write/glob/grep |
 | `file_io_sidecar.py` | 619 | Rust-backed grep/glob: `RustFileIOBackend`, `SidecarAdapter`, `SidecarError`, plus the `resolve_sidecar_binary` resolver and the `default_file_io_service` factory used by `Agent.__init__` |
-| `mail.py` | 4 | Re-exports `MailService`, `FilesystemMailService` from `lingtai_kernel.services.mail` |
+| `mail.py` | 4 | Re-exports `MailService`, `FilesystemMailService` from `lingtai.kernel.services.mail` |
 | `mcp.py` | 510 | `MCPClient` (stdio) + `HTTPMCPClient` (streamable HTTP) — async-to-sync MCP bridges |
 
 **Sub-packages (not covered here):** `vision/` (7 provider files), `websearch/` (6 provider files).
@@ -19,8 +19,8 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 
 ## Connections
 
-- **→ `lingtai_kernel.logging.get_logger`** (mcp.py:16) — structured logging.
-- **→ `lingtai_kernel.services.mail`** (mail.py:2) — pure re-export of kernel mail types.
+- **→ `lingtai.kernel.logging.get_logger`** (mcp.py:16) — structured logging.
+- **→ `lingtai.kernel.services.mail`** (mail.py:2) — pure re-export of kernel mail types.
 - **→ `mcp.client.stdio`**, **`mcp.client.streamable_http`**, **`mcp.client.session`** (mcp.py:224, 406-407) — third-party MCP SDK. Imported lazily inside async connect methods.
 - **← `lingtai.capabilities.vision`** — uses `services.vision.VisionService`.
 - **← `lingtai.capabilities.web_search`** — uses `services.websearch.SearchService`.
@@ -45,5 +45,5 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 - Lazy start: both clients auto-connect on first `call_tool()`.
 - **Stale-resource recovery (issue #104):** `MCPClient` detects a dead stdio transport in `call_tool` and recovers. `_format_exception` renders `ClassName: message` (class-only when `str(e)` is empty) so an empty `ClosedResourceError` never surfaces as a blank `{"status":"error","message":""}`. `_is_stale_resource_error` flags closed/broken transports by class name + message substrings. On a stale error `call_tool` calls `restart()` (which `close()`s, clears `_ready`/`_error`, resets `_closed`/`_session`/`_loop`/`_thread`/`*_cm` so `start()` cannot lie) and retries **once**; a failed retry returns a helpful error naming the class and the retry failure. Non-stale errors surface the class name without churning the subprocess. `HTTPMCPClient` reuses `MCPClient._format_exception` for its connect error only — it has no stale-resource restart (stdio is the reported transport). Tests: `tests/test_mcp_closed_resource_restart.py`.
 - `mcp.py` has significant code duplication between the two classes — same `call_tool()`, `list_tools()`, `_run_loop()`, `_async_cleanup()` pattern.
-- `mail.py` is a thin shim — the real implementation lives in `lingtai_kernel.services.mail`.
+- `mail.py` is a thin shim — the real implementation lives in `lingtai.kernel.services.mail`.
 - `file_io_sidecar.py` is the **default native backend** for `Agent`-created file-I/O services. `default_file_io_service` is the factory that `Agent.__init__` calls; it consults `LINGTAI_FILE_IO_BACKEND` (`auto` / `rust` / `python`, default `auto`) and `resolve_sidecar_binary` to pick between Rust and the pure-Python `LocalFileIOBackend`. Resolver priority: explicit `binary_path=` > `LINGTAI_FILE_IO_SIDECAR` env > `LINGTAI_SEARCH_SIDECAR` (legacy) env > packaged `lingtai/bin/` binary (shipped in platform-specific wheels by `setup.py`) > dev-tree `experimental/lingtai-search-sidecar/target/{release,debug}/`. The strict `SidecarAdapter()` constructor still ignores packaged / dev-tree sources — opt-in callers see `not_configured` rather than picking up a stale binary. Defaults (`DEFAULT_*` constants) are imported from `file_io.py` so both backends stay in lock-step. Cargo is **not** required for install or the normal test suite — tests use a Python-script "sidecar"; only `test_rust_sidecar_integration_grep_and_glob` is cargo-gated.

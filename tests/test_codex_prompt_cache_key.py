@@ -23,7 +23,7 @@ from lingtai.llm.openai.adapter import (
     CodexResponsesSession,
     OpenAIResponsesSession,
 )
-from lingtai_kernel.llm.base import FunctionSchema
+from lingtai.kernel.llm.base import FunctionSchema
 
 
 @dataclass

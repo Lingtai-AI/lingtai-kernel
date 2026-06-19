@@ -14,7 +14,7 @@ bundle-execution pattern end to end against actual behavior.
 
 Two surfaces, two carriers — matching the live wiring
 -----------------------------------------------------
-* ``email`` is a **kernel intrinsic**: ``lingtai_kernel.intrinsics.email.handle
+* ``email`` is a **kernel intrinsic**: ``lingtai.kernel.intrinsics.email.handle
   (agent, args)``, wired live by ``BaseAgent._wire_intrinsics`` as
   ``self._intrinsics["email"] = lambda args: email.handle(self, args)`` — that
   closure is the live registration path, **left untouched** by this stage. The
@@ -51,7 +51,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
     from lingtai_sdk.bundles.host import BundleHost, NativeBundleHost
 
@@ -59,7 +59,7 @@ if TYPE_CHECKING:
 # live ``_wire_intrinsics`` path also dispatches. Imported at wrapper module load
 # (the wrapper may import the kernel intrinsic surface); the SDK is imported
 # lazily inside the bridge functions to preserve the wrapper -> sdk import edge.
-from lingtai_kernel.intrinsics import email as _email
+from lingtai.kernel.intrinsics import email as _email
 
 # The wrapper's real daemon handler factory — the single source of truth shared
 # with the capability ``setup()`` path (``daemon.make_manager``).

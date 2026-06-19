@@ -41,9 +41,9 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 ## Connections
 
 - **Base class** — `OpenAIAdapter` extends `LLMAdapter` (`from lingtai.llm.base import LLMAdapter`, line 29).
-- **Kernel types** — imports `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata` from `lingtai_kernel.llm.base`.
+- **Kernel types** — imports `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata` from `lingtai.kernel.llm.base`.
 - **Interface converters** — imports `to_openai` and `to_responses_input` from `lingtai.llm.interface_converters` (line 31).
-- **Streaming** — imports `StreamingAccumulator` from `lingtai_kernel.llm.streaming` (line 32).
+- **Streaming** — imports `StreamingAccumulator` from `lingtai.kernel.llm.streaming` (line 32).
 - **HTTP client** — imports `httpx` for timeout construction (line 16); `openai` SDK for all API calls (line 17).
 - **Subclass hooks** — `_session_class` (line 1244) for Completions path; `_adapter_extra_body()` (line 1477) for provider-specific `extra_body`; `_default_prompt_cache_key()` (line 1296) for the provider-namespaced cache key.
 
@@ -111,10 +111,10 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 
 ### Context overflow auto-recovery
 
-`OpenAIChatSession._run_with_overflow_recovery()` is inherited from `ChatSession` (`lingtai_kernel/llm/base.py:384`) and wraps any API call in a retry loop:
+`OpenAIChatSession._run_with_overflow_recovery()` is inherited from `ChatSession` (`lingtai/kernel/llm/base.py:384`) and wraps any API call in a retry loop:
 - Detects 400 `context_length_exceeded` via `_is_context_overflow_error()` (line 276) — checks both canonical OpenAI code and loose string heuristics for compatible vendors.
-- `_trim_context_one_round()` (`lingtai_kernel/llm/base.py:303`) drops ~10% of non-system entries from the FRONT of the interface. Snaps cut point to never split `assistant[ToolCallBlock]` from `user[ToolResultBlock]`.
-- Max 10 rounds (`lingtai_kernel/llm/base.py:291`). On successful recovery, injects a `[kernel]` molt notice via `_inject_overflow_notice()` (`lingtai_kernel/llm/base.py:363`).
+- `_trim_context_one_round()` (`lingtai/kernel/llm/base.py:303`) drops ~10% of non-system entries from the FRONT of the interface. Snaps cut point to never split `assistant[ToolCallBlock]` from `user[ToolResultBlock]`.
+- Max 10 rounds (`lingtai/kernel/llm/base.py:291`). On successful recovery, injects a `[kernel]` molt notice via `_inject_overflow_notice()` (`lingtai/kernel/llm/base.py:363`).
 
 ### Wire-layer orphan guard
 

@@ -77,7 +77,7 @@ avatar/__init__.py
 ## Dependencies
 
 - `lingtai.i18n` — `t()` for localized strings
-- `lingtai_kernel.handshake` — `is_alive()` for liveness checks, `resolve_address()` for ledger-based tree walking
+- `lingtai.kernel.handshake` — `is_alive()` for liveness checks, `resolve_address()` for ledger-based tree walking
 - `lingtai.venv_resolve` — `resolve_venv()`, `venv_python()` for resolving the Python executable to launch the avatar
 - `lingtai.agent.Agent` — parent agent type (TYPE_CHECKING only)
 

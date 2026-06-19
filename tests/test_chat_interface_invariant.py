@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from lingtai_kernel.llm.interface import (
+from lingtai.kernel.llm.interface import (
     ChatInterface,
     PendingToolCallsError,
     TextBlock,

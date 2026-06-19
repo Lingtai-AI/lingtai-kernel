@@ -22,14 +22,14 @@ import signal
 import sys
 from pathlib import Path
 
-from lingtai_kernel.config_resolve import (
+from lingtai.kernel.config_resolve import (
     resolve_env,
     load_env_file,
 )
 from lingtai.init_schema import validate_init
 from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 from lingtai.agent import Agent
-from lingtai_kernel.services.mail import FilesystemMailService
+from lingtai.kernel.services.mail import FilesystemMailService
 
 
 def load_init(working_dir: Path) -> dict:
@@ -40,11 +40,11 @@ def load_init(working_dir: Path) -> dict:
     so downstream code (and the schema check) sees a fully-resolved manifest.
     This mirrors ``Agent._read_init`` so boot and live-refresh agree.
     """
-    from lingtai_kernel.config_resolve import resolve_paths
-    from lingtai_kernel.presets import materialize_active_preset
+    from lingtai.kernel.config_resolve import resolve_paths
+    from lingtai.kernel.presets import materialize_active_preset
     from lingtai.capabilities import CORE_DEFAULTS
 
-    from lingtai_kernel.migrate import run_agent_migrations
+    from lingtai.kernel.migrate import run_agent_migrations
 
     run_agent_migrations(working_dir)
 
@@ -232,7 +232,7 @@ def run(working_dir: Path) -> None:
     agent._venv_path = str(venv_dir)
     _install_signal_handlers(working_dir, agent)
 
-    from lingtai_kernel.state import AgentState
+    from lingtai.kernel.state import AgentState
     agent._asleep.set()
     agent._state = AgentState.ASLEEP
 
@@ -247,7 +247,7 @@ def run(working_dir: Path) -> None:
 
         # Kick-start after refresh — wake agent with a system message
         if is_refresh:
-            from lingtai_kernel.i18n import t
+            from lingtai.kernel.i18n import t
             lang = agent._config.language
             agent.send(t(lang, "system.refresh_successful"), sender="system")
 
@@ -264,7 +264,7 @@ def _emit_json(data: object) -> None:
 
 
 def _handle_log_command(args) -> None:
-    from lingtai_kernel.services.logging import (
+    from lingtai.kernel.services.logging import (
         doctor_sqlite_event_index,
         query_sqlite_event_index,
         rebuild_sqlite_event_index,

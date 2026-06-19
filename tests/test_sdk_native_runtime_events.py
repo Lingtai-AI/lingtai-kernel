@@ -279,7 +279,7 @@ def test_bridge_wraps_real_baseagent_hook_contract(tmp_path):
     if the kernel changes them. We avoid booting a real agent by binding the
     unbound kernel hooks onto a lightweight object the bridge can wrap.
     """
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
     class _Stub:
         # Borrow the genuine kernel hook implementations.

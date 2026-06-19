@@ -12,7 +12,7 @@ Where the real handler lives — and why the bridge lives here
 ------------------------------------------------------------
 Unlike the file tools (wrapper capabilities with a ``make_handler(agent)`` factory
 in ``lingtai.core.{read,write,...}``), ``system`` is a **kernel intrinsic**:
-``lingtai_kernel.intrinsics.system.handle(agent, args)``. The kernel wires it live
+``lingtai.kernel.intrinsics.system.handle(agent, args)``. The kernel wires it live
 in ``BaseAgent._wire_intrinsics`` as ``self._intrinsics["system"] =
 lambda args: system.handle(self, args)`` — that closure is the live registration
 path, and it is **left untouched** by this stage.
@@ -51,14 +51,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
     from lingtai_sdk.bundles.host import NativeBundleHost
 
 # The single source of truth for ``system`` behavior — the kernel intrinsic the
 # live ``_wire_intrinsics`` path also dispatches. Imported at wrapper module load
 # (the wrapper may import the kernel intrinsic surface); the SDK is imported
 # lazily inside the bridge function to preserve the wrapper→sdk import edge.
-from lingtai_kernel.intrinsics import system as _system
+from lingtai.kernel.intrinsics import system as _system
 
 
 def _kwargs_adapter(

@@ -25,7 +25,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.base_agent import BaseAgent
+from lingtai.kernel.base_agent import BaseAgent
 from lingtai.core import skills as skillsmod
 from lingtai.core import skills_bundle
 from lingtai_sdk import skill_tools as st

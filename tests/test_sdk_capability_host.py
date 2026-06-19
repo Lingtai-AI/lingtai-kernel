@@ -209,7 +209,7 @@ def test_host_load_and_host_from_dict():
 def test_capability_host_import_is_pure():
     code = (
         "import sys, lingtai_sdk.capability_host\n"
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        "bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]\n"
         "assert not bad, bad\n"
         "print('OK')\n"
     )

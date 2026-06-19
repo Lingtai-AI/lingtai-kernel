@@ -3,7 +3,7 @@
 Stage 17 built a pure, import-light SDK adapter
 (:mod:`lingtai_sdk.guard_bridge`) that turns one or more
 :class:`~lingtai_sdk.capabilities.BundleManifest` objects into a kernel
-:class:`~lingtai_kernel.tool_call_guard.ToolCallGuard` — but wired *nothing* into
+:class:`~lingtai.kernel.tool_call_guard.ToolCallGuard` — but wired *nothing* into
 a live agent. This module is the thin wrapper-layer seam that finally installs
 such a guard onto the Stage-16 ``BaseAgent._tool_call_guard`` slot, so the turn
 loop's ``ToolExecutor`` consults declared bundle posture before a tool is
@@ -40,7 +40,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Iterable
 
-from lingtai_kernel.tool_call_guard import ToolCallGuard
+from lingtai.kernel.tool_call_guard import ToolCallGuard
 from lingtai_sdk.bundles.registry import default_registry
 from lingtai_sdk.bundles.contracts import BundleManifest
 from lingtai_sdk.guard.bridge import (
@@ -112,7 +112,7 @@ def collect_core_bundle_manifests(
     Unlike :func:`collect_agent_bundle_manifests`, this does **not** gate on the
     agent's ``_capabilities`` — the three core surfaces are kernel intrinsics
     that are always present (registered in
-    ``lingtai_kernel.intrinsics.__init__``), never declared as wrapper
+    ``lingtai.kernel.intrinsics.__init__``), never declared as wrapper
     capabilities. Stage 20 default wiring calls this seam unless
     ``include_core=False`` is passed to :func:`wire_agent_guard`.
 
@@ -223,7 +223,7 @@ def reset_bundle_guard(agent: Any) -> None:
     """Reset a wrapper-installed bundle guard back to a pass-through.
 
     Stage 19 safety seam. Restores ``agent._tool_call_guard`` to a default,
-    empty :class:`~lingtai_kernel.tool_call_guard.ToolCallGuard` (the same
+    empty :class:`~lingtai.kernel.tool_call_guard.ToolCallGuard` (the same
     pass-through posture a freshly built default agent owns) and clears the
     provenance markers. Intended for the case where a previous wiring installed
     a bundle-derived guard but a later wiring collects no manifests — without

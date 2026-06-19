@@ -227,7 +227,7 @@ def test_core_bundles_import_is_pure_and_migrates_nothing():
         "assert h.invoke('system') == 'dummy'\n"
         # importing core_bundles must NOT pull in the lingtai wrapper, i.e. the
         # real system/psyche/soul implementation is not migrated/imported.
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        "bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]\n"
         "assert not bad, bad\n"
         "print('OK')\n"
     )

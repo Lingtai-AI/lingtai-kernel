@@ -21,20 +21,20 @@ from urllib.parse import urlsplit
 import httpx
 import openai
 
-from lingtai_kernel.logging import get_logger
+from lingtai.kernel.logging import get_logger
 
-from lingtai_kernel.llm.base import (
+from lingtai.kernel.llm.base import (
     ChatSession,
     FunctionSchema,
     LLMResponse,
     ToolCall,
     UsageMetadata,
 )
-from lingtai_kernel.llm.interface import ToolResultBlock
+from lingtai.kernel.llm.interface import ToolResultBlock
 from lingtai.llm.base import LLMAdapter
-from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock, ToolCallBlock
+from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock, ToolCallBlock
 from ..interface_converters import to_openai, to_responses_input
-from lingtai_kernel.llm.streaming import StreamingAccumulator
+from lingtai.kernel.llm.streaming import StreamingAccumulator
 
 logger = get_logger()
 
@@ -1279,7 +1279,7 @@ class OpenAIAdapter(LLMAdapter):
         # (lingtai/llm/_register.py:_openai reads provider defaults); when
         # unset we fall back to the intended 100k default. ``None`` disables
         # compaction entirely. Config is injected at construction here, never
-        # read from a global module — see lingtai_kernel.config's contract.
+        # read from a global module — see lingtai.kernel.config's contract.
         self._compact_threshold = _validate_compact_threshold(compact_threshold)
         kwargs: dict[str, Any] = {"api_key": api_key}
         if base_url:

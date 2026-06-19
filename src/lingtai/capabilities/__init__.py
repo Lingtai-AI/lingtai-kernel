@@ -5,7 +5,7 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
 # Registry of built-in capability names → module paths.
 # Entries starting with "." are relative to this package (lingtai.capabilities);

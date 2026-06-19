@@ -13,9 +13,9 @@ from typing import Any
 
 from pathlib import Path
 
-from lingtai_kernel.base_agent import BaseAgent
+from lingtai.kernel.base_agent import BaseAgent
 from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
-from lingtai_kernel.prompt import build_system_prompt
+from lingtai.kernel.prompt import build_system_prompt
 
 
 class Agent(BaseAgent):
@@ -369,7 +369,7 @@ class Agent(BaseAgent):
         """Refresh the 'tools' section — wrapper override includes MCP schemas."""
         lang = self._config.language
         lines = []
-        from lingtai_kernel.intrinsics import ALL_INTRINSICS
+        from lingtai.kernel.intrinsics import ALL_INTRINSICS
         for name in self._intrinsics:
             info = ALL_INTRINSICS.get(name)
             if info:
@@ -393,7 +393,7 @@ class Agent(BaseAgent):
 
     def _build_system_prompt_batches(self) -> list[str]:
         """Override kernel's batched builder to inject tool descriptions."""
-        from lingtai_kernel.prompt import build_system_prompt_batches
+        from lingtai.kernel.prompt import build_system_prompt_batches
         self._refresh_tool_inventory_section()
         return build_system_prompt_batches(
             prompt_manager=self._prompt_manager,
@@ -434,7 +434,7 @@ class Agent(BaseAgent):
         """
         import json
 
-        from lingtai_kernel.logging import get_logger
+        from lingtai.kernel.logging import get_logger
         logger = get_logger()
 
         # Per-name tracking of init.json MCP launches. Populated below and
@@ -574,7 +574,7 @@ class Agent(BaseAgent):
         returns False when the background loop has exited (which happens
         when the stdio transport closes due to subprocess death).
         """
-        from lingtai_kernel.logging import get_logger
+        from lingtai.kernel.logging import get_logger
         logger = get_logger()
 
         specs = getattr(self, "_mcp_init_specs", None)
@@ -690,7 +690,7 @@ class Agent(BaseAgent):
         import shlex
         import subprocess
         import time
-        from lingtai_kernel.handshake import is_agent, is_alive, resolve_address
+        from lingtai.kernel.handshake import is_agent, is_alive, resolve_address
         from lingtai.venv_resolve import resolve_venv, venv_python
 
         base_dir = self._working_dir.parent
@@ -918,13 +918,13 @@ class Agent(BaseAgent):
 
         On success, the resolved (secret-redacted) manifest is also published
         to ``system/manifest.resolved.json`` via
-        ``lingtai_kernel.workdir.write_resolved_manifest`` (issue #259).
+        ``lingtai.kernel.workdir.write_resolved_manifest`` (issue #259).
         """
         import json
         from .init_schema import strip_deprecated, validate_init
-        from lingtai_kernel.config_resolve import resolve_paths
-        from lingtai_kernel.migrate import run_agent_migrations
-        from lingtai_kernel.presets import expand_inherit, materialize_active_preset
+        from lingtai.kernel.config_resolve import resolve_paths
+        from lingtai.kernel.migrate import run_agent_migrations
+        from lingtai.kernel.presets import expand_inherit, materialize_active_preset
         from .capabilities import CORE_DEFAULTS
 
         run_agent_migrations(self._working_dir)
@@ -985,7 +985,7 @@ class Agent(BaseAgent):
         # config the agent actually runs on — consumers read it instead of
         # re-implementing preset materialization over the raw init.json
         # snapshot. init.json itself stays user-owned input.
-        from lingtai_kernel.workdir import write_resolved_manifest
+        from lingtai.kernel.workdir import write_resolved_manifest
         if write_resolved_manifest(self._working_dir, data) is None:
             self._log("resolved_manifest_write_failed")
 
@@ -1009,7 +1009,7 @@ class Agent(BaseAgent):
         """
         import json
         import os
-        from lingtai_kernel.presets import load_preset
+        from lingtai.kernel.presets import load_preset
 
         init_path = self._working_dir / "init.json"
         data = json.loads(init_path.read_text(encoding="utf-8"))
@@ -1074,13 +1074,13 @@ class Agent(BaseAgent):
             self._log("refresh_skipped", reason="no valid init.json")
             return
 
-        from lingtai_kernel.config_resolve import (
+        from lingtai.kernel.config_resolve import (
             load_env_file,
             resolve_env,
             resolve_file,
             _resolve_capabilities,
         )
-        from lingtai_kernel.config import AgentConfig
+        from lingtai.kernel.config import AgentConfig
 
         env_file = data.get("env_file")
         import os
@@ -1174,7 +1174,7 @@ class Agent(BaseAgent):
 
         # Reload config (all fields optional — fall back to AgentConfig defaults)
         soul = m.get("soul", {})
-        # NOTE: defaults here MUST mirror src/lingtai_kernel/config.py
+        # NOTE: defaults here MUST mirror src/lingtai/kernel/config.py
         # AgentConfig defaults — _read_init reload re-constructs the
         # whole config and would otherwise silently override any kernel-
         # side default change with the stale literal here. Kept as
@@ -1188,7 +1188,7 @@ class Agent(BaseAgent):
             soul_voice_prompt=soul.get("voice_prompt", ""),
             # ``manifest.max_turns`` is a legacy/resolved-manifest field and is
             # no longer the authoritative tool-loop guard source.  ACTIVE-turn
-            # tool-call safety is kernel-owned in ``lingtai_kernel.safety_limits``.
+            # tool-call safety is kernel-owned in ``lingtai.kernel.safety_limits``.
             # Keep AgentConfig.max_turns at its default for API compatibility,
             # but deliberately ignore stale init.json values here.
             language=m.get("language", "en"),
@@ -1215,7 +1215,7 @@ class Agent(BaseAgent):
         # `_reload_prompt_sections` now route through the same canonical
         # composers (`_lingtai_load`, `_pad_load`), so they produce identical
         # content and the result is independent of which runs last.
-        from lingtai_kernel.intrinsics import psyche as _psyche
+        from lingtai.kernel.intrinsics import psyche as _psyche
         _psyche.boot(self)
 
         # Re-boot email so a fresh EmailManager + scheduler thread are wired.
@@ -1223,7 +1223,7 @@ class Agent(BaseAgent):
         # starting a new one — without that, the prior daemon thread keeps
         # polling ``mailbox/schedules/*/schedule.json`` and races the new
         # thread, double-sending the same due tick (issue #154).
-        from lingtai_kernel.intrinsics import email as _email
+        from lingtai.kernel.intrinsics import email as _email
         _email.boot(self)
 
         # Decompress addons BEFORE capability setup so the `mcp` capability
@@ -1328,7 +1328,7 @@ class Agent(BaseAgent):
             if data is None:
                 return
             # Resolve *_file fields (brief_file, covenant_file, etc.)
-            from lingtai_kernel.config_resolve import resolve_file
+            from lingtai.kernel.config_resolve import resolve_file
             for key in ("covenant", "principle", "substrate",
                         "brief", "pad", "comment"):
                 file_key = f"{key}_file"
@@ -1353,7 +1353,7 @@ class Agent(BaseAgent):
         # produce byte-identical `character` content and no longer depend on
         # post-molt hook ordering. Distinct from `covenant` above and from the
         # mechanical `identity` section written by BaseAgent.
-        from lingtai_kernel.intrinsics.psyche import _lingtai_load
+        from lingtai.kernel.intrinsics.psyche import _lingtai_load
         _lingtai_load(self, {})
 
         # --- Substrate (kernel-owned, cross-app stable; #39) ---
@@ -1408,7 +1408,7 @@ class Agent(BaseAgent):
         # Delegate to the single canonical composer rather than re-reading
         # pad.md alone — otherwise the post-molt hook ordering silently drops
         # the pinned append references. `_pad_load` composes both.
-        from lingtai_kernel.intrinsics.psyche import _pad_load
+        from lingtai.kernel.intrinsics.psyche import _pad_load
         _pad_load(self, {})
 
         # --- Principle ---

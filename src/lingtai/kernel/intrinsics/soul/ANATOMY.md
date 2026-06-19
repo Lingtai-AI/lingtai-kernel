@@ -42,6 +42,6 @@ simultaneously.
 
 ## Composition
 
-- **Parent:** `src/lingtai_kernel/intrinsics/` (see `intrinsics/ANATOMY.md`).
+- **Parent:** `src/lingtai/kernel/intrinsics/` (see `intrinsics/ANATOMY.md`).
 - **Siblings:** `system/`, `psyche/`, `email/` (all sub-packages in the parent folder; flat-file intrinsics are gone).
 - **Kernel hooks:** `base_agent/__init__.py` calls `_start_soul_timer`/`_cancel_soul_timer`/`_run_consultation_fire`/`_rehydrate_appendix_tracking` from `flow.py` and `_run_inquiry` from `inquiry.py` at lifecycle moments.

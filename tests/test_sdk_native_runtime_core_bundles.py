@@ -130,7 +130,7 @@ handlers = {{name: (lambda **kwargs: kwargs) for name in ('system', 'psyche', 's
 rtm = native.NativeRuntime(core_handlers=handlers)
 session = rtm.create_session(rt.RuntimeOptions(working_dir={str(tmp_path)!r}))
 assert tuple(session.core_bundle_hosts) == ('system', 'psyche', 'soul')
-bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]
+bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]
 assert not bad, bad
 print('OK')
 """

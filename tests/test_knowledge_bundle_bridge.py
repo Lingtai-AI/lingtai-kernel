@@ -25,7 +25,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.base_agent import BaseAgent
+from lingtai.kernel.base_agent import BaseAgent
 from lingtai.core import knowledge as knowledgemod
 from lingtai.core import knowledge_bundle
 from lingtai_sdk import knowledge_tools as kt

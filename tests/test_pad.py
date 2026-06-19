@@ -8,8 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.intrinsics import ALL_INTRINSICS
-from lingtai_kernel.base_agent import BaseAgent
+from lingtai.kernel.intrinsics import ALL_INTRINSICS
+from lingtai.kernel.base_agent import BaseAgent
 
 
 def make_mock_service():

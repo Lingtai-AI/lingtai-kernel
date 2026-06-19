@@ -22,7 +22,7 @@ there is exactly one ``psyche`` manifest in the SDK, and adds two things on top:
    grades each ``psyche`` ``(object, action)`` pair individually. Unlike
    ``system`` (a flat ``action`` discriminator), the live ``psyche`` tool
    dispatches on an ``(object, action)`` pair (see
-   ``lingtai_kernel.intrinsics.psyche._VALID_ACTIONS`` / ``_DISPATCH``), so the
+   ``lingtai.kernel.intrinsics.psyche._VALID_ACTIONS`` / ``_DISPATCH``), so the
    table is keyed by that pair. A single bundle-level ``caution`` posture cannot
    faithfully express that ``pad.load`` / ``lingtai.load`` are pure reads while
    ``name.set`` writes the **immutable** true name (set-once, irreversible);
@@ -55,7 +55,7 @@ What this module is NOT
 -----------------------
 Exactly as in stages 3A/3B/3C/8, it does **not** migrate, move, rewrite, import,
 or call the real ``psyche`` implementation. The real handler is a *kernel
-intrinsic* (``lingtai_kernel.intrinsics.psyche.handle(agent, args)``), wired live
+intrinsic* (``lingtai.kernel.intrinsics.psyche.handle(agent, args)``), wired live
 by ``BaseAgent._wire_intrinsics``; importing it here would break SDK
 import-purity and is unnecessary — this module ships *declarations + an injection
 seam* only. The wrapper-side bridge that supplies the handler lives in
@@ -80,7 +80,7 @@ from ..errors import BundleHostError
 PSYCHE_TOOL_NAME = "psyche"
 
 #: The live ``(object -> {actions})`` validity map, a language-neutral copy of
-#: ``lingtai_kernel.intrinsics.psyche._VALID_ACTIONS``. ``psyche`` dispatches on a
+#: ``lingtai.kernel.intrinsics.psyche._VALID_ACTIONS``. ``psyche`` dispatches on a
 #: pair, not a flat action enum, so this records which actions each object
 #: accepts. Pinned against the kernel by ``tests/test_sdk_psyche_tools.py`` so the
 #: declaration cannot drift from the live dispatch table.

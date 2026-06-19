@@ -35,7 +35,7 @@ Generic agent kernel. Single class `BaseAgent` with methods distributed across 6
 
 ## Composition
 
-- **Parent:** `src/lingtai_kernel/` (see `ANATOMY.md`).
+- **Parent:** `src/lingtai/kernel/` (see `ANATOMY.md`).
 - **Siblings:** `intrinsics/`, `llm/`, `services/`, `i18n/`, `session.py`, `tc_inbox.py`, `tool_executor.py`, `loop_guard.py`, `prompt.py`, `meta_block.py`, `config.py`, `state.py`, `workdir.py`, `message.py`.
 
 ## State

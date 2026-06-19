@@ -53,10 +53,10 @@ lingtai-cloud-mail = "lingtai.mcp_servers.cloud_mail.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["lingtai*", "lingtai_kernel*", "lingtai_cli*"]
+include = ["lingtai*", "lingtai_cli*"]
 
 [tool.setuptools.package-data]
-lingtai_kernel = ["i18n/*.json"]
+"lingtai.kernel" = ["i18n/*.json"]
 # SDK assets: committed, read-only skill-shaped asset trees reachable via
 # importlib.resources (see src/lingtai_sdk/assets/). Globbed so new asset files
 # under a skill directory are packaged without editing this list.

@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
 log = logging.getLogger(__name__)
 

@@ -191,11 +191,11 @@ def discover_presets_in_dirs(
     Nonexistent directories are silently skipped — they're not an error.
 
     Triggers any pending kernel-side preset migrations against each path
-    before listing — see lingtai_kernel.migrate. Migrations are idempotent
+    before listing — see lingtai.kernel.migrate. Migrations are idempotent
     and process-cached, so repeated calls share the work.
     """
-    from lingtai_kernel.migrate import run_migrations
-    from lingtai_kernel.migrate.migrate import meta_filename
+    from lingtai.kernel.migrate import run_migrations
+    from lingtai.kernel.migrate.migrate import meta_filename
 
     if isinstance(dirs, (str, Path)):
         normalized: list[Path] = [Path(dirs)]
@@ -250,7 +250,7 @@ def load_preset(
             required fields are missing.
     """
     from .config_resolve import load_jsonc
-    from lingtai_kernel.migrate import run_migrations
+    from lingtai.kernel.migrate import run_migrations
 
     if not isinstance(name, str) or not name:
         raise ValueError(f"preset name must be a non-empty string, got {name!r}")

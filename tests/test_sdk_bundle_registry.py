@@ -212,7 +212,7 @@ def test_registry_is_reachable_from_package_root_lazily_and_wrapper_free():
         "assert r.dispatch_target('daemon').bundle_name == 'daemon'\n"
         "assert lingtai_sdk.BundleRegistry is not None\n"
         "assert len(lingtai_sdk.all_bundle_manifests()) == 16\n"
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        "bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]\n"
         "assert not bad, bad\n"
         "print('OK')\n"
     )
@@ -234,7 +234,7 @@ def test_bundle_registry_import_is_wrapper_free():
         "r = reg.default_registry()\n"
         "assert r.dispatch_target('bash').danger.value == 'destructive'\n"
         "assert len(reg.all_bundle_manifests()) == 16\n"
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        "bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]\n"
         "assert not bad, bad\n"
         "print('OK')\n"
     )

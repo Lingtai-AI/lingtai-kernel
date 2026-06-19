@@ -394,7 +394,7 @@ def test_manifest_options_construction_stays_pure():
         " 'context_window': 500000}, 'max_rpm': 30}))\n"
         "providers = ('anthropic','openai','google.genai',"
         "'google.generativeai','mcp','trafilatura','ddgs')\n"
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        "bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]\n"
         "bad += [m for m in sys.modules "
         "if any(m == p or m.startswith(p + '.') for p in providers)]\n"
         "assert not bad, bad\n"

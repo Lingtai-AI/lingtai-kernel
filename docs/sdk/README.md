@@ -14,7 +14,7 @@ LingTai agents in-process. It is a thin consumer of the two implementation
 packages — never a dependency of them:
 
 ```
-lingtai_sdk  ──imports──▶  lingtai_kernel   (eager; zero hard deps)
+lingtai_sdk  ──imports──▶  lingtai.kernel   (eager; zero hard deps)
             ──imports──▶  lingtai          (lazy; the batteries-included wrapper)
 ```
 
@@ -39,7 +39,7 @@ What it gives you today:
   consult declared posture *before* a tool is dispatched.
 
 `import lingtai_sdk` stays as cheap and side-effect-free as
-`import lingtai_kernel`: only the kernel is loaded eagerly. The wrapper and its
+`import lingtai.kernel`: only the kernel is loaded eagerly. The wrapper and its
 heavy provider SDKs (anthropic, openai, google-genai, mcp, …) load **lazily** —
 the first time you touch a wrapper-backed name like `Agent`, or the first time a
 `NativeRuntime` session is actually started.
@@ -64,7 +64,7 @@ there:
 - **A package split / distribution rename.** `lingtai_sdk` ships *inside* the
   existing `lingtai` wheel. Making it the headline published package is a later
   step.
-- **Any change to existing `lingtai` / `lingtai_kernel` runtime behavior.** This
+- **Any change to existing `lingtai` / `lingtai.kernel` runtime behavior.** This
   whole surface is additive; it changes no kernel turn-loop behavior.
 
 ## Canonical import paths (after #368) and the legacy-shim policy
@@ -112,7 +112,7 @@ path that re-exports from the new location. The same-object guarantee is pinned
 by `tests/test_sdk_directory_shape.py`.
 
 There is a *second*, older compatibility map for names that moved out of the
-implementation packages into the SDK (`lingtai_kernel.BaseAgent` →
+implementation packages into the SDK (`lingtai.kernel.BaseAgent` →
 `lingtai_sdk.BaseAgent`, `lingtai.Agent` → `lingtai_sdk.Agent`, …). It lives in
 `lingtai_sdk._compat.DEPRECATIONS` and is enforced by `tests/test_sdk_compat.py`.
 No name is removed within a major version; a legacy path graduates from "active
@@ -236,7 +236,7 @@ tool → allow:
 ```python
 from lingtai_sdk import all_bundle_manifests
 from lingtai_sdk.guard import GuardPolicyMode, guard_check_from_manifests
-from lingtai_kernel.tool_call_guard import ToolProposal
+from lingtai.kernel.tool_call_guard import ToolProposal
 
 check = guard_check_from_manifests(all_bundle_manifests(), mode=GuardPolicyMode.BLOCKING)
 check(ToolProposal(tool_name="read", tool_args={}))   # -> None  (clean allow)

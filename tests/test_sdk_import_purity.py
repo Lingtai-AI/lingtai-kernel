@@ -1,7 +1,14 @@
 """lingtai_sdk must stay import-light: a bare import pulls the dependency-light
-kernel only, never the ``lingtai`` wrapper nor any heavy provider SDK. Wrapper-
-backed names resolve lazily and must resolve to the SAME object the wrapper
-exports.
+kernel only, never the ``lingtai`` *wrapper* layer nor any heavy provider SDK.
+Wrapper-backed names resolve lazily and must resolve to the SAME object the
+wrapper exports.
+
+The kernel now lives at ``lingtai.kernel`` (relocated from the old top-level
+``lingtai_kernel`` package, hard cut). Re-exporting kernel symbols therefore
+legitimately loads the bare ``lingtai`` namespace ``__init__`` and
+``lingtai.kernel.*`` — both are dependency-light. What must stay OUT is the
+batteries-included wrapper layer (``lingtai.agent`` / ``capabilities`` / ``core``
+/ ``llm`` adapters / ``services``).
 
 Note on the provider list: importing the kernel loads the *bare* ``google``
 namespace package (an ambient site-packages artifact pulled in transitively by
@@ -32,6 +39,18 @@ _HEAVY_PROVIDERS = (
     "ddgs",
 )
 
+# Wrapper submodules that carry the agent / capabilities / services layer. A
+# bare ``import lingtai_sdk`` must not eagerly load any of these. The
+# dependency-light kernel (``lingtai.kernel``) and the bare ``lingtai``
+# namespace are allowed.
+_WRAPPER_SUBMODULES = (
+    "lingtai.agent",
+    "lingtai.capabilities",
+    "lingtai.core",
+    "lingtai.llm",
+    "lingtai.services",
+)
+
 
 def _run(code: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "PYTHONPATH": str(SRC)}
@@ -45,13 +64,16 @@ def _run(code: str) -> subprocess.CompletedProcess:
 
 
 _PROVIDERS_LITERAL = repr(_HEAVY_PROVIDERS)
+_WRAPPER_LITERAL = repr(_WRAPPER_SUBMODULES)
 
 
 def test_import_sdk_does_not_load_wrapper_or_providers():
     code = (
         "import sys, lingtai_sdk\n"
         f"providers = {_PROVIDERS_LITERAL}\n"
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        f"wrapper = {_WRAPPER_LITERAL}\n"
+        "bad = [m for m in sys.modules "
+        "if any(m == w or m.startswith(w + '.') for w in wrapper)]\n"
         "bad += [m for m in sys.modules "
         "if any(m == p or m.startswith(p + '.') for p in providers)]\n"
         "assert not bad, bad\n"
@@ -70,7 +92,9 @@ def test_touching_kernel_names_stays_clean():
         "_ = (lingtai_sdk.BaseAgent, lingtai_sdk.AgentState, lingtai_sdk.AgentConfig,\n"
         "     lingtai_sdk.Message, lingtai_sdk.UnknownToolError, lingtai_sdk.LLMService,\n"
         "     lingtai_sdk.LingTaiSDKError)\n"
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        f"wrapper = {_WRAPPER_LITERAL}\n"
+        "bad = [m for m in sys.modules "
+        "if any(m == w or m.startswith(w + '.') for w in wrapper)]\n"
         "assert not bad, bad\n"
         "print('OK')\n"
     )

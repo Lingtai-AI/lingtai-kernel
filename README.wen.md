@@ -43,7 +43,7 @@ pip install lingtai-kernel
 ## 速启
 
 ```python
-from lingtai_kernel import BaseAgent
+from lingtai.kernel import BaseAgent
 
 # 调用者供语言服务（抽象之约的任何实现）
 agent = BaseAgent(

@@ -22,7 +22,7 @@ from ...i18n import t
 from ...services.vision import VisionService, create_vision_service
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
 PROVIDERS = {
     "providers": ["minimax", "zhipu", "mimo", "gemini", "anthropic", "openai", "codex"],
@@ -102,7 +102,7 @@ def setup(
     """
     if vision_service is None and provider is not None:
         if api_key_env:
-            from lingtai_kernel.config_resolve import resolve_env
+            from lingtai.kernel.config_resolve import resolve_env
             api_key = resolve_env(api_key, api_key_env)
         if provider not in PROVIDERS["providers"]:
             # No dedicated VisionService for this provider (custom relay,

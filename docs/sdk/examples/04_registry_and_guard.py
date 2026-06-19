@@ -29,7 +29,7 @@ from lingtai_sdk.guard import (
     guard_check_from_manifests,
     tool_danger_index,
 )
-from lingtai_kernel.tool_call_guard import ToolProposal
+from lingtai.kernel.tool_call_guard import ToolProposal
 
 
 def main() -> None:

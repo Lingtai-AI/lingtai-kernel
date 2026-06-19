@@ -12,7 +12,7 @@ actual behavior.
 Where the real handler lives — and why the bridge lives here
 ------------------------------------------------------------
 Exactly like ``system`` / ``psyche``, ``soul`` is a **kernel intrinsic**:
-``lingtai_kernel.intrinsics.soul.handle(agent, args)``. The kernel wires it live
+``lingtai.kernel.intrinsics.soul.handle(agent, args)``. The kernel wires it live
 in ``BaseAgent._wire_intrinsics`` as ``self._intrinsics["soul"] =
 lambda args: soul.handle(self, args)`` — that closure is the live registration
 path, and it is **left untouched** by this stage.
@@ -48,14 +48,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
     from lingtai_sdk.bundles.host import NativeBundleHost
 
 # The single source of truth for ``soul`` behavior — the kernel intrinsic the live
 # ``_wire_intrinsics`` path also dispatches. Imported at wrapper module load (the
 # wrapper may import the kernel intrinsic surface); the SDK is imported lazily
 # inside the bridge functions to preserve the wrapper→sdk import edge.
-from lingtai_kernel.intrinsics import soul as _soul
+from lingtai.kernel.intrinsics import soul as _soul
 
 
 def _kwargs_adapter(

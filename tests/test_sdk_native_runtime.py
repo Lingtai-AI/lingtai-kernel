@@ -218,7 +218,7 @@ def test_importing_native_and_constructing_runtime_is_pure():
         "_ = native.NativeRuntimeSession\n"
         "providers = ('anthropic','openai','google.genai',"
         "'google.generativeai','mcp','trafilatura','ddgs')\n"
-        "bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]\n"
+        "bad = [m for m in sys.modules if m.startswith('lingtai.') and not (m == 'lingtai.kernel' or m.startswith('lingtai.kernel.') or m == 'lingtai._version')]\n"
         "bad += [m for m in sys.modules "
         "if any(m == p or m.startswith(p + '.') for p in providers)]\n"
         "assert not bad, bad\n"
