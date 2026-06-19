@@ -12,6 +12,7 @@ from lingtai.kernel.config import AgentConfig
 def make_session_manager(**kw):
     svc = MagicMock()
     svc.model = "test-model"
+    svc.provider = "test-provider"
     mock_session = MagicMock()
     mock_session.context_window.return_value = 100000
     mock_session.interface.estimate_context_tokens.return_value = 5000
@@ -32,6 +33,7 @@ def make_session_manager(**kw):
         build_system_prompt_fn=lambda: "test prompt",
         build_tool_schemas_fn=lambda: [],
         logger_fn=kw.get("logger_fn", None),
+        cache_audit_path=kw.get("cache_audit_path", None),
     ), svc, mock_session
 
 
@@ -82,6 +84,46 @@ def test_send_tracks_usage():
     assert usage["input_tokens"] == 100
     assert usage["output_tokens"] == 50
     assert usage["api_calls"] == 1
+
+
+def test_send_writes_cache_audit_jsonl(tmp_path):
+    audit_path = tmp_path / "logs" / "cache_audit.jsonl"
+    sm, _, _ = make_session_manager(cache_audit_path=audit_path)
+
+    sm.send("hello")
+
+    lines = audit_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    import json
+    entry = json.loads(lines[0])
+    assert entry["call_role"] == "main"
+    assert entry["provider"] == "test-provider"
+    assert entry["model"] == "test-model"
+    assert entry["agent_name"] == "test"
+    assert entry["input_tokens"] == 100
+    assert entry["cached_tokens"] == 20
+    assert entry["uncached_input"] == 80
+    assert entry["cache_ratio"] == 0.2
+
+
+def test_session_manager_cache_auditor_constructor_is_fail_open(tmp_path, monkeypatch):
+    import lingtai.kernel.cache_audit as cache_audit
+
+    events = []
+
+    def log_fn(event_type, **fields):
+        events.append((event_type, fields))
+
+    class BrokenAuditor:
+        def __init__(self, *_args, **_kwargs):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(cache_audit, "CacheAuditor", BrokenAuditor)
+
+    sm, _, _ = make_session_manager(cache_audit_path=tmp_path / "audit.jsonl", logger_fn=log_fn)
+
+    assert sm._cache_auditor is None
+    assert any(event == "cache_auditor_disabled" for event, _ in events)
 
 
 def test_send_does_not_call_compaction():

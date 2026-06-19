@@ -560,6 +560,7 @@ class BaseAgent:
             build_tool_schemas_fn=self._build_tool_schemas,
             logger_fn=self._log,
             build_system_batches_fn=self._build_system_prompt_batches,
+            cache_audit_path=self._working_dir / "logs" / "cache_audit.jsonl",
         )
 
         # Boot the psyche intrinsic

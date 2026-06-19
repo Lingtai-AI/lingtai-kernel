@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import uuid
+from pathlib import Path
 from typing import Any, Callable, TYPE_CHECKING
 
 from .config import AgentConfig
@@ -48,6 +49,7 @@ class SessionManager:
         build_tool_schemas_fn: Callable[[], list[FunctionSchema]],
         logger_fn: Callable[..., None] | None,
         build_system_batches_fn: Callable[[], list[str]] | None = None,
+        cache_audit_path: str | Path | None = None,
     ):
         self._llm_service = llm_service
         self._config = config
@@ -62,6 +64,18 @@ class SessionManager:
         # and can place cache breakpoints between them. When absent, the
         # string builder is used for everything.
         self._build_system_batches_fn = build_system_batches_fn
+        self._cache_auditor = None
+        if cache_audit_path is not None:
+            try:
+                from .cache_audit import CacheAuditor
+                self._cache_auditor = CacheAuditor(cache_audit_path)
+            except Exception as e:
+                self._cache_auditor = None
+                if self._logger_fn is not None:
+                    try:
+                        self._logger_fn("cache_auditor_disabled", reason=str(e))
+                    except Exception:
+                        pass
         # Persistent LLM session
         self._chat: ChatSession | None = None
         self._interaction_id: str | None = None
@@ -376,6 +390,20 @@ class SessionManager:
                 estimated=fallback,
                 api_call_id=response.api_call_id,
             )
+            if self._cache_auditor is not None:
+                self._cache_auditor.record(
+                    call_role="main",
+                    provider=str(getattr(self._llm_service, "provider", "unknown") or "unknown"),
+                    model=str(getattr(self._llm_service, "model", "unknown") or "unknown"),
+                    endpoint=str(getattr(self._llm_service, "_base_url", None) or ""),
+                    agent_name=self._display_name,
+                    input_tokens=response.usage.input_tokens,
+                    cached_tokens=response.usage.cached_tokens,
+                    output_tokens=response.usage.output_tokens,
+                    thinking_tokens=response.usage.thinking_tokens,
+                    system_tokens=self._system_prompt_tokens,
+                    tools_tokens=self._tools_tokens,
+                )
 
     def get_token_usage(self) -> dict:
         """Return token usage summary."""

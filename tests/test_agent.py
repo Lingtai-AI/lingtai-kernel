@@ -46,6 +46,16 @@ def test_base_agent_file_io_defaults_to_none(tmp_path):
     assert agent._file_io is None
 
 
+def test_base_agent_wires_cache_auditor_to_real_session(tmp_path):
+    """Cache audit must attach to the live self._session, not a side object."""
+    workdir = tmp_path / "test"
+    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=workdir)
+
+    assert not hasattr(agent, "_session_manager")
+    assert agent._session._cache_auditor is not None
+    assert agent._session._cache_auditor._path == workdir / "logs" / "cache_audit.jsonl"
+
+
 # ---------------------------------------------------------------------------
 # Intrinsics filtering
 # ---------------------------------------------------------------------------
