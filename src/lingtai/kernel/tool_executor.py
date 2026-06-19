@@ -542,7 +542,10 @@ class ToolExecutor:
         ids = result.get("ids")
         if not isinstance(ids, list) or not ids:
             return False
-        if not result.get("group_id"):
+        if not all(isinstance(eid, str) and eid for eid in ids):
+            return False
+        group_id = result.get("group_id")
+        if not isinstance(group_id, str) or not group_id:
             return False
         return True
 
