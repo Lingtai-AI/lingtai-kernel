@@ -1397,6 +1397,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         if intercepted:
             if tool_results and agent._chat:
                 agent._chat.commit_tool_results(tool_results)
+                agent._save_chat_history(ledger_source=ledger_source)
             return {
                 "text": intercept_text,
                 "failed": False,

@@ -106,6 +106,7 @@ def test_terminal_async_daemon_dispatch_skips_post_tool_continuation_send():
     assert committed[0]["tool_call_id"] == "daemon-call"
     assert committed[0]["result"]["status"] == "dispatched"
     assert committed[0]["result"]["terminal_async_dispatch"] is True
+    assert agent._saves == ["main"]
     assert any(event == "tool_call_terminal_async_dispatch" for event, _ in agent._logs)
 
 
