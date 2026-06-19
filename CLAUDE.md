@@ -231,11 +231,9 @@ Base prompt (minimal — identity and general guidance only) → Sections (injec
 - Migrations should be complete and clean — remove old code entirely. No backward-compatibility shims, no deprecated wrappers, no legacy aliases unless the user explicitly asks for them.
 - Kernel (`lingtai.kernel`) must never import from the `lingtai` wrapper layer (`lingtai.agent`/`capabilities`/`core`/`llm` adapters/`services`) — dependency is strictly one-directional. A bare `import lingtai` for `__version__` is permitted.
 - All imports in the wrapper use `from lingtai.kernel.xxx import ...` for kernel types. The old top-level `lingtai_kernel` package was removed (hard cut) — never reintroduce it as an import path.
-- Repo housekeeping: `docs/`, `reports/`, and `tmp/` are ignored by default because
-  agent sessions often create private scratch there. PR explainers are local
-  artifacts by default and should not be uploaded; put them under ignored
-  `reports/`, `tmp/`, or another local artifact path. Only long-lived docs,
-  release materials, or reports with an explicit durable purpose may be
-  force-added with rationale. Do not delete or untrack historical `discussions/`
-  design material as part of a drive-by cleanup unless the owner explicitly
-  approves that archival decision.
+- Repo housekeeping: durable public documentation belongs under `docs/` (or the
+  relevant package/anatomy file) and should be tracked normally. Agent/session
+  scratch belongs under ignored `reports/`, `tmp/`, `.cache/`, or
+  `discussions/` paths and should not be uploaded. PR explainers are local
+  artifacts by default; promote only polished, long-lived outcomes into `docs/`
+  with rationale.
