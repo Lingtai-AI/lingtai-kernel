@@ -112,13 +112,25 @@ def _no_cache_control(payload) -> bool:
     return "cache_control" not in json.dumps(payload, default=str)
 
 
-def test_codex_request_includes_default_prompt_cache_key():
+def test_codex_request_includes_default_prompt_cache_key_without_agent_env(monkeypatch):
+    monkeypatch.delenv("LINGTAI_AGENT_DIR", raising=False)
     session = _create_codex_session([_completed()], model="gpt-5.5")
 
     session.send("please answer via tool")
 
     sent = session._client.responses.kwargs[0]
     assert sent["prompt_cache_key"] == "lingtai-codex:gpt-5.5:v1"
+
+
+def test_codex_request_uses_agent_dir_env_for_default_prompt_cache_key(monkeypatch, tmp_path):
+    agent_dir = tmp_path / "agent-env"
+    monkeypatch.setenv("LINGTAI_AGENT_DIR", str(agent_dir))
+    session = _create_codex_session([_completed()], model="gpt-5.5")
+
+    session.send("please answer via tool")
+
+    sent = session._client.responses.kwargs[0]
+    assert sent["prompt_cache_key"] == _expected_init_key(agent_dir / "init.json")
 
 
 def test_codex_request_uses_agent_init_path_hash_when_available(tmp_path):
