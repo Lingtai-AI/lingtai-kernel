@@ -101,8 +101,10 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
     # predates this field cooperatively share the network-wide 60 RPM cap
     # by default. Set to 0 in init.json to disable gating.
     max_rpm = m.get("max_rpm", 60)
+    # Pass working_dir so Codex agents get their per-agent session/thread
+    # identity (agent path + last molt time) wired in by default.
     provider_defaults = build_provider_defaults_from_manifest_llm(
-        llm, max_rpm=max_rpm
+        llm, max_rpm=max_rpm, working_dir=working_dir
     )
     service = LLMService(
         provider=llm["provider"],

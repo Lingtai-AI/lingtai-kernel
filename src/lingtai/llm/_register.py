@@ -64,11 +64,12 @@ def register_all_adapters() -> None:
         kw.pop("model", None)
         kw.pop("api_key", None)  # ignore env-resolved key
         kw.pop("base_url", None)  # we set our own
-        # Per-agent Codex REST cache-affinity header config (issue #378). Read
-        # from the agent's manifest ``llm`` defaults so distinct agents supply
-        # distinct per-agent session/thread identities. Absent config -> the
-        # adapter sends no session/thread headers (safe default; the adapter has
-        # no other per-agent identity in scope).
+        # Per-agent Codex REST cache-affinity header config (issue #378). The
+        # host wiring (service.build_provider_defaults_from_manifest_llm) passes
+        # down the agent path + last molt time by default via these keys, so a
+        # normal Codex agent sends stable per-agent session/thread headers. The
+        # adapter has no per-agent identity of its own; absent these keys (e.g. a
+        # bare service built in a test) it sends no session/thread headers.
         d = defaults or {}
         codex_id_kw: dict = {}
         for cfg_key in ("codex_session_id", "codex_session_anchor", "codex_thread_salt"):

@@ -11,9 +11,12 @@ Decoupled from any app-specific config system:
 from __future__ import annotations
 
 import os
+import re
 import threading
 import uuid
 from collections.abc import Callable
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from lingtai_kernel.llm.base import (
@@ -59,10 +62,14 @@ def _generate_tool_call_id() -> str:
 # api_compat="anthropic" custom providers (e.g. local GLM proxies) to
 # OpenAIAdapter, which then explodes on raw.choices access. See
 # Lingtai-AI/lingtai#112 for the full failure trace.
-# ``codex_session_id`` / ``codex_session_anchor`` / ``codex_thread_salt`` let an
-# agent opt into stable Codex REST cache-affinity headers (issue #378). They
-# carry the agent's per-agent identity, which the adapter layer otherwise has
-# no access to; absent them the Codex adapter sends no session/thread headers.
+# ``codex_session_id`` / ``codex_session_anchor`` / ``codex_thread_salt`` carry
+# the agent's per-agent Codex identity down to the adapter, which lets the Codex
+# REST path send stable ``session-id`` / ``thread-id`` cache-affinity headers
+# (issue #378). The adapter layer has no per-agent identity of its own, so these
+# are normally populated *automatically* for Codex agents from the agent path +
+# last molt time (see ``build_provider_defaults_from_manifest_llm``); they also
+# remain available as an internal override / testing escape hatch when set on
+# the manifest ``llm`` block directly.
 _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     "api_compat",
     "codex_session_id",
@@ -72,10 +79,94 @@ _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
 _PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS = ("compact_threshold",)
 
 
+# Latest-molt-summary filename shape, written by
+# ``lingtai_kernel.intrinsics.psyche._snapshots._write_molt_summary``:
+# ``molt_<count>_<unix_ts>.md``. We read the *time* component, not the count —
+# ``molt_count`` is not a reliable thread anchor; the last molt's wall-clock
+# time is.
+_MOLT_SUMMARY_RE = re.compile(r"^molt_\d+_(\d+)\.md$")
+# Frontmatter ``created_at: <ISO UTC>`` line in a molt summary, the preferred
+# (most precise) last-molt-time source.
+_FRONTMATTER_CREATED_AT_RE = re.compile(
+    r"^created_at:\s*(\S+)\s*$", re.MULTILINE
+)
+# Stable salt used before an agent has ever molted, so the thread-id is constant
+# from birth through the first molt. Only used when no durable time source
+# (molt summary, ``.agent.json``/init ``created_at``) is available.
+_CODEX_BIRTH_THREAD_SALT = "birth"
+
+
+def _latest_molt_time(working_dir: Path) -> str | None:
+    """Return the agent's last molt time as a stable salt string, or ``None``.
+
+    Used as the Codex ``thread-id`` salt so a fresh continuous-context thread
+    starts whenever the agent molts (resummarizes its history), while the
+    ``session-id`` stays anchored to the agent path. ``molt_count`` is *not*
+    used — it is not a reliable thread anchor; the last molt's time is.
+
+    Source preference (most to least precise):
+      1. Newest ``system/summaries/molt_<count>_<ts>.md`` frontmatter
+         ``created_at`` (ISO UTC), written by the molt machinery.
+      2. That same file's ``<ts>`` filename component (unix seconds), rendered
+         as ISO UTC, when frontmatter is missing/unreadable.
+      3. ``.agent.json`` then ``init.json`` ``created_at`` — keeps the thread
+         stable from birth until the first molt.
+
+    Returns ``None`` only when no durable source exists; callers fall back to a
+    stable birth salt so the thread-id is still constant.
+    """
+    summaries_dir = working_dir / "system" / "summaries"
+    latest_ts = -1
+    latest_path: Path | None = None
+    try:
+        entries = list(summaries_dir.iterdir())
+    except OSError:
+        entries = []
+    for entry in entries:
+        m = _MOLT_SUMMARY_RE.match(entry.name)
+        if not m:
+            continue
+        ts = int(m.group(1))
+        if ts > latest_ts:
+            latest_ts = ts
+            latest_path = entry
+
+    if latest_path is not None:
+        # Prefer the precise frontmatter timestamp; fall back to the filename ts.
+        try:
+            text = latest_path.read_text(encoding="utf-8")
+            fm = _FRONTMATTER_CREATED_AT_RE.search(text)
+            if fm:
+                return fm.group(1)
+        except OSError:
+            pass
+        return datetime.fromtimestamp(latest_ts, tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+
+    # No molt yet — anchor on the agent's birth time so the thread stays stable
+    # from birth to first molt. Prefer the live ``.agent.json``, then init.json.
+    for manifest_name in (".agent.json", "init.json"):
+        try:
+            import json
+
+            data = json.loads(
+                (working_dir / manifest_name).read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            continue
+        created = data.get("created_at") if isinstance(data, dict) else None
+        if created:
+            return str(created)
+
+    return None
+
+
 def build_provider_defaults_from_manifest_llm(
     llm: dict,
     *,
     max_rpm: int,
+    working_dir: Path | None = None,
 ) -> dict | None:
     """Convert a manifest.llm block into LLMService.provider_defaults.
 
@@ -83,6 +174,15 @@ def build_provider_defaults_from_manifest_llm(
     configured provider so other providers stay unaffected), or ``None``
     when no fields are set — preserving the historical behavior where
     callers passed ``provider_defaults=None`` for the unconfigured case.
+
+    When ``working_dir`` is given and the provider is Codex, the agent's
+    per-agent Codex identity is injected by default: the ``codex_session_anchor``
+    is the resolved ``init.json`` path (the agent's durable identity anchor) and
+    the ``codex_thread_salt`` is the agent's last molt time. This is the normal
+    path — it is neither opt-in nor opt-out; a Codex agent gets stable
+    ``session-id`` / ``thread-id`` headers out of the box. An explicit value on
+    the manifest ``llm`` block still wins (internal override / testing escape
+    hatch).
     """
     provider_key = llm["provider"].lower()
     per_provider: dict = {}
@@ -100,6 +200,20 @@ def build_provider_defaults_from_manifest_llm(
     for key in _PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS:
         if key in llm:
             per_provider[key] = llm[key]
+
+    # Default per-agent Codex identity from the agent path + last molt time.
+    # Manifest-supplied values (handled above) take precedence; we only fill
+    # the gaps so the override/testing escape hatch still works.
+    if provider_key == "codex" and working_dir is not None:
+        if "codex_session_id" not in per_provider:
+            per_provider.setdefault(
+                "codex_session_anchor",
+                str((working_dir / "init.json").resolve()),
+            )
+        if "codex_thread_salt" not in per_provider:
+            last_molt = _latest_molt_time(working_dir)
+            per_provider["codex_thread_salt"] = last_molt or _CODEX_BIRTH_THREAD_SALT
+
     return {provider_key: per_provider} if per_provider else None
 
 

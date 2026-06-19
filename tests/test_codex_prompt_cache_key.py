@@ -195,11 +195,12 @@ def _create_codex_session_cfg(events, *, model="gpt-5.5", **adapter_kw):
     )
 
 
-def test_codex_omits_session_thread_headers_by_default():
-    """SAFE DEFAULT: no per-agent identity configured -> no session/thread headers.
+def test_codex_bare_adapter_omits_session_thread_headers():
+    """A bare adapter (no per-agent identity passed down) sends no headers.
 
-    Deriving these from the model-only prompt_cache_key would collapse every
-    agent on a model onto one session/thread, so the default must be silence.
+    This is the test/standalone path: when nothing supplies the agent path
+    (the host wiring normally does), the adapter cannot distinguish agents and
+    must not collapse them onto one session/thread, so it stays silent.
     """
     session = _create_codex_session([_completed()], model="gpt-5.5")
 
@@ -338,7 +339,9 @@ def test_codex_bare_session_omits_headers():
 
 
 # ---------------------------------------------------------------------------
-# Manifest config seam — per-agent identity flows factory -> adapter (#378)
+# Manifest config seam — per-agent identity flows factory -> adapter (#378).
+# This is the internal override / testing escape hatch; the default path
+# (agent path + last molt time) is covered in the section after this one.
 # ---------------------------------------------------------------------------
 
 
@@ -351,14 +354,14 @@ def test_manifest_config_keys_pass_through_to_provider_defaults():
         {
             "provider": "codex",
             "codex_session_anchor": "/agents/alice/init.json",
-            "codex_thread_salt": "molt:2",
+            "codex_thread_salt": "explicit-salt",
         },
         max_rpm=0,
     )
     assert d["codex"]["codex_session_anchor"] == "/agents/alice/init.json"
-    assert d["codex"]["codex_thread_salt"] == "molt:2"
+    assert d["codex"]["codex_thread_salt"] == "explicit-salt"
 
-    # No codex config -> nothing leaks (preserves the historical None default).
+    # No codex config and no working_dir -> nothing leaks (historical None).
     assert build_provider_defaults_from_manifest_llm({"provider": "codex"}, max_rpm=0) is None
 
 
@@ -388,6 +391,155 @@ def test_codex_factory_builds_adapter_with_per_agent_ids():
         # No config -> the safe default: no per-agent identity, no headers.
         svc2 = LLMService(provider="codex", model="gpt-5.5")
         assert svc2.get_adapter("codex")._resolve_codex_ids("gpt-5.5") == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# Default wiring — agent path + last molt time passed down automatically (#378)
+# ---------------------------------------------------------------------------
+
+
+def _write_molt_summary(working_dir, *, count, ts, created_at):
+    """Write a system/summaries/molt_<count>_<ts>.md like the molt machinery."""
+    summaries = working_dir / "system" / "summaries"
+    summaries.mkdir(parents=True, exist_ok=True)
+    (summaries / f"molt_{count}_{ts}.md").write_text(
+        f"---\nmolt_count: {count}\ncreated_at: {created_at}\n---\n\nbody",
+        encoding="utf-8",
+    )
+
+
+def test_latest_molt_time_reads_created_at_from_newest_summary(tmp_path):
+    from lingtai.llm.service import _latest_molt_time
+
+    _write_molt_summary(tmp_path, count=1, ts=1000, created_at="2026-01-01T00:00:00Z")
+    _write_molt_summary(tmp_path, count=2, ts=2000, created_at="2026-06-01T12:00:00Z")
+
+    # Newest by filename ts wins, and we read its frontmatter created_at.
+    assert _latest_molt_time(tmp_path) == "2026-06-01T12:00:00Z"
+
+
+def test_latest_molt_time_falls_back_to_filename_ts(tmp_path):
+    from datetime import datetime, timezone
+
+    from lingtai.llm.service import _latest_molt_time
+
+    summaries = tmp_path / "system" / "summaries"
+    summaries.mkdir(parents=True, exist_ok=True)
+    # No frontmatter created_at -> fall back to the filename unix ts.
+    (summaries / "molt_3_1750000000.md").write_text("no frontmatter", encoding="utf-8")
+
+    expected = datetime.fromtimestamp(1750000000, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    assert _latest_molt_time(tmp_path) == expected
+
+
+def test_latest_molt_time_falls_back_to_agent_json_created_at(tmp_path):
+    from lingtai.llm.service import _latest_molt_time
+
+    # No molt summaries yet -> use .agent.json created_at (birth-stable thread).
+    (tmp_path / ".agent.json").write_text(
+        json.dumps({"created_at": "2026-05-05T05:05:05Z"}), encoding="utf-8"
+    )
+    assert _latest_molt_time(tmp_path) == "2026-05-05T05:05:05Z"
+
+
+def test_latest_molt_time_none_when_no_source(tmp_path):
+    from lingtai.llm.service import _latest_molt_time
+
+    assert _latest_molt_time(tmp_path) is None
+
+
+def test_default_wiring_injects_agent_path_and_last_molt_salt(tmp_path):
+    """Codex defaults: session anchor = resolved init.json path; salt = molt time."""
+    import lingtai  # noqa: F401
+    from lingtai.llm.service import build_provider_defaults_from_manifest_llm
+
+    _write_molt_summary(tmp_path, count=1, ts=1000, created_at="2026-06-01T12:00:00Z")
+
+    d = build_provider_defaults_from_manifest_llm(
+        {"provider": "codex"}, max_rpm=0, working_dir=tmp_path
+    )
+    assert d["codex"]["codex_session_anchor"] == str((tmp_path / "init.json").resolve())
+    assert d["codex"]["codex_thread_salt"] == "2026-06-01T12:00:00Z"
+
+
+def test_default_wiring_uses_birth_salt_before_first_molt(tmp_path):
+    import lingtai  # noqa: F401
+    from lingtai.llm.service import build_provider_defaults_from_manifest_llm
+
+    # No molt summaries, no birth manifest -> stable "birth" salt.
+    d = build_provider_defaults_from_manifest_llm(
+        {"provider": "codex"}, max_rpm=0, working_dir=tmp_path
+    )
+    assert d["codex"]["codex_thread_salt"] == "birth"
+
+
+def test_default_wiring_only_applies_to_codex(tmp_path):
+    import lingtai  # noqa: F401
+    from lingtai.llm.service import build_provider_defaults_from_manifest_llm
+
+    d = build_provider_defaults_from_manifest_llm(
+        {"provider": "openai"}, max_rpm=0, working_dir=tmp_path
+    )
+    # Non-codex providers get no codex identity injected (None when otherwise empty).
+    assert d is None
+
+
+def test_manifest_salt_overrides_default_last_molt_time(tmp_path):
+    """Explicit manifest config wins (internal override / testing escape hatch)."""
+    import lingtai  # noqa: F401
+    from lingtai.llm.service import build_provider_defaults_from_manifest_llm
+
+    _write_molt_summary(tmp_path, count=1, ts=1000, created_at="2026-06-01T12:00:00Z")
+
+    d = build_provider_defaults_from_manifest_llm(
+        {
+            "provider": "codex",
+            "codex_session_anchor": "/custom/anchor",
+            "codex_thread_salt": "override-salt",
+        },
+        max_rpm=0,
+        working_dir=tmp_path,
+    )
+    assert d["codex"]["codex_session_anchor"] == "/custom/anchor"
+    assert d["codex"]["codex_thread_salt"] == "override-salt"
+
+
+def test_default_wiring_different_agent_paths_yield_different_session_ids(tmp_path):
+    """Different agent paths -> different session-id; same path + different last
+    molt time -> same session-id but different thread-id."""
+    import lingtai  # noqa: F401
+    from lingtai.llm.openai.adapter import _codex_session_id, _codex_thread_id
+    from lingtai.llm.service import build_provider_defaults_from_manifest_llm
+
+    alice = tmp_path / "alice"
+    bob = tmp_path / "bob"
+    for p in (alice, bob):
+        p.mkdir()
+        _write_molt_summary(p, count=1, ts=1000, created_at="2026-06-01T12:00:00Z")
+
+    da = build_provider_defaults_from_manifest_llm(
+        {"provider": "codex"}, max_rpm=0, working_dir=alice
+    )["codex"]
+    db = build_provider_defaults_from_manifest_llm(
+        {"provider": "codex"}, max_rpm=0, working_dir=bob
+    )["codex"]
+
+    sid_a = _codex_session_id(da["codex_session_anchor"])
+    sid_b = _codex_session_id(db["codex_session_anchor"])
+    assert sid_a != sid_b  # different agent paths -> different session-id
+
+    # Same agent, two different last-molt times -> same session, new thread.
+    _write_molt_summary(alice, count=2, ts=2000, created_at="2026-07-01T00:00:00Z")
+    da2 = build_provider_defaults_from_manifest_llm(
+        {"provider": "codex"}, max_rpm=0, working_dir=alice
+    )["codex"]
+    sid_a2 = _codex_session_id(da2["codex_session_anchor"])
+    assert sid_a2 == sid_a  # session-id stable across molts (same path)
+    tid_a = _codex_thread_id(sid_a, da["codex_thread_salt"])
+    tid_a2 = _codex_thread_id(sid_a2, da2["codex_thread_salt"])
+    assert tid_a != tid_a2  # thread-id rotates with last molt time
 
 
 def _is_uuid(value: str) -> bool:
