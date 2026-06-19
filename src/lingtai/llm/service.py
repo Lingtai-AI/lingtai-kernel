@@ -10,6 +10,7 @@ Decoupled from any app-specific config system:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -67,7 +68,7 @@ def _generate_tool_call_id() -> str:
 # REST path send stable ``session-id`` / ``thread-id`` cache-affinity headers
 # (issue #378). The adapter layer has no per-agent identity of its own, so these
 # are normally populated *automatically* for Codex agents from the agent path +
-# last molt time (see ``build_provider_defaults_from_manifest_llm``); they also
+# last call id (see ``build_provider_defaults_from_manifest_llm``); they also
 # remain available as an internal override / testing escape hatch when set on
 # the manifest ``llm`` block directly.
 _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
@@ -90,9 +91,9 @@ _MOLT_SUMMARY_RE = re.compile(r"^molt_\d+_(\d+)\.md$")
 _FRONTMATTER_CREATED_AT_RE = re.compile(
     r"^created_at:\s*(\S+)\s*$", re.MULTILINE
 )
-# Stable salt used before an agent has ever molted, so the thread-id is constant
-# from birth through the first molt. Only used when no durable time source
-# (molt summary, ``.agent.json``/init ``created_at``) is available.
+# Stable salt used before an agent has recorded its first LLM API call, so the
+# thread-id is constant from birth through the first ledgered call. Only used
+# when no durable call id is available (no token ledger entry yet).
 _CODEX_BIRTH_THREAD_SALT = "birth"
 
 
@@ -148,8 +149,6 @@ def _latest_molt_time(working_dir: Path) -> str | None:
     # from birth to first molt. Prefer the live ``.agent.json``, then init.json.
     for manifest_name in (".agent.json", "init.json"):
         try:
-            import json
-
             data = json.loads(
                 (working_dir / manifest_name).read_text(encoding="utf-8")
             )
@@ -161,6 +160,49 @@ def _latest_molt_time(working_dir: Path) -> str | None:
 
     return None
 
+
+def _latest_call_id(working_dir: Path) -> str | None:
+    """Return the latest main-chat LLM API call id from token_ledger.jsonl.
+
+    Used as the Codex ``thread-id`` salt while ``session-id`` stays anchored to
+    the agent path. SessionManager assigns these ids as ``api_<hex>`` for each
+    LLM round-trip and BaseAgent writes them to ``logs/token_ledger.jsonl``
+    beside usage/cache data. This is the durable, per-call source Jason wanted
+    for correlating Codex cache-affinity headers with token-ledger rows.
+
+    Prefer entries tagged ``source="main"`` so daemon/soul accounting written
+    into the same ledger does not rotate the main agent's Codex thread. For
+    forward compatibility, fall back to the newest entry carrying ``api_call_id``
+    if no source-tagged main entry exists. Returns ``None`` when the ledger is
+    absent or predates api-call ids; callers then use the stable birth salt.
+    """
+    ledger_file = working_dir / "logs" / "token_ledger.jsonl"
+    try:
+        lines = ledger_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+    newest_any: str | None = None
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        call_id = entry.get("api_call_id")
+        if not call_id:
+            continue
+        call_id = str(call_id)
+        if newest_any is None:
+            newest_any = call_id
+        if entry.get("source") == "main":
+            return call_id
+
+    return newest_any
 
 def build_provider_defaults_from_manifest_llm(
     llm: dict,
@@ -178,11 +220,12 @@ def build_provider_defaults_from_manifest_llm(
     When ``working_dir`` is given and the provider is Codex, the agent's
     per-agent Codex identity is injected by default: the ``codex_session_anchor``
     is the resolved ``init.json`` path (the agent's durable identity anchor) and
-    the ``codex_thread_salt`` is the agent's last molt time. This is the normal
-    path — it is neither opt-in nor opt-out; a Codex agent gets stable
-    ``session-id`` / ``thread-id`` headers out of the box. An explicit value on
-    the manifest ``llm`` block still wins (internal override / testing escape
-    hatch).
+    the ``codex_thread_salt`` is the agent's last main-chat LLM API call id
+    (read from ``logs/token_ledger.jsonl``).
+    This is the normal path — it is neither opt-in nor opt-out; a Codex agent
+    gets stable ``session-id`` / ``thread-id`` headers out of the box. An
+    explicit value on the manifest ``llm`` block still wins (internal override /
+    testing escape hatch).
     """
     provider_key = llm["provider"].lower()
     per_provider: dict = {}
@@ -201,7 +244,7 @@ def build_provider_defaults_from_manifest_llm(
         if key in llm:
             per_provider[key] = llm[key]
 
-    # Default per-agent Codex identity from the agent path + last molt time.
+    # Default per-agent Codex identity from the agent path + last call id.
     # Manifest-supplied values (handled above) take precedence; we only fill
     # the gaps so the override/testing escape hatch still works.
     if provider_key == "codex" and working_dir is not None:
@@ -211,8 +254,10 @@ def build_provider_defaults_from_manifest_llm(
                 str((working_dir / "init.json").resolve()),
             )
         if "codex_thread_salt" not in per_provider:
-            last_molt = _latest_molt_time(working_dir)
-            per_provider["codex_thread_salt"] = last_molt or _CODEX_BIRTH_THREAD_SALT
+            last_call_id = _latest_call_id(working_dir)
+            per_provider["codex_thread_salt"] = (
+                last_call_id or _CODEX_BIRTH_THREAD_SALT
+            )
 
     return {provider_key: per_provider} if per_provider else None
 

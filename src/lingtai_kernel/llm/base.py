@@ -41,12 +41,15 @@ class ToolCall:
 
 @dataclass
 class UsageMetadata:
-    """Normalized token counts."""
+    """Normalized token counts plus optional per-call ledger metadata."""
 
     input_tokens: int = 0
     output_tokens: int = 0
     thinking_tokens: int = 0
     cached_tokens: int = 0
+    # Optional safe, provider-specific metadata to merge into token_ledger.jsonl.
+    # Do not place request bodies, API keys, or other secrets here.
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
