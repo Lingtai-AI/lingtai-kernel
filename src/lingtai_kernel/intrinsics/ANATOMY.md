@@ -1,6 +1,6 @@
 # intrinsics
 
-> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues (mail or `discussions/<name>-patch.md`); do not silently fix.
+> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.
 
 Kernel-built-in tools — the four primitives every agent always has, never removable. Each is a sub-package with a uniform public shape: `get_schema(lang)`, `get_description(lang)`, `handle(agent, args)`, and (optionally) `boot(agent)`. `ALL_INTRINSICS` registers the four modules consumed by `BaseAgent` (`intrinsics/__init__.py:8-15`).
 

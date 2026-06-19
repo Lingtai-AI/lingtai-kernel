@@ -43,7 +43,7 @@ It is **not**:
 
 - A user manual or how-to guide (those are skills, manuals, tutorials).
 - An API contract (those are tool schemas).
-- A design or rationale document (those live in `discussions/` or commit messages).
+- A design or rationale document (those live in issues, PR descriptions, durable docs, or commit messages).
 - A test specification (those are test files).
 
 It **is**: a code-cited map of *what is in this folder, how the parts connect, and where state lives.* Every structural claim is grounded in a `file:line` reference into the code. If a claim cannot point at a line that says what it claims, the claim does not belong in anatomy.
@@ -112,7 +112,7 @@ There are two kinds of agent that interact with this convention, and they have d
 
 **Coding agents** (Claude Code, Codex CLI, any agent that edits files and creates commits): you MUST update the relevant `ANATOMY.md` files in the **same commit** as the code change. If a commit moves a function, renames a file, splits a module, or changes a connection between folders, the anatomies that cite that code are part of the diff. Do not split anatomy updates into a follow-up commit — drift starts the moment the code change lands without its anatomy update. Git history is the audit trail; anatomy files do not need their own version-history sections.
 
-**LingTai agents** (the creatures running inside `.lingtai/`): you generally do NOT modify kernel source directly — you propose patches, the human applies them. Your role with anatomy is **to report drift as issues**. When you read anatomy and notice it disagrees with the code, mail the human, or write a `discussions/<name>-patch.md` proposal naming the specific citation that rotted and the correct line. Do not silently fix anatomy in your own working copy without surfacing the drift, because the value of your read-pass is the signal that the drift exists.
+**LingTai agents** (the creatures running inside `.lingtai/`): you generally do NOT modify kernel source directly — you propose patches, the human applies them. Your role with anatomy is **to report drift as issues**. When you read anatomy and notice it disagrees with the code, mail the human, or open/write a structured issue or PR proposal naming the specific citation that rotted and the correct line. Do not silently fix anatomy in your own working copy without surfacing the drift, because the value of your read-pass is the signal that the drift exists.
 
 The asymmetry exists because coding agents have commit authority and LingTai agents have observation authority. Both are needed; neither replaces the other.
 
@@ -151,7 +151,7 @@ PY
 
 This only catches missing files and out-of-range lines. It does not prove semantic correctness; an agent still has to open the cited code and confirm the claim.
 
-This is the discipline `discussions/soul-flow-tool-refusal-patch.md` and the soul package refactor (`ffe42d4`) demonstrated. The first round of citation rot happened because the rule was implicit; making it explicit here is part of the convention.
+This is the discipline demonstrated by the historical soul-flow tool-refusal proposal and the soul package refactor (`ffe42d4`). The first round of citation rot happened because the rule was implicit; making it explicit here is part of the convention.
 
 ## The kernel-root anatomy is just an anatomy
 

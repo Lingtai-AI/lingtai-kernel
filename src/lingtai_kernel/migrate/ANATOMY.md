@@ -1,6 +1,6 @@
 # migrate
 
-> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues (mail or `discussions/<name>-patch.md`); do not silently fix.
+> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.
 
 Versioned, append-only, forward-only migrations for kernel-managed on-disk state. This folder is the kernel's migration system: when changing an on-disk shape owned by the kernel, look here first and extend the appropriate registry instead of adding an ad-hoc boot-time helper. The runner currently has two domains: **preset library** migrations over preset `.json`/`.jsonc` directories, and **agent workdir** migrations over one agent directory (including `init.json`). Each domain has its own version counter and append-only registry, but both use the same runner/validation/cache machinery.
 

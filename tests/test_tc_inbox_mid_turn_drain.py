@@ -1,5 +1,5 @@
 """Tests for the mid-turn tc_inbox drain hook (option c, see
-discussions/tc-inbox-mid-turn-drain-patch.md).
+the historical TC inbox mid-turn drain proposal).
 
 The hook fires inside each adapter's send() after the message has been
 committed to the canonical ChatInterface but before the API call. The

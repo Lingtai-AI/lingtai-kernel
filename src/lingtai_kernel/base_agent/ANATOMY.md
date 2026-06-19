@@ -1,6 +1,6 @@
 # base_agent
 
-> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues (mail or `discussions/<name>-patch.md`); do not silently fix.
+> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.
 
 Generic agent kernel. Single class `BaseAgent` with methods distributed across 6 helper modules. `__init__.py` retains the constructor, properties, state machine, and subclass-overridable hooks.
 

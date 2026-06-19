@@ -389,7 +389,7 @@ def _heartbeat_loop(agent) -> None:
         # the prior wire block and reinjects per current state (IDLE
         # pair / ACTIVE meta-stash / ASLEEP wake-then-pair).  See
         # base_agent/__init__.py:_sync_notifications and
-        # discussions/notification-filesystem-redesign.md.
+        # the notification filesystem design rationale.
         try:
             agent._sync_notifications()
         except Exception as notif_err:

@@ -1,6 +1,6 @@
 # intrinsics/soul
 
-> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues (mail or `discussions/<name>-patch.md`); do not silently fix.
+> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.
 
 Inner voice and soul-flow. Four soul-domain actions (`inquiry`,
 `config`, `voice`, `flow`) plus a `dismiss` alias for the generic

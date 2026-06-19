@@ -96,7 +96,7 @@ def handle(agent, args: dict) -> dict:
     # from the agent).  The handler never returns bare channel keys
     # itself: notifications surface only via the meta-block path so there
     # is one and only one live notification payload in history at a time.
-    # See discussions/notification-filesystem-redesign.md.
+    # See the notification filesystem design rationale.
     if action == "notification":
         return {
             "_notification_placeholder": True,

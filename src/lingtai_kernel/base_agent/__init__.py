@@ -958,7 +958,7 @@ class BaseAgent:
 
     # ------------------------------------------------------------------
     # Notification sync — filesystem-as-protocol replacement for tc_inbox.
-    # See notifications.py and discussions/notification-filesystem-redesign.md.
+    # See notifications.py for the notification filesystem design rationale.
     # ------------------------------------------------------------------
 
     def _sync_notifications(self) -> None:

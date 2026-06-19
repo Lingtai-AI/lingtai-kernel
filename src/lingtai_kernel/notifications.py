@@ -14,9 +14,8 @@ Naming convention:
 
 The basename is the *tool* whose namespace owns the notification.
 
-See ``discussions/notification-filesystem-redesign.md`` for the design
-rationale and ``discussions/notification-filesystem-implementation-patch.md``
-for the implementation specification.
+Notification-file design rationale and staged implementation notes are
+preserved in this module, its Git history, and related PR / issue records.
 """
 from __future__ import annotations
 

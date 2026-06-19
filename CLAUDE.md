@@ -232,6 +232,7 @@ Base prompt (minimal — identity and general guidance only) → Sections (injec
   artifacts by default and should not be uploaded; put them under ignored
   `reports/`, `tmp/`, or another local artifact path. Only long-lived docs,
   release materials, or reports with an explicit durable purpose may be
-  force-added with rationale. Do not delete or untrack historical `discussions/`
-  design material as part of a drive-by cleanup unless the owner explicitly
+  force-added with rationale. Historical design material should now live in
+  issues, PR descriptions, commit messages, or durable docs rather than root
+  scratch trees; do not remove such records unless the owner explicitly
   approves that archival decision.
