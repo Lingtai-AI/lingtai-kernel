@@ -13,7 +13,7 @@
 > — Zhuangzi · Gengsang Chu (庄子 · 庚桑楚)
 
 [![PyPI](https://img.shields.io/pypi/v/lingtai?color=%237dab8f)](https://pypi.org/project/lingtai/)
-[![License](https://img.shields.io/github/license/Lingtai-AI/lingtai-kernel?color=%237dab8f)](LICENSE)
+[![License](https://img.shields.io/github/license/Lingtai-AI/lingtai-sdk?color=%237dab8f)](LICENSE)
 [![Blog](https://img.shields.io/badge/blog-lingtai.ai-%23d4a853)](https://lingtai.ai)
 
 [lingtai.ai](https://lingtai.ai)
@@ -140,6 +140,6 @@ Apache-2.0 — [Zesen Huang](https://github.com/huangzesen), 2025–2026
 
 <div align="center">
 
-[lingtai.ai](https://lingtai.ai) · [GitHub](https://github.com/Lingtai-AI/lingtai-kernel) · [TUI](https://github.com/Lingtai-AI/lingtai)
+[lingtai.ai](https://lingtai.ai) · [GitHub](https://github.com/Lingtai-AI/lingtai-sdk) · [TUI](https://github.com/Lingtai-AI/lingtai)
 
 </div>
