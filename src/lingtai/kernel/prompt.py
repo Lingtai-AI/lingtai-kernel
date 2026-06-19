@@ -244,7 +244,8 @@ class SystemPromptManager:
     # "unordered" bucket rendered just before the tail batch.
     _BATCHES: tuple[tuple[str, ...], ...] = (
         ("principle", "covenant", "tools", "substrate", "procedures", "comment"),
-        ("rules", "brief", "skills", "knowledge", "identity", "character", "pad"),
+        ("rules", "brief", "skills", "knowledge", "identity", "character"),
+        ("pad",),
     )
 
     def render(self) -> str:

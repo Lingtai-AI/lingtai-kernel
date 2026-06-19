@@ -101,32 +101,35 @@ def _build_system_batches_with_cache(
 
     ``batches`` is the ordered output of build_system_prompt_batches:
     typically [immovable, rarely-mutated, per-idle]. Empty batches are
-    dropped. A ``cache_control`` marker is placed on each batch boundary
-    *except the last* — the last batch is volatile (e.g. grows every
-    idle) and caching it would churn. This places up to
-    ``max_breakpoints - 1`` in-system breakpoints; combined with the
-    1 breakpoint on tools, that totals ``max_breakpoints`` and stays
-    under Anthropic's 4-slot-per-request cap.
+    skipped when emitting Anthropic content blocks, but their original
+    indexes still matter: the configured final batch is the volatile tail
+    whether or not it is currently empty. A ``cache_control`` marker is
+    placed on each non-empty batch boundary *before* that final tail; the
+    tail itself is left unmarked because caching it would churn. This places
+    up to ``max_breakpoints - 1`` in-system breakpoints; combined with the
+    1 breakpoint on tools, that totals ``max_breakpoints`` and stays under
+    Anthropic's 4-slot-per-request cap.
 
     When only a single non-empty batch exists, falls back to the
     single-block form (one breakpoint at the end).
     """
-    non_empty = [b for b in batches if b]
-    if not non_empty:
+    indexed_non_empty = [(i, b) for i, b in enumerate(batches) if b]
+    if not indexed_non_empty:
         return []
-    if len(non_empty) == 1:
-        return _build_system_with_cache(non_empty[0])
+    if len(indexed_non_empty) == 1:
+        return _build_system_with_cache(indexed_non_empty[0][1])
 
     # Cap the number of cache markers we emit inside the system list.
-    # The final batch gets no marker (too volatile to cache effectively).
-    # Earlier batches get markers up to the cap.
+    # The configured final batch gets no marker (too volatile to cache
+    # effectively), even when it is empty and therefore emits no block. Earlier
+    # batches get markers up to the cap.
     max_markers = max(0, max_breakpoints - 1)
+    final_batch_idx = len(batches) - 1
     blocks: list[dict] = []
     num_marked = 0
-    last_idx = len(non_empty) - 1
-    for i, text in enumerate(non_empty):
+    for batch_idx, text in indexed_non_empty:
         block: dict = {"type": "text", "text": text}
-        if i < last_idx and num_marked < max_markers:
+        if batch_idx < final_batch_idx and num_marked < max_markers:
             block["cache_control"] = {"type": "ephemeral"}
             num_marked += 1
         blocks.append(block)

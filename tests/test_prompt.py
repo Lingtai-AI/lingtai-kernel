@@ -3,6 +3,12 @@ from lingtai.kernel.prompt import build_system_prompt_batches
 from lingtai.kernel.prompt import SystemPromptManager
 
 
+def _batch_hash(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 def test_build_system_prompt_minimal():
     mgr = SystemPromptManager()
     prompt = build_system_prompt(mgr)
@@ -198,4 +204,54 @@ def test_batches_byte_identical_when_empty():
     batches = build_system_prompt_batches(mgr, language="zh")
     assert "\n\n".join(seg for seg in batches if seg) == full
     # Batch shape is preserved: still one string per batch.
-    assert len(batches) == 2
+    assert len(batches) == 3
+
+
+def test_pad_is_isolated_in_volatile_tail_batch():
+    """Changing pad should not perturb the stable prefix batches."""
+    mgr_v1 = SystemPromptManager()
+    mgr_v1.write_section("covenant", "Be good.", protected=True)
+    mgr_v1.write_section("tools", "### bash\nRun commands.", protected=True)
+    mgr_v1.write_section("skills", "- name: bash-manual", protected=True)
+    mgr_v1.write_section("knowledge", "- name: project-memory", protected=True)
+    mgr_v1.write_section("identity", "name: alice", protected=True)
+    mgr_v1.write_section("character", "I am a meticulous archivist.", protected=True)
+    mgr_v1.write_section("pad", "Working notes v1.")
+
+    mgr_v2 = SystemPromptManager()
+    mgr_v2.write_section("covenant", "Be good.", protected=True)
+    mgr_v2.write_section("tools", "### bash\nRun commands.", protected=True)
+    mgr_v2.write_section("skills", "- name: bash-manual", protected=True)
+    mgr_v2.write_section("knowledge", "- name: project-memory", protected=True)
+    mgr_v2.write_section("identity", "name: alice", protected=True)
+    mgr_v2.write_section("character", "I am a meticulous archivist.", protected=True)
+    mgr_v2.write_section("pad", "Working notes v2.")
+
+    batches_v1 = build_system_prompt_batches(mgr_v1, language="en")
+    batches_v2 = build_system_prompt_batches(mgr_v2, language="en")
+
+    assert len(batches_v1) == 3
+    assert len(batches_v2) == 3
+    assert "Working notes v1." in batches_v1[2]
+    assert "Working notes v1." not in batches_v1[0]
+    assert "Working notes v1." not in batches_v1[1]
+    assert "- name: bash-manual" in batches_v1[1]
+    assert "- name: project-memory" in batches_v1[1]
+    assert "I am a meticulous archivist." in batches_v1[1]
+
+    assert _batch_hash(batches_v1[0]) == _batch_hash(batches_v2[0])
+    assert _batch_hash(batches_v1[1]) == _batch_hash(batches_v2[1])
+    assert _batch_hash(batches_v1[2]) != _batch_hash(batches_v2[2])
+
+
+def test_unordered_sections_do_not_spill_into_pad_tail():
+    mgr = SystemPromptManager()
+    mgr.write_section("custom", "Custom stable context.")
+    mgr.write_section("pad", "Volatile notes.")
+
+    batches = build_system_prompt_batches(mgr, language="en")
+
+    assert len(batches) == 3
+    assert "Custom stable context." in batches[1]
+    assert "Custom stable context." not in batches[2]
+    assert "Volatile notes." in batches[2]
