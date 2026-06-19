@@ -4,10 +4,12 @@ Daemon capability (分神) — dispatch ephemeral subagents (分神) that operat
 in parallel on the agent's working directory. Each LingTai-backend emanation
 is a disposable `ChatSession` with a curated tool surface, not an agent; the
 parent may add a per-task oneshot `system_prompt` as the behavior contract for
-role, constraints, and tool-use policy; per-task `skills` paths render into a
-compact skill catalog; and per-task `mcp` supplies full one-run MCP
-registrations serialized as YAML for all backends and loaded as task-scoped MCP
-tools by the LingTai backend. Parent MCP tools are not auto-inherited. The daemon-eligible `email` intrinsic is available by default, but daemon tool
+role, constraints, and tool-use policy; per-task `capsule` renders a compact
+structured task contract (objective, scope, result contract, review gate) into
+the same oneshot context and persists it in `call_parameters`; per-task `skills`
+paths render into a compact skill catalog; and per-task `mcp` supplies full
+one-run MCP registrations serialized as YAML for all backends and loaded as
+task-scoped MCP tools by the LingTai backend. Parent MCP tools are not auto-inherited. The daemon-eligible `email` intrinsic is available by default, but daemon tool
 calls still pass through the kernel `ToolExecutor`/`ToolCallGuard` path before
 any handler runs. Each `daemon.emanate` batch gets a stable `group_id` shared by
 every run in that batch, while each daemon still keeps its own `run_id`. Results are
@@ -17,7 +19,7 @@ text.
 
 ## Components
 
-- `daemon/__init__.py` — public capability surface. `get_description`, `get_schema`, and `setup`; `make_manager(agent, …)` / `make_handler(agent, …)` are the single-source-of-truth construction factories (`setup()` builds through `make_manager` and registers `mgr.handle`; the SDK communication/execution bundle bridge `lingtai.core.communication_bundle` uses `make_handler` to host the *same* `DaemonManager.handle` — stage 3D). The core class is `DaemonManager`, which manages the full emanation lifecycle and parent-stop cleanup. Key internals: `_ToolCollector` (`daemon/__init__.py:338-365`) intercepts `add_tool` calls during preset-driven capability setup to build a sandboxed tool surface without mutating the parent's registry. `EMANATION_BLACKLIST` (`daemon/__init__.py:143`) prevents recursion by blocking `daemon`, `avatar`, `psyche`, `skills`, and `knowledge`; `_daemon_intrinsic_surface()` (`daemon/__init__.py:603`) is the narrow daemon intrinsic bridge for `email` only; `_task_mcp_registrations()` (`daemon/__init__.py:695`) validates full per-task MCP registrations and renders prompt-safe YAML; `_connect_task_mcp_registrations()` (`daemon/__init__.py:784`) starts task-scoped MCP clients for the LingTai backend; `_build_tool_surface()` (`daemon/__init__.py:913`) includes only task-scoped MCP tools rather than auto-inheriting parent MCP tools.
+- `daemon/__init__.py` — public capability surface. `get_description`, `get_schema`, and `setup`; `make_manager(agent, …)` / `make_handler(agent, …)` are the single-source-of-truth construction factories (`setup()` builds through `make_manager` and registers `mgr.handle`; the SDK communication/execution bundle bridge `lingtai.core.communication_bundle` uses `make_handler` to host the *same* `DaemonManager.handle` — stage 3D). The core class is `DaemonManager`, which manages the full emanation lifecycle and parent-stop cleanup. Key internals: `_ToolCollector` (`daemon/__init__.py:338-365`) intercepts `add_tool` calls during preset-driven capability setup to build a sandboxed tool surface without mutating the parent's registry. `EMANATION_BLACKLIST` (`daemon/__init__.py:143`) prevents recursion by blocking `daemon`, `avatar`, `psyche`, `skills`, and `knowledge`; `_daemon_intrinsic_surface()` (`daemon/__init__.py:603`) is the narrow daemon intrinsic bridge for `email` only; `_task_mcp_registrations()` (`daemon/__init__.py:720`) validates full per-task MCP registrations and renders prompt-safe YAML; `_connect_task_mcp_registrations()` (`daemon/__init__.py:809`) starts task-scoped MCP clients for the LingTai backend; `_task_capsule()` / `_render_task_capsule()` (`daemon/__init__.py:929-948`) validate and render the optional structured task capsule into the oneshot daemon context; `_build_tool_surface()` (`daemon/__init__.py:965`) includes only task-scoped MCP tools rather than auto-inheriting parent MCP tools.
 - `daemon/claude_interactive.py` — interactive Claude Code daemon backend. **Hidden / not user-selectable:** `claude` / `claude-interactive` were removed from the `get_schema()` `backend` enum and description (`daemon/__init__.py:458-485`); the code path stays only so older callers and stored daemon entries with `backend="claude"` still resolve through `_normalize_backend`/dispatch. New work uses print-mode `claude-p`. `ClaudeInteractiveBridge` (`daemon/claude_interactive.py:103`) runs normal interactive `claude` under a PTY from a LingTai-managed workspace, writes the managed system prompt (`daemon/claude_interactive.py:80-96`), prepares empty or explicit-source detached worktrees (`daemon/claude_interactive.py:250-309`), answers terminal probes, injects `SessionStart`/`Stop` hooks via inline `--settings`, relays hook payloads through a FIFO, auto-selects workspace trust only inside the verified managed root (`daemon/claude_interactive.py:535-559`), and parses Claude transcript JSONL into daemon progress/result state.
 - `daemon/run_dir.py` — per-emanation filesystem run directory. `DaemonRunDir` owns every filesystem effect for one run: folder layout, `daemon.json` atomic writes, batch `group_id` metadata (`DaemonRunDir.new_group_id()`), JSONL appends, CLI progress events, heartbeat touches, `result.txt`, versioned `daemon.json` data (`data_version`), visible `call_parameters`, and terminal state markers. The `DaemonManager` calls into a `DaemonRunDir` at every lifecycle hook without itself touching the filesystem.
 
@@ -43,7 +45,8 @@ daemon/__init__.py
   ├── _daemon_intrinsic_surface()   — exposes daemon-eligible intrinsics (currently auto-included `email`)
   ├── _build_tool_surface()         — filters requested tools against blacklist, expands groups, merges preset/MCP/email surfaces
   ├── _instantiate_preset_capabilities() — sets up preset tool surface in a sandbox
-  ├── _build_emanation_prompt()     — composes the base prompt plus optional per-task oneshot system_prompt
+  ├── _task_capsule()/render        — validates optional structured capsule and renders it into oneshot context
+  ├── _build_emanation_prompt()     — composes the base prompt plus optional per-task oneshot context
   ├── _run_emanation()              — lingtai-backend worker tool loop (send → ToolExecutor/ToolCallGuard → tool results)
   ├── _run_claude_interactive_emanation() — `claude` / `claude-interactive` backend; delegates to `run_claude_interactive()` (`daemon/claude_interactive.py:771`) to create the managed workspace, drive the interactive Claude TUI through PTY + hooks + transcript parsing, and persist managed-workspace state.
   ├── _run_claude_code_emanation()  — `claude-p` / compatibility `claude-code` backend; parses `--output-format stream-json --verbose` print-mode events in real time so `claude_session_id`, per-turn text, and tool_use/tool_result land in DaemonRunDir during the run (vs. post-hoc). Claude Code's own `usage` fields are deliberately NOT forwarded to append_tokens (external billing path; semantics don't match the kernel's adapter accounting).
@@ -71,7 +74,7 @@ daemon/__init__.py
   └── _drain_followup()             — drains per-emanation follow-up buffer (lingtai backend only)
 
 daemon/run_dir.py
-  ├── DaemonRunDir.__init__         — creates folder on disk, writes versioned daemon.json (data_version + call_parameters) + .prompt
+  ├── DaemonRunDir.__init__         — creates folder on disk, writes versioned daemon.json (data_version + call_parameters, including optional capsule) + .prompt
   ├── Path properties               — run_id, handle, group_id, path, daemon_json_path, prompt_path, heartbeat_path, chat_path, events_path, token_ledger_path, result_path
   ├── record_user_send()            — appends user-role entry to chat_history.jsonl
   ├── bump_turn()                   — marks end of LLM round (daemon.json + chat_history + heartbeat)

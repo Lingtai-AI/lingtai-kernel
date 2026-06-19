@@ -386,6 +386,8 @@ def test_daemon_schema_accepts_task_system_prompt_and_skills():
     assert "mcp" in task_props
     assert task_props["mcp"]["type"] == "array"
     assert task_props["mcp"]["items"]["type"] == "object"
+    assert "capsule" in task_props
+    assert task_props["capsule"]["type"] == "object"
     assert "custom_system_prompt" not in task_props
 
 
@@ -426,6 +428,43 @@ def test_cli_backend_serializes_task_mcp_context(tmp_path, monkeypatch):
     assert "TOKEN: <redacted>" in captured["task"]
     assert "secret" not in captured["task"]
     assert "## Parent-provided MCP registrations" in captured["prompt"]
+
+
+def test_cli_backend_serializes_task_capsule_context(tmp_path, monkeypatch):
+    """CLI backends receive the structured capsule and persist it for review."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    captured = {}
+    capsule = {
+        "objective": "measure daemon return quality",
+        "result_contract": ["conclusion", "evidence", "risks"],
+        "review_gate": {"parent_must_verify": True},
+    }
+
+    def fake_run(em_id, run_dir, task, cancel_event, timeout_event=None, backend_argv=None):
+        captured["task"] = task
+        captured["prompt"] = run_dir.prompt_path.read_text(encoding="utf-8")
+        captured["state"] = json.loads(run_dir.daemon_json_path.read_text(encoding="utf-8"))
+        run_dir.mark_done("ok")
+        return "ok"
+
+    monkeypatch.setattr(mgr, "_run_codex_emanation", fake_run)
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "codex",
+        "tasks": [{"task": "x", "tools": [], "capsule": capsule}],
+    })
+
+    assert result["status"] == "dispatched"
+    future = mgr._emanations[result["ids"][0]]["future"]
+    future.result(timeout=5)
+    assert "## Structured daemon task capsule" in captured["task"]
+    assert '"objective": "measure daemon return quality"' in captured["task"]
+    assert '"result_contract"' in captured["task"]
+    assert '"review_gate"' in captured["task"]
+    assert captured["task"].index("## Structured daemon task capsule") < captured["task"].index("Task:")
+    assert "## Structured daemon task capsule" in captured["prompt"]
+    assert captured["state"]["call_parameters"]["capsule"] == capsule
 
 
 def test_build_tool_surface_includes_email_intrinsic_by_default(tmp_path):
@@ -602,6 +641,53 @@ def test_build_emanation_prompt_includes_selected_mcp_context(tmp_path):
     assert "- name: demo-mcp" in prompt
     assert "transport: stdio" in prompt
     assert prompt.index("## Parent-provided MCP registrations") < prompt.index("Your task:")
+
+
+def test_build_emanation_prompt_includes_task_capsule(tmp_path):
+    """Structured capsules render before the daemon task for parent review gates."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    schemas, _ = mgr._build_tool_surface(["file"])
+    capsule = {
+        "objective": "audit a change",
+        "result_contract": ["conclusion", "evidence"],
+        "review_gate": {"parent_must_verify": True},
+    }
+    context = mgr._combine_oneshot_context(
+        None,
+        None,
+        None,
+        mgr._render_task_capsule(capsule),
+    )
+
+    prompt = mgr._build_emanation_prompt("Review the report", schemas, system_prompt=context)
+
+    assert "## Structured daemon task capsule" in prompt
+    assert '"objective": "audit a change"' in prompt
+    assert '"result_contract"' in prompt
+    assert '"review_gate"' in prompt
+    assert prompt.index("## Structured daemon task capsule") < prompt.index("Your task:")
+
+
+def test_task_capsule_rejects_non_object(tmp_path):
+    """capsule is optional, but when present it must be an object."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    assert mgr._task_capsule({"task": "x", "tools": []}) is None
+    assert mgr._task_capsule({"task": "x", "tools": [], "capsule": {}}) is None
+    try:
+        mgr._task_capsule({"task": "x", "tools": [], "capsule": "bad"})
+    except ValueError as e:
+        assert str(e) == "capsule must be an object"
+    else:
+        raise AssertionError("non-object capsule should fail")
+    try:
+        mgr._task_capsule({"task": "x", "tools": [], "capsule": {"bad": object()}})
+    except ValueError as e:
+        assert str(e) == "capsule must be JSON-serializable"
+    else:
+        raise AssertionError("non-JSON-serializable capsule should fail")
 
 
 def test_build_emanation_prompt_includes_task(tmp_path):
@@ -808,6 +894,96 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
     assert {e["source"] for e in events} == {"daemon"}
     assert {e["ref_id"] for e in events} == {"em-1", "em-2"}
     assert all("[daemon:em-" not in e["body"] for e in events)
+
+
+def test_handle_emanate_persists_task_capsule(tmp_path, monkeypatch):
+    """LingTai backend stores task capsule in daemon.json and prompt context."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    captured = {}
+    capsule = {
+        "objective": "reduce parent rework",
+        "scope": ["read-only prototype"],
+        "result_contract": ["conclusion", "evidence", "next_step"],
+        "review_gate": {"parent_must_verify": True},
+    }
+
+    def fake_run(em_id, run_dir, schemas, dispatch, task, cancel_event, *args):
+        captured["prompt"] = run_dir.prompt_path.read_text(encoding="utf-8")
+        captured["state"] = json.loads(run_dir.daemon_json_path.read_text(encoding="utf-8"))
+        run_dir.mark_done("ok")
+        return "ok"
+
+    monkeypatch.setattr(mgr, "_run_emanation", fake_run)
+    result = mgr.handle({"action": "emanate", "tasks": [
+        {"task": "Review one file", "tools": ["file"], "capsule": capsule},
+    ]})
+
+    assert result["status"] == "dispatched"
+    future = mgr._emanations[result["ids"][0]]["future"]
+    future.result(timeout=5)
+    assert "## Structured daemon task capsule" in captured["prompt"]
+    assert '"objective": "reduce parent rework"' in captured["prompt"]
+    assert captured["prompt"].index("## Structured daemon task capsule") < captured["prompt"].index("Your task:")
+    assert captured["state"]["call_parameters"]["capsule"] == capsule
+
+
+def test_handle_emanate_rejects_invalid_capsule_before_dispatch(tmp_path, monkeypatch):
+    """LingTai backend validates all capsules before dispatching any task."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    called = False
+
+    def fake_run(*args, **kwargs):
+        nonlocal called
+        called = True
+        return "should not run"
+
+    monkeypatch.setattr(mgr, "_run_emanation", fake_run)
+    result = mgr.handle({"action": "emanate", "tasks": [
+        {"task": "valid first", "tools": ["file"], "capsule": {"objective": "ok"}},
+        {"task": "invalid second", "tools": ["file"], "capsule": "bad"},
+    ]})
+
+    assert result == {"status": "error", "message": "tasks[1]: capsule must be an object"}
+    assert called is False
+    assert mgr._emanations == {}
+
+
+def test_handle_emanate_rejects_non_json_capsule_before_dispatch(tmp_path):
+    """In-process callers get a structured error for non-JSON capsule values."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+
+    result = mgr.handle({"action": "emanate", "tasks": [
+        {"task": "x", "tools": ["file"], "capsule": {"bad": object()}},
+    ]})
+
+    assert result == {"status": "error", "message": "tasks[0]: capsule must be JSON-serializable"}
+    assert mgr._emanations == {}
+
+
+def test_cli_backend_rejects_non_json_capsule_before_dispatch(tmp_path, monkeypatch):
+    """CLI backend shares the same preflight error for non-JSON capsules."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    called = False
+
+    def fake_run(*args, **kwargs):
+        nonlocal called
+        called = True
+        return "should not run"
+
+    monkeypatch.setattr(mgr, "_run_codex_emanation", fake_run)
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "codex",
+        "tasks": [{"task": "x", "tools": [], "capsule": {"bad": object()}}],
+    })
+
+    assert result == {"status": "error", "message": "tasks[0]: capsule must be JSON-serializable"}
+    assert called is False
+    assert mgr._emanations == {}
 
 
 def test_handle_emanate_allows_concurrent(tmp_path):

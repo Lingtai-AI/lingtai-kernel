@@ -396,6 +396,10 @@ def get_schema(lang: str = "en") -> dict:
                             "items": {"type": "object"},
                             "description": t(lang, "daemon.tasks.mcp"),
                         },
+                        "capsule": {
+                            "type": "object",
+                            "description": t(lang, "daemon.tasks.capsule"),
+                        },
                         "preset": {
                             "type": "string",
                             "description": t(lang, "daemon.tasks.preset"),
@@ -891,10 +895,13 @@ class DaemonManager:
         system_prompt: str | None,
         skill_catalog: str | None,
         mcp_catalog: str | None = None,
+        capsule_context: str | None = None,
     ) -> str | None:
         parts = []
         if system_prompt:
             parts.append(system_prompt)
+        if capsule_context:
+            parts.append(capsule_context)
         if skill_catalog:
             parts.append("## Parent-selected skills\n" + skill_catalog)
         if mcp_catalog:
@@ -917,6 +924,30 @@ class DaemonManager:
         if not isinstance(value, str):
             raise ValueError("system_prompt must be a string")
         return value.strip() or None
+
+    @staticmethod
+    def _task_capsule(spec: dict) -> dict | None:
+        """Return the optional structured task capsule for one daemon task."""
+        if "capsule" not in spec:
+            return None
+        value = spec.get("capsule")
+        if not isinstance(value, dict):
+            raise ValueError("capsule must be an object")
+        if not value:
+            return None
+        try:
+            json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError) as e:
+            raise ValueError("capsule must be JSON-serializable") from e
+        return value
+
+    @staticmethod
+    def _render_task_capsule(capsule: dict | None) -> str | None:
+        """Render a compact JSON capsule into the daemon oneshot context."""
+        if not capsule:
+            return None
+        rendered = json.dumps(capsule, indent=2, ensure_ascii=False, sort_keys=True)
+        return "## Structured daemon task capsule\n```json\n" + rendered + "\n```"
 
     @staticmethod
     def _compose_cli_task(task: str, system_prompt: str | None) -> str:
@@ -2137,6 +2168,29 @@ class DaemonManager:
                 "preset_handlers": preset_handlers,
             })
 
+        # Pre-flight oneshot task context before creating the executor or
+        # scheduling any emanation. A bad later task (for example a non-object
+        # capsule) must refuse the whole batch rather than returning an error
+        # after earlier tasks already started without IDs for the caller.
+        task_system_prompts: list[str | None] = []
+        task_skill_catalogs: list[str | None] = []
+        task_mcp_registrations: list[list[dict]] = []
+        task_mcp_catalogs: list[str | None] = []
+        task_capsules: list[dict | None] = []
+        task_capsule_contexts: list[str | None] = []
+        for i, spec in enumerate(tasks):
+            try:
+                task_system_prompts.append(self._task_system_prompt(spec))
+                task_skill_catalogs.append(self._task_skill_catalog(spec))
+                task_mcp_regs, task_mcp_catalog = self._task_mcp_registrations(spec)
+                task_mcp_registrations.append(task_mcp_regs)
+                task_mcp_catalogs.append(task_mcp_catalog)
+                task_capsule = self._task_capsule(spec)
+                task_capsules.append(task_capsule)
+                task_capsule_contexts.append(self._render_task_capsule(task_capsule))
+            except ValueError as e:
+                return {"status": "error", "message": f"tasks[{i}]: {e}"}
+
         cancel_event = threading.Event()
         # Separate event so the watchdog can distinguish timeout from manual
         # reclaim. Watchdog sets BOTH on timeout; reclaim sets only cancel_event.
@@ -2166,9 +2220,14 @@ class DaemonManager:
                     resolved["preset_schemas"],
                     resolved["preset_handlers"],
                 )
+            task_system_prompt = task_system_prompts[i]
+            task_skill_catalog = task_skill_catalogs[i]
+            task_mcp_regs = task_mcp_registrations[i]
+            task_mcp_catalog = task_mcp_catalogs[i]
+            task_capsule = task_capsules[i]
+            task_capsule_context = task_capsule_contexts[i]
             task_mcp_clients: list[object] = []
             try:
-                task_mcp_regs, task_mcp_catalog = self._task_mcp_registrations(spec)
                 mcp_schemas, mcp_handlers, task_mcp_clients = (
                     self._connect_task_mcp_registrations(task_mcp_regs)
                 )
@@ -2177,13 +2236,12 @@ class DaemonManager:
                     preset_surface=preset_surface,
                     mcp_surface=(mcp_schemas, mcp_handlers),
                 )
-                task_system_prompt = self._task_system_prompt(spec)
-                task_skill_catalog = self._task_skill_catalog(spec)
             except Exception as e:
                 self._close_task_mcp_clients(task_mcp_clients)
                 return {"status": "error", "message": str(e)}
             task_context = self._combine_oneshot_context(
-                task_system_prompt, task_skill_catalog, task_mcp_catalog
+                task_system_prompt, task_skill_catalog, task_mcp_catalog,
+                task_capsule_context,
             )
             system_prompt = self._build_emanation_prompt(
                 spec["task"], schemas, system_prompt=task_context
@@ -2215,6 +2273,7 @@ class DaemonManager:
                         "skills": spec.get("skills", []),
                         "mcp": [self._redact_mcp_registration_for_prompt(r) for r in task_mcp_regs],
                         "system_prompt": task_system_prompt,
+                        "capsule": task_capsule,
                     },
                     log_callback=self._log,
                     preset_name=resolved["name"] if resolved else None,
@@ -2293,6 +2352,8 @@ class DaemonManager:
         task_skill_catalogs: list[str | None] = []
         task_mcp_catalogs: list[str | None] = []
         task_mcp_registrations: list[list[dict]] = []
+        task_capsules: list[dict | None] = []
+        task_capsule_contexts: list[str | None] = []
         for i, spec in enumerate(tasks):
             try:
                 task_system_prompts.append(self._task_system_prompt(spec))
@@ -2300,6 +2361,9 @@ class DaemonManager:
                 task_mcp_regs, task_mcp_catalog = self._task_mcp_registrations(spec)
                 task_mcp_registrations.append(task_mcp_regs)
                 task_mcp_catalogs.append(task_mcp_catalog)
+                task_capsule = self._task_capsule(spec)
+                task_capsules.append(task_capsule)
+                task_capsule_contexts.append(self._render_task_capsule(task_capsule))
             except ValueError as e:
                 return {"status": "error",
                         "message": f"tasks[{i}]: {e}"}
@@ -2336,8 +2400,11 @@ class DaemonManager:
             task_skill_catalog = task_skill_catalogs[i]
             task_mcp_catalog = task_mcp_catalogs[i]
             task_mcp_regs = task_mcp_registrations[i]
+            task_capsule = task_capsules[i]
+            task_capsule_context = task_capsule_contexts[i]
             task_context = self._combine_oneshot_context(
-                task_system_prompt, task_skill_catalog, task_mcp_catalog
+                task_system_prompt, task_skill_catalog, task_mcp_catalog,
+                task_capsule_context,
             )
             system_prompt = f"[{backend} backend — task delegated to external CLI]"
             if task_context:
@@ -2365,6 +2432,7 @@ class DaemonManager:
                         "skills": spec.get("skills", []),
                         "mcp": [self._redact_mcp_registration_for_prompt(r) for r in task_mcp_regs],
                         "system_prompt": task_system_prompt,
+                        "capsule": task_capsule,
                         "backend_options": backend_options,
                     },
                     log_callback=self._log,

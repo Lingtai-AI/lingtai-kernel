@@ -62,5 +62,6 @@
   "skills.preamble": "以下技能为特定任务提供专门指导。当任务匹配某个技能的描述时，使用 read 工具读取 location 字段所示路径下的 SKILL.md 文件，然后遵循其中指示。每个技能文件夹可能包含支持文件（脚本、模板、数据）——SKILL.md 会引用它们。经常使用的技能可通过 psyche({object:'pad', action:'append', files:[location]}) 固定到 pad 中，使其跨轮次持久存在。若没有明显匹配的技能，则不加载任何技能。",
   "daemon.tasks.system_prompt": "可选的一次性行为契约，只附加到此 daemon 任务：角色、约束、工具使用策略、协作边界与安全姿态。留空或省略表示使用默认 daemon 身份。它可以引导 daemon 的工作方式，但不能覆盖工具可用性、取消/超时限制或工具执行/审批 gate。",
   "daemon.tasks.skills": "此 daemon 任务的可选 skill 上下文。字符串数组；每项可以是 skill 目录（内含 SKILL.md），也可以是直接的 SKILL.md 文件路径。相对路径按父 agent 工作目录解析。daemon runtime 会解析每个 skill 的 frontmatter，并把紧凑 YAML skill list 注入本次 prompt；用 system_prompt 说明何时/如何应用这些 skills。",
-  "daemon.tasks.mcp": "此 daemon 任务的可选一次性 MCP 注册。对象数组；每项为完整 MCP 注册对象：{name, transport/type: stdio|http，stdio 使用 command+args+env，http 使用 url+headers}。这些注册会以 YAML 序列化进 daemon prompt；LingTai backend 还会将其启动为本次任务专属 MCP client 并暴露其 tools。CLI backends 会收到同一份序列化注册作为上下文，如其运行时支持 MCP 可自行加载。prompt 中的 env/header secret 会被脱敏。"
+  "daemon.tasks.mcp": "此 daemon 任务的可选一次性 MCP 注册。对象数组；每项为完整 MCP 注册对象：{name, transport/type: stdio|http，stdio 使用 command+args+env，http 使用 url+headers}。这些注册会以 YAML 序列化进 daemon prompt；LingTai backend 还会将其启动为本次任务专属 MCP client 并暴露其 tools。CLI backends 会收到同一份序列化注册作为上下文，如其运行时支持 MCP 可自行加载。prompt 中的 env/header secret 会被脱敏。",
+  "daemon.tasks.capsule": "此 daemon 任务的可选结构化 capsule：objective、scope、result_contract、review_gate 与 metadata。它会渲染进一次性 daemon 上下文，并持久化到 daemon call_parameters 供父灵复核。请保持精简，勿放入凭证或秘密。"
 }
