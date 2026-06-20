@@ -3,7 +3,9 @@
 Gives an agent the ability to split its consciousness into focused worker
 fragments that operate in parallel on the same working directory.  Each
 emanation is a disposable ChatSession with a curated tool surface — not an
-agent.  Results are persisted in daemon run directories; completion is surfaced via a compact system notification.
+agent.  Results are persisted in daemon run directories; every terminal outcome
+(done / failed / cancelled / timeout) is surfaced exactly once via a compact
+system notification, so the parent can dispatch and go idle without polling.
 
 Usage:
     Agent(capabilities=["daemon"])
@@ -491,8 +493,10 @@ def get_schema(lang: str = "en") -> dict:
 class DaemonManager:
     """Manages subagent (emanation) lifecycle."""
 
-    # Minimum text length to trigger a parent notification.
-    # Short results (e.g. "[cancelled]") are suppressed to avoid notification storms.
+    # Minimum text length to trigger a parent notification for a *successful*
+    # (done) run — short happy-path results are suppressed to avoid notification
+    # storms. Non-success terminal states (failed / cancelled / timeout) always
+    # notify regardless of length; see _on_emanation_done.
     _NOTIFY_MIN_LEN = 20
 
     def __init__(self, agent: "Agent", max_emanations: int = 100,
@@ -1990,12 +1994,19 @@ class DaemonManager:
         text: str,
         run_dir: DaemonRunDir | None = None,
     ) -> None:
-        """Publish a compact daemon completion event via .notification/system.json.
+        """Publish a compact daemon terminal event via .notification/system.json.
 
-        Full daemon output belongs in the run directory and is inspectable via
+        Fired on every terminal status (done / failed / cancelled / timeout) so
+        the parent agent can dispatch a daemon and safely go idle: the kernel
+        notification sync wakes it when the run ends, no polling required. Full
+        daemon output belongs in the run directory and is inspectable via
         ``daemon(action="check", id=...)``.  The parent notification is only a
         wake signal with provenance, bounded preview, and the inspection path.
         It must not arrive as ordinary ``MSG_REQUEST`` text.
+
+        Once-only delivery is the caller's responsibility via
+        ``DaemonRunDir.claim_terminal_notification`` (terminal path); follow-up
+        (``ask``) notifications intentionally reuse this same compact format.
         """
         preview = text or ""
         if len(preview) > self._NOTIFICATION_PREVIEW_MAX:
@@ -2007,11 +2018,23 @@ class DaemonManager:
             f"Daemon {em_id} {status}.",
             f"Inspect with daemon(action=\"check\", id=\"{em_id}\").",
         ]
+        recorded_error = None
         if run_dir is not None:
+            snapshot = run_dir.state_snapshot()
+            task = (snapshot.get("task") or "").strip()
+            if task:
+                if len(task) > self._NOTIFICATION_PREVIEW_MAX:
+                    task = task[: self._NOTIFICATION_PREVIEW_MAX] + "..."
+                parts.append(f"Task: {task}")
             parts.append(f"Run directory: {run_dir.path}")
-            result_path = run_dir.state_snapshot().get("result_path")
+            result_path = snapshot.get("result_path")
             if result_path:
                 parts.append(f"Result file: {result_path}")
+            recorded_error = snapshot.get("error")
+        if recorded_error:
+            err_type = recorded_error.get("type", "error")
+            err_msg = (recorded_error.get("message") or "")[:self._NOTIFICATION_PREVIEW_MAX]
+            parts.append(f"Error: {err_type}: {err_msg}".rstrip(": "))
         if preview:
             parts.append(f"Preview:\n{preview}")
         body = "\n".join(parts)
@@ -4864,6 +4887,11 @@ class DaemonManager:
         entry = self._emanations.get(em_id)
         if entry:
             elapsed = time.time() - entry["start_time"]
+        run_dir = entry.get("run_dir") if entry else None
+
+        # Derive a fallback status from the future result. The future returns
+        # text on cooperative exit (including the short ``[cancelled]`` sentinel
+        # a timed-out/reclaimed run returns) and raises on a hard failure.
         status = "done"
         try:
             text = future.result()
@@ -4875,16 +4903,41 @@ class DaemonManager:
             self._log("daemon_error", em_id=em_id,
                       exception=type(e).__name__, exception_message=str(e))
 
-        # Suppress notifications for short successful results to prevent
-        # notification storms. Failures always notify.
+        # The run directory's recorded state is authoritative for the terminal
+        # status: a cancelled/timed-out run returns the short ``[cancelled]``
+        # sentinel through the future, which would otherwise be misclassified as
+        # a tiny "done" and swallowed by the short-result gate below. Prefer it
+        # so every terminal status (done / failed / cancelled / timeout) is
+        # labelled and reported correctly, and the parent always learns the
+        # daemon terminated even when it failed silently.
+        if run_dir is not None:
+            try:
+                recorded = run_dir.state_snapshot().get("state")
+            except Exception:
+                recorded = None
+            if recorded in ("done", "failed", "cancelled", "timeout"):
+                status = recorded
+
+        # Suppress notifications only for short *successful* results to prevent
+        # notification storms. Every non-success terminal state (failed,
+        # cancelled, timeout) always notifies so the parent can safely go idle
+        # after dispatch and still learn the run ended.
         if status == "done" and len(text) < self._notify_threshold:
             self._log("daemon_result", em_id=em_id, status="suppressed_short",
                       text_length=len(text))
             return
 
-        run_dir = entry.get("run_dir") if entry else None
+        # Deliver exactly once per run: the done-callback can fire more than
+        # once for the same em_id (racing reclaim, re-entrant callbacks). The
+        # run directory owns the once-only claim, decoupled from the system
+        # channel's ref_id dedup so an earlier follow-up (``ask``) event sharing
+        # this run's ref_id cannot suppress the terminal notification.
+        if run_dir is not None and not run_dir.claim_terminal_notification():
+            self._log("daemon_terminal_notify_skipped_duplicate",
+                      em_id=em_id, status=status)
+            return
         self._publish_daemon_notification(
-            em_id, status=status, text=text, run_dir=run_dir
+            em_id, status=status, text=text, run_dir=run_dir,
         )
 
     # ------------------------------------------------------------------

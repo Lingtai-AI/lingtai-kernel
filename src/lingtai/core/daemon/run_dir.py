@@ -540,6 +540,27 @@ class DaemonRunDir:
         """Watchdog timeout. Sets state=timeout."""
         self._mark_terminal("timeout", "daemon_timeout")
 
+    def claim_terminal_notification(self) -> bool:
+        """Atomically claim the once-only terminal-notification slot for this run.
+
+        Returns True the first time it is called for a given run and False on
+        every subsequent call, so the parent's terminal-completion notification
+        is delivered exactly once even if the future done-callback fires more
+        than once (racing reclaim, re-entrant callbacks). The claim is persisted
+        to daemon.json so it also survives a process restart that re-reaps the
+        same run directory. Decoupled from the system notification channel's
+        ref_id dedup so an earlier follow-up (``ask``) event sharing the run's
+        ref_id cannot suppress the terminal notification.
+        """
+        if self._state.get("terminal_notified"):
+            return False
+        self._state["terminal_notified"] = True
+        self._safe(
+            "claim_terminal_notification",
+            lambda: self._atomic_write_json(self.daemon_json_path, self._state),
+        )
+        return True
+
     def _mark_terminal(self, state: str, event: str) -> None:
         def _write():
             self._state["state"] = state

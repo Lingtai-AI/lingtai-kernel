@@ -1502,6 +1502,161 @@ def test_on_emanation_done_short_success_still_suppressed(tmp_path):
     assert collect_notifications(agent._working_dir) == {}
 
 
+def test_on_emanation_done_cancelled_notifies_despite_short_text(tmp_path):
+    """A cancelled run returns the short ``[cancelled]`` sentinel but its
+    run_dir state is authoritative. The short-result suppression must NOT
+    swallow a non-success terminal state — the parent must always learn the
+    daemon terminated."""
+    from lingtai_kernel.notifications import collect_notifications
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+    rd = _make_run_dir(agent, em_id="em-cancel")
+    rd.mark_cancelled()
+
+    future = MagicMock()
+    future.result.return_value = "[cancelled]"
+    mgr._emanations["em-cancel"] = {
+        "future": future,
+        "task": "test task",
+        "start_time": time.time(),
+        "run_dir": rd,
+    }
+
+    mgr._on_emanation_done("em-cancel", "test task", future)
+
+    assert agent.inbox.empty()
+    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    assert len(events) == 1
+    assert events[0]["source"] == "daemon"
+    assert events[0]["ref_id"] == "em-cancel"
+    assert "cancelled" in events[0]["body"]
+
+
+def test_on_emanation_done_timeout_notifies_despite_short_text(tmp_path):
+    """A timed-out run also returns the short sentinel; its terminal state is
+    ``timeout`` and must be reported with that label."""
+    from lingtai_kernel.notifications import collect_notifications
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+    rd = _make_run_dir(agent, em_id="em-timeout")
+    rd.mark_timeout()
+
+    future = MagicMock()
+    future.result.return_value = "[cancelled]"
+    mgr._emanations["em-timeout"] = {
+        "future": future,
+        "task": "test task",
+        "start_time": time.time(),
+        "run_dir": rd,
+    }
+
+    mgr._on_emanation_done("em-timeout", "test task", future)
+
+    assert agent.inbox.empty()
+    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    assert len(events) == 1
+    assert events[0]["ref_id"] == "em-timeout"
+    assert "timeout" in events[0]["body"]
+
+
+def test_on_emanation_done_notifies_terminal_only_once(tmp_path):
+    """A daemon run's terminal notification is delivered exactly once even if
+    the done-callback fires more than once for the same run (e.g. a racing
+    reclaim or a duplicated callback). Dedup is keyed on the run's ref_id."""
+    from lingtai_kernel.notifications import collect_notifications
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+    rd = _make_run_dir(agent, em_id="em-dup")
+    rd.mark_failed(RuntimeError("boom"))
+
+    future = MagicMock()
+    future.result.side_effect = RuntimeError("boom")
+    mgr._emanations["em-dup"] = {
+        "future": future,
+        "task": "test task",
+        "start_time": time.time(),
+        "run_dir": rd,
+    }
+
+    mgr._on_emanation_done("em-dup", "test task", future)
+    mgr._on_emanation_done("em-dup", "test task", future)
+
+    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    daemon_events = [e for e in events if e["ref_id"] == "em-dup"]
+    assert len(daemon_events) == 1
+
+
+def test_on_emanation_done_notification_includes_task_summary(tmp_path):
+    """The terminal notification carries a bounded task summary so the parent
+    can recognize which dispatched daemon ended without opening the run dir."""
+    from lingtai_kernel.notifications import collect_notifications
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+    rd = _make_run_dir(
+        agent, em_id="em-task",
+        task="Audit the payment retry logic for double-charge bugs",
+    )
+    rd.mark_done("a sufficiently long final result body here")
+
+    future = MagicMock()
+    future.result.return_value = "a sufficiently long final result body here"
+    mgr._emanations["em-task"] = {
+        "future": future,
+        "task": "Audit the payment retry logic for double-charge bugs",
+        "start_time": time.time(),
+        "run_dir": rd,
+    }
+
+    mgr._on_emanation_done("em-task", "test task", future)
+
+    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    body = next(e["body"] for e in events if e["ref_id"] == "em-task")
+    assert "payment retry logic" in body
+
+
+def test_terminal_notification_not_blocked_by_prior_followup(tmp_path):
+    """A follow-up (ask) notification shares the daemon's ref_id and fires while
+    the run is still alive. The terminal notification must still be delivered
+    afterward — the once-only guard is scoped to the terminal event, not to any
+    event carrying the same ref_id."""
+    from lingtai_kernel.notifications import collect_notifications
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+    rd = _make_run_dir(agent, em_id="em-ask")
+    mgr._emanations["em-ask"] = {
+        "future": MagicMock(),
+        "task": "test task",
+        "start_time": time.time(),
+        "run_dir": rd,
+    }
+
+    # A follow-up reply lands first (run still running), same ref_id.
+    mgr._publish_followup_if_live(
+        "em-ask", status="follow-up completed",
+        text="here is the follow-up answer, long enough", run_dir=rd,
+    )
+
+    # Then the run reaches a terminal state and the done-callback fires.
+    rd.mark_done("final long-enough report from the daemon run")
+    future = MagicMock()
+    future.result.return_value = "final long-enough report from the daemon run"
+    mgr._on_emanation_done("em-ask", "test task", future)
+
+    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    bodies = [e["body"] for e in events if e["ref_id"] == "em-ask"]
+    assert any("Daemon em-ask done" in b for b in bodies), bodies
+
+
 def test_sequential_emanate_increments_ids(tmp_path):
     """Multiple emanate calls produce sequential IDs."""
     agent = _make_agent(tmp_path, ["file", "daemon"])

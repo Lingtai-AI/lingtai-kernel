@@ -156,14 +156,23 @@ files, not standalone top-level skills.
   `daemon.json` is missing, invalid, or has an old `data_version`, list
   does a best-effort lazy rebuild from the run folder before indexing it.
   It is not a full transcript; use the returned paths for details.
-- Completion is push-notified; do not poll only to ask "is it done yet".
-- **Idle care before resting: completion is push-notified, but do not rest on
-  that alone.** With daemon work pending and unverified-healthy, arm at least
-  one self-wake (a `.notification/cron.json` reminder) before going IDLE, with
-  the delay set from the task's expected duration. On wake, health-check — daemon
-  `state`/`last_output_at` advancing, `current_tool`/`tool_call_count` changing,
-  events alive — and if there is no progress, reclaim/downgrade/switch path and
-  report rather than waiting indefinitely. See `reference/inspection/SKILL.md`.
+- **Every terminal outcome is push-notified exactly once** — done, failed,
+  cancelled, or timed out. After you dispatch, you can safely go IDLE and wait
+  for the notification; do not poll only to ask "is it done yet". The
+  notification arrives on the system channel carrying the daemon id, terminal
+  status, task summary, and the result/error path. React to it with
+  `daemon(action="check", id=...)` (and read `result.txt` for the full output).
+- **Defense-in-depth, not primary signal: a self-wake guards against a daemon
+  that never reaches a terminal state at all.** The terminal notification covers
+  every state a run can *finish* in, but a run that hangs without the watchdog
+  firing, or a degraded notification-wake path, could leave you waiting forever.
+  When daemon work is pending and unverified-healthy, you may arm one self-wake
+  (a `.notification/cron.json` reminder) sized to the task's expected duration as
+  a backstop. On wake, health-check — `state`/`last_output_at` advancing,
+  `current_tool`/`tool_call_count` changing, events alive — and if there is no
+  progress, reclaim/downgrade/switch path and report rather than waiting
+  indefinitely. Do not turn this backstop into frequent polling. See
+  `reference/inspection/SKILL.md`.
 - If repeated-call `_advisory` appears on `daemon(list/check)`, the call still
   ran; treat it as a signal to stop the loop, centralize status checking in the
   parent, and read `reference/inspection/SKILL.md` before polling again.
