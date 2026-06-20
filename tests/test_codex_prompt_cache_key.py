@@ -162,8 +162,8 @@ def test_lone_prompt_cache_key_stays_body_only_no_headers():
     assert sent["prompt_cache_key"] == "custom-key:v2"
     # The carve-out is about the per-agent slot routers: no session-id / thread-id.
     headers = sent.get("extra_headers") or {}
-    assert "session-id" not in headers
-    assert "thread-id" not in headers
+    assert "session_id" not in headers
+    assert "thread_id" not in headers
     # The Codex-specific cache-key header still rides on every request with a
     # prompt key, but it does not route a shared per-agent slot.
     assert headers.get("codex-cache-key") == "cus"
@@ -231,8 +231,8 @@ def test_codex_bare_adapter_omits_session_thread_headers():
 
     sent = session._client.responses.kwargs[0]
     headers = sent.get("extra_headers") or {}
-    assert "session-id" not in headers
-    assert "thread-id" not in headers
+    assert "session_id" not in headers
+    assert "thread_id" not in headers
     # prompt_cache_key behavior is untouched.
     assert sent["prompt_cache_key"] == "lingtai-codex:gpt-5.5:v1"
 
@@ -254,8 +254,8 @@ def test_codex_sends_stable_headers_from_session_anchor():
     h1 = s1["extra_headers"]
     expected = _expected_codex_hash(anchor)
     # Root/main path: session-id == thread-id == prompt_cache_key == 8-char hash.
-    assert h0["session-id"] == expected
-    assert h0["thread-id"] == expected
+    assert h0["session_id"] == expected
+    assert h0["thread_id"] == expected
     assert s0["prompt_cache_key"] == expected
     # Stable across multiple ordinary sends of the same session.
     assert h0 == h1
@@ -275,11 +275,11 @@ def test_codex_headers_differ_for_different_agents():
 
     ha = a._client.responses.kwargs[0]["extra_headers"]
     hb = b._client.responses.kwargs[0]["extra_headers"]
-    assert ha["session-id"] != hb["session-id"]
-    assert ha["thread-id"] != hb["thread-id"]
+    assert ha["session_id"] != hb["session_id"]
+    assert ha["thread_id"] != hb["thread_id"]
     # Each agent's three values are internally identical (the agent-path hash).
-    assert ha["session-id"] == ha["thread-id"]
-    assert hb["session-id"] == hb["thread-id"]
+    assert ha["session_id"] == ha["thread_id"]
+    assert hb["session_id"] == hb["thread_id"]
 
 
 def test_codex_thread_salt_does_not_split_thread_from_session():
@@ -307,8 +307,8 @@ def test_codex_thread_salt_does_not_split_thread_from_session():
     expected = _expected_codex_hash(anchor)
     h0 = salt0._client.responses.kwargs[0]["extra_headers"]
     h1 = salt1._client.responses.kwargs[0]["extra_headers"]
-    assert h0["session-id"] == h0["thread-id"] == expected
-    assert h1["session-id"] == h1["thread-id"] == expected  # salt is irrelevant
+    assert h0["session_id"] == h0["thread_id"] == expected
+    assert h1["session_id"] == h1["thread_id"] == expected  # salt is irrelevant
     assert salt0._client.responses.kwargs[0]["prompt_cache_key"] == expected
     assert salt1._client.responses.kwargs[0]["prompt_cache_key"] == expected
 
@@ -328,7 +328,7 @@ def test_codex_rest_omits_previous_response_id_with_anchored_thread():
     expected = _expected_codex_hash(anchor)
     assert "previous_response_id" not in sent
     assert sent.get("store") is False
-    assert sent["extra_headers"]["thread-id"] == expected  # anchored thread still sent
+    assert sent["extra_headers"]["thread_id"] == expected  # anchored thread still sent
     # prompt_cache_key matches the same hash alongside the stateless REST contract.
     assert sent["prompt_cache_key"] == expected
 
@@ -344,8 +344,8 @@ def test_codex_explicit_session_id_used_verbatim_for_all_three():
     sent = session._client.responses.kwargs[0]
     headers = sent["extra_headers"]
     # Explicit id is used byte-identically for session, thread, and cache key.
-    assert headers["session-id"] == explicit
-    assert headers["thread-id"] == explicit
+    assert headers["session_id"] == explicit
+    assert headers["thread_id"] == explicit
     assert sent["prompt_cache_key"] == explicit
 
 
@@ -369,8 +369,8 @@ def test_codex_explicit_prompt_cache_key_override_drives_all_three_with_anchor()
 
     sent = session._client.responses.kwargs[0]
     assert sent["prompt_cache_key"] == override
-    assert sent["extra_headers"]["session-id"] == override
-    assert sent["extra_headers"]["thread-id"] == override
+    assert sent["extra_headers"]["session_id"] == override
+    assert sent["extra_headers"]["thread_id"] == override
 
 
 def test_codex_explicit_session_id_wins_over_anchor():
@@ -383,7 +383,7 @@ def test_codex_explicit_session_id_wins_over_anchor():
 
     session.send("x")
 
-    assert session._client.responses.kwargs[0]["extra_headers"]["session-id"] == explicit
+    assert session._client.responses.kwargs[0]["extra_headers"]["session_id"] == explicit
 
 
 def test_codex_session_normalizes_mismatched_ids_to_one_effective_value():
@@ -413,8 +413,8 @@ def test_codex_session_normalizes_mismatched_ids_to_one_effective_value():
     sent = session._client.responses.kwargs[0]
     # prompt_cache_key wins; all three carry that single effective value.
     assert sent["prompt_cache_key"] == "custom-key:v2"
-    assert sent["extra_headers"]["session-id"] == "custom-key:v2"
-    assert sent["extra_headers"]["thread-id"] == "custom-key:v2"
+    assert sent["extra_headers"]["session_id"] == "custom-key:v2"
+    assert sent["extra_headers"]["thread_id"] == "custom-key:v2"
 
 
 def test_codex_session_normalization_priority_session_then_thread():
@@ -434,8 +434,8 @@ def test_codex_session_normalization_priority_session_then_thread():
 
     sent = session._client.responses.kwargs[0]
     assert sent["prompt_cache_key"] == "session-wins"
-    assert sent["extra_headers"]["session-id"] == "session-wins"
-    assert sent["extra_headers"]["thread-id"] == "session-wins"
+    assert sent["extra_headers"]["session_id"] == "session-wins"
+    assert sent["extra_headers"]["thread_id"] == "session-wins"
 
     # And ``thread_id`` alone becomes the effective id for all three.
     thread_only = CodexResponsesSession(
@@ -450,8 +450,8 @@ def test_codex_session_normalization_priority_session_then_thread():
     thread_only.send("hi")
     sent2 = thread_only._client.responses.kwargs[0]
     assert sent2["prompt_cache_key"] == "thread-only"
-    assert sent2["extra_headers"]["session-id"] == "thread-only"
-    assert sent2["extra_headers"]["thread-id"] == "thread-only"
+    assert sent2["extra_headers"]["session_id"] == "thread-only"
+    assert sent2["extra_headers"]["thread_id"] == "thread-only"
 
 
 def test_codex_bare_session_omits_headers():
@@ -729,7 +729,7 @@ def test_codex_usage_extra_carries_cache_affinity_ids_for_token_ledger():
         "codex_thread_id": "custom-key:v2",
         "codex_prompt_cache_key": "custom-key:v2",
     }
-    assert headers["session-id"] == headers["thread-id"] == sent["prompt_cache_key"]
+    assert headers["session_id"] == headers["thread_id"] == sent["prompt_cache_key"]
     # The affinity ids are short, non-secret derived values; the request body,
     # messages, and OAuth secret never ride in the usage extra payload.
     blob = json.dumps(result.usage.extra, default=str)

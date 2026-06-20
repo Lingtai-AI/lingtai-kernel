@@ -1708,12 +1708,20 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._time_fn = time_fn or time.time
 
     def _cache_affinity_headers(self) -> dict[str, str]:
-        """Return the current ``session-id`` / ``thread-id`` headers, if any."""
+        """Return the current ``session_id`` / ``thread_id`` headers, if any.
+
+        The header names use UNDERSCORES (``session_id`` / ``thread_id``) to match
+        what the official Codex CLI sends on its
+        ``/backend-api/codex/responses`` calls (verified by capturing real Codex
+        CLI traffic, 2026-06). The backend routes the prompt-cache slot off these
+        headers; sending the exact spelling the reference client uses avoids any
+        chance of a name mismatch defeating cache affinity.
+        """
         headers: dict[str, str] = {}
         if self._session_id:
-            headers["session-id"] = self._session_id
+            headers["session_id"] = self._session_id
         if self._thread_id:
-            headers["thread-id"] = self._thread_id
+            headers["thread_id"] = self._thread_id
         return headers
 
     def _cache_key_header(self, cache_key: str | None) -> dict[str, str]:
@@ -1837,10 +1845,10 @@ class CodexResponsesSession(OpenAIResponsesSession):
         tokens, no OAuth secret.
         """
         extra: dict[str, str] = {}
-        if affinity_headers.get("session-id"):
-            extra["codex_session_id"] = affinity_headers["session-id"]
-        if affinity_headers.get("thread-id"):
-            extra["codex_thread_id"] = affinity_headers["thread-id"]
+        if affinity_headers.get("session_id"):
+            extra["codex_session_id"] = affinity_headers["session_id"]
+        if affinity_headers.get("thread_id"):
+            extra["codex_thread_id"] = affinity_headers["thread_id"]
         if cache_key:
             extra["codex_prompt_cache_key"] = cache_key
         return extra
