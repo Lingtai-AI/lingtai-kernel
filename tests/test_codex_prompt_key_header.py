@@ -110,8 +110,8 @@ def test_lone_prompt_cache_key_sends_codex_cache_key_header():
     headers = _headers(sent)
     assert headers[HEADER] == "cus"
     # The lone-key carve-out still holds for per-agent slot routers.
-    assert "session-id" not in headers
-    assert "thread-id" not in headers
+    assert "session_id" not in headers
+    assert "thread_id" not in headers
     assert sent["instructions"] == "system prompt"
 
 
@@ -144,8 +144,8 @@ def test_header_present_on_anchored_session_alongside_affinity_headers():
     sent = session._client.responses.kwargs[0]
     assert _headers(sent)[HEADER] == current[:3]
     # Existing affinity headers still ride along unchanged.
-    assert sent["extra_headers"]["session-id"] == current
-    assert sent["extra_headers"]["thread-id"] == current
+    assert sent["extra_headers"]["session_id"] == current
+    assert sent["extra_headers"]["thread_id"] == current
 
 
 def test_header_present_on_every_ordinary_request_no_threshold():

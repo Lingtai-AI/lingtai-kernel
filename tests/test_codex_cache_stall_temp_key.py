@@ -187,8 +187,8 @@ def test_current_id_stable_within_one_session_across_requests():
 
     for sent in session._client.responses.kwargs:
         assert sent["prompt_cache_key"] == current
-        assert sent["extra_headers"]["session-id"] == current
-        assert sent["extra_headers"]["thread-id"] == current
+        assert sent["extra_headers"]["session_id"] == current
+        assert sent["extra_headers"]["thread_id"] == current
 
 
 def test_adapter_build_epoch_drives_current_id_and_changes_on_rebuild():
@@ -221,9 +221,9 @@ def test_adapter_build_epoch_drives_current_id_and_changes_on_rebuild():
     id0 = _codex_affinity_id(ANCHOR, EPOCH0)
     id1 = _codex_affinity_id(ANCHOR, EPOCH0 + 99)
     assert id0 != id1
-    assert sent0["prompt_cache_key"] == sent0["extra_headers"]["session-id"] == id0
-    assert sent0["extra_headers"]["thread-id"] == id0
-    assert sent1["prompt_cache_key"] == sent1["extra_headers"]["session-id"] == id1
+    assert sent0["prompt_cache_key"] == sent0["extra_headers"]["session_id"] == id0
+    assert sent0["extra_headers"]["thread_id"] == id0
+    assert sent1["prompt_cache_key"] == sent1["extra_headers"]["session_id"] == id1
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +240,7 @@ def test_no_rotate_before_ten_identical_hits():
 
     for sent in session._client.responses.kwargs:
         assert sent["prompt_cache_key"] == current
-        assert sent["extra_headers"]["session-id"] == current
+        assert sent["extra_headers"]["session_id"] == current
 
 
 def test_no_rotate_when_cached_values_vary():
@@ -287,8 +287,8 @@ def test_rotate_after_ten_identical_hits_persists():
     # The 11th request uses the rotated id for all three levers.
     sent11 = session._client.responses.kwargs[10]
     assert sent11["prompt_cache_key"] == rotated
-    assert sent11["extra_headers"]["session-id"] == rotated
-    assert sent11["extra_headers"]["thread-id"] == rotated
+    assert sent11["extra_headers"]["session_id"] == rotated
+    assert sent11["extra_headers"]["thread_id"] == rotated
 
 
 def test_rotated_id_persists_and_does_not_revert():
@@ -307,7 +307,7 @@ def test_rotated_id_persists_and_does_not_revert():
     assert session._client.responses.kwargs[10]["prompt_cache_key"] == rotated
     assert session._client.responses.kwargs[11]["prompt_cache_key"] == rotated
     assert session._client.responses.kwargs[12]["prompt_cache_key"] == rotated
-    assert session._client.responses.kwargs[11]["extra_headers"]["session-id"] == rotated
+    assert session._client.responses.kwargs[11]["extra_headers"]["session_id"] == rotated
     # None of the post-rotate requests fell back to the start id.
     for sent in session._client.responses.kwargs[10:]:
         assert sent["prompt_cache_key"] != start_id
@@ -440,8 +440,8 @@ def test_three_fields_always_equal_including_across_rotate():
 
     for sent in session._client.responses.kwargs:
         key = sent["prompt_cache_key"]
-        assert sent["extra_headers"]["session-id"] == key
-        assert sent["extra_headers"]["thread-id"] == key
+        assert sent["extra_headers"]["session_id"] == key
+        assert sent["extra_headers"]["thread_id"] == key
 
 
 # ---------------------------------------------------------------------------
