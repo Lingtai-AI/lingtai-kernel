@@ -116,6 +116,10 @@ def _codex_session_id(anchor: str) -> str:
 # There is no one-shot "temporary id then revert" concept. Once rotated, the new
 # current id stays in force.
 _CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN = 10
+# A window only counts toward a stalled-cache rotate when its cache rate
+# (``cached_tokens / input_tokens``) is strictly below this threshold. A rotate
+# requires the whole window to be low-rate AND byte-identical (Jason 2026-06-20).
+_CODEX_CACHE_AFFINITY_LOW_RATE_THRESHOLD = 0.85
 
 # Codex cache-key request header. Every ordinary Codex API request whose
 # effective prompt key exists carries a Codex-specific, unambiguous cache-key
@@ -1696,7 +1700,9 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # is an optional callable that receives the rotate event dict (the host
         # wires it to ``logs/events.jsonl``); ``_time_fn`` is an injectable clock
         # used for the rotate epoch and the event ``ts`` (defaults to wall-clock).
-        self._cache_hit_queue: list[int] = []
+        # Each entry is ``(cached_tokens, low_rate)`` — the positive cache-hit
+        # number plus whether that request's cache rate was confirmed < 85%.
+        self._cache_hit_queue: list[tuple[int, bool]] = []
         self._affinity_anchor = affinity_anchor
         self._event_sink = event_sink
         self._time_fn = time_fn or time.time
@@ -1733,24 +1739,43 @@ class CodexResponsesSession(OpenAIResponsesSession):
         """
         return self._prompt_cache_key, self._cache_affinity_headers()
 
-    def _record_cache_hit(self, cached_tokens: int, *, model: str) -> None:
+    def _record_cache_hit(
+        self, cached_tokens: int, *, model: str, input_tokens: int = 0
+    ) -> None:
         """Feed a request's cache-hit number into the rolling corruption detector.
 
         Only POSITIVE ``cached_tokens`` count as cache hits — a 0 is a miss, not
-        a stalled hit. When the last ``_CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN``
-        hits are byte-identical, the cache slot has stalled: rotate the current
-        affinity id in place (persistent) and emit a safe
-        ``codex_cache_affinity_rotated`` event.
+        a stalled hit. The cache slot is rotated only when, across the last
+        ``_CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN`` hits, BOTH conditions hold
+        simultaneously (Jason 2026-06-20):
+
+          1. every ``cached_tokens`` in the window is byte-identical; and
+          2. every window's cache rate (``cached_tokens / input_tokens``) is
+             below ``_CODEX_CACHE_AFFINITY_LOW_RATE_THRESHOLD`` (85%).
+
+        The cache rate is confirmable only when ``input_tokens`` is a positive
+        denominator. A missing/zero denominator means the low-rate condition
+        cannot be confirmed, so that window is recorded as NOT low-rate and the
+        rotate is conservatively blocked. When both conditions hold the current
+        affinity id is rotated in place (persistent) and a safe
+        ``codex_cache_affinity_rotated`` event is emitted.
         """
         if cached_tokens <= 0:
             return
-        self._cache_hit_queue.append(int(cached_tokens))
+        denom = int(input_tokens) if input_tokens else 0
+        low_rate = (
+            denom > 0
+            and (cached_tokens / denom) < _CODEX_CACHE_AFFINITY_LOW_RATE_THRESHOLD
+        )
+        self._cache_hit_queue.append((int(cached_tokens), bool(low_rate)))
         if len(self._cache_hit_queue) > _CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN:
             self._cache_hit_queue.pop(0)
-        if (
-            len(self._cache_hit_queue) == _CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN
-            and len(set(self._cache_hit_queue)) == 1
-        ):
+        if len(self._cache_hit_queue) != _CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN:
+            return
+        values = {value for value, _ in self._cache_hit_queue}
+        all_identical = len(values) == 1
+        all_low_rate = all(is_low for _, is_low in self._cache_hit_queue)
+        if all_identical and all_low_rate:
             self._rotate_current_affinity(model=model)
 
     def _rotate_current_affinity(self, *, model: str) -> None:
@@ -1762,7 +1787,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
         with a per-agent anchor rotate — a bare/test session with no anchor stays
         as-is (it just resets the detector window).
         """
-        recent = list(self._cache_hit_queue)
+        recent = [value for value, _ in self._cache_hit_queue]
         # Clear the window so we don't re-trigger on the very next hit; the
         # detector needs a fresh run of N identical hits to fire again.
         self._cache_hit_queue.clear()
@@ -1960,8 +1985,9 @@ class CodexResponsesSession(OpenAIResponsesSession):
                     if event.response.usage:
                         cached = getattr(event.response.usage, "input_tokens_details", None)
                         cached_tokens = (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
+                        input_tokens = getattr(event.response.usage, "input_tokens", 0) or 0
                         usage = UsageMetadata(
-                            input_tokens=getattr(event.response.usage, "input_tokens", 0) or 0,
+                            input_tokens=input_tokens,
                             output_tokens=getattr(event.response.usage, "output_tokens", 0) or 0,
                             thinking_tokens=getattr(
                                 event.response.usage, "output_tokens_details", None
@@ -1980,9 +2006,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
                         # Feed this request's cache-hit number into the rolling
                         # corruption detector. A run of
                         # ``_CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN`` byte-identical
-                        # positive hits rotates the current affinity id in place
-                        # for all subsequent requests (see ``_record_cache_hit``).
-                        self._record_cache_hit(cached_tokens, model=self._model)
+                        # positive hits that are ALL below the 85% cache-rate
+                        # threshold rotates the current affinity id in place for
+                        # all subsequent requests (see ``_record_cache_hit``).
+                        self._record_cache_hit(
+                            cached_tokens,
+                            model=self._model,
+                            input_tokens=input_tokens,
+                        )
         except Exception:
             # Revert the trailing user entry we just added so the next retry
             # doesn't double-record it. Mirrors OpenAIChatSession.send's

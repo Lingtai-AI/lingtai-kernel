@@ -7,12 +7,17 @@ TWO rotation triggers:
   1. start/refresh — the adapter is (re)built, which stamps a fresh epoch; the
      current id is ``hash(anchor + epoch)`` and stays fixed for the life of that
      adapter/session instance (every request inside it uses the same id).
-  2. 10-call cache corruption — when the backend returns the SAME positive
-     ``cached_tokens`` for ten requests in a row, the cache slot has stalled, so
-     the session ROTATES its current id (a persistent replacement, derived via
-     the same ``hash(anchor + epoch)`` helper with a fresh epoch), clears the
-     queue, and keeps using the new id for ALL subsequent requests until the next
-     start/refresh or the next 10-call corruption.
+  2. 10-call cache corruption — when, for ten requests in a row, the backend
+     returns the SAME positive ``cached_tokens`` AND the cache rate
+     (``cached_tokens / input_tokens``) is below 85% on every one of those ten
+     requests, the cache slot has stalled at a low hit rate, so the session
+     ROTATES its current id (a persistent replacement, derived via the same
+     ``hash(anchor + epoch)`` helper with a fresh epoch), clears the queue, and
+     keeps using the new id for ALL subsequent requests until the next
+     start/refresh or the next 10-call corruption. Both conditions must hold
+     simultaneously across the whole window; a single request at/above 85%, a
+     differing cached value, or an unconfirmable rate (missing/zero
+     ``input_tokens``) blocks the rotate.
 
 There is no one-shot "temporary id then revert" concept: once rotated, the new
 id stays in force. On a rotate the session emits a ``codex_cache_affinity_rotated``
@@ -60,22 +65,36 @@ class FakeClient:
         self.responses = FakeResponses(events_per_call)
 
 
-def _usage(cached: int) -> SimpleNamespace:
+def _usage(cached: int, input_tokens: int = 100) -> SimpleNamespace:
     return SimpleNamespace(
-        input_tokens=100,
+        input_tokens=input_tokens,
         output_tokens=20,
         input_tokens_details=SimpleNamespace(cached_tokens=cached),
         output_tokens_details=SimpleNamespace(reasoning_tokens=0),
     )
 
 
-def _completed(cached: int) -> list[Event]:
+def _completed(cached: int, input_tokens: int = 100) -> list[Event]:
     return [
         Event(
             "response.completed",
-            response=SimpleNamespace(id="resp_fake", usage=_usage(cached)),
+            response=SimpleNamespace(
+                id="resp_fake", usage=_usage(cached, input_tokens)
+            ),
         )
     ]
+
+
+def _completed_for(spec) -> list[Event]:
+    """Build a response.completed for a per-call spec.
+
+    ``spec`` is either a bare ``cached`` int (input_tokens defaults to 100) or a
+    ``(cached, input_tokens)`` tuple so tests can pin the cache rate.
+    """
+    if isinstance(spec, tuple):
+        cached, input_tokens = spec
+        return _completed(cached, input_tokens)
+    return _completed(spec)
 
 
 ANCHOR = "/agents/alice/init.json"
@@ -91,7 +110,7 @@ def _make_session(cached_per_call, *, events=None, clock=None, epoch=EPOCH0):
     the rotate epoch and event ts). ``epoch`` is the build epoch baked into the
     start/refresh current id.
     """
-    client = FakeClient([_completed(c) for c in cached_per_call])
+    client = FakeClient([_completed_for(c) for c in cached_per_call])
     current = _codex_affinity_id(ANCHOR, epoch)
     kw = dict(
         client=client,
@@ -292,6 +311,85 @@ def test_rotated_id_persists_and_does_not_revert():
     # None of the post-rotate requests fell back to the start id.
     for sent in session._client.responses.kwargs[10:]:
         assert sent["prompt_cache_key"] != start_id
+
+
+def test_rotate_requires_all_ten_rates_below_threshold():
+    """Ten identical positive hits all <85% cache rate -> the 11th request rotates.
+
+    cached=70 over input=100 is a 70% rate (< 85%): every window qualifies, so
+    the run of ten identical low-rate hits rotates exactly as before.
+    """
+    clock = lambda: EPOCH0 + 500  # noqa: E731
+    session, start_id = _make_session(
+        [(70, 100)] * 10 + [(99, 100)], clock=clock
+    )
+
+    for _ in range(11):
+        session.send("hi")
+
+    rotated = _codex_affinity_id(ANCHOR, EPOCH0 + 500)
+    assert rotated != start_id
+    for sent in session._client.responses.kwargs[:10]:
+        assert sent["prompt_cache_key"] == start_id
+    assert session._client.responses.kwargs[10]["prompt_cache_key"] == rotated
+
+
+def test_no_rotate_when_one_rate_at_or_above_threshold():
+    """Ten identical positive hits but ONE at >=85% cache rate -> NO rotate.
+
+    cached=90 over input=100 is a 90% rate (>= 85%). Even though all ten cached
+    values are byte-identical, the low-rate condition fails for that window, so
+    the session must NOT rotate; the 11th request keeps the start id.
+    """
+    clock = lambda: EPOCH0 + 500  # noqa: E731
+    # Nine windows at 90/100 (high rate) and one at 90/200 would differ in rate
+    # but also in value; keep the VALUE identical (90) and vary only the rate by
+    # changing the denominator so exactly the rate condition is what fails.
+    session, start_id = _make_session(
+        [(90, 200)] * 9 + [(90, 100)] + [(99, 100)], clock=clock
+    )
+
+    for _ in range(11):
+        session.send("hi")
+
+    # 90/200 = 45% (low) for nine, but 90/100 = 90% (>=85%) for the tenth ->
+    # the AND-over-the-window fails, so no rotate.
+    for sent in session._client.responses.kwargs:
+        assert sent["prompt_cache_key"] == start_id
+
+
+def test_no_rotate_when_low_rates_but_values_not_all_identical():
+    """Ten low cache rates but cached values NOT all identical -> NO rotate."""
+    clock = lambda: EPOCH0 + 500  # noqa: E731
+    # All rates well below 85% (input 1000), but the cached values vary, so the
+    # identical-value condition fails.
+    session, start_id = _make_session(
+        [(10, 1000), (11, 1000), (10, 1000), (11, 1000), (10, 1000),
+         (11, 1000), (10, 1000), (11, 1000), (10, 1000), (11, 1000), (99, 1000)],
+        clock=clock,
+    )
+
+    for _ in range(11):
+        session.send("hi")
+
+    for sent in session._client.responses.kwargs:
+        assert sent["prompt_cache_key"] == start_id
+
+
+def test_no_rotate_when_denominator_missing_or_zero():
+    """Identical positive hits but input_tokens==0 -> rate unconfirmable, NO rotate.
+
+    A missing/zero denominator means the cache rate cannot be confirmed below
+    85%, so the conservative choice is NOT to rotate.
+    """
+    clock = lambda: EPOCH0 + 500  # noqa: E731
+    session, start_id = _make_session([(7, 0)] * 11, clock=clock)
+
+    for _ in range(11):
+        session.send("hi")
+
+    for sent in session._client.responses.kwargs:
+        assert sent["prompt_cache_key"] == start_id
 
 
 def test_second_corruption_rotates_again():
