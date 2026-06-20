@@ -377,8 +377,9 @@ def test_build_meta_usage_matches_get_context_pressure_after_restore():
 # ---------------------------------------------------------------------------
 # notifications field removed 2026-05-02 (Task 11 of system-notification-as-
 # tool-call redesign). System-source notifications are now delivered as
-# synthetic system(action="notification") tool-call pairs spliced via tc_inbox;
-# see docs/plans/2026-05-02-system-notification-as-tool-call.md. Tests for the
+# synthetic notification(action="check") tool-call pairs spliced by
+# BaseAgent._inject_notification_pair (the legacy tc_inbox splice path is
+# dormant); see docs/plans/2026-05-02-system-notification-as-tool-call.md. Tests for the
 # old inbox-drain path lived here and have been removed alongside the field.
 # ---------------------------------------------------------------------------
 
@@ -633,7 +634,7 @@ def test_clear_active_notification_holder_skeletonizes_synthesized_holder():
 
     assert synthesized["_synthesized"] is True
     assert synthesized["_notification_placeholder"] is True
-    assert "kernel-synthesized system(action=notification)" in synthesized["message"]
+    assert "kernel-synthesized notification(action=check)" in synthesized["message"]
     assert "notifications" not in synthesized
     assert "_notification_guidance" not in synthesized
     assert agent._notification_live_holder is None

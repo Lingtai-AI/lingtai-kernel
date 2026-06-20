@@ -96,17 +96,25 @@ are cost/quality hints, not moral rankings:
 Prefer the cheapest preset that can reliably perform the task; switch back when
 experimentation is done.
 
-### `notification` and `dismiss`
+### Notifications and dismiss → the `notification` tool
 
-`system(action="notification")` queries current notification-channel mirrors. Use
-producer-specific verbs first for guarded producers, such as `email.read`,
-`email.dismiss`, Telegram `read`, or other MCP read actions. Generic dismiss is
-for channels that do not own their own read state, or for stale mirrors when you
-know the producer-owned state has already been handled.
+Reading and clearing notification channels is **not** a `system` operation. The
+`system` tool exposes no notification or dismiss verb. Use the standalone
+`notification` tool: `check` to read the live payload, and the atomic dismiss
+verbs `dismiss_channel` / `dismiss_event` / `dismiss_ref` to clear a channel or a
+single `system` event. Prefer producer-specific verbs first for guarded
+producers (`email.read`, `email.dismiss`, Telegram `read`, other MCP read
+actions); a generic channel dismiss is for channels that do not own their own
+read state, or for stale mirrors when the producer-owned state is already
+handled.
 
 Never treat a notification preview as the full source of truth when it is
 truncated, ambiguous, lacks an exact anchor, includes media/attachments, or
 contains human instructions. Read the producer channel.
+
+For channel allowlist, envelope shape, protected channels, stale-version/force
+semantics, and the undismissable large-result reminders, read
+`reference/notification-manual/SKILL.md`.
 
 ### `summarize`
 
@@ -196,13 +204,17 @@ Operational rules:
    shown in later context; the raw event may be expensive to retrieve and may be
    invisible after molt unless you preserved the facts elsewhere.
 3. Call `system(action="summarize", items=[...])` for every pending large-result
-   case you have digested. Batch related cases in one call when possible.
-4. Dismiss or let the system clear stale reminder notifications after successful
-   summarization.
-5. Do not loop on stale notification versions. If a dismiss fails with
-   `stale_channel_version`, read the current notification state or force-clear a
-   known stale system channel only after the substantive payload has been
-   digested.
+   case you have digested. Batch related cases in one call when possible. A
+   successful summarize auto-clears the matching `large_tool_result` reminder —
+   there is no separate dismiss step, and `large_tool_result` reminders are
+   undismissable through the `notification` tool (see notification-manual).
+4. For ordinary (non-large-result) stale reminder notifications, dismiss them via
+   the `notification` tool after the work is handled, or let the kernel clear
+   them when the producer state empties.
+5. Do not loop on stale notification versions. If a `notification` dismiss fails
+   with `stale_channel_version`, read the current notification state or
+   force-clear a known stale channel only after the substantive payload has been
+   digested. See `reference/notification-manual/SKILL.md` for dismiss specifics.
 
 The notification threshold is set via `manifest.summarize_notification_threshold`
 in `init.json` / defaults. It must be non-negative. Per-call overrides to

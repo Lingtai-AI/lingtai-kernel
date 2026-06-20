@@ -1412,8 +1412,10 @@ def test_summarize_clear_is_noop_when_no_reminder_present(tmp_path):
 
 
 def test_summarize_then_dismiss_is_unnecessary_end_to_end(tmp_path):
-    """End-to-end: dismiss is refused, but summarize clears the reminder."""
-    from lingtai_kernel.intrinsics import system as sys_intrinsic
+    """End-to-end: notification dismiss is refused, but system summarize clears
+    the reminder. Dismissal lives on the notification tool now; summarize stays
+    on the system tool."""
+    from lingtai_kernel.intrinsics import notification as notif_intrinsic
     from lingtai_kernel.notifications import collect_notifications, notification_fingerprint
 
     iface = ChatInterface()
@@ -1422,8 +1424,10 @@ def test_summarize_then_dismiss_is_unnecessary_end_to_end(tmp_path):
     _publish_large_result_event(agent._working_dir, "toolu_big")
     agent._notification_fp = notification_fingerprint(agent._working_dir)
 
-    # Dismiss is refused.
-    dismissed = sys_intrinsic._dismiss(agent, {"channel": "system", "force": True})
+    # Dismiss is refused — through the notification tool, with force.
+    dismissed = notif_intrinsic.handle(
+        agent, {"action": "dismiss_channel", "channel": "system", "force": True}
+    )
     assert dismissed["status"] == "error"
     assert dismissed["reason"] == "undismissable_large_result_reminder"
     assert "system" in collect_notifications(agent._working_dir)

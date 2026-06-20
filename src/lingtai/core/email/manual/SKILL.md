@@ -26,7 +26,7 @@ The `email` tool moves messages as files between agents that share a `.lingtai/`
 - Sending writes a `message.json` into the recipient's `mailbox/inbox/<uuid>/` and the sender's `mailbox/sent/<uuid>/`.
 - Delivery is handled by a per-recipient daemon thread (`_mailman`) — synchronous from the sender's perspective once `delay=0`.
 - Read state lives in the recipient's `mailbox/read.json` (a set of message IDs).
-- The kernel mirrors current unread mail into `.notification/email.json`, which the wire surfaces as a `system(action="notification")` block — that's how you find out new mail arrived.
+- The kernel mirrors current unread mail into `.notification/email.json`, which surfaces as a notification block read via `notification(action="check")` — that's how you find out new mail arrived.
 
 There is no concept of an SMTP server, an MX record, or an external address. **If a request involves `@gmail.com`, `@outlook.com`, IMAP folders, or anything that needs to leave the machine, the right tool is the `lingtai-imap` MCP addon — see the `mcp-manual` skill, not this one.**
 

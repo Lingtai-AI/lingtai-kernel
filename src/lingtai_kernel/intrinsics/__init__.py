@@ -5,11 +5,12 @@ Each intrinsic module exposes:
 - get_description(lang) -> str: human-readable description
 - handle(agent, args) -> dict: handler function
 """
-from . import email, system, psyche, soul
+from . import email, system, psyche, soul, notification
 
 ALL_INTRINSICS = {
     "email": {"module": email},
     "system": {"module": system},
     "psyche": {"module": psyche},
     "soul": {"module": soul},
+    "notification": {"module": notification},
 }

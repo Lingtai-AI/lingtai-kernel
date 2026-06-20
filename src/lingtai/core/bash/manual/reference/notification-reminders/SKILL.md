@@ -31,7 +31,7 @@ That sentence has the right shape: current state, what changed, what remains, an
 The kernel's notification sync reads `.notification/*.json`, injects the `cron` channel into the agent's wire context, and wakes the agent to act. After handling it, clear it with:
 
 ```text
-system(action="dismiss", channel="cron")
+notification(action="dismiss_channel", channel="cron")
 ```
 
 Use this pattern when:
@@ -151,4 +151,4 @@ Before resting with pending work:
 2. Set one `cron` notification reminder at a sensible check time.
 3. Include a concise state sentence and a concrete `todo`.
 4. Rest (`system(action="sleep")`) or end the turn.
-5. On wake: handle the `cron` reminder, then `system(action="dismiss", channel="cron")`.
+5. On wake: handle the `cron` reminder, then `notification(action="dismiss_channel", channel="cron")`.

@@ -59,8 +59,8 @@ _PROTECTED_GENERIC_DISMISS: dict[str, str] = {
 
 # Channels whose generic dismissal would leak producer-owned state.
 # Producers with durable unread/state mirrors register themselves here at
-# import time so system(action="dismiss", channel=...) can refuse unsafe
-# generic clears and point the agent at the producer-specific verb.
+# import time so notification(action="dismiss_channel", channel=...) can refuse
+# unsafe generic clears and point the agent at the producer-specific verb.
 _GENERIC_DISMISS_GUARDED: dict[str, str] = {}
 
 # System-notification event sources that must NOT be cleared via dismiss —
@@ -486,9 +486,12 @@ def dismiss_channel(
 ) -> dict:
     """Shared agent-facing notification dismissal helper.
 
-    Used by ``system(action="dismiss")`` and convenience aliases such as
-    ``soul(action="dismiss")``. Generic dismiss clears only the
-    notification surface; producer-owned state is untouched.
+    Used by the standalone ``notification`` tool's atomic dismiss verbs
+    (``dismiss_channel``/``dismiss_event``/``dismiss_ref``, all with
+    ``invoked_by="notification"``) and the ``soul(action="dismiss")``
+    convenience alias. The ``system`` tool no longer exposes any dismiss verb.
+    Generic dismiss clears only the notification surface; producer-owned state
+    is untouched.
 
     ``reason`` is optional for ordinary generic channels. For the kernel-owned
     ``post-molt`` continuation channel it is required: clearing that reminder

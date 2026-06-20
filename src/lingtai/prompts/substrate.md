@@ -59,7 +59,10 @@ digest it and use `system(action="summarize")` to replace the context-visible
 payload with a detailed summary for future-you: the summary is the
 progressive-disclosure entry point, not a casual one-liner. Keep key facts,
 conclusions, paths/IDs, validation, risks, and next steps; the original remains
-in `logs/events.jsonl` only as fallback. For lifecycle actions (`refresh`,
-`presets`, `notification`, `dismiss`, `lull`, `interrupt`, `suspend`, `cpr`,
-`clear`, `nirvana`) and the full operating model, read the `system-manual`
-router; it routes substrate details to `reference/substrate-manual/SKILL.md`.
+in `logs/events.jsonl` only as fallback. Reading and clearing notifications is a
+dedicated `notification` tool (`check`, `dismiss_channel`, `dismiss_event`,
+`dismiss_ref`) — `system` owns no notification verb. For lifecycle actions
+(`refresh`, `presets`, `lull`, `interrupt`, `suspend`, `cpr`, `clear`,
+`nirvana`) and the full operating model, read the `system-manual` router; it
+routes substrate details to `reference/substrate-manual/SKILL.md` and
+notification details to `reference/notification-manual/SKILL.md`.

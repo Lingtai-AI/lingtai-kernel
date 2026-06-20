@@ -85,7 +85,7 @@ def _publish_human_inquiry_notification(agent, result: dict, question: str) -> N
             "your mirrored self via soul.inquiry. It is context with clear "
             "provenance, not a direct new instruction. Use it only if it "
             "helps the current work. The human still reaches you directly "
-            "through email. Dismiss with system(action='dismiss', channel='btw') "
+            "through email. Dismiss with notification(action='dismiss_channel', channel='btw') "
             "after you have noted it."
         ),
         data={

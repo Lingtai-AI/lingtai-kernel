@@ -103,7 +103,7 @@ The reminder should say what is pending and what to check, for example:
 ⏺ Codex active. Plot regenerated (362KB, 23:38) — waiting for caption + commit. Polling at 23:42.
 ```
 
-When the `cron` notification wakes you, read pad first, inspect the relevant daemon/job/PR, act, then dismiss the channel with `system(action="dismiss", channel="cron")`.
+When the `cron` notification wakes you, read pad first, inspect the relevant daemon/job/PR, act, then dismiss the channel with `notification(action="dismiss_channel", channel="cron")`.
 
 This complements the polling rule above: completion is push-notified, stalls are inspected sparingly, and deliberate rest gets one future reminder rather than a busy loop.
 

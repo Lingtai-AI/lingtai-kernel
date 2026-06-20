@@ -442,9 +442,9 @@ def _rescan_large_tool_results(agent) -> int:
                 f"(b) tolerate these repeated reminders until you update the persistent config and refresh."
             )
             _dismiss_policy = (
-                "Dismiss policy: system(action='dismiss') — including force, "
-                "event_id, or ref_id — cannot clear or bypass large-result "
-                "reminders; only a successful system(action='summarize') of the "
+                "Dismiss policy: no notification action — notification(action='dismiss_channel'/"
+                "'dismiss_event'/'dismiss_ref'), including force — can clear or bypass "
+                "large-result reminders; only a successful system(action='summarize') of the "
                 "matching tool_call_id clears the reminder automatically."
             )
             if is_spill and spill_path:

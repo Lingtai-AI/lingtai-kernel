@@ -68,10 +68,13 @@ selects that topic.
 - name: notification-manual
   location: reference/notification-manual/SKILL.md
   description: |
-    Notification filesystem manual: `.notification/<channel>.json` channel
-    whitelist, envelope shape, top-level `instructions`, model-visible
-    notification payload, generic versus producer-specific dismiss, protected
-    channels, and atomic per-event dismiss for `.notification/system.json`.
+    Notification filesystem + standalone `notification` tool manual:
+    `.notification/<channel>.json` channel whitelist, envelope shape, top-level
+    `instructions`, model-visible notification payload, the notification tool
+    verbs (check / dismiss_channel / dismiss_event / dismiss_ref), generic
+    versus producer-specific dismiss, protected channels, stale-version/force
+    semantics, and undismissable large-result reminders (cleared only by
+    system summarize). The `system` tool owns no notification verb.
 - name: goal-manual
   location: reference/goal-manual/SKILL.md
   description: |
@@ -87,7 +90,7 @@ selects that topic.
 | Expanded substrate; body/extensions; bash vs daemon vs avatar vs MCP; lifecycle states; ACTIVE/IDLE/ASLEEP/SUSPENDED; same-channel communication; basic notifications; memory layers; molt model; idle/soul; preset tiers; `system` operations | `reference/substrate-manual/SKILL.md` |
 | Expanded procedures; progressive disclosure; writing skills/knowledge; action discipline; responsiveness; skill routing; HTML deliverables; artifact sharing; issue reporting; when to read which manual | `reference/procedures-manual/SKILL.md` |
 | SQLite; `log.sqlite`; LingTai runtime logs; JSONL traces; `lingtai-agent log doctor`; `lingtai-agent log query`; `lingtai-agent log rebuild`; events/chat_entries schema; daemon/chat-history trace indexing; WAL/live-read caveats; SQL recipes; trajectory/anomaly mining; improvement digests; cheap-model strategy | `reference/sqlite-log-query/SKILL.md` |
-| Notifications; `.notification/<channel>.json`; notification channel allowlist; top-level `instructions`; protected channels; generic vs producer dismiss; atomic single-event dismiss inside `system.json` | `reference/notification-manual/SKILL.md` |
+| Notifications; the `notification` tool; check/dismiss_channel/dismiss_event/dismiss_ref; `.notification/<channel>.json`; channel allowlist; top-level `instructions`; protected channels; generic vs producer dismiss; stale-version/force; undismissable large-result reminders | `reference/notification-manual/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Molt mechanics, pad tending, session journals, post-wipe recovery | `psyche-manual` |
 | Authoring/publishing skills or changing skill catalog behavior | `skills-manual` |

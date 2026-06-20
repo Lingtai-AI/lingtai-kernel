@@ -16,8 +16,9 @@ Channel encoding:
 
 As of 2026-05-02, the meta block no longer carries inbox-drained
 notifications. System-source notifications (mail arrival, bounce, future
-MCP events) are now delivered as synthetic system(action="notification")
-tool-call pairs spliced via tc_inbox; see
+MCP events) are now delivered as synthetic notification(action="check")
+tool-call pairs spliced by ``BaseAgent._inject_notification_pair`` (the
+legacy ``tc_inbox`` splice path is dormant); see
 docs/plans/2026-05-02-system-notification-as-tool-call.md.
 """
 from __future__ import annotations
@@ -166,7 +167,7 @@ def build_notification_payload(notifications: dict) -> dict:
 
     The same payload shape is used in both delivery surfaces:
 
-    * IDLE/ASLEEP synthesized ``system(action="notification")`` pairs; and
+    * IDLE/ASLEEP synthesized ``notification(action="check")`` pairs; and
     * ACTIVE ordinary dict-shaped tool results.
 
     Producers own the per-channel envelope under ``notifications``.  The kernel
@@ -187,7 +188,7 @@ def build_notification_payload(notifications: dict) -> dict:
         "If a human is waiting and the next step may take time, acknowledge "
         "with the communication tool directly before the long-running tool."
         " After handling, dismiss the notification and end your turn"
-        " — do not call system(action='notification') voluntarily."
+        " — do not call notification(action='check') voluntarily."
     )
 
     notifications_with_guidance: dict = {}
@@ -266,7 +267,7 @@ _NOTIFICATION_SKELETON: dict = {
     "_synthesized": True,
     "_notification_placeholder": True,
     "message": (
-        "This was a kernel-synthesized system(action=notification) tool-call pair. "
+        "This was a kernel-synthesized notification(action=check) tool-call pair. "
         "The live notification payload that was here has been moved to a newer tool "
         "result metadata block or cleared."
     ),

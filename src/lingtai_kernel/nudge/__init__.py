@@ -14,7 +14,7 @@ Channel ``.notification/nudge.json`` carries a list of active nudges:
       "header": "<rendered by _render_header — e.g. '2 nudges'>",
       "icon": "🔔",
       "priority": "low",
-      "instructions": "Call system(action='dismiss', channel='nudge') ...",
+      "instructions": "Call notification(action='dismiss_channel', channel='nudge') ...",
       "data": {"nudges": [{"kind": "kernel_version", ...}, ...]}
     }
 
@@ -22,7 +22,7 @@ Each check identifies its slot by a unique ``kind`` string. ``upsert``
 replaces (or appends) one entry; ``remove`` deletes one. When the last
 entry leaves, the channel file is cleared so the agent's wire surface
 drops the notification entirely. The agent dismisses everything at once
-with ``system(action='dismiss', channel='nudge')``.
+with ``notification(action='dismiss_channel', channel='nudge')``.
 
 To add a new nudge: drop ``nudge/<name>.py`` exposing ``check(agent)``,
 then add an import + dispatch line to :func:`run_checks` below. No
@@ -124,7 +124,7 @@ def _modify(agent, mutate) -> None:
             icon="🔔",
             priority="low",
             instructions=(
-                "Call system(action='dismiss', channel='nudge') to "
+                "Call notification(action='dismiss_channel', channel='nudge') to "
                 "acknowledge and clear ALL nudges at once. Individual "
                 "nudges may also describe a specific action to take "
                 "(e.g. system(action='refresh') for a kernel upgrade)."

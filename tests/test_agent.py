@@ -55,10 +55,11 @@ def test_intrinsics_enabled_by_default(tmp_path):
     assert "email" in agent._intrinsics
     assert "system" in agent._intrinsics
     assert "psyche" in agent._intrinsics
+    assert "notification" in agent._intrinsics
     # File I/O is now a capability, not intrinsic
     assert "read" not in agent._intrinsics
     assert "write" not in agent._intrinsics
-    assert len(agent._intrinsics) == 4  # email, system, psyche, soul
+    assert len(agent._intrinsics) == 5  # email, system, psyche, soul, notification
 
 
 # ---------------------------------------------------------------------------

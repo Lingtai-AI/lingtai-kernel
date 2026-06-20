@@ -10,17 +10,17 @@ Actions (voluntary, agent-callable):
     clear     — force a full molt on another agent (requires karma)
     nirvana   — permanently destroy an agent's working directory (requires nirvana)
     presets   — list available presets in the agent's library
-    dismiss   — clear one `.notification/<channel>.json` surface (guarded by producer policy)
+    summarize — replace a prior tool-result block's context-visible copy with
+                an agent-authored summary; a successful summarize of a
+                ``large_tool_result`` tool_call_id auto-clears its reminder.
 
-Action (kernel-synthesized by default — also callable voluntarily by the agent):
-    notification — voluntary call returns a placeholder dict; the canonical
-                   live notification payload (``notifications`` +
-                   ``_notification_guidance``) is then stamped onto that same
-                   result by the turn loop's meta-block post-hook. The kernel
-                   also synthesizes this call on the agent's behalf when
-                   changes arrive during IDLE/ASLEEP states — in that case
-                   the synthesized pair carries ``_synthesized: True`` plus
-                   the same canonical payload.
+Notification verbs (``check``/``dismiss_channel``/``dismiss_event``/
+``dismiss_ref``) are **not** on ``system`` — they live exclusively on the
+standalone ``notification`` tool.  ``system`` no longer exposes any
+notification or dismiss compatibility alias.  The kernel still *synthesizes*
+a notification tool-call pair on the agent's behalf when changes arrive during
+IDLE/ASLEEP states (delivery plumbing, not an agent-callable action); the agent
+reads/clears via the ``notification`` tool.
 
 Identity, runtime, and stamina state surface via other channels:
     - identity prompt section — every turn, cached prefix
@@ -34,7 +34,6 @@ Sub-modules:
     karma.py         — _KARMA_ACTIONS, _NIRVANA_ACTIONS, _check_karma_gate(),
                        _sleep(), _lull(), _suspend(), _cpr(), _interrupt(),
                        _clear(), _nirvana().
-    notification.py  — _dismiss() function.
     summarize.py     — _summarize() function, SUMMARIZE_MARKER.
     schema.py        — get_description(), get_schema().
 """
@@ -45,20 +44,19 @@ from __future__ import annotations
 # Schema (tool registration)
 from .schema import get_description, get_schema  # noqa: F401
 
-# Notification (dismiss — cross-module import from email/manager.py)
-from .notification import _dismiss  # noqa: F401
-
 # Summarize — agent-authored context summarization
 from .summarize import _summarize, SUMMARIZE_MARKER  # noqa: F401
 
 # Notification submission — the canonical helper any producer (intrinsic
 # or in-process MCP) can call to surface a notification to the agent.
-# Re-exported here because ``system`` owns the notification surface
-# conceptually: every producer's file is aggregated into a single
-# ``system(action="notification")`` wire pair by the kernel sync.  The
-# function lives in ``lingtai_kernel.notifications`` (single source of
-# truth, accessible to non-intrinsic call sites and external producers
-# that import the module directly).
+# Re-exported here for back-compat: ``system`` historically owned the
+# producer-facing publish entry point, and many in-process producers still
+# import ``publish_notification`` / ``clear_notification`` from here.  The
+# agent-facing notification *verbs* (check/dismiss) now live exclusively on the
+# standalone ``notification`` tool; ``system`` exposes none of them.  The
+# functions live in ``lingtai_kernel.notifications`` (single source of truth,
+# accessible to non-intrinsic call sites and external producers that import the
+# module directly).
 from ...notifications import (  # noqa: F401
     submit as publish_notification,
     clear as clear_notification,
@@ -88,30 +86,16 @@ from .karma import (  # noqa: F401
 
 
 def handle(agent, args: dict) -> dict:
-    """Handle system tool — runtime, lifecycle, synchronization."""
+    """Handle system tool — runtime, lifecycle, synchronization.
+
+    Notification verbs (``check``/``dismiss_*``) and the old ``notification``/
+    ``dismiss`` compatibility aliases are **not** handled here: they live
+    exclusively on the standalone ``notification`` tool.  ``summarize`` remains
+    a system action (it is a context-hygiene operation, not a notification
+    verb), and a successful summarize still auto-clears the matching
+    ``large_tool_result`` reminder internally.
+    """
     action = args.get("action")
-    # Voluntary `notification` query: returns a *placeholder* dict.  The
-    # actual live notification payload is stamped onto this same result
-    # by the turn loop's ``attach_active_notifications`` post-hook — the
-    # canonical ``notifications`` + ``_notification_guidance`` keys land
-    # here alongside the placeholder marker, giving the agent exactly the
-    # same wire shape as a kernel-synthesized IDLE/ASLEEP pair (minus the
-    # ``_synthesized: True`` flag, since this call really did originate
-    # from the agent).  The handler never returns bare channel keys
-    # itself: notifications surface only via the meta-block path so there
-    # is one and only one live notification payload in history at a time.
-    # See the notification filesystem design rationale.
-    if action == "notification":
-        return {
-            "_notification_placeholder": True,
-            "message": (
-                "Voluntary system(action=notification) read. The live "
-                "notification payload is delivered via the kernel "
-                "meta-block under the `notifications` and "
-                "`_notification_guidance` keys on this same result. "
-                "If those keys are absent, no notifications are active."
-            ),
-        }
     handler = {
         "refresh": _refresh,
         "sleep": _sleep,
@@ -122,7 +106,6 @@ def handle(agent, args: dict) -> dict:
         "clear": _clear,
         "nirvana": _nirvana,
         "presets": _presets,
-        "dismiss": _dismiss,
         "summarize": _summarize,
     }.get(action)
     if handler is None:

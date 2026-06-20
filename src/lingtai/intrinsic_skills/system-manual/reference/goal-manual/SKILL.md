@@ -59,7 +59,7 @@ When you receive a `source="goal.request"` event:
    system events survive:
 
 ```text
-system(action="dismiss", channel="system", ref_id="goal.request:<timestamp>")
+notification(action="dismiss_ref", ref_id="goal.request:<timestamp>")
 ```
 
 If the human changes their mind during setup, dismiss the `goal.request` event
@@ -106,7 +106,7 @@ details.
 `goal` is not an ordinary dismissible notification mirror. Generic dismiss refuses:
 
 ```text
-system(action="dismiss", channel="goal")  # refused
+notification(action="dismiss_channel", channel="goal")  # refused
 ```
 
 To cancel the goal, delete `.notification/goal.json`. To complete the goal, either
@@ -136,7 +136,7 @@ The reminder is intentionally brief. The actual goal and instructions stay in
 `goal.json`. Dismissing the reminder clears only the system event:
 
 ```text
-system(action="dismiss", channel="system", ref_id="goal:<id>")
+notification(action="dismiss_ref", ref_id="goal:<id>")
 ```
 
 Dismissing the reminder does not cancel the goal. If the goal remains active, a

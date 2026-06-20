@@ -6,7 +6,7 @@ Covers the design's invariants and the patch's §13 test matrix:
 - §13.2 — IDLE-state pair injection / strip / no-op
 - §13.3 — ACTIVE-state deferral without ToolResultBlock mutation
 - §13.4 — ASLEEP-state wake on fingerprint change
-- §13.5 — voluntary `system(action="notification")` returns the dict
+- §13.5 — voluntary `notification(action="check")` returns the dict
 - §13.6 — producer migrations: email, soul, system
 - §13.7 — molt clearing
 
@@ -160,14 +160,17 @@ def test_concurrent_publish_atomicity(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# §13.5 — `system(action="notification")` voluntary call
+# §13.5 — `notification(action="check")` voluntary call
+#
+# The read verb moved off `system` onto the standalone `notification` tool.
+# `system(action="notification")` is no longer a valid action.
 # ---------------------------------------------------------------------------
 
 
-def test_notification_action_returns_empty_when_nothing_published(
+def test_check_action_returns_empty_when_nothing_published(
     tmp_path: Path,
 ) -> None:
-    from lingtai_kernel.intrinsics.system import handle
+    from lingtai_kernel.intrinsics.notification import handle
 
     @dataclass
     class _Stub:
@@ -177,7 +180,7 @@ def test_notification_action_returns_empty_when_nothing_published(
         def _log(self, evt: str, **fields: Any) -> None:
             self._logs.append((evt, fields))
 
-    res = handle(_Stub(), {"action": "notification"})
+    res = handle(_Stub(), {"action": "check"})
     # Voluntary call returns a placeholder dict — the live notification
     # payload (if any) is stamped on by the turn loop's meta-block hook,
     # never built by the handler itself. So even with nothing published,
@@ -189,8 +192,8 @@ def test_notification_action_returns_empty_when_nothing_published(
     assert "notification" in res["message"].lower()
 
 
-def test_notification_action_returns_placeholder(tmp_path: Path) -> None:
-    from lingtai_kernel.intrinsics.system import handle
+def test_check_action_returns_placeholder(tmp_path: Path) -> None:
+    from lingtai_kernel.intrinsics.notification import handle
 
     publish(tmp_path, "email", {"count": 5, "newest_received_at": "2026-05-05T00:00:00Z"})
     publish(tmp_path, "soul", {"voices": [{"source": "warmth", "voice": "..."}]})
@@ -203,7 +206,7 @@ def test_notification_action_returns_placeholder(tmp_path: Path) -> None:
         def _log(self, evt: str, **fields: Any) -> None:
             self._logs.append((evt, fields))
 
-    res = handle(_Stub(), {"action": "notification"})
+    res = handle(_Stub(), {"action": "check"})
     # Handler returns a placeholder only — channel keys MUST NOT appear
     # here. The canonical `notifications` payload is attached later by
     # `attach_active_notifications`, not by this handler. This guarantees
@@ -213,6 +216,23 @@ def test_notification_action_returns_placeholder(tmp_path: Path) -> None:
     assert "soul" not in res
     assert "notifications" not in res
     assert "_notification_guidance" not in res
+
+
+def test_system_notification_action_is_removed(tmp_path: Path) -> None:
+    """system(action="notification") is no longer a valid action."""
+    from lingtai_kernel.intrinsics.system import handle
+
+    @dataclass
+    class _Stub:
+        _working_dir: Path = tmp_path
+        _logs: list[tuple[str, dict]] = field(default_factory=list)
+
+        def _log(self, evt: str, **fields: Any) -> None:
+            self._logs.append((evt, fields))
+
+    res = handle(_Stub(), {"action": "notification"})
+    assert res["status"] == "error"
+    assert "Unknown system action" in res["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -536,7 +556,7 @@ def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
 
     The synthesized ``(ToolCallBlock, ToolResultBlock)`` pair has
     already been spliced by ``_inject_notification_pair`` —
-    impersonating a voluntary ``system(action="notification")`` call
+    impersonating a voluntary ``notification(action="check")`` call
     from the agent's perspective.  ``MSG_TC_WAKE`` then unblocks the
     run loop so ``_handle_tc_wake`` drives one inference round off
     the existing wire, no fake user message and no meta prefix.
@@ -741,9 +761,12 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     call_block = entries[0].content[0]
     result_block = entries[1].content[0]
     assert isinstance(call_block, ToolCallBlock)
-    assert call_block.name == "system"
-    assert call_block.args["action"] == "notification"
+    # The kernel-synthesized delivery pair impersonates a voluntary
+    # notification(action="check") read — not system(action="notification").
+    assert call_block.name == "notification"
+    assert call_block.args["action"] == "check"
     assert isinstance(result_block, ToolResultBlock)
+    assert result_block.name == "notification"
     assert result_block.synthesized is True
 
     body = result_block.content
@@ -1367,7 +1390,7 @@ def test_sync_asleep_inject_fail_falls_back_to_degraded_request(tmp_path: Path) 
     to ASLEEP without committing the fingerprint, so the next heartbeat
     saw the same .notification/ state, woke again, failed inject again,
     reverted again — forever. The fix wakes the agent via a degraded
-    request that tells it to call system(action="notification") or
+    request that tells it to call notification(action="check") or
     read the producer files directly.
     """
     from lingtai_kernel.state import AgentState

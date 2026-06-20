@@ -14,7 +14,7 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear", "nirvana", "presets", "dismiss", "notification", "summarize"],
+                "enum": ["refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear", "nirvana", "presets", "summarize"],
                 "description": t(lang, "system_tool.action_description"),
             },
             "reason": {
@@ -32,22 +32,6 @@ def get_schema(lang: str = "en") -> dict:
             "revert_preset": {
                 "type": "boolean",
                 "description": t(lang, "system_tool.revert_preset_description"),
-            },
-            "channel": {
-                "type": "string",
-                "description": t(lang, "system_tool.channel_description"),
-            },
-            "force": {
-                "type": "boolean",
-                "description": t(lang, "system_tool.force_description"),
-            },
-            "event_id": {
-                "type": "string",
-                "description": t(lang, "system_tool.event_id_description"),
-            },
-            "ref_id": {
-                "type": "string",
-                "description": t(lang, "system_tool.ref_id_description"),
             },
             "items": {
                 "type": "array",

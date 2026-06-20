@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from lingtai_kernel.intrinsics import system as sys_intrinsic
+from lingtai_kernel.intrinsics import notification as notif_intrinsic
 from lingtai_kernel.notifications import collect_notifications, notification_fingerprint, publish
 from lingtai_kernel.nudge.goal import check as check_goal
 from lingtai_kernel.state import AgentState
@@ -89,7 +89,7 @@ def test_goal_reminder_republishes_after_whole_system_dismiss_and_fresh_delay(tm
     assert "system" in collect_notifications(tmp_path)
     agent._notification_fp = notification_fingerprint(tmp_path)
 
-    result = sys_intrinsic.handle(agent, {"action": "dismiss", "channel": "system"})
+    result = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "channel": "system"})
 
     assert result["status"] == "ok"
     assert "system" not in collect_notifications(tmp_path)

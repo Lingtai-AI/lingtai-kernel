@@ -13,7 +13,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from lingtai_kernel.intrinsics import system as sys_intrinsic
 from lingtai_kernel.llm.interface import (
     ChatInterface, ToolCallBlock, ToolResultBlock,
 )
@@ -79,14 +78,12 @@ def _make_email_notification(
     )
 
 
-def test_arrival_then_voluntary_dismiss():
-    """After the .notification/ filesystem redesign, system(action='dismiss')
-    is a no-op deprecation shim — the agent never dismisses notifications;
+def test_arrival_splices_notification_pair():
+    """After the .notification/ filesystem redesign, the agent never dismisses
+    notifications via the system tool (system has no dismiss verb at all now);
     producers manage their own state by writing/clearing
-    .notification/<tool>.json files.  This test now verifies the shim
-    contract: the call returns ok with a deprecation note and leaves the
-    wire untouched.  The test will be deleted in Phase 3 along with
-    full dismiss removal.
+    .notification/<tool>.json files. A synthesized notification arrival splices
+    a single call/result pair onto the wire.
     """
     agent = _StubAgent()
     item = _make_email_notification("notif_a", "mail_001")
@@ -95,12 +92,6 @@ def test_arrival_then_voluntary_dismiss():
     drained = agent._tc_inbox.drain()
     for it in drained:
         _splice_pair(agent, it)
-    assert len(agent._session.chat.interface.conversation_entries()) == 2
-
-    res = sys_intrinsic._dismiss(agent, {"ids": ["notif_a"]})
-    assert res["status"] == "ok"
-    assert "legacy ids ignored" in res.get("note", "")
-    # Wire untouched — no dismiss path under the new model.
     assert len(agent._session.chat.interface.conversation_entries()) == 2
 
 
@@ -136,27 +127,23 @@ def test_check_does_not_dismiss():
     assert len(agent._session.chat.interface.conversation_entries()) == 2
 
 
-def test_race_dismiss_before_splice():
+def test_enqueued_notification_stays_until_spliced():
     """Pre-redesign: race-dismiss removed the pair from the queue before
-    splice.  Post-redesign: dismiss is a no-op shim, so the queue/chat
-    state is untouched by the dismiss call.  Test will be deleted in
-    Phase 3 along with full dismiss removal.
+    splice. Post-redesign: there is no system dismiss path at all, so an
+    enqueued notification simply remains queued until splice.
     """
     agent = _StubAgent()
     item = _make_email_notification("notif_d", "mail_004")
     agent._tc_inbox.enqueue(item)
 
-    res = sys_intrinsic._dismiss(agent, {"ids": ["notif_d"]})
-    assert res["status"] == "ok"
-    assert "legacy ids ignored" in res.get("note", "")
-    # Queue remains — dismiss no longer touches tc_inbox.
+    # No dismiss path exists on the system tool; the queue is untouched.
     assert len(agent._tc_inbox) == 1
 
 
-def test_multiple_arrivals_dismiss_one_keep_others():
+def test_multiple_arrivals_all_splice():
     """Pre-redesign: dismiss removed one pair; others persisted.
-    Post-redesign: dismiss is a no-op shim, so all pairs remain
-    untouched. Test will be deleted in Phase 3.
+    Post-redesign: there is no system dismiss path, so all spliced pairs
+    remain on the wire.
     """
     agent = _StubAgent()
     items = [
@@ -172,15 +159,12 @@ def test_multiple_arrivals_dismiss_one_keep_others():
         _splice_pair(agent, it)
     assert len(agent._session.chat.interface.conversation_entries()) == 6  # 3 pairs
 
-    sys_intrinsic._dismiss(agent, {"ids": ["notif_e"]})
 
-    # All three pairs still present — dismiss is a no-op now.
-    assert len(agent._session.chat.interface.conversation_entries()) == 6
-
-
-def test_bounce_persists_until_voluntary_dismiss():
-    """Bounce (source=email.bounce) has no auto-dismiss hook. Agent must
-    voluntarily dismiss via system.dismiss."""
+def test_bounce_splices_and_persists():
+    """Bounce (source=email.bounce) has no auto-dismiss hook. It splices onto
+    the wire and persists; clearing flows through .notification/system.json
+    under the producer-managed-state model (cleared via the notification tool,
+    not the system tool)."""
     agent = _StubAgent()
     call_id = "sn_bounce_001"
     notif_id = "notif_bounce_001"
@@ -206,13 +190,9 @@ def test_bounce_persists_until_voluntary_dismiss():
     for it in drained:
         _splice_pair(agent, it)
 
-    # Pre-redesign: voluntary dismiss removed the bounce pair from the wire.
-    # Post-redesign: dismiss is a no-op shim; the wire is untouched.
-    # Bounce notifications now flow through .notification/system.json
-    # under the producer-managed-state model.  Test will be deleted in Phase 3.
-    res = sys_intrinsic._dismiss(agent, {"ids": [notif_id]})
-    assert res["status"] == "ok"
-    assert "legacy ids ignored" in res.get("note", "")
+    # The bounce pair stays on the wire; there is no system dismiss path.
+    # Bounce notifications now flow through .notification/system.json under the
+    # producer-managed-state model and are cleared via the notification tool.
     assert len(agent._session.chat.interface.conversation_entries()) == 2
 
 
