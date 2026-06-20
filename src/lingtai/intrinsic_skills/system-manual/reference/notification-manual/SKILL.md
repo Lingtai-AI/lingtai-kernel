@@ -152,10 +152,19 @@ large-result events also acks them before clearing. Use summarization whenever
 the result is still accessible and relevant; dismissal is for cleanup of stale
 or irrelevant reminders.
 
-### Progressive disclosure — digesting large results
+### Progressive disclosure — digesting tool results
 
-When you receive a large tool result, treat it as requiring an index-style
-digest:
+Summarization is a general progressive-disclosure tool, not a large-result-only
+cleanup path. A summarized tool result is usually the best long-lived form once
+you have read and digested the raw payload: future context keeps the conclusion,
+key evidence, paths/IDs, validation state, risks, and next steps, while the full
+original remains recoverable from `events.jsonl`.
+
+Large-result metadata and reminders are a strong prompt to summarize because the
+raw payload is already harming context hygiene. Smaller results may also be
+summarized whenever the future agent no longer needs the full raw output.
+
+When digesting any tool result, write an index-style summary:
 
 1. **Conclusion** — what the result says in one sentence.
 2. **Key evidence** — the 3-5 most important facts, paths, IDs, or values.
@@ -163,9 +172,9 @@ digest:
 4. **Risks / caveats** — what to watch out for.
 5. **Next steps** — what to do with this information.
 
-The raw full output remains in `events.jsonl` for fallback. Once digested,
-call `system(action="summarize")` to replace the context-visible copy with your
-summary, then continue your work.
+Once digested, call `system(action="summarize")` to replace the context-visible
+copy with your summary, then continue your work. Do this for any result worth
+compressing, not only for results that crossed the long-result threshold.
 
 > **Timing note:** `system.summarize` can summarize only already-completed prior
 > tool results — it cannot summarize the current result in the same tool batch
@@ -198,5 +207,5 @@ and steer you to the producer's own verb.
 ## Cross-reference
 
 For active goal state and goal reminders, read `reference/goal-manual/SKILL.md`.
-For `summarize` (context hygiene, the only large-result discharge), see the
+For `summarize` (context hygiene and tool-result digestion), see the
 substrate manual's system-operations section under `system-manual`.

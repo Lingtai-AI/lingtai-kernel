@@ -45,6 +45,22 @@ If the answer is no, put it in a skill/reference and leave a one-line route. Do
 not jump straight to code when a manual/reference already names the path, and do
 not bloat the resident prompt with one-off details.
 
+### Tool-result digestion
+
+A summarized tool result is the good long-lived form once the raw output has
+served its purpose. Do not reserve `system.summarize` only for long results:
+large-result metadata/reminders are merely a stronger prompt that context hygiene
+is already at risk. Even a short or medium result should be summarized when the
+future agent only needs an index of what you learned.
+
+Good tool-result summaries preserve the grain: conclusion, key evidence, local
+paths/IDs, validation status, risks/caveats, and next steps. The full original
+remains in `events.jsonl` for fallback; the context-visible copy should become
+the concise index once digested. Timing matters: `system.summarize` can summarize
+only already-completed prior tool results, so digest a result after reading it
+and summarize it on a later step (possibly in parallel with other independent
+work).
+
 ## 2. Action and responsiveness
 
 When need arises, act. If you can do the task safely, do it; if a tool fails, try
