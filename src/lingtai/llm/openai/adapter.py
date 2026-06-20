@@ -1617,13 +1617,37 @@ class CodexResponsesSession(OpenAIResponsesSession):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        # Stable Codex REST cache-affinity headers. On the normal/root path the
-        # adapter supplies the same 8-char agent-path hash for both (so
-        # session-id == thread-id); ``None`` for either means "don't send that
-        # header", so a bare directly-constructed session (e.g. a unit test)
-        # sends neither.
-        self._session_id = session_id
-        self._thread_id = thread_id
+        # Codex REST cache-affinity identity. Jason's follow-up to #378 forces
+        # the three affinity levers to never diverge: whenever the session has a
+        # per-agent affinity identity, on EVERY stable request
+        #
+        #     prompt_cache_key == session-id == thread-id == <effective id>
+        #
+        # is an invariant, not a coincidence of the host wiring. We normalize the
+        # (possibly mismatched) candidate ids the constructor receives into ONE
+        # effective affinity id and use it byte-identically for all three.
+        # Priority: ``prompt_cache_key`` (the explicit request-body cache key) >
+        # ``session_id`` > ``thread_id``.
+        #
+        # The header carve-out (issue #378, NON-NEGOTIABLE): ``session-id`` /
+        # ``thread-id`` headers route the backend cache slot and MUST be
+        # per-agent. The model-only fallback ``prompt_cache_key`` form
+        # (``lingtai-codex:{model}:v1``) is shared by every agent on a model, so
+        # promoting it to headers would collapse all of them onto one
+        # session/thread — exactly the bug the per-agent design exists to avoid.
+        # So headers are emitted only when an explicit ``session_id``/``thread_id``
+        # was supplied (the per-agent path or a direct-construction test that
+        # asked for them). A cache-key-only construction (the bare/no-anchor
+        # adapter path) keeps its body ``prompt_cache_key`` and sends NO headers.
+        has_header_identity = bool(session_id or thread_id)
+        effective_id = self._prompt_cache_key or session_id or thread_id
+        self._prompt_cache_key = effective_id
+        if has_header_identity:
+            self._session_id = effective_id
+            self._thread_id = effective_id
+        else:
+            self._session_id = None
+            self._thread_id = None
 
         # Cache-stall temporary-key protection (Jason's follow-up to #378).
         # ``_cache_hit_queue`` is a rolling window of the last

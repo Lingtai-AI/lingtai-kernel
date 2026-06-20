@@ -136,7 +136,16 @@ def test_codex_prompt_cache_key_is_stable_across_requests():
     assert keys == ["lingtai-codex:gpt-5.5:v1", "lingtai-codex:gpt-5.5:v1"]
 
 
-def test_explicit_prompt_cache_key_overrides_default():
+def test_lone_prompt_cache_key_stays_body_only_no_headers():
+    """A cache-key-only session keeps the body key and emits NO headers.
+
+    Header carve-out (#378): ``session-id`` / ``thread-id`` route the backend
+    cache slot and must be per-agent. A lone ``prompt_cache_key`` with no
+    companion ``session_id``/``thread_id`` declares no per-agent identity (this
+    is the bare/no-anchor adapter path, where the key is the shared model-only
+    fallback), so it stays a body-only cache key and no headers are promoted —
+    otherwise every agent on a model would collapse onto one session/thread.
+    """
     session = CodexResponsesSession(
         client=FakeClient([_completed()]),
         model="gpt-5.5",
@@ -151,6 +160,7 @@ def test_explicit_prompt_cache_key_overrides_default():
 
     sent = session._client.responses.kwargs[0]
     assert sent["prompt_cache_key"] == "custom-key:v2"
+    assert "extra_headers" not in sent
 
 
 def test_responses_session_omits_cache_key_when_unset():
@@ -326,6 +336,30 @@ def test_codex_explicit_session_id_used_verbatim_for_all_three():
     assert sent["prompt_cache_key"] == explicit
 
 
+def test_codex_explicit_prompt_cache_key_override_drives_all_three_with_anchor():
+    """An adapter-level ``prompt_cache_key`` override + anchor → all three equal.
+
+    This is the mismatch leak Jason flagged: previously an explicit
+    ``prompt_cache_key`` override would diverge from the anchor-derived
+    ``session-id``/``thread-id``. Now the override (highest priority) becomes the
+    single effective id carried byte-identically by all three levers, so the
+    operator's explicit choice can never split the cache slot from the headers.
+    """
+    override = "operator-chosen-key:v9"
+    session = _create_codex_session_cfg(
+        [_completed()],
+        codex_session_anchor="/agents/alice/init.json",
+        prompt_cache_key=override,
+    )
+
+    session.send("x")
+
+    sent = session._client.responses.kwargs[0]
+    assert sent["prompt_cache_key"] == override
+    assert sent["extra_headers"]["session-id"] == override
+    assert sent["extra_headers"]["thread-id"] == override
+
+
 def test_codex_explicit_session_id_wins_over_anchor():
     explicit = "11111111-2222-3333-4444-555555555555"
     session = _create_codex_session_cfg(
@@ -339,8 +373,16 @@ def test_codex_explicit_session_id_wins_over_anchor():
     assert session._client.responses.kwargs[0]["extra_headers"]["session-id"] == explicit
 
 
-def test_codex_session_headers_can_be_set_directly_on_session():
-    """The session accepts session_id/thread_id directly (adapter-independent)."""
+def test_codex_session_normalizes_mismatched_ids_to_one_effective_value():
+    """Mismatched session/thread/cache-key inputs collapse to ONE effective id.
+
+    Jason's follow-up: the three levers must never be independent. When a
+    session is constructed with three different candidate ids, the session
+    normalizes them to a single effective affinity id and sends that one value
+    byte-identically as ``prompt_cache_key`` / ``session-id`` / ``thread-id``.
+    Priority is ``prompt_cache_key`` (the explicit request-body cache-affinity
+    key) > ``session_id`` > ``thread_id``.
+    """
     session = CodexResponsesSession(
         client=FakeClient([_completed()]),
         model="gpt-5.5",
@@ -356,10 +398,47 @@ def test_codex_session_headers_can_be_set_directly_on_session():
     session.send("hi")
 
     sent = session._client.responses.kwargs[0]
-    assert sent["extra_headers"]["session-id"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-    assert sent["extra_headers"]["thread-id"] == "ffffffff-0000-1111-2222-333333333333"
-    # prompt_cache_key still sent independently.
+    # prompt_cache_key wins; all three carry that single effective value.
     assert sent["prompt_cache_key"] == "custom-key:v2"
+    assert sent["extra_headers"]["session-id"] == "custom-key:v2"
+    assert sent["extra_headers"]["thread-id"] == "custom-key:v2"
+
+
+def test_codex_session_normalization_priority_session_then_thread():
+    """With no cache key, ``session_id`` wins over ``thread_id``; both sent equal."""
+    session = CodexResponsesSession(
+        client=FakeClient([_completed(), _completed()]),
+        model="gpt-5.5",
+        instructions="system prompt",
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+        session_id="session-wins",
+        thread_id="thread-loses",
+    )
+
+    session.send("hi")
+
+    sent = session._client.responses.kwargs[0]
+    assert sent["prompt_cache_key"] == "session-wins"
+    assert sent["extra_headers"]["session-id"] == "session-wins"
+    assert sent["extra_headers"]["thread-id"] == "session-wins"
+
+    # And ``thread_id`` alone becomes the effective id for all three.
+    thread_only = CodexResponsesSession(
+        client=FakeClient([_completed()]),
+        model="gpt-5.5",
+        instructions="system prompt",
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+        thread_id="thread-only",
+    )
+    thread_only.send("hi")
+    sent2 = thread_only._client.responses.kwargs[0]
+    assert sent2["prompt_cache_key"] == "thread-only"
+    assert sent2["extra_headers"]["session-id"] == "thread-only"
+    assert sent2["extra_headers"]["thread-id"] == "thread-only"
 
 
 def test_codex_bare_session_omits_headers():
@@ -607,7 +686,11 @@ def test_codex_session_id_is_8_char_lowercase_hex_sha256_prefix():
 
 
 def test_codex_usage_extra_carries_cache_affinity_ids_for_token_ledger():
-    """Usage metadata exposes the actual sent ids for token-ledger writes."""
+    """Usage metadata exposes the actual sent ids for token-ledger writes.
+
+    After normalization all three record the SAME effective id (no longer
+    independent), so the ledger never logs mismatched values.
+    """
     session = CodexResponsesSession(
         client=FakeClient([_completed()]),
         model="gpt-5.5",
@@ -625,13 +708,14 @@ def test_codex_usage_extra_carries_cache_affinity_ids_for_token_ledger():
     sent = session._client.responses.kwargs[0]
     headers = sent["extra_headers"]
     # The actual ids used this request ride in usage.extra so token_ledger.jsonl
-    # can record them — including the prompt_cache_key, so a cache-stall
-    # temporary-key swap (Jason's follow-up) is visible there too.
+    # can record them — all three the same normalized effective id, so a
+    # cache-stall temporary-key swap (Jason's follow-up) is visible too.
     assert result.usage.extra == {
-        "codex_session_id": headers["session-id"],
-        "codex_thread_id": headers["thread-id"],
-        "codex_prompt_cache_key": sent["prompt_cache_key"],
+        "codex_session_id": "custom-key:v2",
+        "codex_thread_id": "custom-key:v2",
+        "codex_prompt_cache_key": "custom-key:v2",
     }
+    assert headers["session-id"] == headers["thread-id"] == sent["prompt_cache_key"]
     # The affinity ids are short, non-secret derived values; the request body,
     # messages, and OAuth secret never ride in the usage extra payload.
     blob = json.dumps(result.usage.extra, default=str)
