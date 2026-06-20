@@ -98,6 +98,29 @@ def _codex_session_id(anchor: str) -> str:
     return hashlib.sha256(anchor.encode("utf-8")).hexdigest()[:8]
 
 
+# Cache-stall temporary-key protection (Jason's follow-up to #378). When the
+# Codex backend keeps returning the SAME cache-hit number for several requests
+# in a row, the stable cache slot has stalled — the cached prefix is no longer
+# growing, so the stable affinity id is buying nothing. To break the stall the
+# session swaps, for one request, to a *temporary* affinity id derived from the
+# trigger event time (to the second). The temp value is short, log-safe, and
+# deterministic for that trigger second.
+_CODEX_CACHE_STALL_QUEUE_LEN = 5
+_CODEX_CACHE_STALL_TEMP_PREFIX = "codex-cache-stall:"
+
+
+def _codex_temp_affinity_id(epoch_seconds: float) -> str:
+    """Derive a short, log-safe temporary Codex affinity id from a timestamp.
+
+    The id is a deterministic 8-char lowercase-hex sha256 prefix of the trigger
+    event time truncated to whole seconds. The same trigger second yields the
+    same id; it is used byte-identically for the temporary ``session-id`` /
+    ``thread-id`` / ``prompt_cache_key`` on the one-shot stall-break request.
+    """
+    token = f"{_CODEX_CACHE_STALL_TEMP_PREFIX}{int(epoch_seconds)}"
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:8]
+
+
 def _base_url_namespace(base_url: str | None) -> str:
     """Return a stable namespace token for an OpenAI-compatible ``base_url``.
 
@@ -1589,6 +1612,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
         *args,
         session_id: str | None = None,
         thread_id: str | None = None,
+        event_sink=None,
+        time_fn=None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -1600,6 +1625,21 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._session_id = session_id
         self._thread_id = thread_id
 
+        # Cache-stall temporary-key protection (Jason's follow-up to #378).
+        # ``_cache_hit_queue`` is a rolling window of the last
+        # ``_CODEX_CACHE_STALL_QUEUE_LEN`` POSITIVE cache-hit numbers
+        # (``cached_tokens``). When the window is full and every value is
+        # byte-identical the next request swaps to a one-shot temporary affinity
+        # id, then reverts. ``_pending_temp_id`` holds the temp id for that one
+        # request (``None`` = use the stable id). ``_event_sink`` is an optional
+        # callable that receives the swap event dict (the host wires it to
+        # ``logs/events.jsonl``); ``_time_fn`` is an injectable clock used to
+        # derive/stamp the temp id (defaults to wall-clock seconds).
+        self._cache_hit_queue: list[int] = []
+        self._pending_temp_id: str | None = None
+        self._event_sink = event_sink
+        self._time_fn = time_fn or time.time
+
     def _cache_affinity_headers(self) -> dict[str, str]:
         """Return the stable ``session-id`` / ``thread-id`` headers, if any."""
         headers: dict[str, str] = {}
@@ -1608,6 +1648,102 @@ class CodexResponsesSession(OpenAIResponsesSession):
         if self._thread_id:
             headers["thread-id"] = self._thread_id
         return headers
+
+    def _effective_affinity(self) -> tuple[str | None, dict[str, str]]:
+        """Resolve this request's effective (prompt_cache_key, headers) pair.
+
+        Normally returns the stable values. When a stall was detected on the
+        previous request, ``_pending_temp_id`` holds a one-shot temporary id;
+        this consumes it so the SAME temporary value is used byte-identically
+        for ``prompt_cache_key`` / ``session-id`` / ``thread-id`` on exactly
+        this request, then reverts to the stable id for the next one.
+        """
+        if self._pending_temp_id is not None:
+            temp = self._pending_temp_id
+            self._pending_temp_id = None  # one-shot — revert after this request
+            cache_key = temp if self._prompt_cache_key else None
+            headers: dict[str, str] = {}
+            # Mirror the stable policy: only emit a header if its stable
+            # counterpart would have been sent (so a bare/test session with no
+            # ids stays header-free even mid-stall).
+            if self._session_id:
+                headers["session-id"] = temp
+            if self._thread_id:
+                headers["thread-id"] = temp
+            return cache_key, headers
+        return self._prompt_cache_key, self._cache_affinity_headers()
+
+    def _record_cache_hit(self, cached_tokens: int, *, model: str) -> None:
+        """Feed a request's cache-hit number into the rolling stall detector.
+
+        Only POSITIVE ``cached_tokens`` count as cache hits — a 0 is a miss, not
+        a stalled hit. When the last ``_CODEX_CACHE_STALL_QUEUE_LEN`` hits are
+        byte-identical, arm a one-shot temporary affinity id for the next
+        request and emit a safe ``codex_cache_stall_temp_key`` event.
+        """
+        if cached_tokens <= 0:
+            return
+        self._cache_hit_queue.append(int(cached_tokens))
+        if len(self._cache_hit_queue) > _CODEX_CACHE_STALL_QUEUE_LEN:
+            self._cache_hit_queue.pop(0)
+        if (
+            len(self._cache_hit_queue) == _CODEX_CACHE_STALL_QUEUE_LEN
+            and len(set(self._cache_hit_queue)) == 1
+        ):
+            self._arm_temp_affinity(model=model)
+
+    def _arm_temp_affinity(self, *, model: str) -> None:
+        """Arm a one-shot temporary affinity id and emit a swap event."""
+        trigger_ts = self._time_fn()
+        temp = _codex_temp_affinity_id(trigger_ts)
+        self._pending_temp_id = temp
+        # Clear the window so we don't re-trigger on the very next hit; the
+        # detector needs a fresh run of five identical hits to fire again.
+        recent = list(self._cache_hit_queue)
+        self._cache_hit_queue.clear()
+        if self._event_sink is None:
+            return
+        # Safe metadata only: no token totals beyond the cached-hit list, no
+        # prompt body, no secrets, and NOT the stable id itself.
+        event = {
+            "type": "codex_cache_stall_temp_key",
+            "ts": float(trigger_ts),
+            "provider": "codex",
+            "model": model,
+            "had_stable_id": bool(self._session_id or self._prompt_cache_key),
+            "temporary_id_hash": temp,
+            "recent_cached_values": recent,
+            "reason": (
+                f"last {_CODEX_CACHE_STALL_QUEUE_LEN} cache-hit values were "
+                "byte-identical (stalled cache slot); switching to a temporary "
+                "affinity id for the next request"
+            ),
+        }
+        try:
+            self._event_sink(event)
+        except Exception:
+            # Observability must never break the agent turn.
+            logger.warning("codex cache-stall event sink failed", exc_info=True)
+
+    @staticmethod
+    def _usage_extra(
+        affinity_headers: dict[str, str], cache_key: str | None
+    ) -> dict[str, str]:
+        """Build the token-ledger ``UsageMetadata.extra`` for this request.
+
+        Surfaces the ACTUAL ids used so a stall-break (temporary id) is visible
+        in ``token_ledger.jsonl`` alongside the normal stable-id requests. Only
+        the short non-secret affinity ids ride here — no prompt body, no tokens,
+        no OAuth secret.
+        """
+        extra: dict[str, str] = {}
+        if affinity_headers.get("session-id"):
+            extra["codex_session_id"] = affinity_headers["session-id"]
+        if affinity_headers.get("thread-id"):
+            extra["codex_thread_id"] = affinity_headers["thread-id"]
+        if cache_key:
+            extra["codex_prompt_cache_key"] = cache_key
+        return extra
 
     def send(self, message) -> LLMResponse:
         # Force the streaming path — Codex doesn't serve non-streaming JSON.
@@ -1680,15 +1816,20 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 kwargs["context_management"] = [
                     {"type": "compaction", "compact_threshold": self._compact_threshold}
                 ]
-            # Opt into Codex prompt caching with a stable key. We send only
+            # Resolve this request's effective cache-affinity values. Normally
+            # the stable per-agent id; if the previous request tripped the
+            # cache-stall detector this consumes a one-shot temporary id so all
+            # three levers (prompt_cache_key / session-id / thread-id) carry the
+            # same temporary value for exactly this request, then revert.
+            effective_cache_key, affinity_headers = self._effective_affinity()
+            # Opt into Codex prompt caching with the resolved key. We send only
             # `prompt_cache_key`; the Codex backend rejects `prompt_cache_retention`
             # (Unsupported parameter), so it is deliberately never sent.
-            if self._prompt_cache_key:
-                kwargs["prompt_cache_key"] = self._prompt_cache_key
-            # Stable REST cache-affinity headers (issue #378). Sent as HTTP
-            # headers via the SDK's per-request ``extra_headers``, never as
-            # request-body fields. Omitted entirely when neither id is set.
-            affinity_headers = self._cache_affinity_headers()
+            if effective_cache_key:
+                kwargs["prompt_cache_key"] = effective_cache_key
+            # REST cache-affinity headers (issue #378). Sent as HTTP headers via
+            # the SDK's per-request ``extra_headers``, never as request-body
+            # fields. Omitted entirely when neither id is set.
             if affinity_headers:
                 kwargs["extra_headers"] = {
                     **affinity_headers,
@@ -1750,11 +1891,15 @@ class CodexResponsesSession(OpenAIResponsesSession):
                             )
                             or 0,
                             cached_tokens=cached_tokens,
-                            extra={
-                                "codex_session_id": affinity_headers.get("session-id"),
-                                "codex_thread_id": affinity_headers.get("thread-id"),
-                            } if affinity_headers else {},
+                            extra=self._usage_extra(
+                                affinity_headers, effective_cache_key
+                            ),
                         )
+                        # Feed this request's cache-hit number into the rolling
+                        # stall detector. A run of five byte-identical positive
+                        # hits arms a one-shot temporary affinity id for the
+                        # NEXT request (see ``_record_cache_hit``).
+                        self._record_cache_hit(cached_tokens, model=self._model)
         except Exception:
             # Revert the trailing user entry we just added so the next retry
             # doesn't double-record it. Mirrors OpenAIChatSession.send's
@@ -1840,6 +1985,36 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         else:
             self._codex_id = None  # no per-agent identity -> no headers
         self._codex_thread_salt = codex_thread_salt  # legacy pass-through; unused
+        # The agent's durable identity anchor (resolved ``init.json`` path) also
+        # locates the agent's ``logs/events.jsonl`` (a sibling of ``init.json``).
+        # The cache-stall temporary-key swap emits a safe event there; without an
+        # anchor (bare/test path) there is no agent log to write to.
+        self._codex_session_anchor = (
+            str(codex_session_anchor) if codex_session_anchor else None
+        )
+
+    def _build_codex_event_sink(self):
+        """Return a sink writing cache-stall events to ``logs/events.jsonl``.
+
+        Derives the agent log path from the durable identity anchor (the
+        ``init.json`` path); ``logs/events.jsonl`` is its sibling. Returns
+        ``None`` when no anchor is known (bare/test path) so nothing is written.
+        Append failures are swallowed — observability must never break a turn.
+        """
+        if not self._codex_session_anchor:
+            return None
+        events_path = Path(self._codex_session_anchor).parent / "logs" / "events.jsonl"
+
+        def _sink(event: dict) -> None:
+            try:
+                events_path.parent.mkdir(parents=True, exist_ok=True)
+                line = json.dumps(event, ensure_ascii=False, default=str)
+                with open(events_path, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+            except Exception:
+                logger.warning("codex cache-stall event write failed", exc_info=True)
+
+        return _sink
 
     def _resolve_codex_ids(self, model: str) -> tuple[str | None, str | None]:
         """Resolve the (session-id, thread-id) headers for ``model``.
@@ -1922,4 +2097,8 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             # ``(None, None)`` only for a bare/test adapter.
             session_id=session_id,
             thread_id=thread_id,
+            # Cache-stall temporary-key protection: emit swap events to the
+            # agent's ``logs/events.jsonl`` (derived from the identity anchor).
+            # ``None`` on the bare/test path — no agent log to write to.
+            event_sink=self._build_codex_event_sink(),
         )

@@ -624,15 +624,19 @@ def test_codex_usage_extra_carries_cache_affinity_ids_for_token_ledger():
 
     sent = session._client.responses.kwargs[0]
     headers = sent["extra_headers"]
+    # The actual ids used this request ride in usage.extra so token_ledger.jsonl
+    # can record them — including the prompt_cache_key, so a cache-stall
+    # temporary-key swap (Jason's follow-up) is visible there too.
     assert result.usage.extra == {
         "codex_session_id": headers["session-id"],
         "codex_thread_id": headers["thread-id"],
+        "codex_prompt_cache_key": sent["prompt_cache_key"],
     }
-    # Token-ledger metadata is intentionally small/non-secret: no prompt body or
-    # prompt_cache_key value rides in the usage extra payload.
+    # The affinity ids are short, non-secret derived values; the request body,
+    # messages, and OAuth secret never ride in the usage extra payload.
     blob = json.dumps(result.usage.extra, default=str)
-    assert "custom-key" not in blob
-    assert "prompt_cache_key" not in blob
+    assert "Bearer" not in blob and "Authorization" not in blob
+    assert "system prompt" not in blob
     assert "input" not in result.usage.extra and "messages" not in result.usage.extra
 
 
