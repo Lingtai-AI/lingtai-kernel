@@ -212,11 +212,11 @@ def test_adapter_build_epoch_drives_current_id_and_changes_on_rebuild():
 # ---------------------------------------------------------------------------
 
 
-def test_no_rotate_before_five_identical_hits():
-    """Four identical hits is not enough — the fifth send still uses the start id."""
-    session, current = _make_session([5, 5, 5, 5, 5])
+def test_no_rotate_before_eight_identical_hits():
+    """Seven identical hits is not enough — the seventh send still uses the start id."""
+    session, current = _make_session([5, 5, 5, 5, 5, 5, 5])
 
-    for _ in range(5):
+    for _ in range(7):
         session.send("hi")
 
     for sent in session._client.responses.kwargs:
@@ -237,63 +237,65 @@ def test_no_rotate_when_cached_values_vary():
 
 def test_zero_cached_hits_do_not_count_toward_corruption():
     """cached_tokens == 0 are misses, not hits, and never rotate."""
-    session, current = _make_session([0, 0, 0, 0, 0, 0, 0])
+    session, current = _make_session([0, 0, 0, 0, 0, 0, 0, 0, 0])
 
-    for _ in range(7):
+    for _ in range(9):
         session.send("hi")
 
     for sent in session._client.responses.kwargs:
         assert sent["prompt_cache_key"] == current
 
 
-def test_rotate_after_five_identical_hits_persists():
-    """Five identical positive hits -> the 6th request uses a NEW current id.
+def test_rotate_after_eight_identical_hits_persists():
+    """Eight identical positive hits -> the 9th request uses a NEW current id.
 
-    The rotate is decided AFTER the 5th response completes (its cached value
-    fills the window), so the 6th request is the first to carry the rotated id.
+    The rotate is decided AFTER the 8th response completes (its cached value
+    fills the window), so the 9th request is the first to carry the rotated id.
     """
     clock = lambda: EPOCH0 + 500  # noqa: E731  rotate epoch
-    session, start_id = _make_session([7, 7, 7, 7, 7, 99], clock=clock)
+    session, start_id = _make_session([7, 7, 7, 7, 7, 7, 7, 7, 99], clock=clock)
 
-    for _ in range(6):
+    for _ in range(9):
         session.send("hi")
 
     rotated = _codex_affinity_id(ANCHOR, EPOCH0 + 500)
     assert rotated != start_id
 
     # First threshold requests used the start id.
-    for sent in session._client.responses.kwargs[:5]:
+    for sent in session._client.responses.kwargs[:8]:
         assert sent["prompt_cache_key"] == start_id
 
-    # The 6th request uses the rotated id for all three levers.
-    sent6 = session._client.responses.kwargs[5]
-    assert sent6["prompt_cache_key"] == rotated
-    assert sent6["extra_headers"]["session-id"] == rotated
-    assert sent6["extra_headers"]["thread-id"] == rotated
+    # The 9th request uses the rotated id for all three levers.
+    sent9 = session._client.responses.kwargs[8]
+    assert sent9["prompt_cache_key"] == rotated
+    assert sent9["extra_headers"]["session-id"] == rotated
+    assert sent9["extra_headers"]["thread-id"] == rotated
 
 
 def test_rotated_id_persists_and_does_not_revert():
     """After a rotate the NEW id is used for every later request — no revert."""
     clock = lambda: EPOCH0 + 500  # noqa: E731
-    # 5 identical -> rotate; 6th send records cached=99 (breaks run); 7th + 8th
+    # 8 identical -> rotate; 9th send records cached=99 (breaks run); 10th + 11th
     # must continue on the SAME rotated id, never reverting to the start id.
-    session, start_id = _make_session([7, 7, 7, 7, 7, 99, 0, 3], clock=clock)
+    session, start_id = _make_session(
+        [7, 7, 7, 7, 7, 7, 7, 7, 99, 0, 3], clock=clock
+    )
 
-    for _ in range(8):
+    for _ in range(11):
         session.send("hi")
 
     rotated = _codex_affinity_id(ANCHOR, EPOCH0 + 500)
-    assert session._client.responses.kwargs[5]["prompt_cache_key"] == rotated
-    assert session._client.responses.kwargs[6]["prompt_cache_key"] == rotated
-    assert session._client.responses.kwargs[7]["prompt_cache_key"] == rotated
-    assert session._client.responses.kwargs[6]["extra_headers"]["session-id"] == rotated
+    assert session._client.responses.kwargs[8]["prompt_cache_key"] == rotated
+    assert session._client.responses.kwargs[9]["prompt_cache_key"] == rotated
+    assert session._client.responses.kwargs[10]["prompt_cache_key"] == rotated
+    assert session._client.responses.kwargs[9]["extra_headers"]["session-id"] == rotated
     # None of the post-rotate requests fell back to the start id.
-    for sent in session._client.responses.kwargs[5:]:
+    for sent in session._client.responses.kwargs[8:]:
         assert sent["prompt_cache_key"] != start_id
 
 
 def test_second_corruption_rotates_again():
-    """A second run of five identical hits rotates to a THIRD distinct id."""
+    """A second run of eight identical hits rotates to a THIRD distinct id."""
     # Two rotate epochs via a stateful clock.
     ticks = iter([EPOCH0 + 100, EPOCH0 + 200])
     last = {"v": EPOCH0 + 200}
@@ -306,13 +308,13 @@ def test_second_corruption_rotates_again():
         return last["v"]
 
     # First threshold 7s -> rotate. Then threshold 8s -> rotate again.
-    # Sequence of cached values recorded by requests 1..11:
-    #   7,7,7,7,7 (rotate after #5) | 8,8,8,8,8 (rotate after #10) | 0
+    # Sequence of cached values recorded by requests 1..17:
+    #   7*8 (rotate after #8) | 8*8 (rotate after #16) | 0
     session, start_id = _make_session(
-        [7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 0], clock=clock
+        [7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 0], clock=clock
     )
 
-    for _ in range(11):
+    for _ in range(17):
         session.send("hi")
 
     first_rotate = _codex_affinity_id(ANCHOR, EPOCH0 + 100)
@@ -320,9 +322,9 @@ def test_second_corruption_rotates_again():
     assert len({start_id, first_rotate, second_rotate}) == 3
 
     keys = [kw["prompt_cache_key"] for kw in session._client.responses.kwargs]
-    assert keys[:5] == [start_id] * 5
-    assert keys[5:10] == [first_rotate] * 5
-    assert keys[10] == second_rotate
+    assert keys[:8] == [start_id] * 8
+    assert keys[8:16] == [first_rotate] * 8
+    assert keys[16] == second_rotate
 
 
 # ---------------------------------------------------------------------------
@@ -333,9 +335,9 @@ def test_second_corruption_rotates_again():
 def test_three_fields_always_equal_including_across_rotate():
     """prompt_cache_key == session-id == thread-id on every request."""
     clock = lambda: EPOCH0 + 500  # noqa: E731
-    session, _ = _make_session([7, 7, 7, 7, 7, 99, 0], clock=clock)
+    session, _ = _make_session([7, 7, 7, 7, 7, 7, 7, 7, 99, 0], clock=clock)
 
-    for _ in range(7):
+    for _ in range(10):
         session.send("hi")
 
     for sent in session._client.responses.kwargs:
@@ -353,9 +355,11 @@ def test_rotate_emits_event_to_sink():
     """A rotate emits one safe event with the documented fields and no secrets."""
     events: list[dict] = []
     clock = lambda: EPOCH0 + 500  # noqa: E731
-    session, start_id = _make_session([7, 7, 7, 7, 7, 99], events=events, clock=clock)
+    session, start_id = _make_session(
+        [7, 7, 7, 7, 7, 7, 7, 7, 99], events=events, clock=clock
+    )
 
-    for _ in range(6):
+    for _ in range(9):
         session.send("hi")
 
     rotated = _codex_affinity_id(ANCHOR, EPOCH0 + 500)
@@ -363,8 +367,9 @@ def test_rotate_emits_event_to_sink():
     assert len(rot_events) == 1
     ev = rot_events[0]
     assert ev["new_id_hash"] == rotated
-    assert ev["recent_cached_values"] == [7, 7, 7, 7, 7]
-    assert ev["reason"] == "five_call_cache_corruption"
+    assert ev["recent_cached_values"] == [7, 7, 7, 7, 7, 7, 7, 7]
+    assert ev["reason"] == "stalled_cache_hits"
+    assert ev["had_stable_id"] is True
     assert ev["provider"] == "codex"
     assert ev["model"] == "gpt-5.5"
 
@@ -391,18 +396,18 @@ def test_no_event_without_rotate():
 def test_usage_extra_reflects_current_id_including_after_rotate():
     """UsageMetadata.extra exposes the ACTUAL ids used on each request."""
     clock = lambda: EPOCH0 + 500  # noqa: E731
-    session, start_id = _make_session([7, 7, 7, 7, 7, 99], clock=clock)
+    session, start_id = _make_session([7, 7, 7, 7, 7, 7, 7, 7, 99], clock=clock)
 
-    results = [session.send("hi") for _ in range(6)]
+    results = [session.send("hi") for _ in range(9)]
 
     rotated = _codex_affinity_id(ANCHOR, EPOCH0 + 500)
     # Pre-rotate requests expose the start id.
     assert results[0].usage.extra["codex_session_id"] == start_id
     assert results[0].usage.extra["codex_prompt_cache_key"] == start_id
-    # The rotated (6th) request exposes the new id for all three.
-    assert results[5].usage.extra["codex_session_id"] == rotated
-    assert results[5].usage.extra["codex_thread_id"] == rotated
-    assert results[5].usage.extra["codex_prompt_cache_key"] == rotated
+    # The rotated (9th) request exposes the new id for all three.
+    assert results[8].usage.extra["codex_session_id"] == rotated
+    assert results[8].usage.extra["codex_thread_id"] == rotated
+    assert results[8].usage.extra["codex_prompt_cache_key"] == rotated
 
 
 # ---------------------------------------------------------------------------
@@ -423,11 +428,11 @@ def test_adapter_writes_rotate_event_to_logs_events_jsonl(tmp_path):
         codex_session_anchor=str(anchor),
         codex_epoch=EPOCH0,
     )
-    # Six requests: five identical positive hits rotate the id on the sixth.
-    adapter._client = FakeClient([_completed(7) for _ in range(6)])
+    # Nine requests: eight identical positive hits rotate the id on the ninth.
+    adapter._client = FakeClient([_completed(7) for _ in range(9)])
     session = adapter.create_chat("gpt-5.5", "system prompt")
 
-    for _ in range(6):
+    for _ in range(9):
         session.send("hi")
 
     events_path = tmp_path / "logs" / "events.jsonl"
@@ -435,8 +440,8 @@ def test_adapter_writes_rotate_event_to_logs_events_jsonl(tmp_path):
     lines = [json.loads(ln) for ln in events_path.read_text().splitlines() if ln.strip()]
     rotates = [e for e in lines if e.get("type") == "codex_cache_affinity_rotated"]
     assert len(rotates) == 1
-    assert rotates[0]["recent_cached_values"] == [7, 7, 7, 7, 7]
-    assert rotates[0]["reason"] == "five_call_cache_corruption"
+    assert rotates[0]["recent_cached_values"] == [7, 7, 7, 7, 7, 7, 7, 7]
+    assert rotates[0]["reason"] == "stalled_cache_hits"
     # The event carries no prompt body, anchor path, or OAuth secret.
     blob = json.dumps(rotates[0], default=str)
     assert "system prompt" not in blob and "Bearer" not in blob

@@ -115,7 +115,7 @@ def _codex_session_id(anchor: str) -> str:
 #
 # There is no one-shot "temporary id then revert" concept. Once rotated, the new
 # current id stays in force.
-_CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN = 5
+_CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN = 8
 
 
 def _codex_affinity_id(anchor: str, epoch_seconds: float) -> str:
@@ -1763,7 +1763,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
             "new_id_hash": new_id,
             "recent_cached_values": recent,
             "had_stable_id": had_stable_id,
-            "reason": "five_call_cache_corruption",
+            "reason": "stalled_cache_hits",
         }
         try:
             self._event_sink(event)
