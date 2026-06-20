@@ -1,28 +1,37 @@
-"""Tests for the Codex cache-stall temporary-key protection (Jason's request).
+"""Tests for the Codex affinity-id model (Jason's final #406 semantics).
 
-Background: the Codex Responses adapter normally uses one stable
-``prompt_cache_key`` / ``session-id`` / ``thread-id`` (all three byte-identical)
-to maximize cache affinity. But if the backend keeps returning the *same*
-``cached_tokens`` count request after request, the cache slot is stalled — the
-prefix is no longer growing, so affinity is buying nothing. To break the stall
-the session maintains a rolling queue of the last 5 cache-hit numbers; when all
-5 are byte-identical it swaps to a *temporary* affinity id (one shared value for
-all three) for the next request only, then reverts to the stable id.
+The Codex Responses adapter uses one *current* affinity id, used byte-identically
+for ``prompt_cache_key`` / ``session-id`` / ``thread-id``. That id has exactly
+TWO rotation triggers:
 
-The temporary id is a short, log-safe hash of the trigger event time (to the
-second). When the swap happens the session emits an event to
-``logs/events.jsonl`` carrying only safe metadata (no token values beyond the
-recent cached-hit list, no prompt body, no secrets).
+  1. start/refresh — the adapter is (re)built, which stamps a fresh epoch; the
+     current id is ``hash(anchor + epoch)`` and stays fixed for the life of that
+     adapter/session instance (every request inside it uses the same id).
+  2. 8-call cache corruption — when the backend returns the SAME positive
+     ``cached_tokens`` for eight requests in a row, the cache slot has stalled, so
+     the session ROTATES its current id (a persistent replacement, derived via
+     the same ``hash(anchor + epoch)`` helper with a fresh epoch), clears the
+     queue, and keeps using the new id for ALL subsequent requests until the next
+     start/refresh or the next 8-call corruption.
+
+There is no one-shot "temporary id then revert" concept: once rotated, the new
+id stays in force. On a rotate the session emits a ``codex_cache_affinity_rotated``
+event to ``logs/events.jsonl`` carrying only safe metadata (no token values
+beyond the recent cached-hit list, no prompt body, no secrets, and not the
+anchor path).
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from lingtai.llm.openai.adapter import CodexOpenAIAdapter, CodexResponsesSession
+from lingtai.llm.openai.adapter import (
+    CodexOpenAIAdapter,
+    CodexResponsesSession,
+    _codex_affinity_id,
+)
 
 
 @dataclass
@@ -69,23 +78,21 @@ def _completed(cached: int) -> list[Event]:
     ]
 
 
-def _expected_temp_id(epoch_seconds: int) -> str:
-    """The temporary affinity id derived from the trigger time (to the second)."""
-    token = f"codex-cache-stall:{int(epoch_seconds)}"
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:8]
+ANCHOR = "/agents/alice/init.json"
+EPOCH0 = 1_700_000_000  # adapter-build epoch -> the start/refresh current id
 
 
-STABLE = "stableaa"  # 8-char-ish stable per-agent affinity id used in tests
-
-
-def _make_session(cached_per_call, *, events=None, clock=None):
-    """Build a CodexResponsesSession wired with a stable affinity id.
+def _make_session(cached_per_call, *, events=None, clock=None, epoch=EPOCH0):
+    """Build a CodexResponsesSession with an epoch-stamped current id.
 
     ``cached_per_call`` is a list of cached_tokens numbers, one per send().
     ``events`` is an optional list to capture emitted events.
-    ``clock`` is an optional zero-arg callable returning epoch seconds.
+    ``clock`` is an optional zero-arg callable returning epoch seconds (used for
+    the rotate epoch and event ts). ``epoch`` is the build epoch baked into the
+    start/refresh current id.
     """
     client = FakeClient([_completed(c) for c in cached_per_call])
+    current = _codex_affinity_id(ANCHOR, epoch)
     kw = dict(
         client=client,
         model="gpt-5.5",
@@ -93,157 +100,318 @@ def _make_session(cached_per_call, *, events=None, clock=None):
         tools=None,
         tool_choice=None,
         extra_kwargs={},
-        prompt_cache_key=STABLE,
-        session_id=STABLE,
-        thread_id=STABLE,
+        prompt_cache_key=current,
+        session_id=current,
+        thread_id=current,
+        affinity_anchor=ANCHOR,
     )
     if events is not None:
         kw["event_sink"] = events.append
     if clock is not None:
         kw["time_fn"] = clock
-    return CodexResponsesSession(**kw)
+    return CodexResponsesSession(**kw), current
 
 
-def test_no_swap_when_cached_values_vary():
-    """Five sends with differing cache hits keep the stable id throughout."""
-    session = _make_session([10, 20, 30, 40, 50, 60])
+# ---------------------------------------------------------------------------
+# Helper: deterministic, epoch-sensitive, reused everywhere.
+# ---------------------------------------------------------------------------
+
+
+def test_affinity_id_helper_is_deterministic():
+    """Same (anchor, epoch) -> same 8-char lowercase-hex id."""
+    a = _codex_affinity_id(ANCHOR, EPOCH0)
+    b = _codex_affinity_id(ANCHOR, EPOCH0)
+    assert a == b
+    assert len(a) == 8
+    assert a == a.lower()
+    assert all(c in "0123456789abcdef" for c in a)
+
+
+def test_affinity_id_helper_changes_with_epoch():
+    """A different epoch (a new adapter build / a rotate) -> a different id."""
+    a = _codex_affinity_id(ANCHOR, EPOCH0)
+    b = _codex_affinity_id(ANCHOR, EPOCH0 + 1)
+    assert a != b
+
+
+def test_affinity_id_helper_changes_with_anchor():
+    """A different agent anchor -> a different id (same epoch)."""
+    a = _codex_affinity_id("/agents/alice/init.json", EPOCH0)
+    b = _codex_affinity_id("/agents/bob/init.json", EPOCH0)
+    assert a != b
+
+
+def test_affinity_id_truncates_epoch_to_whole_seconds():
+    """Sub-second epoch jitter does not change the id."""
+    assert _codex_affinity_id(ANCHOR, EPOCH0) == _codex_affinity_id(ANCHOR, EPOCH0 + 0.4)
+
+
+# ---------------------------------------------------------------------------
+# start/refresh: two builds (different epoch) -> different current id; stable
+# within one session across many requests.
+# ---------------------------------------------------------------------------
+
+
+def test_two_builds_different_epoch_yield_different_current_id_same_anchor():
+    """Same anchor, different build epoch -> different current id (refresh rotate)."""
+    id_a = _codex_affinity_id(ANCHOR, EPOCH0)
+    id_b = _codex_affinity_id(ANCHOR, EPOCH0 + 7)
+    assert id_a != id_b
+
+
+def test_current_id_stable_within_one_session_across_requests():
+    """Every request in one session (no corruption) uses the SAME current id."""
+    session, current = _make_session([10, 20, 30, 40, 50, 60])
 
     for _ in range(6):
         session.send("hi")
 
     for sent in session._client.responses.kwargs:
-        assert sent["prompt_cache_key"] == STABLE
-        assert sent["extra_headers"]["session-id"] == STABLE
-        assert sent["extra_headers"]["thread-id"] == STABLE
+        assert sent["prompt_cache_key"] == current
+        assert sent["extra_headers"]["session-id"] == current
+        assert sent["extra_headers"]["thread-id"] == current
 
 
-def test_no_swap_before_five_identical_hits():
-    """Four identical hits is not enough — the fifth send still uses stable id."""
-    # cached: 5,5,5,5 recorded by sends 1..4; send 5 (the 5th request) decides
-    # based on the queue AFTER 4 entries -> only 4 identical, no swap yet.
-    session = _make_session([5, 5, 5, 5, 5])
+def test_adapter_build_epoch_drives_current_id_and_changes_on_rebuild():
+    """CodexOpenAIAdapter stamps an injected epoch into the current id.
+
+    Two adapters over the SAME anchor but different build epochs (a refresh)
+    derive different current ids; both use them byte-identically for all three.
+    """
+    def _adapter(epoch):
+        a = CodexOpenAIAdapter(
+            api_key="fake",
+            base_url="http://fake",
+            use_responses=True,
+            force_responses=True,
+            codex_session_anchor=ANCHOR,
+            codex_epoch=epoch,
+        )
+        a._client = FakeClient([_completed(0)])
+        return a
+
+    a0 = _adapter(EPOCH0)
+    a1 = _adapter(EPOCH0 + 99)
+    s0 = a0.create_chat("gpt-5.5", "system prompt")
+    s1 = a1.create_chat("gpt-5.5", "system prompt")
+    s0.send("hi")
+    s1.send("hi")
+
+    sent0 = a0._client.responses.kwargs[0]
+    sent1 = a1._client.responses.kwargs[0]
+    id0 = _codex_affinity_id(ANCHOR, EPOCH0)
+    id1 = _codex_affinity_id(ANCHOR, EPOCH0 + 99)
+    assert id0 != id1
+    assert sent0["prompt_cache_key"] == sent0["extra_headers"]["session-id"] == id0
+    assert sent0["extra_headers"]["thread-id"] == id0
+    assert sent1["prompt_cache_key"] == sent1["extra_headers"]["session-id"] == id1
+
+
+# ---------------------------------------------------------------------------
+# 8-call cache corruption: persistent rotate (no one-shot, no revert).
+# ---------------------------------------------------------------------------
+
+
+def test_no_rotate_before_five_identical_hits():
+    """Four identical hits is not enough — the fifth send still uses the start id."""
+    session, current = _make_session([5, 5, 5, 5, 5])
 
     for _ in range(5):
         session.send("hi")
 
     for sent in session._client.responses.kwargs:
-        assert sent["prompt_cache_key"] == STABLE
-        assert sent["extra_headers"]["session-id"] == STABLE
+        assert sent["prompt_cache_key"] == current
+        assert sent["extra_headers"]["session-id"] == current
 
 
-def test_swap_to_temp_key_after_five_identical_hits():
-    """Five identical positive cache hits -> the 6th request uses a temp id."""
-    clock = lambda: 1_700_000_000  # noqa: E731  fixed trigger time
-    session = _make_session([7, 7, 7, 7, 7, 99], clock=clock)
-
-    for _ in range(6):
-        session.send("hi")
-
-    sent_sixth = session._client.responses.kwargs[5]
-    temp = _expected_temp_id(1_700_000_000)
-    # All three affinity levers carry the SAME temporary value on the swap call.
-    assert sent_sixth["prompt_cache_key"] == temp
-    assert sent_sixth["extra_headers"]["session-id"] == temp
-    assert sent_sixth["extra_headers"]["thread-id"] == temp
-    assert temp != STABLE
-
-    # First five sends used the stable id.
-    for sent in session._client.responses.kwargs[:5]:
-        assert sent["prompt_cache_key"] == STABLE
-
-
-def test_temp_key_is_one_shot_then_reverts_to_stable():
-    """The temporary id applies to exactly one request, then stable resumes."""
-    clock = lambda: 1_700_000_000  # noqa: E731
-    # 5 identical -> swap on 6th. The 6th send records cached=99 (breaks the
-    # run), so the 7th send must revert to the stable id.
-    session = _make_session([7, 7, 7, 7, 7, 99, 0], clock=clock)
-
-    for _ in range(7):
-        session.send("hi")
-
-    temp = _expected_temp_id(1_700_000_000)
-    assert session._client.responses.kwargs[5]["prompt_cache_key"] == temp
-    assert session._client.responses.kwargs[6]["prompt_cache_key"] == STABLE
-    assert session._client.responses.kwargs[6]["extra_headers"]["session-id"] == STABLE
-
-
-def test_swap_emits_event_to_sink():
-    """A swap emits one safe event with the documented fields and no secrets."""
-    events: list[dict] = []
-    clock = lambda: 1_700_000_000  # noqa: E731
-    session = _make_session([7, 7, 7, 7, 7, 99], events=events, clock=clock)
+def test_no_rotate_when_cached_values_vary():
+    """Varying cache hits never rotate the current id."""
+    session, current = _make_session([10, 20, 30, 40, 50, 60])
 
     for _ in range(6):
         session.send("hi")
 
-    swap_events = [e for e in events if e.get("type") == "codex_cache_stall_temp_key"]
-    assert len(swap_events) == 1
-    ev = swap_events[0]
-    temp = _expected_temp_id(1_700_000_000)
-    assert ev["temporary_id_hash"] == temp
-    assert ev["recent_cached_values"] == [7, 7, 7, 7, 7]
-    assert ev["had_stable_id"] is True
-    assert ev["model"] == "gpt-5.5"
-    assert "reason" in ev and ev["reason"]
-
-    # No secrets / no prompt body / no token-cost leakage beyond the cached list.
-    blob = json.dumps(ev, default=str)
-    assert STABLE not in blob  # the stable id itself is not disclosed
-    assert "system prompt" not in blob
-    assert "Authorization" not in blob and "Bearer" not in blob
+    for sent in session._client.responses.kwargs:
+        assert sent["prompt_cache_key"] == current
 
 
-def test_no_event_without_swap():
-    """Varying cache hits never emit a swap event."""
-    events: list[dict] = []
-    session = _make_session([10, 20, 30, 40, 50, 60], events=events)
-
-    for _ in range(6):
-        session.send("hi")
-
-    assert [e for e in events if e.get("type") == "codex_cache_stall_temp_key"] == []
-
-
-def test_usage_extra_reflects_temp_ids_on_swap_request():
-    """UsageMetadata.extra exposes the ACTUAL ids used on the swap request."""
-    clock = lambda: 1_700_000_000  # noqa: E731
-    session = _make_session([7, 7, 7, 7, 7, 99], clock=clock)
-
-    results = [session.send("hi") for _ in range(6)]
-
-    temp = _expected_temp_id(1_700_000_000)
-    # Swap request (6th) carries the temp ids and exposes the cache key marker.
-    assert results[5].usage.extra["codex_session_id"] == temp
-    assert results[5].usage.extra["codex_thread_id"] == temp
-    assert results[5].usage.extra["codex_prompt_cache_key"] == temp
-    # Stable requests expose the stable id.
-    assert results[0].usage.extra["codex_session_id"] == STABLE
-    assert results[0].usage.extra["codex_prompt_cache_key"] == STABLE
-
-
-def test_zero_cached_hits_do_not_count_toward_stall():
-    """cached_tokens == 0 are misses, not hits, and never trigger a swap."""
-    session = _make_session([0, 0, 0, 0, 0, 0, 0])
+def test_zero_cached_hits_do_not_count_toward_corruption():
+    """cached_tokens == 0 are misses, not hits, and never rotate."""
+    session, current = _make_session([0, 0, 0, 0, 0, 0, 0])
 
     for _ in range(7):
         session.send("hi")
 
     for sent in session._client.responses.kwargs:
-        assert sent["prompt_cache_key"] == STABLE
+        assert sent["prompt_cache_key"] == current
+
+
+def test_rotate_after_five_identical_hits_persists():
+    """Five identical positive hits -> the 6th request uses a NEW current id.
+
+    The rotate is decided AFTER the 5th response completes (its cached value
+    fills the window), so the 6th request is the first to carry the rotated id.
+    """
+    clock = lambda: EPOCH0 + 500  # noqa: E731  rotate epoch
+    session, start_id = _make_session([7, 7, 7, 7, 7, 99], clock=clock)
+
+    for _ in range(6):
+        session.send("hi")
+
+    rotated = _codex_affinity_id(ANCHOR, EPOCH0 + 500)
+    assert rotated != start_id
+
+    # First threshold requests used the start id.
+    for sent in session._client.responses.kwargs[:5]:
+        assert sent["prompt_cache_key"] == start_id
+
+    # The 6th request uses the rotated id for all three levers.
+    sent6 = session._client.responses.kwargs[5]
+    assert sent6["prompt_cache_key"] == rotated
+    assert sent6["extra_headers"]["session-id"] == rotated
+    assert sent6["extra_headers"]["thread-id"] == rotated
+
+
+def test_rotated_id_persists_and_does_not_revert():
+    """After a rotate the NEW id is used for every later request — no revert."""
+    clock = lambda: EPOCH0 + 500  # noqa: E731
+    # 5 identical -> rotate; 6th send records cached=99 (breaks run); 7th + 8th
+    # must continue on the SAME rotated id, never reverting to the start id.
+    session, start_id = _make_session([7, 7, 7, 7, 7, 99, 0, 3], clock=clock)
+
+    for _ in range(8):
+        session.send("hi")
+
+    rotated = _codex_affinity_id(ANCHOR, EPOCH0 + 500)
+    assert session._client.responses.kwargs[5]["prompt_cache_key"] == rotated
+    assert session._client.responses.kwargs[6]["prompt_cache_key"] == rotated
+    assert session._client.responses.kwargs[7]["prompt_cache_key"] == rotated
+    assert session._client.responses.kwargs[6]["extra_headers"]["session-id"] == rotated
+    # None of the post-rotate requests fell back to the start id.
+    for sent in session._client.responses.kwargs[5:]:
+        assert sent["prompt_cache_key"] != start_id
+
+
+def test_second_corruption_rotates_again():
+    """A second run of five identical hits rotates to a THIRD distinct id."""
+    # Two rotate epochs via a stateful clock.
+    ticks = iter([EPOCH0 + 100, EPOCH0 + 200])
+    last = {"v": EPOCH0 + 200}
+
+    def clock():
+        try:
+            last["v"] = next(ticks)
+        except StopIteration:
+            pass
+        return last["v"]
+
+    # First threshold 7s -> rotate. Then threshold 8s -> rotate again.
+    # Sequence of cached values recorded by requests 1..11:
+    #   7,7,7,7,7 (rotate after #5) | 8,8,8,8,8 (rotate after #10) | 0
+    session, start_id = _make_session(
+        [7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 0], clock=clock
+    )
+
+    for _ in range(11):
+        session.send("hi")
+
+    first_rotate = _codex_affinity_id(ANCHOR, EPOCH0 + 100)
+    second_rotate = _codex_affinity_id(ANCHOR, EPOCH0 + 200)
+    assert len({start_id, first_rotate, second_rotate}) == 3
+
+    keys = [kw["prompt_cache_key"] for kw in session._client.responses.kwargs]
+    assert keys[:5] == [start_id] * 5
+    assert keys[5:10] == [first_rotate] * 5
+    assert keys[10] == second_rotate
 
 
 # ---------------------------------------------------------------------------
-# Default host wiring — the adapter writes swap events to logs/events.jsonl.
+# Three-field invariant holds on every request, including across a rotate.
 # ---------------------------------------------------------------------------
 
 
-def _completed_event() -> Event:
-    return Event("response.completed", response=SimpleNamespace(id="r", usage=_usage(7)))
+def test_three_fields_always_equal_including_across_rotate():
+    """prompt_cache_key == session-id == thread-id on every request."""
+    clock = lambda: EPOCH0 + 500  # noqa: E731
+    session, _ = _make_session([7, 7, 7, 7, 7, 99, 0], clock=clock)
+
+    for _ in range(7):
+        session.send("hi")
+
+    for sent in session._client.responses.kwargs:
+        key = sent["prompt_cache_key"]
+        assert sent["extra_headers"]["session-id"] == key
+        assert sent["extra_headers"]["thread-id"] == key
 
 
-def test_adapter_writes_swap_event_to_logs_events_jsonl(tmp_path):
-    """A real Codex adapter emits the swap event to the agent's events.jsonl."""
+# ---------------------------------------------------------------------------
+# Event emission + field safety.
+# ---------------------------------------------------------------------------
+
+
+def test_rotate_emits_event_to_sink():
+    """A rotate emits one safe event with the documented fields and no secrets."""
+    events: list[dict] = []
+    clock = lambda: EPOCH0 + 500  # noqa: E731
+    session, start_id = _make_session([7, 7, 7, 7, 7, 99], events=events, clock=clock)
+
+    for _ in range(6):
+        session.send("hi")
+
+    rotated = _codex_affinity_id(ANCHOR, EPOCH0 + 500)
+    rot_events = [e for e in events if e.get("type") == "codex_cache_affinity_rotated"]
+    assert len(rot_events) == 1
+    ev = rot_events[0]
+    assert ev["new_id_hash"] == rotated
+    assert ev["recent_cached_values"] == [7, 7, 7, 7, 7]
+    assert ev["reason"] == "five_call_cache_corruption"
+    assert ev["provider"] == "codex"
+    assert ev["model"] == "gpt-5.5"
+
+    # No secrets / no prompt body / no anchor path / no token-cost leakage
+    # beyond the cached list, and NOT the previous (start) id.
+    blob = json.dumps(ev, default=str)
+    assert start_id not in blob  # the prior id is not disclosed
+    assert ANCHOR not in blob  # the anchor path is not disclosed
+    assert "system prompt" not in blob
+    assert "Authorization" not in blob and "Bearer" not in blob
+
+
+def test_no_event_without_rotate():
+    """Varying cache hits never emit a rotate event."""
+    events: list[dict] = []
+    session, _ = _make_session([10, 20, 30, 40, 50, 60], events=events)
+
+    for _ in range(6):
+        session.send("hi")
+
+    assert [e for e in events if e.get("type") == "codex_cache_affinity_rotated"] == []
+
+
+def test_usage_extra_reflects_current_id_including_after_rotate():
+    """UsageMetadata.extra exposes the ACTUAL ids used on each request."""
+    clock = lambda: EPOCH0 + 500  # noqa: E731
+    session, start_id = _make_session([7, 7, 7, 7, 7, 99], clock=clock)
+
+    results = [session.send("hi") for _ in range(6)]
+
+    rotated = _codex_affinity_id(ANCHOR, EPOCH0 + 500)
+    # Pre-rotate requests expose the start id.
+    assert results[0].usage.extra["codex_session_id"] == start_id
+    assert results[0].usage.extra["codex_prompt_cache_key"] == start_id
+    # The rotated (6th) request exposes the new id for all three.
+    assert results[5].usage.extra["codex_session_id"] == rotated
+    assert results[5].usage.extra["codex_thread_id"] == rotated
+    assert results[5].usage.extra["codex_prompt_cache_key"] == rotated
+
+
+# ---------------------------------------------------------------------------
+# Default host wiring — the adapter writes rotate events to logs/events.jsonl.
+# ---------------------------------------------------------------------------
+
+
+def test_adapter_writes_rotate_event_to_logs_events_jsonl(tmp_path):
+    """A real Codex adapter emits the rotate event to the agent's events.jsonl."""
     anchor = tmp_path / "init.json"
     anchor.write_text("{}", encoding="utf-8")
 
@@ -253,8 +421,9 @@ def test_adapter_writes_swap_event_to_logs_events_jsonl(tmp_path):
         use_responses=True,
         force_responses=True,
         codex_session_anchor=str(anchor),
+        codex_epoch=EPOCH0,
     )
-    # Six requests: five identical positive hits arm the swap on the sixth.
+    # Six requests: five identical positive hits rotate the id on the sixth.
     adapter._client = FakeClient([_completed(7) for _ in range(6)])
     session = adapter.create_chat("gpt-5.5", "system prompt")
 
@@ -264,13 +433,14 @@ def test_adapter_writes_swap_event_to_logs_events_jsonl(tmp_path):
     events_path = tmp_path / "logs" / "events.jsonl"
     assert events_path.exists()
     lines = [json.loads(ln) for ln in events_path.read_text().splitlines() if ln.strip()]
-    swaps = [e for e in lines if e.get("type") == "codex_cache_stall_temp_key"]
-    assert len(swaps) == 1
-    assert swaps[0]["recent_cached_values"] == [7, 7, 7, 7, 7]
-    assert swaps[0]["had_stable_id"] is True
-    # The event carries no prompt body or OAuth secret.
-    blob = json.dumps(swaps[0], default=str)
+    rotates = [e for e in lines if e.get("type") == "codex_cache_affinity_rotated"]
+    assert len(rotates) == 1
+    assert rotates[0]["recent_cached_values"] == [7, 7, 7, 7, 7]
+    assert rotates[0]["reason"] == "five_call_cache_corruption"
+    # The event carries no prompt body, anchor path, or OAuth secret.
+    blob = json.dumps(rotates[0], default=str)
     assert "system prompt" not in blob and "Bearer" not in blob
+    assert str(anchor) not in blob
 
 
 def test_bare_adapter_has_no_event_sink():

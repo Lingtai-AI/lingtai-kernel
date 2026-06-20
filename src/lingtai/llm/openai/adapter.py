@@ -98,26 +98,39 @@ def _codex_session_id(anchor: str) -> str:
     return hashlib.sha256(anchor.encode("utf-8")).hexdigest()[:8]
 
 
-# Cache-stall temporary-key protection (Jason's follow-up to #378). When the
-# Codex backend keeps returning the SAME cache-hit number for several requests
-# in a row, the stable cache slot has stalled — the cached prefix is no longer
-# growing, so the stable affinity id is buying nothing. To break the stall the
-# session swaps, for one request, to a *temporary* affinity id derived from the
-# trigger event time (to the second). The temp value is short, log-safe, and
-# deterministic for that trigger second.
-_CODEX_CACHE_STALL_QUEUE_LEN = 5
-_CODEX_CACHE_STALL_TEMP_PREFIX = "codex-cache-stall:"
+# Codex affinity-id rotation (Jason's final #406 semantics). The Codex affinity
+# id is a single *current* id used byte-identically for ``session-id`` /
+# ``thread-id`` / ``prompt_cache_key``. It has exactly TWO rotation triggers and
+# nothing else:
+#
+#   1. start/refresh  — the adapter is (re)built, stamping a fresh epoch; the
+#      current id is ``_codex_affinity_id(anchor, epoch)`` and stays fixed for
+#      the life of that adapter/session instance.
+#   2. stalled cache hits — the backend returns the SAME positive
+#      ``cached_tokens`` for ``_CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN`` requests
+#      in a row (the cache slot has stalled), so the session re-derives a fresh
+#      current id from the same helper with a new epoch (``time_fn()``) and keeps
+#      using it for ALL subsequent requests until the next start/refresh or the
+#      next stalled-cache rotate.
+#
+# There is no one-shot "temporary id then revert" concept. Once rotated, the new
+# current id stays in force.
+_CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN = 5
 
 
-def _codex_temp_affinity_id(epoch_seconds: float) -> str:
-    """Derive a short, log-safe temporary Codex affinity id from a timestamp.
+def _codex_affinity_id(anchor: str, epoch_seconds: float) -> str:
+    """Derive the epoch-stamped Codex *current* affinity id.
 
-    The id is a deterministic 8-char lowercase-hex sha256 prefix of the trigger
-    event time truncated to whole seconds. The same trigger second yields the
-    same id; it is used byte-identically for the temporary ``session-id`` /
-    ``thread-id`` / ``prompt_cache_key`` on the one-shot stall-break request.
+    ``anchor`` is the per-agent durable identity (the resolved ``init.json``
+    path); ``epoch_seconds`` is the build epoch (start/refresh) or the rotate
+    epoch (stalled-cache rotate). The result is a deterministic 8-char lowercase-hex
+    sha256 prefix of ``anchor`` combined with the whole-second epoch: the same
+    (anchor, epoch) always yields the same id, a different epoch (a rebuild or a
+    rotate) yields a different one, and sub-second epoch jitter is ignored.
+    Used byte-identically for ``session-id`` / ``thread-id`` / ``prompt_cache_key``
+    until the next rotation.
     """
-    token = f"{_CODEX_CACHE_STALL_TEMP_PREFIX}{int(epoch_seconds)}"
+    token = f"{anchor}:epoch:{int(epoch_seconds)}"
     return hashlib.sha256(token.encode("utf-8")).hexdigest()[:8]
 
 
@@ -1612,22 +1625,26 @@ class CodexResponsesSession(OpenAIResponsesSession):
         *args,
         session_id: str | None = None,
         thread_id: str | None = None,
+        affinity_anchor: str | None = None,
         event_sink=None,
         time_fn=None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        # Codex REST cache-affinity identity. Jason's follow-up to #378 forces
-        # the three affinity levers to never diverge: whenever the session has a
-        # per-agent affinity identity, on EVERY stable request
+        # Codex REST cache-affinity identity (Jason's final #406 semantics). The
+        # three affinity levers never diverge: whenever the session has a
+        # per-agent affinity identity, on EVERY request
         #
-        #     prompt_cache_key == session-id == thread-id == <effective id>
+        #     prompt_cache_key == session-id == thread-id == <current id>
         #
         # is an invariant, not a coincidence of the host wiring. We normalize the
         # (possibly mismatched) candidate ids the constructor receives into ONE
-        # effective affinity id and use it byte-identically for all three.
+        # current affinity id and use it byte-identically for all three.
         # Priority: ``prompt_cache_key`` (the explicit request-body cache key) >
-        # ``session_id`` > ``thread_id``.
+        # ``session_id`` > ``thread_id``. On the normal/root path the adapter has
+        # already epoch-stamped this id at build time (the start/refresh trigger);
+        # a stalled-cache rotate re-derives it from ``affinity_anchor`` + a
+        # fresh epoch (the only other trigger).
         #
         # The header carve-out (issue #378, NON-NEGOTIABLE): ``session-id`` /
         # ``thread-id`` headers route the backend cache slot and MUST be
@@ -1640,32 +1657,37 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # asked for them). A cache-key-only construction (the bare/no-anchor
         # adapter path) keeps its body ``prompt_cache_key`` and sends NO headers.
         has_header_identity = bool(session_id or thread_id)
-        effective_id = self._prompt_cache_key or session_id or thread_id
-        self._prompt_cache_key = effective_id
+        # The *current* affinity id for this session. Stays fixed for the life of
+        # the session until a stalled-cache rotate re-derives it.
+        self._current_id = self._prompt_cache_key or session_id or thread_id
+        self._prompt_cache_key = self._current_id
+        self._has_header_identity = has_header_identity
         if has_header_identity:
-            self._session_id = effective_id
-            self._thread_id = effective_id
+            self._session_id = self._current_id
+            self._thread_id = self._current_id
         else:
             self._session_id = None
             self._thread_id = None
 
-        # Cache-stall temporary-key protection (Jason's follow-up to #378).
-        # ``_cache_hit_queue`` is a rolling window of the last
-        # ``_CODEX_CACHE_STALL_QUEUE_LEN`` POSITIVE cache-hit numbers
-        # (``cached_tokens``). When the window is full and every value is
-        # byte-identical the next request swaps to a one-shot temporary affinity
-        # id, then reverts. ``_pending_temp_id`` holds the temp id for that one
-        # request (``None`` = use the stable id). ``_event_sink`` is an optional
-        # callable that receives the swap event dict (the host wires it to
-        # ``logs/events.jsonl``); ``_time_fn`` is an injectable clock used to
-        # derive/stamp the temp id (defaults to wall-clock seconds).
+        # Cache-corruption rotate. ``_cache_hit_queue`` is a rolling window of the
+        # last ``_CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN`` POSITIVE cache-hit
+        # numbers (``cached_tokens``). When the window is full and every value is
+        # byte-identical the cache slot has stalled, so the current id is ROTATED
+        # in place — re-derived from ``affinity_anchor`` + a fresh ``time_fn()``
+        # epoch — and used for ALL subsequent requests (no one-shot, no revert)
+        # until the next rotate or the next start/refresh. ``_affinity_anchor`` is
+        # the per-agent durable identity used for the re-derivation (``None`` on
+        # the bare/test path — then the current id stays as-is). ``_event_sink``
+        # is an optional callable that receives the rotate event dict (the host
+        # wires it to ``logs/events.jsonl``); ``_time_fn`` is an injectable clock
+        # used for the rotate epoch and the event ``ts`` (defaults to wall-clock).
         self._cache_hit_queue: list[int] = []
-        self._pending_temp_id: str | None = None
+        self._affinity_anchor = affinity_anchor
         self._event_sink = event_sink
         self._time_fn = time_fn or time.time
 
     def _cache_affinity_headers(self) -> dict[str, str]:
-        """Return the stable ``session-id`` / ``thread-id`` headers, if any."""
+        """Return the current ``session-id`` / ``thread-id`` headers, if any."""
         headers: dict[str, str] = {}
         if self._session_id:
             headers["session-id"] = self._session_id
@@ -1676,78 +1698,80 @@ class CodexResponsesSession(OpenAIResponsesSession):
     def _effective_affinity(self) -> tuple[str | None, dict[str, str]]:
         """Resolve this request's effective (prompt_cache_key, headers) pair.
 
-        Normally returns the stable values. When a stall was detected on the
-        previous request, ``_pending_temp_id`` holds a one-shot temporary id;
-        this consumes it so the SAME temporary value is used byte-identically
-        for ``prompt_cache_key`` / ``session-id`` / ``thread-id`` on exactly
-        this request, then reverts to the stable id for the next one.
+        Always returns the *current* affinity id — the epoch-stamped value from
+        construction, or the last stalled-cache rotation if one has fired.
+        There is no one-shot/temporary state: the same current id is used
+        byte-identically for ``prompt_cache_key`` / ``session-id`` / ``thread-id``
+        on every request until the next rotate or the next start/refresh.
         """
-        if self._pending_temp_id is not None:
-            temp = self._pending_temp_id
-            self._pending_temp_id = None  # one-shot — revert after this request
-            cache_key = temp if self._prompt_cache_key else None
-            headers: dict[str, str] = {}
-            # Mirror the stable policy: only emit a header if its stable
-            # counterpart would have been sent (so a bare/test session with no
-            # ids stays header-free even mid-stall).
-            if self._session_id:
-                headers["session-id"] = temp
-            if self._thread_id:
-                headers["thread-id"] = temp
-            return cache_key, headers
         return self._prompt_cache_key, self._cache_affinity_headers()
 
     def _record_cache_hit(self, cached_tokens: int, *, model: str) -> None:
-        """Feed a request's cache-hit number into the rolling stall detector.
+        """Feed a request's cache-hit number into the rolling corruption detector.
 
         Only POSITIVE ``cached_tokens`` count as cache hits — a 0 is a miss, not
-        a stalled hit. When the last ``_CODEX_CACHE_STALL_QUEUE_LEN`` hits are
-        byte-identical, arm a one-shot temporary affinity id for the next
-        request and emit a safe ``codex_cache_stall_temp_key`` event.
+        a stalled hit. When the last ``_CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN``
+        hits are byte-identical, the cache slot has stalled: rotate the current
+        affinity id in place (persistent) and emit a safe
+        ``codex_cache_affinity_rotated`` event.
         """
         if cached_tokens <= 0:
             return
         self._cache_hit_queue.append(int(cached_tokens))
-        if len(self._cache_hit_queue) > _CODEX_CACHE_STALL_QUEUE_LEN:
+        if len(self._cache_hit_queue) > _CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN:
             self._cache_hit_queue.pop(0)
         if (
-            len(self._cache_hit_queue) == _CODEX_CACHE_STALL_QUEUE_LEN
+            len(self._cache_hit_queue) == _CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN
             and len(set(self._cache_hit_queue)) == 1
         ):
-            self._arm_temp_affinity(model=model)
+            self._rotate_current_affinity(model=model)
 
-    def _arm_temp_affinity(self, *, model: str) -> None:
-        """Arm a one-shot temporary affinity id and emit a swap event."""
-        trigger_ts = self._time_fn()
-        temp = _codex_temp_affinity_id(trigger_ts)
-        self._pending_temp_id = temp
-        # Clear the window so we don't re-trigger on the very next hit; the
-        # detector needs a fresh run of five identical hits to fire again.
+    def _rotate_current_affinity(self, *, model: str) -> None:
+        """Rotate the current affinity id in place and emit a rotate event.
+
+        The new id is re-derived from ``affinity_anchor`` + a fresh ``time_fn()``
+        epoch and replaces the current one for ALL subsequent requests (no
+        revert) until the next rotation or the next start/refresh. Only sessions
+        with a per-agent anchor rotate — a bare/test session with no anchor stays
+        as-is (it just resets the detector window).
+        """
         recent = list(self._cache_hit_queue)
+        # Clear the window so we don't re-trigger on the very next hit; the
+        # detector needs a fresh run of N identical hits to fire again.
         self._cache_hit_queue.clear()
+        if not self._affinity_anchor or not self._current_id:
+            return
+        trigger_ts = self._time_fn()
+        new_id = _codex_affinity_id(self._affinity_anchor, trigger_ts)
+        # Whether this session carried a per-agent header identity (session-id /
+        # thread-id slot) before the rotate, vs. a body-only cache-key session.
+        had_stable_id = self._has_header_identity
+        self._current_id = new_id
+        self._prompt_cache_key = new_id
+        if self._has_header_identity:
+            self._session_id = new_id
+            self._thread_id = new_id
         if self._event_sink is None:
             return
         # Safe metadata only: no token totals beyond the cached-hit list, no
-        # prompt body, no secrets, and NOT the stable id itself.
+        # prompt body, no secrets, no anchor path, and NOT the prior id.
         event = {
-            "type": "codex_cache_stall_temp_key",
+            "type": "codex_cache_affinity_rotated",
             "ts": float(trigger_ts),
             "provider": "codex",
             "model": model,
-            "had_stable_id": bool(self._session_id or self._prompt_cache_key),
-            "temporary_id_hash": temp,
+            "new_id_hash": new_id,
             "recent_cached_values": recent,
-            "reason": (
-                f"last {_CODEX_CACHE_STALL_QUEUE_LEN} cache-hit values were "
-                "byte-identical (stalled cache slot); switching to a temporary "
-                "affinity id for the next request"
-            ),
+            "had_stable_id": had_stable_id,
+            "reason": "five_call_cache_corruption",
         }
         try:
             self._event_sink(event)
         except Exception:
             # Observability must never break the agent turn.
-            logger.warning("codex cache-stall event sink failed", exc_info=True)
+            logger.warning(
+                "codex cache-affinity rotate event sink failed", exc_info=True
+            )
 
     @staticmethod
     def _usage_extra(
@@ -1755,10 +1779,10 @@ class CodexResponsesSession(OpenAIResponsesSession):
     ) -> dict[str, str]:
         """Build the token-ledger ``UsageMetadata.extra`` for this request.
 
-        Surfaces the ACTUAL ids used so a stall-break (temporary id) is visible
-        in ``token_ledger.jsonl`` alongside the normal stable-id requests. Only
-        the short non-secret affinity ids ride here — no prompt body, no tokens,
-        no OAuth secret.
+        Surfaces the ACTUAL current ids used so a stalled-cache rotation is
+        visible in ``token_ledger.jsonl`` alongside the pre-rotation requests.
+        Only the short non-secret affinity ids ride here — no prompt body, no
+        tokens, no OAuth secret.
         """
         extra: dict[str, str] = {}
         if affinity_headers.get("session-id"):
@@ -1840,11 +1864,11 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 kwargs["context_management"] = [
                     {"type": "compaction", "compact_threshold": self._compact_threshold}
                 ]
-            # Resolve this request's effective cache-affinity values. Normally
-            # the stable per-agent id; if the previous request tripped the
-            # cache-stall detector this consumes a one-shot temporary id so all
-            # three levers (prompt_cache_key / session-id / thread-id) carry the
-            # same temporary value for exactly this request, then revert.
+            # Resolve this request's effective cache-affinity values — the
+            # current epoch-stamped per-agent id, or the last stalled-cache
+            # rotation if one has fired. All three levers (prompt_cache_key /
+            # session-id / thread-id) carry the same current value on every
+            # request; a rotation persists for all subsequent requests.
             effective_cache_key, affinity_headers = self._effective_affinity()
             # Opt into Codex prompt caching with the resolved key. We send only
             # `prompt_cache_key`; the Codex backend rejects `prompt_cache_retention`
@@ -1920,9 +1944,10 @@ class CodexResponsesSession(OpenAIResponsesSession):
                             ),
                         )
                         # Feed this request's cache-hit number into the rolling
-                        # stall detector. A run of five byte-identical positive
-                        # hits arms a one-shot temporary affinity id for the
-                        # NEXT request (see ``_record_cache_hit``).
+                        # corruption detector. A run of
+                        # ``_CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN`` byte-identical
+                        # positive hits rotates the current affinity id in place
+                        # for all subsequent requests (see ``_record_cache_hit``).
                         self._record_cache_hit(cached_tokens, model=self._model)
         except Exception:
             # Revert the trailing user entry we just added so the next retry
@@ -1980,45 +2005,52 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         codex_session_id: str | None = None,
         codex_session_anchor: str | None = None,
         codex_thread_salt: str | None = None,
+        codex_epoch: float | None = None,
+        time_fn=None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        # Codex REST cache-affinity identity (issue #378). The single per-agent
-        # value below is used byte-identically for ``session-id``, ``thread-id``,
-        # and the default ``prompt_cache_key`` (see the module note above). The
-        # adapter has no per-agent identity of its own; the host wiring passes it
-        # down by default via these kwargs (also usable as an internal override /
-        # testing escape hatch):
+        # Codex REST cache-affinity identity (Jason's final #406 semantics). The
+        # single per-agent value below is used byte-identically for ``session-id``,
+        # ``thread-id``, and the default ``prompt_cache_key`` (see the module note
+        # above). It is the *current* affinity id, epoch-stamped at construction:
+        # building (or rebuilding on refresh) the adapter records a fresh epoch,
+        # so ``_codex_id`` = ``_codex_affinity_id(anchor, epoch)`` and changes on
+        # every adapter rebuild while staying stable for the life of one
+        # adapter/session instance. The adapter has no per-agent identity of its
+        # own; the host wiring passes the anchor down by default via these kwargs
+        # (also usable as an internal override / testing escape hatch):
         #
-        #   codex_session_id=str     -> use this exact string for all three
-        #   codex_session_anchor=str -> derive the stable 8-char agent-path hash
-        #                               from this per-agent anchor (the resolved
-        #                               init.json path — the agent's durable
-        #                               identity) and use it for all three
+        #   codex_session_id=str     -> use this exact string verbatim for all
+        #                               three (no epoch stamping — explicit
+        #                               operator override)
+        #   codex_session_anchor=str -> epoch-stamp the per-agent anchor (the
+        #                               resolved init.json path — the agent's
+        #                               durable identity) into the current id used
+        #                               for all three
         #   (neither set)            -> no session-id/thread-id (bare/test path)
         #
-        # ``codex_thread_salt`` is accepted only as a legacy manifest
-        # pass-through; it is intentionally NOT used to derive a separate thread
-        # id. The root/main thread tracks the session id exactly so the three
-        # values stay byte-identical and stable across api_call_id rotation,
-        # refresh/rebuild, molt, and clear (same agent path).
-        if codex_session_id:
-            self._codex_id: str | None = str(codex_session_id)
-        elif codex_session_anchor:
-            self._codex_id = _codex_session_id(str(codex_session_anchor))
-        else:
-            self._codex_id = None  # no per-agent identity -> no headers
-        self._codex_thread_salt = codex_thread_salt  # legacy pass-through; unused
-        # The agent's durable identity anchor (resolved ``init.json`` path) also
-        # locates the agent's ``logs/events.jsonl`` (a sibling of ``init.json``).
-        # The cache-stall temporary-key swap emits a safe event there; without an
-        # anchor (bare/test path) there is no agent log to write to.
+        # ``codex_epoch`` pins the build epoch (defaults to ``time_fn()``); both
+        # are injectable for tests. ``codex_thread_salt`` is accepted only as a
+        # legacy manifest pass-through; it is intentionally NOT used to derive a
+        # separate thread id. The root/main thread tracks the session id exactly
+        # so the three values stay byte-identical for the life of the adapter.
+        self._codex_time_fn = time_fn or time.time
+        self._codex_epoch = codex_epoch if codex_epoch is not None else self._codex_time_fn()
         self._codex_session_anchor = (
             str(codex_session_anchor) if codex_session_anchor else None
         )
+        if codex_session_id:
+            # Explicit override: used verbatim, not epoch-stamped.
+            self._codex_id: str | None = str(codex_session_id)
+        elif self._codex_session_anchor:
+            self._codex_id = _codex_affinity_id(self._codex_session_anchor, self._codex_epoch)
+        else:
+            self._codex_id = None  # no per-agent identity -> no headers
+        self._codex_thread_salt = codex_thread_salt  # legacy pass-through; unused
 
     def _build_codex_event_sink(self):
-        """Return a sink writing cache-stall events to ``logs/events.jsonl``.
+        """Return a sink writing cache-affinity-rotate events to ``logs/events.jsonl``.
 
         Derives the agent log path from the durable identity anchor (the
         ``init.json`` path); ``logs/events.jsonl`` is its sibling. Returns
@@ -2036,7 +2068,9 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 with open(events_path, "a", encoding="utf-8") as f:
                     f.write(line + "\n")
             except Exception:
-                logger.warning("codex cache-stall event write failed", exc_info=True)
+                logger.warning(
+                    "codex cache-affinity rotate event write failed", exc_info=True
+                )
 
         return _sink
 
@@ -2045,16 +2079,17 @@ class CodexOpenAIAdapter(OpenAIAdapter):
 
         Returns ``(None, None)`` only when no per-agent identity was passed in
         (e.g. a bare adapter built directly in a test). In the normal host path
-        the agent path is always supplied, so both ids are the same stable
-        8-char agent-path hash — the thread id tracks the session id exactly.
+        the agent path is always supplied, so both ids are the same epoch-stamped
+        current id — the thread id tracks the session id exactly.
         """
         return self._codex_id, self._codex_id
 
     def _default_prompt_cache_key(self, model: str) -> str:
         # On the normal/root path the cache key is the SAME per-agent value as
         # session-id / thread-id — byte-identical, so all three cache-affinity
-        # levers point at one stable slot for the agent's durable identity.
-        # Never paired with `prompt_cache_retention` (Codex rejects it).
+        # levers point at one current slot for the agent's durable identity (the
+        # epoch-stamped id). Never paired with `prompt_cache_retention` (Codex
+        # rejects it).
         #
         # The model-keyed ``lingtai-codex:{model}:v1`` form survives only for the
         # truly bare/no-anchor path (e.g. a standalone unit test), where the
@@ -2110,19 +2145,25 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             previous_response_id=None,
             compact_threshold=None,
             interface=interface,
-            # On the normal/root path this resolves to the same 8-char
-            # agent-path hash as session-id / thread-id (see
+            # On the normal/root path this resolves to the SAME epoch-stamped
+            # current id as session-id / thread-id (see
             # ``_default_prompt_cache_key``); it honors an explicit override or
             # a ``prompt_cache_key=False`` disable passed to the adapter. Only
             # the bare/no-anchor path falls back to ``lingtai-codex:{model}:v1``.
             prompt_cache_key=self._resolve_prompt_cache_key(model),
-            # Stable REST cache-affinity headers (issue #378): both the 8-char
-            # agent-path hash, byte-identical, passed down by the host;
+            # Current REST cache-affinity headers: both the epoch-stamped
+            # per-agent id, byte-identical, passed down by the host;
             # ``(None, None)`` only for a bare/test adapter.
             session_id=session_id,
             thread_id=thread_id,
-            # Cache-stall temporary-key protection: emit swap events to the
-            # agent's ``logs/events.jsonl`` (derived from the identity anchor).
+            # Per-agent anchor + clock for the stalled-cache rotate:
+            # the session re-derives a fresh current id from the anchor + a new
+            # epoch when the cache stalls. ``None`` anchor on the bare/test path
+            # disables rotation (no per-agent identity to re-derive from).
+            affinity_anchor=self._codex_session_anchor,
+            time_fn=self._codex_time_fn,
+            # Cache-corruption rotate: emit rotate events to the agent's
+            # ``logs/events.jsonl`` (derived from the identity anchor).
             # ``None`` on the bare/test path — no agent log to write to.
             event_sink=self._build_codex_event_sink(),
         )

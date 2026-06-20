@@ -186,8 +186,15 @@ def test_responses_session_omits_cache_key_when_unset():
 # ---------------------------------------------------------------------------
 
 
+# Fixed build epoch for adapter-built Codex sessions in these tests. The current
+# affinity id is ``hash(anchor + epoch)`` (Jason's final #406 semantics), so the
+# tests pin the epoch to keep the derived id deterministic.
+_CFG_EPOCH = 1_700_000_000
+
+
 def _create_codex_session_cfg(events, *, model="gpt-5.5", **adapter_kw):
     """Build a Codex session through the adapter with extra config kwargs."""
+    adapter_kw.setdefault("codex_epoch", _CFG_EPOCH)
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
@@ -486,11 +493,11 @@ def test_manifest_config_keys_pass_through_to_provider_defaults():
 
 
 def test_codex_factory_builds_adapter_with_per_agent_ids():
-    """The registered codex factory wires the anchor into one shared hash id."""
+    """The registered codex factory wires the anchor into one shared current id."""
     from unittest import mock
 
     import lingtai  # noqa: F401
-    from lingtai.llm.openai.adapter import _codex_session_id
+    from lingtai.llm.openai.adapter import _codex_affinity_id
     from lingtai.llm.service import LLMService
 
     anchor = "/agents/alice/init.json"
@@ -508,10 +515,11 @@ def test_codex_factory_builds_adapter_with_per_agent_ids():
                 }
             },
         )
-        sid, tid = svc.get_adapter("codex")._resolve_codex_ids("gpt-5.5")
-        # session-id == thread-id == the 8-char agent-path hash.
-        assert sid == tid == _codex_session_id(anchor)
-        assert sid == _expected_codex_hash(anchor)
+        adapter = svc.get_adapter("codex")
+        sid, tid = adapter._resolve_codex_ids("gpt-5.5")
+        # session-id == thread-id == the epoch-stamped current id (Jason #406):
+        # hash(anchor + the adapter's build epoch). The thread tracks the session.
+        assert sid == tid == _codex_affinity_id(anchor, adapter._codex_epoch)
 
         # No config -> the safe default: no per-agent identity, no headers.
         svc2 = LLMService(provider="codex", model="gpt-5.5")
@@ -709,7 +717,7 @@ def test_codex_usage_extra_carries_cache_affinity_ids_for_token_ledger():
     headers = sent["extra_headers"]
     # The actual ids used this request ride in usage.extra so token_ledger.jsonl
     # can record them — all three the same normalized effective id, so a
-    # cache-stall temporary-key swap (Jason's follow-up) is visible too.
+    # cache-affinity rotation (Jason's follow-up) is visible too.
     assert result.usage.extra == {
         "codex_session_id": "custom-key:v2",
         "codex_thread_id": "custom-key:v2",
@@ -783,11 +791,13 @@ def test_token_ledger_entry_merges_usage_extra(tmp_path):
 
 
 def _expected_codex_hash(anchor: str) -> str:
-    """The expected root/main Codex id: 8-char lowercase-hex sha256 prefix.
+    """The expected root/main Codex *current* id for the pinned build epoch.
 
-    Used for ``session-id``, ``thread-id``, and the default ``prompt_cache_key``,
-    which are byte-identical on the normal/root path.
+    Jason's final #406 semantics: the id is ``hash(anchor + epoch)`` (8-char
+    lowercase-hex sha256 prefix), used byte-identically for ``session-id``,
+    ``thread-id``, and the default ``prompt_cache_key`` on the normal/root path.
+    These tests pin the build epoch to ``_CFG_EPOCH``.
     """
-    import hashlib
+    from lingtai.llm.openai.adapter import _codex_affinity_id
 
-    return hashlib.sha256(anchor.encode("utf-8")).hexdigest()[:8]
+    return _codex_affinity_id(anchor, _CFG_EPOCH)
