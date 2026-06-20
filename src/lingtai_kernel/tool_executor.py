@@ -25,6 +25,15 @@ from .types import UnknownToolError
 _DEFAULT_MAX_RESULT_BYTES = 50_000
 
 
+def _resolve_max_result_chars(value: int) -> int:
+    """Clamp executor result cap to the non-configurable hard ceiling.
+
+    Callers may choose a smaller cap for tests or embedded runtimes, but cannot
+    raise provider-visible tool results above PREVENTIVE_MAX_CHARS.
+    """
+    return value if type(value) is int and 0 < value <= _DEFAULT_MAX_RESULT_CHARS else _DEFAULT_MAX_RESULT_CHARS
+
+
 class ToolExecutor:
     """Executes tool calls sequentially or in parallel."""
 
@@ -51,7 +60,7 @@ class ToolExecutor:
         self._max_result_bytes = max_result_bytes
         self._meta_fn = meta_fn or (lambda: {})
         self._working_dir = Path(working_dir) if working_dir is not None else None
-        self._max_result_chars = max_result_chars
+        self._max_result_chars = _resolve_max_result_chars(max_result_chars)
         self._tool_call_guard = tool_call_guard or ToolCallGuard()
         self._current_api_call_id: str | None = None
 
@@ -427,7 +436,7 @@ class ToolExecutor:
         """Final boundary before a result reaches the LLM wire.
 
         Adds ACTIVE-turn tool-call progress metadata, then applies the unified
-        character cap (``_DEFAULT_MAX_RESULT_CHARS``): results that serialize
+        character cap (``PREVENTIVE_MAX_CHARS``): results that serialize
         beyond the cap are spilled to a sidecar artifact under
         ``<workdir>/tmp/tool-results/`` and replaced with a compact manifest
         pointing at the file.  The compact manifest also receives progress

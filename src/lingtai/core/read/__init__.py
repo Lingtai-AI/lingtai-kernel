@@ -7,6 +7,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from lingtai_kernel.tool_result_artifacts import PREVENTIVE_MAX_CHARS
+
 from ...i18n import t
 
 if TYPE_CHECKING:
@@ -14,10 +16,38 @@ if TYPE_CHECKING:
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 
-# Conservative character budget for a single read result.  Tool-result
-# transport caps are typically ~10 k characters; we stay well under that to
-# leave room for the JSON envelope and metadata fields.
-READ_CAP_CHARS: int = 8_000
+# Read defaults to a smaller everyday page budget while the runtime tool-result
+# boundary remains a larger non-configurable hard ceiling. Callers may pass
+# ``max_chars`` per read call; values above the runtime ceiling are clamped.
+DEFAULT_READ_CAP_CHARS: int = 20_000
+READ_HARD_CAP_CHARS: int = PREVENTIVE_MAX_CHARS
+
+
+def _valid_cap(value: object) -> int | None:
+    return value if type(value) is int and value > 0 else None
+
+
+def _runtime_hard_cap(agent: "BaseAgent") -> int:
+    """Return the active runtime hard ceiling for provider-visible tool results."""
+    executor_cap = _valid_cap(getattr(getattr(agent, "_executor", None), "_max_result_chars", None))
+    if executor_cap is not None:
+        return min(executor_cap, READ_HARD_CAP_CHARS)
+    return READ_HARD_CAP_CHARS
+
+
+def _resolve_call_cap(agent: "BaseAgent", requested_max_chars: object) -> int:
+    """Return the per-call read cap, clamped by the runtime hard ceiling.
+
+    ``max_chars`` lets the caller intentionally ask for smaller or larger chunks
+    than the read default while the runtime hard cap remains the ceiling that
+    prevents provider-visible tool-result blowups. Invalid per-call values are
+    ignored and use the 20k read default.
+    """
+    runtime_cap = _runtime_hard_cap(agent)
+    requested_cap = _valid_cap(requested_max_chars)
+    if requested_cap is None:
+        return min(DEFAULT_READ_CAP_CHARS, runtime_cap)
+    return min(requested_cap, runtime_cap)
 
 
 def get_description(lang: str = "en") -> str:
@@ -31,6 +61,7 @@ def get_schema(lang: str = "en") -> dict:
             "file_path": {"type": "string", "description": t(lang, "read.file_path")},
             "offset": {"type": "integer", "description": t(lang, "read.offset"), "default": 1},
             "limit": {"type": "integer", "description": t(lang, "read.limit"), "default": 2000},
+            "max_chars": {"type": "integer", "description": t(lang, "read.max_chars")},
         },
         "required": ["file_path"],
     }
@@ -105,6 +136,7 @@ def setup(agent: "BaseAgent") -> None:
             path = str(agent._working_dir / path)
         offset = args.get("offset", 1)
         limit = args.get("limit", 2000)
+        max_chars = args.get("max_chars")
         try:
             content = agent._file_io.read(path)
         except FileNotFoundError:
@@ -113,7 +145,7 @@ def setup(agent: "BaseAgent") -> None:
             return {"status": "error", "message": f"Cannot read {path}: {e}"}
         lines = content.splitlines(keepends=True)
         start = max(0, offset - 1)
-        numbered, extra = _apply_cap(lines, start, limit, READ_CAP_CHARS)
+        numbered, extra = _apply_cap(lines, start, limit, _resolve_call_cap(agent, max_chars))
         result: dict = {
             "content": numbered,
             "total_lines": len(lines),

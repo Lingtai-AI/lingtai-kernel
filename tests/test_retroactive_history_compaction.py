@@ -37,7 +37,7 @@ from lingtai_kernel.tool_result_artifacts import (
 # -- Shared helper: manifest shape & detection ------------------------------
 
 def test_constants_match_spec():
-    assert PREVENTIVE_MAX_CHARS == 10_000
+    assert PREVENTIVE_MAX_CHARS == 100_000
     assert RETROACTIVE_MAX_CHARS == 5_000
 
 
@@ -122,7 +122,7 @@ def test_shared_helper_artifact_contains_full_payload(tmp_path):
 
 def test_shared_helper_source_field_records_caller(tmp_path):
     """source must distinguish preventive vs retroactive spills."""
-    big = "Q" * 20_000
+    big = "Q" * (PREVENTIVE_MAX_CHARS + 1)  # just over the cap
     preventive = spill_oversized_result(
         big, max_chars=PREVENTIVE_MAX_CHARS, tool_name="read",
         tool_call_id="tc-p", working_dir=tmp_path,
@@ -137,7 +137,7 @@ def test_shared_helper_source_field_records_caller(tmp_path):
 
 def test_shared_helper_idempotent_on_manifest(tmp_path):
     """Calling spill on an already-spilled manifest returns it unchanged."""
-    big = "M" * 20_000
+    big = "M" * (PREVENTIVE_MAX_CHARS + 1)  # just over the cap
     first = spill_oversized_result(
         big, max_chars=PREVENTIVE_MAX_CHARS, tool_name="read",
         tool_call_id="tc1", working_dir=tmp_path,
@@ -631,7 +631,7 @@ def test_manifest_carries_namespaced_artifact_marker(tmp_path):
     consumers don't have to rely on the structural quadruple."""
     from lingtai_kernel.tool_result_artifacts import ARTIFACT_MARKER
 
-    big = "A" * 20_000
+    big = "A" * (PREVENTIVE_MAX_CHARS + 1)  # just over the cap
     out = spill_oversized_result(
         big, max_chars=PREVENTIVE_MAX_CHARS, tool_name="read",
         tool_call_id="tc-mark", working_dir=tmp_path,

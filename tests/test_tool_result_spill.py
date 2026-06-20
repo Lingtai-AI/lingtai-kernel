@@ -1,9 +1,9 @@
-"""Tests for the 10K-char tool-result cap and spill-to-artifact behavior.
+"""Tests for the 100K-char tool-result hard cap and spill-to-artifact behavior.
 
 Covers the unified hard cap applied by ``ToolExecutor`` immediately before a
 result reaches the LLM wire: small results pass through unchanged; oversized
 results spill to ``<workdir>/tmp/tool-results/<name>`` and the wire sees a
-compact manifest pointing at the artifact.
+compact manifest pointing at the artifact.  Default hard cap is 100 000 chars. ToolExecutor(max_result_chars=N) may choose a smaller cap for tests/embedded use, but cannot raise above the hard ceiling.
 """
 from __future__ import annotations
 
@@ -21,9 +21,62 @@ from lingtai_kernel.tool_executor import (
     ToolExecutor,
     _spill_oversized_result,
 )
+from lingtai_kernel.tool_result_artifacts import PREVENTIVE_MAX_CHARS
 
 
 CAP = _DEFAULT_MAX_RESULT_CHARS
+
+
+def test_preventive_cap_default_is_100k():
+    """Default preventive cap must be the 100 000 char hard ceiling."""
+    assert PREVENTIVE_MAX_CHARS == 100_000, (
+        f"PREVENTIVE_MAX_CHARS should be 100 000, got {PREVENTIVE_MAX_CHARS}"
+    )
+    assert _DEFAULT_MAX_RESULT_CHARS == 100_000, (
+        f"_DEFAULT_MAX_RESULT_CHARS should be 100 000, got {_DEFAULT_MAX_RESULT_CHARS}"
+    )
+
+
+def test_configurable_cap_via_executor(tmp_path):
+    """ToolExecutor(max_result_chars=N) may lower the preventive cap."""
+    custom_cap = 500
+
+    def dispatch(tc):
+        return "A" * 600  # exceeds custom cap but not default
+
+    captured = MagicMock(side_effect=lambda name, result, **kw: result)
+    executor = ToolExecutor(
+        dispatch_fn=dispatch,
+        make_tool_result_fn=captured,
+        guard=LoopGuard(max_total_calls=50),
+        working_dir=tmp_path,
+        max_result_chars=custom_cap,
+    )
+    executor.execute([ToolCall(name="read", args={}, id="tc-custom")])
+    _, wire_payload = captured.call_args.args
+    assert wire_payload["status"] == "spilled", (
+        "Result of 600 chars should spill when cap is 500"
+    )
+    assert wire_payload["cap_chars"] == custom_cap
+
+
+def test_executor_cap_cannot_exceed_hard_ceiling(tmp_path):
+    """ToolExecutor(max_result_chars=N) cannot raise above the 100k hard cap."""
+    def dispatch(tc):
+        return "A" * (PREVENTIVE_MAX_CHARS + 1)
+
+    captured = MagicMock(side_effect=lambda name, result, **kw: result)
+    executor = ToolExecutor(
+        dispatch_fn=dispatch,
+        make_tool_result_fn=captured,
+        guard=LoopGuard(max_total_calls=50),
+        working_dir=tmp_path,
+        max_result_chars=PREVENTIVE_MAX_CHARS * 2,
+    )
+    executor.execute([ToolCall(name="read", args={}, id="tc-hard")])
+    _, wire_payload = captured.call_args.args
+    assert wire_payload["status"] == "spilled"
+    assert wire_payload["cap_chars"] == PREVENTIVE_MAX_CHARS
 
 
 def _serialized_len(value):
@@ -317,7 +370,7 @@ def test_artifact_directory_created_lazily(tmp_path):
 
 def test_spill_preserves_unicode(tmp_path):
     """Non-ASCII content must survive the round trip to disk."""
-    big = ("器灵 — 灵台方寸山 — " + "字" * 50) * 200  # well over CAP
+    big = ("器灵 — 灵台方寸山 — " + "字" * 50) * 4000  # well over 100K CAP
     assert _serialized_len(big) > CAP
 
     out = _spill_oversized_result(
@@ -335,7 +388,7 @@ def test_spill_preserves_unicode(tmp_path):
 def test_spill_artifact_preserves_full_payload_beyond_legacy_50k_cap(tmp_path):
     """Regression: the legacy 50KB lossy `_truncate_result` must NOT run on
     the primary path before the spill boundary.  A payload that exceeds both
-    the 10K spill cap AND the legacy 50KB byte cap must land in the sidecar
+    the 100K spill cap AND the legacy 50KB byte cap must land in the sidecar
     artifact with its full content intact — no ``[truncated — N bytes total]``
     marker, no half-dict surgery, no dropped list items.
 

@@ -4,7 +4,7 @@ Two related concerns live here:
 
 1. **Preventive spill** (``spill_oversized_result``) — called by ``ToolExecutor``
    on every newly-built tool result.  If serialized content exceeds
-   ``PREVENTIVE_MAX_CHARS`` (10_000), the full original is written to
+   ``PREVENTIVE_MAX_CHARS`` (100_000 hard ceiling), the full original is written to
    ``<workdir>/tmp/tool-results/<…>.{json,txt}`` and a compact manifest dict
    (``status="spilled"``, ``artifact="lingtai_tool_result_spill"``) replaces
    the wire-bound content.
@@ -22,7 +22,7 @@ Both paths produce the same manifest dict, recognised by
 content that is already a manifest, making compaction idempotent across
 repeated AED retries.
 
-The 10K cap on the live wire vs. the 5K cap on history is deliberate: a
+The 100K hard cap on the live wire vs. the 5K cap on history is deliberate: a
 freshly-built result has room for stamp_meta and small reserved warnings,
 while a result already sitting in history is a sunk cost we want to shrink
 hard before retry to free up provider tokens.
@@ -58,8 +58,9 @@ ARTIFACT_MARKER = "lingtai_tool_result_spill"
 _HOISTED_RESERVED_FIELDS = ("_advisory",)
 
 # Preventive cap — applied by ToolExecutor on every freshly built tool
-# result, before it reaches the LLM wire.
-PREVENTIVE_MAX_CHARS = 10_000
+# result, before it reaches the LLM wire. This is the non-configurable hard
+# ceiling for provider-visible tool results.
+PREVENTIVE_MAX_CHARS = 100_000
 
 # Retroactive cap — applied by the AED recovery path to results already
 # committed to the chat interface.  Tighter than the preventive cap so the

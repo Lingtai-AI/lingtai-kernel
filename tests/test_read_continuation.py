@@ -7,6 +7,9 @@ Covers:
 - requested offset/limit and total/line metadata are correct.
 - Schema description contains the transport-cap and truncated warning.
 - Graceful handling of a single very-long line that exceeds cap on its own.
+- DEFAULT_READ_CAP_CHARS is 20k while the runtime hard cap is 100k.
+- Read accepts per-call max_chars and clamps it to the runtime hard cap.
+- Read description references read-manual and the 20k/100k cap semantics.
 """
 from __future__ import annotations
 
@@ -17,7 +20,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.agent import Agent
-from lingtai.core.read import READ_CAP_CHARS, _apply_cap
+from lingtai.core.read import (
+    DEFAULT_READ_CAP_CHARS,
+    READ_HARD_CAP_CHARS,
+    _apply_cap,
+    _resolve_call_cap,
+)
+from lingtai_kernel.tool_result_artifacts import PREVENTIVE_MAX_CHARS
 
 
 # ---------------------------------------------------------------------------
@@ -32,12 +41,13 @@ def _make_mock_service():
     return svc
 
 
-def _file_agent(tmp_path):
+def _file_agent(tmp_path, *, config=None):
     return Agent(
         service=_make_mock_service(),
         agent_name="test",
         working_dir=tmp_path / "test",
         capabilities=["read"],
+        config=config,
     )
 
 
@@ -60,13 +70,13 @@ class TestApplyCap:
     def test_large_read_returns_truncated_true(self):
         """When content exceeds cap, meta contains truncated=True."""
         lines = self._lines(200, chars_per_line=100)
-        numbered, meta = _apply_cap(lines, 0, 200, cap_chars=READ_CAP_CHARS)
+        numbered, meta = _apply_cap(lines, 0, 200, cap_chars=DEFAULT_READ_CAP_CHARS)
         assert meta.get("truncated") is True
 
     def test_large_read_next_offset_is_valid(self):
         """next_offset is 1-based and points past the last returned line."""
         lines = self._lines(200, chars_per_line=100)
-        _, meta = _apply_cap(lines, 0, 200, cap_chars=READ_CAP_CHARS)
+        _, meta = _apply_cap(lines, 0, 200, cap_chars=DEFAULT_READ_CAP_CHARS)
         assert "next_offset" in meta
         next_off = meta["next_offset"]
         assert isinstance(next_off, int)
@@ -75,10 +85,10 @@ class TestApplyCap:
     def test_next_offset_advances_on_second_call(self):
         """A second call starting at next_offset covers different lines."""
         lines = self._lines(300, chars_per_line=100)
-        _, meta1 = _apply_cap(lines, 0, 300, cap_chars=READ_CAP_CHARS)
+        _, meta1 = _apply_cap(lines, 0, 300, cap_chars=DEFAULT_READ_CAP_CHARS)
         assert meta1.get("truncated") is True
         next_start = meta1["next_offset"] - 1  # convert to 0-based
-        numbered2, _ = _apply_cap(lines, next_start, 300, cap_chars=READ_CAP_CHARS)
+        numbered2, _ = _apply_cap(lines, next_start, 300, cap_chars=DEFAULT_READ_CAP_CHARS)
         # The second chunk must start at a later line number than the first.
         first_line_num_chunk2 = int(numbered2.split("\t")[0])
         first_line_num_chunk1 = 1
@@ -87,7 +97,7 @@ class TestApplyCap:
     def test_requested_offset_and_limit_in_meta(self):
         """requested_offset and requested_limit echo the call arguments."""
         lines = self._lines(300, chars_per_line=100)
-        _, meta = _apply_cap(lines, 4, 200, cap_chars=READ_CAP_CHARS)
+        _, meta = _apply_cap(lines, 4, 200, cap_chars=DEFAULT_READ_CAP_CHARS)
         if meta.get("truncated"):
             assert meta["requested_offset"] == 5  # 1-based
             assert meta["requested_limit"] == 200
@@ -95,19 +105,19 @@ class TestApplyCap:
     def test_total_lines_and_remaining_estimate(self):
         """total_lines and remaining_lines_estimate are present when truncated."""
         lines = self._lines(300, chars_per_line=100)
-        _, meta = _apply_cap(lines, 0, 300, cap_chars=READ_CAP_CHARS)
+        _, meta = _apply_cap(lines, 0, 300, cap_chars=DEFAULT_READ_CAP_CHARS)
         assert meta.get("truncated") is True
         assert meta["remaining_lines_estimate"] > 0
 
     def test_single_very_long_line_does_not_crash(self):
         """A line longer than cap_chars returns a bounded prefix without crashing."""
-        long_line = "A" * (READ_CAP_CHARS * 2) + "\n"
+        long_line = "A" * (DEFAULT_READ_CAP_CHARS * 2) + "\n"
         lines = [long_line]
-        numbered, meta = _apply_cap(lines, 0, 1, cap_chars=READ_CAP_CHARS)
+        numbered, meta = _apply_cap(lines, 0, 1, cap_chars=DEFAULT_READ_CAP_CHARS)
         # We get *some* content back (the bounded prefix of the first line),
         # but it must still be explicitly marked as truncated.
         assert len(numbered) > 0
-        assert len(numbered) <= READ_CAP_CHARS
+        assert len(numbered) <= DEFAULT_READ_CAP_CHARS
         assert meta["truncated"] is True
         assert meta["line_truncated"] is True
         assert meta["last_returned_line"] == 1
@@ -116,7 +126,7 @@ class TestApplyCap:
     def test_last_returned_line_is_correct(self):
         """last_returned_line matches the actual last line number in content."""
         lines = self._lines(200, chars_per_line=100)
-        numbered, meta = _apply_cap(lines, 0, 200, cap_chars=READ_CAP_CHARS)
+        numbered, meta = _apply_cap(lines, 0, 200, cap_chars=DEFAULT_READ_CAP_CHARS)
         if meta.get("truncated"):
             # Parse the last line number from the numbered content.
             content_lines = [l for l in numbered.split("\n") if l.strip()]
@@ -145,13 +155,13 @@ class TestReadHandler:
             agent.stop(timeout=1.0)
 
     def test_large_read_returns_continuation_metadata(self, tmp_path):
-        """Files larger than READ_CAP_CHARS return continuation metadata."""
+        """Files larger than DEFAULT_READ_CAP_CHARS return continuation metadata."""
         agent = _file_agent(tmp_path)
         try:
             # Write enough lines to definitely exceed the cap.
             f = tmp_path / "large.txt"
             line = "x" * 100 + "\n"
-            n_lines = (READ_CAP_CHARS // len(line)) * 3
+            n_lines = (DEFAULT_READ_CAP_CHARS // len(line)) * 3
             f.write_text(line * n_lines, encoding="utf-8")
 
             result = agent._tool_handlers["read"]({"file_path": str(f)})
@@ -169,7 +179,7 @@ class TestReadHandler:
         try:
             f = tmp_path / "large.txt"
             line = "x" * 100 + "\n"
-            n_lines = (READ_CAP_CHARS // len(line)) * 3
+            n_lines = (DEFAULT_READ_CAP_CHARS // len(line)) * 3
             f.write_text(line * n_lines, encoding="utf-8")
 
             r1 = agent._tool_handlers["read"]({"file_path": str(f)})
@@ -209,12 +219,58 @@ class TestReadHandler:
 # Schema description contains warning text (#352)
 # ---------------------------------------------------------------------------
 
+def test_read_cap_default_is_20k_and_hard_cap_is_100k():
+    """Read defaults to 20k while runtime spill has a 100k hard ceiling."""
+    assert DEFAULT_READ_CAP_CHARS == 20_000
+    assert READ_HARD_CAP_CHARS == 100_000
+    assert PREVENTIVE_MAX_CHARS == 100_000
+
+
+def test_resolve_call_cap_defaults_to_read_default(tmp_path):
+    """Without max_chars, read uses the 20k everyday page budget."""
+    agent = _file_agent(tmp_path)
+    try:
+        assert _resolve_call_cap(agent, None) == 20_000
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_resolve_call_cap_clamps_to_runtime_hard_cap(tmp_path):
+    """max_chars may raise read chunk size, but never beyond the runtime ceiling."""
+    agent = _file_agent(tmp_path)
+    try:
+        assert _resolve_call_cap(agent, 50_000) == 50_000
+        assert _resolve_call_cap(agent, 200_000) == 100_000
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_read_handler_uses_per_call_max_chars(tmp_path):
+    """Read pagination obeys max_chars passed to one call."""
+    agent = _file_agent(tmp_path)
+    try:
+        f = tmp_path / "small-cap.txt"
+        f.write_text("".join(f"line-{i:03d} xxxxxxxxxxxxxxxxxxxx\n" for i in range(100)), encoding="utf-8")
+        result = agent._tool_handlers["read"]({"file_path": str(f), "limit": 100, "max_chars": 120})
+        assert result["truncated"] is True
+        assert result["cap_chars"] == 120
+        assert result["returned_chars"] <= 120
+    finally:
+        agent.stop(timeout=1.0)
+
+
 def test_read_schema_description_warns_about_cap():
-    """en description must mention the character cap and truncated/next_offset."""
+    """en description must mention read-manual, max_chars, 20k default, and 100k hard cap."""
     from lingtai.core.read import get_description
     desc = get_description("en")
-    assert "8 000" in desc or "8000" in desc or "8_000" in desc, \
-        "description should mention the ~8 000 char cap"
+    assert "20 000" in desc or "20000" in desc or "20_000" in desc, \
+        "description should mention the 20 000 char read default"
+    assert "100 000" in desc or "100000" in desc or "100_000" in desc, \
+        "description should mention the 100 000 char runtime hard cap"
+    assert "max_chars" in desc, \
+        "description should mention the per-call max_chars parameter"
+    assert "read-manual" in desc and "Before using read" in desc, \
+        "description should require reading read-manual first"
     assert "truncated" in desc, \
         "description should mention the 'truncated' field"
     assert "next_offset" in desc, \
