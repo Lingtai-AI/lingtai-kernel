@@ -16,7 +16,7 @@
 [![License](https://img.shields.io/github/license/Lingtai-AI/lingtai-kernel?color=%237dab8f)](LICENSE)
 [![Blog](https://img.shields.io/badge/blog-lingtai.ai-%23d4a853)](https://lingtai.ai)
 
-[lingtai.ai](https://lingtai.ai) · [简体中文](docs/readmes/README.zh.md) · [文言](docs/readmes/README.wen.md)
+[lingtai.ai](https://lingtai.ai) · [简体中文](docs/readmes/README.zh.md) · [文言](docs/readmes/README.wen.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Support](SUPPORT.md)
 
 </div>
 
@@ -130,6 +130,10 @@ No `agent_id`. The path is the identity. Agents find each other by path, communi
 
 Read the full manifesto at [lingtai.ai](https://lingtai.ai).
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and repository navigation entry points. For responsible disclosure, read [SECURITY.md](SECURITY.md); for help, read [SUPPORT.md](SUPPORT.md).
+
 ## Acknowledgements
 
 See [docs/references/acknowledgements.md](docs/references/acknowledgements.md).
@@ -140,6 +144,6 @@ Apache-2.0 — [Zesen Huang](https://github.com/huangzesen), 2025–2026
 
 <div align="center">
 
-[lingtai.ai](https://lingtai.ai) · [GitHub](https://github.com/Lingtai-AI/lingtai-kernel) · [TUI](https://github.com/Lingtai-AI/lingtai)
+[lingtai.ai](https://lingtai.ai) · [GitHub](https://github.com/Lingtai-AI/lingtai-kernel) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Support](SUPPORT.md) · [TUI](https://github.com/Lingtai-AI/lingtai)
 
 </div>

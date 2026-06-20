@@ -1,6 +1,6 @@
 # 灵台内核
 
-> [English](../../README.md) | [中文](README.zh.md) | [文言](README.wen.md)
+> [English](../../README.md) | [中文](README.zh.md) | [文言](README.wen.md) | [贡献](../../CONTRIBUTING.md) | [安全](../../SECURITY.md) | [支持](../../SUPPORT.md)
 
 > *灵台者有持，而不知其所持，而不可持者也。*
 > — 庄子·庚桑楚

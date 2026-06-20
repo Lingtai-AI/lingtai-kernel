@@ -1,6 +1,6 @@
 # Contributing to lingtai-kernel
 
-Thank you for helping improve the LingTai Python runtime.
+Thank you for helping improve the LingTai Python runtime. GitHub discovers this root file as the repository contributing guide.
 
 ## Start here
 
@@ -9,6 +9,12 @@ Thank you for helping improve the LingTai Python runtime.
   [`docs/references/claude-code-guide.md`](docs/references/claude-code-guide.md)
 - Source-root anatomy: [`src/lingtai_kernel/ANATOMY.md`](src/lingtai_kernel/ANATOMY.md)
 - Rust sidecar notes: [`crates/lingtai-search-sidecar/README.md`](crates/lingtai-search-sidecar/README.md)
+
+## Community and safety
+
+- Code of conduct: [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
+- Security reporting: [`SECURITY.md`](SECURITY.md)
+- Support guidance: [`SUPPORT.md`](SUPPORT.md)
 
 ## Workflow
 

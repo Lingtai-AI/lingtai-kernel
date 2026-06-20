@@ -22,4 +22,5 @@ prune src/lingtai/bin
 include setup.py
 include MANIFEST.in
 include LICENSE
+include NOTICE
 include README.md
