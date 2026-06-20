@@ -137,6 +137,39 @@ _CODEX_CACHE_KEY_HEADER = "codex-cache-key"
 _CODEX_CACHE_KEY_HEADER_LEN = 3
 
 
+# Honest client-identity headers for the Codex ``/backend-api/codex/responses``
+# path. The official Codex CLI sends ``originator`` + a Codex ``User-Agent`` to
+# identify itself; LingTai is NOT the Codex CLI, so we identify HONESTLY as
+# LingTai rather than impersonating ``codex_exec`` (impersonating a first-party
+# client risks an OpenAI ToS violation). These are pure identity hints — they do
+# NOT affect prompt caching (verified empirically: cache rate is identical with
+# or without them; only the stable ``session_id``/``thread_id`` header routes the
+# cache slot). The point is account hygiene: hitting the endpoint with a
+# ChatGPT-OAuth token and no recognizable client identity is exactly the traffic
+# anomaly/abuse detection flags. Mirrors the existing honest-User-Agent policy
+# for Kimi in ``LLMService._default_headers_for``. See issue #436.
+_CODEX_ORIGINATOR = "lingtai"
+
+
+def _lingtai_user_agent() -> str:
+    """Return an honest LingTai ``User-Agent`` string, e.g. ``LingTai/0.12.4``.
+
+    Falls back to an unversioned token if the installed package version cannot
+    be resolved (e.g. running from a source tree without metadata).
+    """
+    try:
+        from importlib.metadata import version
+
+        return f"LingTai/{version('lingtai')}"
+    except Exception:
+        return "LingTai"
+
+
+def _codex_identity_headers() -> dict[str, str]:
+    """Honest client-identity headers sent on every Codex request (see #436)."""
+    return {"originator": _CODEX_ORIGINATOR, "User-Agent": _lingtai_user_agent()}
+
+
 def _codex_affinity_id(anchor: str, epoch_seconds: float) -> str:
     """Derive the epoch-stamped Codex *current* affinity id.
 
@@ -1953,7 +1986,10 @@ class CodexResponsesSession(OpenAIResponsesSession):
             # ``codex-cache-key`` is a Codex-specific cache breaker derived from
             # the current prompt key and sent on every request whenever a prompt
             # key exists (no threshold / streak / after-N-hits gating).
+            # Honest client identity (#436) forms the base; cache-affinity and
+            # caller-supplied headers layer on top so they always win.
             extra_headers = {
+                **_codex_identity_headers(),
                 **affinity_headers,
                 **self._cache_key_header(effective_cache_key),
             }
