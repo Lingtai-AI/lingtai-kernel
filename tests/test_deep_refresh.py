@@ -463,3 +463,149 @@ def test_post_molt_preserves_pad_append_pinned_reference(tmp_path):
     pad = agent._prompt_manager.read_section("pad") or ""
     assert "Working notes line." in pad
     assert "PINNED-REFERENCE-MARKER" in pad
+
+
+# ---------------------------------------------------------------------------
+# Codex cache-affinity rebuild on refresh (Jason's final #406 semantics).
+#
+# #406 makes start/refresh one of exactly two rotate triggers: a live refresh
+# must (re)build the Codex adapter so it stamps a FRESH epoch and the current
+# affinity id rotates. The agent path is stable across refresh, so without an
+# explicit rebuild the provider-defaults bucket is byte-identical and the old
+# adapter (with its boot-epoch id) survives — the 8-hit shuffle never goes
+# live. These tests prove refresh now rebuilds the Codex service/adapter while
+# preserving chat history.
+# ---------------------------------------------------------------------------
+
+
+def _codex_agent(tmp_path: Path, epoch: float):
+    """Build a real Agent backed by a real Codex LLMService at a pinned epoch.
+
+    ``time.time`` is patched for the duration of service construction so the
+    adapter's build epoch (``_codex_epoch``) is deterministic. The returned
+    agent's ``service`` is a genuine ``LLMService`` (not a mock), so
+    ``_setup_from_init`` exercises the real Codex rebuild path.
+    """
+    from unittest.mock import patch as _patch
+
+    from lingtai.agent import Agent
+    from lingtai.llm.service import (
+        LLMService,
+        build_provider_defaults_from_manifest_llm,
+    )
+    from lingtai_kernel.config import AgentConfig
+    import lingtai  # noqa: F401  (registers the codex adapter factory)
+
+    init = _make_init(provider="codex", model="gpt-5.5")
+    # Pin max_rpm so the provider-defaults bucket is byte-identical before and
+    # after refresh — otherwise an incidental max_rpm change (default 60 on
+    # refresh) would rebuild the service for the wrong reason and mask the bug.
+    init["manifest"]["max_rpm"] = 60
+    (tmp_path / "init.json").write_text(json.dumps(init))
+
+    llm = init["manifest"]["llm"]
+    provider_defaults = build_provider_defaults_from_manifest_llm(
+        llm, max_rpm=60, working_dir=tmp_path
+    )
+    with _patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls, _patch(
+        "time.time", return_value=epoch
+    ):
+        mgr_cls.return_value.get_access_token.return_value = "fake-token"
+        service = LLMService(
+            provider="codex",
+            model="gpt-5.5",
+            api_key="fake",
+            provider_defaults=provider_defaults,
+        )
+        agent = Agent(
+            service,
+            agent_name="test-agent",
+            working_dir=tmp_path,
+            config=AgentConfig(),
+        )
+    return agent
+
+
+def test_refresh_rebuilds_codex_adapter_with_fresh_epoch(tmp_path):
+    """A live Codex refresh rebuilds the adapter and rotates the affinity id.
+
+    Before the fix, ``_setup_from_init`` only rebuilt ``LLMService`` when the
+    provider-defaults bucket changed; the Codex bucket is anchored on the agent
+    path only, so it stayed byte-identical across refresh and the boot-epoch
+    adapter (and its stamped current id) survived. The 8-hit cache-affinity
+    shuffle could therefore never become active. After the fix, refresh forces
+    a fresh Codex service/adapter, so the epoch-stamped current id rotates.
+    """
+    from unittest.mock import patch
+
+    agent = _codex_agent(tmp_path, epoch=1_700_000_000)
+    agent._sealed = True
+
+    old_adapter = agent.service.get_adapter("codex")
+    old_id = old_adapter._codex_id
+    assert old_id is not None  # per-agent identity is wired by default
+
+    # A later refresh stamps a different epoch -> a different current id.
+    mock_interface = MagicMock()
+    mock_session = MagicMock()
+    mock_session.chat = MagicMock()
+    mock_session.chat.interface = mock_interface
+    # The real Session._rebuild_session would call create_session; we only need
+    # to confirm refresh hands it the preserved interface and a fresh service.
+    agent._session = mock_session
+
+    with patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls, patch(
+        "time.time", return_value=1_700_000_500
+    ):
+        mgr_cls.return_value.get_access_token.return_value = "fake-token"
+        agent._setup_from_init()
+
+    new_adapter = agent.service.get_adapter("codex")
+    new_id = new_adapter._codex_id
+
+    # 1. A genuinely fresh adapter instance (not the cached boot one).
+    assert new_adapter is not old_adapter
+    # 2. The current epoch-stamped affinity id rotated.
+    assert new_id != old_id
+    assert new_id is not None
+    # 3. The rotated id is the epoch-stamped form, NOT the legacy
+    #    pre-#406 _codex_session_id(anchor) value.
+    from lingtai.llm.openai.adapter import _codex_affinity_id, _codex_session_id
+
+    anchor = str((tmp_path / "init.json").resolve())
+    assert new_id == _codex_affinity_id(anchor, 1_700_000_500)
+    assert new_id != _codex_session_id(anchor)
+    # 4. The new service object is wired into the session that rebuilds history.
+    assert agent._session._llm_service is agent.service
+    # 5. Chat history is preserved: the saved interface is replayed.
+    mock_session._rebuild_session.assert_called_once_with(mock_interface)
+
+
+def test_refresh_codex_adapter_keeps_per_agent_anchor(tmp_path):
+    """The rebuilt adapter still anchors on the same agent path (identity).
+
+    Rotation must change only the epoch, not the agent's durable identity:
+    both the old and new ids derive from the same ``init.json`` anchor, so the
+    rebuilt adapter remains a per-agent identity (not a shared model-only key).
+    """
+    from unittest.mock import patch
+
+    agent = _codex_agent(tmp_path, epoch=1_700_000_000)
+    agent._sealed = True
+
+    old_anchor = agent.service.get_adapter("codex")._codex_session_anchor
+
+    mock_session = MagicMock()
+    mock_session.chat = MagicMock()
+    mock_session.chat.interface = MagicMock()
+    agent._session = mock_session
+
+    with patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls, patch(
+        "time.time", return_value=1_700_000_500
+    ):
+        mgr_cls.return_value.get_access_token.return_value = "fake-token"
+        agent._setup_from_init()
+
+    new_adapter = agent.service.get_adapter("codex")
+    assert new_adapter._codex_session_anchor == old_anchor
+    assert new_adapter._codex_session_anchor == str((tmp_path / "init.json").resolve())

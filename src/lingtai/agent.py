@@ -1126,9 +1126,11 @@ class Agent(BaseAgent):
         # 60 RPM cap by default. Set to 0 in init.json to disable gating.
         new_max_rpm = m.get("max_rpm", 60)
         # Pass working_dir so a Codex agent's per-agent session/thread identity
-        # (the agent path) is resolved into the provider defaults. The identity
-        # is the agent path alone, so it is stable across refresh/rebuild — a
-        # refresh never rotates session-id / thread-id / prompt_cache_key.
+        # (the agent path) is resolved into the provider defaults. The agent
+        # path anchor is stable across refresh, but #406 makes start/refresh one
+        # of the two cache-affinity rotate triggers: the Codex adapter stamps a
+        # fresh epoch at construction, so a live refresh must REBUILD the adapter
+        # to rotate the current id (see codex_force_rebuild below).
         new_provider_defaults = build_provider_defaults_from_manifest_llm(
             llm, max_rpm=new_max_rpm, working_dir=self._working_dir
         )
@@ -1139,13 +1141,26 @@ class Agent(BaseAgent):
         cur_provider_defaults_bucket = getattr(
             self.service, "_provider_defaults", {}
         ).get(new_provider.lower(), {})
-        # Codex cache-affinity identity is anchored on the agent path only, so
-        # token-ledger / molt-time churn does not rotate it. Still compare the
-        # resolved provider-defaults bucket as a whole so explicit init.json
-        # changes (codex_session_id/anchor, default_headers, compact_threshold,
-        # max_rpm, api_compat, etc.) rebuild the service coherently.
+        # Codex start/refresh is a cache-affinity rotate trigger (Jason's final
+        # #406 semantics): the adapter epoch-stamps the *current* affinity id at
+        # construction, so the 8-hit stalled-cache shuffle only becomes active
+        # once a live refresh REBUILDS the adapter at a fresh epoch. The agent
+        # path anchor is stable across refresh, so the provider-defaults bucket
+        # is byte-identical and the boot-epoch adapter (with its stale current
+        # id) would otherwise survive untouched — exactly the bug where the
+        # shuffle never went live. A *live* refresh is one that replays existing
+        # history (``saved_interface is not None``); boot has no prior session
+        # and already builds a fresh adapter, so it is excluded to avoid a
+        # redundant double-build.
+        codex_force_rebuild = (
+            new_provider.lower() == "codex" and saved_interface is not None
+        )
+        # Compare the resolved provider-defaults bucket as a whole so explicit
+        # init.json changes (codex_session_id/anchor, default_headers,
+        # compact_threshold, max_rpm, api_compat, etc.) rebuild coherently.
         if (
-            new_provider != self.service.provider
+            codex_force_rebuild
+            or new_provider != self.service.provider
             or new_model != self.service.model
             or new_base_url != getattr(self.service, "_base_url", None)
             or new_provider_defaults_bucket != cur_provider_defaults_bucket
