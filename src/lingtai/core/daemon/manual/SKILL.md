@@ -5,8 +5,8 @@ description: >
   read daemon artifact folders, choose polling cadence, avoid reclaiming on a
   hunch, understand `daemon(action="list")`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
-  slow, failed, timed out, or needs backend-specific reasoning.
-version: 0.5.0
+  slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
+version: 0.5.1
 ---
 
 # Daemon Manual — Router
@@ -33,8 +33,9 @@ files, not standalone top-level skills.
   location: reference/forensics/SKILL.md
   description: |
     Daemon artifact forensics: persistent daemons/em-* folders, daemon.json
-    status fields, chat_history.jsonl, token_ledger.jsonl, events.jsonl, and how
-    to inspect progress without guessing.
+    status fields, chat_history.jsonl, token_ledger.jsonl, events.jsonl,
+    interpreting exit code 143 / SIGTERM (terminated, not a test/code failure),
+    and how to inspect progress without guessing.
 - name: daemon-inspection
   location: reference/inspection/SKILL.md
   description: |
@@ -58,6 +59,7 @@ files, not standalone top-level skills.
 | Need / keywords | Read |
 |---|---|
 | Find an emanation's folder; inspect `daemon.json`, transcript, token ledger, event log; understand result paths or token attribution | `reference/forensics/SKILL.md` |
+| Interpret a CLI-backend **exit code 143 / SIGTERM** (terminated from outside — watchdog/timeout/reclaim — not a test or code failure); decide rerun vs hand-off; report it to a human | `reference/forensics/SKILL.md` |
 | Decide whether a daemon is stuck; choose when to list/check/tail; avoid polling too often; set a reminder before resting | `reference/inspection/SKILL.md` |
 | Use `daemon(action="list")`; choose `lingtai` vs `claude-p`/`codex`/`opencode`; pass `backend_options`; understand CLI backend limitations | `reference/cli-backends/SKILL.md` |
 | Retire or audit old daemon artifacts; understand what `reclaim` does and does not delete; scope boundaries | `reference/cleanup/SKILL.md` |

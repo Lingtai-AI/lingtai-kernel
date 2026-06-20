@@ -3,8 +3,9 @@ name: daemon-forensics
 description: >
   Nested daemon-manual reference for daemon artifact forensics: persistent
   daemons/em-* folders, daemon.json status fields, chat_history.jsonl,
-  token_ledger.jsonl, events.jsonl, and how to inspect progress without guessing.
-version: 1.0.0
+  token_ledger.jsonl, events.jsonl, exit code 143 / SIGTERM, and how to inspect
+  progress without guessing.
+version: 1.1.0
 ---
 
 # Daemon Forensics Reference
@@ -86,3 +87,71 @@ The same per-call entries are also in your own `logs/token_ledger.jsonl` (the pa
 ### "Why did it fail?"
 
 Read `daemon.json`'s `error` field — `{type, message}`. For more depth, tail `logs/events.jsonl` for the `daemon_error` event and look at the preceding `tool_call`/`tool_result` entries to see what was happening just before the failure.
+
+### Exit code 143 / SIGTERM — *terminated*, not *failed assertion*
+
+CLI-backend emanations (`claude-p`, `codex`, and the other coding-CLI backends)
+report the child process's POSIX exit code. **Exit code 143 is `128 + 15`, i.e.
+the process was killed by signal 15 (`SIGTERM`).** It almost never means the
+agent's own logic failed, a test assertion broke, or the model produced a wrong
+answer. It means *something outside the child sent it SIGTERM and the child obeyed
+and exited*. Read it as "this run was terminated from the outside," not "this run
+computed the wrong thing."
+
+This matters because 143 is easy to misread. A short transcript that ends in exit
+143 looks like a crash; it is usually a **starvation or reclaim**, where the agent
+was still doing useful work (often still reading/orienting) when it was cut off.
+Do not "fix" it by editing the agent's task or the code it was touching — there is
+typically nothing wrong with either.
+
+**Why 143 happens (who sends the SIGTERM):**
+
+- **Turn/time budget hit a watchdog.** A `max_turns` (or wall-clock) cap set too
+  low for the task's explore-then-act shape: the daemon watchdog SIGTERMs the
+  child mid-exploration. This is the most common cause for `claude-p` / `codex`.
+  See the `max_turns` guidance in `reference/cli-backends/SKILL.md`.
+- **`reclaim` / cancel.** A parent (or a human) ran `daemon(action="reclaim")`,
+  or otherwise cancelled the run. `reclaim` stops the process — that stop is a
+  SIGTERM, surfacing as 143.
+- **Parent reclaim on shutdown.** When the parent agent molts, restarts, or is
+  itself terminated, its child daemons get SIGTERM'd as part of tearing down the
+  process tree.
+- **Outer harness / timeout.** An enclosing harness, supervisor, `timeout(1)`
+  wrapper, container stop, or OS-level shutdown signals the process group. The
+  CLI backend (Claude Code, Codex, …) is the immediate victim, but the origin is
+  the layer above the daemon.
+- **CLI backend process tree killed.** The underlying coding CLI spawns its own
+  subprocesses; if that tree is signalled (or the CLI exits and propagates),
+  the recorded code is 143.
+
+**How to handle a 143 (inspect before reacting):**
+
+1. **Read the artifacts first — do not blind-rerun.** Open `daemon.json`
+   (`state`, `error`, `elapsed_s`, `last_output_at`, `result_preview`/
+   `result_path`) and tail `logs/events.jsonl` and `result.txt`. Check whether the
+   run *already produced the deliverable* before it was killed; partial results
+   are common with 143 and may be enough.
+2. **Decide whether it was starved or cancelled.** Short `elapsed_s` + a low turn
+   cap in `daemon.json` (`backend_options` / `backend_argv`) → starvation; raise
+   or unset the cap and re-dispatch the *same* task. A `reclaim`/cancel event in
+   the parent's `logs/events.jsonl` near the same timestamp → it was intentional;
+   confirm intent before re-running.
+3. **Check for a real timeout.** If wall-clock matches a configured timeout, the
+   task was too big for the window: split it, give it more budget, or hand it to a
+   fresh daemon scoped to the remaining work.
+4. **Hand off, don't hand-patch.** If work remains, dispatch a **new** daemon that
+   *consumes the previous emanation's visible artifacts* (prior task prompt,
+   `result.txt`, partial output files) and continues from there — rather than the
+   parent editing the half-done files by hand or reviving the dead session. A
+   daemon is disposable memory but durable evidence; point the successor at the
+   evidence.
+5. **Only treat 143 as a genuine error** if inspection shows the SIGTERM came from
+   *inside* the task (e.g., the agent's own script killed its process group) — rare.
+
+**How to report a 143 to a human.** Say *terminated*, not *failed*, and name the
+likely sender. Example: "em-3 (`claude-p`) exited 143 = SIGTERM (terminated by the
+turn-budget watchdog ~90s in, mid-exploration). It is **not** a test/code failure;
+the task starved. It had read 6 files but not started the edit. Re-dispatching with
+`max_turns` unset." Avoid phrasing like "the daemon failed / the tests failed / the
+model crashed" — that misattributes an external kill to the agent's logic and
+invites a pointless rerun or a manual fix.
