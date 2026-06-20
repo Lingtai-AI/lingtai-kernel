@@ -74,7 +74,8 @@ standing exceptions.
 Choose the smallest durable body:
 
 - Use bash for deterministic local work.
-- Use daemon for noisy, isolated, disposable exploration.
+- Use daemon for noisy, isolated, disposable exploration, batch analysis, and
+  long-context branches that would otherwise burden the parent.
 - Use avatar for persistent specialization or recurring collaboration.
 - Use MCP for durable external integrations.
 - Use knowledge for private durable facts.
@@ -88,12 +89,20 @@ that tool's manual.
 
 ### Daemon workflow methodology
 
-Protect the main agent's context. The parent agent should stay in the strategic
-seat: define the objective, negate the first plan before acting, design the
-workflow, choose the bodies, and synthesize the result. Daemons should carry the
-execution: file scans, deterministic transformations, read-only reviews, batch
-conversion, log mining, and other noisy work whose details would pollute the main
-context.
+Protect the main agent's context and use tokens deliberately. The parent agent
+should stay in the strategic seat: define the objective, negate the first plan
+before acting, design the workflow, choose the bodies, and synthesize the result.
+Daemons should carry the execution: file scans, deterministic transformations,
+read-only reviews, batch conversion, log mining, and other noisy work whose
+details would pollute the main context. Be proactive rather than waiting for an
+explicit delegation request: if the useful output is a conclusion or artifact,
+not the full transcript, isolate the work in a daemon.
+
+Daemon turns do not carry the full resident system prompt, so they are often the
+more token-efficient body for temporary exploration. Choose the daemon/model by
+exercising judgment about the task: match capability, cost, latency, privacy, and
+expected output to the work instead of blindly mirroring the parent. When the
+human gives an explicit instruction about which daemon/model to use, follow it.
 
 Use this methodology for substantial daemon work:
 

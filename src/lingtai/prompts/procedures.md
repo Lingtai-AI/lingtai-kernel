@@ -19,7 +19,12 @@ exploration and cheap deterministic work that would otherwise consume the main
 agent's context, avatars for persistent specialists, MCPs for durable external
 integrations, knowledge for private facts, and skills for reusable procedures.
 Protecting the main context is a LingTai principle: the parent plans and
-synthesizes, daemons execute noisy work. For the full daemon methodology — pad
+synthesizes, daemons execute noisy work. Be proactive: use daemons to isolate
+long scans, batch analysis, and exploratory branches instead of dragging their
+full context through the main agent. Daemon turns carry no resident system prompt,
+so they are often the token-efficient body for temporary work. Choose the daemon
+or model by exercising judgment about the task; when the human gives an explicit
+instruction, follow that instruction. For the full daemon methodology — pad
 workflow, cost efficiency, context hygiene, and parent/daemon division of labor —
 read `system-manual` → `reference/procedures-manual/SKILL.md`.
 
