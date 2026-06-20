@@ -1,0 +1,52 @@
+name: Bug report
+description: Report a reproducible problem in lingtai-kernel
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please remove secrets, tokens, private mailbox contents, and unrelated logs before submitting.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Minimal steps or commands that reproduce the issue.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior / logs
+      description: Include the smallest useful excerpt. Redact secrets.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: LingTai / Python / OS versions
+      placeholder: "lingtai 0.x, Python 3.11, macOS/Linux/..."
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Submission hygiene
+      options:
+        - label: I removed secrets, tokens, private paths that are not needed, and unrelated logs.
+          required: true

@@ -6,7 +6,7 @@ while long-form references live under [`docs/`](docs/).
 
 ## Components
 
-- [`.github/`](.github/) — GitHub Actions and repository automation.
+- [`.github/`](.github/) — GitHub Actions, issue templates, and pull request templates.
 - [`crates/lingtai-search-sidecar/`](crates/lingtai-search-sidecar/) — Rust
   file-search sidecar crate packaged with the Python runtime.
 - [`docs/`](docs/) — durable documentation, plans, language-specific readmes,
@@ -23,9 +23,10 @@ while long-form references live under [`docs/`](docs/).
 - [`README.md`](README.md) — public English entry point; links to translated
   readmes under `docs/readmes/`.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contributor entry point.
+- [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), [`SECURITY.md`](SECURITY.md), and [`SUPPORT.md`](SUPPORT.md) — GitHub community and safety entry points.
 - [`CLAUDE.md`](CLAUDE.md) — short Claude Code entry point; full guidance is
   [`docs/references/claude-code-guide.md`](docs/references/claude-code-guide.md).
-- [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) — legal metadata.
+- [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) — legal metadata; both are kept at root and included in source distributions.
 - [`pyproject.toml`](pyproject.toml), [`setup.py`](setup.py), and
   [`MANIFEST.in`](MANIFEST.in) — Python packaging and Rust sidecar build hooks.
 - [`.gitignore`](.gitignore) — local scratch/build/cache exclusions.
