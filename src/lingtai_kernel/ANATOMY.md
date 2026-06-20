@@ -159,7 +159,8 @@ Beyond kernel-driven sync, agents can call `notification(action="check")` themse
 Phase 2 (`d2da97e`) migrated all in-tree producers (mail, system events, soul flow) to `publish_notification`. Phase 2.5 migrated the LICC MCP inbox (`core/mcp/inbox.py`) to publish via `notifications.submit` to `.notification/mcp.<server>.json` instead of posting to the legacy inbox queue. The `tc_inbox.py` module survives as dead code — no producer enqueues, the drain hook is still installed but always finds the queue empty. Phase 3 (deferred to a separate point release after soak) will:
 - Delete `tc_inbox.py`.
 - Remove the pre-request drain hook from `BaseAgent._install_drain_hook` and the three drain call sites.
-- Remove the legacy `ids=` soak path from `system(action="dismiss")`; `_dismiss` itself remains as the channel-level generic clear (`channel` + optional `force`).
+
+(The legacy `ids=` soak path on the old `system(action="dismiss")` action no longer exists — #426/#428 split dismiss into the standalone `notification` tool with atomic `dismiss_channel` / `dismiss_event` / `dismiss_ref` actions and removed the agent-callable `system.dismiss` alias entirely, so there is no per-id soak path left to retire.)
 
 ### Adjacent: healing mid-pair tails
 

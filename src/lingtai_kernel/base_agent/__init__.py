@@ -434,8 +434,8 @@ class BaseAgent:
 
         # _pending_mail_notifications removed — email arrivals now use
         # single-slot unread-digest (email.unread) instead of per-arrival
-        # system.notification pairs. Bounce/MCP/soul notifications still
-        # use system.notification but don't need per-ref tracking.
+        # notification pairs. Bounce/MCP/soul events publish their own
+        # `.notification/*.json` files and don't need per-ref tracking.
 
         # Notification sync state (filesystem-as-protocol redesign).
         # _notification_fp: last-seen `.notification/` fingerprint for

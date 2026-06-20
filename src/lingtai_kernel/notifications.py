@@ -942,7 +942,7 @@ def submit(
         tool_name: The producer's namespace key — ``email``, ``soul``,
             ``system``, ``mcp.<server>``, …  This becomes both the file
             basename (``<tool_name>.json``) AND the dict key the agent
-            sees when it reads ``system(action="notification")``.
+            sees when it reads ``notification(action="check")``.
         data: Structured payload the agent will read.  No restrictions
             on shape — producers decide.
         header: One-line glanceable summary used by frontends (TUI

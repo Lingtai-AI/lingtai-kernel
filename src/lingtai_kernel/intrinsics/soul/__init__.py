@@ -4,12 +4,12 @@ Three actions:
     flow    — past-self consultation appendix. Every ``_soul_delay`` seconds,
               fires M=1+K parallel LLM calls (1 stepped-back read of the
               current chat as "insights", K random past-snapshot
-              consultations sampled from history/snapshots/). Voices bundle
-              into one synthetic (assistant{tool_call}, user{tool_result})
-              pair with action="flow"; the pair is enqueued on tc_inbox
-              with replace_in_history=True so the drain side enforces a
-              single-slot invariant in chat history. Mechanical — agent
-              cannot invoke manually.
+              consultations sampled from history/snapshots/). Voices are
+              written to ``.notification/soul.json`` via
+              ``publish_notification``; the kernel's ``_sync_notifications``
+              picks up the fingerprint change and surfaces them inside the
+              single-slot synthesized ``notification(action="check")`` wire
+              pair. Mechanical — agent cannot invoke manually.
     inquiry — sync mirror session. Clones conversation (text+thinking only),
               sends question, returns answer in tool result. On-demand.
     config  — adjust soul flow knobs. Accepts any subset of two optional
@@ -118,8 +118,10 @@ def get_schema(lang: str = "en") -> dict:
 def handle(agent, args: dict) -> dict:
     """Handle soul tool — inquiry, config, voice are agent-invocable.
     Flow is invocable too, but the call returns immediately with a
-    synthesized success result; the actual voices arrive shortly as a
-    separate involuntary soul(action='flow') pair through tc_inbox.
+    synthesized success result; the actual voices arrive shortly by
+    writing ``.notification/soul.json``, which the kernel's notification
+    sync surfaces inside the synthesized ``notification(action="check")``
+    wire pair.
     """
     action = args.get("action", "")
 

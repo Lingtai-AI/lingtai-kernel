@@ -35,7 +35,7 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
 - **Inbound (cross-module):** `_new_mailbox_id` is imported by `base_agent/messaging.py:28` and `services/mail.py:165` for ID generation.
 - **Inbound (cross-module):** `EmailManager` is imported by `src/lingtai/__init__.py:19` for the wrapper re-export.
 - **Outbound:** Depends on `..i18n` (translations), `..message` (message construction), `..time_veil` (timestamp scrubbing), `..token_counter` (budget checks in `_check`).
-- **Outbound (unread-digest producer):** Mail arrival writes `.notification/email.json` via `publish_notification` (or deletes it via `clear_notification` when count hits 0). `base_agent/messaging.py:_on_normal_mail` calls `_rerender_unread_digest(agent)` (`base_agent/messaging.py:52`) which uses `primitives.py:_render_unread_digest` to build the digest prose, then `system.publish_notification(workdir, "email", header=…, icon="📧", data={count, newest_received_at, digest})`. The kernel's `_sync_notifications` poll picks up the fingerprint change on the next heartbeat tick and updates the wire's `system(action="notification")` block. See root `ANATOMY.md` "Notifications" for the full architecture.
+- **Outbound (unread-digest producer):** Mail arrival writes `.notification/email.json` via `publish_notification` (or deletes it via `clear_notification` when count hits 0). `base_agent/messaging.py:_on_normal_mail` calls `_rerender_unread_digest(agent)` (`base_agent/messaging.py:52`) which uses `primitives.py:_render_unread_digest` to build the digest prose, then `system.publish_notification(workdir, "email", header=…, icon="📧", data={count, newest_received_at, digest})`. The kernel's `_sync_notifications` poll picks up the fingerprint change on the next heartbeat tick and updates the wire's `notification(action="check")` block. See root `ANATOMY.md` "Notifications" for the full architecture.
 - **Outbound (bounce notification):** `primitives.py:_mailman` calls `agent._enqueue_system_notification(source="email.bounce", ref_id=msg_id, body=...)` (`primitives.py:280`). The system events producer in `base_agent/messaging.py` merges the bounce into the events list inside `.notification/system.json` (capped at 20 newest) under a per-agent `threading.Lock`. Bounces share `system.json` with daemon notices, MCP-bridged events, and any future kernel events — they are NOT aggregated into the unread digest at `email.json`.
 - **Data flow:** All state lives in the filesystem under `mailbox/` and `.notification/`. The `EmailManager` is stateless except for `_last_sent` (duplicate-send guard) and `_scheduler_thread` (background timer).
 
@@ -80,7 +80,7 @@ replaces the static-prompt approach: it travels with the payload, so
 each producer owns its own dismissal contract without the kernel
 having to know about it.
 
-The agent reads this through the kernel-injected `system(action="notification")`
+The agent reads this through the kernel-injected `notification(action="check")`
 wire pair (see root `ANATOMY.md` "Notifications"); the JSON dict appears
 under the `email` key in the `notifications` map. There is no per-mail
 "notification pair" anymore — the file IS the notification.
