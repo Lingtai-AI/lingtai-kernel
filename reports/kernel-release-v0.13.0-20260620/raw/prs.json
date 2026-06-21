@@ -1,0 +1,410 @@
+[
+  {
+    "additions": 185,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 13,
+    "deletions": 7,
+    "headRefName": "docs/readme-link-fix-20260619",
+    "mergedAt": "2026-06-20T01:08:51Z",
+    "number": 402,
+    "title": "docs: add GitHub community entry points",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/402"
+  },
+  {
+    "additions": 1531,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 12,
+    "deletions": 16,
+    "headRefName": "feat/system-compress-20260619",
+    "mergedAt": "2026-06-20T03:55:10Z",
+    "number": 405,
+    "title": "feat(system): add summarize action for tool results",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/405"
+  },
+  {
+    "additions": 896,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 4,
+    "deletions": 81,
+    "headRefName": "codex-cache-stall-temp-key-20260619",
+    "mergedAt": "2026-06-20T05:08:47Z",
+    "number": 406,
+    "title": "feat(codex): rotate affinity id on refresh and stalled cache",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/406"
+  },
+  {
+    "additions": 785,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 5,
+    "deletions": 4,
+    "headRefName": "fix/large-result-rescan-20260619",
+    "mergedAt": "2026-06-20T05:15:11Z",
+    "number": 407,
+    "title": "fix(system): rescan live large tool results",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/407"
+  },
+  {
+    "additions": 16,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 2,
+    "deletions": 1,
+    "headRefName": "fix/large-result-hook-copy-20260619",
+    "mergedAt": "2026-06-20T05:51:47Z",
+    "number": 410,
+    "title": "fix(system): strengthen large-result hook guidance",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/410"
+  },
+  {
+    "additions": 170,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 2,
+    "deletions": 9,
+    "headRefName": "fix/codex-refresh-rebuild-20260620",
+    "mergedAt": "2026-06-20T06:22:44Z",
+    "number": 411,
+    "title": "fix(codex): rebuild adapter on live refresh",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/411"
+  },
+  {
+    "additions": 433,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 14,
+    "deletions": 164,
+    "headRefName": "fix/summarize-threshold-config-only-20260619",
+    "mergedAt": "2026-06-20T06:59:59Z",
+    "number": 412,
+    "title": "Make summarize threshold config-only",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/412"
+  },
+  {
+    "additions": 328,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 4,
+    "deletions": 4,
+    "headRefName": "codex-prompt-key-header-20260620",
+    "mergedAt": "2026-06-20T07:23:22Z",
+    "number": 413,
+    "title": "fix: bind Codex requests to cache-key header",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/413"
+  },
+  {
+    "additions": 961,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 18,
+    "deletions": 26,
+    "headRefName": "feat/molt-session-journal-gate-20260620",
+    "mergedAt": "2026-06-20T07:56:58Z",
+    "number": 414,
+    "title": "feat(psyche): require session journal path for agent molt",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/414"
+  },
+  {
+    "additions": 67,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 4,
+    "deletions": 67,
+    "headRefName": "codex-cache-affinity-threshold-10-20260620",
+    "mergedAt": "2026-06-20T07:56:42Z",
+    "number": 415,
+    "title": "fix(codex): rotate cache affinity after ten stalled hits",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/415"
+  },
+  {
+    "additions": 161,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 3,
+    "deletions": 32,
+    "headRefName": "codex-cache-rotate-low-rate-20260620",
+    "mergedAt": "2026-06-20T08:57:58Z",
+    "number": 416,
+    "title": "fix(codex): rotate cache affinity only on stalled hits below 85% rate",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/416"
+  },
+  {
+    "additions": 94,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 2,
+    "deletions": 71,
+    "headRefName": "docs-summarize-manual-substrate-20260620",
+    "mergedAt": "2026-06-20T09:10:47Z",
+    "number": 417,
+    "title": "docs(system): clarify summarize as progressive disclosure",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/417"
+  },
+  {
+    "additions": 434,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 7,
+    "deletions": 59,
+    "headRefName": "summary-notification-batch-threshold-20260620",
+    "mergedAt": "2026-06-20T09:55:22Z",
+    "number": 418,
+    "title": "Gate large-result reminders on >20000-char pending total (replace >5 count gate; default threshold 3000)",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/418"
+  },
+  {
+    "additions": 269,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 8,
+    "deletions": 27,
+    "headRefName": "fix/daemon-terminal-notifications-20260620",
+    "mergedAt": "2026-06-20T09:49:55Z",
+    "number": 419,
+    "title": "fix(daemon): notify parent on every terminal state",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/419"
+  },
+  {
+    "additions": 84,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 6,
+    "deletions": 84,
+    "headRefName": "large-result-total-gate-50k-20260620",
+    "mergedAt": "2026-06-20T10:20:35Z",
+    "number": 420,
+    "title": "Raise large-result reminder total gate to 50k",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/420"
+  },
+  {
+    "additions": 195,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 5,
+    "deletions": 4,
+    "headRefName": "fix/notification-block-snapshot-20260620",
+    "mergedAt": "2026-06-20T18:37:24Z",
+    "number": 421,
+    "title": "Persist actual notification block snapshots",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/421"
+  },
+  {
+    "additions": 768,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 8,
+    "deletions": 30,
+    "headRefName": "summarize-reminder-dismiss-guard-20260620",
+    "mergedAt": "2026-06-20T19:08:49Z",
+    "number": 424,
+    "title": "Guard large-result reminders from dismiss",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/424"
+  },
+  {
+    "additions": 1261,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 43,
+    "deletions": 449,
+    "headRefName": "feat/notification-tool-split-20260620",
+    "mergedAt": "2026-06-20T20:50:37Z",
+    "number": 426,
+    "title": "Split notification verbs into standalone mandatory tool",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/426"
+  },
+  {
+    "additions": 44,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "feat/notification-tool-split-20260620",
+    "changedFiles": 12,
+    "deletions": 34,
+    "headRefName": "feat/notification-delivery-pair-rename-20260620",
+    "mergedAt": "2026-06-20T20:50:33Z",
+    "number": 428,
+    "title": "Rename synthesized notification delivery pair to notification(action=check)",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/428"
+  },
+  {
+    "additions": 23,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 9,
+    "deletions": 20,
+    "headRefName": "chore/notification-nits-cleanup-20260620",
+    "mergedAt": "2026-06-20T21:07:44Z",
+    "number": 429,
+    "title": "chore: clean up stale system(action=notification) doc/docstring nits (post-#428)",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/429"
+  },
+  {
+    "additions": 264,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 5,
+    "deletions": 5,
+    "headRefName": "claude-p-daemon-token-usage-20260620",
+    "mergedAt": "2026-06-20T22:49:42Z",
+    "number": 432,
+    "title": "Persist claude-p daemon CLI token usage",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/432"
+  },
+  {
+    "additions": 291,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 34,
+    "deletions": 594,
+    "headRefName": "chore/test-suite-cleanup-20260620",
+    "mergedAt": "2026-06-20T23:43:57Z",
+    "number": 434,
+    "title": "chore(tests): de-duplicate suite scaffolding and fold redundant cases",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/434"
+  },
+  {
+    "additions": 55,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 4,
+    "deletions": 47,
+    "headRefName": "codex-session-id-underscore-header",
+    "mergedAt": "2026-06-20T23:46:13Z",
+    "number": 435,
+    "title": "codex: send session_id/thread_id headers (underscore) to match Codex CLI",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/435"
+  },
+  {
+    "additions": 102,
+    "author": {
+      "id": "MDQ6VXNlcjI5NzIwNzk5",
+      "is_bot": false,
+      "login": "huangzesen",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "changedFiles": 2,
+    "deletions": 4,
+    "headRefName": "codex-honest-client-identity",
+    "mergedAt": "2026-06-20T23:57:57Z",
+    "number": 437,
+    "title": "codex: send honest LingTai client-identity headers (originator + User-Agent)",
+    "url": "https://github.com/Lingtai-AI/lingtai-kernel/pull/437"
+  }
+]

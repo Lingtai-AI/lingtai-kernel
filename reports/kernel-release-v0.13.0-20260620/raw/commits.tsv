@@ -1,0 +1,47 @@
+17d12d4 17d12d45dd6585e786ab5225ec5905ad828cc783	huangzesen	hzsbazinga@outlook.com	2026-06-19T21:08:50-04:00	docs: add GitHub community entry points (#402)
+8061f04 8061f042cdae1b9f3046a4f06f315ef56ee171e0	huangzesen	hzsbazinga@outlook.com	2026-06-19T22:57:18-04:00	feat(read): add max_chars continuation control and manual
+b77d91f b77d91f43d83a69f628b6c2ce659fb568b59fd01	huangzesen	hzsbazinga@outlook.com	2026-06-19T23:42:41-04:00	docs(procedures): emphasize daemon context isolation
+f369ee8 f369ee86ce7d126bb9477950fa0df209a5d8d21f	huangzesen	hzsbazinga@outlook.com	2026-06-19T23:55:10-04:00	feat(system): add summarize action for tool results (#405)
+63c3dbd 63c3dbd4090fab3cb7dbeb0b07e019705c3f5f3d	huangzesen	hzsbazinga@outlook.com	2026-06-19T21:53:32-07:00	fix(system): rescan live large tool results
+5233172 5233172787e940d59a082fd3c9e130a9427285f2	huangzesen	hzsbazinga@outlook.com	2026-06-20T01:02:05-04:00	docs(daemon): explain exit code 143 / SIGTERM
+1d68112 1d681125183d44156745e1bd665b80fa74452de5	huangzesen	hzsbazinga@outlook.com	2026-06-20T01:08:47-04:00	feat(codex): rotate affinity id on refresh and stalled cache
+74d0cc1 74d0cc1d24e006b1b45d1824c9960b058477b483	huangzesen	hzsbazinga@outlook.com	2026-06-20T01:15:11-04:00	Merge pull request #407 from Lingtai-AI/fix/large-result-rescan-20260619
+6450d95 6450d9599cd1181047e9f4d3ddd1c2be63530b83	huangzesen	hzsbazinga@outlook.com	2026-06-19T22:49:28-07:00	fix(system): strengthen large-result hook guidance
+2720eb4 2720eb4394743bd6865b11b74728319243c079cb	huangzesen	hzsbazinga@outlook.com	2026-06-20T01:51:47-04:00	Merge pull request #410 from Lingtai-AI/fix/large-result-hook-copy-20260619
+5b97955 5b97955cf2a28a5ce6d005007e57ae5c33ff4259	huangzesen	hzsbazinga@outlook.com	2026-06-20T02:22:43-04:00	fix(codex): rebuild adapter on live refresh so #406 shuffle activates (#411)
+2f12996 2f12996c0d30ad2094b7e8de198c4b8fbc0f7307	huangzesen	hzsbazinga@outlook.com	2026-06-19T23:54:01-07:00	Make summarize threshold config-only
+d8f1539 d8f15392e0fc7749042e41d9737bda6db7a21607	huangzesen	hzsbazinga@outlook.com	2026-06-20T02:59:59-04:00	Merge pull request #412 from Lingtai-AI/fix/summarize-threshold-config-only-20260619
+e337a89 e337a894faf0d56947c899b4b1d1fa5e52a506dd	huangzesen	hzsbazinga@outlook.com	2026-06-20T00:07:32-07:00	fix: bind codex requests to prompt key header
+15107a3 15107a37780c469ea792a6da6f765f3029889efc	huangzesen	hzsbazinga@outlook.com	2026-06-20T03:23:22-04:00	Merge pull request #413 from Lingtai-AI/codex-prompt-key-header-20260620
+08f05d1 08f05d1ba7b1b29739cc2f03599bd51c64a28301	huangzesen	hzsbazinga@outlook.com	2026-06-20T00:53:47-07:00	fix(codex): rotate cache affinity after ten stalled hits
+d663529 d6635294b21ec9d00e337a87ab94ace11b8f0b60	huangzesen	hzsbazinga@outlook.com	2026-06-20T03:56:42-04:00	Merge pull request #415 from Lingtai-AI/codex-cache-affinity-threshold-10-20260620
+7d742d7 7d742d7b750837e31d344a83d4b41d7f3cbdaa43	huangzesen	hzsbazinga@outlook.com	2026-06-20T03:56:57-04:00	feat(psyche): require session journal path for agent molt (#414)
+1e9b69d 1e9b69de2c9c207649498dbbe7a7197c72998033	huangzesen	hzsbazinga@outlook.com	2026-06-20T01:53:53-07:00	fix(codex): rotate cache affinity only on stalled hits below 85% rate
+b014490 b014490e8a5d44d462e6dc546f91ac928ca345f7	huangzesen	hzsbazinga@outlook.com	2026-06-20T04:57:58-04:00	Merge pull request #416 from Lingtai-AI/codex-cache-rotate-low-rate-20260620
+af08afc af08afc891e37fa9fea72c635c231dca6ebb9a73	huangzesen	hzsbazinga@outlook.com	2026-06-20T02:09:49-07:00	docs(system): clarify summarize as progressive disclosure
+1bfc4c7 1bfc4c741d0c043352b84ee06ef300c95f16bfa6	huangzesen	hzsbazinga@outlook.com	2026-06-20T05:10:46-04:00	Merge pull request #417 from Lingtai-AI/docs-summarize-manual-substrate-20260620
+0665e5d 0665e5d88a5ddcba65153f8281d0ab09b3adbd64	huangzesen	hzsbazinga@outlook.com	2026-06-20T02:26:38-07:00	feat(notifications): gate large-result reminders on >20000-char pending total
+d9d5339 d9d5339285ae494fc21812eeea1496ea4118dba8	huangzesen	hzsbazinga@outlook.com	2026-06-20T05:49:55-04:00	fix(daemon): notify parent on every terminal state (#419)
+57bc39c 57bc39cd3cc83947bf51a030ff428b6f426d847f	huangzesen	hzsbazinga@outlook.com	2026-06-20T05:55:22-04:00	Merge pull request #418 from Lingtai-AI/summary-notification-batch-threshold-20260620
+873b0a2 873b0a277a0498e69e1b4bf1d8139c7e0b8ba523	huangzesen	hzsbazinga@outlook.com	2026-06-20T03:20:30-07:00	Raise large-result total gate to 50k
+ec7fff3 ec7fff3171fd76cd7c09dd2b158a65a695ef90f1	huangzesen	hzsbazinga@outlook.com	2026-06-20T06:20:35-04:00	Merge pull request #420 from Lingtai-AI/large-result-total-gate-50k-20260620
+d9efe7d d9efe7df4b2367caed4de5ee33e0b513b63f9ce5	huangzesen	hzsbazinga@outlook.com	2026-06-20T14:37:24-04:00	Persist actual notification block snapshots (#421)
+e86a24f e86a24fe6e69ded12f5a7a0534f4760ffc53506e	huangzesen	hzsbazinga@outlook.com	2026-06-20T11:52:08-07:00	Guard large-result reminders from dismiss
+ef5bb36 ef5bb3662c9d34c847d56e3d68c8e478999d2773	huangzesen	hzsbazinga@outlook.com	2026-06-20T15:08:49-04:00	Merge pull request #424 from Lingtai-AI/summarize-reminder-dismiss-guard-20260620
+eb4b16b eb4b16bbf6f90958de08be6470ce064aca57635a	huangzesen	hzsbazinga@outlook.com	2026-06-20T12:23:40-07:00	Split notification verbs into a standalone notification tool
+9470644 9470644bd8f65e2e4f1d8ac1d2e7678ff015b991	huangzesen	hzsbazinga@outlook.com	2026-06-20T13:05:49-07:00	Atomicize notification dismiss; drop system notification/dismiss aliases
+9c7bc7d 9c7bc7de8608f6f8446b18c17335e4f7bc650422	huangzesen	hzsbazinga@outlook.com	2026-06-20T13:41:50-07:00	Rename synthesized notification delivery pair to notification(action=check)
+74163f9 74163f9c17716981ff2ef50fb094867eebfd652c	huangzesen	hzsbazinga@outlook.com	2026-06-20T16:50:33-04:00	Merge pull request #428 from Lingtai-AI/feat/notification-delivery-pair-rename-20260620
+f555cce f555ccead74b3f6b85fad8ca396ad70d0f6a6d37	huangzesen	hzsbazinga@outlook.com	2026-06-20T16:50:36-04:00	Merge pull request #426 from Lingtai-AI/feat/notification-tool-split-20260620
+4b9bc5a 4b9bc5aaf0cc452eac6aa72d8741dcaae11ccfb5	huangzesen	hzsbazinga@outlook.com	2026-06-20T17:01:09-04:00	Replay raw Codex reasoning state
+c81fab7 c81fab79392977d139c20b19901ee5d6eb45b68e	huangzesen	hzsbazinga@outlook.com	2026-06-20T14:02:16-07:00	Clean up stale system(action=notification) doc/docstring nits
+a5e46ab a5e46abf6adc6ca2569666aaf25466b752d2e423	huangzesen	hzsbazinga@outlook.com	2026-06-20T17:07:44-04:00	Merge pull request #429 from Lingtai-AI/chore/notification-nits-cleanup-20260620
+adeb88c adeb88c0ad9bed330264b1c380bfb4c45dcfbeff	huangzesen	hzsbazinga@outlook.com	2026-06-20T15:32:16-07:00	Allow dismissing large-result reminders
+bb001e5 bb001e526703346199700acc9d3621ea47742621	huangzesen	hzsbazinga@outlook.com	2026-06-20T15:49:30-07:00	Keep large-result hint text English-only
+2977f7d 2977f7d6440fdf8171309e5f20894e163fa4a541	huangzesen	hzsbazinga@outlook.com	2026-06-20T15:49:37-07:00	Persist claude-p daemon CLI token usage
+38ec2d6 38ec2d6aa6cd53d93795e9828f45bd6e952cd963	huangzesen	hzsbazinga@outlook.com	2026-06-20T15:49:41-07:00	Merge pull request #432 from Lingtai-AI/claude-p-daemon-token-usage-20260620
+6c69ef6 6c69ef67b55c67e9e90f6285b81bb993cc850503	huangzesen	hzsbazinga@outlook.com	2026-06-20T16:12:08-07:00	Use English fallback for internal i18n strings
+102f99e 102f99ec4d4843d20d29eba2b365ad5b98342bc5	huangzesen	hzsbazinga@outlook.com	2026-06-20T16:25:50-07:00	chore(tests): de-duplicate suite scaffolding and fold redundant cases
+c542f82 c542f827798b1fba99c6fb0dc95ad630cb5f252e	huangzesen	hzsbazinga@outlook.com	2026-06-20T16:43:57-07:00	Merge pull request #434 from Lingtai-AI/chore/test-suite-cleanup-20260620
+4565ea5 4565ea54b63dd7ee4fc66834e601f37ed54a66a2	huangzesen	hzsbazinga@outlook.com	2026-06-20T16:46:13-07:00	codex: send session_id/thread_id headers (underscore) to match Codex CLI (#435)
+cfebe16 cfebe167fca51766a5acc8073d4bb3e8561a32f6	huangzesen	hzsbazinga@outlook.com	2026-06-20T16:57:56-07:00	codex: send honest LingTai client-identity headers (originator + User-Agent) (#437)

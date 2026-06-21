@@ -1,0 +1,1728 @@
+* Creating isolated environment: venv+pip...
+* Installing packages in isolated environment:
+  - setuptools>=68.0
+  - wheel>=0.41
+* Getting build dependencies for sdist...
+running egg_info
+writing src/lingtai.egg-info/PKG-INFO
+writing dependency_links to src/lingtai.egg-info/dependency_links.txt
+writing entry points to src/lingtai.egg-info/entry_points.txt
+writing requirements to src/lingtai.egg-info/requires.txt
+writing top-level names to src/lingtai.egg-info/top_level.txt
+reading manifest file 'src/lingtai.egg-info/SOURCES.txt'
+reading manifest template 'MANIFEST.in'
+no previously-included directories found matching 'crates/lingtai-search-sidecar/target'
+warning: no previously-included files found matching 'src/lingtai/bin/*'
+warning: no previously-included files found matching 'src/lingtai/bin/__init__.py'
+no previously-included directories found matching 'src/lingtai/bin'
+adding license file 'LICENSE'
+adding license file 'NOTICE'
+writing manifest file 'src/lingtai.egg-info/SOURCES.txt'
+* Building sdist...
+running sdist
+running egg_info
+writing src/lingtai.egg-info/PKG-INFO
+writing dependency_links to src/lingtai.egg-info/dependency_links.txt
+writing entry points to src/lingtai.egg-info/entry_points.txt
+writing requirements to src/lingtai.egg-info/requires.txt
+writing top-level names to src/lingtai.egg-info/top_level.txt
+reading manifest file 'src/lingtai.egg-info/SOURCES.txt'
+reading manifest template 'MANIFEST.in'
+no previously-included directories found matching 'crates/lingtai-search-sidecar/target'
+warning: no previously-included files found matching 'src/lingtai/bin/*'
+warning: no previously-included files found matching 'src/lingtai/bin/__init__.py'
+no previously-included directories found matching 'src/lingtai/bin'
+adding license file 'LICENSE'
+adding license file 'NOTICE'
+writing manifest file 'src/lingtai.egg-info/SOURCES.txt'
+running check
+creating lingtai-0.13.0
+creating lingtai-0.13.0/crates/lingtai-search-sidecar
+creating lingtai-0.13.0/crates/lingtai-search-sidecar/src
+creating lingtai-0.13.0/src/lingtai
+creating lingtai-0.13.0/src/lingtai.egg-info
+creating lingtai-0.13.0/src/lingtai/auth
+creating lingtai-0.13.0/src/lingtai/capabilities
+creating lingtai-0.13.0/src/lingtai/capabilities/vision
+creating lingtai-0.13.0/src/lingtai/capabilities/web_search
+creating lingtai-0.13.0/src/lingtai/core
+creating lingtai-0.13.0/src/lingtai/core/avatar
+creating lingtai-0.13.0/src/lingtai/core/avatar/manual
+creating lingtai-0.13.0/src/lingtai/core/bash
+creating lingtai-0.13.0/src/lingtai/core/bash/manual
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-aider
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-claude-code
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-crush
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-cursor-agent
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-gemini-cli
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-goose
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-mimocode
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-oh-my-pi
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-openai-codex
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-opencode
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-openhands
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-qwen-code
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-zed-acp
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/debugging-cleanup
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/notification-reminders
+creating lingtai-0.13.0/src/lingtai/core/bash/manual/reference/scheduled-work
+creating lingtai-0.13.0/src/lingtai/core/daemon
+creating lingtai-0.13.0/src/lingtai/core/daemon/manual
+creating lingtai-0.13.0/src/lingtai/core/daemon/manual/reference/cleanup
+creating lingtai-0.13.0/src/lingtai/core/daemon/manual/reference/cli-backends
+creating lingtai-0.13.0/src/lingtai/core/daemon/manual/reference/forensics
+creating lingtai-0.13.0/src/lingtai/core/daemon/manual/reference/inspection
+creating lingtai-0.13.0/src/lingtai/core/edit
+creating lingtai-0.13.0/src/lingtai/core/email/manual
+creating lingtai-0.13.0/src/lingtai/core/glob
+creating lingtai-0.13.0/src/lingtai/core/grep
+creating lingtai-0.13.0/src/lingtai/core/knowledge
+creating lingtai-0.13.0/src/lingtai/core/knowledge/manual
+creating lingtai-0.13.0/src/lingtai/core/mcp
+creating lingtai-0.13.0/src/lingtai/core/mcp/manual
+creating lingtai-0.13.0/src/lingtai/core/mcp/manual/reference
+creating lingtai-0.13.0/src/lingtai/core/mcp/manual/scripts
+creating lingtai-0.13.0/src/lingtai/core/read
+creating lingtai-0.13.0/src/lingtai/core/skills
+creating lingtai-0.13.0/src/lingtai/core/skills/manual
+creating lingtai-0.13.0/src/lingtai/core/skills/manual/assets
+creating lingtai-0.13.0/src/lingtai/core/skills/manual/reference
+creating lingtai-0.13.0/src/lingtai/core/skills/manual/scripts
+creating lingtai-0.13.0/src/lingtai/core/write
+creating lingtai-0.13.0/src/lingtai/i18n
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/file-manual
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/lingtai-doctor
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/lingtai-doctor/scripts
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/lingtai-kernel-anatomy
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/lingtai-repo-watch
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/psyche-manual
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/psyche-manual/assets
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/read-manual
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/system-manual
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/system-manual/reference/goal-manual
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/system-manual/reference/notification-manual
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/scripts
+creating lingtai-0.13.0/src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual
+creating lingtai-0.13.0/src/lingtai/llm
+creating lingtai-0.13.0/src/lingtai/llm/anthropic
+creating lingtai-0.13.0/src/lingtai/llm/claude_agent_sdk
+creating lingtai-0.13.0/src/lingtai/llm/custom
+creating lingtai-0.13.0/src/lingtai/llm/deepseek
+creating lingtai-0.13.0/src/lingtai/llm/gemini
+creating lingtai-0.13.0/src/lingtai/llm/mimo
+creating lingtai-0.13.0/src/lingtai/llm/minimax
+creating lingtai-0.13.0/src/lingtai/llm/openai
+creating lingtai-0.13.0/src/lingtai/llm/openrouter
+creating lingtai-0.13.0/src/lingtai/llm/zhipu
+creating lingtai-0.13.0/src/lingtai/mcp_servers
+creating lingtai-0.13.0/src/lingtai/mcp_servers/cloud_mail
+creating lingtai-0.13.0/src/lingtai/mcp_servers/feishu
+creating lingtai-0.13.0/src/lingtai/mcp_servers/imap
+creating lingtai-0.13.0/src/lingtai/mcp_servers/telegram
+creating lingtai-0.13.0/src/lingtai/mcp_servers/wechat
+creating lingtai-0.13.0/src/lingtai/mcp_servers/whatsapp
+creating lingtai-0.13.0/src/lingtai/prompts
+creating lingtai-0.13.0/src/lingtai/services
+creating lingtai-0.13.0/src/lingtai/services/vision
+creating lingtai-0.13.0/src/lingtai/services/websearch
+creating lingtai-0.13.0/src/lingtai_kernel
+creating lingtai-0.13.0/src/lingtai_kernel/base_agent
+creating lingtai-0.13.0/src/lingtai_kernel/i18n
+creating lingtai-0.13.0/src/lingtai_kernel/intrinsics
+creating lingtai-0.13.0/src/lingtai_kernel/intrinsics/email
+creating lingtai-0.13.0/src/lingtai_kernel/intrinsics/notification
+creating lingtai-0.13.0/src/lingtai_kernel/intrinsics/psyche
+creating lingtai-0.13.0/src/lingtai_kernel/intrinsics/soul
+creating lingtai-0.13.0/src/lingtai_kernel/intrinsics/system
+creating lingtai-0.13.0/src/lingtai_kernel/llm
+creating lingtai-0.13.0/src/lingtai_kernel/migrate
+creating lingtai-0.13.0/src/lingtai_kernel/nudge
+creating lingtai-0.13.0/src/lingtai_kernel/services
+creating lingtai-0.13.0/tests
+copying files to lingtai-0.13.0...
+copying LICENSE -> lingtai-0.13.0
+copying MANIFEST.in -> lingtai-0.13.0
+copying NOTICE -> lingtai-0.13.0
+copying README.md -> lingtai-0.13.0
+copying pyproject.toml -> lingtai-0.13.0
+copying setup.py -> lingtai-0.13.0
+copying crates/lingtai-search-sidecar/Cargo.lock -> lingtai-0.13.0/crates/lingtai-search-sidecar
+copying crates/lingtai-search-sidecar/Cargo.toml -> lingtai-0.13.0/crates/lingtai-search-sidecar
+copying crates/lingtai-search-sidecar/README.md -> lingtai-0.13.0/crates/lingtai-search-sidecar
+copying crates/lingtai-search-sidecar/src/main.rs -> lingtai-0.13.0/crates/lingtai-search-sidecar/src
+copying src/lingtai/__init__.py -> lingtai-0.13.0/src/lingtai
+copying src/lingtai/__main__.py -> lingtai-0.13.0/src/lingtai
+copying src/lingtai/agent.py -> lingtai-0.13.0/src/lingtai
+copying src/lingtai/cli.py -> lingtai-0.13.0/src/lingtai
+copying src/lingtai/init_schema.py -> lingtai-0.13.0/src/lingtai
+copying src/lingtai/mcp_catalog.json -> lingtai-0.13.0/src/lingtai
+copying src/lingtai/network.py -> lingtai-0.13.0/src/lingtai
+copying src/lingtai/presets.py -> lingtai-0.13.0/src/lingtai
+copying src/lingtai/venv_resolve.py -> lingtai-0.13.0/src/lingtai
+copying src/lingtai.egg-info/PKG-INFO -> lingtai-0.13.0/src/lingtai.egg-info
+copying src/lingtai.egg-info/SOURCES.txt -> lingtai-0.13.0/src/lingtai.egg-info
+copying src/lingtai.egg-info/dependency_links.txt -> lingtai-0.13.0/src/lingtai.egg-info
+copying src/lingtai.egg-info/entry_points.txt -> lingtai-0.13.0/src/lingtai.egg-info
+copying src/lingtai.egg-info/requires.txt -> lingtai-0.13.0/src/lingtai.egg-info
+copying src/lingtai.egg-info/top_level.txt -> lingtai-0.13.0/src/lingtai.egg-info
+copying src/lingtai/auth/__init__.py -> lingtai-0.13.0/src/lingtai/auth
+copying src/lingtai/auth/codex.py -> lingtai-0.13.0/src/lingtai/auth
+copying src/lingtai/capabilities/__init__.py -> lingtai-0.13.0/src/lingtai/capabilities
+copying src/lingtai/capabilities/_media_host.py -> lingtai-0.13.0/src/lingtai/capabilities
+copying src/lingtai/capabilities/_zhipu_mode.py -> lingtai-0.13.0/src/lingtai/capabilities
+copying src/lingtai/capabilities/vision/__init__.py -> lingtai-0.13.0/src/lingtai/capabilities/vision
+copying src/lingtai/capabilities/web_search/__init__.py -> lingtai-0.13.0/src/lingtai/capabilities/web_search
+copying src/lingtai/core/__init__.py -> lingtai-0.13.0/src/lingtai/core
+copying src/lingtai/core/avatar/__init__.py -> lingtai-0.13.0/src/lingtai/core/avatar
+copying src/lingtai/core/avatar/manual/SKILL.md -> lingtai-0.13.0/src/lingtai/core/avatar/manual
+copying src/lingtai/core/bash/__init__.py -> lingtai-0.13.0/src/lingtai/core/bash
+copying src/lingtai/core/bash/bash_policy.json -> lingtai-0.13.0/src/lingtai/core/bash
+copying src/lingtai/core/bash/manual/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual
+copying src/lingtai/core/bash/manual/reference/bash-aider/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-aider
+copying src/lingtai/core/bash/manual/reference/bash-claude-code/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-claude-code
+copying src/lingtai/core/bash/manual/reference/bash-crush/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-crush
+copying src/lingtai/core/bash/manual/reference/bash-cursor-agent/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-cursor-agent
+copying src/lingtai/core/bash/manual/reference/bash-gemini-cli/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-gemini-cli
+copying src/lingtai/core/bash/manual/reference/bash-goose/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-goose
+copying src/lingtai/core/bash/manual/reference/bash-mimocode/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-mimocode
+copying src/lingtai/core/bash/manual/reference/bash-oh-my-pi/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-oh-my-pi
+copying src/lingtai/core/bash/manual/reference/bash-openai-codex/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-openai-codex
+copying src/lingtai/core/bash/manual/reference/bash-opencode/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-opencode
+copying src/lingtai/core/bash/manual/reference/bash-openhands/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-openhands
+copying src/lingtai/core/bash/manual/reference/bash-qwen-code/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-qwen-code
+copying src/lingtai/core/bash/manual/reference/bash-zed-acp/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/bash-zed-acp
+copying src/lingtai/core/bash/manual/reference/debugging-cleanup/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/debugging-cleanup
+copying src/lingtai/core/bash/manual/reference/notification-reminders/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/notification-reminders
+copying src/lingtai/core/bash/manual/reference/scheduled-work/SKILL.md -> lingtai-0.13.0/src/lingtai/core/bash/manual/reference/scheduled-work
+copying src/lingtai/core/daemon/__init__.py -> lingtai-0.13.0/src/lingtai/core/daemon
+copying src/lingtai/core/daemon/claude_interactive.py -> lingtai-0.13.0/src/lingtai/core/daemon
+copying src/lingtai/core/daemon/run_dir.py -> lingtai-0.13.0/src/lingtai/core/daemon
+copying src/lingtai/core/daemon/manual/SKILL.md -> lingtai-0.13.0/src/lingtai/core/daemon/manual
+copying src/lingtai/core/daemon/manual/reference/cleanup/SKILL.md -> lingtai-0.13.0/src/lingtai/core/daemon/manual/reference/cleanup
+copying src/lingtai/core/daemon/manual/reference/cli-backends/SKILL.md -> lingtai-0.13.0/src/lingtai/core/daemon/manual/reference/cli-backends
+copying src/lingtai/core/daemon/manual/reference/forensics/SKILL.md -> lingtai-0.13.0/src/lingtai/core/daemon/manual/reference/forensics
+copying src/lingtai/core/daemon/manual/reference/inspection/SKILL.md -> lingtai-0.13.0/src/lingtai/core/daemon/manual/reference/inspection
+copying src/lingtai/core/edit/__init__.py -> lingtai-0.13.0/src/lingtai/core/edit
+copying src/lingtai/core/email/manual/SKILL.md -> lingtai-0.13.0/src/lingtai/core/email/manual
+copying src/lingtai/core/glob/__init__.py -> lingtai-0.13.0/src/lingtai/core/glob
+copying src/lingtai/core/grep/__init__.py -> lingtai-0.13.0/src/lingtai/core/grep
+copying src/lingtai/core/knowledge/__init__.py -> lingtai-0.13.0/src/lingtai/core/knowledge
+copying src/lingtai/core/knowledge/manual/SKILL.md -> lingtai-0.13.0/src/lingtai/core/knowledge/manual
+copying src/lingtai/core/mcp/__init__.py -> lingtai-0.13.0/src/lingtai/core/mcp
+copying src/lingtai/core/mcp/inbox.py -> lingtai-0.13.0/src/lingtai/core/mcp
+copying src/lingtai/core/mcp/licc.py -> lingtai-0.13.0/src/lingtai/core/mcp
+copying src/lingtai/core/mcp/manual/SKILL.md -> lingtai-0.13.0/src/lingtai/core/mcp/manual
+copying src/lingtai/core/mcp/manual/reference/curated-addons.md -> lingtai-0.13.0/src/lingtai/core/mcp/manual/reference
+copying src/lingtai/core/mcp/manual/reference/third-party-and-legacy.md -> lingtai-0.13.0/src/lingtai/core/mcp/manual/reference
+copying src/lingtai/core/mcp/manual/reference/troubleshooting.md -> lingtai-0.13.0/src/lingtai/core/mcp/manual/reference
+copying src/lingtai/core/mcp/manual/scripts/find_readme.py -> lingtai-0.13.0/src/lingtai/core/mcp/manual/scripts
+copying src/lingtai/core/read/__init__.py -> lingtai-0.13.0/src/lingtai/core/read
+copying src/lingtai/core/skills/__init__.py -> lingtai-0.13.0/src/lingtai/core/skills
+copying src/lingtai/core/skills/manual/SKILL.md -> lingtai-0.13.0/src/lingtai/core/skills/manual
+copying src/lingtai/core/skills/manual/assets/skill-template.md -> lingtai-0.13.0/src/lingtai/core/skills/manual/assets
+copying src/lingtai/core/skills/manual/reference/cleanup-footprint-contract.md -> lingtai-0.13.0/src/lingtai/core/skills/manual/reference
+copying src/lingtai/core/skills/manual/scripts/validate.py -> lingtai-0.13.0/src/lingtai/core/skills/manual/scripts
+copying src/lingtai/core/write/__init__.py -> lingtai-0.13.0/src/lingtai/core/write
+copying src/lingtai/i18n/__init__.py -> lingtai-0.13.0/src/lingtai/i18n
+copying src/lingtai/i18n/en.json -> lingtai-0.13.0/src/lingtai/i18n
+copying src/lingtai/i18n/wen.json -> lingtai-0.13.0/src/lingtai/i18n
+copying src/lingtai/i18n/zh.json -> lingtai-0.13.0/src/lingtai/i18n
+copying src/lingtai/intrinsic_skills/__init__.py -> lingtai-0.13.0/src/lingtai/intrinsic_skills
+copying src/lingtai/intrinsic_skills/file-manual/SKILL.md -> lingtai-0.13.0/src/lingtai/intrinsic_skills/file-manual
+copying src/lingtai/intrinsic_skills/lingtai-doctor/SKILL.md -> lingtai-0.13.0/src/lingtai/intrinsic_skills/lingtai-doctor
+copying src/lingtai/intrinsic_skills/lingtai-doctor/scripts/doctor.py -> lingtai-0.13.0/src/lingtai/intrinsic_skills/lingtai-doctor/scripts
+copying src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md -> lingtai-0.13.0/src/lingtai/intrinsic_skills/lingtai-kernel-anatomy
+copying src/lingtai/intrinsic_skills/lingtai-repo-watch/SKILL.md -> lingtai-0.13.0/src/lingtai/intrinsic_skills/lingtai-repo-watch
+copying src/lingtai/intrinsic_skills/psyche-manual/SKILL.md -> lingtai-0.13.0/src/lingtai/intrinsic_skills/psyche-manual
+copying src/lingtai/intrinsic_skills/psyche-manual/assets/molt-template.md -> lingtai-0.13.0/src/lingtai/intrinsic_skills/psyche-manual/assets
+copying src/lingtai/intrinsic_skills/psyche-manual/assets/session-journal-entry-template.md -> lingtai-0.13.0/src/lingtai/intrinsic_skills/psyche-manual/assets
+copying src/lingtai/intrinsic_skills/read-manual/SKILL.md -> lingtai-0.13.0/src/lingtai/intrinsic_skills/read-manual
+copying src/lingtai/intrinsic_skills/system-manual/SKILL.md -> lingtai-0.13.0/src/lingtai/intrinsic_skills/system-manual
+copying src/lingtai/intrinsic_skills/system-manual/reference/goal-manual/SKILL.md -> lingtai-0.13.0/src/lingtai/intrinsic_skills/system-manual/reference/goal-manual
+copying src/lingtai/intrinsic_skills/system-manual/reference/notification-manual/SKILL.md -> lingtai-0.13.0/src/lingtai/intrinsic_skills/system-manual/reference/notification-manual
+copying src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md -> lingtai-0.13.0/src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual
+copying src/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/SKILL.md -> lingtai-0.13.0/src/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query
+copying src/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/scripts/event_summary.py -> lingtai-0.13.0/src/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/scripts
+copying src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md -> lingtai-0.13.0/src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual
+copying src/lingtai/llm/__init__.py -> lingtai-0.13.0/src/lingtai/llm
+copying src/lingtai/llm/_register.py -> lingtai-0.13.0/src/lingtai/llm
+copying src/lingtai/llm/api_gate.py -> lingtai-0.13.0/src/lingtai/llm
+copying src/lingtai/llm/base.py -> lingtai-0.13.0/src/lingtai/llm
+copying src/lingtai/llm/interface_converters.py -> lingtai-0.13.0/src/lingtai/llm
+copying src/lingtai/llm/service.py -> lingtai-0.13.0/src/lingtai/llm
+copying src/lingtai/llm/anthropic/__init__.py -> lingtai-0.13.0/src/lingtai/llm/anthropic
+copying src/lingtai/llm/anthropic/adapter.py -> lingtai-0.13.0/src/lingtai/llm/anthropic
+copying src/lingtai/llm/anthropic/defaults.py -> lingtai-0.13.0/src/lingtai/llm/anthropic
+copying src/lingtai/llm/claude_agent_sdk/__init__.py -> lingtai-0.13.0/src/lingtai/llm/claude_agent_sdk
+copying src/lingtai/llm/claude_agent_sdk/adapter.py -> lingtai-0.13.0/src/lingtai/llm/claude_agent_sdk
+copying src/lingtai/llm/claude_agent_sdk/defaults.py -> lingtai-0.13.0/src/lingtai/llm/claude_agent_sdk
+copying src/lingtai/llm/custom/__init__.py -> lingtai-0.13.0/src/lingtai/llm/custom
+copying src/lingtai/llm/custom/adapter.py -> lingtai-0.13.0/src/lingtai/llm/custom
+copying src/lingtai/llm/custom/defaults.py -> lingtai-0.13.0/src/lingtai/llm/custom
+copying src/lingtai/llm/deepseek/__init__.py -> lingtai-0.13.0/src/lingtai/llm/deepseek
+copying src/lingtai/llm/deepseek/adapter.py -> lingtai-0.13.0/src/lingtai/llm/deepseek
+copying src/lingtai/llm/gemini/__init__.py -> lingtai-0.13.0/src/lingtai/llm/gemini
+copying src/lingtai/llm/gemini/adapter.py -> lingtai-0.13.0/src/lingtai/llm/gemini
+copying src/lingtai/llm/gemini/defaults.py -> lingtai-0.13.0/src/lingtai/llm/gemini
+copying src/lingtai/llm/mimo/__init__.py -> lingtai-0.13.0/src/lingtai/llm/mimo
+copying src/lingtai/llm/mimo/adapter.py -> lingtai-0.13.0/src/lingtai/llm/mimo
+copying src/lingtai/llm/minimax/__init__.py -> lingtai-0.13.0/src/lingtai/llm/minimax
+copying src/lingtai/llm/minimax/adapter.py -> lingtai-0.13.0/src/lingtai/llm/minimax
+copying src/lingtai/llm/minimax/defaults.py -> lingtai-0.13.0/src/lingtai/llm/minimax
+copying src/lingtai/llm/minimax/mcp_client.py -> lingtai-0.13.0/src/lingtai/llm/minimax
+copying src/lingtai/llm/openai/__init__.py -> lingtai-0.13.0/src/lingtai/llm/openai
+copying src/lingtai/llm/openai/adapter.py -> lingtai-0.13.0/src/lingtai/llm/openai
+copying src/lingtai/llm/openai/defaults.py -> lingtai-0.13.0/src/lingtai/llm/openai
+copying src/lingtai/llm/openrouter/__init__.py -> lingtai-0.13.0/src/lingtai/llm/openrouter
+copying src/lingtai/llm/openrouter/adapter.py -> lingtai-0.13.0/src/lingtai/llm/openrouter
+copying src/lingtai/llm/zhipu/__init__.py -> lingtai-0.13.0/src/lingtai/llm/zhipu
+copying src/lingtai/llm/zhipu/adapter.py -> lingtai-0.13.0/src/lingtai/llm/zhipu
+copying src/lingtai/mcp_servers/__init__.py -> lingtai-0.13.0/src/lingtai/mcp_servers
+copying src/lingtai/mcp_servers/cloud_mail/__init__.py -> lingtai-0.13.0/src/lingtai/mcp_servers/cloud_mail
+copying src/lingtai/mcp_servers/cloud_mail/__main__.py -> lingtai-0.13.0/src/lingtai/mcp_servers/cloud_mail
+copying src/lingtai/mcp_servers/cloud_mail/_watermark.py -> lingtai-0.13.0/src/lingtai/mcp_servers/cloud_mail
+copying src/lingtai/mcp_servers/cloud_mail/client.py -> lingtai-0.13.0/src/lingtai/mcp_servers/cloud_mail
+copying src/lingtai/mcp_servers/cloud_mail/licc.py -> lingtai-0.13.0/src/lingtai/mcp_servers/cloud_mail
+copying src/lingtai/mcp_servers/cloud_mail/manager.py -> lingtai-0.13.0/src/lingtai/mcp_servers/cloud_mail
+copying src/lingtai/mcp_servers/cloud_mail/server.py -> lingtai-0.13.0/src/lingtai/mcp_servers/cloud_mail
+copying src/lingtai/mcp_servers/feishu/__init__.py -> lingtai-0.13.0/src/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/feishu/__main__.py -> lingtai-0.13.0/src/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/feishu/account.py -> lingtai-0.13.0/src/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/feishu/licc.py -> lingtai-0.13.0/src/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/feishu/manager.py -> lingtai-0.13.0/src/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/feishu/notification_header.md -> lingtai-0.13.0/src/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/feishu/server.py -> lingtai-0.13.0/src/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/feishu/service.py -> lingtai-0.13.0/src/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/imap/__init__.py -> lingtai-0.13.0/src/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/__main__.py -> lingtai-0.13.0/src/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/_migrate.py -> lingtai-0.13.0/src/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/_watermark.py -> lingtai-0.13.0/src/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/account.py -> lingtai-0.13.0/src/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/bridge.py -> lingtai-0.13.0/src/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/licc.py -> lingtai-0.13.0/src/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/manager.py -> lingtai-0.13.0/src/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/server.py -> lingtai-0.13.0/src/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/service.py -> lingtai-0.13.0/src/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/telegram/__init__.py -> lingtai-0.13.0/src/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/telegram/__main__.py -> lingtai-0.13.0/src/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/telegram/account.py -> lingtai-0.13.0/src/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/telegram/licc.py -> lingtai-0.13.0/src/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/telegram/manager.py -> lingtai-0.13.0/src/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/telegram/notification_header.md -> lingtai-0.13.0/src/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/telegram/server.py -> lingtai-0.13.0/src/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/telegram/service.py -> lingtai-0.13.0/src/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/wechat/__init__.py -> lingtai-0.13.0/src/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/__main__.py -> lingtai-0.13.0/src/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/api.py -> lingtai-0.13.0/src/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/licc.py -> lingtai-0.13.0/src/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/lockfile.py -> lingtai-0.13.0/src/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/login.py -> lingtai-0.13.0/src/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/manager.py -> lingtai-0.13.0/src/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/media.py -> lingtai-0.13.0/src/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/notification_header.md -> lingtai-0.13.0/src/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/server.py -> lingtai-0.13.0/src/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/types.py -> lingtai-0.13.0/src/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/whatsapp/__init__.py -> lingtai-0.13.0/src/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/__main__.py -> lingtai-0.13.0/src/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/client.py -> lingtai-0.13.0/src/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/licc.py -> lingtai-0.13.0/src/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/manager.py -> lingtai-0.13.0/src/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/notification_header.md -> lingtai-0.13.0/src/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/redaction.py -> lingtai-0.13.0/src/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/resources.py -> lingtai-0.13.0/src/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/server.py -> lingtai-0.13.0/src/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/webhook.py -> lingtai-0.13.0/src/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/webhook_server.py -> lingtai-0.13.0/src/lingtai/mcp_servers/whatsapp
+copying src/lingtai/prompts/procedures.md -> lingtai-0.13.0/src/lingtai/prompts
+copying src/lingtai/prompts/substrate.md -> lingtai-0.13.0/src/lingtai/prompts
+copying src/lingtai/services/__init__.py -> lingtai-0.13.0/src/lingtai/services
+copying src/lingtai/services/file_io.py -> lingtai-0.13.0/src/lingtai/services
+copying src/lingtai/services/file_io_sidecar.py -> lingtai-0.13.0/src/lingtai/services
+copying src/lingtai/services/mail.py -> lingtai-0.13.0/src/lingtai/services
+copying src/lingtai/services/mcp.py -> lingtai-0.13.0/src/lingtai/services
+copying src/lingtai/services/vision/__init__.py -> lingtai-0.13.0/src/lingtai/services/vision
+copying src/lingtai/services/vision/anthropic.py -> lingtai-0.13.0/src/lingtai/services/vision
+copying src/lingtai/services/vision/codex.py -> lingtai-0.13.0/src/lingtai/services/vision
+copying src/lingtai/services/vision/gemini.py -> lingtai-0.13.0/src/lingtai/services/vision
+copying src/lingtai/services/vision/local.py -> lingtai-0.13.0/src/lingtai/services/vision
+copying src/lingtai/services/vision/mimo.py -> lingtai-0.13.0/src/lingtai/services/vision
+copying src/lingtai/services/vision/minimax.py -> lingtai-0.13.0/src/lingtai/services/vision
+copying src/lingtai/services/vision/openai.py -> lingtai-0.13.0/src/lingtai/services/vision
+copying src/lingtai/services/vision/zhipu.py -> lingtai-0.13.0/src/lingtai/services/vision
+copying src/lingtai/services/websearch/__init__.py -> lingtai-0.13.0/src/lingtai/services/websearch
+copying src/lingtai/services/websearch/anthropic.py -> lingtai-0.13.0/src/lingtai/services/websearch
+copying src/lingtai/services/websearch/duckduckgo.py -> lingtai-0.13.0/src/lingtai/services/websearch
+copying src/lingtai/services/websearch/gemini.py -> lingtai-0.13.0/src/lingtai/services/websearch
+copying src/lingtai/services/websearch/minimax.py -> lingtai-0.13.0/src/lingtai/services/websearch
+copying src/lingtai/services/websearch/openai.py -> lingtai-0.13.0/src/lingtai/services/websearch
+copying src/lingtai/services/websearch/zhipu.py -> lingtai-0.13.0/src/lingtai/services/websearch
+copying src/lingtai_kernel/__init__.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/config.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/config_resolve.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/handshake.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/llm_utils.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/logging.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/loop_guard.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/message.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/meta_block.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/notifications.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/preset_connectivity.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/presets.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/prompt.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/safety_limits.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/sent_message_tracker.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/session.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/state.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/tc_inbox.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/time_veil.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/token_counter.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/token_ledger.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/tool_call_guard.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/tool_executor.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/tool_result_artifacts.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/tool_timing.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/trace_redaction.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/types.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/workdir.py -> lingtai-0.13.0/src/lingtai_kernel
+copying src/lingtai_kernel/base_agent/__init__.py -> lingtai-0.13.0/src/lingtai_kernel/base_agent
+copying src/lingtai_kernel/base_agent/identity.py -> lingtai-0.13.0/src/lingtai_kernel/base_agent
+copying src/lingtai_kernel/base_agent/lifecycle.py -> lingtai-0.13.0/src/lingtai_kernel/base_agent
+copying src/lingtai_kernel/base_agent/messaging.py -> lingtai-0.13.0/src/lingtai_kernel/base_agent
+copying src/lingtai_kernel/base_agent/prompt.py -> lingtai-0.13.0/src/lingtai_kernel/base_agent
+copying src/lingtai_kernel/base_agent/tools.py -> lingtai-0.13.0/src/lingtai_kernel/base_agent
+copying src/lingtai_kernel/base_agent/turn.py -> lingtai-0.13.0/src/lingtai_kernel/base_agent
+copying src/lingtai_kernel/i18n/__init__.py -> lingtai-0.13.0/src/lingtai_kernel/i18n
+copying src/lingtai_kernel/i18n/en.json -> lingtai-0.13.0/src/lingtai_kernel/i18n
+copying src/lingtai_kernel/i18n/wen.json -> lingtai-0.13.0/src/lingtai_kernel/i18n
+copying src/lingtai_kernel/i18n/zh.json -> lingtai-0.13.0/src/lingtai_kernel/i18n
+copying src/lingtai_kernel/intrinsics/__init__.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics
+copying src/lingtai_kernel/intrinsics/email/__init__.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/email
+copying src/lingtai_kernel/intrinsics/email/manager.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/email
+copying src/lingtai_kernel/intrinsics/email/primitives.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/email
+copying src/lingtai_kernel/intrinsics/email/schema.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/email
+copying src/lingtai_kernel/intrinsics/notification/__init__.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/notification
+copying src/lingtai_kernel/intrinsics/notification/schema.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/notification
+copying src/lingtai_kernel/intrinsics/psyche/__init__.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/psyche
+copying src/lingtai_kernel/intrinsics/psyche/_lingtai.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/psyche
+copying src/lingtai_kernel/intrinsics/psyche/_molt.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/psyche
+copying src/lingtai_kernel/intrinsics/psyche/_pad.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/psyche
+copying src/lingtai_kernel/intrinsics/psyche/_session_journal.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/psyche
+copying src/lingtai_kernel/intrinsics/psyche/_snapshots.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/psyche
+copying src/lingtai_kernel/intrinsics/soul/__init__.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/soul
+copying src/lingtai_kernel/intrinsics/soul/config.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/soul
+copying src/lingtai_kernel/intrinsics/soul/consultation.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/soul
+copying src/lingtai_kernel/intrinsics/soul/flow.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/soul
+copying src/lingtai_kernel/intrinsics/soul/inquiry.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/soul
+copying src/lingtai_kernel/intrinsics/system/__init__.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/system
+copying src/lingtai_kernel/intrinsics/system/karma.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/system
+copying src/lingtai_kernel/intrinsics/system/preset.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/system
+copying src/lingtai_kernel/intrinsics/system/schema.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/system
+copying src/lingtai_kernel/intrinsics/system/summarize.py -> lingtai-0.13.0/src/lingtai_kernel/intrinsics/system
+copying src/lingtai_kernel/llm/__init__.py -> lingtai-0.13.0/src/lingtai_kernel/llm
+copying src/lingtai_kernel/llm/base.py -> lingtai-0.13.0/src/lingtai_kernel/llm
+copying src/lingtai_kernel/llm/interface.py -> lingtai-0.13.0/src/lingtai_kernel/llm
+copying src/lingtai_kernel/llm/service.py -> lingtai-0.13.0/src/lingtai_kernel/llm
+copying src/lingtai_kernel/llm/streaming.py -> lingtai-0.13.0/src/lingtai_kernel/llm
+copying src/lingtai_kernel/migrate/__init__.py -> lingtai-0.13.0/src/lingtai_kernel/migrate
+copying src/lingtai_kernel/migrate/agent_m001_init_procedures_override.py -> lingtai-0.13.0/src/lingtai_kernel/migrate
+copying src/lingtai_kernel/migrate/agent_m002_mcp_launch_args_rewrite.py -> lingtai-0.13.0/src/lingtai_kernel/migrate
+copying src/lingtai_kernel/migrate/m001_context_limit_relocation.py -> lingtai-0.13.0/src/lingtai_kernel/migrate
+copying src/lingtai_kernel/migrate/m002_description_object.py -> lingtai-0.13.0/src/lingtai_kernel/migrate
+copying src/lingtai_kernel/migrate/migrate.py -> lingtai-0.13.0/src/lingtai_kernel/migrate
+copying src/lingtai_kernel/nudge/__init__.py -> lingtai-0.13.0/src/lingtai_kernel/nudge
+copying src/lingtai_kernel/nudge/goal.py -> lingtai-0.13.0/src/lingtai_kernel/nudge
+copying src/lingtai_kernel/nudge/kernel_version.py -> lingtai-0.13.0/src/lingtai_kernel/nudge
+copying src/lingtai_kernel/services/__init__.py -> lingtai-0.13.0/src/lingtai_kernel/services
+copying src/lingtai_kernel/services/logging.py -> lingtai-0.13.0/src/lingtai_kernel/services
+copying src/lingtai_kernel/services/mail.py -> lingtai-0.13.0/src/lingtai_kernel/services
+copying tests/test_activate_preset.py -> lingtai-0.13.0/tests
+copying tests/test_active_stuck_watchdog.py -> lingtai-0.13.0/tests
+copying tests/test_adapter_registry.py -> lingtai-0.13.0/tests
+copying tests/test_aed_recovery.py -> lingtai-0.13.0/tests
+copying tests/test_aed_tool_pairing.py -> lingtai-0.13.0/tests
+copying tests/test_agent.py -> lingtai-0.13.0/tests
+copying tests/test_agent_capabilities.py -> lingtai-0.13.0/tests
+copying tests/test_agent_preset_manifest.py -> lingtai-0.13.0/tests
+copying tests/test_api_gate.py -> lingtai-0.13.0/tests
+copying tests/test_avatar_preset_inheritance.py -> lingtai-0.13.0/tests
+copying tests/test_avatar_rules.py -> lingtai-0.13.0/tests
+copying tests/test_avatar_timezone_inheritance.py -> lingtai-0.13.0/tests
+copying tests/test_base_agent.py -> lingtai-0.13.0/tests
+copying tests/test_bash_async.py -> lingtai-0.13.0/tests
+copying tests/test_chat_interface_invariant.py -> lingtai-0.13.0/tests
+copying tests/test_chat_interface_remove_pair_by_notif_id.py -> lingtai-0.13.0/tests
+copying tests/test_check_caps.py -> lingtai-0.13.0/tests
+copying tests/test_claude_agent_sdk_adapter.py -> lingtai-0.13.0/tests
+copying tests/test_cli.py -> lingtai-0.13.0/tests
+copying tests/test_cli_integration.py -> lingtai-0.13.0/tests
+copying tests/test_cloud_mail_addon.py -> lingtai-0.13.0/tests
+copying tests/test_codex_cache_stall_temp_key.py -> lingtai-0.13.0/tests
+copying tests/test_codex_prompt_cache_key.py -> lingtai-0.13.0/tests
+copying tests/test_codex_prompt_key_header.py -> lingtai-0.13.0/tests
+copying tests/test_codex_raw_reasoning_replay.py -> lingtai-0.13.0/tests
+copying tests/test_compaction.py -> lingtai-0.13.0/tests
+copying tests/test_daemon.py -> lingtai-0.13.0/tests
+copying tests/test_daemon_backend_options.py -> lingtai-0.13.0/tests
+copying tests/test_daemon_check.py -> lingtai-0.13.0/tests
+copying tests/test_daemon_claude_interactive_backend.py -> lingtai-0.13.0/tests
+copying tests/test_daemon_claude_usage.py -> lingtai-0.13.0/tests
+copying tests/test_daemon_cli_watchdog_scope.py -> lingtai-0.13.0/tests
+copying tests/test_daemon_cursor_backend.py -> lingtai-0.13.0/tests
+copying tests/test_daemon_opencode_backend.py -> lingtai-0.13.0/tests
+copying tests/test_daemon_per_batch_limits.py -> lingtai-0.13.0/tests
+copying tests/test_daemon_preset_capabilities.py -> lingtai-0.13.0/tests
+copying tests/test_daemon_run_dir.py -> lingtai-0.13.0/tests
+copying tests/test_deep_refresh.py -> lingtai-0.13.0/tests
+copying tests/test_deepseek_adapter.py -> lingtai-0.13.0/tests
+copying tests/test_eigen.py -> lingtai-0.13.0/tests
+copying tests/test_email_abs_reply_route.py -> lingtai-0.13.0/tests
+copying tests/test_email_identity.py -> lingtai-0.13.0/tests
+copying tests/test_file_io_sidecar.py -> lingtai-0.13.0/tests
+copying tests/test_filesystem_mail.py -> lingtai-0.13.0/tests
+copying tests/test_git_init.py -> lingtai-0.13.0/tests
+copying tests/test_goal_notification.py -> lingtai-0.13.0/tests
+copying tests/test_handshake.py -> lingtai-0.13.0/tests
+copying tests/test_heartbeat.py -> lingtai-0.13.0/tests
+copying tests/test_i18n.py -> lingtai-0.13.0/tests
+copying tests/test_imap_reply_attachments.py -> lingtai-0.13.0/tests
+copying tests/test_inherit_fallback.py -> lingtai-0.13.0/tests
+copying tests/test_init_schema.py -> lingtai-0.13.0/tests
+copying tests/test_init_schema_procedures.py -> lingtai-0.13.0/tests
+copying tests/test_interface.py -> lingtai-0.13.0/tests
+copying tests/test_intrinsics_comm.py -> lingtai-0.13.0/tests
+copying tests/test_karma.py -> lingtai-0.13.0/tests
+copying tests/test_kernel_isolation.py -> lingtai-0.13.0/tests
+copying tests/test_kernel_migrate.py -> lingtai-0.13.0/tests
+copying tests/test_knowledge.py -> lingtai-0.13.0/tests
+copying tests/test_large_result_rescan.py -> lingtai-0.13.0/tests
+copying tests/test_layers_avatar.py -> lingtai-0.13.0/tests
+copying tests/test_layers_bash.py -> lingtai-0.13.0/tests
+copying tests/test_layers_email.py -> lingtai-0.13.0/tests
+copying tests/test_layers_file.py -> lingtai-0.13.0/tests
+copying tests/test_lifecycle_daemon_shutdown.py -> lingtai-0.13.0/tests
+copying tests/test_lingtai_doctor.py -> lingtai-0.13.0/tests
+copying tests/test_llm_adapter_timeouts.py -> lingtai-0.13.0/tests
+copying tests/test_llm_service.py -> lingtai-0.13.0/tests
+copying tests/test_llm_utils.py -> lingtai-0.13.0/tests
+copying tests/test_loop_guard.py -> lingtai-0.13.0/tests
+copying tests/test_max_rpm_plumbing.py -> lingtai-0.13.0/tests
+copying tests/test_mcp_capability.py -> lingtai-0.13.0/tests
+copying tests/test_mcp_closed_resource_restart.py -> lingtai-0.13.0/tests
+copying tests/test_mcp_inbox.py -> lingtai-0.13.0/tests
+copying tests/test_mcp_licc_client.py -> lingtai-0.13.0/tests
+copying tests/test_message.py -> lingtai-0.13.0/tests
+copying tests/test_messaging_notification_format.py -> lingtai-0.13.0/tests
+copying tests/test_meta_block.py -> lingtai-0.13.0/tests
+copying tests/test_mimo_adapter.py -> lingtai-0.13.0/tests
+copying tests/test_molt_notification_persistence.py -> lingtai-0.13.0/tests
+copying tests/test_molt_task_persistence.py -> lingtai-0.13.0/tests
+copying tests/test_network.py -> lingtai-0.13.0/tests
+copying tests/test_notification_sync.py -> lingtai-0.13.0/tests
+copying tests/test_notification_tool.py -> lingtai-0.13.0/tests
+copying tests/test_openai_compact_threshold.py -> lingtai-0.13.0/tests
+copying tests/test_openai_overflow_recovery.py -> lingtai-0.13.0/tests
+copying tests/test_openai_prompt_cache_key.py -> lingtai-0.13.0/tests
+copying tests/test_openai_responses_streaming.py -> lingtai-0.13.0/tests
+copying tests/test_override_intrinsic.py -> lingtai-0.13.0/tests
+copying tests/test_pad.py -> lingtai-0.13.0/tests
+copying tests/test_perform_refresh_handshake.py -> lingtai-0.13.0/tests
+copying tests/test_post_molt_notification.py -> lingtai-0.13.0/tests
+copying tests/test_preset_auto_fallback.py -> lingtai-0.13.0/tests
+copying tests/test_preset_connectivity.py -> lingtai-0.13.0/tests
+copying tests/test_preset_context_guard.py -> lingtai-0.13.0/tests
+copying tests/test_preset_materialization.py -> lingtai-0.13.0/tests
+copying tests/test_preset_swap_e2e.py -> lingtai-0.13.0/tests
+copying tests/test_presets.py -> lingtai-0.13.0/tests
+copying tests/test_prompt.py -> lingtai-0.13.0/tests
+copying tests/test_psyche.py -> lingtai-0.13.0/tests
+copying tests/test_read_continuation.py -> lingtai-0.13.0/tests
+copying tests/test_repeated_tool_error_continue.py -> lingtai-0.13.0/tests
+copying tests/test_resolved_manifest_artifact.py -> lingtai-0.13.0/tests
+copying tests/test_responses_converter.py -> lingtai-0.13.0/tests
+copying tests/test_retroactive_history_compaction.py -> lingtai-0.13.0/tests
+copying tests/test_secondary_schema.py -> lingtai-0.13.0/tests
+copying tests/test_sent_message_tracker.py -> lingtai-0.13.0/tests
+copying tests/test_services_file_io.py -> lingtai-0.13.0/tests
+copying tests/test_services_integration.py -> lingtai-0.13.0/tests
+copying tests/test_services_logging.py -> lingtai-0.13.0/tests
+copying tests/test_services_mail.py -> lingtai-0.13.0/tests
+copying tests/test_session.py -> lingtai-0.13.0/tests
+copying tests/test_session_journal_gate.py -> lingtai-0.13.0/tests
+copying tests/test_silence_kill.py -> lingtai-0.13.0/tests
+copying tests/test_skills.py -> lingtai-0.13.0/tests
+copying tests/test_soul.py -> lingtai-0.13.0/tests
+copying tests/test_soul_consultation.py -> lingtai-0.13.0/tests
+copying tests/test_state.py -> lingtai-0.13.0/tests
+copying tests/test_streaming.py -> lingtai-0.13.0/tests
+copying tests/test_system.py -> lingtai-0.13.0/tests
+copying tests/test_system_dismiss.py -> lingtai-0.13.0/tests
+copying tests/test_system_notifications.py -> lingtai-0.13.0/tests
+copying tests/test_system_summarize.py -> lingtai-0.13.0/tests
+copying tests/test_tc_inbox.py -> lingtai-0.13.0/tests
+copying tests/test_tc_inbox_mid_turn_drain.py -> lingtai-0.13.0/tests
+copying tests/test_tc_inbox_remove_by_notif_id.py -> lingtai-0.13.0/tests
+copying tests/test_tc_wake_chat_not_ready.py -> lingtai-0.13.0/tests
+copying tests/test_tc_wake_orphan_heal.py -> lingtai-0.13.0/tests
+copying tests/test_three_agent_email.py -> lingtai-0.13.0/tests
+copying tests/test_time_awareness_email.py -> lingtai-0.13.0/tests
+copying tests/test_time_awareness_mail.py -> lingtai-0.13.0/tests
+copying tests/test_time_awareness_status.py -> lingtai-0.13.0/tests
+copying tests/test_time_veil.py -> lingtai-0.13.0/tests
+copying tests/test_token_counter.py -> lingtai-0.13.0/tests
+copying tests/test_token_ledger.py -> lingtai-0.13.0/tests
+copying tests/test_tool_executor.py -> lingtai-0.13.0/tests
+copying tests/test_tool_result_restore_after_continuation_failure.py -> lingtai-0.13.0/tests
+copying tests/test_tool_result_spill.py -> lingtai-0.13.0/tests
+copying tests/test_tool_timing.py -> lingtai-0.13.0/tests
+copying tests/test_trace_redaction.py -> lingtai-0.13.0/tests
+copying tests/test_types.py -> lingtai-0.13.0/tests
+copying tests/test_utf8_read_text.py -> lingtai-0.13.0/tests
+copying tests/test_validate_skill.py -> lingtai-0.13.0/tests
+copying tests/test_vision_capability.py -> lingtai-0.13.0/tests
+copying tests/test_vision_services.py -> lingtai-0.13.0/tests
+copying tests/test_web_search_capability.py -> lingtai-0.13.0/tests
+copying tests/test_wheel_sidecar_smoke.py -> lingtai-0.13.0/tests
+copying tests/test_wire_orphan_pairing.py -> lingtai-0.13.0/tests
+copying tests/test_workdir.py -> lingtai-0.13.0/tests
+copying tests/test_zhipu_merge_consecutive.py -> lingtai-0.13.0/tests
+copying src/lingtai.egg-info/SOURCES.txt -> lingtai-0.13.0/src/lingtai.egg-info
+Writing lingtai-0.13.0/setup.cfg
+Creating tar archive
+removing 'lingtai-0.13.0' (and everything under it)
+* Building wheel from sdist
+* Creating isolated environment: venv+pip...
+* Installing packages in isolated environment:
+  - setuptools>=68.0
+  - wheel>=0.41
+* Getting build dependencies for wheel...
+running egg_info
+writing src/lingtai.egg-info/PKG-INFO
+writing dependency_links to src/lingtai.egg-info/dependency_links.txt
+writing entry points to src/lingtai.egg-info/entry_points.txt
+writing requirements to src/lingtai.egg-info/requires.txt
+writing top-level names to src/lingtai.egg-info/top_level.txt
+reading manifest file 'src/lingtai.egg-info/SOURCES.txt'
+reading manifest template 'MANIFEST.in'
+no previously-included directories found matching 'crates/lingtai-search-sidecar/target'
+warning: no previously-included files found matching 'src/lingtai/bin/*'
+warning: no previously-included files found matching 'src/lingtai/bin/__init__.py'
+no previously-included directories found matching 'src/lingtai/bin'
+adding license file 'LICENSE'
+adding license file 'NOTICE'
+writing manifest file 'src/lingtai.egg-info/SOURCES.txt'
+* Building wheel...
+running bdist_wheel
+[lingtai] cargo build --release --locked (/private/var/folders/g1/jbj1s_4x7wn1f67ffjt2_thm0000gn/T/build-via-sdist-o5im63my/lingtai-0.13.0/crates/lingtai-search-sidecar)
+   Compiling memchr v2.8.1
+   Compiling proc-macro2 v1.0.106
+   Compiling regex-syntax v0.8.10
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling crossbeam-utils v0.8.21
+   Compiling libc v0.2.186
+   Compiling serde_core v1.0.228
+   Compiling log v0.4.30
+   Compiling cfg-if v1.0.4
+   Compiling zmij v1.0.21
+   Compiling serde v1.0.228
+   Compiling same-file v1.0.6
+   Compiling serde_json v1.0.150
+   Compiling itoa v1.0.18
+   Compiling encoding_rs v0.8.35
+   Compiling walkdir v2.5.0
+   Compiling aho-corasick v1.1.4
+   Compiling grep-matcher v0.1.8
+   Compiling encoding_rs_io v0.1.7
+   Compiling regex-automata v0.4.14
+   Compiling crossbeam-epoch v0.9.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling syn v2.0.117
+   Compiling memmap2 v0.9.10
+   Compiling serde_derive v1.0.228
+   Compiling bstr v1.12.1
+   Compiling globset v0.4.18
+   Compiling grep-regex v0.1.14
+   Compiling grep-searcher v0.1.16
+   Compiling ignore v0.4.25
+   Compiling lingtai-search-sidecar v0.2.0 (/private/var/folders/g1/jbj1s_4x7wn1f67ffjt2_thm0000gn/T/build-via-sdist-o5im63my/lingtai-0.13.0/crates/lingtai-search-sidecar)
+    Finished `release` profile [optimized] target(s) in 16.12s
+running build
+running build_py
+creating build/lib/lingtai
+copying src/lingtai/presets.py -> build/lib/lingtai
+copying src/lingtai/venv_resolve.py -> build/lib/lingtai
+copying src/lingtai/__init__.py -> build/lib/lingtai
+copying src/lingtai/cli.py -> build/lib/lingtai
+copying src/lingtai/agent.py -> build/lib/lingtai
+copying src/lingtai/network.py -> build/lib/lingtai
+copying src/lingtai/init_schema.py -> build/lib/lingtai
+copying src/lingtai/__main__.py -> build/lib/lingtai
+creating build/lib/lingtai_kernel
+copying src/lingtai_kernel/tool_result_artifacts.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/preset_connectivity.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/trace_redaction.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/handshake.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/time_veil.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/logging.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/tc_inbox.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/token_ledger.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/tool_timing.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/config.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/workdir.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/token_counter.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/presets.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/meta_block.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/session.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/safety_limits.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/__init__.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/message.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/types.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/llm_utils.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/sent_message_tracker.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/tool_call_guard.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/notifications.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/prompt.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/loop_guard.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/tool_executor.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/config_resolve.py -> build/lib/lingtai_kernel
+copying src/lingtai_kernel/state.py -> build/lib/lingtai_kernel
+creating build/lib/lingtai/llm
+copying src/lingtai/llm/api_gate.py -> build/lib/lingtai/llm
+copying src/lingtai/llm/_register.py -> build/lib/lingtai/llm
+copying src/lingtai/llm/service.py -> build/lib/lingtai/llm
+copying src/lingtai/llm/interface_converters.py -> build/lib/lingtai/llm
+copying src/lingtai/llm/__init__.py -> build/lib/lingtai/llm
+copying src/lingtai/llm/base.py -> build/lib/lingtai/llm
+creating build/lib/lingtai/core
+copying src/lingtai/core/__init__.py -> build/lib/lingtai/core
+creating build/lib/lingtai/capabilities
+copying src/lingtai/capabilities/__init__.py -> build/lib/lingtai/capabilities
+copying src/lingtai/capabilities/_zhipu_mode.py -> build/lib/lingtai/capabilities
+copying src/lingtai/capabilities/_media_host.py -> build/lib/lingtai/capabilities
+creating build/lib/lingtai/auth
+copying src/lingtai/auth/codex.py -> build/lib/lingtai/auth
+copying src/lingtai/auth/__init__.py -> build/lib/lingtai/auth
+creating build/lib/lingtai/mcp_servers
+copying src/lingtai/mcp_servers/__init__.py -> build/lib/lingtai/mcp_servers
+creating build/lib/lingtai/intrinsic_skills
+copying src/lingtai/intrinsic_skills/__init__.py -> build/lib/lingtai/intrinsic_skills
+creating build/lib/lingtai/i18n
+copying src/lingtai/i18n/__init__.py -> build/lib/lingtai/i18n
+creating build/lib/lingtai/services
+copying src/lingtai/services/mail.py -> build/lib/lingtai/services
+copying src/lingtai/services/file_io_sidecar.py -> build/lib/lingtai/services
+copying src/lingtai/services/__init__.py -> build/lib/lingtai/services
+copying src/lingtai/services/mcp.py -> build/lib/lingtai/services
+copying src/lingtai/services/file_io.py -> build/lib/lingtai/services
+creating build/lib/lingtai/llm/gemini
+copying src/lingtai/llm/gemini/adapter.py -> build/lib/lingtai/llm/gemini
+copying src/lingtai/llm/gemini/__init__.py -> build/lib/lingtai/llm/gemini
+copying src/lingtai/llm/gemini/defaults.py -> build/lib/lingtai/llm/gemini
+creating build/lib/lingtai/llm/mimo
+copying src/lingtai/llm/mimo/adapter.py -> build/lib/lingtai/llm/mimo
+copying src/lingtai/llm/mimo/__init__.py -> build/lib/lingtai/llm/mimo
+creating build/lib/lingtai/llm/openrouter
+copying src/lingtai/llm/openrouter/adapter.py -> build/lib/lingtai/llm/openrouter
+copying src/lingtai/llm/openrouter/__init__.py -> build/lib/lingtai/llm/openrouter
+creating build/lib/lingtai/llm/minimax
+copying src/lingtai/llm/minimax/adapter.py -> build/lib/lingtai/llm/minimax
+copying src/lingtai/llm/minimax/__init__.py -> build/lib/lingtai/llm/minimax
+copying src/lingtai/llm/minimax/mcp_client.py -> build/lib/lingtai/llm/minimax
+copying src/lingtai/llm/minimax/defaults.py -> build/lib/lingtai/llm/minimax
+creating build/lib/lingtai/llm/deepseek
+copying src/lingtai/llm/deepseek/adapter.py -> build/lib/lingtai/llm/deepseek
+copying src/lingtai/llm/deepseek/__init__.py -> build/lib/lingtai/llm/deepseek
+creating build/lib/lingtai/llm/claude_agent_sdk
+copying src/lingtai/llm/claude_agent_sdk/adapter.py -> build/lib/lingtai/llm/claude_agent_sdk
+copying src/lingtai/llm/claude_agent_sdk/__init__.py -> build/lib/lingtai/llm/claude_agent_sdk
+copying src/lingtai/llm/claude_agent_sdk/defaults.py -> build/lib/lingtai/llm/claude_agent_sdk
+creating build/lib/lingtai/llm/anthropic
+copying src/lingtai/llm/anthropic/adapter.py -> build/lib/lingtai/llm/anthropic
+copying src/lingtai/llm/anthropic/__init__.py -> build/lib/lingtai/llm/anthropic
+copying src/lingtai/llm/anthropic/defaults.py -> build/lib/lingtai/llm/anthropic
+creating build/lib/lingtai/llm/zhipu
+copying src/lingtai/llm/zhipu/adapter.py -> build/lib/lingtai/llm/zhipu
+copying src/lingtai/llm/zhipu/__init__.py -> build/lib/lingtai/llm/zhipu
+creating build/lib/lingtai/llm/custom
+copying src/lingtai/llm/custom/adapter.py -> build/lib/lingtai/llm/custom
+copying src/lingtai/llm/custom/__init__.py -> build/lib/lingtai/llm/custom
+copying src/lingtai/llm/custom/defaults.py -> build/lib/lingtai/llm/custom
+creating build/lib/lingtai/llm/openai
+copying src/lingtai/llm/openai/adapter.py -> build/lib/lingtai/llm/openai
+copying src/lingtai/llm/openai/__init__.py -> build/lib/lingtai/llm/openai
+copying src/lingtai/llm/openai/defaults.py -> build/lib/lingtai/llm/openai
+creating build/lib/lingtai/core/write
+copying src/lingtai/core/write/__init__.py -> build/lib/lingtai/core/write
+creating build/lib/lingtai/core/read
+copying src/lingtai/core/read/__init__.py -> build/lib/lingtai/core/read
+creating build/lib/lingtai/core/mcp
+copying src/lingtai/core/mcp/__init__.py -> build/lib/lingtai/core/mcp
+copying src/lingtai/core/mcp/licc.py -> build/lib/lingtai/core/mcp
+copying src/lingtai/core/mcp/inbox.py -> build/lib/lingtai/core/mcp
+creating build/lib/lingtai/core/grep
+copying src/lingtai/core/grep/__init__.py -> build/lib/lingtai/core/grep
+creating build/lib/lingtai/core/bash
+copying src/lingtai/core/bash/__init__.py -> build/lib/lingtai/core/bash
+creating build/lib/lingtai/core/edit
+copying src/lingtai/core/edit/__init__.py -> build/lib/lingtai/core/edit
+creating build/lib/lingtai/core/daemon
+copying src/lingtai/core/daemon/__init__.py -> build/lib/lingtai/core/daemon
+copying src/lingtai/core/daemon/run_dir.py -> build/lib/lingtai/core/daemon
+copying src/lingtai/core/daemon/claude_interactive.py -> build/lib/lingtai/core/daemon
+creating build/lib/lingtai/core/knowledge
+copying src/lingtai/core/knowledge/__init__.py -> build/lib/lingtai/core/knowledge
+creating build/lib/lingtai/core/avatar
+copying src/lingtai/core/avatar/__init__.py -> build/lib/lingtai/core/avatar
+creating build/lib/lingtai/core/glob
+copying src/lingtai/core/glob/__init__.py -> build/lib/lingtai/core/glob
+creating build/lib/lingtai/core/skills
+copying src/lingtai/core/skills/__init__.py -> build/lib/lingtai/core/skills
+creating build/lib/lingtai/core/mcp/manual/scripts
+copying src/lingtai/core/mcp/manual/scripts/find_readme.py -> build/lib/lingtai/core/mcp/manual/scripts
+creating build/lib/lingtai/core/skills/manual/scripts
+copying src/lingtai/core/skills/manual/scripts/validate.py -> build/lib/lingtai/core/skills/manual/scripts
+creating build/lib/lingtai/capabilities/web_search
+copying src/lingtai/capabilities/web_search/__init__.py -> build/lib/lingtai/capabilities/web_search
+creating build/lib/lingtai/capabilities/vision
+copying src/lingtai/capabilities/vision/__init__.py -> build/lib/lingtai/capabilities/vision
+creating build/lib/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/service.py -> build/lib/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/server.py -> build/lib/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/bridge.py -> build/lib/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/_watermark.py -> build/lib/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/__init__.py -> build/lib/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/licc.py -> build/lib/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/__main__.py -> build/lib/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/manager.py -> build/lib/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/_migrate.py -> build/lib/lingtai/mcp_servers/imap
+copying src/lingtai/mcp_servers/imap/account.py -> build/lib/lingtai/mcp_servers/imap
+creating build/lib/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/feishu/service.py -> build/lib/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/feishu/server.py -> build/lib/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/feishu/__init__.py -> build/lib/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/feishu/licc.py -> build/lib/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/feishu/__main__.py -> build/lib/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/feishu/manager.py -> build/lib/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/feishu/account.py -> build/lib/lingtai/mcp_servers/feishu
+creating build/lib/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/server.py -> build/lib/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/media.py -> build/lib/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/lockfile.py -> build/lib/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/__init__.py -> build/lib/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/licc.py -> build/lib/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/types.py -> build/lib/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/api.py -> build/lib/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/login.py -> build/lib/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/__main__.py -> build/lib/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/wechat/manager.py -> build/lib/lingtai/mcp_servers/wechat
+creating build/lib/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/telegram/service.py -> build/lib/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/telegram/server.py -> build/lib/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/telegram/__init__.py -> build/lib/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/telegram/licc.py -> build/lib/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/telegram/__main__.py -> build/lib/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/telegram/manager.py -> build/lib/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/telegram/account.py -> build/lib/lingtai/mcp_servers/telegram
+creating build/lib/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/redaction.py -> build/lib/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/server.py -> build/lib/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/webhook.py -> build/lib/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/client.py -> build/lib/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/__init__.py -> build/lib/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/licc.py -> build/lib/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/resources.py -> build/lib/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/webhook_server.py -> build/lib/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/__main__.py -> build/lib/lingtai/mcp_servers/whatsapp
+copying src/lingtai/mcp_servers/whatsapp/manager.py -> build/lib/lingtai/mcp_servers/whatsapp
+creating build/lib/lingtai/mcp_servers/cloud_mail
+copying src/lingtai/mcp_servers/cloud_mail/server.py -> build/lib/lingtai/mcp_servers/cloud_mail
+copying src/lingtai/mcp_servers/cloud_mail/client.py -> build/lib/lingtai/mcp_servers/cloud_mail
+copying src/lingtai/mcp_servers/cloud_mail/_watermark.py -> build/lib/lingtai/mcp_servers/cloud_mail
+copying src/lingtai/mcp_servers/cloud_mail/__init__.py -> build/lib/lingtai/mcp_servers/cloud_mail
+copying src/lingtai/mcp_servers/cloud_mail/licc.py -> build/lib/lingtai/mcp_servers/cloud_mail
+copying src/lingtai/mcp_servers/cloud_mail/__main__.py -> build/lib/lingtai/mcp_servers/cloud_mail
+copying src/lingtai/mcp_servers/cloud_mail/manager.py -> build/lib/lingtai/mcp_servers/cloud_mail
+creating build/lib/lingtai/intrinsic_skills/lingtai-doctor/scripts
+copying src/lingtai/intrinsic_skills/lingtai-doctor/scripts/doctor.py -> build/lib/lingtai/intrinsic_skills/lingtai-doctor/scripts
+creating build/lib/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/scripts
+copying src/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/scripts/event_summary.py -> build/lib/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/scripts
+creating build/lib/lingtai/services/websearch
+copying src/lingtai/services/websearch/minimax.py -> build/lib/lingtai/services/websearch
+copying src/lingtai/services/websearch/zhipu.py -> build/lib/lingtai/services/websearch
+copying src/lingtai/services/websearch/__init__.py -> build/lib/lingtai/services/websearch
+copying src/lingtai/services/websearch/gemini.py -> build/lib/lingtai/services/websearch
+copying src/lingtai/services/websearch/openai.py -> build/lib/lingtai/services/websearch
+copying src/lingtai/services/websearch/anthropic.py -> build/lib/lingtai/services/websearch
+copying src/lingtai/services/websearch/duckduckgo.py -> build/lib/lingtai/services/websearch
+creating build/lib/lingtai/services/vision
+copying src/lingtai/services/vision/minimax.py -> build/lib/lingtai/services/vision
+copying src/lingtai/services/vision/codex.py -> build/lib/lingtai/services/vision
+copying src/lingtai/services/vision/local.py -> build/lib/lingtai/services/vision
+copying src/lingtai/services/vision/mimo.py -> build/lib/lingtai/services/vision
+copying src/lingtai/services/vision/zhipu.py -> build/lib/lingtai/services/vision
+copying src/lingtai/services/vision/__init__.py -> build/lib/lingtai/services/vision
+copying src/lingtai/services/vision/gemini.py -> build/lib/lingtai/services/vision
+copying src/lingtai/services/vision/openai.py -> build/lib/lingtai/services/vision
+copying src/lingtai/services/vision/anthropic.py -> build/lib/lingtai/services/vision
+creating build/lib/lingtai_kernel/llm
+copying src/lingtai_kernel/llm/service.py -> build/lib/lingtai_kernel/llm
+copying src/lingtai_kernel/llm/interface.py -> build/lib/lingtai_kernel/llm
+copying src/lingtai_kernel/llm/__init__.py -> build/lib/lingtai_kernel/llm
+copying src/lingtai_kernel/llm/streaming.py -> build/lib/lingtai_kernel/llm
+copying src/lingtai_kernel/llm/base.py -> build/lib/lingtai_kernel/llm
+creating build/lib/lingtai_kernel/nudge
+copying src/lingtai_kernel/nudge/__init__.py -> build/lib/lingtai_kernel/nudge
+copying src/lingtai_kernel/nudge/kernel_version.py -> build/lib/lingtai_kernel/nudge
+copying src/lingtai_kernel/nudge/goal.py -> build/lib/lingtai_kernel/nudge
+creating build/lib/lingtai_kernel/migrate
+copying src/lingtai_kernel/migrate/agent_m001_init_procedures_override.py -> build/lib/lingtai_kernel/migrate
+copying src/lingtai_kernel/migrate/m001_context_limit_relocation.py -> build/lib/lingtai_kernel/migrate
+copying src/lingtai_kernel/migrate/__init__.py -> build/lib/lingtai_kernel/migrate
+copying src/lingtai_kernel/migrate/agent_m002_mcp_launch_args_rewrite.py -> build/lib/lingtai_kernel/migrate
+copying src/lingtai_kernel/migrate/m002_description_object.py -> build/lib/lingtai_kernel/migrate
+copying src/lingtai_kernel/migrate/migrate.py -> build/lib/lingtai_kernel/migrate
+creating build/lib/lingtai_kernel/intrinsics
+copying src/lingtai_kernel/intrinsics/__init__.py -> build/lib/lingtai_kernel/intrinsics
+creating build/lib/lingtai_kernel/base_agent
+copying src/lingtai_kernel/base_agent/turn.py -> build/lib/lingtai_kernel/base_agent
+copying src/lingtai_kernel/base_agent/tools.py -> build/lib/lingtai_kernel/base_agent
+copying src/lingtai_kernel/base_agent/__init__.py -> build/lib/lingtai_kernel/base_agent
+copying src/lingtai_kernel/base_agent/lifecycle.py -> build/lib/lingtai_kernel/base_agent
+copying src/lingtai_kernel/base_agent/prompt.py -> build/lib/lingtai_kernel/base_agent
+copying src/lingtai_kernel/base_agent/identity.py -> build/lib/lingtai_kernel/base_agent
+copying src/lingtai_kernel/base_agent/messaging.py -> build/lib/lingtai_kernel/base_agent
+creating build/lib/lingtai_kernel/i18n
+copying src/lingtai_kernel/i18n/__init__.py -> build/lib/lingtai_kernel/i18n
+creating build/lib/lingtai_kernel/services
+copying src/lingtai_kernel/services/mail.py -> build/lib/lingtai_kernel/services
+copying src/lingtai_kernel/services/logging.py -> build/lib/lingtai_kernel/services
+copying src/lingtai_kernel/services/__init__.py -> build/lib/lingtai_kernel/services
+creating build/lib/lingtai_kernel/intrinsics/notification
+copying src/lingtai_kernel/intrinsics/notification/__init__.py -> build/lib/lingtai_kernel/intrinsics/notification
+copying src/lingtai_kernel/intrinsics/notification/schema.py -> build/lib/lingtai_kernel/intrinsics/notification
+creating build/lib/lingtai_kernel/intrinsics/psyche
+copying src/lingtai_kernel/intrinsics/psyche/_molt.py -> build/lib/lingtai_kernel/intrinsics/psyche
+copying src/lingtai_kernel/intrinsics/psyche/_pad.py -> build/lib/lingtai_kernel/intrinsics/psyche
+copying src/lingtai_kernel/intrinsics/psyche/_snapshots.py -> build/lib/lingtai_kernel/intrinsics/psyche
+copying src/lingtai_kernel/intrinsics/psyche/__init__.py -> build/lib/lingtai_kernel/intrinsics/psyche
+copying src/lingtai_kernel/intrinsics/psyche/_lingtai.py -> build/lib/lingtai_kernel/intrinsics/psyche
+copying src/lingtai_kernel/intrinsics/psyche/_session_journal.py -> build/lib/lingtai_kernel/intrinsics/psyche
+creating build/lib/lingtai_kernel/intrinsics/system
+copying src/lingtai_kernel/intrinsics/system/__init__.py -> build/lib/lingtai_kernel/intrinsics/system
+copying src/lingtai_kernel/intrinsics/system/preset.py -> build/lib/lingtai_kernel/intrinsics/system
+copying src/lingtai_kernel/intrinsics/system/summarize.py -> build/lib/lingtai_kernel/intrinsics/system
+copying src/lingtai_kernel/intrinsics/system/karma.py -> build/lib/lingtai_kernel/intrinsics/system
+copying src/lingtai_kernel/intrinsics/system/schema.py -> build/lib/lingtai_kernel/intrinsics/system
+creating build/lib/lingtai_kernel/intrinsics/soul
+copying src/lingtai_kernel/intrinsics/soul/config.py -> build/lib/lingtai_kernel/intrinsics/soul
+copying src/lingtai_kernel/intrinsics/soul/consultation.py -> build/lib/lingtai_kernel/intrinsics/soul
+copying src/lingtai_kernel/intrinsics/soul/inquiry.py -> build/lib/lingtai_kernel/intrinsics/soul
+copying src/lingtai_kernel/intrinsics/soul/__init__.py -> build/lib/lingtai_kernel/intrinsics/soul
+copying src/lingtai_kernel/intrinsics/soul/flow.py -> build/lib/lingtai_kernel/intrinsics/soul
+creating build/lib/lingtai_kernel/intrinsics/email
+copying src/lingtai_kernel/intrinsics/email/primitives.py -> build/lib/lingtai_kernel/intrinsics/email
+copying src/lingtai_kernel/intrinsics/email/__init__.py -> build/lib/lingtai_kernel/intrinsics/email
+copying src/lingtai_kernel/intrinsics/email/manager.py -> build/lib/lingtai_kernel/intrinsics/email
+copying src/lingtai_kernel/intrinsics/email/schema.py -> build/lib/lingtai_kernel/intrinsics/email
+running egg_info
+writing src/lingtai.egg-info/PKG-INFO
+writing dependency_links to src/lingtai.egg-info/dependency_links.txt
+writing entry points to src/lingtai.egg-info/entry_points.txt
+writing requirements to src/lingtai.egg-info/requires.txt
+writing top-level names to src/lingtai.egg-info/top_level.txt
+reading manifest file 'src/lingtai.egg-info/SOURCES.txt'
+reading manifest template 'MANIFEST.in'
+no previously-included directories found matching 'crates/lingtai-search-sidecar/target'
+warning: no previously-included files found matching 'src/lingtai/bin/__init__.py'
+no previously-included directories found matching 'src/lingtai/bin'
+adding license file 'LICENSE'
+adding license file 'NOTICE'
+writing manifest file 'src/lingtai.egg-info/SOURCES.txt'
+copying src/lingtai/mcp_catalog.json -> build/lib/lingtai
+copying src/lingtai/i18n/zh.json -> build/lib/lingtai/i18n
+copying src/lingtai/i18n/en.json -> build/lib/lingtai/i18n
+copying src/lingtai/i18n/wen.json -> build/lib/lingtai/i18n
+copying src/lingtai/core/bash/bash_policy.json -> build/lib/lingtai/core/bash
+copying src/lingtai/core/mcp/manual/SKILL.md -> build/lib/lingtai/core/mcp/manual
+creating build/lib/lingtai/core/mcp/manual/reference
+copying src/lingtai/core/mcp/manual/reference/troubleshooting.md -> build/lib/lingtai/core/mcp/manual/reference
+copying src/lingtai/core/mcp/manual/reference/third-party-and-legacy.md -> build/lib/lingtai/core/mcp/manual/reference
+copying src/lingtai/core/mcp/manual/reference/curated-addons.md -> build/lib/lingtai/core/mcp/manual/reference
+creating build/lib/lingtai/core/bash/manual
+copying src/lingtai/core/bash/manual/SKILL.md -> build/lib/lingtai/core/bash/manual
+creating build/lib/lingtai/core/bash/manual/reference/bash-oh-my-pi
+copying src/lingtai/core/bash/manual/reference/bash-oh-my-pi/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/bash-oh-my-pi
+creating build/lib/lingtai/core/bash/manual/reference/bash-gemini-cli
+copying src/lingtai/core/bash/manual/reference/bash-gemini-cli/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/bash-gemini-cli
+creating build/lib/lingtai/core/bash/manual/reference/bash-openai-codex
+copying src/lingtai/core/bash/manual/reference/bash-openai-codex/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/bash-openai-codex
+creating build/lib/lingtai/core/bash/manual/reference/bash-mimocode
+copying src/lingtai/core/bash/manual/reference/bash-mimocode/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/bash-mimocode
+creating build/lib/lingtai/core/bash/manual/reference/bash-openhands
+copying src/lingtai/core/bash/manual/reference/bash-openhands/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/bash-openhands
+creating build/lib/lingtai/core/bash/manual/reference/bash-claude-code
+copying src/lingtai/core/bash/manual/reference/bash-claude-code/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/bash-claude-code
+creating build/lib/lingtai/core/bash/manual/reference/bash-qwen-code
+copying src/lingtai/core/bash/manual/reference/bash-qwen-code/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/bash-qwen-code
+creating build/lib/lingtai/core/bash/manual/reference/bash-aider
+copying src/lingtai/core/bash/manual/reference/bash-aider/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/bash-aider
+creating build/lib/lingtai/core/bash/manual/reference/scheduled-work
+copying src/lingtai/core/bash/manual/reference/scheduled-work/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/scheduled-work
+creating build/lib/lingtai/core/bash/manual/reference/debugging-cleanup
+copying src/lingtai/core/bash/manual/reference/debugging-cleanup/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/debugging-cleanup
+creating build/lib/lingtai/core/bash/manual/reference/bash-zed-acp
+copying src/lingtai/core/bash/manual/reference/bash-zed-acp/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/bash-zed-acp
+creating build/lib/lingtai/core/bash/manual/reference/bash-crush
+copying src/lingtai/core/bash/manual/reference/bash-crush/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/bash-crush
+creating build/lib/lingtai/core/bash/manual/reference/notification-reminders
+copying src/lingtai/core/bash/manual/reference/notification-reminders/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/notification-reminders
+creating build/lib/lingtai/core/bash/manual/reference/bash-goose
+copying src/lingtai/core/bash/manual/reference/bash-goose/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/bash-goose
+creating build/lib/lingtai/core/bash/manual/reference/bash-cursor-agent
+copying src/lingtai/core/bash/manual/reference/bash-cursor-agent/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/bash-cursor-agent
+creating build/lib/lingtai/core/bash/manual/reference/bash-opencode
+copying src/lingtai/core/bash/manual/reference/bash-opencode/SKILL.md -> build/lib/lingtai/core/bash/manual/reference/bash-opencode
+creating build/lib/lingtai/core/daemon/manual
+copying src/lingtai/core/daemon/manual/SKILL.md -> build/lib/lingtai/core/daemon/manual
+creating build/lib/lingtai/core/daemon/manual/reference/cli-backends
+copying src/lingtai/core/daemon/manual/reference/cli-backends/SKILL.md -> build/lib/lingtai/core/daemon/manual/reference/cli-backends
+creating build/lib/lingtai/core/daemon/manual/reference/forensics
+copying src/lingtai/core/daemon/manual/reference/forensics/SKILL.md -> build/lib/lingtai/core/daemon/manual/reference/forensics
+creating build/lib/lingtai/core/daemon/manual/reference/inspection
+copying src/lingtai/core/daemon/manual/reference/inspection/SKILL.md -> build/lib/lingtai/core/daemon/manual/reference/inspection
+creating build/lib/lingtai/core/daemon/manual/reference/cleanup
+copying src/lingtai/core/daemon/manual/reference/cleanup/SKILL.md -> build/lib/lingtai/core/daemon/manual/reference/cleanup
+creating build/lib/lingtai/core/knowledge/manual
+copying src/lingtai/core/knowledge/manual/SKILL.md -> build/lib/lingtai/core/knowledge/manual
+creating build/lib/lingtai/core/avatar/manual
+copying src/lingtai/core/avatar/manual/SKILL.md -> build/lib/lingtai/core/avatar/manual
+copying src/lingtai/core/skills/manual/SKILL.md -> build/lib/lingtai/core/skills/manual
+creating build/lib/lingtai/core/skills/manual/assets
+copying src/lingtai/core/skills/manual/assets/skill-template.md -> build/lib/lingtai/core/skills/manual/assets
+creating build/lib/lingtai/core/skills/manual/reference
+copying src/lingtai/core/skills/manual/reference/cleanup-footprint-contract.md -> build/lib/lingtai/core/skills/manual/reference
+creating build/lib/lingtai/core/email/manual
+copying src/lingtai/core/email/manual/SKILL.md -> build/lib/lingtai/core/email/manual
+creating build/lib/lingtai/intrinsic_skills/psyche-manual
+copying src/lingtai/intrinsic_skills/psyche-manual/SKILL.md -> build/lib/lingtai/intrinsic_skills/psyche-manual
+creating build/lib/lingtai/intrinsic_skills/psyche-manual/assets
+copying src/lingtai/intrinsic_skills/psyche-manual/assets/session-journal-entry-template.md -> build/lib/lingtai/intrinsic_skills/psyche-manual/assets
+copying src/lingtai/intrinsic_skills/psyche-manual/assets/molt-template.md -> build/lib/lingtai/intrinsic_skills/psyche-manual/assets
+copying src/lingtai/intrinsic_skills/lingtai-doctor/SKILL.md -> build/lib/lingtai/intrinsic_skills/lingtai-doctor
+copying src/lingtai/intrinsic_skills/system-manual/SKILL.md -> build/lib/lingtai/intrinsic_skills/system-manual
+creating build/lib/lingtai/intrinsic_skills/system-manual/reference/notification-manual
+copying src/lingtai/intrinsic_skills/system-manual/reference/notification-manual/SKILL.md -> build/lib/lingtai/intrinsic_skills/system-manual/reference/notification-manual
+creating build/lib/lingtai/intrinsic_skills/system-manual/reference/substrate-manual
+copying src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md -> build/lib/lingtai/intrinsic_skills/system-manual/reference/substrate-manual
+creating build/lib/lingtai/intrinsic_skills/system-manual/reference/procedures-manual
+copying src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md -> build/lib/lingtai/intrinsic_skills/system-manual/reference/procedures-manual
+creating build/lib/lingtai/intrinsic_skills/system-manual/reference/goal-manual
+copying src/lingtai/intrinsic_skills/system-manual/reference/goal-manual/SKILL.md -> build/lib/lingtai/intrinsic_skills/system-manual/reference/goal-manual
+copying src/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/SKILL.md -> build/lib/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query
+creating build/lib/lingtai/intrinsic_skills/lingtai-repo-watch
+copying src/lingtai/intrinsic_skills/lingtai-repo-watch/SKILL.md -> build/lib/lingtai/intrinsic_skills/lingtai-repo-watch
+creating build/lib/lingtai/intrinsic_skills/lingtai-kernel-anatomy
+copying src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md -> build/lib/lingtai/intrinsic_skills/lingtai-kernel-anatomy
+creating build/lib/lingtai/intrinsic_skills/read-manual
+copying src/lingtai/intrinsic_skills/read-manual/SKILL.md -> build/lib/lingtai/intrinsic_skills/read-manual
+creating build/lib/lingtai/intrinsic_skills/file-manual
+copying src/lingtai/intrinsic_skills/file-manual/SKILL.md -> build/lib/lingtai/intrinsic_skills/file-manual
+creating build/lib/lingtai/prompts
+copying src/lingtai/prompts/procedures.md -> build/lib/lingtai/prompts
+copying src/lingtai/prompts/substrate.md -> build/lib/lingtai/prompts
+creating build/lib/lingtai/bin
+copying src/lingtai/bin/lingtai-search-sidecar -> build/lib/lingtai/bin
+copying src/lingtai_kernel/i18n/zh.json -> build/lib/lingtai_kernel/i18n
+copying src/lingtai_kernel/i18n/en.json -> build/lib/lingtai_kernel/i18n
+copying src/lingtai_kernel/i18n/wen.json -> build/lib/lingtai_kernel/i18n
+copying src/lingtai/mcp_servers/feishu/notification_header.md -> build/lib/lingtai/mcp_servers/feishu
+copying src/lingtai/mcp_servers/wechat/notification_header.md -> build/lib/lingtai/mcp_servers/wechat
+copying src/lingtai/mcp_servers/telegram/notification_header.md -> build/lib/lingtai/mcp_servers/telegram
+copying src/lingtai/mcp_servers/whatsapp/notification_header.md -> build/lib/lingtai/mcp_servers/whatsapp
+installing to build/bdist.macosx-11.1-arm64/wheel
+running install
+running install_lib
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm
+copying build/lib/lingtai/llm/api_gate.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm
+copying build/lib/lingtai/llm/_register.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm
+copying build/lib/lingtai/llm/service.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/gemini
+copying build/lib/lingtai/llm/gemini/adapter.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/gemini
+copying build/lib/lingtai/llm/gemini/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/gemini
+copying build/lib/lingtai/llm/gemini/defaults.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/gemini
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/mimo
+copying build/lib/lingtai/llm/mimo/adapter.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/mimo
+copying build/lib/lingtai/llm/mimo/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/mimo
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/openrouter
+copying build/lib/lingtai/llm/openrouter/adapter.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/openrouter
+copying build/lib/lingtai/llm/openrouter/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/openrouter
+copying build/lib/lingtai/llm/interface_converters.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm
+copying build/lib/lingtai/llm/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/minimax
+copying build/lib/lingtai/llm/minimax/adapter.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/minimax
+copying build/lib/lingtai/llm/minimax/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/minimax
+copying build/lib/lingtai/llm/minimax/mcp_client.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/minimax
+copying build/lib/lingtai/llm/minimax/defaults.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/minimax
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/deepseek
+copying build/lib/lingtai/llm/deepseek/adapter.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/deepseek
+copying build/lib/lingtai/llm/deepseek/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/deepseek
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/claude_agent_sdk
+copying build/lib/lingtai/llm/claude_agent_sdk/adapter.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/claude_agent_sdk
+copying build/lib/lingtai/llm/claude_agent_sdk/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/claude_agent_sdk
+copying build/lib/lingtai/llm/claude_agent_sdk/defaults.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/claude_agent_sdk
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/anthropic
+copying build/lib/lingtai/llm/anthropic/adapter.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/anthropic
+copying build/lib/lingtai/llm/anthropic/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/anthropic
+copying build/lib/lingtai/llm/anthropic/defaults.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/anthropic
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/zhipu
+copying build/lib/lingtai/llm/zhipu/adapter.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/zhipu
+copying build/lib/lingtai/llm/zhipu/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/zhipu
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/custom
+copying build/lib/lingtai/llm/custom/adapter.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/custom
+copying build/lib/lingtai/llm/custom/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/custom
+copying build/lib/lingtai/llm/custom/defaults.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/custom
+copying build/lib/lingtai/llm/base.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/openai
+copying build/lib/lingtai/llm/openai/adapter.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/openai
+copying build/lib/lingtai/llm/openai/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/openai
+copying build/lib/lingtai/llm/openai/defaults.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/llm/openai
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/write
+copying build/lib/lingtai/core/write/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/write
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/read
+copying build/lib/lingtai/core/read/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/read
+copying build/lib/lingtai/core/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/mcp
+copying build/lib/lingtai/core/mcp/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/mcp
+copying build/lib/lingtai/core/mcp/licc.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/mcp
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/mcp/manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/mcp/manual/scripts
+copying build/lib/lingtai/core/mcp/manual/scripts/find_readme.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/mcp/manual/scripts
+copying build/lib/lingtai/core/mcp/manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/mcp/manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/mcp/manual/reference
+copying build/lib/lingtai/core/mcp/manual/reference/troubleshooting.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/mcp/manual/reference
+copying build/lib/lingtai/core/mcp/manual/reference/third-party-and-legacy.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/mcp/manual/reference
+copying build/lib/lingtai/core/mcp/manual/reference/curated-addons.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/mcp/manual/reference
+copying build/lib/lingtai/core/mcp/inbox.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/mcp
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/grep
+copying build/lib/lingtai/core/grep/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/grep
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash
+copying build/lib/lingtai/core/bash/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual
+copying build/lib/lingtai/core/bash/manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-oh-my-pi
+copying build/lib/lingtai/core/bash/manual/reference/bash-oh-my-pi/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-oh-my-pi
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-gemini-cli
+copying build/lib/lingtai/core/bash/manual/reference/bash-gemini-cli/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-gemini-cli
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-openai-codex
+copying build/lib/lingtai/core/bash/manual/reference/bash-openai-codex/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-openai-codex
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-mimocode
+copying build/lib/lingtai/core/bash/manual/reference/bash-mimocode/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-mimocode
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-openhands
+copying build/lib/lingtai/core/bash/manual/reference/bash-openhands/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-openhands
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-claude-code
+copying build/lib/lingtai/core/bash/manual/reference/bash-claude-code/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-claude-code
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-qwen-code
+copying build/lib/lingtai/core/bash/manual/reference/bash-qwen-code/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-qwen-code
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-aider
+copying build/lib/lingtai/core/bash/manual/reference/bash-aider/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-aider
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/scheduled-work
+copying build/lib/lingtai/core/bash/manual/reference/scheduled-work/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/scheduled-work
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/debugging-cleanup
+copying build/lib/lingtai/core/bash/manual/reference/debugging-cleanup/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/debugging-cleanup
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-zed-acp
+copying build/lib/lingtai/core/bash/manual/reference/bash-zed-acp/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-zed-acp
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-crush
+copying build/lib/lingtai/core/bash/manual/reference/bash-crush/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-crush
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/notification-reminders
+copying build/lib/lingtai/core/bash/manual/reference/notification-reminders/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/notification-reminders
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-goose
+copying build/lib/lingtai/core/bash/manual/reference/bash-goose/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-goose
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-cursor-agent
+copying build/lib/lingtai/core/bash/manual/reference/bash-cursor-agent/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-cursor-agent
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-opencode
+copying build/lib/lingtai/core/bash/manual/reference/bash-opencode/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-opencode
+copying build/lib/lingtai/core/bash/bash_policy.json -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/bash
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/edit
+copying build/lib/lingtai/core/edit/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/edit
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon
+copying build/lib/lingtai/core/daemon/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon
+copying build/lib/lingtai/core/daemon/run_dir.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual
+copying build/lib/lingtai/core/daemon/manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual/reference
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual/reference/cli-backends
+copying build/lib/lingtai/core/daemon/manual/reference/cli-backends/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual/reference/cli-backends
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual/reference/forensics
+copying build/lib/lingtai/core/daemon/manual/reference/forensics/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual/reference/forensics
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual/reference/inspection
+copying build/lib/lingtai/core/daemon/manual/reference/inspection/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual/reference/inspection
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual/reference/cleanup
+copying build/lib/lingtai/core/daemon/manual/reference/cleanup/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual/reference/cleanup
+copying build/lib/lingtai/core/daemon/claude_interactive.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/daemon
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/knowledge
+copying build/lib/lingtai/core/knowledge/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/knowledge
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/knowledge/manual
+copying build/lib/lingtai/core/knowledge/manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/knowledge/manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/avatar
+copying build/lib/lingtai/core/avatar/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/avatar
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/avatar/manual
+copying build/lib/lingtai/core/avatar/manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/avatar/manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/glob
+copying build/lib/lingtai/core/glob/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/glob
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/skills
+copying build/lib/lingtai/core/skills/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/skills
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/skills/manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/skills/manual/scripts
+copying build/lib/lingtai/core/skills/manual/scripts/validate.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/skills/manual/scripts
+copying build/lib/lingtai/core/skills/manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/skills/manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/skills/manual/assets
+copying build/lib/lingtai/core/skills/manual/assets/skill-template.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/skills/manual/assets
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/skills/manual/reference
+copying build/lib/lingtai/core/skills/manual/reference/cleanup-footprint-contract.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/skills/manual/reference
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/email
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/email/manual
+copying build/lib/lingtai/core/email/manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/core/email/manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/capabilities
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/capabilities/web_search
+copying build/lib/lingtai/capabilities/web_search/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/capabilities/web_search
+copying build/lib/lingtai/capabilities/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/capabilities
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/capabilities/vision
+copying build/lib/lingtai/capabilities/vision/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/capabilities/vision
+copying build/lib/lingtai/capabilities/_zhipu_mode.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/capabilities
+copying build/lib/lingtai/capabilities/_media_host.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/capabilities
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/bin
+copying build/lib/lingtai/bin/lingtai-search-sidecar -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/bin
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/auth
+copying build/lib/lingtai/auth/codex.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/auth
+copying build/lib/lingtai/auth/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/auth
+copying build/lib/lingtai/presets.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai
+copying build/lib/lingtai/mcp_catalog.json -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai
+copying build/lib/lingtai/venv_resolve.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai
+copying build/lib/lingtai/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai
+copying build/lib/lingtai/cli.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai
+copying build/lib/lingtai/agent.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai
+copying build/lib/lingtai/network.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap
+copying build/lib/lingtai/mcp_servers/imap/service.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap
+copying build/lib/lingtai/mcp_servers/imap/server.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap
+copying build/lib/lingtai/mcp_servers/imap/bridge.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap
+copying build/lib/lingtai/mcp_servers/imap/_watermark.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap
+copying build/lib/lingtai/mcp_servers/imap/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap
+copying build/lib/lingtai/mcp_servers/imap/licc.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap
+copying build/lib/lingtai/mcp_servers/imap/__main__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap
+copying build/lib/lingtai/mcp_servers/imap/manager.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap
+copying build/lib/lingtai/mcp_servers/imap/_migrate.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap
+copying build/lib/lingtai/mcp_servers/imap/account.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu
+copying build/lib/lingtai/mcp_servers/feishu/service.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu
+copying build/lib/lingtai/mcp_servers/feishu/server.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu
+copying build/lib/lingtai/mcp_servers/feishu/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu
+copying build/lib/lingtai/mcp_servers/feishu/licc.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu
+copying build/lib/lingtai/mcp_servers/feishu/notification_header.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu
+copying build/lib/lingtai/mcp_servers/feishu/__main__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu
+copying build/lib/lingtai/mcp_servers/feishu/manager.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu
+copying build/lib/lingtai/mcp_servers/feishu/account.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu
+copying build/lib/lingtai/mcp_servers/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat
+copying build/lib/lingtai/mcp_servers/wechat/server.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat
+copying build/lib/lingtai/mcp_servers/wechat/media.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat
+copying build/lib/lingtai/mcp_servers/wechat/lockfile.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat
+copying build/lib/lingtai/mcp_servers/wechat/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat
+copying build/lib/lingtai/mcp_servers/wechat/licc.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat
+copying build/lib/lingtai/mcp_servers/wechat/types.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat
+copying build/lib/lingtai/mcp_servers/wechat/api.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat
+copying build/lib/lingtai/mcp_servers/wechat/login.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat
+copying build/lib/lingtai/mcp_servers/wechat/notification_header.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat
+copying build/lib/lingtai/mcp_servers/wechat/__main__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat
+copying build/lib/lingtai/mcp_servers/wechat/manager.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram
+copying build/lib/lingtai/mcp_servers/telegram/service.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram
+copying build/lib/lingtai/mcp_servers/telegram/server.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram
+copying build/lib/lingtai/mcp_servers/telegram/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram
+copying build/lib/lingtai/mcp_servers/telegram/licc.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram
+copying build/lib/lingtai/mcp_servers/telegram/notification_header.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram
+copying build/lib/lingtai/mcp_servers/telegram/__main__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram
+copying build/lib/lingtai/mcp_servers/telegram/manager.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram
+copying build/lib/lingtai/mcp_servers/telegram/account.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp
+copying build/lib/lingtai/mcp_servers/whatsapp/redaction.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp
+copying build/lib/lingtai/mcp_servers/whatsapp/server.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp
+copying build/lib/lingtai/mcp_servers/whatsapp/webhook.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp
+copying build/lib/lingtai/mcp_servers/whatsapp/client.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp
+copying build/lib/lingtai/mcp_servers/whatsapp/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp
+copying build/lib/lingtai/mcp_servers/whatsapp/licc.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp
+copying build/lib/lingtai/mcp_servers/whatsapp/resources.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp
+copying build/lib/lingtai/mcp_servers/whatsapp/notification_header.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp
+copying build/lib/lingtai/mcp_servers/whatsapp/webhook_server.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp
+copying build/lib/lingtai/mcp_servers/whatsapp/__main__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp
+copying build/lib/lingtai/mcp_servers/whatsapp/manager.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail
+copying build/lib/lingtai/mcp_servers/cloud_mail/server.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail
+copying build/lib/lingtai/mcp_servers/cloud_mail/client.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail
+copying build/lib/lingtai/mcp_servers/cloud_mail/_watermark.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail
+copying build/lib/lingtai/mcp_servers/cloud_mail/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail
+copying build/lib/lingtai/mcp_servers/cloud_mail/licc.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail
+copying build/lib/lingtai/mcp_servers/cloud_mail/__main__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail
+copying build/lib/lingtai/mcp_servers/cloud_mail/manager.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/psyche-manual
+copying build/lib/lingtai/intrinsic_skills/psyche-manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/psyche-manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/psyche-manual/assets
+copying build/lib/lingtai/intrinsic_skills/psyche-manual/assets/session-journal-entry-template.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/psyche-manual/assets
+copying build/lib/lingtai/intrinsic_skills/psyche-manual/assets/molt-template.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/psyche-manual/assets
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/lingtai-doctor
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/lingtai-doctor/scripts
+copying build/lib/lingtai/intrinsic_skills/lingtai-doctor/scripts/doctor.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/lingtai-doctor/scripts
+copying build/lib/lingtai/intrinsic_skills/lingtai-doctor/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/lingtai-doctor
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual
+copying build/lib/lingtai/intrinsic_skills/system-manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/notification-manual
+copying build/lib/lingtai/intrinsic_skills/system-manual/reference/notification-manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/notification-manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/substrate-manual
+copying build/lib/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/substrate-manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/procedures-manual
+copying build/lib/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/procedures-manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/goal-manual
+copying build/lib/lingtai/intrinsic_skills/system-manual/reference/goal-manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/goal-manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/scripts
+copying build/lib/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/scripts/event_summary.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/scripts
+copying build/lib/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query
+copying build/lib/lingtai/intrinsic_skills/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/lingtai-repo-watch
+copying build/lib/lingtai/intrinsic_skills/lingtai-repo-watch/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/lingtai-repo-watch
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/lingtai-kernel-anatomy
+copying build/lib/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/lingtai-kernel-anatomy
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/read-manual
+copying build/lib/lingtai/intrinsic_skills/read-manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/read-manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/file-manual
+copying build/lib/lingtai/intrinsic_skills/file-manual/SKILL.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/file-manual
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/prompts
+copying build/lib/lingtai/prompts/procedures.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/prompts
+copying build/lib/lingtai/prompts/substrate.md -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/prompts
+copying build/lib/lingtai/init_schema.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/i18n
+copying build/lib/lingtai/i18n/zh.json -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/i18n
+copying build/lib/lingtai/i18n/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/i18n
+copying build/lib/lingtai/i18n/en.json -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/i18n
+copying build/lib/lingtai/i18n/wen.json -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/i18n
+copying build/lib/lingtai/__main__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services
+copying build/lib/lingtai/services/mail.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services
+copying build/lib/lingtai/services/file_io_sidecar.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/websearch
+copying build/lib/lingtai/services/websearch/minimax.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/websearch
+copying build/lib/lingtai/services/websearch/zhipu.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/websearch
+copying build/lib/lingtai/services/websearch/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/websearch
+copying build/lib/lingtai/services/websearch/gemini.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/websearch
+copying build/lib/lingtai/services/websearch/openai.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/websearch
+copying build/lib/lingtai/services/websearch/anthropic.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/websearch
+copying build/lib/lingtai/services/websearch/duckduckgo.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/websearch
+copying build/lib/lingtai/services/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/vision
+copying build/lib/lingtai/services/vision/minimax.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/vision
+copying build/lib/lingtai/services/vision/codex.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/vision
+copying build/lib/lingtai/services/vision/local.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/vision
+copying build/lib/lingtai/services/vision/mimo.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/vision
+copying build/lib/lingtai/services/vision/zhipu.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/vision
+copying build/lib/lingtai/services/vision/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/vision
+copying build/lib/lingtai/services/vision/gemini.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/vision
+copying build/lib/lingtai/services/vision/openai.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/vision
+copying build/lib/lingtai/services/vision/anthropic.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services/vision
+copying build/lib/lingtai/services/mcp.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services
+copying build/lib/lingtai/services/file_io.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai/services
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/tool_result_artifacts.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/preset_connectivity.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/trace_redaction.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/handshake.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/time_veil.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/logging.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/tc_inbox.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/token_ledger.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/tool_timing.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/llm
+copying build/lib/lingtai_kernel/llm/service.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/llm
+copying build/lib/lingtai_kernel/llm/interface.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/llm
+copying build/lib/lingtai_kernel/llm/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/llm
+copying build/lib/lingtai_kernel/llm/streaming.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/llm
+copying build/lib/lingtai_kernel/llm/base.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/llm
+copying build/lib/lingtai_kernel/config.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/workdir.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/token_counter.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/presets.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/meta_block.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/session.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/safety_limits.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/message.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/types.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/nudge
+copying build/lib/lingtai_kernel/nudge/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/nudge
+copying build/lib/lingtai_kernel/nudge/kernel_version.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/nudge
+copying build/lib/lingtai_kernel/nudge/goal.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/nudge
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/migrate
+copying build/lib/lingtai_kernel/migrate/agent_m001_init_procedures_override.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/migrate
+copying build/lib/lingtai_kernel/migrate/m001_context_limit_relocation.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/migrate
+copying build/lib/lingtai_kernel/migrate/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/migrate
+copying build/lib/lingtai_kernel/migrate/agent_m002_mcp_launch_args_rewrite.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/migrate
+copying build/lib/lingtai_kernel/migrate/m002_description_object.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/migrate
+copying build/lib/lingtai_kernel/migrate/migrate.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/migrate
+copying build/lib/lingtai_kernel/llm_utils.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/sent_message_tracker.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/tool_call_guard.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/notifications.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/notification
+copying build/lib/lingtai_kernel/intrinsics/notification/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/notification
+copying build/lib/lingtai_kernel/intrinsics/notification/schema.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/notification
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/psyche
+copying build/lib/lingtai_kernel/intrinsics/psyche/_molt.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/psyche
+copying build/lib/lingtai_kernel/intrinsics/psyche/_pad.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/psyche
+copying build/lib/lingtai_kernel/intrinsics/psyche/_snapshots.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/psyche
+copying build/lib/lingtai_kernel/intrinsics/psyche/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/psyche
+copying build/lib/lingtai_kernel/intrinsics/psyche/_lingtai.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/psyche
+copying build/lib/lingtai_kernel/intrinsics/psyche/_session_journal.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/psyche
+copying build/lib/lingtai_kernel/intrinsics/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/system
+copying build/lib/lingtai_kernel/intrinsics/system/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/system
+copying build/lib/lingtai_kernel/intrinsics/system/preset.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/system
+copying build/lib/lingtai_kernel/intrinsics/system/summarize.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/system
+copying build/lib/lingtai_kernel/intrinsics/system/karma.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/system
+copying build/lib/lingtai_kernel/intrinsics/system/schema.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/system
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/soul
+copying build/lib/lingtai_kernel/intrinsics/soul/config.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/soul
+copying build/lib/lingtai_kernel/intrinsics/soul/consultation.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/soul
+copying build/lib/lingtai_kernel/intrinsics/soul/inquiry.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/soul
+copying build/lib/lingtai_kernel/intrinsics/soul/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/soul
+copying build/lib/lingtai_kernel/intrinsics/soul/flow.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/soul
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/email
+copying build/lib/lingtai_kernel/intrinsics/email/primitives.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/email
+copying build/lib/lingtai_kernel/intrinsics/email/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/email
+copying build/lib/lingtai_kernel/intrinsics/email/manager.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/email
+copying build/lib/lingtai_kernel/intrinsics/email/schema.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/email
+copying build/lib/lingtai_kernel/prompt.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/loop_guard.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent
+copying build/lib/lingtai_kernel/base_agent/turn.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent
+copying build/lib/lingtai_kernel/base_agent/tools.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent
+copying build/lib/lingtai_kernel/base_agent/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent
+copying build/lib/lingtai_kernel/base_agent/lifecycle.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent
+copying build/lib/lingtai_kernel/base_agent/prompt.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent
+copying build/lib/lingtai_kernel/base_agent/identity.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent
+copying build/lib/lingtai_kernel/base_agent/messaging.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/i18n
+copying build/lib/lingtai_kernel/i18n/zh.json -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/i18n
+copying build/lib/lingtai_kernel/i18n/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/i18n
+copying build/lib/lingtai_kernel/i18n/en.json -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/i18n
+copying build/lib/lingtai_kernel/i18n/wen.json -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/i18n
+copying build/lib/lingtai_kernel/tool_executor.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+copying build/lib/lingtai_kernel/config_resolve.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/services
+copying build/lib/lingtai_kernel/services/mail.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/services
+copying build/lib/lingtai_kernel/services/logging.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/services
+copying build/lib/lingtai_kernel/services/__init__.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel/services
+copying build/lib/lingtai_kernel/state.py -> build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai_kernel
+running install_egg_info
+Copying src/lingtai.egg-info to build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.data/purelib/lingtai-0.13.0-py3.12.egg-info
+running install_scripts
+creating build/bdist.macosx-11.1-arm64/wheel/lingtai-0.13.0.dist-info/WHEEL
+creating '/Users/huangzesen/work/GitHub/lingtai-kernel-worktrees/release-0.13.0/dist/.tmp-ymltajl3/lingtai-0.13.0-cp312-cp312-macosx_11_0_arm64.whl' and adding 'build/bdist.macosx-11.1-arm64/wheel' to it
+adding 'lingtai-0.13.0.data/purelib/lingtai/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/__main__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/agent.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/cli.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/init_schema.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_catalog.json'
+adding 'lingtai-0.13.0.data/purelib/lingtai/network.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/presets.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/venv_resolve.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/auth/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/auth/codex.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/bin/lingtai-search-sidecar'
+adding 'lingtai-0.13.0.data/purelib/lingtai/capabilities/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/capabilities/_media_host.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/capabilities/_zhipu_mode.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/capabilities/vision/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/capabilities/web_search/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/avatar/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/avatar/manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/bash_policy.json'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-aider/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-claude-code/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-crush/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-cursor-agent/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-gemini-cli/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-goose/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-mimocode/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-oh-my-pi/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-openai-codex/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-opencode/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-openhands/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-qwen-code/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/bash-zed-acp/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/debugging-cleanup/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/notification-reminders/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/bash/manual/reference/scheduled-work/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/daemon/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/daemon/claude_interactive.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/daemon/run_dir.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual/reference/cleanup/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual/reference/cli-backends/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual/reference/forensics/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/daemon/manual/reference/inspection/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/edit/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/email/manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/glob/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/grep/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/knowledge/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/knowledge/manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/mcp/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/mcp/inbox.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/mcp/licc.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/mcp/manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/mcp/manual/reference/curated-addons.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/mcp/manual/reference/third-party-and-legacy.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/mcp/manual/reference/troubleshooting.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/mcp/manual/scripts/find_readme.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/read/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/skills/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/skills/manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/skills/manual/assets/skill-template.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/skills/manual/reference/cleanup-footprint-contract.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/skills/manual/scripts/validate.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/core/write/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/i18n/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/i18n/en.json'
+adding 'lingtai-0.13.0.data/purelib/lingtai/i18n/wen.json'
+adding 'lingtai-0.13.0.data/purelib/lingtai/i18n/zh.json'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/file-manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/lingtai-doctor/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/lingtai-doctor/scripts/doctor.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/lingtai-repo-watch/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/psyche-manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/psyche-manual/assets/molt-template.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/psyche-manual/assets/session-journal-entry-template.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/read-manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/goal-manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/notification-manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/scripts/event_summary.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/_register.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/api_gate.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/base.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/interface_converters.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/service.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/anthropic/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/anthropic/adapter.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/anthropic/defaults.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/claude_agent_sdk/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/claude_agent_sdk/adapter.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/claude_agent_sdk/defaults.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/custom/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/custom/adapter.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/custom/defaults.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/deepseek/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/deepseek/adapter.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/gemini/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/gemini/adapter.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/gemini/defaults.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/mimo/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/mimo/adapter.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/minimax/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/minimax/adapter.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/minimax/defaults.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/minimax/mcp_client.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/openai/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/openai/adapter.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/openai/defaults.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/openrouter/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/openrouter/adapter.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/zhipu/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/llm/zhipu/adapter.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail/__main__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail/_watermark.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail/client.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail/licc.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail/manager.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/cloud_mail/server.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu/__main__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu/account.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu/licc.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu/manager.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu/notification_header.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu/server.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/feishu/service.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap/__main__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap/_migrate.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap/_watermark.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap/account.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap/bridge.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap/licc.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap/manager.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap/server.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/imap/service.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram/__main__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram/account.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram/licc.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram/manager.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram/notification_header.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram/server.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/telegram/service.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat/__main__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat/api.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat/licc.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat/lockfile.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat/login.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat/manager.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat/media.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat/notification_header.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat/server.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/wechat/types.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp/__main__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp/client.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp/licc.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp/manager.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp/notification_header.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp/redaction.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp/resources.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp/server.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp/webhook.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/mcp_servers/whatsapp/webhook_server.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/prompts/procedures.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/prompts/substrate.md'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/file_io.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/file_io_sidecar.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/mail.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/mcp.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/vision/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/vision/anthropic.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/vision/codex.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/vision/gemini.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/vision/local.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/vision/mimo.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/vision/minimax.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/vision/openai.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/vision/zhipu.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/websearch/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/websearch/anthropic.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/websearch/duckduckgo.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/websearch/gemini.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/websearch/minimax.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/websearch/openai.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai/services/websearch/zhipu.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/config.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/config_resolve.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/handshake.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/llm_utils.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/logging.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/loop_guard.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/message.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/meta_block.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/notifications.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/preset_connectivity.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/presets.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/prompt.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/safety_limits.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/sent_message_tracker.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/session.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/state.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/tc_inbox.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/time_veil.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/token_counter.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/token_ledger.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/tool_call_guard.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/tool_executor.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/tool_result_artifacts.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/tool_timing.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/trace_redaction.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/types.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/workdir.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent/identity.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent/lifecycle.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent/messaging.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent/prompt.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent/tools.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/base_agent/turn.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/i18n/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/i18n/en.json'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/i18n/wen.json'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/i18n/zh.json'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/email/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/email/manager.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/email/primitives.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/email/schema.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/notification/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/notification/schema.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/psyche/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/psyche/_lingtai.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/psyche/_molt.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/psyche/_pad.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/psyche/_session_journal.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/psyche/_snapshots.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/soul/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/soul/config.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/soul/consultation.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/soul/flow.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/soul/inquiry.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/system/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/system/karma.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/system/preset.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/system/schema.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/intrinsics/system/summarize.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/llm/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/llm/base.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/llm/interface.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/llm/service.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/llm/streaming.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/migrate/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/migrate/agent_m001_init_procedures_override.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/migrate/agent_m002_mcp_launch_args_rewrite.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/migrate/m001_context_limit_relocation.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/migrate/m002_description_object.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/migrate/migrate.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/nudge/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/nudge/goal.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/nudge/kernel_version.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/services/__init__.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/services/logging.py'
+adding 'lingtai-0.13.0.data/purelib/lingtai_kernel/services/mail.py'
+adding 'lingtai-0.13.0.dist-info/licenses/LICENSE'
+adding 'lingtai-0.13.0.dist-info/licenses/NOTICE'
+adding 'lingtai-0.13.0.dist-info/METADATA'
+adding 'lingtai-0.13.0.dist-info/WHEEL'
+adding 'lingtai-0.13.0.dist-info/entry_points.txt'
+adding 'lingtai-0.13.0.dist-info/top_level.txt'
+adding 'lingtai-0.13.0.dist-info/RECORD'
+removing build/bdist.macosx-11.1-arm64/wheel
+Successfully built lingtai-0.13.0.tar.gz and lingtai-0.13.0-cp312-cp312-macosx_11_0_arm64.whl

@@ -1,0 +1,47 @@
+- `17d12d4` docs: add GitHub community entry points (#402)
+- `8061f04` feat(read): add max_chars continuation control and manual
+- `b77d91f` docs(procedures): emphasize daemon context isolation
+- `f369ee8` feat(system): add summarize action for tool results (#405)
+- `63c3dbd` fix(system): rescan live large tool results
+- `5233172` docs(daemon): explain exit code 143 / SIGTERM
+- `1d68112` feat(codex): rotate affinity id on refresh and stalled cache
+- `74d0cc1` Merge pull request #407 from Lingtai-AI/fix/large-result-rescan-20260619
+- `6450d95` fix(system): strengthen large-result hook guidance
+- `2720eb4` Merge pull request #410 from Lingtai-AI/fix/large-result-hook-copy-20260619
+- `5b97955` fix(codex): rebuild adapter on live refresh so #406 shuffle activates (#411)
+- `2f12996` Make summarize threshold config-only
+- `d8f1539` Merge pull request #412 from Lingtai-AI/fix/summarize-threshold-config-only-20260619
+- `e337a89` fix: bind codex requests to prompt key header
+- `15107a3` Merge pull request #413 from Lingtai-AI/codex-prompt-key-header-20260620
+- `08f05d1` fix(codex): rotate cache affinity after ten stalled hits
+- `d663529` Merge pull request #415 from Lingtai-AI/codex-cache-affinity-threshold-10-20260620
+- `7d742d7` feat(psyche): require session journal path for agent molt (#414)
+- `1e9b69d` fix(codex): rotate cache affinity only on stalled hits below 85% rate
+- `b014490` Merge pull request #416 from Lingtai-AI/codex-cache-rotate-low-rate-20260620
+- `af08afc` docs(system): clarify summarize as progressive disclosure
+- `1bfc4c7` Merge pull request #417 from Lingtai-AI/docs-summarize-manual-substrate-20260620
+- `0665e5d` feat(notifications): gate large-result reminders on >20000-char pending total
+- `d9d5339` fix(daemon): notify parent on every terminal state (#419)
+- `57bc39c` Merge pull request #418 from Lingtai-AI/summary-notification-batch-threshold-20260620
+- `873b0a2` Raise large-result total gate to 50k
+- `ec7fff3` Merge pull request #420 from Lingtai-AI/large-result-total-gate-50k-20260620
+- `d9efe7d` Persist actual notification block snapshots (#421)
+- `e86a24f` Guard large-result reminders from dismiss
+- `ef5bb36` Merge pull request #424 from Lingtai-AI/summarize-reminder-dismiss-guard-20260620
+- `eb4b16b` Split notification verbs into a standalone notification tool
+- `9470644` Atomicize notification dismiss; drop system notification/dismiss aliases
+- `9c7bc7d` Rename synthesized notification delivery pair to notification(action=check)
+- `74163f9` Merge pull request #428 from Lingtai-AI/feat/notification-delivery-pair-rename-20260620
+- `f555cce` Merge pull request #426 from Lingtai-AI/feat/notification-tool-split-20260620
+- `4b9bc5a` Replay raw Codex reasoning state
+- `c81fab7` Clean up stale system(action=notification) doc/docstring nits
+- `a5e46ab` Merge pull request #429 from Lingtai-AI/chore/notification-nits-cleanup-20260620
+- `adeb88c` Allow dismissing large-result reminders
+- `bb001e5` Keep large-result hint text English-only
+- `2977f7d` Persist claude-p daemon CLI token usage
+- `38ec2d6` Merge pull request #432 from Lingtai-AI/claude-p-daemon-token-usage-20260620
+- `6c69ef6` Use English fallback for internal i18n strings
+- `102f99e` chore(tests): de-duplicate suite scaffolding and fold redundant cases
+- `c542f82` Merge pull request #434 from Lingtai-AI/chore/test-suite-cleanup-20260620
+- `4565ea5` codex: send session_id/thread_id headers (underscore) to match Codex CLI (#435)
+- `cfebe16` codex: send honest LingTai client-identity headers (originator + User-Agent) (#437)
