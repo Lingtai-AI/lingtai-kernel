@@ -99,7 +99,7 @@ def _run_executor_metadata(
     """Run one tool call through a real ToolExecutor and return its result content.
 
     Centralises the ToolExecutor + dispatch/make_result boilerplate that the
-    ``_tool_result_metadata`` tests below would otherwise each copy verbatim.
+    Legacy metadata-removal tests below would otherwise each copy verbatim.
     *output* is wrapped in the standard ``{"output": ..., "status": "ok"}`` dict
     result; pass *threshold* to override ``summarize_notification_threshold``.
     """
@@ -942,179 +942,28 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 16. _tool_result_metadata hint in tool results
-# ---------------------------------------------------------------------------
+# 16. Legacy _tool_result_metadata removal
 
 
-def test_large_result_hint_in_tool_result(tmp_path):
-    """ToolExecutor injects _tool_result_metadata with long_tool_result=True for large results."""
-    from lingtai_kernel.tool_executor import ToolExecutor
-    from lingtai_kernel.loop_guard import LoopGuard
-    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
-    from lingtai_kernel.llm.base import ToolCall as _TC
-
-    def _dispatch(tc):
-        return {"output": "X" * 5000, "status": "ok"}
-
-    def _make_result(tool_name, content, *, tool_call_id=None):
-        return _TRB(id=tool_call_id, name=tool_name, content=content)
-
-    executor = ToolExecutor(
-        dispatch_fn=_dispatch,
-        make_tool_result_fn=_make_result,
-        guard=LoopGuard(),
-        working_dir=tmp_path,
-    )
-
-    tc = _TC(name="bash", args={}, id="tc-hint-001")
-    results, _, _ = executor.execute([tc], on_result_hook=None)
-
-    assert len(results) == 1
-    content = results[0].content
-    assert isinstance(content, dict), "result content should be a dict"
-    assert "_tool_result_metadata" in content, "_tool_result_metadata must be present"
-    meta = content["_tool_result_metadata"]
-    assert meta["tool_call_id"] == "tc-hint-001"
-    assert meta["tool_name"] == "bash"
-    assert meta["char_count"] > 3000
-    assert meta["threshold_chars"] == 3000
-    assert meta["long_tool_result"] is True
-    assert "system" in meta["summarize_instruction"]
-    assert "summarize" in meta["summarize_instruction"]
-    assert "prior" in meta["summarize_instruction"] or "next step" in meta["summarize_instruction"]
-
-
-def test_no_hint_for_small_result(tmp_path):
-    """ToolExecutor injects _tool_result_metadata with long_tool_result=False for small results."""
-    content = _run_executor_metadata(tmp_path, output="tiny", tool_call_id="tc-small-001")
-    assert "_tool_result_metadata" in content, "_tool_result_metadata is always present"
-    assert content["_tool_result_metadata"]["long_tool_result"] is False, (
-        "small result must have long_tool_result=False"
-    )
-
-
-def test_no_hint_for_string_result(tmp_path):
-    """ToolExecutor does NOT inject metadata into string-type tool results."""
-    from lingtai_kernel.tool_executor import ToolExecutor
-    from lingtai_kernel.loop_guard import LoopGuard
-    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
-    from lingtai_kernel.llm.base import ToolCall as _TC
-
-    def _dispatch(tc):
-        return "X" * 5000  # string result
-
-    def _make_result(tool_name, content, *, tool_call_id=None):
-        return _TRB(id=tool_call_id, name=tool_name, content=content)
-
-    executor = ToolExecutor(
-        dispatch_fn=_dispatch,
-        make_tool_result_fn=_make_result,
-        guard=LoopGuard(),
-        working_dir=tmp_path,
-    )
-
-    tc = _TC(name="bash", args={}, id="tc-str-001")
-    results, _, _ = executor.execute([tc], on_result_hook=None)
-
-    content = results[0].content
-    assert isinstance(content, str), "string result stays a string"
-
-
-# ---------------------------------------------------------------------------
-# 17. _tool_result_metadata always present (Jason's PR #430 requirement), and
-#     long_tool_result honours the configured threshold (default / custom / zero).
-#
-# The custom-threshold and threshold-zero cases below prove the executor uses its
-# *configured* summarize_notification_threshold rather than a hardcoded default,
-# subsuming the earlier standalone "hint_*" tests.
-# ---------------------------------------------------------------------------
-
-
-def test_tool_result_metadata_always_present_for_small_result(tmp_path):
-    """Every dict result gets _tool_result_metadata even when below the large-result threshold."""
+def test_legacy_tool_result_metadata_removed_for_small_dict_result(tmp_path):
     content = _run_executor_metadata(
-        tmp_path, output="tiny result", tool_call_id="tc-meta-small-001"
+        tmp_path,
+        output={"status": "ok", "value": "tiny"},
+        tool_call_id="tc-small",
     )
-    assert isinstance(content, dict), "result should be a dict"
-    assert "_tool_result_metadata" in content, "_tool_result_metadata must always be present"
-    meta = content["_tool_result_metadata"]
-    assert meta["tool_call_id"] == "tc-meta-small-001"
-    # tool_name is no longer repeated on ordinary results — identity lives in the
-    # permanent _tool block (and on the ToolCallBlock).
-    assert "tool_name" not in meta
-    tool_block = content["_tool"]
-    assert tool_block["id"] == "tc-meta-small-001"
-    assert isinstance(tool_block["char_count"], int) and tool_block["char_count"] > 0
-    assert "chars" not in tool_block
-    assert "spilled" not in tool_block
-    assert "spilled_char_count" not in tool_block
-    assert isinstance(meta["char_count"], int) and meta["char_count"] > 0
-    assert meta["threshold_chars"] == 3000
-    assert meta["long_tool_result"] is False
-    assert "hint" in meta
-    # summarize_instruction is only present on large results (long_tool_result=True);
-    # generic summarize discipline lives in _runtime.guidance (from guidance.json).
-    assert "summarize_instruction" not in meta
+
+    assert "_tool_result_metadata" not in content
+    assert content["_tool"]["id"] == "tc-small"
+    assert content["_tool"]["char_count"] > 0
 
 
-def test_tool_result_metadata_long_result_has_true_flag(tmp_path):
-    """_tool_result_metadata.long_tool_result is True when result exceeds threshold."""
+def test_legacy_tool_result_metadata_removed_for_large_dict_result(tmp_path):
     content = _run_executor_metadata(
-        tmp_path, output="X" * 5000, tool_name="read", tool_call_id="tc-meta-large-001"
+        tmp_path,
+        output={"data": "x" * 5000},
+        tool_call_id="tc-large",
     )
-    assert "_tool_result_metadata" in content, "_tool_result_metadata must always be present"
-    meta = content["_tool_result_metadata"]
-    assert meta["tool_call_id"] == "tc-meta-large-001"
-    assert meta["tool_name"] == "read"
-    assert meta["char_count"] > 3000
-    assert meta["threshold_chars"] == 3000
-    assert meta["long_tool_result"] is True
-    assert "summarize" in meta["summarize_instruction"]
-    assert "next step" in meta["summarize_instruction"] or "prior" in meta["summarize_instruction"]
-    # hint should distinguish large vs small
-    assert meta["hint"] != ""
 
-
-def test_tool_result_metadata_custom_threshold(tmp_path):
-    """Executor uses its *configured* threshold, not a hardcoded default.
-
-    A 600-char result is below the default (3000) but above a custom 500 — the
-    metadata's long_tool_result flag and threshold_chars track whichever
-    threshold the executor was built with.  (Subsumes the former test_hint_* pair.)
-    """
-    meta = _run_executor_metadata(
-        tmp_path, output="X" * 600, tool_call_id="tc-meta-thresh-001"
-    )["_tool_result_metadata"]
-    assert meta["long_tool_result"] is False
-    assert meta["threshold_chars"] == 3000
-
-    meta2 = _run_executor_metadata(
-        tmp_path, output="X" * 600, tool_call_id="tc-meta-thresh-002", threshold=500
-    )["_tool_result_metadata"]
-    assert meta2["long_tool_result"] is True
-    assert meta2["threshold_chars"] == 500
-
-
-def test_tool_result_metadata_threshold_zero_still_present(tmp_path):
-    """With threshold=0 (disabled), _tool_result_metadata is still present but long_tool_result=False.
-
-    The 5000-char output is a "would-be" long result, but well within the spill
-    cap so it is not spilled to a sidecar (spill manifests are excluded).
-    """
-    content = _run_executor_metadata(
-        tmp_path, output="X" * 5000, tool_call_id="tc-meta-zero-001", threshold=0
-    )
-    assert "_tool_result_metadata" in content, (
-        "threshold=0 disables long-result hinting but metadata itself must still be present"
-    )
-    meta = content["_tool_result_metadata"]
-    assert meta["tool_call_id"] == "tc-meta-zero-001"
-    # tool_name moved to the permanent _tool block on ordinary results.
-    assert "tool_name" not in meta
-    assert content["_tool"]["id"] == "tc-meta-zero-001"
-    assert isinstance(meta["char_count"], int) and meta["char_count"] > 0
-    assert meta["threshold_chars"] == 0
-    assert meta["long_tool_result"] is False
-    assert "hint" in meta
-    # summarize_instruction is only present on large results (long_tool_result=True)
-    assert "summarize_instruction" not in meta
+    assert "_tool_result_metadata" not in content
+    assert content["_tool"]["id"] == "tc-large"
+    assert content["_tool"]["char_count"] > 0

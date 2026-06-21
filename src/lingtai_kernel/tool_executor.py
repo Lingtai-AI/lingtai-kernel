@@ -323,8 +323,7 @@ class ToolExecutor:
         "_tool",
         "_runtime",
         "_runtime_pending",
-        "_tool_result_metadata",
-        "_advisory",
+            "_advisory",
         "notifications",
         "_notifications",
         "_notification_guidance",
@@ -366,7 +365,7 @@ class ToolExecutor:
           timestamp           — ISO completion timestamp
           char_count          — current model-visible serialized size: kernel aux keys
                                 (``_tool``, ``_runtime``, ``_runtime_pending``,
-                                ``_tool_result_metadata``, ``_advisory``,
+                                ``_advisory``,
                                 ``notifications``, ``_notification_guidance``, batch
                                 progress notice) are excluded from the count.
           elapsed_ms          — execution time in milliseconds
@@ -395,111 +394,7 @@ class ToolExecutor:
         result["_tool"] = tool_block
         return result
 
-    def _attach_tool_result_metadata(
-        self,
-        result: Any,
-        *,
-        tool_name: str,
-        tool_call_id: str | None,
-    ) -> Any:
-        """Inject ``_tool_result_metadata`` into dict-shaped tool results.
-
-        Metadata is present so agents have a constant affordance for tool
-        identity, size, and large-result hints.  String results and non-dict
-        payloads are left unchanged.
-
-        Excluded: daemon_tool_result relays, already-summarized blocks, spill
-        manifests (they carry their own size hints via the spill path).
-
-        Fields always present:
-          tool_call_id    — provider-assigned call id (or "<unknown>")
-          tool_name       — name of the tool that produced the result
-          char_count      — serialized character count of the substantive result
-                            (measured before this metadata is added)
-          threshold_chars — the configured summarize notification threshold
-                            (0 means long-result hinting is disabled)
-          long_tool_result — True iff char_count > threshold_chars > 0
-          hint            — short human/agent-readable string for large results
-
-        Note: ``summarize_instruction`` is only included for *large* results
-        (``long_tool_result=True``). Generic summarization guidance belongs in
-        ``_runtime.guidance`` (loaded from ``guidance.json``), not repeated on
-        every ordinary tool result.
-        """
-        if not isinstance(result, dict):
-            return result
-        if tool_name == "daemon_tool_result":
-            return result
-        # Idempotent: skip if metadata already injected.
-        if "_tool_result_metadata" in result:
-            return result
-
-        from .tool_result_artifacts import is_spill_manifest
-        from .intrinsics.system.summarize import _is_already_summarized
-
-        if _is_already_summarized(result):
-            return result
-        if is_spill_manifest(result):
-            return result
-
-        # Result-intrinsic count: exclude kernel aux keys so the figure reflects
-        # the tool's own payload and never self-inflates from metadata added
-        # earlier in the boundary (matches the ``_tool.char_count`` contract).
-        char_count = self._intrinsic_char_count(result)
-
-        threshold = self._summarize_notification_threshold
-        tcid = tool_call_id or "<unknown>"
-
-        # long_tool_result is True only when threshold > 0 and result exceeds it.
-        is_long = (threshold > 0) and (char_count > threshold)
-
-        if is_long:
-            # Long results keep the full compact metadata (including tool_name and
-            # the actionable summarize_instruction) — this is the size-pressure
-            # affordance the model and procedures.md rely on.
-            hint = (
-                f"Large result: {char_count} chars exceeds the {threshold}-char threshold."
-            )
-            summarize_instruction = (
-                f"Digest this result, then on the next step (or alongside other independent "
-                f"work) call system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tcid}\", "
-                f"\"summary\": \"<your summary>\"}}]) to replace the context-visible payload "
-                f"with your own summary. system.summarize operates on already-completed prior "
-                f"tool results — it cannot summarize the current result in the same tool batch "
-                f"before that result exists. The full original is preserved in events.jsonl."
-            )
-            meta_block: dict = {
-                "tool_call_id": tcid,
-                "tool_name": tool_name,
-                "char_count": char_count,
-                "threshold_chars": threshold,
-                "long_tool_result": is_long,
-                "hint": hint,
-                "summarize_instruction": summarize_instruction,
-            }
-        else:
-            # Ordinary results carry the minimal size-signal block only; tool
-            # identity lives in the permanent ``_tool`` block (and on the
-            # ToolCallBlock), so ``tool_name`` is no longer repeated here. The
-            # block stays present (PR #430 always-present invariant) so agents
-            # keep a constant char_count/threshold affordance.
-            if threshold <= 0:
-                hint = "Long-result hinting is disabled (threshold=0); summarize remains available for any prior result worth condensing."
-            else:
-                hint = f"Result within threshold ({char_count} chars ≤ {threshold} chars)."
-            meta_block = {
-                "tool_call_id": tcid,
-                "char_count": char_count,
-                "threshold_chars": threshold,
-                "long_tool_result": is_long,
-                "hint": hint,
-            }
-
-        result["_tool_result_metadata"] = meta_block
-        return result
-
-    @staticmethod
-    def _append_advisory(result: Any, advisory: dict[str, Any] | None) -> Any:
+    def _append_advisory(self, result: Any, advisory: dict[str, Any] | None) -> Any:
         if not isinstance(result, dict) or not advisory:
             return result
         existing = result.get("_advisory")
@@ -662,7 +557,6 @@ class ToolExecutor:
         by ``BaseAgent._inject_notifications``.
         """
         self._attach_tool_call_progress(result)
-        self._attach_tool_result_metadata(result, tool_name=tool_name, tool_call_id=tool_call_id)
         capped = _spill_oversized_result(
             result,
             max_chars=self._max_result_chars,
