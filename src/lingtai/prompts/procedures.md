@@ -55,6 +55,12 @@ record, and routing consequential handoffs to the molt-template and entry
 templates. Read it while context is still cheap; do not wait until the last
 moment. For the broader memory model, read `system-manual`.
 
+When writing the session-journal child, use the canonical entry path
+`knowledge/session-journal/<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md`
+(read `<molt-count>` from your identity before the molt). Do not shorten it to a
+plain date+slug: the kernel validates the location and marker, while this naming
+discipline keeps multiple same-day molts chronologically stable.
+
 ### Skill Routing — When to Load What
 
 | Situation | Load |
