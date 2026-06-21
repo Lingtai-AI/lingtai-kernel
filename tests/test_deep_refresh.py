@@ -526,15 +526,14 @@ def _codex_agent(tmp_path: Path, epoch: float):
     return agent
 
 
-def test_refresh_rebuilds_codex_adapter_with_fresh_epoch(tmp_path):
-    """A live Codex refresh rebuilds the adapter and rotates the affinity id.
+def test_refresh_rebuilds_codex_adapter_with_stable_id(tmp_path):
+    """A live Codex refresh rebuilds the adapter but KEEPS the same affinity id.
 
-    Before the fix, ``_setup_from_init`` only rebuilt ``LLMService`` when the
-    provider-defaults bucket changed; the Codex bucket is anchored on the agent
-    path only, so it stayed byte-identical across refresh and the boot-epoch
-    adapter (and its stamped current id) survived. The 8-hit cache-affinity
-    shuffle could therefore never become active. After the fix, refresh forces
-    a fresh Codex service/adapter, so the epoch-stamped current id rotates.
+    The Codex cache-affinity id is a pure hash of the agent path (no epoch, no
+    time dependence), so a refresh — even at a different wall-clock — must yield
+    a fresh adapter instance whose id is byte-identical to the pre-refresh id.
+    This is the whole point of removing the epoch-stamp / rotation: the agent
+    keeps routing to the same sticky-warm backend cache slot across restarts.
     """
     from unittest.mock import patch
 
@@ -545,7 +544,7 @@ def test_refresh_rebuilds_codex_adapter_with_fresh_epoch(tmp_path):
     old_id = old_adapter._codex_id
     assert old_id is not None  # per-agent identity is wired by default
 
-    # A later refresh stamps a different epoch -> a different current id.
+    # A later refresh at a DIFFERENT wall-clock must NOT change the id.
     mock_interface = MagicMock()
     mock_session = MagicMock()
     mock_session.chat = MagicMock()
@@ -565,16 +564,14 @@ def test_refresh_rebuilds_codex_adapter_with_fresh_epoch(tmp_path):
 
     # 1. A genuinely fresh adapter instance (not the cached boot one).
     assert new_adapter is not old_adapter
-    # 2. The current epoch-stamped affinity id rotated.
-    assert new_id != old_id
+    # 2. The id is STABLE across refresh despite the different clock.
+    assert new_id == old_id
     assert new_id is not None
-    # 3. The rotated id is the epoch-stamped form, NOT the legacy
-    #    pre-#406 _codex_session_id(anchor) value.
-    from lingtai.llm.openai.adapter import _codex_affinity_id, _codex_session_id
+    # 3. The id is the pure per-agent hash of the anchor (no epoch).
+    from lingtai.llm.openai.adapter import _codex_session_id
 
     anchor = str((tmp_path / "init.json").resolve())
-    assert new_id == _codex_affinity_id(anchor, 1_700_000_500)
-    assert new_id != _codex_session_id(anchor)
+    assert new_id == _codex_session_id(anchor)
     # 4. The new service object is wired into the session that rebuilds history.
     assert agent._session._llm_service is agent.service
     # 5. Chat history is preserved: the saved interface is replayed.
