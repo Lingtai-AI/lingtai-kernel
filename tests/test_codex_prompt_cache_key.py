@@ -530,6 +530,118 @@ def test_codex_bare_session_omits_cache_headers_but_sends_identity():
 
 
 # ---------------------------------------------------------------------------
+# ChatGPT-Account-ID header — the user's own account id, when available.
+# Sent so the request is attributed to the right ChatGPT account WITHOUT
+# impersonating the official Codex CLI (honest originator/User-Agent unchanged).
+# ---------------------------------------------------------------------------
+
+# Placeholder, non-secret account-id value used only in tests.
+_TEST_ACCOUNT_ID = "acct-test-deadbeef"
+
+
+def test_codex_sends_chatgpt_account_id_header_when_present():
+    """When the adapter carries an account id, every request sends the canonical
+    ``ChatGPT-Account-ID`` header verbatim."""
+    session = _create_codex_session_cfg(
+        [_completed()], codex_account_id=_TEST_ACCOUNT_ID
+    )
+
+    session.send("x")
+
+    headers = session._client.responses.kwargs[0]["extra_headers"]
+    assert headers["ChatGPT-Account-ID"] == _TEST_ACCOUNT_ID
+
+
+def test_codex_omits_chatgpt_account_id_header_when_absent():
+    """No account id → no ``ChatGPT-Account-ID`` header at all (omitted, not empty)."""
+    session = _create_codex_session_cfg([_completed()])  # no codex_account_id
+
+    session.send("x")
+
+    headers = session._client.responses.kwargs[0]["extra_headers"]
+    assert "ChatGPT-Account-ID" not in headers
+
+
+def test_codex_account_id_preserves_honest_identity():
+    """Sending ChatGPT-Account-ID does NOT alter the honest LingTai identity —
+    no Codex CLI impersonation creeps in alongside the account header."""
+    session = _create_codex_session_cfg(
+        [_completed()], codex_account_id=_TEST_ACCOUNT_ID
+    )
+
+    session.send("x")
+
+    headers = session._client.responses.kwargs[0]["extra_headers"]
+    assert headers["ChatGPT-Account-ID"] == _TEST_ACCOUNT_ID
+    # Honest identity is unchanged; we are still LingTai, not the Codex CLI.
+    assert headers["originator"] == "lingtai"
+    assert headers["User-Agent"].startswith("LingTai")
+    assert "codex_exec" not in headers["User-Agent"]
+
+
+def test_codex_account_id_does_not_affect_cache_affinity():
+    """Adding the account header leaves session/thread/prompt_cache_key untouched.
+
+    Regression guard: the ChatGPT-Account-ID plumbing must not perturb the
+    cache-affinity identity (issue #378) in any way."""
+    explicit = "11111111-2222-3333-4444-555555555555"
+    with_acct = _create_codex_session_cfg(
+        [_completed()],
+        codex_session_id=explicit,
+        codex_account_id=_TEST_ACCOUNT_ID,
+    )
+    without_acct = _create_codex_session_cfg(
+        [_completed()],
+        codex_session_id=explicit,
+    )
+
+    with_acct.send("x")
+    without_acct.send("x")
+
+    h_with = with_acct._client.responses.kwargs[0]["extra_headers"]
+    h_without = without_acct._client.responses.kwargs[0]["extra_headers"]
+    # The cache-affinity headers + body key are identical with and without the
+    # account header.
+    assert h_with["session_id"] == h_without["session_id"] == explicit
+    assert h_with["thread_id"] == h_without["thread_id"] == explicit
+    assert (
+        with_acct._client.responses.kwargs[0]["prompt_cache_key"]
+        == without_acct._client.responses.kwargs[0]["prompt_cache_key"]
+        == explicit
+    )
+
+
+def test_codex_account_id_not_in_usage_metadata():
+    """The account id never leaks into usage metadata returned to the caller."""
+    session = _create_codex_session_cfg(
+        [_completed()], codex_account_id=_TEST_ACCOUNT_ID
+    )
+
+    result = session.send("x")
+
+    # The streamed result/usage must not carry the account id anywhere.
+    assert _TEST_ACCOUNT_ID not in json.dumps(result, default=str)
+
+
+def test_codex_session_account_id_used_verbatim_on_direct_construction():
+    """A directly-constructed session honors the ``account_id`` kwarg."""
+    session = CodexResponsesSession(
+        client=FakeClient([_completed()]),
+        model="gpt-5.5",
+        instructions="system prompt",
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+        account_id=_TEST_ACCOUNT_ID,
+    )
+
+    session.send("hi")
+
+    headers = session._client.responses.kwargs[0]["extra_headers"]
+    assert headers["ChatGPT-Account-ID"] == _TEST_ACCOUNT_ID
+
+
+# ---------------------------------------------------------------------------
 # Manifest config seam — per-agent identity flows factory -> adapter (#378).
 # This is the internal override / testing escape hatch; the default path
 # (agent path hash only) is covered in the section after this one.

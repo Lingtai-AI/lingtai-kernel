@@ -6,6 +6,8 @@ checks expiry, and auto-refreshes via the OpenAI OAuth endpoint.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import time
@@ -17,6 +19,36 @@ from filelock import FileLock
 TOKEN_URL = "https://auth.openai.com/oauth/token"
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 REFRESH_BUFFER_SECONDS = 300  # refresh if within 5 minutes of expiry
+
+# Namespaced OAuth claim that carries the user's ChatGPT account id in the
+# OpenAI-issued id_token. The official OpenAI OAuth payload nests it under this
+# OIDC-style namespace key, e.g.
+#   {"https://api.openai.com/auth": {"chatgpt_account_id": "<uuid>", ...}, ...}
+_OAUTH_AUTH_CLAIM = "https://api.openai.com/auth"
+_ACCOUNT_ID_CLAIM = "chatgpt_account_id"
+
+
+def _decode_jwt_payload(token: str) -> dict:
+    """Decode a JWT's payload segment locally (NO signature verification).
+
+    This only base64url-decodes the middle segment to read non-secret metadata
+    claims the issuer put there. We never verify the signature — we are not
+    authenticating the token, just reading our own account metadata out of it.
+    Returns ``{}`` for anything that is not a well-formed JWT-with-JSON-payload
+    rather than raising, so callers can treat "no account id" uniformly.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return {}
+        payload_b64 = parts[1]
+        # base64url, padding stripped by the JWT spec — restore it before decode.
+        padding = "=" * (-len(payload_b64) % 4)
+        raw = base64.urlsafe_b64decode(payload_b64 + padding)
+        decoded = json.loads(raw)
+        return decoded if isinstance(decoded, dict) else {}
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return {}
 
 
 class CodexAuthError(Exception):
@@ -64,6 +96,49 @@ class CodexTokenManager:
             data = self._read()
 
         return data["access_token"]
+
+    def get_account_id(self) -> str | None:
+        """Return the user's own ChatGPT account id, or ``None`` if unavailable.
+
+        Source priority (the user's OWN auth data only — never invented):
+          1. An explicit ``account_id`` / ``chatgpt_account_id`` field written
+             into ``codex-auth.json`` by the TUI, if present.
+          2. The namespaced claim decoded locally from the ``id_token`` JWT:
+             ``payload["https://api.openai.com/auth"]["chatgpt_account_id"]``
+             (no signature verification — local metadata extraction only).
+
+        Always non-raising: a missing file, malformed JSON, or absent claim all
+        yield ``None`` so callers can simply omit the header. The returned id is
+        a non-secret account identifier; the access/refresh tokens are never
+        read or returned here.
+        """
+        try:
+            data = self._read()
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+        return self._extract_account_id(data)
+
+    @staticmethod
+    def _extract_account_id(data: dict) -> str | None:
+        """Pull the ChatGPT account id out of already-loaded auth data."""
+        # 1. Explicit field wins — the TUI may persist it directly.
+        for key in ("account_id", "chatgpt_account_id"):
+            val = data.get(key)
+            if isinstance(val, str) and val:
+                return val
+
+        # 2. Fall back to decoding the id_token JWT's namespaced auth claim.
+        id_token = data.get("id_token")
+        if not isinstance(id_token, str) or not id_token:
+            return None
+        payload = _decode_jwt_payload(id_token)
+        auth_claim = payload.get(_OAUTH_AUTH_CLAIM)
+        if isinstance(auth_claim, dict):
+            val = auth_claim.get(_ACCOUNT_ID_CLAIM)
+            if isinstance(val, str) and val:
+                return val
+        return None
 
     # ------------------------------------------------------------------
     # Internal helpers

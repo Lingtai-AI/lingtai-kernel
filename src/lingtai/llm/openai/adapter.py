@@ -1649,9 +1649,18 @@ class CodexResponsesSession(OpenAIResponsesSession):
         *args,
         session_id: str | None = None,
         thread_id: str | None = None,
+        account_id: str | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        # The user's own ChatGPT account id (decoded upstream from their OAuth
+        # auth data). When present it is sent as the ``ChatGPT-Account-ID`` HTTP
+        # header so the request is attributed to the right ChatGPT account —
+        # this does NOT impersonate the official Codex CLI (we keep the honest
+        # ``originator: lingtai`` / ``User-Agent: LingTai/<ver>`` identity). It
+        # is a non-secret account identifier and is never copied into usage
+        # metadata or logs.
+        self._account_id = account_id if isinstance(account_id, str) and account_id else None
         # Codex REST cache-affinity identity: ONE stable per-agent value used
         # byte-identically for ``prompt_cache_key`` / ``session_id`` /
         # ``thread_id`` on EVERY request, and NEVER changed for the life of the
@@ -1834,6 +1843,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 **_codex_identity_headers(),
                 **affinity_headers,
             }
+            # The user's own ChatGPT account id, when available. Canonical
+            # official spelling ``ChatGPT-Account-ID`` (HTTP header names are
+            # case-insensitive). Attributes the request to the right ChatGPT
+            # account WITHOUT impersonating the official Codex CLI — the honest
+            # ``originator``/``User-Agent`` identity above is unchanged. Omitted
+            # entirely when no account id is known.
+            if self._account_id:
+                extra_headers["ChatGPT-Account-ID"] = self._account_id
             if extra_headers:
                 kwargs["extra_headers"] = {
                     **extra_headers,
@@ -2016,6 +2033,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         codex_session_id: str | None = None,
         codex_session_anchor: str | None = None,
         codex_thread_salt: str | None = None,
+        codex_account_id: str | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -2050,6 +2068,13 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         else:
             self._codex_id = None  # no per-agent identity -> no headers
         self._codex_thread_salt = codex_thread_salt  # legacy pass-through; unused
+        # The user's own ChatGPT account id, resolved upstream from their OAuth
+        # auth data (explicit ``account_id`` field or decoded id_token claim).
+        # Mutable so the token-refresh path can keep it current if refreshed
+        # auth data changes it. ``None`` -> no ``ChatGPT-Account-ID`` header.
+        self.codex_account_id: str | None = (
+            str(codex_account_id) if codex_account_id else None
+        )
 
     def _resolve_codex_ids(self, model: str) -> tuple[str | None, str | None]:
         """Resolve the (session_id, thread_id) headers for ``model``.
@@ -2133,4 +2158,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             # a bare/test adapter. Never rotated.
             session_id=session_id,
             thread_id=thread_id,
+            # The user's own ChatGPT account id (read fresh from the adapter so a
+            # token refresh that changes it is reflected on newly built sessions).
+            account_id=self.codex_account_id,
         )

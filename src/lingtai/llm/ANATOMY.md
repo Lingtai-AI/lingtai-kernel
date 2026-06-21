@@ -30,7 +30,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 - **Adapter caching** — `LLMService._adapters` keyed by `(provider, base_url)` tuple (`service.py:141`). Double-checked locking via `_adapter_lock` (`service.py:142`).
 - **Session tracking** — `LLMService._sessions` dict maps `st_<12-hex>` session IDs to `ChatSession` instances (`service.py:144`). Untracked sessions get `session_id=""`.
 - **Gated sessions** — `_GatedSession` (`base.py:19`) proxies `send()` and `send_stream()` through `APICallGate.submit()`. Attribute writes land on the proxy; reads fall through to inner session via `__getattr__`.
-- **Codex factory** — `_register.py:54` builds `CodexOpenAIAdapter`, monkey-patches `create_chat` and `generate` to refresh OAuth tokens before each call via `CodexTokenManager.get_access_token()`.
+- **Codex factory** — `_register.py:54` builds `CodexOpenAIAdapter`, monkey-patches `create_chat` and `generate` to refresh OAuth tokens before each call via `CodexTokenManager.get_access_token()`; the same refresh hook re-reads `get_account_id()` into `adapter.codex_account_id` (the user's own `ChatGPT-Account-ID`, passed to the adapter at build time and kept current across refreshes).
 
 ## State
 

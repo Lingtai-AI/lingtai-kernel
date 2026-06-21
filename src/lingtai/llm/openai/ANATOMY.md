@@ -112,6 +112,10 @@ The REST `/backend-api/codex/responses` endpoint does **not** accept `previous_r
 
 **Codex-only (#436).** Every Codex request carries honest LingTai identity headers — `originator: lingtai` and `User-Agent: LingTai/<version>` (`_codex_identity_headers()`), merged as the base layer of `extra_headers` so cache-affinity and caller-supplied headers still override. We identify HONESTLY as LingTai, NOT as the Codex CLI (`codex_exec`). These do **not** affect prompt caching (verified empirically — identical cache rate with or without); they are account hygiene, mirroring the Kimi User-Agent policy in `../service.py` `_default_headers_for`.
 
+### Codex `ChatGPT-Account-ID` header (the user's own account id)
+
+**Codex-only.** When the user's OAuth auth data supplies an account id (`CodexTokenManager.get_account_id()`, see `../../auth/ANATOMY.md`), `CodexResponsesSession` sends it as the canonical `ChatGPT-Account-ID` header so the request is attributed to the right ChatGPT account. It does NOT change the honest `originator`/`User-Agent` identity above — no Codex-CLI impersonation. The value flows `_register.py` (`codex_account_id=mgr.get_account_id()`) → `CodexOpenAIAdapter.codex_account_id` (mutable; the OAuth-refresh monkey-patch re-reads it via `get_account_id()` so a refresh that changes the id stays current on later-built sessions) → `CodexResponsesSession(account_id=...)` (`self._account_id`). Emitted only when non-empty; otherwise the header is omitted entirely. The account id is a non-secret identifier and — unlike the affinity ids — is **NOT** copied into `UsageMetadata.extra` or any log/ledger.
+
 ## State
 
 - **`OpenAIChatSession._interface`** — canonical `ChatInterface`, single source of truth. Mutated in-place: `add_user_message`, `add_tool_results`, `add_assistant_message`, `drop_trailing`.

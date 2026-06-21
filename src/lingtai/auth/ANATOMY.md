@@ -9,11 +9,12 @@ Codex OAuth token management — reads TUI-written tokens, checks expiry, auto-r
 | File | LOC | Role |
 |---|---|---|
 | `__init__.py` | 1 | Docstring-only package marker |
-| `codex.py` | 145 | `CodexTokenManager` — reads/refreshes OAuth tokens |
+| `codex.py` | 220 | `CodexTokenManager` — reads/refreshes OAuth tokens |
 
 **Key classes** (`codex.py`):
-- `CodexTokenManager` (L30) — main API: `is_authenticated()` (L46), `get_access_token()` (L54). Reads `~/.lingtai-tui/codex-auth.json`, auto-refreshes when within 5 min of expiry (`REFRESH_BUFFER_SECONDS`, L19).
-- `CodexAuthError` (L22) — raised on 401/403 from refresh endpoint, user-facing message points to `/login`.
+- `CodexTokenManager` (L62) — main API: `is_authenticated()` (L78), `get_access_token()` (L86), `get_account_id()` (L100). Reads `~/.lingtai-tui/codex-auth.json`, auto-refreshes when within 5 min of expiry (`REFRESH_BUFFER_SECONDS`, L21).
+  - `get_account_id()` returns the user's OWN ChatGPT account id (non-secret) for the `ChatGPT-Account-ID` header, or `None`. Source priority: an explicit `account_id` / `chatgpt_account_id` field in `codex-auth.json`, else the namespaced `https://api.openai.com/auth.chatgpt_account_id` claim decoded locally from the `id_token` JWT (`_decode_jwt_payload`, L31 — base64url-only, NO signature verification, non-raising). Never invents a value; missing/malformed → `None`.
+- `CodexAuthError` (L54) — raised on 401/403 from refresh endpoint, user-facing message points to `/login`.
 
 ## Connections
 
