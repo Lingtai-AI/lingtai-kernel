@@ -547,6 +547,10 @@ def test_lifecycle_trace_events_cover_spilled_result(tmp_path):
     assert not intercepted
     manifest = results[0]["result"]
     assert manifest["artifact"] == "lingtai_tool_result_spill"
+    tool_block = manifest["_tool"]
+    assert "spilled" not in tool_block
+    assert isinstance(tool_block["char_count"], int) and tool_block["char_count"] > 0
+    assert tool_block["spilled_char_count"] == manifest["original_char_count"]
     spill_event = logs[_log_index(logs, "tool_result_spilled", trace_id="spill-trace")][1]
     assert spill_event["tool_call_id"] == "spill-trace"
     model_event = logs[_log_index(logs, "tool_result_model_visible", trace_id="spill-trace")][1]

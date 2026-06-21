@@ -1042,7 +1042,12 @@ def test_tool_result_metadata_always_present_for_small_result(tmp_path):
     # tool_name is no longer repeated on ordinary results — identity lives in the
     # permanent _tool block (and on the ToolCallBlock).
     assert "tool_name" not in meta
-    assert content["_tool"]["id"] == "tc-meta-small-001"
+    tool_block = content["_tool"]
+    assert tool_block["id"] == "tc-meta-small-001"
+    assert isinstance(tool_block["char_count"], int) and tool_block["char_count"] > 0
+    assert "chars" not in tool_block
+    assert "spilled" not in tool_block
+    assert "spilled_char_count" not in tool_block
     assert isinstance(meta["char_count"], int) and meta["char_count"] > 0
     assert meta["threshold_chars"] == 3000
     assert meta["long_tool_result"] is False

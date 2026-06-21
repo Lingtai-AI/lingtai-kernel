@@ -317,7 +317,7 @@ class ToolExecutor:
         return result
 
     # Kernel-injected auxiliary keys that are NOT part of the tool's own
-    # substantive payload. Excluded from the result-intrinsic ``_tool.chars``
+    # substantive payload. Excluded from the result-intrinsic ``_tool.char_count``
     # count so size reflects the tool output, not metadata layered on after.
     _AUX_RESULT_KEYS = (
         "_tool",
@@ -352,7 +352,7 @@ class ToolExecutor:
         *,
         tool_call_id: str | None,
         elapsed_ms: int | float,
-        spilled: bool = False,
+        spilled_char_count: int | None = None,
         status: str | None = None,
     ) -> Any:
         """Inject the permanent ``_tool`` identity block into dict-shaped results.
@@ -362,32 +362,33 @@ class ToolExecutor:
         intentionally omitted because it already appears on the ToolCallBlock.
 
         Fields:
-          id          — tool_call_id (or "<unknown>")
-          timestamp   — ISO completion timestamp
-          chars       — *result-intrinsic* serialized size: the kernel-injected
-                        auxiliary keys (``_tool``, ``_runtime``, ``_runtime_pending``,
-                        ``_tool_result_metadata``, ``_advisory``, ``notifications``,
-                        ``_notification_guidance``, batch progress notice) are
-                        excluded so the count reflects the tool's own payload, not
-                        metadata the kernel layered on after the fact.
-          elapsed_ms  — execution time in milliseconds
-          spilled     — True when the result was truncated to a spill manifest
-          status      — "error" when the result carries status=error; omitted otherwise
+          id                  — tool_call_id (or "<unknown>")
+          timestamp           — ISO completion timestamp
+          char_count          — current model-visible serialized size: kernel aux keys
+                                (``_tool``, ``_runtime``, ``_runtime_pending``,
+                                ``_tool_result_metadata``, ``_advisory``,
+                                ``notifications``, ``_notification_guidance``, batch
+                                progress notice) are excluded from the count.
+          elapsed_ms          — execution time in milliseconds
+          spilled_char_count  — original sidecar character count when a spill occurred;
+                                omitted for ordinary non-spilled results
+          status              — "error" when the result carries status=error; omitted otherwise
         """
         if not isinstance(result, dict):
             return result
         if "_tool" in result:
             return result
 
-        chars = self._intrinsic_char_count(result)
+        char_count = self._intrinsic_char_count(result)
 
         tool_block: dict = {
             "id": tool_call_id or "<unknown>",
             "timestamp": now_iso_plain(),
-            "chars": chars,
+            "char_count": char_count,
             "elapsed_ms": int(elapsed_ms),
-            "spilled": spilled,
         }
+        if spilled_char_count is not None:
+            tool_block["spilled_char_count"] = int(spilled_char_count)
         if status == "error":
             tool_block["status"] = "error"
 
@@ -443,7 +444,7 @@ class ToolExecutor:
 
         # Result-intrinsic count: exclude kernel aux keys so the figure reflects
         # the tool's own payload and never self-inflates from metadata added
-        # earlier in the boundary (matches the ``_tool.chars`` contract).
+        # earlier in the boundary (matches the ``_tool.char_count`` contract).
         char_count = self._intrinsic_char_count(result)
 
         threshold = self._summarize_notification_threshold
@@ -670,7 +671,10 @@ class ToolExecutor:
             working_dir=self._working_dir,
         )
         spilled = capped is not result
+        spilled_char_count = None
         if spilled:
+            if isinstance(capped, dict) and isinstance(capped.get("original_char_count"), int):
+                spilled_char_count = capped["original_char_count"]
             self._attach_tool_call_progress(capped)
         if spilled and self._logger_fn is not None:
             try:
@@ -689,7 +693,7 @@ class ToolExecutor:
             capped,
             tool_call_id=tool_call_id,
             elapsed_ms=elapsed_ms,
-            spilled=spilled,
+            spilled_char_count=spilled_char_count,
             status=status,
         )
         msg = self._make_tool_result_fn(tool_name, capped, tool_call_id=tool_call_id)
