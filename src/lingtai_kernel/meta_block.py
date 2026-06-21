@@ -110,6 +110,73 @@ def formal_tool_result_preview(content, limit: int = 200) -> str:
     return _visible_content_text(formal_tool_result_content(content))[:limit]
 
 
+def _is_tool_result_block(block) -> bool:
+    """Best-effort duck-typing for ToolResultBlock without a hard import cycle."""
+    return block.__class__.__name__ == "ToolResultBlock" and hasattr(block, "content")
+
+
+def _iter_history_tool_result_blocks(agent):
+    session = getattr(agent, "_session", None)
+    chat = getattr(session, "chat", None)
+    interface = getattr(chat, "interface", None)
+    entries = getattr(interface, "_entries", None)
+    if not entries:
+        return
+    for entry in entries:
+        for block in getattr(entry, "content", ()) or ():
+            if _is_tool_result_block(block):
+                yield block
+
+
+TOOL_RESULT_CHARS_TOP_N = 5
+TOOL_RESULT_CHARS_MIN = 1000
+TOOL_RESULT_CHARS_README = (
+    "listing top 5 tool result longer than 1000 char; "
+    "consider summarize if deemed useless"
+)
+
+
+def _tool_result_id(block) -> str:
+    return str(getattr(block, "id", None) or getattr(block, "tool_call_id", None) or "")
+
+
+def current_tool_result_chars(agent, extra_results=()) -> dict:
+    """Return current context-visible formal tool-result char summary.
+
+    The count is intentionally based on formal result payloads rather than
+    runtime metadata.  ``_meta`` notifications/guidance, transient scaffolding,
+    and other non-payload fields are excluded by
+    ``formal_tool_result_visible_len``.  ``extra_results`` lets latest-result
+    stamping include the just-created tool-result batch before those blocks are
+    appended to chat history.
+    """
+    total = 0
+    top: list[dict] = []
+    seen: set[int] = set()
+
+    def visit(block) -> None:
+        nonlocal total
+        seen.add(id(block))
+        chars = formal_tool_result_visible_len(getattr(block, "content", ""))
+        total += chars
+        if chars > TOOL_RESULT_CHARS_MIN:
+            top.append({"id": _tool_result_id(block), "chars": chars})
+
+    for block in _iter_history_tool_result_blocks(agent) or ():
+        visit(block)
+    for block in extra_results or ():
+        if not _is_tool_result_block(block) or id(block) in seen:
+            continue
+        visit(block)
+
+    top.sort(key=lambda item: item["chars"], reverse=True)
+    return {
+        "_readme": TOOL_RESULT_CHARS_README,
+        "total_chars": total,
+        "top_results": top[:TOOL_RESULT_CHARS_TOP_N],
+    }
+
+
 def _meta_block(result: dict) -> dict:
     """Return ``result["_meta"]``, creating an empty dict if absent.
 
@@ -139,8 +206,10 @@ def build_meta_readme() -> dict:
         ),
         AGENT_META_KEY: (
             "Agent/current-state snapshot (time, context usage, stamina, "
-            "active_turn_tool_calls). Latest tool result only; older copies "
-            "are stripped as newer results arrive."
+            "active_turn_tool_calls, current_tool_result_chars). Latest tool "
+            "result only; older copies are stripped as newer results arrive. "
+            "current_tool_result_chars is a dict with total_chars and the top "
+            "long tool results to consider for summarization."
         ),
         GUIDANCE_KEY: (
             "Kernel guidance plus this meta_readme. Latest tool result only."
@@ -279,6 +348,7 @@ def build_meta(agent) -> dict:
                 "usage": float,              # fraction of context window used
             },
             "stamina_left_seconds": float,   # session time remaining; -1 if unstarted
+            "current_tool_result_chars": dict, # total + top long formal tool results
         }
 
     Sentinel handling: when token decomposition has not yet run, the
@@ -379,6 +449,8 @@ def build_meta(agent) -> dict:
         meta["stamina_left_seconds"] = round(max(0.0, stamina - uptime), 1)
     else:
         meta["stamina_left_seconds"] = -1
+
+    meta["current_tool_result_chars"] = current_tool_result_chars(agent)
 
     # Notifications are deliberately NOT included here. Active-state
     # notification payload is a moving single-slot block that lives on the
@@ -816,6 +888,9 @@ def attach_active_runtime(
     calls = _active_turn_tool_calls(agent)
     if calls is not None:
         agent_meta["active_turn_tool_calls"] = calls
+    agent_meta["current_tool_result_chars"] = current_tool_result_chars(
+        agent, extra_results=tool_results
+    )
 
     # guidance always carries meta_readme (latest-only self-description); the
     # packaged guidance.json sections are merged in when available.

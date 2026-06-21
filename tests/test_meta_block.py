@@ -1,6 +1,7 @@
 """Tests for meta_block — unified per-turn metadata injection."""
 from __future__ import annotations
 
+import json
 import re
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ from lingtai_kernel.meta_block import (
     attach_active_notifications,
     attach_active_runtime,
     build_meta,
+    build_meta_readme,
     build_runtime_guidance,
     clear_active_notification_holder,
     render_meta,
@@ -58,6 +60,57 @@ def test_build_meta_time_blind_regardless_of_timezone_awareness():
     meta = build_meta(agent)
     assert "current_time" not in meta
     assert meta["context"]["system_tokens"] == -1
+
+
+def test_build_meta_counts_current_tool_result_chars_excluding_meta():
+    formal_payload = {"payload": "X" * 1200}
+    tool_block = ToolResultBlock(
+        id="tc-history",
+        name="bash",
+        content={
+            **formal_payload,
+            "_meta": {
+                "notifications": {"system": {"body": "N" * 1000}},
+                "guidance": {"meta_readme": {}},
+            },
+        },
+    )
+    agent = _fake_agent()
+    agent._config.context_limit = 1_000_000
+    agent._cached_sys_prompt_tokens = 0
+    agent._cached_tool_schema_tokens = 0
+    agent._session = SimpleNamespace(
+        _token_decomp_dirty=False,
+        _system_prompt_tokens=0,
+        _tools_tokens=0,
+        _context_tokens=0,
+        _latest_input_tokens=0,
+        _tool_schema_tokens=0,
+        _context_section_tokens=0,
+        chat=SimpleNamespace(
+            interface=SimpleNamespace(_entries=[SimpleNamespace(content=[tool_block])]),
+            context_window=lambda: 1_000_000,
+        ),
+    )
+
+    meta = build_meta(agent)
+
+    current = meta["current_tool_result_chars"]
+    expected = len(json.dumps(formal_payload, ensure_ascii=False, default=str))
+    assert current["_readme"] == (
+        "listing top 5 tool result longer than 1000 char; "
+        "consider summarize if deemed useless"
+    )
+    assert current["total_chars"] == expected
+    assert current["top_results"] == [{"id": "tc-history", "chars": expected}]
+
+
+def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
+    readme = build_meta_readme()
+
+    assert "current_tool_result_chars" in readme["agent_meta"]
+    assert "top" in readme["agent_meta"]
+    assert "summarization" in readme["agent_meta"]
 
 
 def _fake_agent_with_lang(lang: str, *, time_awareness: bool = True):
@@ -771,6 +824,22 @@ def _stamped_result(meta, elapsed_ms):
     result = {"status": "ok"}
     stamp_meta(result, meta, elapsed_ms)
     return result
+
+
+def test_attach_active_runtime_counts_current_batch_tool_result_chars():
+    agent = _fake_agent()
+    result = {"payload": "batch"}
+    stamp_meta(result, build_meta(agent), elapsed_ms=12)
+    block = ToolResultBlock(id="tc-batch", name="bash", content=result)
+
+    attach_active_runtime(agent, [block])
+
+    agent_meta = block.content["_meta"]["agent_meta"]
+    current = agent_meta["current_tool_result_chars"]
+    assert current["total_chars"] == len(
+        json.dumps({"payload": "batch"}, ensure_ascii=False, default=str)
+    )
+    assert current["top_results"] == []
 
 
 def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
