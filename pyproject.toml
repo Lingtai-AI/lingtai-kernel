@@ -61,7 +61,7 @@ exclude = [
 ]
 
 [tool.setuptools.package-data]
-lingtai_kernel = ["i18n/*.json"]
+lingtai_kernel = ["i18n/*.json", "guidance.json"]
 lingtai = [
     "i18n/*.json",
     "mcp_catalog.json",

@@ -855,8 +855,13 @@ def test_reasoning_stripped_from_args():
 
 
 def test_tool_executor_uses_meta_fn_for_stamping():
-    """ToolExecutor calls meta_fn once per tool call and merges the returned
-    dict onto the result alongside _elapsed_ms."""
+    """ToolExecutor calls meta_fn once per tool call and records the returned
+    dict under result["_runtime_pending"] together with elapsed_ms.
+
+    The real latest-only _runtime block is promoted from _runtime_pending at the
+    tool-batch boundary by meta_block.attach_active_runtime (covered in
+    test_meta_block.py); ToolExecutor itself only records the pending snapshot.
+    """
     meta_calls = {"n": 0}
 
     def meta_fn():
@@ -882,14 +887,20 @@ def test_tool_executor_uses_meta_fn_for_stamping():
     assert not intercepted
     assert meta_calls["n"] == 1
     payload = results[0]["result"]
-    assert payload["current_time"] == "FAKE-TS"
-    assert payload["future_field"] == 1
-    assert "_elapsed_ms" in payload
+    # meta keys are recorded under _runtime_pending (not flat, not a real
+    # _runtime block — that is attached only at the turn boundary).
+    pending = payload["_runtime_pending"]
+    assert pending["current_time"] == "FAKE-TS"
+    assert pending["future_field"] == 1
+    assert "elapsed_ms" in pending
+    assert "_runtime" not in payload
+    assert "current_time" not in payload
+    assert "_elapsed_ms" not in payload
 
 
 def test_tool_executor_meta_fn_covers_parallel_path():
     """meta_fn is called per-tool in the parallel execution path too,
-    and each stamped result carries its meta fields and _elapsed_ms."""
+    and each result records its meta fields under _runtime_pending."""
     meta_calls = {"n": 0}
 
     def meta_fn():
@@ -919,8 +930,13 @@ def test_tool_executor_meta_fn_covers_parallel_path():
     assert meta_calls["n"] == 2
     for r in results:
         payload = r["result"]
-        assert payload["current_time"] == "FAKE-TS"
-        assert "_elapsed_ms" in payload
+        # meta keys recorded under _runtime_pending
+        pending = payload["_runtime_pending"]
+        assert pending["current_time"] == "FAKE-TS"
+        assert "elapsed_ms" in pending
+        assert "_runtime" not in payload
+        assert "current_time" not in payload
+        assert "_elapsed_ms" not in payload
 
 def test_deprecated_secondary_arg_is_ignored_not_dispatched():
     seen = []
@@ -1000,8 +1016,15 @@ def test_deprecated_secondary_arg_is_ignored_on_parallel_path():
     assert any(event == "deprecated_secondary_ignored" for event, _fields in logs)
 
 
-def test_tool_executor_attaches_active_turn_tool_call_progress_metadata():
-    """ToolExecutor exposes the guard's ACTIVE-turn progress meter on results."""
+def test_tool_executor_attaches_batch_progress_notice_only():
+    """ToolExecutor attaches the batch-scoped progress *notice* to results, but
+    no longer repeats the running counter top-level.
+
+    The counter (active_turn_tool_calls) is latest-only and lives under
+    _runtime.state, stamped by attach_active_runtime at the turn boundary from
+    the guard's total_calls — see test_meta_block.py. The transient notice is
+    still surfaced on the result that triggered it.
+    """
     guard = LoopGuard(max_total_calls=10_000, notice_interval=500)
     notice = guard.record_calls(500)
     assert notice is not None
@@ -1013,7 +1036,33 @@ def test_tool_executor_attaches_active_turn_tool_call_progress_metadata():
 
     assert not intercepted
     payload = results[0]["result"]
-    assert payload["active_turn_tool_calls"] == 500
+    # The running counter is NOT repeated top-level anymore.
+    assert "active_turn_tool_calls" not in payload
+    # The batch-scoped soft self-check notice is still surfaced.
     assert payload["active_turn_tool_call_notice"] == notice
     assert "active_turn_tool_call_limit" not in payload
     assert "active_turn_tool_call_notice_interval" not in payload
+
+
+def test_tool_executor_runtime_counter_stamped_at_boundary():
+    """The ACTIVE-turn counter reaches the model via _runtime.state (latest-only),
+    sourced from the guard at the tool-batch boundary by attach_active_runtime."""
+    from lingtai_kernel.meta_block import attach_active_runtime
+    from lingtai_kernel.llm.interface import ToolResultBlock
+    from types import SimpleNamespace
+
+    guard = LoopGuard(max_total_calls=10_000, notice_interval=500)
+    guard.record_calls(500)
+    executor = make_executor(guard=guard)
+    agent = SimpleNamespace(_executor=executor)
+
+    # A stamped result content (carries _runtime_pending via meta_fn-less path:
+    # stamp it explicitly to mimic a time-aware agent's result).
+    from lingtai_kernel.meta_block import stamp_meta
+    content = {"status": "ok"}
+    stamp_meta(content, {"current_time": "T"}, 7)
+    block = ToolResultBlock(id="tc1", name="read", content=content)
+
+    holder = attach_active_runtime(agent, [block], prior_holder=None)
+    assert holder is content
+    assert content["_runtime"]["state"]["active_turn_tool_calls"] == 500

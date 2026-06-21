@@ -1039,12 +1039,17 @@ def test_tool_result_metadata_always_present_for_small_result(tmp_path):
     assert "_tool_result_metadata" in content, "_tool_result_metadata must always be present"
     meta = content["_tool_result_metadata"]
     assert meta["tool_call_id"] == "tc-meta-small-001"
-    assert meta["tool_name"] == "bash"
+    # tool_name is no longer repeated on ordinary results — identity lives in the
+    # permanent _tool block (and on the ToolCallBlock).
+    assert "tool_name" not in meta
+    assert content["_tool"]["id"] == "tc-meta-small-001"
     assert isinstance(meta["char_count"], int) and meta["char_count"] > 0
     assert meta["threshold_chars"] == 3000
     assert meta["long_tool_result"] is False
     assert "hint" in meta
-    assert "summarize_instruction" in meta
+    # summarize_instruction is only present on large results (long_tool_result=True);
+    # generic summarize discipline lives in _runtime.guidance (from guidance.json).
+    assert "summarize_instruction" not in meta
 
 
 def test_tool_result_metadata_long_result_has_true_flag(tmp_path):
@@ -1099,9 +1104,12 @@ def test_tool_result_metadata_threshold_zero_still_present(tmp_path):
     )
     meta = content["_tool_result_metadata"]
     assert meta["tool_call_id"] == "tc-meta-zero-001"
-    assert meta["tool_name"] == "bash"
+    # tool_name moved to the permanent _tool block on ordinary results.
+    assert "tool_name" not in meta
+    assert content["_tool"]["id"] == "tc-meta-zero-001"
     assert isinstance(meta["char_count"], int) and meta["char_count"] > 0
     assert meta["threshold_chars"] == 0
     assert meta["long_tool_result"] is False
     assert "hint" in meta
-    assert "summarize_instruction" in meta
+    # summarize_instruction is only present on large results (long_tool_result=True)
+    assert "summarize_instruction" not in meta

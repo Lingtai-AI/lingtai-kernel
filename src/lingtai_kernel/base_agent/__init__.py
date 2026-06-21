@@ -472,6 +472,14 @@ class BaseAgent:
         # `meta_block.attach_active_notifications`.
         self._notification_live_holder: dict | None = None
 
+        # Latest provider-visible tool result carrying the live `_runtime`
+        # block (kernel runtime state + guidance).  Like the notification
+        # holder, `_runtime` is latest-only: when a newer dict result takes
+        # over, the prior holder's `_runtime` is stripped so stale runtime
+        # snapshots never accumulate in history.
+        # See `meta_block.attach_active_runtime`.
+        self._runtime_live_holder: dict | None = None
+
         # Large-result notification threshold (chars).  When a main-agent
         # tool result's serialized length exceeds this value, it becomes a
         # pending large-result case.  A system-channel notification reminding

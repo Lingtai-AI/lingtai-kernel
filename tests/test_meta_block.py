@@ -4,12 +4,18 @@ from __future__ import annotations
 import re
 from types import SimpleNamespace
 
+import pytest
+
 from lingtai_kernel.meta_block import (
+    GuidanceSchemaError,
     attach_active_notifications,
+    attach_active_runtime,
     build_meta,
+    build_runtime_guidance,
     clear_active_notification_holder,
     render_meta,
     stamp_meta,
+    validate_runtime_guidance,
 )
 from lingtai_kernel.llm.interface import ToolResultBlock
 
@@ -157,41 +163,53 @@ def test_render_meta_rounds_usage_to_one_decimal():
     assert "7.2%" in result
 
 
-def test_stamp_meta_writes_meta_keys_and_elapsed_ms_in_place():
+def test_stamp_meta_records_pending_snapshot_not_runtime_block():
+    # stamp_meta records a transient _runtime_pending snapshot. The real
+    # _runtime block is promoted only at the tool-batch boundary by
+    # attach_active_runtime (latest-only), so stamp_meta itself never writes
+    # _runtime or flat top-level keys.
     result = {"status": "ok"}
     out = stamp_meta(result, {"current_time": "2026-04-20T10:15:23-07:00"}, 42)
     assert out is result  # in-place
-    assert out["current_time"] == "2026-04-20T10:15:23-07:00"
-    assert out["_elapsed_ms"] == 42
+    pending = out["_runtime_pending"]
+    assert pending["current_time"] == "2026-04-20T10:15:23-07:00"
+    assert pending["elapsed_ms"] == 42
     assert out["status"] == "ok"
+    # No real _runtime block and no legacy flat keys at the top level.
+    assert "_runtime" not in out
+    assert "current_time" not in out
+    assert "_elapsed_ms" not in out
 
 
-def test_stamp_meta_empty_meta_omits_both_keys():
-    # Time-blind case: empty meta ⇒ no current_time AND no _elapsed_ms.
-    # Preserves stamp_tool_result(time_awareness=False) behavior verbatim.
+def test_stamp_meta_empty_meta_records_nothing():
+    # Time-blind case: empty meta ⇒ no pending snapshot, no _runtime block.
     result = {"status": "ok"}
     out = stamp_meta(result, {}, 42)
     assert out is result
+    assert "_runtime" not in out
+    assert "_runtime_pending" not in out
     assert "current_time" not in out
     assert "_elapsed_ms" not in out
     assert out == {"status": "ok"}
 
 
-def test_stamp_meta_future_fields_are_merged_through():
-    # Forward-compatibility: every key in meta lands on the result.
+def test_stamp_meta_future_fields_are_carried_in_pending():
+    # Forward-compatibility: every key in meta lands in _runtime_pending.
     result = {"status": "ok"}
     meta = {"current_time": "2026-04-20T10:15:23-07:00", "future_field": 123}
     stamp_meta(result, meta, 7)
-    assert result["future_field"] == 123
-    assert result["current_time"] == "2026-04-20T10:15:23-07:00"
-    assert result["_elapsed_ms"] == 7
+    pending = result["_runtime_pending"]
+    assert pending["future_field"] == 123
+    assert pending["current_time"] == "2026-04-20T10:15:23-07:00"
+    assert pending["elapsed_ms"] == 7
 
 
-def test_stamp_meta_elapsed_ms_overrides_meta_key():
-    # Guard: if meta ever carries _elapsed_ms, the measured value wins.
+def test_stamp_meta_elapsed_ms_key_under_pending():
+    # elapsed_ms is written as pending["elapsed_ms"] (not _elapsed_ms).
     result = {}
-    stamp_meta(result, {"_elapsed_ms": 9999}, 7)
-    assert result["_elapsed_ms"] == 7
+    stamp_meta(result, {"current_time": "T"}, 7)
+    assert result["_runtime_pending"]["elapsed_ms"] == 7
+    assert "_elapsed_ms" not in result
 
 
 def _fake_agent_with_session(
@@ -705,3 +723,228 @@ def test_attach_active_notifications_stamps_post_molt_with_other_channels(tmp_pa
     assert "email" in block.content["notifications"]
     assert "post-molt" in block.content["notifications"]
     assert agent._notification_fp == notification_fingerprint(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# attach_active_runtime — latest-only moving _runtime block (mirrors the
+# notification holder).  These cover the acceptance criteria directly:
+#   * latest provider-visible result has _runtime.state and _runtime.guidance
+#   * previous results lose _runtime when a newer dict result exists
+#   * active_turn_tool_calls lives under _runtime.state (not top-level)
+# ---------------------------------------------------------------------------
+
+
+def _runtime_agent(*, total_calls: int | None = None):
+    """Agent stand-in: attach_active_runtime reads agent._executor.guard.total_calls."""
+    guard = SimpleNamespace(total_calls=total_calls) if total_calls is not None else None
+    executor = SimpleNamespace(guard=guard) if guard is not None else None
+    return SimpleNamespace(_executor=executor)
+
+
+def _stamped_result(meta, elapsed_ms):
+    """A dict result that has been through stamp_meta (carries _runtime_pending)."""
+    result = {"status": "ok"}
+    stamp_meta(result, meta, elapsed_ms)
+    return result
+
+
+def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
+    agent = _runtime_agent(total_calls=3)
+    content = _stamped_result({"current_time": "T", "context": {"usage": 0.1}}, 12)
+    block = ToolResultBlock(id="t1", name="x", content=content)
+
+    holder = attach_active_runtime(agent, [block], prior_holder=None)
+
+    assert holder is block.content
+    runtime = block.content["_runtime"]
+    assert runtime["state"]["current_time"] == "T"
+    assert runtime["state"]["elapsed_ms"] == 12
+    # active_turn_tool_calls is sourced from the guard and lives under state.
+    assert runtime["state"]["active_turn_tool_calls"] == 3
+    # guidance comes from guidance.json (package resource) and validates.
+    assert "guidance" in runtime
+    assert runtime["guidance"]["schema_version"] == 1
+    # The transient scaffolding is consumed.
+    assert "_runtime_pending" not in block.content
+    # No top-level active_turn_tool_calls repetition.
+    assert "active_turn_tool_calls" not in block.content
+
+
+def test_attach_active_runtime_moves_to_latest_and_clears_prior():
+    agent = _runtime_agent(total_calls=1)
+
+    first_content = _stamped_result({"current_time": "T1"}, 5)
+    first = ToolResultBlock(id="t1", name="x", content=first_content)
+    holder = attach_active_runtime(agent, [first], prior_holder=None)
+    assert "_runtime" in first.content
+
+    # Second batch: a new dict result takes over. The prior holder must shed
+    # its _runtime; only the newest result carries it.
+    agent = _runtime_agent(total_calls=2)
+    second_content = _stamped_result({"current_time": "T2"}, 6)
+    second = ToolResultBlock(id="t2", name="x", content=second_content)
+    new_holder = attach_active_runtime(agent, [second], prior_holder=holder)
+
+    assert new_holder is second.content
+    assert "_runtime" not in first.content  # previous loses it
+    assert second.content["_runtime"]["state"]["current_time"] == "T2"
+    assert second.content["_runtime"]["state"]["active_turn_tool_calls"] == 2
+
+
+def test_attach_active_runtime_picks_latest_dict_in_batch():
+    agent = _runtime_agent(total_calls=4)
+    earlier = ToolResultBlock(id="t1", name="x", content=_stamped_result({"current_time": "E"}, 1))
+    middle = ToolResultBlock(id="t2", name="x", content=_stamped_result({"current_time": "M"}, 2))
+    string_tail = ToolResultBlock(id="t3", name="x", content="plain text")
+
+    holder = attach_active_runtime(agent, [earlier, middle, string_tail], prior_holder=None)
+
+    assert holder is middle.content
+    assert middle.content["_runtime"]["state"]["current_time"] == "M"
+    # The earlier dict gets no _runtime, and its pending scaffolding is stripped.
+    assert "_runtime" not in earlier.content
+    assert "_runtime_pending" not in earlier.content
+    assert string_tail.content == "plain text"
+
+
+def test_attach_active_runtime_empty_meta_yields_no_runtime_but_clears_prior():
+    # A time-blind agent's results carry no _runtime_pending (stamp_meta no-op).
+    agent = _runtime_agent(total_calls=1)
+    prior_content = _stamped_result({"current_time": "T1"}, 5)
+    prior = ToolResultBlock(id="t1", name="x", content=prior_content)
+    holder = attach_active_runtime(agent, [prior], prior_holder=None)
+    assert "_runtime" in prior.content
+
+    # Next batch: result was NOT stamped (no pending). Prior still loses _runtime.
+    blind = ToolResultBlock(id="t2", name="x", content={"status": "ok"})
+    new_holder = attach_active_runtime(agent, [blind], prior_holder=holder)
+
+    assert new_holder is None
+    assert "_runtime" not in prior.content
+    assert "_runtime" not in blind.content
+
+
+def test_attach_active_runtime_no_dict_target_clears_prior():
+    agent = _runtime_agent(total_calls=1)
+    prior_content = _stamped_result({"current_time": "T1"}, 5)
+    prior = ToolResultBlock(id="t1", name="x", content=prior_content)
+    holder = attach_active_runtime(agent, [prior], prior_holder=None)
+
+    string_only = ToolResultBlock(id="t2", name="x", content="text")
+    new_holder = attach_active_runtime(agent, [string_only], prior_holder=holder)
+
+    assert new_holder is None
+    assert "_runtime" not in prior.content
+    assert string_only.content == "text"
+
+
+def test_attach_active_runtime_omits_counter_when_no_guard():
+    agent = _runtime_agent(total_calls=None)  # no executor/guard
+    content = _stamped_result({"current_time": "T"}, 9)
+    block = ToolResultBlock(id="t1", name="x", content=content)
+
+    holder = attach_active_runtime(agent, [block], prior_holder=None)
+
+    assert holder is block.content
+    state = block.content["_runtime"]["state"]
+    assert state["current_time"] == "T"
+    assert "active_turn_tool_calls" not in state
+
+
+# ---------------------------------------------------------------------------
+# guidance.json schema validation.
+# ---------------------------------------------------------------------------
+
+
+def _valid_guidance():
+    return {
+        "schema_version": 1,
+        "guidance_version": "0.1.0",
+        "priority": "tail",
+        "render_mode": "latest_tool_result_only",
+        "sections": [
+            {"id": "a", "title": "A", "body": "body a"},
+            {"id": "b", "title": "B", "body": "body b"},
+        ],
+    }
+
+
+def test_packaged_guidance_resource_is_valid():
+    # The shipped guidance.json must validate — this is the test that catches a
+    # malformed packaged resource (build_runtime_guidance degrades silently).
+    guidance = build_runtime_guidance()
+    assert guidance != {}, "packaged guidance.json failed to load/validate"
+    validate_runtime_guidance(guidance)  # must not raise
+    ids = [s["id"] for s in guidance["sections"]]
+    assert len(ids) == len(set(ids)), "section ids must be unique"
+    titles = [s["title"] for s in guidance["sections"]]
+    assert len(titles) == len(set(titles)), "section titles must be unique"
+
+
+def test_validate_runtime_guidance_accepts_well_formed():
+    data = _valid_guidance()
+    assert validate_runtime_guidance(data) is data
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d.pop("schema_version"),
+    lambda d: d.pop("sections"),
+    lambda d: d.update(schema_version="1"),   # wrong type
+    lambda d: d.update(schema_version=True),  # bool is not a valid int here
+    lambda d: d.update(priority=""),          # empty string
+    lambda d: d.update(sections=[]),          # empty list
+    lambda d: d.update(sections="nope"),      # wrong type
+])
+def test_validate_runtime_guidance_rejects_malformed_top_level(mutate):
+    data = _valid_guidance()
+    mutate(data)
+    with pytest.raises(GuidanceSchemaError):
+        validate_runtime_guidance(data)
+
+
+def test_validate_runtime_guidance_rejects_section_missing_field():
+    data = _valid_guidance()
+    data["sections"][0].pop("body")
+    with pytest.raises(GuidanceSchemaError):
+        validate_runtime_guidance(data)
+
+
+def test_validate_runtime_guidance_rejects_duplicate_section_id():
+    data = _valid_guidance()
+    data["sections"][1]["id"] = "a"  # duplicate of sections[0].id
+    with pytest.raises(GuidanceSchemaError):
+        validate_runtime_guidance(data)
+
+
+def test_validate_runtime_guidance_rejects_duplicate_section_title():
+    data = _valid_guidance()
+    data["sections"][1]["title"] = "A"  # duplicate of sections[0].title
+    with pytest.raises(GuidanceSchemaError):
+        validate_runtime_guidance(data)
+
+
+def test_validate_runtime_guidance_rejects_non_dict():
+    with pytest.raises(GuidanceSchemaError):
+        validate_runtime_guidance(["not", "a", "dict"])
+
+
+# ---------------------------------------------------------------------------
+# Regression guard for the parent-identified blocker #1: move_runtime_block was
+# defined but had NO call site, so _runtime was never injected. attach_active_runtime
+# replaces it and MUST be wired into the tool-batch boundary in base_agent.turn.
+# This catches a future "function defined but never called" regression cheaply
+# without standing up a full turn harness.
+# ---------------------------------------------------------------------------
+
+
+def test_attach_active_runtime_is_wired_into_turn_boundary():
+    import inspect
+    from lingtai_kernel.base_agent import turn as _turn
+
+    src = inspect.getsource(_turn)
+    assert "attach_active_runtime(" in src, (
+        "attach_active_runtime must be CALLED at the tool-batch boundary in "
+        "base_agent/turn.py — otherwise _runtime is never injected (blocker #1)."
+    )
+    # The holder attribute the boundary mutates must be referenced too.
+    assert "_runtime_live_holder" in src

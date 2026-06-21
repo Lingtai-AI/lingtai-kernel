@@ -17,7 +17,12 @@ from ..safety_limits import (
 )
 from ..tool_executor import ToolExecutor
 from ..tool_result_artifacts import CompactionStats, compact_oversized_history
-from ..meta_block import attach_active_notifications, build_meta, render_meta
+from ..meta_block import (
+    attach_active_notifications,
+    attach_active_runtime,
+    build_meta,
+    render_meta,
+)
 from ..sent_message_tracker import SEND_TOOLS, SEND_ACTIONS, CHECK_ACTIONS
 from ..time_veil import now_iso
 
@@ -1436,6 +1441,25 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                     )
                 except Exception:
                     pass
+
+        # Move the live `_runtime` block (kernel runtime state + guidance) to
+        # the latest tool-result dict from this batch, stripping it from the
+        # prior holder.  This keeps `_runtime` latest-only — only the freshest
+        # provider-visible result carries live runtime state, so stale snapshots
+        # do not accumulate in history.  Mirrors the notification holder above.
+        # Unlike notifications there is no molt-race special case: `_runtime` is
+        # a pure per-turn snapshot, not kernel-synchronized channel state.
+        try:
+            agent._runtime_live_holder = attach_active_runtime(
+                agent,
+                tool_results,
+                prior_holder=getattr(agent, "_runtime_live_holder", None),
+            )
+        except Exception:
+            agent._log(
+                "runtime_block_attach_failed",
+                reason="attach_active_runtime raised",
+            )
 
         if intercepted:
             if tool_results and agent._chat:

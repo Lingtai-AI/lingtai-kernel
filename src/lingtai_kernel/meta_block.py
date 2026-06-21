@@ -8,11 +8,17 @@ Curate carefully: every field added to `build_meta` ships on every text input
 and every tool result.
 
 Channel encoding:
-- Tool-result channel: `stamp_meta` flattens the dict into the result dict
-  as-is. The LLM sees structured JSON (e.g. ``result["context"]["usage"]``).
+- Tool-result channel: ``stamp_meta`` records a per-tool runtime snapshot,
+  which ``attach_active_runtime`` promotes into a nested ``_runtime`` block on
+  the *latest* result dict only (latest-only; the prior holder's ``_runtime``
+  is stripped).  The LLM sees structured JSON under
+  ``result["_runtime"]["state"]`` plus ``result["_runtime"]["guidance"]``.
 - Text-input channel: `render_meta` formats the same dict into a prose
   prefix line. Inbox content is NOT rendered here — it lives in the
   user-turn body, drained by ``_concat_queued_messages`` upstream.
+
+Per-result identity facts live in a small permanent ``_tool`` block, written
+once by ``ToolExecutor._attach_tool_block`` and never moved.
 
 As of 2026-05-02, the meta block no longer carries inbox-drained
 notifications. System-source notifications (mail arrival, bounce, future
@@ -23,10 +29,121 @@ docs/plans/2026-05-02-system-notification-as-tool-call.md.
 """
 from __future__ import annotations
 
+import json as _json
 import time as _time
+from importlib import resources as _resources
 
 from .i18n import t as _t
 from .time_veil import now_iso
+
+
+def now_iso_plain() -> str:
+    """Return the current UTC time as a plain ISO-8601 string (no agent needed).
+
+    Used by ``_tool`` block stamping where no agent context is available.
+    Always returns UTC with a Z suffix, e.g. ``2026-06-20T12:34:56Z``.
+    Falls back to empty string on any error.
+    """
+    try:
+        import datetime as _dt
+        return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# guidance.json — package resource, loaded once.
+# ---------------------------------------------------------------------------
+
+_GUIDANCE_CACHE: dict | None = None
+
+# Allowed values for the small fixed-vocabulary fields. Kept permissive on
+# purpose: the kernel must not reject a future render strategy it does not yet
+# know about, only structurally malformed payloads.
+_GUIDANCE_REQUIRED_TOP_KEYS = ("schema_version", "guidance_version", "priority", "render_mode", "sections")
+
+
+class GuidanceSchemaError(ValueError):
+    """Raised when guidance.json does not match the expected shape.
+
+    A structural problem in the *packaged* resource is a build/authoring error,
+    not a runtime condition, so this is surfaced loudly to ``validate_runtime_guidance``
+    callers (and the test suite). The live loader (``build_runtime_guidance``)
+    degrades to ``{}`` rather than crashing an agent on a bad ship.
+    """
+
+
+def validate_runtime_guidance(data) -> dict:
+    """Validate the guidance payload shape, returning it unchanged on success.
+
+    Raises :class:`GuidanceSchemaError` on any structural violation:
+      * top-level must be a dict with ``schema_version`` (int), ``guidance_version``
+        (str), ``priority`` (str), ``render_mode`` (str), and ``sections`` (list);
+      * each section must be a dict with non-empty string ``id``, ``title``, ``body``;
+      * section ``id`` and ``title`` must each be unique across the list.
+
+    This is intentionally strict and independently testable so a malformed
+    packaged resource is caught by the test suite rather than silently shipping
+    empty guidance to production agents.
+    """
+    if not isinstance(data, dict):
+        raise GuidanceSchemaError(f"guidance must be a JSON object, got {type(data).__name__}")
+    for key in _GUIDANCE_REQUIRED_TOP_KEYS:
+        if key not in data:
+            raise GuidanceSchemaError(f"guidance missing required key: {key!r}")
+    if not isinstance(data["schema_version"], int) or isinstance(data["schema_version"], bool):
+        raise GuidanceSchemaError("guidance.schema_version must be an int")
+    for str_key in ("guidance_version", "priority", "render_mode"):
+        if not isinstance(data[str_key], str) or not data[str_key]:
+            raise GuidanceSchemaError(f"guidance.{str_key} must be a non-empty string")
+    sections = data["sections"]
+    if not isinstance(sections, list) or not sections:
+        raise GuidanceSchemaError("guidance.sections must be a non-empty list")
+
+    seen_ids: set[str] = set()
+    seen_titles: set[str] = set()
+    for idx, section in enumerate(sections):
+        if not isinstance(section, dict):
+            raise GuidanceSchemaError(f"guidance.sections[{idx}] must be an object")
+        for field in ("id", "title", "body"):
+            value = section.get(field)
+            if not isinstance(value, str) or not value:
+                raise GuidanceSchemaError(
+                    f"guidance.sections[{idx}].{field} must be a non-empty string"
+                )
+        sid = section["id"]
+        stitle = section["title"]
+        if sid in seen_ids:
+            raise GuidanceSchemaError(f"duplicate guidance section id: {sid!r}")
+        if stitle in seen_titles:
+            raise GuidanceSchemaError(f"duplicate guidance section title: {stitle!r}")
+        seen_ids.add(sid)
+        seen_titles.add(stitle)
+    return data
+
+
+def build_runtime_guidance() -> dict:
+    """Load, validate, and return the runtime guidance payload from guidance.json.
+
+    Cached after first successful load.  The payload is schema-checked via
+    :func:`validate_runtime_guidance`; on a missing/unreadable resource, a JSON
+    parse error, or a schema violation the loader returns an empty dict so a
+    live agent degrades (no guidance) rather than crashing.  Tests should call
+    :func:`validate_runtime_guidance` directly to assert the *packaged* resource
+    is well-formed — that path raises, this one does not.
+    """
+    global _GUIDANCE_CACHE
+    if _GUIDANCE_CACHE is not None:
+        return _GUIDANCE_CACHE
+    try:
+        pkg = _resources.files("lingtai_kernel")
+        data = (pkg / "guidance.json").read_text(encoding="utf-8")
+        parsed = _json.loads(data)
+        validate_runtime_guidance(parsed)
+        _GUIDANCE_CACHE = parsed
+        return parsed
+    except Exception:
+        return {}
 
 
 def build_meta(agent) -> dict:
@@ -460,25 +577,118 @@ def _render_context_fragment(agent, meta: dict) -> str:
 
 
 def stamp_meta(result: dict, meta: dict, elapsed_ms: int) -> dict:
-    """Merge meta fields into a tool-result dict (in place) and return it.
+    """Record per-tool runtime ``meta`` on the result for the boundary holder.
 
-    When ``meta`` is empty, neither the meta fields nor ``_elapsed_ms`` are
-    written — matching the pre-existing behaviour of
-    ``stamp_tool_result(time_awareness=False)`` exactly. This is deliberate:
-    the spec originally claimed ``_elapsed_ms`` always writes, but preserving
-    the old time-blind path means a time-blind agent's tool results stay
-    free of any timing signal, not just wall-clock. Callers that want a
-    timing-only stamp should pass a non-empty meta dict.
+    ``_runtime`` is a **latest-only** block: only the freshest provider-visible
+    tool result carries live runtime ``state``/``guidance``.  Stamping it on
+    every result (the old behaviour) would leave stale snapshots in history, so
+    this function no longer writes ``result["_runtime"]``.  Instead it records
+    the per-tool ``meta`` snapshot and measured ``elapsed_ms`` under a transient
+    ``_runtime_pending`` key, which :func:`attach_active_runtime` consumes at the
+    tool-batch boundary (analogous to the notification holder) and then deletes.
 
-    ``_elapsed_ms`` lives here (rather than inside ``build_meta``) because
-    it is a per-tool-call measurement — not per-turn agent state — and it
-    would be wrong for the same value to appear on the text-input prefix.
-    It is written unconditionally after the meta-key loop, so it always
-    overrides any identically-named key in ``meta``.
+    When ``meta`` is empty nothing is recorded — matching the pre-existing
+    time-blind behaviour where no timing signal appears.
+
+    ``_runtime_pending`` is internal scaffolding and never reaches the wire: the
+    boundary holder strips it from every result it inspects.  The ``_tool`` block
+    written by ``ToolExecutor._attach_tool_block`` is separate and permanent;
+    ``stamp_meta`` does not touch it.
     """
     if not meta:
         return result
-    for k, v in meta.items():
-        result[k] = v
-    result["_elapsed_ms"] = elapsed_ms
+    pending: dict = dict(meta)
+    pending["elapsed_ms"] = elapsed_ms
+    result["_runtime_pending"] = pending
     return result
+
+
+# ---------------------------------------------------------------------------
+# _runtime block — latest-result-only moving holder, mirrors the notification
+# payload pattern in ``attach_active_notifications``.
+# ---------------------------------------------------------------------------
+
+_RUNTIME_KEYS = ("state", "guidance")
+
+
+def _strip_runtime_pending(tool_results: list) -> None:
+    """Remove the transient ``_runtime_pending`` scaffolding from every result.
+
+    ``stamp_meta`` records a per-tool ``_runtime_pending`` snapshot on each
+    dict result; only the latest result's snapshot is promoted into a real
+    ``_runtime`` block.  This clears the scaffolding from the rest so it never
+    reaches the wire or lingers in history.
+    """
+    for block in tool_results:
+        content = getattr(block, "content", None)
+        if isinstance(content, dict):
+            content.pop("_runtime_pending", None)
+
+
+def attach_active_runtime(
+    agent,
+    tool_results: list,
+    *,
+    prior_holder: dict | None = None,
+) -> dict | None:
+    """Move the live ``_runtime`` block to the latest tool result only.
+
+    Mirrors :func:`attach_active_notifications`:
+
+      * Strip ``_runtime`` from ``prior_holder`` (the previous live holder) so
+        stale runtime snapshots do not accumulate in history.
+      * Promote the latest dict-shaped result's per-tool ``_runtime_pending``
+        snapshot (recorded by :func:`stamp_meta`) into a real ``_runtime`` block
+        carrying ``state`` (kernel runtime state + ``elapsed_ms`` +
+        ``active_turn_tool_calls``) and ``guidance`` (from ``guidance.json``).
+      * Strip the transient ``_runtime_pending`` scaffolding from *all* results.
+      * Return the new holder dict (or ``None`` when no live runtime applies).
+
+    ``active_turn_tool_calls`` is read from the agent's executor guard so the
+    counter lives under ``_runtime.state`` (latest-only) rather than being
+    repeated on every result.  ``elapsed_ms`` comes from the latest result's
+    own ``_runtime_pending`` snapshot.
+
+    No live runtime is produced (and the prior holder is still cleared) when the
+    batch has no dict-shaped target or the latest target carried no pending
+    snapshot (e.g. a time-blind agent whose ``meta`` is empty).
+    """
+    # The prior holder always loses its _runtime — at most one live holder.
+    if prior_holder is not None:
+        prior_holder.pop("_runtime", None)
+
+    target = _last_dict_result(tool_results)
+    pending = target.pop("_runtime_pending", None) if target is not None else None
+
+    # Clear scaffolding from every other result regardless of outcome.
+    _strip_runtime_pending(tool_results)
+
+    if target is None or not isinstance(pending, dict) or not pending:
+        return None
+
+    state: dict = dict(pending)
+    calls = _active_turn_tool_calls(agent)
+    if calls is not None:
+        state["active_turn_tool_calls"] = calls
+
+    runtime: dict = {"state": state}
+    guidance = build_runtime_guidance()
+    if guidance:
+        runtime["guidance"] = guidance
+
+    target["_runtime"] = runtime
+    return target
+
+
+def _active_turn_tool_calls(agent) -> int | None:
+    """Best-effort read of the ACTIVE-turn tool-call counter from the guard.
+
+    Returns ``None`` (counter omitted) if the agent has no executor/guard or
+    the attribute is unavailable, so a missing counter never breaks stamping.
+    """
+    try:
+        guard = getattr(getattr(agent, "_executor", None), "guard", None)
+        total = getattr(guard, "total_calls", None)
+        return int(total) if total is not None else None
+    except Exception:
+        return None

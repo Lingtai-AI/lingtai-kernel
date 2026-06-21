@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from .llm.base import ToolCall
 from .loop_guard import LoopGuard
-from .meta_block import stamp_meta
+from .meta_block import stamp_meta, now_iso_plain
 from .tool_result_artifacts import (
     PREVENTIVE_MAX_CHARS as _DEFAULT_MAX_RESULT_CHARS,
     spill_oversized_result as _spill_oversized_result,
@@ -293,14 +293,105 @@ class ToolExecutor:
         return formatted[-max_chars:]
 
     def _attach_tool_call_progress(self, result: Any) -> Any:
-        """Attach ACTIVE-turn tool-call progress metadata when possible.
+        """Attach the batch-scoped ACTIVE-turn progress *notice* when present.
 
-        Tool-result metadata is already dictionary-based in LingTai's main
-        result path.  Preserve non-dict payloads to avoid changing legacy
-        scalar tool semantics.
+        The running counter (``active_turn_tool_calls``) is intentionally NOT
+        written here: it is latest-only state and lives under
+        ``_runtime.state.active_turn_tool_calls`` (stamped by
+        ``attach_active_runtime`` at the tool-batch boundary).  Repeating the
+        counter on every result left stale snapshots in history.
+
+        The ``active_turn_tool_call_notice`` is a transient soft self-check that
+        the guard only emits when a notice interval is crossed and clears after
+        the batch — it is genuine batch-scoped advisory text the model should see
+        on the result that triggered it, so it is preserved here.
+
+        Non-dict payloads are left unchanged to avoid mutating legacy scalar
+        tool semantics.
         """
         if isinstance(result, dict):
-            result.update(self._guard.progress_metadata())
+            progress = self._guard.progress_metadata()
+            notice = progress.get("active_turn_tool_call_notice")
+            if notice:
+                result["active_turn_tool_call_notice"] = notice
+        return result
+
+    # Kernel-injected auxiliary keys that are NOT part of the tool's own
+    # substantive payload. Excluded from the result-intrinsic ``_tool.chars``
+    # count so size reflects the tool output, not metadata layered on after.
+    _AUX_RESULT_KEYS = (
+        "_tool",
+        "_runtime",
+        "_runtime_pending",
+        "_tool_result_metadata",
+        "_advisory",
+        "notifications",
+        "_notifications",
+        "_notification_guidance",
+        "active_turn_tool_calls",
+        "active_turn_tool_call_notice",
+    )
+
+    def _intrinsic_char_count(self, result: dict) -> int:
+        """Serialized size of the result excluding kernel auxiliary keys.
+
+        Builds a shallow copy without the aux keys (see ``_AUX_RESULT_KEYS``) and
+        measures that, so the count is stable regardless of which metadata blocks
+        happen to be present when ``_tool`` is stamped.
+        """
+        import json as _json
+        intrinsic = {k: v for k, v in result.items() if k not in self._AUX_RESULT_KEYS}
+        try:
+            return len(_json.dumps(intrinsic, ensure_ascii=False, default=str))
+        except (TypeError, ValueError):
+            return 0
+
+    def _attach_tool_block(
+        self,
+        result: Any,
+        *,
+        tool_call_id: str | None,
+        elapsed_ms: int | float,
+        spilled: bool = False,
+        status: str | None = None,
+    ) -> Any:
+        """Inject the permanent ``_tool`` identity block into dict-shaped results.
+
+        This block is tiny, written once, and survives context history. It records
+        facts intrinsic to this specific tool result invocation. The tool name is
+        intentionally omitted because it already appears on the ToolCallBlock.
+
+        Fields:
+          id          — tool_call_id (or "<unknown>")
+          timestamp   — ISO completion timestamp
+          chars       — *result-intrinsic* serialized size: the kernel-injected
+                        auxiliary keys (``_tool``, ``_runtime``, ``_runtime_pending``,
+                        ``_tool_result_metadata``, ``_advisory``, ``notifications``,
+                        ``_notification_guidance``, batch progress notice) are
+                        excluded so the count reflects the tool's own payload, not
+                        metadata the kernel layered on after the fact.
+          elapsed_ms  — execution time in milliseconds
+          spilled     — True when the result was truncated to a spill manifest
+          status      — "error" when the result carries status=error; omitted otherwise
+        """
+        if not isinstance(result, dict):
+            return result
+        if "_tool" in result:
+            return result
+
+        chars = self._intrinsic_char_count(result)
+
+        tool_block: dict = {
+            "id": tool_call_id or "<unknown>",
+            "timestamp": now_iso_plain(),
+            "chars": chars,
+            "elapsed_ms": int(elapsed_ms),
+            "spilled": spilled,
+        }
+        if status == "error":
+            tool_block["status"] = "error"
+
+        result["_tool"] = tool_block
         return result
 
     def _attach_tool_result_metadata(
@@ -310,17 +401,14 @@ class ToolExecutor:
         tool_name: str,
         tool_call_id: str | None,
     ) -> Any:
-        """Inject ``_tool_result_metadata`` into every dict-shaped tool result.
+        """Inject ``_tool_result_metadata`` into dict-shaped tool results.
 
-        Metadata is always present so agents and orchestrators have a constant
-        affordance for tool identity, size, and summarize guidance — regardless
-        of whether the result is large.  String results and non-dict payloads
-        are left unchanged to avoid mutating non-kernel-owned schemas.
+        Metadata is present so agents have a constant affordance for tool
+        identity, size, and large-result hints.  String results and non-dict
+        payloads are left unchanged.
 
         Excluded: daemon_tool_result relays, already-summarized blocks, spill
-        manifests (they carry their own size hints via the spill path).  The key
-        ``_tool_result_metadata`` is reserved and will not collide with normal
-        tool output.
+        manifests (they carry their own size hints via the spill path).
 
         Fields always present:
           tool_call_id    — provider-assigned call id (or "<unknown>")
@@ -330,11 +418,12 @@ class ToolExecutor:
           threshold_chars — the configured summarize notification threshold
                             (0 means long-result hinting is disabled)
           long_tool_result — True iff char_count > threshold_chars > 0
-          hint            — short human/agent-readable string distinguishing
-                            long vs non-long result
-          summarize_instruction — concise instruction for calling system.summarize;
-                            always states that summarize operates on already-
-                            completed prior results (not the current one)
+          hint            — short human/agent-readable string for large results
+
+        Note: ``summarize_instruction`` is only included for *large* results
+        (``long_tool_result=True``). Generic summarization guidance belongs in
+        ``_runtime.guidance`` (loaded from ``guidance.json``), not repeated on
+        every ordinary tool result.
         """
         if not isinstance(result, dict):
             return result
@@ -352,12 +441,10 @@ class ToolExecutor:
         if is_spill_manifest(result):
             return result
 
-        import json as _json
-        try:
-            serialized = _json.dumps(result, ensure_ascii=False, default=str)
-        except (TypeError, ValueError):
-            return result
-        char_count = len(serialized)
+        # Result-intrinsic count: exclude kernel aux keys so the figure reflects
+        # the tool's own payload and never self-inflates from metadata added
+        # earlier in the boundary (matches the ``_tool.chars`` contract).
+        char_count = self._intrinsic_char_count(result)
 
         threshold = self._summarize_notification_threshold
         tcid = tool_call_id or "<unknown>"
@@ -366,6 +453,9 @@ class ToolExecutor:
         is_long = (threshold > 0) and (char_count > threshold)
 
         if is_long:
+            # Long results keep the full compact metadata (including tool_name and
+            # the actionable summarize_instruction) — this is the size-pressure
+            # affordance the model and procedures.md rely on.
             hint = (
                 f"Large result: {char_count} chars exceeds the {threshold}-char threshold."
             )
@@ -377,28 +467,34 @@ class ToolExecutor:
                 f"tool results — it cannot summarize the current result in the same tool batch "
                 f"before that result exists. The full original is preserved in events.jsonl."
             )
+            meta_block: dict = {
+                "tool_call_id": tcid,
+                "tool_name": tool_name,
+                "char_count": char_count,
+                "threshold_chars": threshold,
+                "long_tool_result": is_long,
+                "hint": hint,
+                "summarize_instruction": summarize_instruction,
+            }
         else:
+            # Ordinary results carry the minimal size-signal block only; tool
+            # identity lives in the permanent ``_tool`` block (and on the
+            # ToolCallBlock), so ``tool_name`` is no longer repeated here. The
+            # block stays present (PR #430 always-present invariant) so agents
+            # keep a constant char_count/threshold affordance.
             if threshold <= 0:
                 hint = "Long-result hinting is disabled (threshold=0); summarize remains available for any prior result worth condensing."
             else:
-                hint = f"Result within threshold ({char_count} chars ≤ {threshold} chars); summarize is optional when the result is worth condensing."
-            summarize_instruction = (
-                f"Call system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tcid}\", "
-                f"\"summary\": \"<your summary>\"}}]) on a later step to compress any prior "
-                f"completed tool result that is worth condensing. system.summarize operates on "
-                f"already-completed prior tool results only — it cannot summarize a result in "
-                f"the same tool batch before that result exists."
-            )
+                hint = f"Result within threshold ({char_count} chars ≤ {threshold} chars)."
+            meta_block = {
+                "tool_call_id": tcid,
+                "char_count": char_count,
+                "threshold_chars": threshold,
+                "long_tool_result": is_long,
+                "hint": hint,
+            }
 
-        result["_tool_result_metadata"] = {
-            "tool_call_id": tcid,
-            "tool_name": tool_name,
-            "char_count": char_count,
-            "threshold_chars": threshold,
-            "long_tool_result": is_long,
-            "hint": hint,
-            "summarize_instruction": summarize_instruction,
-        }
+        result["_tool_result_metadata"] = meta_block
         return result
 
     @staticmethod
@@ -540,7 +636,8 @@ class ToolExecutor:
         )
         collected_errors.append(f"{tc.name}: {result['message']}")
         return self._build_result_message(
-            tc.name, result, tool_call_id=tc_id, tool_trace_id=trace_id, status="error"
+            tc.name, result, tool_call_id=tc_id, tool_trace_id=trace_id,
+            status="error", elapsed_ms=elapsed,
         )
 
     def _build_result_message(
@@ -551,18 +648,17 @@ class ToolExecutor:
         tool_call_id: str | None,
         tool_trace_id: str,
         status: str | None = None,
+        elapsed_ms: int | float = 0,
     ) -> Any:
         """Final boundary before a result reaches the LLM wire.
 
-        Adds ACTIVE-turn tool-call progress metadata, then applies the unified
-        character cap (``PREVENTIVE_MAX_CHARS``): results that serialize
-        beyond the cap are spilled to a sidecar artifact under
-        ``<workdir>/tmp/tool-results/`` and replaced with a compact manifest
-        pointing at the file.  The compact manifest also receives progress
-        metadata so the model-visible result always carries the counter when the
-        payload is dict-shaped.  Notification pairs do not pass through this
-        method — they are synthesized directly by ``BaseAgent._inject_notifications``
-        and bypass ``ToolExecutor``.
+        Attaches ACTIVE-turn progress metadata and the permanent ``_tool``
+        identity block, then applies the unified character cap: oversized results
+        are spilled to a sidecar artifact and replaced with a compact manifest.
+        The manifest also receives progress metadata when dict-shaped.
+
+        Notification pairs bypass this method — they are synthesized directly
+        by ``BaseAgent._inject_notifications``.
         """
         self._attach_tool_call_progress(result)
         self._attach_tool_result_metadata(result, tool_name=tool_name, tool_call_id=tool_call_id)
@@ -588,6 +684,14 @@ class ToolExecutor:
                 )
             except Exception:
                 pass
+        # Attach permanent _tool identity block to the final (possibly spilled) result.
+        self._attach_tool_block(
+            capped,
+            tool_call_id=tool_call_id,
+            elapsed_ms=elapsed_ms,
+            spilled=spilled,
+            status=status,
+        )
         msg = self._make_tool_result_fn(tool_name, capped, tool_call_id=tool_call_id)
         self._log_lifecycle(
             "tool_result_model_visible",
@@ -757,7 +861,7 @@ class ToolExecutor:
                 )
                 result_msg = self._build_result_message(
                     tc.name, err_result, tool_call_id=tc_id, tool_trace_id=trace_id,
-                    status="error",
+                    status="error", elapsed_ms=timer.elapsed_ms,
                 )
                 collected_errors.append(f"{tc.name}: {err_result['message']}")
                 return result_msg, False, ""
@@ -835,13 +939,13 @@ class ToolExecutor:
                 intercept_text = result.get("text", "")
                 result_msg = self._build_result_message(
                     tc.name, result, tool_call_id=tc_id, tool_trace_id=trace_id,
-                    status=status,
+                    status=status, elapsed_ms=timer.elapsed_ms,
                 )
                 return result_msg, True, intercept_text
 
             result_msg = self._build_result_message(
                 tc.name, result, tool_call_id=tc_id, tool_trace_id=trace_id,
-                status=status,
+                status=status, elapsed_ms=timer.elapsed_ms,
             )
 
             if isinstance(result, dict) and result.get("status") == "error":
@@ -897,7 +1001,7 @@ class ToolExecutor:
             )
             result_msg = self._build_result_message(
                 tc.name, err_result, tool_call_id=tc_id, tool_trace_id=trace_id,
-                status="error",
+                status="error", elapsed_ms=timer.elapsed_ms,
             )
             collected_errors.append(f"{tc.name}: {e}")
             return result_msg, False, ""
@@ -976,7 +1080,7 @@ class ToolExecutor:
                 )
                 tool_results.append((i, self._build_result_message(
                     tc.name, result, tool_call_id=tc_id, tool_trace_id=trace_id,
-                    status="error",
+                    status="error", elapsed_ms=0,
                 )))
                 collected_errors.append(f"{tc.name}: {result['message']}")
             else:
@@ -1247,9 +1351,10 @@ class ToolExecutor:
             if i in results_map:
                 result = results_map[i]
                 status = result.get("status", "success") if isinstance(result, dict) else "success"
+                _elapsed = result.get("elapsed_ms", 0) if isinstance(result, dict) else 0
                 result_msg = self._build_result_message(
                     tc.name, result, tool_call_id=tc_id, tool_trace_id=trace_id,
-                    status=status,
+                    status=status, elapsed_ms=_elapsed,
                 )
                 tool_results.append((i, result_msg))
                 if isinstance(result, dict) and result.get("status") == "error":
@@ -1273,9 +1378,10 @@ class ToolExecutor:
             elif i in errors_map:
                 err_result = errors_map[i]
                 err_msg = str(err_result.get("message", "unknown error"))
+                _elapsed = err_result.get("elapsed_ms", 0)
                 tool_results.append((i, self._build_result_message(
                     tc.name, err_result, tool_call_id=tc_id, tool_trace_id=trace_id,
-                    status="error",
+                    status="error", elapsed_ms=_elapsed,
                 )))
                 collected_errors.append(f"{tc.name}: {err_msg}")
 
