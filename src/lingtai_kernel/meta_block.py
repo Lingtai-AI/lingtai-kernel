@@ -129,10 +129,10 @@ def _iter_history_tool_result_blocks(agent):
                 yield block
 
 
-TOOL_RESULT_CHARS_TOP_N = 5
-TOOL_RESULT_CHARS_MIN = 1000
+TOOL_RESULT_CHARS_TOP_N = 10
+TOOL_RESULT_CHARS_PREVIEW_LEN = 200
 TOOL_RESULT_CHARS_README = (
-    "listing top 5 tool result longer than 1000 char; "
+    "listing top 10 tool results by char count with a first-200-char preview; "
     "consider summarize if deemed useless"
 )
 
@@ -158,10 +158,18 @@ def current_tool_result_chars(agent, extra_results=()) -> dict:
     def visit(block) -> None:
         nonlocal total
         seen.add(id(block))
-        chars = formal_tool_result_visible_len(getattr(block, "content", ""))
+        content = getattr(block, "content", "")
+        chars = formal_tool_result_visible_len(content)
         total += chars
-        if chars > TOOL_RESULT_CHARS_MIN:
-            top.append({"id": _tool_result_id(block), "chars": chars})
+        top.append(
+            {
+                "id": _tool_result_id(block),
+                "chars": chars,
+                "preview": formal_tool_result_preview(
+                    content, TOOL_RESULT_CHARS_PREVIEW_LEN
+                ),
+            }
+        )
 
     for block in _iter_history_tool_result_blocks(agent) or ():
         visit(block)
@@ -210,7 +218,8 @@ def build_meta_readme() -> dict:
             "active_turn_tool_calls, current_tool_result_chars). Latest tool "
             "result only; older copies are stripped as newer results arrive. "
             "current_tool_result_chars is a dict with total_chars and the top "
-            "long tool results to consider for summarization."
+            "10 tool results (each with a first-200-char preview) to consider "
+            "for summarization."
         ),
         GUIDANCE_KEY: (
             "Kernel guidance sections, including the meta_readme section. "
@@ -401,7 +410,7 @@ def build_meta(agent) -> dict:
                 "usage": float,              # fraction of context window used
             },
             "stamina_left_seconds": float,   # session time remaining; -1 if unstarted
-            "current_tool_result_chars": dict, # total + top long formal tool results
+            "current_tool_result_chars": dict, # total + top 10 formal tool results w/ preview
         }
 
     Sentinel handling: when token decomposition has not yet run, the

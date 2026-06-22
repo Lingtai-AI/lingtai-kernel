@@ -16,6 +16,7 @@ from lingtai_kernel.meta_block import (
     build_guidance_with_meta_readme,
     build_runtime_guidance,
     clear_active_notification_holder,
+    current_tool_result_chars,
     render_meta,
     stamp_meta,
     validate_runtime_guidance,
@@ -102,12 +103,93 @@ def test_build_meta_counts_current_tool_result_chars_excluding_meta():
 
     current = meta["current_tool_result_chars"]
     expected = len(json.dumps(formal_payload, ensure_ascii=False, default=str))
-    assert current["_readme"] == (
-        "listing top 5 tool result longer than 1000 char; "
-        "consider summarize if deemed useless"
-    )
+    assert "top 10" in current["_readme"]
     assert current["total_chars"] == expected
-    assert current["top_results"] == [{"id": "tc-history", "chars": expected}]
+    assert current["top_results"] == [
+        {
+            "id": "tc-history",
+            "chars": expected,
+            "preview": json.dumps(formal_payload, ensure_ascii=False)[:200],
+        }
+    ]
+
+
+def _agent_with_history(blocks):
+    """Agent stand-in whose chat history yields the given tool-result blocks."""
+    agent = _fake_agent()
+    agent._session = SimpleNamespace(
+        chat=SimpleNamespace(
+            interface=SimpleNamespace(
+                _entries=[SimpleNamespace(content=list(blocks))]
+            ),
+        ),
+    )
+    return agent
+
+
+def test_current_tool_result_chars_lists_top_10():
+    # 15 prior results of strictly decreasing length; expect the 10 longest.
+    blocks = [
+        ToolResultBlock(id=f"tc-{i}", name="bash", content={"payload": "X" * (100 - i)})
+        for i in range(15)
+    ]
+    agent = _agent_with_history(blocks)
+
+    current = current_tool_result_chars(agent)
+
+    assert len(current["top_results"]) == 10
+    ids = [entry["id"] for entry in current["top_results"]]
+    assert ids == [f"tc-{i}" for i in range(10)]
+
+
+def test_current_tool_result_chars_no_1000_char_threshold():
+    # Two short results, both well under 1000 chars, must still be listed.
+    blocks = [
+        ToolResultBlock(id="tc-short-a", name="bash", content={"payload": "A" * 10}),
+        ToolResultBlock(id="tc-short-b", name="bash", content={"payload": "B" * 5}),
+    ]
+    agent = _agent_with_history(blocks)
+
+    current = current_tool_result_chars(agent)
+
+    ids = {entry["id"] for entry in current["top_results"]}
+    assert ids == {"tc-short-a", "tc-short-b"}
+
+
+def test_current_tool_result_chars_includes_first_200_char_preview():
+    body = "Z" * 500
+    block = ToolResultBlock(id="tc-preview", name="bash", content={"payload": body})
+    agent = _agent_with_history([block])
+
+    current = current_tool_result_chars(agent)
+
+    entry = current["top_results"][0]
+    preview = entry["preview"]
+    assert len(preview) == 200
+    # Preview is taken from the visible (JSON-serialized) formal payload.
+    assert preview == json.dumps({"payload": body}, ensure_ascii=False)[:200]
+
+
+def test_current_tool_result_chars_preview_handles_short_body():
+    block = ToolResultBlock(id="tc-tiny", name="bash", content={"payload": "hi"})
+    agent = _agent_with_history([block])
+
+    current = current_tool_result_chars(agent)
+
+    entry = current["top_results"][0]
+    assert entry["preview"] == json.dumps({"payload": "hi"}, ensure_ascii=False)
+    assert len(entry["preview"]) < 200
+
+
+def test_current_tool_result_chars_readme_drops_top5_and_1000_wording():
+    agent = _agent_with_history([])
+
+    current = current_tool_result_chars(agent)
+
+    readme = current["_readme"]
+    assert "top 10" in readme
+    assert "1000" not in readme
+    assert "top 5" not in readme
 
 
 def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
@@ -851,10 +933,16 @@ def test_attach_active_runtime_counts_current_batch_tool_result_chars():
 
     agent_meta = block.content["_meta"]["agent_meta"]
     current = agent_meta["current_tool_result_chars"]
-    assert current["total_chars"] == len(
-        json.dumps({"payload": "batch"}, ensure_ascii=False, default=str)
-    )
-    assert current["top_results"] == []
+    expected = len(json.dumps({"payload": "batch"}, ensure_ascii=False, default=str))
+    assert current["total_chars"] == expected
+    # No >1000 threshold any more: the current batch result is always listed.
+    assert current["top_results"] == [
+        {
+            "id": "tc-batch",
+            "chars": expected,
+            "preview": json.dumps({"payload": "batch"}, ensure_ascii=False)[:200],
+        }
+    ]
 
 
 def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
