@@ -203,9 +203,12 @@ def test_current_tool_result_chars_readme_says_no_need_to_summarize_helper():
     # appears on the latest tool result _meta, older copies are stripped.
     assert "no need to summarize this" in readme
     assert "latest" in readme
-    # It must still point the agent at the listed results so it can decide
-    # which prior results actually need summarizing.
-    assert "summariz" in readme
+    # It must still point the agent at the listed results and actively tell it
+    # to summarize prior results that no longer need to stay in full.
+    assert "proactively summarize" in readme
+    assert "useless" in readme
+    assert "no longer needed in full" in readme
+    assert "ids/previews" in readme
     assert "1000" not in readme
     assert "top 5" not in readme
 
@@ -215,7 +218,7 @@ def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
 
     assert "current_tool_result_chars" in readme["agent_meta"]
     assert "top" in readme["agent_meta"]
-    assert "summarization" in readme["agent_meta"]
+    assert "proactive summarization candidates" in readme["agent_meta"]
 
 
 def test_build_guidance_with_meta_readme_keeps_section_shape_without_packaged_guidance():

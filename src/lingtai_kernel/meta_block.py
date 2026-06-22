@@ -139,8 +139,10 @@ TOOL_RESULT_CHARS_PREVIEW_LEN = 200
 TOOL_RESULT_CHARS_README = (
     "listing top 10 tool results by char count with a first-200-char preview; "
     "no need to summarize this helper (it appears only on the latest tool "
-    "result _meta and older copies are stripped); use the listed result "
-    "ids/previews to decide which prior results need summarizing"
+    "result _meta and older copies are stripped); proactively summarize "
+    "prior tool results that are useless, already digested, irrelevant, "
+    "obsolete, or no longer needed in full, using the listed result "
+    "ids/previews"
 )
 
 
@@ -225,8 +227,8 @@ def build_meta_readme() -> dict:
             "active_turn_tool_calls, current_tool_result_chars). Latest tool "
             "result only; older copies are stripped as newer results arrive. "
             "current_tool_result_chars is a dict with total_chars and the top "
-            "10 tool results (each with a first-200-char preview) to consider "
-            "for summarization."
+            "10 tool results (each with a first-200-char preview) that are "
+            "proactive summarization candidates."
         ),
         GUIDANCE_KEY: (
             "Kernel guidance sections, including the meta_readme section. "
