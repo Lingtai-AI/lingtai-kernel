@@ -151,6 +151,19 @@ def test_send_logs_llm_call_with_api_call_id():
     assert llm_call["api_call_id"].startswith("api_")
     assert llm_response["api_call_id"] == llm_call["api_call_id"]
     assert response.send.return_value.api_call_id == llm_call["api_call_id"]
+    assert llm_response["input_tokens"] == 100
+    assert llm_response["output_tokens"] == 50
+    assert llm_response["thinking_tokens"] == 10
+    assert llm_response["cached_tokens"] == 20
+    assert llm_response["estimated"] is False
+    for field in (
+        "prompt_build_ms",
+        "tool_schema_build_ms",
+        "provider_wait_ms",
+        "usage_track_ms",
+    ):
+        assert isinstance(llm_response[field], (int, float))
+        assert llm_response[field] >= 0
 
 
 # ------------------------------------------------------------------
