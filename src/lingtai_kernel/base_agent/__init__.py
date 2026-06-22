@@ -1431,44 +1431,57 @@ class BaseAgent:
             summary=summary_text,
             meta=meta,
         )
-        self._log_notification_block_injected(
+        # Reconstruct the full four-block ``_meta`` envelope for the durable
+        # snapshot so the TUI /notification view shows the same ``_meta.*``
+        # blocks (tool_meta/agent_meta/guidance/notifications/
+        # notification_guidance) a synthesized pair would carry.  The live wire
+        # body keeps its notification-only ``_meta``; this is logging-side only.
+        from ..meta_block import build_synthetic_meta_envelope
+        synthetic_envelope = build_synthetic_meta_envelope(
+            self,
             notifications_with_guidance,
+            call_id=call_id,
+        )
+        self._log_notification_block_injected(
+            synthetic_envelope,
             mode="synthetic_notification_pair",
             call_id=call_id,
-            meta=meta,
         )
         return True
 
     def _log_notification_block_injected(
         self,
-        payload: dict,
+        meta_envelope: dict,
         *,
         mode: str,
         call_id: str | None = None,
-        meta: dict | None = None,
     ) -> None:
         """Persist a durable notification_block_injected event capturing the
-        actual canonical block the model saw.
+        full ``_meta`` envelope the model saw.
 
-        Best-effort: any exception is swallowed so callers are never broken
-        by a logging failure.  ``payload`` is the dict returned by
-        ``build_notification_payload`` — ``{"notification_guidance": ...,
-        "notifications": {...}}``.  A deep copy is stored so later
+        Best-effort: any exception is swallowed so callers are never broken by a
+        logging failure.  ``meta_envelope`` is the complete four-block envelope
+        — ``tool_meta``, ``agent_meta``, ``guidance``, plus ``notifications`` and
+        ``notification_guidance`` — exactly as it appears under the tool result's
+        ``_meta`` key (ACTIVE) or as reconstructed for the synthesized pair
+        (IDLE/ASLEEP, via ``build_synthetic_meta_envelope``).
+
+        The envelope is persisted under a top-level ``_meta`` field on the event
+        so the TUI ``/notification`` view renders ``_meta.tool_meta`` /
+        ``_meta.agent_meta`` / ``_meta.guidance`` / ``_meta.notification_guidance``
+        / ``_meta.notifications`` directly.  A deep copy is stored so later
         in-place skeletonization or nested mutation of the live holder does not
         corrupt the logged snapshot.
         """
         try:
-            sources = sorted(payload.get("notifications", {}).keys())
+            notifications = meta_envelope.get("notifications", {})
+            sources = sorted(notifications.keys()) if isinstance(notifications, dict) else []
             self._log(
                 "notification_block_injected",
                 mode=mode,
                 call_id=call_id or "",
                 sources=sources,
-                payload={
-                    "notification_guidance": payload.get("notification_guidance", ""),
-                    "notifications": copy.deepcopy(payload.get("notifications", {})),
-                },
-                meta=meta or {},
+                _meta=copy.deepcopy(meta_envelope),
             )
         except Exception:
             pass

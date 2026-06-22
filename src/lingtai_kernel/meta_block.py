@@ -528,6 +528,72 @@ def build_notification_payload(notifications: dict) -> dict:
     }
 
 
+def build_synthetic_tool_meta(
+    call_id: str,
+    *,
+    char_count: int = 0,
+    elapsed_ms: int = 0,
+) -> dict:
+    """Return a minimal synthetic ``tool_meta`` block for the IDLE/ASLEEP pair.
+
+    The synthesized ``notification(action="check")`` pair has no real tool
+    execution, so :class:`ToolExecutor._attach_tool_block` never stamps a
+    ``_meta.tool_meta`` block on it.  The ``/notification`` history view still
+    wants a ``tool_meta`` block to render, so this builds a parallel one carrying
+    the same identity fields a real ``tool_meta`` has (id/timestamp/char_count/
+    elapsed_ms) plus a ``synthetic: True`` marker that distinguishes it from a
+    real tool result's permanent block.
+    """
+    return {
+        "id": call_id or "<unknown>",
+        "timestamp": now_iso_plain(),
+        "char_count": int(char_count),
+        "elapsed_ms": int(elapsed_ms),
+        "synthetic": True,
+    }
+
+
+def build_synthetic_meta_envelope(
+    agent,
+    notification_payload: dict,
+    *,
+    call_id: str,
+) -> dict:
+    """Assemble the full ``_meta`` envelope for a synthesized notification pair.
+
+    Produces the same four-block envelope an ACTIVE tool result persists:
+
+      * ``tool_meta``            — synthetic identity (see
+        :func:`build_synthetic_tool_meta`)
+      * ``agent_meta``           — current ``build_meta`` snapshot
+      * ``guidance``             — packaged ``guidance.json`` plus ``meta_readme``
+      * ``notifications`` +
+        ``notification_guidance``— from ``notification_payload`` (the dict
+        returned by :func:`build_notification_payload`)
+
+    Used only for the durable ``notification_block_injected`` snapshot so the TUI
+    ``/notification`` view shows the same ``_meta.*`` blocks for synthesized
+    pairs as for ACTIVE tool results.  The live wire body keeps its own
+    (notification-only) ``_meta`` — this is a logging-side reconstruction.
+    """
+    try:
+        agent_meta = build_meta(agent)
+    except (AttributeError, TypeError):
+        agent_meta = {}
+
+    guidance: dict = dict(build_runtime_guidance())
+    guidance["meta_readme"] = build_meta_readme()
+
+    envelope: dict = {
+        TOOL_META_KEY: build_synthetic_tool_meta(call_id),
+        AGENT_META_KEY: agent_meta,
+        GUIDANCE_KEY: guidance,
+    }
+    # notifications + notification_guidance from the canonical payload.
+    envelope.update(notification_payload)
+    return envelope
+
+
 def _collect_active_notifications_payload(agent) -> dict | None:
     """Return the canonical notification payload for the latest tool result.
 

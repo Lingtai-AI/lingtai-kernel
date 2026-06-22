@@ -1413,10 +1413,41 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 tool_results,
                 prior_holder=_prior_holder,
             )
-            # Log the actual canonical block that was stamped onto the tool
-            # result so the TUI /notification command can show real snapshots.
-            # Only log when a genuinely new holder was established (changed and
-            # is not None), i.e. when stamping actually happened this batch.
+
+        # Move the live `_meta.agent_meta` / `_meta.guidance` blocks (kernel
+        # runtime state + guidance) to the latest tool-result dict from this
+        # batch, stripping them from the prior holder.  This keeps them
+        # latest-only — only the freshest provider-visible result carries live
+        # agent state, so stale snapshots do not accumulate in history.  Mirrors
+        # the notification holder above.  Unlike notifications there is no
+        # molt-race special case: these are pure per-turn snapshots, not
+        # kernel-synchronized channel state.
+        #
+        # MUST run before _log_notification_block_injected below: the durable
+        # snapshot copies the holder's full ``_meta`` envelope, and
+        # ``attach_active_runtime`` is what populates ``_meta.agent_meta`` /
+        # ``_meta.guidance`` on that holder.  Logging before this ran would
+        # persist rows missing those two blocks.
+        try:
+            agent._runtime_live_holder = attach_active_runtime(
+                agent,
+                tool_results,
+                prior_holder=getattr(agent, "_runtime_live_holder", None),
+            )
+        except Exception:
+            agent._log(
+                "runtime_block_attach_failed",
+                reason="attach_active_runtime raised",
+            )
+
+        # Log the actual canonical ``_meta`` envelope that was stamped onto the
+        # tool result so the TUI /notification command can show real snapshots.
+        # Only log when a genuinely new notification holder was established
+        # (changed and not None), i.e. when notification stamping actually
+        # happened this batch.  Runs after attach_active_runtime so the persisted
+        # ``_meta`` carries all four blocks (tool_meta/agent_meta/guidance/
+        # notifications/notification_guidance).
+        if not _batch_includes_context_molt(response.tool_calls):
             _new_holder = agent._notification_live_holder
             _new_meta = _new_holder.get("_meta") if isinstance(_new_holder, dict) else None
             if (
@@ -1431,38 +1462,13 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                         if getattr(_result, "content", None) is _new_holder:
                             _carrier_call_id = str(getattr(_result, "id", "") or "")
                             break
-                    _block_payload = {
-                        "notification_guidance": _new_meta.get("notification_guidance", ""),
-                        "notifications": _new_meta.get("notifications", {}),
-                    }
                     agent._log_notification_block_injected(
-                        _block_payload,
+                        _new_meta,
                         mode="active_tool_result",
                         call_id=_carrier_call_id,
-                        meta=build_meta(agent),
                     )
                 except Exception:
                     pass
-
-        # Move the live `_meta.agent_meta` / `_meta.guidance` blocks (kernel
-        # runtime state + guidance) to the latest tool-result dict from this
-        # batch, stripping them from the prior holder.  This keeps them
-        # latest-only — only the freshest provider-visible result carries live
-        # agent state, so stale snapshots do not accumulate in history.  Mirrors
-        # the notification holder above.  Unlike notifications there is no
-        # molt-race special case: these are pure per-turn snapshots, not
-        # kernel-synchronized channel state.
-        try:
-            agent._runtime_live_holder = attach_active_runtime(
-                agent,
-                tool_results,
-                prior_holder=getattr(agent, "_runtime_live_holder", None),
-            )
-        except Exception:
-            agent._log(
-                "runtime_block_attach_failed",
-                reason="attach_active_runtime raised",
-            )
 
         if intercepted:
             if tool_results and agent._chat:

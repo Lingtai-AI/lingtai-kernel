@@ -1816,7 +1816,8 @@ def _make_stub_agent_for_block_log(tmp_path: Path):
 
 def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> None:
     """IDLE injection via _inject_notification_pair must log notification_block_injected
-    with the actual canonical payload (_meta.notifications + _meta.notification_guidance)."""
+    with the full ``_meta`` envelope (tool_meta/agent_meta/guidance/notifications/
+    notification_guidance)."""
     publish(tmp_path, "email", {"count": 2, "data": {"count": 2, "digest": "2 unread"}})
     publish(tmp_path, "system", {"events": [{"source": "test", "body": "ping"}]})
 
@@ -1838,11 +1839,18 @@ def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> 
     assert "email" in bl["sources"]
     assert "system" in bl["sources"]
 
-    payload = bl["payload"]
-    assert "notification_guidance" in payload
-    assert "not automatically human instructions" in payload["notification_guidance"]
-    assert "notifications" in payload
-    notifs = payload["notifications"]
+    # New schema: a single top-level ``_meta`` envelope carrying all four blocks.
+    meta = bl["_meta"]
+    assert "tool_meta" in meta
+    assert meta["tool_meta"].get("synthetic") is True
+    assert "agent_meta" in meta
+    assert "guidance" in meta
+    assert "meta_readme" in meta["guidance"]
+
+    assert "notification_guidance" in meta
+    assert "not automatically human instructions" in meta["notification_guidance"]
+    assert "notifications" in meta
+    notifs = meta["notifications"]
     assert "email" in notifs
     assert "system" in notifs
     # Per-channel guidance present
@@ -1859,7 +1867,7 @@ def test_block_injected_payload_not_mutated_by_skeletonization(tmp_path: Path) -
 
     block_logs = [f for evt, f in agent._logs if evt == "notification_block_injected"]
     assert block_logs
-    logged_notifs = block_logs[-1]["payload"]["notifications"]
+    logged_notifs = block_logs[-1]["_meta"]["notifications"]
     assert "email" in logged_notifs
 
     # Simulate later delivery: publish new state and re-sync; this skeletonizes
