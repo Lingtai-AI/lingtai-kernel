@@ -1894,3 +1894,116 @@ def test_block_injected_emits_companion_to_pair_injected(tmp_path: Path) -> None
     assert pair_idx != -1, "notification_pair_injected missing"
     assert block_idx != -1, "notification_block_injected missing"
     assert block_idx > pair_idx, "notification_block_injected must follow notification_pair_injected"
+
+
+# ---------------------------------------------------------------------------
+# Poisoned-interface fail-closed guard in _sync_notifications
+# ---------------------------------------------------------------------------
+
+
+def _make_poisoned_sync_agent(tmp_path: Path, state):
+    """An agent whose interface is poisoned. Every mutating sync helper is
+    wired to fail the test if called — the guard must short-circuit first."""
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.state import AgentState
+
+    chat = _make_chat_stub()
+
+    class _Agent(BaseAgent):
+        def __init__(self, workdir):
+            self._working_dir = workdir
+            self._state = state
+            self._notification_fp = (("email.json", 1, "old"),)
+            self._notification_deferred_log_fp = ()
+            self._notification_block_id = None
+            self._pending_notification_meta = None
+            self._chat_stub = chat
+            self._logs = []
+            self.agent_name = "stub"
+            import queue
+            self.inbox = queue.Queue()
+            self._asleep = threading.Event()
+            if state == AgentState.ASLEEP:
+                self._asleep.set()
+            self._cancel_event = threading.Event()
+            self._llm_worker_interface_poisoned = True
+            self._llm_worker_poison_artifact = (
+                "history/unfinished_turns/worker_still_running_test.json"
+            )
+            self._llm_worker_refresh_requested = False
+            self.refresh_calls = []
+
+        @property
+        def _chat(self):
+            return self._chat_stub
+
+        def _inject_notification_pair(self, _notifications):
+            raise AssertionError("poisoned sync must not inject")
+
+        def _heal_pending_tool_calls(self, *, reason):
+            raise AssertionError("poisoned sync must not heal")
+
+        def _save_chat_history(self, *, ledger_source="main"):
+            raise AssertionError("poisoned sync must not save")
+
+        def _log(self, evt, **fields):
+            self._logs.append((evt, fields))
+
+        def _wake_nap(self, *_a, **_kw):
+            raise AssertionError("poisoned sync must not wake")
+
+        def _set_state(self, *_a, **_kw):
+            raise AssertionError("poisoned sync must not change state")
+
+        def _reset_uptime(self):
+            raise AssertionError("poisoned sync must not reset uptime")
+
+        def _perform_refresh(self, *, skip_chat_history_save=False, skip_save_reason=None):
+            self.refresh_calls.append({
+                "skip_chat_history_save": skip_chat_history_save,
+                "skip_save_reason": skip_save_reason,
+            })
+
+    return _Agent(tmp_path)
+
+
+def test_sync_notifications_asleep_refuses_touch_when_poisoned(tmp_path: Path) -> None:
+    from lingtai_kernel.state import AgentState
+
+    agent = _make_poisoned_sync_agent(tmp_path, AgentState.ASLEEP)
+    before_fp = agent._notification_fp
+    publish(tmp_path, "system", {"data": {"events": [{"source": "daemon"}]}})
+
+    agent._sync_notifications()
+
+    assert agent._state == AgentState.ASLEEP
+    assert agent._asleep.is_set()
+    assert agent.inbox.empty()
+    assert agent._notification_fp == before_fp
+    assert agent.refresh_calls == [{
+        "skip_chat_history_save": True,
+        "skip_save_reason": "worker_still_running_interface_unsafe",
+    }]
+    assert any(
+        evt == "notification_sync_skipped_poisoned_interface"
+        for evt, _ in agent._logs
+    )
+
+
+def test_sync_notifications_idle_refuses_touch_when_poisoned(tmp_path: Path) -> None:
+    from lingtai_kernel.state import AgentState
+
+    agent = _make_poisoned_sync_agent(tmp_path, AgentState.IDLE)
+    before_fp = agent._notification_fp
+    publish(tmp_path, "email", {"data": {"count": 1}})
+
+    agent._sync_notifications()
+
+    assert agent._state == AgentState.IDLE
+    assert agent.inbox.empty()
+    assert agent._notification_fp == before_fp
+    assert len(agent._chat_stub.interface.entries) == 0
+    assert agent.refresh_calls == [{
+        "skip_chat_history_save": True,
+        "skip_save_reason": "worker_still_running_interface_unsafe",
+    }]

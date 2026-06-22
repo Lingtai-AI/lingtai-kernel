@@ -180,6 +180,36 @@ def test_perform_refresh_sets_shutdown_and_cancel(tmp_path):
         "_perform_refresh must set _cancel_event so in-flight turn work yields"
 
 
+def test_perform_refresh_skips_chat_history_save_when_interface_poisoned(tmp_path):
+    """A poisoned interface must not be serialized: `_perform_refresh` skips
+    the chat-history save and logs the skip reason, but still relaunches."""
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    agent._llm_worker_interface_poisoned = True
+
+    def fail_save(*_args, **_kwargs):
+        raise AssertionError("poisoned refresh must not save chat history")
+
+    agent._save_chat_history = fail_save
+    log_events = []
+    real_log = agent._log
+
+    def log_capture(event, **kw):
+        log_events.append((event, kw))
+        return real_log(event, **kw)
+
+    agent._log = log_capture
+
+    with patch("subprocess.Popen") as mock_popen:
+        agent._perform_refresh()
+
+    assert mock_popen.called
+    assert any(
+        event == "refresh_chat_history_save_skipped"
+        and fields.get("reason") == "worker_still_running_interface_unsafe"
+        for event, fields in log_events
+    )
+
+
 def test_perform_refresh_no_launch_cmd_skips_handshake(tmp_path):
     """When `_build_launch_cmd()` returns None (e.g. bare BaseAgent),
     `_perform_refresh` logs and returns BEFORE touching the handshake or

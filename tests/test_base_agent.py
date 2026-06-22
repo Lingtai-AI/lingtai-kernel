@@ -120,6 +120,36 @@ def test_perform_refresh_no_launch_cmd_is_noop(tmp_path):
     assert "refresh_no_launch_cmd" in log_calls
 
 
+def test_worker_hang_system_notification_is_high_priority(tmp_path):
+    """The worker-hang notification is published to system.json with a
+    high-priority envelope and the expected structured fields."""
+    import json
+    from lingtai_kernel.base_agent.worker_recovery import publish_worker_hang_notification
+
+    agent = BaseAgent(service=make_mock_service(), working_dir=tmp_path / "test")
+    artifact = "history/unfinished_turns/worker_still_running_test.json"
+    ref_id = "worker_still_running:worker_still_running_test"
+    event_id = publish_worker_hang_notification(
+        agent,
+        artifact,
+        {
+            "recovery": {"notification_ref_id": ref_id},
+            "turn": {"entry": "request"},
+            "error": {"elapsed_s": 300.0, "grace_s": 5.0},
+        },
+    )
+
+    payload = json.loads((agent.working_dir / ".notification" / "system.json").read_text())
+    assert payload["priority"] == "high"
+    events = payload["data"]["events"]
+    event = next(item for item in events if item["event_id"] == event_id)
+    assert event["source"] == "kernel.llm_worker_hang"
+    assert event["ref_id"] == ref_id
+    assert event["artifact"] == artifact
+    assert event["severity"] == "high"
+    assert event["recommended_action"] == "wait_for_refresh_then_continue_from_restored_history"
+
+
 # ------------------------------------------------------------------
 # Message basics
 # ------------------------------------------------------------------

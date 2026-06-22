@@ -222,6 +222,8 @@ def _enqueue_system_notification(
     ref_id: str,
     body: str,
     skip_if_ref_id_exists: bool = False,
+    priority: str = "normal",
+    extra: dict | None = None,
 ) -> str:
     """Append a system event to ``.notification/system.json``.
 
@@ -246,6 +248,11 @@ def _enqueue_system_notification(
             the same ref_id already exists in system.json.  Used by the
             large-result rescan path to avoid duplicate notifications.
             Returns "" (empty string) when skipped.
+        priority: Notification envelope priority. Defaults to ``"normal"``.
+            ``"high"`` (or any event carrying a high severity/priority) makes
+            the published envelope high priority so frontends surface it.
+        extra: Optional structured event fields merged into this event only
+            (e.g. severity, artifact path, recommended_action).
 
     Returns:
         An identifier for the event (for logging and back-compat with
@@ -272,15 +279,30 @@ def _enqueue_system_notification(
                 if ev.get("ref_id") == ref_id:
                     return ""
 
-        events.append({
+        event = {
             "event_id": event_id,
             "source": source,
             "ref_id": ref_id,
             "body": body,
             "at": received_at,
-        })
+        }
+        if isinstance(extra, dict):
+            event.update(extra)
+        events.append(event)
         # Cap at the 20 most recent.
         events = events[-20:]
+
+        # Envelope priority is high if this call asked for it, or if any
+        # retained event carries a high severity/priority field.
+        envelope_priority = (
+            "high"
+            if priority == "high" or any(
+                isinstance(ev, dict)
+                and (ev.get("severity") == "high" or ev.get("priority") == "high")
+                for ev in events
+            )
+            else "normal"
+        )
 
         publish_notification(
             agent._working_dir, "system",
@@ -289,6 +311,7 @@ def _enqueue_system_notification(
                 f"{'s' if len(events) != 1 else ''}"
             ),
             icon="🔔",
+            priority=envelope_priority,
             data={"events": events},
         )
 
