@@ -4977,24 +4977,78 @@ class DaemonManager:
         last = min(last, self._CHECK_LAST_MAX)
 
         entry = self._emanations.get(em_id)
-        if not entry:
-            return {"status": "error", "message": f"Unknown emanation: {em_id}"}
-        run_dir = entry.get("run_dir")
-        if run_dir is None:
-            return {"status": "error", "message": f"emanation {em_id} has no run_dir"}
+        if entry is not None:
+            run_dir = entry.get("run_dir")
+            if run_dir is None:
+                return {"status": "error", "message": f"emanation {em_id} has no run_dir"}
+            return self._check_snapshot_from_paths(
+                em_id,
+                run_path=run_dir.path,
+                daemon_json_path=run_dir.daemon_json_path,
+                events_path=run_dir.events_path,
+                last=last,
+                truncate=truncate,
+            )
 
+        # In-memory registry miss. After a refresh/molt the parent gets a fresh
+        # DaemonManager whose registry is empty (__init__ does NOT reconstruct
+        # entries from disk), yet the terminal notification still points at a
+        # valid daemons/<run_id>/ folder. Fall back to the durable run dirs so
+        # `check` by the notification's short id resolves the historical run
+        # instead of answering "Unknown emanation". `list` already scans this
+        # history; `check` now joins it. See GH (daemon check after refresh).
+        resolved = self._resolve_historical_run_dir(em_id)
+        if resolved is None:
+            return {"status": "error", "message": f"Unknown emanation: {em_id}"}
+        run_path, matches = resolved
+        snapshot = self._check_snapshot_from_paths(
+            em_id,
+            run_path=run_path,
+            daemon_json_path=run_path / "daemon.json",
+            events_path=run_path / "logs" / "events.jsonl",
+            last=last,
+            truncate=truncate,
+        )
+        if snapshot.get("status") == "error":
+            return snapshot
+        # Flag the disk-resolved nature so the parent can tell it apart from a
+        # live registry hit, and surface ambiguity rather than hiding it.
+        snapshot["source"] = "history"
+        if len(matches) > 1:
+            snapshot["ambiguous"] = True
+            snapshot["match_count"] = len(matches)
+            snapshot["other_run_dirs"] = [
+                str(p) for p in matches if p != run_path
+            ]
+        return snapshot
+
+    def _check_snapshot_from_paths(
+        self,
+        em_id: str,
+        *,
+        run_path: Path,
+        daemon_json_path: Path,
+        events_path: Path,
+        last: int,
+        truncate: int,
+    ) -> dict:
+        """Build a `check` response from an on-disk run dir.
+
+        Shared by the live-registry path and the post-refresh historical
+        fallback so both surface identical daemon.json + event-tail shape.
+        """
         # daemon.json — atomic-replaced, may transiently miss but never partial
         try:
-            state = json.loads(run_dir.daemon_json_path.read_text(encoding="utf-8"))
+            state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as e:
             return {"status": "error", "message": f"daemon.json read failed: {e}"}
 
         # events.jsonl — append-only, missing means no events yet
         events: list[dict] = []
         events_total = 0
-        if run_dir.events_path.is_file():
+        if events_path.is_file():
             try:
-                with open(run_dir.events_path, "r", encoding="utf-8") as f:
+                with open(events_path, "r", encoding="utf-8") as f:
                     raw_lines = f.readlines()
             except OSError as e:
                 return {"status": "error", "message": f"events.jsonl read failed: {e}"}
@@ -5019,7 +5073,7 @@ class DaemonManager:
             "run_id": state.get("run_id"),
             "state": state.get("state"),
             "backend": state.get("backend"),
-            "path": str(run_dir.path),
+            "path": str(run_path),
             "turn": state.get("turn"),
             "current_tool": state.get("current_tool"),
             "elapsed_s": state.get("elapsed_s"),
@@ -5034,6 +5088,61 @@ class DaemonManager:
             "events_total": events_total,
             "events_returned": len(events),
         }
+
+    def _resolve_historical_run_dir(
+        self, em_id: str
+    ) -> tuple[Path, list[Path]] | None:
+        """Resolve a daemon short id / run id to a durable run dir on disk.
+
+        Returns ``(chosen_run_path, all_matches)`` or ``None`` if nothing on
+        disk matches. ``em_id`` may be a full ``run_id`` (folder name, e.g.
+        ``em-5-20260623-223922-625c40``) for an exact, unambiguous hit, or a
+        short ``handle`` (e.g. ``em-5``) which the daemon counter reuses across
+        refreshes — so a short id can map to several historical run dirs. We
+        resolve the most recent deterministically (folder names embed a
+        ``YYYYMMDD-HHMMSS`` timestamp, so lexical order == chronological order)
+        and return every match so the caller can report the ambiguity.
+        """
+        em_id = (em_id or "").strip()
+        if not em_id:
+            return None
+        daemons_dir = self._agent._working_dir / "daemons"
+        if not daemons_dir.is_dir():
+            return None
+
+        matches: list[Path] = []
+        for run_path in daemons_dir.iterdir():
+            if not self._looks_like_daemon_run_dir(run_path):
+                continue
+            # Exact run-id (folder name) match wins unambiguously.
+            if run_path.name == em_id:
+                return run_path, [run_path]
+            # Otherwise match the recorded handle. Prefer the persisted
+            # daemon.json handle; fall back to parsing it from the folder name
+            # so a missing/corrupt daemon.json doesn't drop a real match.
+            handle = self._run_dir_handle(run_path)
+            if handle == em_id:
+                matches.append(run_path)
+
+        if not matches:
+            return None
+        # Folder name = handle-YYYYMMDD-HHMMSS-hash6 → lexical sort is
+        # chronological; pick the most recent.
+        matches.sort(key=lambda p: p.name)
+        return matches[-1], matches
+
+    def _run_dir_handle(self, run_path: Path) -> str | None:
+        """Best-effort handle for a run dir: daemon.json first, name second."""
+        try:
+            loaded = json.loads(
+                (run_path / "daemon.json").read_text(encoding="utf-8")
+            )
+            handle = loaded.get("handle") if isinstance(loaded, dict) else None
+            if isinstance(handle, str) and handle:
+                return handle
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            pass
+        return self._handle_from_run_id(run_path.name)
 
     def shutdown_for_agent_stop(
         self, reason: str = "agent_stop", wait_timeout: float = 5.0

@@ -162,6 +162,15 @@ files, not standalone top-level skills.
   notification arrives on the system channel carrying the daemon id, terminal
   status, task summary, and the result/error path. React to it with
   `daemon(action="check", id=...)` (and read `result.txt` for the full output).
+- **`check` still resolves a daemon after refresh/molt.** A refresh/molt gives
+  you a fresh daemon registry with no in-memory entries, but the run folders
+  and their notifications survive on disk. `daemon(action="check", id=...)`
+  falls back to the durable `daemons/<run_id>/` folders on a registry miss: a
+  full `run_id` resolves exactly; a short id (e.g. `em-5`, which the counter
+  reuses across sessions) resolves to the most recent matching run and returns
+  `source="history"` plus `ambiguous`/`match_count`/`other_run_dirs` when more
+  than one run shares that id. To target an older run, pass its full `run_id`
+  from the notification or `daemon(action="list")` rather than the short id.
 - **Defense-in-depth, not primary signal: a self-wake guards against a daemon
   that never reaches a terminal state at all.** The terminal notification covers
   every state a run can *finish* in, but a run that hangs without the watchdog
