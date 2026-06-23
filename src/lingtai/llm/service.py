@@ -75,11 +75,20 @@ def _generate_tool_call_id() -> str:
 # directly. The default path no longer injects ``codex_thread_salt``; the salt
 # no longer derives a separate thread id (the thread tracks the session id), and
 # nothing reads the token ledger to pick the Codex identity.
+#
+# ``codex_auth_path`` selects which Codex OAuth token file the adapter reads
+# (the path to a ``codex-auth.json``-shaped file), enabling true multiple Codex
+# accounts: a preset/manifest can point one agent at its own token file instead
+# of the shared default ``~/.lingtai-tui/codex-auth.json``. The value is a local
+# filesystem path, not a secret, so it travels with the other provider defaults;
+# the adapter never logs token contents. Blank/whitespace values are treated as
+# omitted by the factory (legacy default-path behavior).
 _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     "api_compat",
     "codex_session_id",
     "codex_session_anchor",
     "codex_thread_salt",
+    "codex_auth_path",
 )
 _PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS = ("compact_threshold",)
 

@@ -748,6 +748,100 @@ def test_codex_factory_builds_adapter_with_per_agent_ids():
 
 
 # ---------------------------------------------------------------------------
+# Per-agent Codex OAuth token file — ``codex_auth_path`` (true multiple Codex
+# accounts). The manifest/preset can point one agent at its own token file; the
+# factory passes it to ``CodexTokenManager(token_path=...)``. Blank/absent falls
+# back to the legacy default path (``~/.lingtai-tui/codex-auth.json``). The path
+# is a non-secret local path and travels with the other provider defaults.
+# ---------------------------------------------------------------------------
+
+
+def test_codex_auth_path_passes_through_to_provider_defaults():
+    """A manifest ``codex_auth_path`` survives the manifest->defaults map."""
+    import lingtai  # noqa: F401  (registers adapters / loads service module)
+    from lingtai.llm.service import build_provider_defaults_from_manifest_llm
+
+    d = build_provider_defaults_from_manifest_llm(
+        {
+            "provider": "codex",
+            "codex_auth_path": "/secrets/alice/codex-auth.json",
+        },
+        max_rpm=0,
+    )
+    assert d["codex"]["codex_auth_path"] == "/secrets/alice/codex-auth.json"
+
+    # Absent codex_auth_path with no working_dir -> nothing leaks (historical None).
+    assert (
+        build_provider_defaults_from_manifest_llm({"provider": "codex"}, max_rpm=0)
+        is None
+    )
+
+
+def test_codex_factory_passes_token_path_when_auth_path_set():
+    """The codex factory wires ``codex_auth_path`` into ``CodexTokenManager``."""
+    from unittest import mock
+
+    import lingtai  # noqa: F401
+    from lingtai.llm.service import LLMService
+
+    auth_path = "/secrets/alice/codex-auth.json"
+    with mock.patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls:
+        mgr_cls.return_value.get_access_token.return_value = "fake-token"
+        mgr_cls.return_value.get_account_id.return_value = None
+
+        svc = LLMService(
+            provider="codex",
+            model="gpt-5.5",
+            provider_defaults={"codex": {"codex_auth_path": auth_path}},
+        )
+        svc.get_adapter("codex")
+
+        # The token file path is forwarded verbatim as ``token_path``.
+        mgr_cls.assert_called_once_with(token_path=auth_path)
+
+
+def test_codex_factory_uses_legacy_default_when_auth_path_absent():
+    """No ``codex_auth_path`` -> no ``token_path`` override (legacy default path)."""
+    from unittest import mock
+
+    import lingtai  # noqa: F401
+    from lingtai.llm.service import LLMService
+
+    with mock.patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls:
+        mgr_cls.return_value.get_access_token.return_value = "fake-token"
+        mgr_cls.return_value.get_account_id.return_value = None
+
+        svc = LLMService(provider="codex", model="gpt-5.5")
+        svc.get_adapter("codex")
+
+        # Constructed with no token_path so it falls back to the default file.
+        mgr_cls.assert_called_once_with()
+
+
+def test_codex_factory_treats_blank_auth_path_as_omitted():
+    """Blank/whitespace ``codex_auth_path`` is ignored -> legacy default path."""
+    from unittest import mock
+
+    import lingtai  # noqa: F401
+    from lingtai.llm.service import LLMService
+
+    for blank in ("", "   ", "\t\n"):
+        with mock.patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls:
+            mgr_cls.return_value.get_access_token.return_value = "fake-token"
+            mgr_cls.return_value.get_account_id.return_value = None
+
+            svc = LLMService(
+                provider="codex",
+                model="gpt-5.5",
+                provider_defaults={"codex": {"codex_auth_path": blank}},
+            )
+            svc.get_adapter("codex")
+
+            # Blank path must not become a token_path override.
+            mgr_cls.assert_called_once_with()
+
+
+# ---------------------------------------------------------------------------
 # Default wiring — only the agent path is passed down automatically (#378).
 # The adapter hashes it to one stable 8-char value used byte-identically for
 # session_id, thread_id, and prompt_cache_key. The default path no longer reads
