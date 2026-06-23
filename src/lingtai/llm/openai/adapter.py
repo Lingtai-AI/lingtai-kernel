@@ -465,6 +465,68 @@ def _ws_is_synthesized_orphan_output(item: Any) -> bool:
     )
 
 
+def _freeze_responses_outputs(
+    items: list[dict[str, Any]],
+    frozen: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Stabilize ``function_call_output.output`` strings across WS replay turns.
+
+    The kernel carries *latest-only* resident-meta blocks (``_meta.agent_meta`` /
+    ``_meta.guidance`` / ``_meta.notifications``) and MOVES them off an older tool
+    result onto the freshest one each turn (``meta_block.attach_active_runtime`` /
+    ``attach_active_notifications``). That rewrites an older
+    ``ToolResultBlock.content`` *in place*, so the same ``call_id``'s
+    ``function_call_output.output`` serializes differently on a later turn even
+    though, semantically, the model already saw that result.
+
+    For Codex's stateful WS delta path the next request's converted input must
+    strict-prefix-match the prior baseline. A changed older
+    ``function_call_output`` (same ``call_id`` and keys, different ``output``
+    hash) breaks the prefix and forces ``ws_full`` every turn (the observed
+    ``prefix_mismatch``).
+
+    This freezes each output by ``call_id`` at first send for the life of the
+    session: the first time a ``call_id`` is converted, its ``output`` is
+    recorded; every later conversion replays the recorded string. Replay is
+    therefore byte-identical regardless of in-place resident-meta movement.
+
+    Fidelity is preserved, not lost: the model already saw the frozen version
+    when it was first sent, and the freshest result is *first-seen on its own
+    turn*, so it freezes WITH its live meta — live guidance / notifications still
+    reach the model on the result that is supposed to carry them.
+
+    Pure and content-free: returns a new list (shallow-copying only the rewritten
+    items), never mutates the caller's items, and records nothing to diagnostics.
+    Non-``function_call_output`` items and outputs missing a ``call_id`` pass
+    through untouched.
+    """
+    out: list[dict[str, Any]] = []
+    for item in items:
+        if (
+            isinstance(item, dict)
+            and item.get("type") == "function_call_output"
+            and isinstance(item.get("call_id"), str)
+            # The synthesized orphan placeholder (issue #170 wire guard) is a
+            # transient stand-in, NOT the real tool result. Never freeze it:
+            # doing so would replay the placeholder once the real continuation
+            # arrives, hiding the actual result from the model. Let it pass
+            # through so the real output freezes when it first appears.
+            and not _ws_is_synthesized_orphan_output(item)
+        ):
+            call_id = item["call_id"]
+            cached = frozen.get(call_id)
+            if cached is None:
+                frozen[call_id] = item.get("output")
+                out.append(item)
+            else:
+                replayed = dict(item)
+                replayed["output"] = cached
+                out.append(replayed)
+        else:
+            out.append(item)
+    return out
+
+
 def _ws_dump_item(item: Any) -> dict[str, Any] | None:
     """Normalize a streamed output item to a plain dict.
 
@@ -2068,6 +2130,15 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # sent this turn, used by ``_ws_record_baseline_from_interface`` to derive
         # a converter-stable delta baseline once the assistant turn is recorded.
         self._ws_pending_baseline_input: list[dict[str, Any]] | None = None
+        # Per-session freeze of model-facing ``function_call_output.output`` strings
+        # keyed by ``call_id``. The kernel moves latest-only resident-meta blocks
+        # off older tool results onto the freshest one each turn, which rewrites an
+        # older ``ToolResultBlock.content`` in place and would change that result's
+        # converted ``output`` on replay — breaking the strict-prefix WS delta
+        # baseline. Freezing the first-seen output per call_id keeps replay
+        # byte-identical while the freshest result still carries live meta (it is
+        # first-seen on its own turn). See ``_freeze_responses_outputs``.
+        self._ws_frozen_outputs: dict[str, str] = {}
         # Last websocket delta decision diagnostic (safe metadata only): why the
         # request went ``ws_incremental`` vs ``ws_full``. Surfaced in usage.extra.
         self._ws_last_diag: dict[str, Any] = {}
@@ -2448,7 +2519,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
         if pending is None or last is None or not last.response_id:
             self._ws_pending_baseline_input = None
             return
-        full_now = to_responses_input(self._interface)
+        full_now = self._frozen_responses_input(self._interface)
         base_len = len(pending)
         # Only treat the tail as server-added output when the interface still
         # strictly extends what we sent (it always should: we appended an
@@ -2498,8 +2569,21 @@ class CodexResponsesSession(OpenAIResponsesSession):
         """
         self._ws_session.turn_state = None
 
-    @staticmethod
-    def _interface_entries_to_responses_input(entries: list[Any]) -> list[dict[str, Any]]:
+    def _frozen_responses_input(self, iface: ChatInterface) -> list[dict[str, Any]]:
+        """``to_responses_input`` with per-session tool-result output freezing.
+
+        Routes every Codex WS conversion through ``_freeze_responses_outputs`` so
+        the model-facing ``function_call_output.output`` for a given ``call_id``
+        stays byte-identical across turns, even after the kernel moves latest-only
+        resident-meta off an older result. All three WS conversion sites (full
+        replay, per-turn delta, baseline tail) share ``self._ws_frozen_outputs`` so
+        the baseline and the next full request remain strict-prefix comparable.
+        """
+        return _freeze_responses_outputs(
+            to_responses_input(iface), self._ws_frozen_outputs
+        )
+
+    def _interface_entries_to_responses_input(self, entries: list[Any]) -> list[dict[str, Any]]:
         """Serialize newly-added ChatInterface entries for stateful Codex turns."""
 
         if not entries:
@@ -2509,7 +2593,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # populate a temporary interface so the normal converter preserves
         # reasoning/tool-result shapes and pairing behavior for the delta.
         delta_interface.entries.extend(entries)
-        return to_responses_input(delta_interface)
+        return self._frozen_responses_input(delta_interface)
 
     def send_stream(self, message, on_chunk=None) -> LLMResponse:
         # Maintain the canonical interface for local recovery and full-replay
@@ -2554,7 +2638,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
             ):
                 prebuilt_items.extend(self._convert_input(message))
 
-            full_replay_input_items = to_responses_input(self._interface)
+            full_replay_input_items = self._frozen_responses_input(self._interface)
             full_replay_input_items.extend(prebuilt_items)
 
             delta_entries = self._interface.entries[interface_start:]

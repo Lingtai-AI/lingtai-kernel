@@ -531,6 +531,97 @@ def test_tool_result_continuation_stays_incremental():
     assert "synthesized placeholder" not in str(only)
 
 
+class _PerTurnToolCallWsTransport(FakeWsTransport):
+    """Emits a distinct tool call (``call_1``, ``call_2``, …) on every turn.
+
+    This drives a multi-step tool loop so the kernel-side resident-meta movement
+    (latest-only ``_meta`` blocks hopping from an older tool result onto the
+    freshest one) can be simulated between turns.
+    """
+
+    def stream(self, frame):
+        self.sent_frames.append(frame)
+        self._resp_counter += 1
+        rid = f"resp_ws_{self._resp_counter}"
+        call_id = f"call_{self._resp_counter}"
+        yield Event("response.output_item.added", item=_ToolCallItem(call_id=call_id))
+        yield Event("response.function_call_arguments.delta", delta='{"a": 1}')
+        yield Event("response.output_item.done", item=_ToolCallItem(call_id=call_id))
+        yield _completed(rid)
+
+
+def _strip_resident_meta_from_oldest_tool_result(session) -> bool:
+    """Mimic ``attach_active_runtime``: strip the latest-only ``_meta`` blocks
+    from the OLDEST tool result's content in place (the kernel moves them onto
+    the freshest result each turn). Returns True if a result was mutated."""
+    from lingtai_kernel.llm.interface import ToolResultBlock
+
+    for entry in session._interface.entries:
+        for block in getattr(entry, "content", []) or []:
+            if isinstance(block, ToolResultBlock) and isinstance(block.content, dict):
+                meta = block.content.get("_meta")
+                if isinstance(meta, dict) and (
+                    "agent_meta" in meta or "guidance" in meta or "notifications" in meta
+                ):
+                    meta.pop("agent_meta", None)
+                    meta.pop("guidance", None)
+                    meta.pop("notifications", None)
+                    if not meta:
+                        block.content.pop("_meta", None)
+                    return True
+    return False
+
+
+def test_resident_meta_movement_does_not_break_incremental_delta():
+    """Core regression for resident-meta canonicalization.
+
+    The kernel moves latest-only ``_meta`` blocks off an older tool result onto
+    the freshest one each turn, mutating the older ``ToolResultBlock.content`` in
+    place. Without per-session output freezing that older
+    ``function_call_output.output`` changes between turns, breaking the strict
+    prefix and forcing ``ws_full`` (``prefix_mismatch``). With freezing the older
+    output replays byte-identically and the delta stays ``ws_incremental``.
+    """
+    from lingtai_kernel.llm.interface import ToolResultBlock
+
+    t = _PerTurnToolCallWsTransport()
+    session = _make_session(t)
+
+    session.send("start the tool loop")  # turn 1 -> assistant emits call_1
+    # Turn 2: answer call_1. As the freshest result it carries resident meta.
+    session.send([
+        ToolResultBlock(
+            id="call_1",
+            name="do_x",
+            content={"ok": True, "_meta": {"agent_meta": {"stamina": 9}, "tool_meta": {"id": "call_1"}}},
+        )
+    ])  # assistant emits call_2
+
+    # Kernel boundary: the meta hops off call_1's result onto the newer one.
+    # Simulate that in-place mutation BEFORE the next send re-converts history.
+    assert _strip_resident_meta_from_oldest_tool_result(session)
+
+    # Turn 3: answer call_2. The re-converted history now contains call_1 with
+    # its resident meta stripped — the exact prefix-mismatch trigger.
+    third = session.send([
+        ToolResultBlock(
+            id="call_2",
+            name="do_x",
+            content={"ok": True, "_meta": {"agent_meta": {"stamina": 8}, "tool_meta": {"id": "call_2"}}},
+        )
+    ])
+
+    # The frozen call_1 output keeps the prefix byte-identical: stays incremental.
+    assert third.usage.extra["codex_request_mode"] == "ws_incremental"
+    assert third.usage.extra["codex_ws_delta_reason"] == "ok"
+    # No prefix divergence was recorded (mismatch_index stays the -1 sentinel).
+    assert str(third.usage.extra.get("codex_ws_mismatch_index", "-1")) == "-1"
+    # The delta carries only the new call_2 result, not a full replay.
+    assert t.sent_frames[2]["previous_response_id"] == "resp_ws_2"
+    delta = t.sent_frames[2]["input"]
+    assert [i.get("call_id") for i in delta if i.get("type") == "function_call_output"] == ["call_2"]
+
+
 def test_mismatch_falls_back_to_ws_full_with_safe_reason():
     """A non-input field change (tools) forces ``ws_full`` with a safe diagnostic
     naming only the changed KEY, never any value."""
