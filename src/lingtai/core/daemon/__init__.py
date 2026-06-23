@@ -153,6 +153,32 @@ EMANATION_BLACKLIST = {
     "knowledge",
 }
 
+
+def _parent_host_tool_floor() -> frozenset[str]:
+    """The always-on host tools a preset emanation may borrow from the parent.
+
+    A preset selects the child LLM + provider-specific capabilities; it does
+    NOT re-declare the parent's always-on ``CORE_DEFAULTS`` host floor, because
+    the TUI preset wizard only writes overrides/opt-ins into
+    ``manifest.capabilities``. So those floor tools must still resolve from the
+    parent surface under a preset. But the floor is exactly the host
+    primitives — ``bash`` and the ``file`` group (read/write/edit/glob/grep) —
+    and nothing more: optional/provider parent tools (e.g. ``vision``,
+    ``web_search``) must NOT silently fall back to the parent when a preset
+    omits or fails them.
+
+    Derived from ``CORE_DEFAULTS`` so it stays in sync with the floor, minus
+    the entries that are not borrowable host *tools*:
+      * ``EMANATION_BLACKLIST`` (knowledge / skills / avatar / daemon …) — these
+        register no emanation-usable tool surface;
+      * ``mcp`` — the MCP host registers no regular tool of its own; parent MCP
+        tools are inherited only via task ``mcp`` registrations, never the floor.
+    The result is exactly {bash, read, write, edit, glob, grep}.
+    """
+    from ...capabilities import CORE_DEFAULTS  # noqa: PLC0415
+    return frozenset(set(CORE_DEFAULTS) - EMANATION_BLACKLIST - {"mcp"})
+
+
 # Env vars that override Claude Code's normal first-party OAuth credentials.
 # LingTai loads ``.env`` from ``~/.lingtai-tui/`` early, so auth intended for
 # another LLM adapter can leak into spawned ``claude`` subprocesses.
@@ -1128,10 +1154,20 @@ class DaemonManager:
         """Build filtered tool schemas and dispatch map for an emanation.
 
         When ``preset_surface`` is provided (preset-driven emanation), the
-        capability tools come from the preset's pre-instantiated sandbox
-        (``preset_surface = (schemas_by_name, handlers_by_name)``). Parent MCP
-        tools do not auto-inherit; task ``mcp`` provides complete one-run MCP
-        registrations whose tools are added through ``mcp_surface``. When
+        preset's pre-instantiated sandbox supplies the child LLM's
+        provider-specific capabilities (``preset_surface =
+        (schemas_by_name, handlers_by_name)``), but it does NOT replace the
+        parent's always-on host tool floor. Only that narrow floor — ``bash``
+        and the file primitives (read/write/edit/glob/grep) the preset wizard
+        omits from ``manifest.capabilities`` — stays available from the parent,
+        so requested host tools are not rejected as unknown just because a
+        preset was supplied. Optional/provider parent tools (vision,
+        web_search, …) are NOT borrowable; they must come from the preset's own
+        sandbox. See ``_parent_host_tool_floor``. Resolution is preset-first
+        (a tool the preset re-instantiated against the child LLM wins), then
+        intrinsics/task MCP, then the parent host surface fills in. Parent MCP
+        tools still do not auto-inherit; task ``mcp`` provides complete one-run
+        MCP registrations whose tools are added through ``mcp_surface``. When
         ``preset_surface`` is None, the parent's currently registered regular
         capability surface is used, again plus only task-scoped MCP tools.
         """
@@ -1167,9 +1203,27 @@ class DaemonManager:
 
         if preset_surface is not None:
             preset_schemas, preset_handlers = preset_surface
-            # Available surface = preset capabilities ∪ task-scoped MCP tools
-            # ∪ daemon-eligible intrinsics (currently email).
-            available = set(preset_schemas.keys()) | set(mcp_schemas) | set(intrinsic_schemas)
+            # A preset selects the child LLM + provider-specific capabilities;
+            # it does NOT re-declare the parent's always-on CORE_DEFAULTS host
+            # floor (bash / read / write / edit / glob / grep), because the
+            # preset wizard only writes overrides/opt-ins into
+            # manifest.capabilities. So those floor tools must remain available
+            # — they must not become "unknown" just because a preset was
+            # supplied. The borrowable floor is NARROW on purpose: only the
+            # always-on host primitives, never optional/provider parent tools
+            # (vision, web_search, …) — those must come from the preset's own
+            # sandbox so a preset that omits/fails a provider cap does NOT
+            # silently fall back to the parent. Parent MCP tools likewise do
+            # NOT auto-inherit (they must come through task `mcp` registrations);
+            # that exclusion is enforced by the ``parent_mcp_requested`` guard
+            # above and by the floor's exclusion of `mcp`.
+            parent_schema_map = {s.name: s for s in self._agent._tool_schemas}
+            parent_host_names = (set(parent_schema_map)
+                                 & _parent_host_tool_floor()) - parent_mcp_names
+            # Available surface = preset capabilities ∪ parent host-floor tools
+            # ∪ task-scoped MCP tools ∪ daemon-eligible intrinsics (email).
+            available = (set(preset_schemas.keys()) | parent_host_names
+                         | set(mcp_schemas) | set(intrinsic_schemas))
             # The narrow daemon intrinsic surface and task MCP surface are
             # auto-included for this one run.
             tool_names |= set(mcp_schemas) | set(intrinsic_schemas)
@@ -1178,10 +1232,12 @@ class DaemonManager:
             if missing:
                 raise ValueError(f"Unknown tools for emanation: {missing}")
 
-            # Build merged schemas + dispatch — preset tools first, MCP fills in
+            # Build merged schemas + dispatch. Resolution order is preset-first
+            # so a capability the preset re-instantiated (configured against the
+            # child LLM) wins over the parent; intrinsics and task MCP next; the
+            # parent host surface fills in for floor tools the preset omitted.
             schemas: list[FunctionSchema] = []
             dispatch: dict = {}
-            parent_schema_map = {s.name: s for s in self._agent._tool_schemas}
             for n in sorted(tool_names):
                 if n in preset_schemas:
                     schemas.append(preset_schemas[n])
@@ -1195,6 +1251,10 @@ class DaemonManager:
                     schemas.append(mcp_schemas[n])
                     if n in mcp_handlers:
                         dispatch[n] = mcp_handlers[n]
+                elif n in parent_schema_map:
+                    schemas.append(parent_schema_map[n])
+                    if n in self._agent._tool_handlers:
+                        dispatch[n] = self._agent._tool_handlers[n]
             return schemas, dispatch
 
         # Default path: emanation runs on the parent's capability surface plus
