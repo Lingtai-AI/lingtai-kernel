@@ -153,6 +153,32 @@ EMANATION_BLACKLIST = {
     "knowledge",
 }
 
+
+def _parent_host_tool_floor() -> frozenset[str]:
+    """The always-on host tools a preset emanation may borrow from the parent.
+
+    A preset selects the child LLM + provider-specific capabilities; it does
+    NOT re-declare the parent's always-on ``CORE_DEFAULTS`` host floor, because
+    the TUI preset wizard only writes overrides/opt-ins into
+    ``manifest.capabilities``. So those floor tools must still resolve from the
+    parent surface under a preset. But the floor is exactly the host
+    primitives — ``bash`` and the ``file`` group (read/write/edit/glob/grep) —
+    and nothing more: optional/provider parent tools (e.g. ``vision``,
+    ``web_search``) must NOT silently fall back to the parent when a preset
+    omits or fails them.
+
+    Derived from ``CORE_DEFAULTS`` so it stays in sync with the floor, minus
+    the entries that are not borrowable host *tools*:
+      * ``EMANATION_BLACKLIST`` (knowledge / skills / avatar / daemon …) — these
+        register no emanation-usable tool surface;
+      * ``mcp`` — the MCP host registers no regular tool of its own; parent MCP
+        tools are inherited only via task ``mcp`` registrations, never the floor.
+    The result is exactly {bash, read, write, edit, glob, grep}.
+    """
+    from ...capabilities import CORE_DEFAULTS  # noqa: PLC0415
+    return frozenset(set(CORE_DEFAULTS) - EMANATION_BLACKLIST - {"mcp"})
+
+
 # Env vars that override Claude Code's normal first-party OAuth credentials.
 # LingTai loads ``.env`` from ``~/.lingtai-tui/`` early, so auth intended for
 # another LLM adapter can leak into spawned ``claude`` subprocesses.
@@ -1131,11 +1157,13 @@ class DaemonManager:
         preset's pre-instantiated sandbox supplies the child LLM's
         provider-specific capabilities (``preset_surface =
         (schemas_by_name, handlers_by_name)``), but it does NOT replace the
-        parent's always-on host tool floor. The parent's regular (non-MCP)
-        capability surface — bash and the file primitives the preset wizard
-        omits from ``manifest.capabilities`` — stays available, so requested
-        host tools valid in the parent capability set are not rejected as
-        unknown just because a preset was supplied. Resolution is preset-first
+        parent's always-on host tool floor. Only that narrow floor — ``bash``
+        and the file primitives (read/write/edit/glob/grep) the preset wizard
+        omits from ``manifest.capabilities`` — stays available from the parent,
+        so requested host tools are not rejected as unknown just because a
+        preset was supplied. Optional/provider parent tools (vision,
+        web_search, …) are NOT borrowable; they must come from the preset's own
+        sandbox. See ``_parent_host_tool_floor``. Resolution is preset-first
         (a tool the preset re-instantiated against the child LLM wins), then
         intrinsics/task MCP, then the parent host surface fills in. Parent MCP
         tools still do not auto-inherit; task ``mcp`` provides complete one-run
@@ -1176,18 +1204,23 @@ class DaemonManager:
         if preset_surface is not None:
             preset_schemas, preset_handlers = preset_surface
             # A preset selects the child LLM + provider-specific capabilities;
-            # it does NOT re-declare the parent's always-on CORE_DEFAULTS floor
-            # (bash / read / write / edit / glob / grep), because the preset
-            # wizard only writes overrides/opt-ins into manifest.capabilities.
-            # So the parent's regular (non-MCP) host tools must remain available
-            # — requested host tools valid in the parent capability set must not
-            # become "unknown" just because a preset was supplied. Parent MCP
-            # tools still do NOT auto-inherit (they must come through task `mcp`
-            # registrations); that exclusion is enforced by the
-            # ``parent_mcp_requested`` guard above and the subtraction here.
+            # it does NOT re-declare the parent's always-on CORE_DEFAULTS host
+            # floor (bash / read / write / edit / glob / grep), because the
+            # preset wizard only writes overrides/opt-ins into
+            # manifest.capabilities. So those floor tools must remain available
+            # — they must not become "unknown" just because a preset was
+            # supplied. The borrowable floor is NARROW on purpose: only the
+            # always-on host primitives, never optional/provider parent tools
+            # (vision, web_search, …) — those must come from the preset's own
+            # sandbox so a preset that omits/fails a provider cap does NOT
+            # silently fall back to the parent. Parent MCP tools likewise do
+            # NOT auto-inherit (they must come through task `mcp` registrations);
+            # that exclusion is enforced by the ``parent_mcp_requested`` guard
+            # above and by the floor's exclusion of `mcp`.
             parent_schema_map = {s.name: s for s in self._agent._tool_schemas}
-            parent_host_names = set(parent_schema_map) - parent_mcp_names
-            # Available surface = preset capabilities ∪ parent host tools
+            parent_host_names = (set(parent_schema_map)
+                                 & _parent_host_tool_floor()) - parent_mcp_names
+            # Available surface = preset capabilities ∪ parent host-floor tools
             # ∪ task-scoped MCP tools ∪ daemon-eligible intrinsics (email).
             available = (set(preset_schemas.keys()) | parent_host_names
                          | set(mcp_schemas) | set(intrinsic_schemas))

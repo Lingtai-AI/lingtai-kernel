@@ -703,6 +703,67 @@ def test_build_tool_surface_preset_does_not_inherit_parent_mcp(tmp_path):
         raise AssertionError("parent MCP tool must not be accepted via tools")
 
 
+def test_build_tool_surface_preset_floor_excludes_extra_parent_tool(tmp_path):
+    """dev-1 blocker: the parent host floor a preset may borrow is NARROW —
+    exactly {bash, read, write, edit, glob, grep}. An extra regular (non-MCP)
+    parent tool that is NOT in that floor and NOT in the preset must stay
+    unknown under a preset: not available, not dispatchable, and rejected when
+    requested. This guards against optional/provider parent tools (vision,
+    web_search, …) silently falling back to the parent when a preset omits or
+    fails the provider capability."""
+    agent = _make_agent(tmp_path, ["file", "bash", "daemon"])
+    # A regular (non-MCP) parent tool outside the core host floor. This stands
+    # in for an optional/provider tool like vision/web_search.
+    agent._sealed = False
+    agent.add_tool("parent_extra_tool",
+                   schema={"type": "object", "properties": {}},
+                   handler=lambda args: {"ok": True},
+                   description="Extra non-floor parent tool")
+    agent._sealed = True
+    # NOT registered as an MCP tool — it is a regular parent capability tool.
+    assert "parent_extra_tool" not in agent._mcp_tool_names
+    mgr = agent.get_capability("daemon")
+
+    preset_schemas, preset_handlers = mgr._instantiate_preset_capabilities(
+        {},  # preset declares no host floor and no provider caps
+        {"provider": "mock", "model": "mock"},
+    )
+    assert "parent_extra_tool" not in preset_schemas
+
+    # Floor tools survive; the extra parent tool does not leak into the surface.
+    schemas, dispatch = mgr._build_tool_surface(
+        ["bash"], preset_surface=(preset_schemas, preset_handlers),
+    )
+    names = {s.name for s in schemas}
+    assert "bash" in names
+    assert "parent_extra_tool" not in names
+    assert "parent_extra_tool" not in dispatch
+
+    # Requesting it by name under a preset is rejected as unknown.
+    try:
+        mgr._build_tool_surface(
+            ["bash", "parent_extra_tool"],
+            preset_surface=(preset_schemas, preset_handlers),
+        )
+    except ValueError as e:
+        assert "parent_extra_tool" in str(e)
+        assert "bash" not in str(e)  # bash is a valid floor tool
+    else:
+        raise AssertionError(
+            "extra non-floor parent tool must be rejected under a preset")
+
+
+def test_parent_host_tool_floor_is_exactly_bash_and_file(tmp_path):
+    """Lock the borrowable floor to the intended set. Derived from
+    CORE_DEFAULTS minus EMANATION_BLACKLIST minus mcp, it must equal exactly
+    {bash, read, write, edit, glob, grep} — no intrinsics, no mcp, no optional
+    provider caps."""
+    from lingtai.core.daemon import _parent_host_tool_floor
+    assert _parent_host_tool_floor() == frozenset(
+        {"bash", "read", "write", "edit", "glob", "grep"}
+    )
+
+
 def test_emanate_preset_skipped_provider_cap_still_runs_host_tools(
         tmp_path, monkeypatch):
     """End-to-end repro: a preset whose optional provider capability (vision)
