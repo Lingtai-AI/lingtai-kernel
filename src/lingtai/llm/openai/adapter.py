@@ -14,6 +14,7 @@ import json
 import os
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -1531,6 +1532,7 @@ class OpenAIChatSession(ChatSession):
         acc.finish_all_tools()
         result = acc.finalize(usage=usage)
 
+
         # 5. Record assistant response into interface
         blocks: list = []
         # Persist captured reasoning as a ThinkingBlock so the next request
@@ -2149,6 +2151,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # Last websocket delta decision diagnostic (safe metadata only): why the
         # request went ``ws_incremental`` vs ``ws_full``. Surfaced in usage.extra.
         self._ws_last_diag: dict[str, Any] = {}
+        self._ws_cache_ledger: deque[dict[str, Any]] = deque(maxlen=20)
+        self._ws_cache_call_seq = 0
         # One Codex websocket connection may carry multiple ``response.create``
         # frames. Live smoke showed ChatGPT Codex resolves
         # ``previous_response_id`` only when the follow-up request stays on the
@@ -2619,102 +2623,226 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._reset_ws_epoch("summarize")
 
     def on_notification_dismissed(self, channel: str | None = None) -> None:
-        """Hook called after a notification dismiss/cleanup mutates the surface.
+        # Notification dismiss is high-frequency housekeeping, not context
+        # compaction. It should not break the Codex previous_response_id
+        # chain; only summarize rewrites old tool-result payloads enough to
+        # require a fresh ws_full epoch.
+        return None
 
-        Dismissing or clearing a notification rewrites the resident
-        ``_meta.notifications`` block carried on prior tool results, which
-        breaks the strict-prefix comparison the WS incremental chain relies on
-        — exactly the same hazard ``on_history_summarized`` guards against. So
-        a dismiss intentionally starts a fresh ws_full epoch instead of letting
-        the next request continue as ws_incremental against a now-stale remote
-        baseline. ``channel`` is accepted for diagnostics/symmetry; the reset is
-        unconditional once a dismiss has actually cleared state (the caller only
-        invokes this hook on a real clear).
-        """
-        if not self._ws_enabled:
+    @staticmethod
+    def _ws_cache_rate(input_tokens: int, cached_tokens: int) -> float | None:
+        if input_tokens <= 0:
+            return None
+        return round(cached_tokens / input_tokens, 2)
+
+    @staticmethod
+    def _ws_tokens_k(tokens: int) -> float:
+        return round(max(0, int(tokens or 0)) / 1000, 1)
+
+    @staticmethod
+    def _ws_request_mode_code(request_mode: str | None) -> str:
+        if request_mode == "ws_full":
+            return "F"
+        if request_mode == "ws_incremental":
+            return "I"
+        return str(request_mode or "unknown")[:12]
+
+    @staticmethod
+    def _ws_reason_code(ws_diag: dict[str, Any] | None) -> str:
+        if not isinstance(ws_diag, dict):
+            return ""
+        reason = str(ws_diag.get("reason") or "")
+        if not reason or reason == "ok":
+            return ""
+        if reason == "epoch_reset":
+            reset_reason = str(ws_diag.get("epoch_reset_reason") or "")
+            reset_codes = {
+                "summarize": "sum",
+                "turn_count": "turns",
+            }
+            if reset_reason in reset_codes:
+                return reset_codes[reset_reason]
+            return f"epoch:{reset_reason}" if reset_reason else "epoch"
+        reason_codes = {
+            "prefix_mismatch": "pm",
+            "no_baseline": "nb",
+            "missing_response_id": "no_prev",
+            "missing_baseline_request": "no_base",
+            "missing_output_items": "no_out",
+        }
+        return reason_codes.get(reason, reason[:24])
+
+    def _record_ws_cache_ledger(
+        self,
+        *,
+        request_mode: str | None,
+        usage: UsageMetadata,
+        ws_diag: dict[str, Any] | None,
+    ) -> None:
+        if request_mode not in {"ws_full", "ws_incremental"}:
             return
-        self._reset_ws_epoch("notification_dismiss")
+        input_tokens = max(0, int(getattr(usage, "input_tokens", 0) or 0))
+        cached_tokens = max(0, int(getattr(usage, "cached_tokens", 0) or 0))
+        cached_tokens = min(cached_tokens, input_tokens)
+        miss_tokens = max(0, input_tokens - cached_tokens)
+        mode = self._ws_request_mode_code(request_mode)
+        self._ws_cache_call_seq += 1
+        self._ws_cache_ledger.append(
+            {
+                "seq": self._ws_cache_call_seq,
+                "mode": mode,
+                "cache": self._ws_cache_rate(input_tokens, cached_tokens),
+                "input_tokens": input_tokens,
+                "cached_tokens": cached_tokens,
+                "miss_tokens": miss_tokens,
+                "reason": self._ws_reason_code(ws_diag) if mode == "F" else "",
+            }
+        )
 
-    def adapter_comment(self):
-        # Be honest about the *active* transport. The previous_response_id epoch
-        # machinery (ws_full/ws_incremental, turns_since_epoch_reset) only exists
-        # on the experimental websocket path; when WS is disabled every request
-        # is already a full stateless replay (store=false, no previous_response_id)
-        # rebuilt from local chat_history, so advertising a ws_full/ws_incremental
-        # boundary would mislead the agent (it never resets, and the counter is
-        # permanently 0). See self-trace 2026-06-23T21:02Z: ws_enabled=false yet
-        # the comment claimed a ws_full reset, which looked like summarize "not
-        # triggering ws_full".
+    def _ws_cache_ledger_comment(self) -> dict[str, Any]:
+        entries = list(self._ws_cache_ledger)
+        latest_seq = int(entries[-1]["seq"]) if entries else 0
+        rows = [
+            [
+                latest_seq - int(entry["seq"]),
+                entry["mode"],
+                entry["cache"],
+                self._ws_tokens_k(int(entry["input_tokens"])),
+                self._ws_tokens_k(int(entry["miss_tokens"])),
+                entry["reason"],
+            ]
+            for entry in entries
+        ]
+        total_input = sum(int(entry["input_tokens"]) for entry in entries)
+        total_cached = sum(int(entry["cached_tokens"]) for entry in entries)
+        total_miss = sum(int(entry["miss_tokens"]) for entry in entries)
+        last_ws_full = next(
+            (entry for entry in reversed(entries) if entry["mode"] == "F"),
+            None,
+        )
+        if last_ws_full is None:
+            last_ws_full_comment = {
+                "api_calls_ago": None,
+                "reason": "not_seen" if entries else "not_recorded",
+            }
+        else:
+            last_ws_full_comment = {
+                "api_calls_ago": latest_seq - int(last_ws_full["seq"]),
+                "reason": last_ws_full["reason"] or "ws_full",
+            }
+        return {
+            "window_api_calls": 20,
+            "recorded_api_calls": len(entries),
+            "cols": ["ago", "mode", "cache", "in_k", "miss_k", "reason"],
+            "rows": rows,
+            "summary": {
+                "api_calls": len(entries),
+                "cache_rate": self._ws_cache_rate(total_input, total_cached),
+                "ws_full_count": sum(1 for entry in entries if entry["mode"] == "F"),
+                "miss_k": self._ws_tokens_k(total_miss),
+            },
+            "last_ws_full": last_ws_full_comment,
+            "legend": {
+                "I": "ws_incremental",
+                "F": "ws_full",
+                "sum": "epoch_reset:summarize",
+                "turns": "epoch_reset:turn_count",
+                "pm": "prefix_mismatch",
+                "nb": "no_baseline",
+            },
+        }
+
+    @staticmethod
+    def _ws_maintenance_hint(
+        *,
+        recorded_api_calls: int,
+        last_ws_full_api_calls_ago: int | None,
+    ) -> dict[str, Any]:
+        if recorded_api_calls <= 0:
+            return {
+                "non_urgent_summarize": "unknown",
+                "reason": "no Codex websocket cache ledger entries yet",
+            }
+        if last_ws_full_api_calls_ago is None:
+            return {
+                "non_urgent_summarize": "ok",
+                "reason": "no ws_full in the last 20 Codex API calls",
+            }
+        wait_remaining = max(0, 5 - int(last_ws_full_api_calls_ago))
+        if wait_remaining > 0:
+            return {
+                "non_urgent_summarize": "wait",
+                "wait_until_last_ws_full_api_calls_ago": 5,
+                "wait_api_calls_remaining": wait_remaining,
+                "reason": (
+                    f"last ws_full was {last_ws_full_api_calls_ago} API calls ago; "
+                    f"wait {wait_remaining} more if not urgent"
+                ),
+            }
+        return {
+            "non_urgent_summarize": "ok",
+            "wait_until_last_ws_full_api_calls_ago": 5,
+            "wait_api_calls_remaining": 0,
+            "reason": f"last ws_full was {last_ws_full_api_calls_ago} API calls ago",
+        }
+
+    def adapter_comment(self) -> dict[str, Any] | None:
         if not self._ws_enabled:
             return {
                 "adapter": "codex",
                 "feature": "stateless_full_replay",
                 "ws_enabled": False,
                 "summary": (
-                    "Codex runs in stateless mode here (store=false, no "
-                    "previous_response_id chain). Every request is a complete "
-                    "replay rebuilt from the current local chat_history, so there "
-                    "is no remote epoch to reset and no incremental chain to "
-                    "preserve. Context-shaping actions take effect immediately on "
-                    "the next request because it is always a full replay; the "
-                    "kernel does not delete or summarize local chat_history on "
-                    "your behalf."
+                    "Codex WebSocket continuation is disabled, so every request is a "
+                    "full stateless replay. There is no ws_incremental/ws_full "
+                    "previous_response_id chain to preserve."
                 ),
                 "summarize_ws_full_note": (
-                    "Codex-specific note: this runtime is stateless (no "
-                    "ws_incremental chain). system(action='summarize') and "
-                    "notification dismiss/cleanup (notification(action='dismiss_*') "
-                    "and channel clears) both take effect by shrinking or "
-                    "rewriting the next full replay built from local chat_history "
-                    "— summarize replaces the visible tool-result payload with "
-                    "your summary, and dismiss removes the resident notification "
-                    "meta. Each such change alters the replay shape from the "
-                    "mutation point onward and can reduce cached-token reuse after "
-                    "that point; the stable prefix before it may still cache. Batch "
-                    "summaries and notification dismissals (group finished items, "
-                    "clear several at once) instead of doing them one at a time to "
-                    "limit cache churn. Other providers are much less sensitive to "
-                    "this boundary."
+                    "Summarize can still compact redundant carried-forward context "
+                    "before the next full replay. Notification dismiss only clears "
+                    "notification state; it does not compact redundant context or "
+                    "create a ws_full epoch boundary in stateless mode."
                 ),
             }
-
         self._refresh_ws_epoch_reset_turn_limit()
         limit = self._ws_epoch_reset_turn_limit
         next_reset_in = None
         if limit > 0:
             next_reset_in = max(0, limit - self._ws_turns_since_epoch_reset)
+        cache_note = (
+            "Summarize rewrites older tool-result payloads, compacts redundant "
+            "carried-forward context, and breaks Codex's previous_response_id/"
+            "ws_incremental prefix; the next request must be ws_full, usually "
+            "causing more cache miss. Wait until >=5 API calls after the last "
+            "ws_full before non-urgent summarize. Notification dismiss is only "
+            "notification cleanup: it does not compact redundant context and does "
+            "not trigger a ws_full epoch reset."
+        )
+        cache_ledger = self._ws_cache_ledger_comment()
+        last_ws_full = cache_ledger["last_ws_full"]
+        last_ws_full_api_calls_ago = last_ws_full["api_calls_ago"]
         return {
             "adapter": "codex",
             "feature": "responses_websocket_epoch_reset",
-            "ws_enabled": self._ws_enabled,
+            "ws_enabled": True,
             "epoch_reset_turns": limit,
             "turns_since_epoch_reset": self._ws_turns_since_epoch_reset,
             "next_reset_in": next_reset_in,
+            "last_ws_full_api_calls_ago": last_ws_full_api_calls_ago,
+            "last_ws_full_reason": last_ws_full["reason"],
             "summary": (
                 "Codex reuses remote Responses state through previous_response_id. "
-                "To keep that remote chain from carrying stale runtime metadata "
-                "forever, LingTai sometimes starts a fresh Codex epoch: it drops "
-                "only request-side state (previous_response_id, the local baseline, "
-                "pending baseline, frozen tool-output cache, and WS transport), "
-                "then sends a complete request rebuilt from the current local "
-                "chat_history. This removes stale meta blocks and stale frozen "
-                "tool outputs from the next remote state chain. It does not delete "
-                "or summarize LingTai local chat_history."
+                "A fresh ws_full epoch clears only request-side continuation state "
+                "and rebuilds the next request from local chat_history; local history "
+                "is not deleted or summarized."
             ),
-            "summarize_ws_full_note": (
-                "Codex-specific caution: each summarize forces the next request "
-                "to start a fresh ws_full epoch instead of continuing as "
-                "ws_incremental, so it can hurt the previous_response_id cache "
-                "chain. Notification dismiss/cleanup (notification(action='dismiss_*') "
-                "and channel clears) does the same thing: it rewrites the resident "
-                "notification meta on older tool results, breaking the incremental "
-                "chain and forcing the next request to start a fresh ws_full epoch. "
-                "Strongly avoid consecutive summarize or dismiss calls within about "
-                "five turns; for ordinary long results, group several finished "
-                "items and summarize them together, and batch notification dismissals "
-                "rather than clearing them one at a time. Other providers are much "
-                "less sensitive to this Codex cache boundary."
+            "cache_ledger": cache_ledger,
+            "maintenance_hint": self._ws_maintenance_hint(
+                recorded_api_calls=cache_ledger["recorded_api_calls"],
+                last_ws_full_api_calls_ago=last_ws_full_api_calls_ago,
             ),
+            "cache_note": cache_note,
+            "summarize_ws_full_note": cache_note,
         }
 
     def reset_provider_turn_state(self) -> None:
@@ -3117,6 +3245,11 @@ class CodexResponsesSession(OpenAIResponsesSession):
             self._ws_record_baseline_from_interface()
             if locals().get("ws_stream_was_used"):
                 self._ws_turns_since_epoch_reset += 1
+                self._record_ws_cache_ledger(
+                    request_mode=request_mode,
+                    usage=usage,
+                    ws_diag=self._ws_last_diag,
+                )
 
         # Stateless: don't persist the response_id beyond this single turn.
         # Stored only as a transient debug aid; never threaded into the next
