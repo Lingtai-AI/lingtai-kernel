@@ -8,7 +8,7 @@ description: >
   force semantics, and the undismissable large-result reminders discharged only
   by system(action="summarize").
 version: 0.2.0
-tags: [lingtai, notifications, channels, dismiss, large-result, force, stale]
+tags: [lingtai, notifications, channels, dismiss, large-result, force, stale, nudge]
 ---
 
 # Notification Manual
@@ -34,6 +34,12 @@ The kernel uses an allowlist: built-in channels such as `email`, `system`,
 and `goal` are accepted; MCP bridge channels are accepted by the `mcp.` prefix.
 Unknown `.json` files are ignored by `collect_notifications()` and kernel helper
 publish/dismiss calls reject non-allowlisted channel names.
+
+The `nudge` channel is the formal surface for mechanical, throttled checks. For
+example, kernel runtime/update checks publish `data.nudges[]` entries with
+`kind: kernel_version`; interpret those with
+`reference/runtime-update-checks/SKILL.md` before asking the human to update or
+refresh.
 
 ## Envelope shape
 

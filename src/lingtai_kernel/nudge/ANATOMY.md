@@ -1,10 +1,12 @@
 # Nudge
 
 Per-agent periodic checks that emit notification nudges or reminders when
-something needs the agent's attention. Kernel-version nudges share
-`.notification/nudge.json`; goal reminders read protected `.notification/goal.json`
-and publish short dismissible events into `.notification/system.json`. Designed so
-additional checks land as small additions (e.g. MCP version drift, addon updates).
+something needs the agent's attention. Runtime/kernel update nudges share
+`.notification/nudge.json` and keep throttle state in
+`.notification/.nudge_state.json`; goal reminders read protected
+`.notification/goal.json` and publish short dismissible events into
+`.notification/system.json`. Designed so additional mechanical checks land as
+small additions (e.g. MCP version drift, addon updates).
 
 ## Entry point
 
@@ -19,9 +21,14 @@ bad check never breaks the loop). It dispatches to each check's
   helpers (`upsert`, `remove`) that operate on the `nudge.json`
   multi-entry payload under a lazy per-agent lock. Runs `kernel_version.check`
   and then `goal.check` once per heartbeat tick.
-- `kernel_version.py` — compares `lingtai.__version__` (frozen at import time)
-  against `importlib.metadata.version("lingtai")` (rescans dist-info on each
-  call). Emits into `nudge.json` when they differ; clears when they re-agree.
+- `kernel_version.py` — read-only runtime/update check. It first detects
+  whether the installed `lingtai` distribution on disk differs from the running
+  `lingtai.__version__` and emits a fast local refresh nudge. For packaged,
+  non-editable/non-dev runtimes, it also performs an at-most-once-per-UTC-day
+  package-index check for a newer kernel version and nudges the agent to read
+  `system-manual -> reference/runtime-update-checks/SKILL.md` before asking the
+  human whether to update. It stores daily throttle state in the hidden
+  `.notification/.nudge_state.json` helper file, which is not a channel.
 - `goal.py` — IDLE-only goal reminder check. It reads the allowlisted protected
   `.notification/goal.json`; if and only if that file exists, is active, and the
   idle delay has elapsed, it publishes one short `goal.reminder` event into
@@ -39,7 +46,7 @@ All nudges share `.notification/nudge.json` with this shape:
   "header": "1 nudge",
   "icon": "🔔",
   "priority": "low",
-  "instructions": "Call system(action='dismiss', channel='nudge') ...",
+  "instructions": "Call notification(action='dismiss_channel', channel='nudge') ...",
   "data": {
     "nudges": [
       {"kind": "kernel_version", "title": "...", "detail": "...", ...}
@@ -52,14 +59,15 @@ Each entry's `kind` is its slot key — `upsert(agent, kind, body)`
 replaces by `kind`, `remove(agent, kind)` drops by `kind`. When the
 list empties, the channel file is deleted entirely so the wire surface
 drops the notification cleanly. The agent dismisses everything at once
-with `system(action='dismiss', channel='nudge')`.
+with `notification(action='dismiss_channel', channel='nudge')`.
 
 ## Adding a new nudge
 
 1. Drop `nudge/<name>.py` with a top-level `check(agent) -> None`
    function. Inside:
-   - Throttle (compare wall-clock against a state dict you stash on
-     the agent as `agent._nudge_<name>_state`).
+   - Throttle. In-memory state on `agent._nudge_<name>_state` is fine for
+     short cadence checks; use a small non-channel state file (for example
+     `.notification/.nudge_state.json`) when the cadence must survive refreshes.
    - Probe whatever you need to check.
    - On hit: call `upsert(agent, "<unique_kind>", body)` where `body`
      is the per-kind payload dict you want the agent to read.

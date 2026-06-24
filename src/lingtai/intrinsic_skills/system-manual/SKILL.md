@@ -12,13 +12,15 @@ description: >
   summarization, progressive disclosure, original-result recovery, and
   summarize-vs-molt distinctions; and `reference/sqlite-log-query/SKILL.md` for
   SQLite/log.sqlite runtime trace inspection and trajectory/anomaly mining from
-  event traces. Also
-  route here for lifecycle operations, notification
-  handling, molt/memory questions, MCP/addon ownership, preset tiers,
-  collaboration/network topology, resident prompt design, and the `system` tool
-  actions.
-version: 1.2.0
-tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize]
+  event traces; and `reference/runtime-update-checks/SKILL.md` for
+  runtime/kernel self-checks, nudge-driven update reminders, editable/dev-mode
+  identification, and safe refresh/update handoffs. Also
+  route here for lifecycle operations, notification/nudge
+  handling, runtime/kernel update checks, molt/memory questions, MCP/addon
+  ownership, preset tiers, collaboration/network topology, resident prompt
+  design, and the `system` tool actions.
+version: 1.3.0
+tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks]
 ---
 
 # System Manual — Progressive Disclosure Router
@@ -30,7 +32,7 @@ that carries the actual detail.
 
 Use this file first when the question is about LingTai's agent runtime, resident
 prompt design, lifecycle, memory, communication, tool routing, system operations,
-or runtime trace inspection. Then open the referenced lower node.
+runtime trace inspection, runtime/kernel update checks, or nudge handling. Then open the referenced lower node.
 
 
 ## Nested reference catalog
@@ -84,6 +86,14 @@ selects that topic.
     versus producer-specific dismiss, protected channels, stale-version/force
     semantics, and undismissable large-result reminders (cleared only by
     system summarize). The `system` tool owns no notification verb.
+- name: runtime-update-checks
+  location: reference/runtime-update-checks/SKILL.md
+  description: |
+    Runtime/kernel self-check and update-nudge manual: handling `.notification/nudge.json`
+    entries with `kind: kernel_version`, distinguishing running/installed/latest
+    LingTai kernel versions, recognizing editable/dev/source installs, honoring
+    the once-per-day packaged-runtime update check, asking the human before
+    downloading/updating, and refreshing only when safe.
 - name: goal-manual
   location: reference/goal-manual/SKILL.md
   description: |
@@ -101,6 +111,7 @@ selects that topic.
 | Tool-result summarization; large-result reminders; progressive disclosure of raw outputs; original-result recovery; summarize vs molt | `reference/summarize-manual/SKILL.md` |
 | SQLite; `log.sqlite`; LingTai runtime logs; JSONL traces; `lingtai-agent log doctor`; `lingtai-agent log query`; `lingtai-agent log rebuild`; events/chat_entries schema; daemon/chat-history trace indexing; WAL/live-read caveats; SQL recipes; trajectory/anomaly mining; improvement digests; cheap-model strategy | `reference/sqlite-log-query/SKILL.md` |
 | Notifications; the `notification` tool; check/dismiss_channel/dismiss_event/dismiss_ref; `.notification/<channel>.json`; channel allowlist; top-level `instructions`; protected channels; generic vs producer dismiss; stale-version/force; undismissable large-result reminders | `reference/notification-manual/SKILL.md` |
+| Runtime/kernel state; `nudge` notification channel; `.notification/nudge.json`; `kind: kernel_version`; running vs installed vs latest LingTai kernel; editable/dev/source installs; daily update checks; safe `system(action='refresh')`; ask the human before downloading/updating | `reference/runtime-update-checks/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Molt mechanics, pad tending, session journals, post-wipe recovery | `psyche-manual` |
 | Authoring/publishing skills or changing skill catalog behavior | `skills-manual` |

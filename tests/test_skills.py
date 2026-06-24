@@ -184,12 +184,14 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "reference/substrate-manual/SKILL.md" in system_manual_body
         assert "reference/procedures-manual/SKILL.md" in system_manual_body
         assert "reference/sqlite-log-query/SKILL.md" in system_manual_body
+        assert "reference/runtime-update-checks/SKILL.md" in system_manual_body
         assert "lingtai-agent log doctor" in system_manual_body
         assert "lingtai-agent log query" in system_manual_body
         assert "lingtai-agent log rebuild" in system_manual_body
         assert "name: substrate-manual" in system_manual_body
         assert "name: procedures-manual" in system_manual_body
         assert "name: sqlite-log-query" in system_manual_body
+        assert "name: runtime-update-checks" in system_manual_body
         assert "Nested reference catalog" in system_manual_body
 
         substrate_ref = system_manual_md.parent / "reference" / "substrate-manual" / "SKILL.md"
@@ -214,6 +216,20 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "Human-facing deliverables" in procedures_body
         assert "external side effects" in procedures_body
         assert "Resident procedures maintenance" in procedures_body
+
+        runtime_update_ref = (
+            system_manual_md.parent / "reference" / "runtime-update-checks" / "SKILL.md"
+        )
+        assert runtime_update_ref.is_file()
+        runtime_update_body = runtime_update_ref.read_text(encoding="utf-8")
+        assert "name: runtime-update-checks" in runtime_update_body
+        assert "Nested system-manual reference" in runtime_update_body
+        assert "# Runtime Update Checks" in runtime_update_body
+        assert "kind: kernel_version" in runtime_update_body
+        assert ".notification/nudge.json" in runtime_update_body
+        assert "once per UTC day" in runtime_update_body
+        assert "editable/source/dev" in runtime_update_body
+        assert "ask the human" in runtime_update_body
 
         psyche_md = (
             workdir
