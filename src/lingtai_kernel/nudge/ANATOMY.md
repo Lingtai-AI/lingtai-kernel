@@ -19,8 +19,8 @@ bad check never breaks the loop). It dispatches to each check's
 
 - `__init__.py` — dispatcher (`run_checks`), shared upsert/remove
   helpers (`upsert`, `remove`) that operate on the `nudge.json`
-  multi-entry payload under a lazy per-agent lock. Runs `kernel_version.check`
-  and then `goal.check` once per heartbeat tick.
+  multi-entry payload under a lazy per-agent lock. Runs `kernel_version.check`,
+  `source_drift.check`, and then `goal.check` once per heartbeat tick.
 - `kernel_version.py` — read-only runtime/update check. It first detects
   whether the installed `lingtai` distribution on disk differs from the running
   `lingtai.__version__` and emits a fast local refresh nudge. For packaged,
@@ -29,6 +29,11 @@ bad check never breaks the loop). It dispatches to each check's
   `system-manual -> reference/runtime-update-checks/SKILL.md` before asking the
   human whether to update. It stores daily throttle state in the hidden
   `.notification/.nudge_state.json` helper file, which is not a channel.
+- `source_drift.py` — read-only process/source freshness check. It compares the
+  startup runtime fingerprint with the current on-disk fingerprint and emits a
+  low-priority refresh nudge only for non-dev/non-editable/non-source runtimes;
+  development checkouts are skipped so agents are not nudged into arbitrary
+  in-flight source changes.
 - `goal.py` — IDLE-only goal reminder check. It reads the allowlisted protected
   `.notification/goal.json`; if and only if that file exists, is active, and the
   idle delay has elapsed, it publishes one short `goal.reminder` event into
@@ -83,11 +88,10 @@ tick.
 ## Why not a Check protocol / registry?
 
 Three similar lines is better than a premature abstraction
-(CLAUDE.md). At one check today, the per-check throttle boilerplate
-(~3 lines) is cheaper than maintaining a `Check` protocol and a
-registry. If this grows to ≥3 checks and the duplication starts to
-hurt, lift a `_throttled_probe` helper into `__init__.py` — but the
-right abstraction shape will be obvious by then.
+(CLAUDE.md). At this small scale, the per-check throttle boilerplate is still cheaper
+than maintaining a `Check` protocol and a registry. If the duplication starts
+to hurt, lift a `_throttled_probe` helper into `__init__.py` — but the right
+abstraction shape will be obvious by then.
 
 ## Wire surface
 
