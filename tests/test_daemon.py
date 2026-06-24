@@ -2719,3 +2719,58 @@ def test_ask_worker_exception_is_logged(tmp_path, monkeypatch):
     # ask_in_flight cleared even though worker raised before its finally
     # would have run.
     assert entry["ask_in_flight"] is False
+
+
+# ---------------------------------------------------------------------------
+# Preset-driven daemon provider defaults — ``codex_auth_path`` propagation.
+# A preset/manifest that points an agent at its own Codex OAuth token file must
+# carry that path into daemon-scoped LLM services so preset-driven daemon work
+# uses the same auth file (true multiple Codex accounts).
+# ---------------------------------------------------------------------------
+
+
+def test_daemon_llm_defaults_carries_codex_auth_path():
+    """The preset manifest.llm allowlist includes ``codex_auth_path``."""
+    from lingtai.core.daemon import DaemonManager
+
+    defaults = DaemonManager._llm_defaults_from_manifest(
+        {
+            "provider": "codex",
+            "model": "gpt-5.5",
+            "codex_auth_path": "/secrets/alice/codex-auth.json",
+            # An unrelated key must still be dropped (allowlist, not pass-all).
+            "api_key": "should-not-survive",
+        }
+    )
+    assert defaults["codex_auth_path"] == "/secrets/alice/codex-auth.json"
+    assert "api_key" not in defaults
+
+
+def test_daemon_provider_defaults_preserves_codex_auth_path(tmp_path):
+    """Daemon-scoped Codex defaults keep the agent's ``codex_auth_path``.
+
+    The daemon overrides the cache-affinity anchor (per-run slot) and drops a
+    manifest-level fixed session id, but the chosen token file must survive so
+    daemon traffic authenticates against the same Codex account.
+    """
+    from types import SimpleNamespace
+
+    from lingtai.core.daemon import DaemonManager
+
+    run_dir = SimpleNamespace(path=tmp_path / "run")
+    mgr = DaemonManager.__new__(DaemonManager)
+    out = DaemonManager._daemon_provider_defaults(
+        mgr,
+        "codex",
+        {
+            "codex_auth_path": "/secrets/alice/codex-auth.json",
+            "codex_session_id": "fixed-id-should-be-dropped",
+        },
+        run_dir,
+    )
+    assert out["codex"]["codex_auth_path"] == "/secrets/alice/codex-auth.json"
+    # Per-run anchor replaces any manifest-level fixed id.
+    assert "codex_session_id" not in out["codex"]
+    assert out["codex"]["codex_session_anchor"] == str(
+        (run_dir.path / "daemon.json").resolve()
+    )

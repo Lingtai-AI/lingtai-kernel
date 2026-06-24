@@ -1136,6 +1136,7 @@ class DaemonManager:
         keys = (
             "api_compat",
             "base_url",
+            "codex_auth_path",
             "codex_session_id",
             "codex_session_anchor",
             "codex_thread_salt",

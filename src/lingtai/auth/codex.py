@@ -66,7 +66,7 @@ class CodexTokenManager:
         if token_path is None:
             tui_dir = os.environ.get("LINGTAI_TUI_DIR", "~/.lingtai-tui")
             token_path = str(Path(tui_dir).expanduser() / "codex-auth.json")
-        self._path = Path(token_path)
+        self._path = Path(token_path).expanduser()
         self._lock_path = self._path.with_suffix(".json.lock")
         self._cache: dict | None = None
         self._cache_mtime: float = 0.0

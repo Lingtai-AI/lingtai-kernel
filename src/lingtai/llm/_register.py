@@ -79,7 +79,16 @@ def register_all_adapters() -> None:
             val = d.get(cfg_key)
             if val is not None:
                 codex_id_kw[cfg_key] = val
-        mgr = CodexTokenManager()
+        # Per-agent Codex OAuth token file (true multiple Codex accounts). When a
+        # manifest/preset sets ``codex_auth_path`` to a non-empty path, read that
+        # token file instead of the shared default ``~/.lingtai-tui/codex-auth.json``.
+        # Blank/whitespace is treated as omitted -> legacy default-path behavior.
+        # The path is non-secret; token contents are never logged.
+        auth_path = d.get("codex_auth_path")
+        mgr_kw: dict = {}
+        if isinstance(auth_path, str) and auth_path.strip():
+            mgr_kw["token_path"] = auth_path
+        mgr = CodexTokenManager(**mgr_kw)
         adapter = CodexOpenAIAdapter(
             api_key=mgr.get_access_token(),
             base_url="https://chatgpt.com/backend-api/codex",

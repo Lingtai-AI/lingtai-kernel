@@ -54,6 +54,18 @@ class TestGetAccessToken:
         mgr = CodexTokenManager(token_path=str(token_file))
         assert mgr.get_access_token() == "tok_fresh"
 
+    def test_expands_user_in_explicit_token_path(self, tmp_path, monkeypatch):
+        """A user-relative explicit token_path is expanded before reading."""
+        home = tmp_path / "home"
+        home.mkdir()
+        token_file = home / "codex-auth.json"
+        _write_token_file(token_file, access_token="tok_home")
+        monkeypatch.setenv("HOME", str(home))
+
+        mgr = CodexTokenManager(token_path="~/codex-auth.json")
+        assert mgr.get_access_token() == "tok_home"
+        assert mgr.is_authenticated() is True
+
     def test_missing_file_raises(self, tmp_path):
         """FileNotFoundError is raised when the token file does not exist."""
         token_file = tmp_path / "nonexistent" / "codex-auth.json"

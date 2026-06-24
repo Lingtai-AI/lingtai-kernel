@@ -17,7 +17,10 @@ preserving the parent's provider defaults, rather than reusing the parent
 service. Codex additionally derives a daemon-scoped cache anchor from each run's
 `daemon.json` (and drops any fixed `codex_session_id`), so the child's
 `session_id`, `thread_id`, and `prompt_cache_key` do not collide with the parent
-agent's cache slot. Results are persisted in per-run daemon folders; **every** terminal outcome
+agent's cache slot. A preset/manifest `codex_auth_path` (the per-agent Codex
+OAuth token file) is among the preserved provider defaults — and is on the
+`_llm_defaults_from_manifest` preset allowlist — so preset-driven daemon work
+authenticates against the same Codex account as the parent. Results are persisted in per-run daemon folders; **every** terminal outcome
 (done / failed / cancelled / timeout) is surfaced exactly once as a compact
 `.notification/system.json` event — never as ordinary parent request text — so a
 parent that dispatched a daemon can safely go idle and be woken when the run
