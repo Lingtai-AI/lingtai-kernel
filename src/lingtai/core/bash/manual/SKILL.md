@@ -11,7 +11,7 @@ description: >
   reminders, debugging silent jobs, and safe cleanup. Start here for any
   long-running agent CLI, time-driven recurring work ("every hour", "weekdays at
   9", "remind me later"), or when a scheduled job misbehaves.
-version: 1.6.0
+version: 1.6.1
 ---
 
 # Bash Manual — Router
@@ -152,11 +152,13 @@ common way agents corrupt their own downstream work.
   result carries `ok` (bool) and `command_status` (`"success"`/`"failed"`)
   keyed off the exit code. `exit_code != 0` means the command failed even
   though `status` says `ok`.
-- **Read the `warning` field when present.** On failure (or a suspicious
-  zero-exit with a traceback in the output) the result includes a one-line
-  `warning` naming the nonzero exit, any detected Python traceback or missing
-  module, and a stderr tail. If `warning` is present, stop and read it before
-  acting on the output.
+- **Read the `warning` field when present.** On failure **or** a suspicious
+  zero-exit (a traceback/missing-module signature in the output despite exit
+  code 0) the result includes a one-line `warning` naming the nonzero exit, any
+  detected Python traceback or missing module, and a stderr tail. The tail is
+  run through the kernel's secret redactor, so secret-shaped lines are masked in
+  `warning`; the raw `stderr` field is unchanged. If `warning` is present, stop
+  and read it before acting on the output.
 - **Use the venv interpreter for project code.** Bare `python3` lacks
   third-party packages and LingTai's own modules (`lingtai`, `lingtai_kernel`).
   A `No module named …` / `missing_module` warning usually means you ran the

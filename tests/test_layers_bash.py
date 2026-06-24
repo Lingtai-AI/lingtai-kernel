@@ -13,6 +13,7 @@ from lingtai.core.bash import (
     _augment_command_result,
     _broad_scan_hint,
     _detect_failure_signature,
+    _redact_warning_tail,
 )
 
 
@@ -301,6 +302,63 @@ class TestAugmentCommandResult:
         r = _augment_command_result({"status": "running", "job_id": "x"})
         assert "ok" not in r
         assert "command_status" not in r
+
+    def test_warning_tail_redacts_secret_shaped_stderr(self):
+        # A secret-shaped token in the stderr tail must not be hoisted verbatim
+        # into the model-visible `warning`; the raw `stderr` field is unchanged.
+        token = "ghp_" + "a" * 36  # GitHub PAT shape the kernel redactor catches
+        stderr = f"fatal: auth failed using token {token}\n"
+        r = _augment_command_result(
+            {"status": "done", "exit_code": 1, "stdout": "", "stderr": stderr}
+        )
+        assert token not in r["warning"]
+        assert "<REDACTED:github_token>" in r["warning"]
+        # Raw stderr is mirrored verbatim — only the warning tail is redacted.
+        assert token in r["stderr"]
+
+    def test_suspicious_zero_exit_warning_wording(self):
+        # A zero exit whose output carries a traceback signature is flagged as a
+        # suspicious success — the wording must say so, not claim a failure.
+        r = _augment_command_result(
+            {
+                "status": "done",
+                "exit_code": 0,
+                "stdout": "Traceback (most recent call last):\n  File ...",
+                "stderr": "",
+            }
+        )
+        assert r["ok"] is True
+        assert r["command_status"] == "success"
+        assert "exited 0 but output contains" in r["warning"]
+        assert "python_traceback" in r["warning"]
+
+
+class TestRedactWarningTail:
+    def test_redacts_known_token_shape(self):
+        token = "ghp_" + "b" * 36
+        out = _redact_warning_tail(f"using {token}")
+        assert token not in out
+        assert "<REDACTED:github_token>" in out
+
+    def test_passes_through_ordinary_text(self):
+        text = "command exited with code 1; bad argument"
+        assert _redact_warning_tail(text) == text
+
+    def test_fail_open_returns_input_when_redactor_unavailable(self, monkeypatch):
+        # If the kernel redactor import fails, the tail is returned unchanged
+        # rather than breaking the bash result (raw stderr already mirrors it).
+        import builtins
+
+        real_import = builtins.__import__
+
+        def boom(name, *args, **kwargs):
+            if name == "lingtai_kernel.trace_redaction":
+                raise ImportError("simulated missing redactor")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", boom)
+        text = "some stderr with sk-" + "x" * 30
+        assert _redact_warning_tail(text) == text
 
 
 class TestDetectFailureSignature:

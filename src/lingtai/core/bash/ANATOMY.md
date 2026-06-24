@@ -31,7 +31,7 @@ The `bash` tool supports synchronous and asynchronous execution:
 
 - `ok` (bool) — `True` only when `exit_code == 0`.
 - `command_status` (str) — `"success"` or `"failed"`.
-- `warning` (str, present only on failure or a suspicious zero-exit) — one-line summary: the nonzero exit code, any detected `python_traceback`/`missing_module` signature (`_detect_failure_signature`), and a bounded stderr tail.
+- `warning` (str, present on failure or a suspicious zero-exit) — one-line summary: the nonzero exit code, any detected `python_traceback`/`missing_module` signature (`_detect_failure_signature`), and a bounded stderr tail. The hoisted tail is routed through `lingtai_kernel.trace_redaction.redact_text` (`_redact_warning_tail`, fail-open) so a secret-shaped error line is not made more prominent in the top-level `warning` than it already is in the raw `stderr` field; the raw `stderr`/`stdout` fields are never altered.
 
 On a still-running poll there is no `exit_code`, so no fidelity fields are added.
 
@@ -85,6 +85,7 @@ bash/__init__.py
 
 - `lingtai.i18n` — `t()` for localized strings
 - `lingtai_kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
+- `lingtai_kernel.trace_redaction.redact_text` — mechanical secret redaction for the stderr tail hoisted into `warning` (imported lazily inside `_redact_warning_tail`, fail-open).
 
 ## Composition
 

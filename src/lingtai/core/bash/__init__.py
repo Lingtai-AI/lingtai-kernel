@@ -34,6 +34,28 @@ _DEFAULT_POLICY_FILE = Path(__file__).parent / "bash_policy.json"
 # failure impossible to miss when an agent skims the top-level fields.
 _WARNING_STDERR_TAIL = 600
 
+
+def _redact_warning_tail(text: str) -> str:
+    """Best-effort secret redaction for the stderr tail copied into ``warning``.
+
+    The raw ``stderr``/``stdout`` fields already mirror the command output
+    verbatim; this only touches the bounded tail that gets hoisted into the
+    top-level ``warning`` string, where a secret-shaped error line would be made
+    *more* prominent. Routes through the kernel's mechanical
+    ``trace_redaction.redact_text`` so the warning surface gets the same
+    high-confidence token/key redaction as durable trajectory writes.
+
+    Fail-open: if the redactor cannot be imported or raises (it must never break
+    a bash result), the original tail is returned unchanged — the raw stderr is
+    already present in the result, so this introduces no new exposure beyond it.
+    """
+    try:
+        from lingtai_kernel.trace_redaction import redact_text
+
+        return redact_text(text)
+    except Exception:
+        return text
+
 # Substrings that signal a "successful shell, failed program" — the failure the
 # fidelity warning exists to surface. A Python traceback or a missing-module
 # error commonly exits nonzero, but agents have been observed proceeding on the
@@ -106,11 +128,15 @@ def _augment_command_result(result: dict) -> dict:
 
     - ``ok`` (bool): ``True`` only when ``exit_code == 0``.
     - ``command_status`` (str): ``"success"`` or ``"failed"``.
-    - ``warning`` (str, only on failure): one-line summary naming the nonzero
-      exit, any detected traceback/missing-module signature, and a stderr tail.
+    - ``warning`` (str, on failure *or* a suspicious zero-exit): one-line summary
+      naming the nonzero exit, any detected traceback/missing-module signature,
+      and a stderr tail. The tail is routed through the kernel redactor so a
+      secret-shaped error line is not made more prominent than it already is in
+      the raw ``stderr`` field.
 
     ``status`` itself is intentionally left untouched so existing callers and
-    tests that branch on it keep working.
+    tests that branch on it keep working. The raw ``stderr``/``stdout`` fields
+    are mirrored verbatim and never altered here.
     """
     exit_code = result.get("exit_code")
     if not isinstance(exit_code, int):
@@ -139,7 +165,8 @@ def _augment_command_result(result: dict) -> dict:
         tail = stderr[-_WARNING_STDERR_TAIL:]
         if len(stderr) > _WARNING_STDERR_TAIL:
             tail = "…" + tail
-        parts.append(f"stderr tail: {tail}")
+        # Redact the hoisted tail only — the raw stderr field is left verbatim.
+        parts.append(f"stderr tail: {_redact_warning_tail(tail)}")
     result["warning"] = "; ".join(parts)
     return result
 
