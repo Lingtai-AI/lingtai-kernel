@@ -3263,7 +3263,10 @@ class CodexOpenAIAdapter(OpenAIAdapter):
     standard server-stateful OpenAIResponsesSession.
 
     Use this with `provider=codex` only. Always set `use_responses=True,
-    force_responses=True, base_url='https://chatgpt.com/backend-api/codex'`.
+    force_responses=True`. `base_url` defaults to the official Codex endpoint
+    (`https://chatgpt.com/backend-api/codex`) but is configurable — the `codex`
+    factory forwards an explicit `manifest.llm['base_url']` so a future local
+    `lingtai-codex-pool` can front this provider without a separate adapter.
     """
 
     def __init__(
