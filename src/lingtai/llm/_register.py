@@ -6,6 +6,13 @@ to the adapter's actual constructor signature.
 """
 from __future__ import annotations
 
+# Official Codex REST endpoint. Used as the default ``base_url`` for the
+# ``codex`` provider when the manifest/provider-defaults do not configure one.
+# A configured ``base_url`` (the generic provider convention) overrides it so a
+# future local ``lingtai-codex-pool`` endpoint can front the same provider
+# without a separate adapter.
+CODEX_OFFICIAL_BASE_URL = "https://chatgpt.com/backend-api/codex"
+
 
 def register_all_adapters() -> None:
     from lingtai.llm.service import LLMService
@@ -63,7 +70,19 @@ def register_all_adapters() -> None:
         from lingtai.auth.codex import CodexTokenManager
         kw.pop("model", None)
         kw.pop("api_key", None)  # ignore env-resolved key
-        kw.pop("base_url", None)  # we set our own
+        # Honor an explicitly configured endpoint (manifest ``base_url`` /
+        # ``provider_defaults['base_url']``, already resolved into ``base_url``
+        # by LLMService._create_adapter) so a future local ``lingtai-codex-pool``
+        # can front this provider. Absent/blank -> the official Codex endpoint.
+        # The pool routes later off the unchanged ``prompt_cache_key`` /
+        # ``session_id`` / ``thread_id`` identity emitted below; the OAuth bearer
+        # may reach localhost in that use case, which is acceptable here.
+        configured_base_url = kw.pop("base_url", None)
+        codex_base_url = (
+            configured_base_url.strip()
+            if isinstance(configured_base_url, str) and configured_base_url.strip()
+            else CODEX_OFFICIAL_BASE_URL
+        )
         # Per-agent Codex REST cache-affinity header config (issue #378). The
         # host wiring (service.build_provider_defaults_from_manifest_llm) passes
         # down the agent path as ``codex_session_anchor`` by default; the adapter
@@ -91,7 +110,7 @@ def register_all_adapters() -> None:
         mgr = CodexTokenManager(**mgr_kw)
         adapter = CodexOpenAIAdapter(
             api_key=mgr.get_access_token(),
-            base_url="https://chatgpt.com/backend-api/codex",
+            base_url=codex_base_url,
             use_responses=True,
             force_responses=True,
             # The user's own ChatGPT account id (sent as the ``ChatGPT-Account-ID``

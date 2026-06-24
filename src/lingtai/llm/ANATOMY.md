@@ -9,7 +9,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 20 | Re-exports kernel types (`ChatSession`, `LLMResponse`, `ToolCall`, `FunctionSchema`, `ChatInterface`) + `LLMAdapter` from `base.py`. Triggers `register_all_adapters()` on import. |
-| `_register.py` | 132 | Registers adapter factories for all providers with `LLMService.register_adapter()` |
+| `_register.py` | 186 | Registers adapter factories for all providers with `LLMService.register_adapter()`. Module constant `CODEX_OFFICIAL_BASE_URL` is the Codex default endpoint. |
 | `claude_agent_sdk/` | — | Clean-room completion provider wrapping `claude_agent_sdk.query` as a next-turn generator (no SDK tools, LingTai keeps the tool loop). See its `ANATOMY.md`. |
 | `api_gate.py` | 112 | `APICallGate` — RPM rate limiter with deque timestamps, `ThreadPoolExecutor`, daemon gate thread |
 | `base.py` | 150 | `LLMAdapter` ABC (4 abstract methods), `_GatedSession` proxy |
@@ -30,7 +30,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 - **Adapter caching** — `LLMService._adapters` keyed by `(provider, base_url)` tuple (`service.py:141`). Double-checked locking via `_adapter_lock` (`service.py:142`).
 - **Session tracking** — `LLMService._sessions` dict maps `st_<12-hex>` session IDs to `ChatSession` instances (`service.py:144`). Untracked sessions get `session_id=""`.
 - **Gated sessions** — `_GatedSession` (`base.py:19`) proxies `send()` and `send_stream()` through `APICallGate.submit()`. Attribute writes land on the proxy; reads fall through to inner session via `__getattr__`.
-- **Codex factory** — `_register.py:54` builds `CodexOpenAIAdapter`, monkey-patches `create_chat` and `generate` to refresh OAuth tokens before each call via `CodexTokenManager.get_access_token()`; the same refresh hook re-reads `get_account_id()` into `adapter.codex_account_id` (the user's own `ChatGPT-Account-ID`, passed to the adapter at build time and kept current across refreshes). The token file is the default `~/.lingtai-tui/codex-auth.json` unless the provider defaults carry a non-blank `codex_auth_path`, in which case the factory builds `CodexTokenManager(token_path=codex_auth_path)` — this is the seam for true multiple Codex accounts (a preset/manifest picks the token file per agent).
+- **Codex factory** — `_register.py:68` builds `CodexOpenAIAdapter`, monkey-patches `create_chat` and `generate` to refresh OAuth tokens before each call via `CodexTokenManager.get_access_token()`; the same refresh hook re-reads `get_account_id()` into `adapter.codex_account_id` (the user's own `ChatGPT-Account-ID`, passed to the adapter at build time and kept current across refreshes). The token file is the default `~/.lingtai-tui/codex-auth.json` unless the provider defaults carry a non-blank `codex_auth_path`, in which case the factory builds `CodexTokenManager(token_path=codex_auth_path)` — this is the seam for true multiple Codex accounts (a preset/manifest picks the token file per agent). The endpoint defaults to `CODEX_OFFICIAL_BASE_URL` (`https://chatgpt.com/backend-api/codex`) but honors an explicit `base_url` resolved generically by `_create_adapter` (manifest `base_url` / `provider_defaults['base_url']`) — the seam for a future local `lingtai-codex-pool` to front this provider without a separate adapter. The unchanged `prompt_cache_key`/`session_id`/`thread_id` identity is what the pool routes off later.
 
 ## State
 
