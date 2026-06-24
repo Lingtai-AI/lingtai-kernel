@@ -47,9 +47,14 @@ entry is `{path, size, mtime, role}` (run-dir-relative path, byte size, ISO-8601
 mtime, and an inferred role like `status` / `result` / `prompt` / `transcript` /
 `events` / `token_ledger`, or `null` for unrecognized work-product files). The
 manifest also carries run-level `state`, `result_path`, and `error_path` (the
-last set to `result.txt` for failed/timeout/cancelled runs). It lists **paths and
-metadata only — never file contents** — and caps the number of entries (recording
-`artifacts_total` and `truncated` when a run drops more files than the cap).
+last set to `result.txt` for failed/timeout/cancelled runs). Artifact entries are
+run-dir-relative; run-level `result_path` / `error_path` intentionally preserve the
+absolute-path convention already returned by `daemon(check)`, so humans can open
+the full files directly. It lists **paths and metadata only — never file contents**
+— and caps the number of entries (recording `artifacts_total` and `truncated` when
+a run drops more files than the cap). Because names and relative paths are still
+visible metadata, avoid creating daemon work products whose filenames themselves
+contain secrets.
 
 `daemon(action="check")` surfaces this as an `artifacts` block so you don't have
 to scan the folder yourself: it prefers the persisted `artifacts.json`
