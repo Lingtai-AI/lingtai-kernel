@@ -25,6 +25,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from lingtai_kernel.llm.base import UsageMetadata
+
 from lingtai.llm.openai.codex_ws import SyncCodexWebsocketTransport
 
 from lingtai.llm.openai.adapter import (
@@ -754,10 +756,8 @@ def test_new_user_turn_after_tool_loop_keeps_incremental_chain():
     assert "call the tool" not in flat3
 
 
-def test_codex_adapter_comment_explains_epoch_reset_and_summarize_delay():
-    # WS-enabled path: the comment describes the previous_response_id epoch
-    # reset and the ws_full/ws_incremental cache boundary that actually exists.
-    session = _make_session(FakeWsTransport(), ws_enabled=True)
+def test_codex_adapter_comment_explains_epoch_reset_and_cache_ledger():
+    session = _make_session(FakeWsTransport())
 
     comment = session.adapter_comment()
 
@@ -766,48 +766,139 @@ def test_codex_adapter_comment_explains_epoch_reset_and_summarize_delay():
     assert comment["feature"] == "responses_websocket_epoch_reset"
     assert comment["epoch_reset_turns"] == 20
     assert comment["turns_since_epoch_reset"] == 0
-    note = comment["summarize_ws_full_note"]
+    assert comment["last_ws_full_api_calls_ago"] is None
+    assert comment["last_ws_full_reason"] == "not_recorded"
+
+    note = comment["cache_note"]
+    assert comment["summarize_ws_full_note"] == note
     assert "ws_full" in note
     assert "ws_incremental" in note
-    assert "five turns" in note
-    assert "Codex-specific" in note
-    assert "summarize them together" in note
-    # The note must also warn that notification dismiss/cleanup breaks the
-    # incremental/cache chain and forces a fresh ws_full epoch, just like
-    # summarize — so the agent does not assume only summarize is sensitive.
-    assert "notification" in note
-    assert "dismiss" in note
+    assert ">=5 API calls" in note
+    assert "cache miss" in note
+    assert "Summarize" in note
+    assert "Notification dismiss" in note
+    assert "non-urgent summarize" in note
+
+    ledger = comment["cache_ledger"]
+    assert ledger["window_api_calls"] == 20
+    assert ledger["recorded_api_calls"] == 0
+    assert ledger["cols"] == ["ago", "mode", "cache", "in_k", "miss_k", "reason"]
+    assert ledger["rows"] == []
+    assert ledger["summary"] == {
+        "api_calls": 0,
+        "cache_rate": None,
+        "ws_full_count": 0,
+        "miss_k": 0.0,
+    }
+    assert ledger["last_ws_full"] == {
+        "api_calls_ago": None,
+        "reason": "not_recorded",
+    }
+    assert ledger["legend"]["I"] == "ws_incremental"
+    assert ledger["legend"]["F"] == "ws_full"
+    assert ledger["legend"]["sum"] == "epoch_reset:summarize"
+
+    hint = comment["maintenance_hint"]
+    assert hint["non_urgent_summarize"] == "unknown"
+    assert "no Codex websocket cache ledger" in hint["reason"]
+
+
+def test_codex_adapter_comment_reports_compact_cache_ledger():
+    session = _make_session(FakeWsTransport())
+
+    session._record_ws_cache_ledger(
+        request_mode="ws_full",
+        usage=UsageMetadata(input_tokens=100_000, output_tokens=0, thinking_tokens=0, cached_tokens=50_000),
+        ws_diag={"reason": "epoch_reset", "epoch_reset_reason": "summarize"},
+    )
+    session._record_ws_cache_ledger(
+        request_mode="ws_incremental",
+        usage=UsageMetadata(input_tokens=100_000, output_tokens=0, thinking_tokens=0, cached_tokens=90_000),
+        ws_diag={"reason": "ok"},
+    )
+    session._record_ws_cache_ledger(
+        request_mode="ws_full",
+        usage=UsageMetadata(input_tokens=50_000, output_tokens=0, thinking_tokens=0, cached_tokens=30_000),
+        ws_diag={"reason": "prefix_mismatch"},
+    )
+
+    comment = session.adapter_comment()
+
+    assert comment["last_ws_full_api_calls_ago"] == 0
+    assert comment["last_ws_full_reason"] == "pm"
+    assert comment["maintenance_hint"]["non_urgent_summarize"] == "wait"
+    assert comment["maintenance_hint"]["wait_api_calls_remaining"] == 5
+    assert "wait 5 more" in comment["maintenance_hint"]["reason"]
+
+    ledger = comment["cache_ledger"]
+    assert ledger["recorded_api_calls"] == 3
+    assert ledger["rows"] == [
+        [2, "F", 0.5, 100.0, 50.0, "sum"],
+        [1, "I", 0.9, 100.0, 10.0, ""],
+        [0, "F", 0.6, 50.0, 20.0, "pm"],
+    ]
+    assert ledger["summary"] == {
+        "api_calls": 3,
+        "cache_rate": 0.68,
+        "ws_full_count": 2,
+        "miss_k": 80.0,
+    }
+    assert ledger["last_ws_full"] == {
+        "api_calls_ago": 0,
+        "reason": "pm",
+    }
+
+
+def test_codex_send_populates_cache_ledger_end_to_end():
+    t = FakeWsTransport()
+    session = _make_session(t)
+
+    first = session.send("one")
+    second = session.send("two")
+
+    assert first.usage.extra["codex_request_mode"] == "ws_full"
+    assert second.usage.extra["codex_request_mode"] == "ws_incremental"
+    assert t.sent_frames[1]["previous_response_id"] == "resp_ws_1"
+
+    comment = session.adapter_comment()
+    assert comment["last_ws_full_api_calls_ago"] == 1
+    assert comment["last_ws_full_reason"] == "nb"
+    assert comment["maintenance_hint"]["non_urgent_summarize"] == "wait"
+    assert comment["maintenance_hint"]["wait_api_calls_remaining"] == 4
+
+    ledger = comment["cache_ledger"]
+    assert ledger["recorded_api_calls"] == 2
+    assert [row[1] for row in ledger["rows"]] == ["F", "I"]
+    assert [row[5] for row in ledger["rows"]] == ["nb", ""]
+    assert ledger["last_ws_full"] == {
+        "api_calls_ago": 1,
+        "reason": "nb",
+    }
 
 
 def test_codex_adapter_comment_is_honest_when_ws_disabled():
-    # Stateless HTTP path (the default runtime): there is NO previous_response_id
-    # chain and NO ws_full/ws_incremental boundary, so the comment must not claim
-    # one. Every request is already a full stateless replay rebuilt from local
-    # chat_history; summarize/dismiss take effect by shrinking that next full
-    # request, not by toggling an incremental chain.
     session = _make_session(FakeWsTransport(), ws_enabled=False)
 
     comment = session.adapter_comment()
 
     assert comment["adapter"] == "codex"
     assert comment["ws_enabled"] is False
-    # The inert WS epoch counter must not masquerade as a live signal.
-    assert comment["feature"] != "responses_websocket_epoch_reset"
+    assert comment["feature"] == "stateless_full_replay"
     assert "turns_since_epoch_reset" not in comment
     assert "next_reset_in" not in comment
+    assert "cache_ledger" not in comment
+    assert "maintenance_hint" not in comment
+    assert "cache_note" not in comment
+
     note = comment["summarize_ws_full_note"]
-    # Stateless honesty: no incremental chain to preserve, every request is a
-    # full replay; summarize and notification dismiss/cleanup both take effect
-    # by shrinking the next full request from mutated local history.
-    assert "stateless" in note
-    # Must not claim a live ws_full/ws_incremental boundary; if it mentions the
-    # term at all it is to say there is NO such chain.
-    assert "ws_full epoch" not in note
-    assert "no ws_incremental" in note
+    assert "stateless" in comment["summary"]
+    assert "no ws_incremental/ws_full" in comment["summary"]
+    assert "full stateless replay" in comment["summary"]
+    assert "Summarize" in note
+    assert "Notification dismiss" in note
     assert "full replay" in note
-    assert "summarize" in note
-    assert "notification" in note
-    assert "dismiss" in note
+    assert "ws_full epoch boundary" in note
+    assert "does not compact redundant context" in note
 
 
 def test_history_summarized_forces_next_ws_full_epoch_reset():
@@ -827,24 +918,24 @@ def test_history_summarized_forces_next_ws_full_epoch_reset():
     assert "previous_response_id" not in t.sent_frames[2]
 
 
-def test_notification_dismissed_forces_next_ws_full_epoch_reset():
+def test_notification_dismissed_keeps_incremental_ws_chain():
     t = FakeWsTransport()
     session = _make_session(t)
 
     first = session.send("one")
     second = session.send("two")
-    # A notification dismiss/cleanup rewrites the resident-meta off older
-    # tool results, so — exactly like summarize — it must force the next
-    # request to start a fresh ws_full epoch instead of ws_incremental.
+    # Notification dismiss/cleanup is high-frequency housekeeping. It should
+    # not reset the Codex previous_response_id chain; only summarize compacts
+    # old tool-result payloads enough to require a fresh ws_full epoch.
     session.on_notification_dismissed("system")
     third = session.send("three")
 
     assert first.usage.extra["codex_request_mode"] == "ws_full"
     assert second.usage.extra["codex_request_mode"] == "ws_incremental"
-    assert third.usage.extra["codex_request_mode"] == "ws_full"
-    assert third.usage.extra["codex_ws_delta_reason"] == "epoch_reset"
-    assert third.usage.extra["codex_ws_epoch_reset_reason"] == "notification_dismiss"
-    assert "previous_response_id" not in t.sent_frames[2]
+    assert third.usage.extra["codex_request_mode"] == "ws_incremental"
+    assert third.usage.extra["codex_ws_delta_reason"] == "ok"
+    assert "codex_ws_epoch_reset_reason" not in third.usage.extra
+    assert t.sent_frames[2]["previous_response_id"] == "resp_ws_2"
 
 
 def test_ws_epoch_reset_default_limit_refreshes_for_existing_sessions(monkeypatch):
