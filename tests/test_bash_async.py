@@ -51,6 +51,37 @@ class TestBashAsync:
         assert poll["status"] == "done"
         assert "async-output" in poll["stdout"]
         assert "exit_code" in poll
+        # Fidelity fields apply to the async poll path too.
+        assert poll["ok"] is True
+        assert poll["command_status"] == "success"
+
+    # 3b. poll on a failed async job surfaces the failure explicitly
+    def test_poll_nonzero_exit_is_flagged_failed(self, tmp_path):
+        mgr = self._make_manager(tmp_path)
+        result = mgr.handle({"command": "exit 7", "async": True})
+        job_id = result["job_id"]
+
+        time.sleep(0.5)
+
+        poll = mgr.handle({"action": "poll", "command": "", "job_id": job_id})
+        assert poll["status"] == "done"
+        assert poll["exit_code"] == 7
+        assert poll["ok"] is False
+        assert poll["command_status"] == "failed"
+        assert "exited with code 7" in poll["warning"]
+
+    # 3c. a still-running poll has no exit_code, so no fidelity fields
+    def test_poll_running_has_no_fidelity_fields(self, tmp_path):
+        mgr = self._make_manager(tmp_path)
+        result = mgr.handle({"command": "sleep 5", "async": True})
+        job_id = result["job_id"]
+
+        poll = mgr.handle({"action": "poll", "command": "", "job_id": job_id})
+        assert poll["status"] == "running"
+        assert "ok" not in poll
+        assert "command_status" not in poll
+
+        mgr.handle({"action": "cancel", "command": "", "job_id": job_id})
 
     # 4. cancel kills the process
     def test_cancel_kills_process(self, tmp_path):

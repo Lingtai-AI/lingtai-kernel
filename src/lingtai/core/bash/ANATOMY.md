@@ -7,7 +7,7 @@ be explicitly opted into.
 
 ## Components
 
-- `bash/__init__.py` — the entire capability in a single file. `get_description` (`bash/__init__.py:32-33`), `get_schema` (`bash/__init__.py:36-70`), `setup` (`bash/__init__.py:505-539`). Two core classes: `BashPolicy` (`bash/__init__.py:74-162`) for command filtering, `BashManager` (`bash/__init__.py:165-503`) for execution.
+- `bash/__init__.py` — the entire capability in a single file. `get_description`, `get_schema`, `setup`. Two core classes: `BashPolicy` for command filtering, `BashManager` for execution. Module-level result helpers: `_augment_command_result` (adds `ok`/`command_status`/`warning` fidelity fields), `_detect_failure_signature` (labels `python_traceback`/`missing_module`), `_broad_scan_hint` (timeout recipe for broad recursive walks).
 - `bash/bash_policy.json` — default denylist policy shipped with the kernel. Denies destructive (`rm`, `rmdir`, `shred`, `dd`), privilege escalation (`sudo`, `su`, `doas`), permission changes (`chmod`, `chown`, `chgrp`), disk management (`mount`, `umount`, `mkfs`, `fdisk`), package managers (`apt`, `apt-get`, `yum`, `dnf`, `brew`), process control (`kill`, `killall`, `pkill`, `shutdown`, `reboot`, `systemctl`), network (`nc`, `ncat`), and code execution (`eval`, `exec`).
 
 ## Public API
@@ -23,9 +23,19 @@ The `bash` tool supports synchronous and asynchronous execution:
 | `async`        | boolean  | If true, run in background and return job_id immediately (default: false) |
 | `job_id`       | string   | Job ID for `poll` and `cancel` actions |
 
-**Sync mode** (`async=false`, default): Returns `{status, exit_code, stdout, stderr}` on success, or `{status: "error", message}` on failure. Identical to pre-async behavior.
+**Sync mode** (`async=false`, default): Returns `{status, exit_code, stdout, stderr, ok, command_status[, warning]}` once the command completes, or `{status: "error", message}` only when the shell itself could not run it (empty command, policy denial, timeout, spawn failure).
 
-**Async mode** (`async=true`): Returns `{status: "ok", job_id, pid, message}` immediately. Use `action="poll"` with the job_id to check status: returns `{status: "running", job_id, pid}` or `{status: "done", exit_code, stdout, stderr}`. Use `action="cancel"` to kill the process group.
+**Async mode** (`async=true`): Returns `{status: "ok", job_id, pid, message}` immediately. Use `action="poll"` with the job_id to check status: returns `{status: "running", job_id, pid}` while running, or `{status: "done", exit_code, stdout, stderr, ok, command_status[, warning]}` once finished. Use `action="cancel"` to kill the process group.
+
+**Result fidelity — top-level `status` vs. inner command success.** The top-level `status` (`ok`/`done`) reflects only that the shell *spawned* the command; it stays `ok`/`done` even when the inner command exits nonzero. To make inner failures impossible to skim past *without* changing the `status` contract that downstream recovery/telemetry branch on (`tool_executor.py` enriches/logs/collects on `status == "error"`), `_augment_command_result` (`bash/__init__.py`) adds three additive, model-visible fields keyed off `exit_code`:
+
+- `ok` (bool) — `True` only when `exit_code == 0`.
+- `command_status` (str) — `"success"` or `"failed"`.
+- `warning` (str, present only on failure or a suspicious zero-exit) — one-line summary: the nonzero exit code, any detected `python_traceback`/`missing_module` signature (`_detect_failure_signature`), and a bounded stderr tail.
+
+On a still-running poll there is no `exit_code`, so no fidelity fields are added.
+
+**Timeout hint.** On a sync timeout whose command resembles a broad recursive scan (`find … -name/-path/-type`, `rglob(`, `os.walk(`, `glob('**…')` — `_broad_scan_hint`), the timeout `message` appends an `rg --files`-based recipe. The hint is advisory text only; it never blocks or rewrites the command.
 
 Job files are stored under `system/jobs/{job_id}/` (stdout.log, stderr.log, pid, status). Cleaned up automatically on poll-completion or cancel.
 
@@ -33,6 +43,10 @@ Job files are stored under `system/jobs/{job_id}/` (stdout.log, stderr.log, pid,
 
 ```
 bash/__init__.py
+  ├── _detect_failure_signature()    — labels python_traceback / missing_module in output
+  ├── _broad_scan_hint()             — rg recipe hint for broad-recursive-walk timeouts
+  ├── _augment_command_result()      — adds ok / command_status / warning to completed results
+  │
   ├── BashPolicy                     — command execution policy
   │   ├── __init__(allow, deny)      — two modes: allowlist (if allow present) or denylist
   │   ├── from_file(path)            — loads policy from JSON file
@@ -46,9 +60,9 @@ bash/__init__.py
   │   ├── __init__(policy, working_dir, max_output) — stores policy + config
   │   ├── handle(args)               — dispatches to _handle_run / _handle_poll / _handle_cancel
   │   ├── _handle_run(args)          — validates + runs sync or async
-  │   ├── _run_sync(command, cwd, timeout) — original subprocess.run path
+  │   ├── _run_sync(command, cwd, timeout) — subprocess.run path; augments result + timeout hint
   │   ├── _run_async(command, cwd)   — subprocess.Popen with start_new_session, returns job_id
-  │   ├── _handle_poll(args)         — checks job status via Popen.poll() or os.waitpid
+  │   ├── _handle_poll(args)         — checks job status; augments completed result
   │   ├── _handle_cancel(args)       — SIGTERM to process group, cleanup
   │   └── _close_handles(job_id)     — closes open file handles for a job
   │
@@ -60,6 +74,7 @@ bash/__init__.py
 - **Two policy modes:** Allowlist mode (when `allow` key is present in policy) — only listed commands permitted, everything else blocked. Denylist mode (only `deny` key) — everything allowed except denied commands. The mode is implicit.
 - **Pipe-aware command extraction:** `_extract_commands()` parses `|`, `&&`, `||`, `;`, newlines, `$()`, backticks, and env-var prefixes to find every command name in a compound expression.
 - **Working directory sandbox:** `working_dir` is validated to be under the agent's working directory. Paths are resolved and checked with `startswith(sandbox + "/")`.
+- **Result fidelity is additive, never status-changing:** A completed command always returns top-level `status: "ok"`/`"done"` regardless of `exit_code`. The pass/fail signal lives in additive `ok`/`command_status`/`warning` fields. `status: "error"` is reserved for the shell failing to run the command at all (empty/denied command, timeout, spawn failure) — this preserves the `tool_executor` contract that branches on `status == "error"` for error enrichment, lifecycle logging, and `collected_errors`.
 - **Output truncation:** `max_output = 50_000` chars. Both stdout and stderr are truncated with a note showing total length.
 - **Subprocess isolation:** Commands run via `subprocess.run(shell=True, capture_output=True, text=True, timeout=...)` in the agent's working directory by default.
 - **Async subprocess:** Async commands use `subprocess.Popen(shell=True, start_new_session=True)` with stdout/stderr redirected to files under `system/jobs/{job_id}/`. `start_new_session=True` ensures the process gets its own session, enabling `os.killpg()` for clean cancellation.

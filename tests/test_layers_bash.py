@@ -5,7 +5,15 @@ from pathlib import Path
 import pytest
 from unittest.mock import MagicMock
 
-from lingtai.core.bash import BashManager, BashPolicy, get_schema, setup as setup_bash
+from lingtai.core.bash import (
+    BashManager,
+    BashPolicy,
+    get_schema,
+    setup as setup_bash,
+    _augment_command_result,
+    _broad_scan_hint,
+    _detect_failure_signature,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -99,8 +107,72 @@ class TestBashManager:
     def test_nonexistent_command(self):
         mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
         result = mgr.handle({"command": "definitely_not_a_real_command_xyz"})
+        # status stays "ok" — it reflects that the shell spawned, not that the
+        # inner command succeeded (preserving the existing executor contract).
         assert result["status"] == "ok"
         assert result["exit_code"] != 0
+
+    # --- result fidelity: explicit pass/fail fields (T1a) ------------------
+
+    def test_success_is_marked_ok(self):
+        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        result = mgr.handle({"command": "echo hi"})
+        assert result["exit_code"] == 0
+        assert result["ok"] is True
+        assert result["command_status"] == "success"
+        # No warning on a clean success.
+        assert "warning" not in result
+
+    def test_nonzero_exit_is_flagged_failed_with_warning(self):
+        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        result = mgr.handle({"command": "exit 3"})
+        # status unchanged, but the failure is now impossible to miss.
+        assert result["status"] == "ok"
+        assert result["exit_code"] == 3
+        assert result["ok"] is False
+        assert result["command_status"] == "failed"
+        assert "exited with code 3" in result["warning"]
+
+    def test_warning_includes_stderr_tail(self):
+        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        result = mgr.handle(
+            {"command": "echo boom-marker 1>&2; exit 1"}
+        )
+        assert result["ok"] is False
+        assert "boom-marker" in result["warning"]
+
+    def test_python_traceback_is_detected(self):
+        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        # A real interpreter traceback exits nonzero and prints to stderr.
+        result = mgr.handle(
+            {"command": "python3 -c 'raise ValueError(\"x\")'"}
+        )
+        assert result["ok"] is False
+        assert result["command_status"] == "failed"
+        assert "python_traceback" in result["warning"]
+
+    def test_missing_module_is_detected(self):
+        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        result = mgr.handle(
+            {"command": "python3 -c 'import lingtai_kernel_does_not_exist_xyz'"}
+        )
+        assert result["ok"] is False
+        assert "missing_module" in result["warning"]
+
+    def test_zero_exit_with_traceback_in_output_is_flagged_without_failing(self):
+        # A subshell swallows the nonzero exit but the traceback text leaks to
+        # stdout — flag it as suspicious without claiming the command failed.
+        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        result = mgr.handle(
+            {
+                "command": "python3 -c 'raise ValueError(1)' 2>&1 | cat; true"
+            }
+        )
+        assert result["exit_code"] == 0
+        assert result["ok"] is True
+        assert result["command_status"] == "success"
+        assert "warning" in result
+        assert "python_traceback" in result["warning"]
 
     def test_empty_command(self):
         mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
@@ -112,6 +184,22 @@ class TestBashManager:
         result = mgr.handle({"command": "sleep 10", "timeout": 0.5})
         assert result["status"] == "error"
         assert "timed out" in result["message"]
+        # A plain sleep is not a broad scan — no recipe hint appended.
+        assert "rg --files" not in result["message"]
+
+    def test_timeout_on_broad_find_appends_rg_hint(self):
+        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        result = mgr.handle(
+            {
+                "command": (
+                    "sleep 10; find /Users/x/work -name '*.py' -type f"
+                ),
+                "timeout": 0.5,
+            }
+        )
+        assert result["status"] == "error"
+        assert "timed out" in result["message"]
+        assert "rg --files" in result["message"]
 
     def test_policy_denies(self, tmp_path):
         policy_file = tmp_path / "policy.json"
@@ -176,6 +264,79 @@ class TestBashManager:
         mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp", max_output=20)
         result = mgr.handle({"command": "echo 'a very long output string that exceeds the limit'"})
         assert "truncated" in result["stdout"]
+
+
+# ---------------------------------------------------------------------------
+# Result-fidelity helpers (unit-level, no subprocess)
+# ---------------------------------------------------------------------------
+
+class TestAugmentCommandResult:
+    def test_success(self):
+        r = _augment_command_result({"status": "done", "exit_code": 0, "stdout": "", "stderr": ""})
+        assert r["ok"] is True
+        assert r["command_status"] == "success"
+        assert "warning" not in r
+
+    def test_failure_has_warning(self):
+        r = _augment_command_result(
+            {"status": "done", "exit_code": 2, "stdout": "", "stderr": "bad arg\n"}
+        )
+        assert r["ok"] is False
+        assert r["command_status"] == "failed"
+        assert "exited with code 2" in r["warning"]
+        assert "bad arg" in r["warning"]
+
+    def test_long_stderr_tail_is_truncated_with_ellipsis(self):
+        big = "E" * 5000
+        r = _augment_command_result(
+            {"status": "done", "exit_code": 1, "stdout": "", "stderr": big}
+        )
+        assert r["warning"].startswith("command exited with code 1")
+        assert "…" in r["warning"]
+        # The warning carries only a bounded tail, not the whole 5000 chars.
+        assert len(r["warning"]) < 1200
+
+    def test_missing_exit_code_is_left_untouched(self):
+        # poll on a still-running job has no exit_code yet → no fidelity fields.
+        r = _augment_command_result({"status": "running", "job_id": "x"})
+        assert "ok" not in r
+        assert "command_status" not in r
+
+
+class TestDetectFailureSignature:
+    def test_traceback(self):
+        assert (
+            _detect_failure_signature("", "Traceback (most recent call last):\n  ...")
+            == "python_traceback"
+        )
+
+    def test_missing_module(self):
+        assert (
+            _detect_failure_signature("", "ModuleNotFoundError: No module named 'lingtai'")
+            == "missing_module"
+        )
+
+    def test_clean(self):
+        assert _detect_failure_signature("all good", "") is None
+
+
+class TestBroadScanHint:
+    def test_find_with_name(self):
+        assert _broad_scan_hint("find /work -name '*.py'") is not None
+
+    def test_rglob(self):
+        assert _broad_scan_hint("python3 -c 'list(Path(\".\").rglob(\"*.py\"))'") is not None
+
+    def test_os_walk(self):
+        assert _broad_scan_hint("python3 -c 'list(os.walk(\"/work\"))'") is not None
+
+    def test_glob_double_star(self):
+        assert _broad_scan_hint("python3 -c \"glob('**/*.py', recursive=True)\"") is not None
+
+    def test_plain_command_not_flagged(self):
+        assert _broad_scan_hint("ls -la") is None
+        assert _broad_scan_hint("git status") is None
+        assert _broad_scan_hint("find . -maxdepth 1") is None
 
 
 # ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@ description: >
   reminders, debugging silent jobs, and safe cleanup. Start here for any
   long-running agent CLI, time-driven recurring work ("every hour", "weekdays at
   9", "remind me later"), or when a scheduled job misbehaves.
-version: 1.5.0
+version: 1.6.0
 ---
 
 # Bash Manual — Router
@@ -140,6 +140,51 @@ files, not standalone top-level skills.
 5. **A scheduled job already exists and is misbehaving?** Read
    `reference/debugging-cleanup/SKILL.md` before editing blindly.
 
+## Reading command results — never trust top-level `status` alone
+
+The top-level `status` of a `bash` result (`ok`/`done`) means only that the
+**shell spawned** the command — **not** that the command succeeded. A failed
+build, a missing file, a Python traceback, or a missing import all come back
+under `status: "ok"`. Proceeding on that false success is the single most
+common way agents corrupt their own downstream work.
+
+- **Check `exit_code` / `ok` on every command whose success matters.** The
+  result carries `ok` (bool) and `command_status` (`"success"`/`"failed"`)
+  keyed off the exit code. `exit_code != 0` means the command failed even
+  though `status` says `ok`.
+- **Read the `warning` field when present.** On failure (or a suspicious
+  zero-exit with a traceback in the output) the result includes a one-line
+  `warning` naming the nonzero exit, any detected Python traceback or missing
+  module, and a stderr tail. If `warning` is present, stop and read it before
+  acting on the output.
+- **Use the venv interpreter for project code.** Bare `python3` lacks
+  third-party packages and LingTai's own modules (`lingtai`, `lingtai_kernel`).
+  A `No module named …` / `missing_module` warning usually means you ran the
+  wrong interpreter — invoke the project's virtualenv `python`, not the system
+  one.
+
+## Avoid broad recursive scans
+
+Unbounded recursive walks over large roots (`work/projects/.lingtai`) are the
+top cause of `bash` timeouts. On a timeout the tool appends an `rg` recipe when
+it detects this shape, but prefer it from the start:
+
+- Replace `find <root> -name …`, `Path(...).rglob(...)`, `os.walk(...)`, and
+  `glob('**/…')` over big trees with:
+  `rg --files --hidden -g '!**/{.git,node_modules,daemons,.worktrees}/**' <root>`
+  then filter the file list — `rg` honors `.gitignore` and skips the expensive
+  directories by default.
+- Narrow the root, add `-maxdepth`, or raise `timeout` only when the tree is
+  genuinely large and you have a reason to walk all of it.
+
+## Parse JSONL line-by-line
+
+Event/log files (`events.jsonl`, daemon logs) are **JSON Lines** — one JSON
+object per line, **not** a single JSON document. `json.loads(whole_file)` fails
+on them. Iterate lines and `json.loads` each non-empty line, or pipe through
+`jq -c .` / `rg` to filter before parsing. Tail with `tail -n` instead of
+reading the whole file when you only need recent events.
+
 ## Core rules to keep resident
 
 - **Synchronous `bash` is only for short, deterministic commands.** A long-running
@@ -159,7 +204,9 @@ files, not standalone top-level skills.
   # Later turns: poll until done (handle mail/other work between polls):
   bash(action="poll", job_id="ab12…")
   # → {"status": "running", …}   then eventually
-  # → {"status": "done", "exit_code": 0, "stdout": "…", "stderr": "…"}
+  # → {"status": "done", "exit_code": 0, "ok": true, "command_status": "success", "stdout": "…", "stderr": "…"}
+  #   On failure: {"status": "done", "exit_code": 1, "ok": false,
+  #                "command_status": "failed", "warning": "command exited with code 1; …"}
 
   # Abandon it if needed:
   bash(action="cancel", job_id="ab12…")

@@ -29,6 +29,120 @@ PROVIDERS = {"providers": [], "default": "builtin"}
 
 _DEFAULT_POLICY_FILE = Path(__file__).parent / "bash_policy.json"
 
+# Length of the stderr tail surfaced in the failure warning. Short on purpose:
+# the full stderr is already present in the result; the tail just makes the
+# failure impossible to miss when an agent skims the top-level fields.
+_WARNING_STDERR_TAIL = 600
+
+# Substrings that signal a "successful shell, failed program" — the failure the
+# fidelity warning exists to surface. A Python traceback or a missing-module
+# error commonly exits nonzero, but agents have been observed proceeding on the
+# false success because the top-level status said "ok".
+_FAILURE_SIGNATURES = (
+    "Traceback (most recent call last)",
+    "ModuleNotFoundError",
+    "No module named",
+)
+
+
+def _detect_failure_signature(stdout: str, stderr: str) -> str | None:
+    """Return a short label if stdout/stderr carries a known failure signature.
+
+    Detection is best-effort and advisory only — it never changes ``exit_code``
+    or whether the command is considered failed; that is driven solely by the
+    exit code. It only enriches the human-/model-visible ``warning`` text so a
+    Python traceback or missing-import under a zero/nonzero exit is named
+    explicitly instead of being buried in the output.
+    """
+    haystack = f"{stderr}\n{stdout}"
+    # Prefer the most specific, most actionable label. A missing-module error
+    # also emits a full traceback, so check for it before the generic one.
+    if _FAILURE_SIGNATURES[1] in haystack or _FAILURE_SIGNATURES[2] in haystack:
+        return "missing_module"
+    if _FAILURE_SIGNATURES[0] in haystack:
+        return "python_traceback"
+    return None
+
+
+# Command shapes that frequently time out via unbounded recursive directory
+# walks over large roots (work/projects/.lingtai). Matched only to *append a
+# hint* on timeout — never to block or alter the command.
+_BROAD_SCAN_RE = re.compile(
+    r"""
+    \bfind\s+[^|]*\s-(?:name|path|type|iname)\b   # find ... -name/-path/-type
+    | \brglob\s*\(                                  # Path.rglob(
+    | \bos\.walk\s*\(                               # os.walk(
+    | \bglob\s*\(\s*['"][^'"]*\*\*                  # glob('**/...')
+    """,
+    re.VERBOSE,
+)
+
+_BROAD_SCAN_HINT = (
+    "This looks like a broad recursive scan, the most common cause of bash "
+    "timeouts. Prefer `rg --files --hidden -g '!**/{.git,node_modules,daemons,"
+    ".worktrees}/**' <root>` (then filter), narrow the root, or raise `timeout` "
+    "for a genuinely large tree."
+)
+
+
+def _broad_scan_hint(command: str) -> str | None:
+    """Return a broad-scan recipe hint if the command resembles a recursive walk.
+
+    Best-effort heuristic used only to enrich a timeout message. False positives
+    are harmless (an extra sentence); it never blocks or rewrites the command.
+    """
+    return _BROAD_SCAN_HINT if _BROAD_SCAN_RE.search(command) else None
+
+
+def _augment_command_result(result: dict) -> dict:
+    """Add explicit pass/fail fidelity fields to a completed-command result.
+
+    The top-level ``status`` of a bash result reflects only that the shell
+    *spawned* — it stays ``ok``/``done`` even when the inner command failed.
+    Agents have repeatedly missed inner failures because of this. To make a
+    failure impossible to skim past *without* changing the ``status`` contract
+    (which downstream recovery/telemetry branches on), this adds three additive,
+    model-visible fields keyed off ``exit_code``:
+
+    - ``ok`` (bool): ``True`` only when ``exit_code == 0``.
+    - ``command_status`` (str): ``"success"`` or ``"failed"``.
+    - ``warning`` (str, only on failure): one-line summary naming the nonzero
+      exit, any detected traceback/missing-module signature, and a stderr tail.
+
+    ``status`` itself is intentionally left untouched so existing callers and
+    tests that branch on it keep working.
+    """
+    exit_code = result.get("exit_code")
+    if not isinstance(exit_code, int):
+        return result
+    failed = exit_code != 0
+    result["ok"] = not failed
+    result["command_status"] = "failed" if failed else "success"
+
+    signature = _detect_failure_signature(
+        result.get("stdout", "") or "", result.get("stderr", "") or ""
+    )
+    if not failed and signature is None:
+        return result
+
+    parts: list[str] = []
+    if failed:
+        parts.append(f"command exited with code {exit_code}")
+    else:
+        # Zero exit but a traceback/missing-module signature is present — the
+        # command may have swallowed the error. Flag it without claiming failure.
+        parts.append(f"command exited 0 but output contains a {signature}")
+    if failed and signature is not None:
+        parts.append(f"detected {signature}")
+    stderr = (result.get("stderr") or "").strip()
+    if stderr:
+        tail = stderr[-_WARNING_STDERR_TAIL:]
+        if len(stderr) > _WARNING_STDERR_TAIL:
+            tail = "…" + tail
+        parts.append(f"stderr tail: {tail}")
+    result["warning"] = "; ".join(parts)
+    return result
+
 def get_description(lang: str = "en") -> str:
     return t(lang, "bash.description")
 
@@ -274,14 +388,18 @@ class BashManager:
             if len(stderr) > self._max_output:
                 stderr = stderr[: self._max_output] + f"\n... (truncated, {len(result.stderr)} chars total)"
 
-            return {
+            return _augment_command_result({
                 "status": "ok",
                 "exit_code": result.returncode,
                 "stdout": stdout,
                 "stderr": stderr,
-            }
+            })
         except subprocess.TimeoutExpired:
-            return {"status": "error", "message": f"Command timed out after {timeout}s"}
+            msg = f"Command timed out after {timeout}s"
+            hint = _broad_scan_hint(command)
+            if hint:
+                msg = f"{msg}. {hint}"
+            return {"status": "error", "message": msg}
         except Exception as e:
             return {"status": "error", "message": f"Command failed: {e}"}
 
@@ -444,12 +562,12 @@ class BashManager:
         import shutil
         shutil.rmtree(job_dir, ignore_errors=True)
 
-        return {
+        return _augment_command_result({
             "status": "done",
             "exit_code": returncode,
             "stdout": stdout,
             "stderr": stderr,
-        }
+        })
 
     def _handle_cancel(self, args: dict) -> dict:
         """Kill an async job."""
