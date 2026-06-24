@@ -169,7 +169,13 @@ def sum_token_ledger(path: Path | str, *, scope: str = "all") -> dict:
     - ``"main_agent"`` — row-level **excludes** daemon rows (``is_daemon_entry``
       is True), answering "what did this agent's own context cost?" without the
       spend of daemons it spawned. ``tc_wake`` and other involuntary splices in
-      the agent's own context are kept.
+      the agent's own context are kept. This scope is intended for a **parent
+      agent's** ledger (a mixed stream of main + daemon rows); applied to a
+      **daemon-local** ledger — every row of which is daemon-attributed
+      (``source="daemon"`` + ``em_id``/``run_id``; see
+      ``lingtai.core.daemon.run_dir.RunDir.append_tokens``) — it correctly
+      excludes all rows and returns zero. Use ``"all"`` to total a daemon-local
+      ledger.
 
     This is a pure read-side filter — the durable rows on disk are never
     rewritten. Skips corrupt lines gracefully. Unknown ``scope`` values raise
