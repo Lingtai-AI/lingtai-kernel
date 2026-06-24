@@ -2,10 +2,10 @@
 name: daemon-forensics
 description: >
   Nested daemon-manual reference for daemon artifact forensics: persistent
-  daemons/em-* folders, daemon.json status fields, chat_history.jsonl,
-  token_ledger.jsonl, events.jsonl, exit code 143 / SIGTERM, and how to inspect
-  progress without guessing.
-version: 1.1.0
+  daemons/em-* folders, daemon.json status fields, artifacts.json manifest,
+  chat_history.jsonl, token_ledger.jsonl, events.jsonl, exit code 143 / SIGTERM,
+  and how to inspect progress without guessing.
+version: 1.2.0
 ---
 
 # Daemon Forensics Reference
@@ -28,6 +28,7 @@ This means: when an emanation looks stuck, you can read its actual state instead
 ```
 daemons/em-3-20260427-094215-a1b2c3/
 ├── daemon.json                  ← versioned identity card + live status snapshot + visible call parameters
+├── artifacts.json               ← compact artifact manifest (path/size/mtime/role per file) — written at terminal time
 ├── result.txt                   ← full terminal result when available
 ├── .prompt                      ← system prompt as built (forensic)
 ├── .heartbeat                   ← mtime touched on every write
@@ -37,6 +38,25 @@ daemons/em-3-20260427-094215-a1b2c3/
     ├── token_ledger.jsonl       ← per-call token usage
     └── events.jsonl             ← daemon_start, tool_call, tool_result, cli_output, daemon_done/...
 ```
+
+### `artifacts.json` — the manifest, and how `check` surfaces it
+
+Each terminal transition writes a compact **artifact manifest** to
+`artifacts.json`: a metadata-only index of the run dir's important files. Each
+entry is `{path, size, mtime, role}` (run-dir-relative path, byte size, ISO-8601
+mtime, and an inferred role like `status` / `result` / `prompt` / `transcript` /
+`events` / `token_ledger`, or `null` for unrecognized work-product files). The
+manifest also carries run-level `state`, `result_path`, and `error_path` (the
+last set to `result.txt` for failed/timeout/cancelled runs). It lists **paths and
+metadata only — never file contents** — and caps the number of entries (recording
+`artifacts_total` and `truncated` when a run drops more files than the cap).
+
+`daemon(action="check")` surfaces this as an `artifacts` block so you don't have
+to scan the folder yourself: it prefers the persisted `artifacts.json`
+(`source: "manifest"`) and, for a still-running run or an old run that predates
+the manifest, computes an equivalent listing on the fly (`source: "fallback"`).
+Read the `artifacts` block first to learn which files exist and how big they are,
+then open `result_path` / `error_path` for the full content.
 
 Progressive disclosure starts with `daemon(action="list")`: it reads these
 per-run JSON/files and returns a compact searchable index (metadata, visible call

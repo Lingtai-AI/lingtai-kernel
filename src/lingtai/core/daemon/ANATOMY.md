@@ -42,7 +42,7 @@ The `daemon` tool exposes five actions:
 | `emanate`  | Spawn one or more subagents with specified task + tools + optional preset |
 | `list`     | List running/completed/failed emanations with status and elapsed time |
 | `ask`      | Send a follow-up message to a running emanation |
-| `check`    | Read-only progress tail: `daemon.json` state + last N events from `events.jsonl`. On in-memory registry miss (e.g. after refresh/molt) falls back to the durable `daemons/*/` run dirs, resolving by full `run_id` (exact) or short `handle` (most-recent, with ambiguity flagged) |
+| `check`    | Read-only progress tail: `daemon.json` state + last N events from `events.jsonl` + a compact `artifacts` block (the run's artifact manifest — relative path/size/mtime/role per important file, plus run-level state/result_path/error_path). On in-memory registry miss (e.g. after refresh/molt) falls back to the durable `daemons/*/` run dirs, resolving by full `run_id` (exact) or short `handle` (most-recent, with ambiguity flagged) |
 | `list`     | Progressive-disclosure index: active registry + historical run dirs; lazily rebuilds missing/invalid/stale-version `daemon.json` and returns prompt/result previews with search filters |
 | `reclaim`  | Cancel all running emanations, shut down CLI process groups/thread pools through the same runtime-shutdown helper used by agent stop, reset ID counter |
 
@@ -68,7 +68,8 @@ daemon/__init__.py
   ├── _find_claude_session_id()     — legacy `~/.claude/projects/` JSONL scan; now only a fallback when the stream-json `session_id` capture fails
   ├── _handle_emanate()             — validates presets, creates DaemonRunDir, submits to pool
   ├── _handle_list/check/reclaim    — individual action handlers; list scans active entries plus historical run-dir JSON records and performs best-effort lazy daemon.json rebuilds. `_handle_check` tries the in-memory registry first, then falls back to `_resolve_historical_run_dir` so a short id from a terminal notification still resolves after refresh/molt
-  ├── _check_snapshot_from_paths()  — builds the `check` response (daemon.json fields + truncated event tail) from a run dir's paths; shared by the live-registry hit and the historical fallback so both surface identical shape
+  ├── _check_snapshot_from_paths()  — builds the `check` response (daemon.json fields + truncated event tail + `artifacts` block) from a run dir's paths; shared by the live-registry hit and the historical fallback so both surface identical shape
+  ├── _artifacts_summary()          — compact artifact-manifest block for `check`: prefers the persisted `artifacts.json` (written at terminal time; `source="manifest"`), else computes a fallback via `DaemonRunDir.build_manifest` for a still-running or pre-manifest run (`source="fallback"`); on any failure returns `source="unavailable"` rather than breaking `check`. Surfaces path/size/mtime/role metadata only — never file contents
   ├── _resolve_historical_run_dir() — resolves a short `handle` or full `run_id` to a durable `daemons/<run_id>/` folder; exact run-id match wins, else the most-recent `handle` match (folder-name timestamp ⇒ lexical == chronological) with every match returned so the caller can flag ambiguity
   ├── _run_dir_handle()             — best-effort handle for a run dir (daemon.json `handle`, falling back to parsing the folder name) used by historical resolution
   ├── _handle_ask()                 — dispatcher: routes resumable CLI backends (interactive Claude, claude-p/claude-code, codex, opencode, mimocode, oh-my-pi, and cursor) to their async follow-up handlers; returns an explicit unsupported error for qwen-code; routes lingtai asks to the in-process followup buffer
@@ -88,7 +89,8 @@ daemon/__init__.py
 
 daemon/run_dir.py
   ├── DaemonRunDir.__init__         — creates folder on disk, writes versioned daemon.json (data_version + call_parameters) + .prompt
-  ├── Path properties               — run_id, handle, group_id, path, daemon_json_path, prompt_path, heartbeat_path, chat_path, events_path, token_ledger_path, result_path
+  ├── Path properties               — run_id, handle, group_id, path, daemon_json_path, prompt_path, heartbeat_path, chat_path, events_path, token_ledger_path, result_path, manifest_path (`artifacts.json`)
+  ├── build_manifest() / write_manifest() — `build_manifest(run_path)` is a classmethod pure read over a run dir: lists path/size/mtime/inferred-role for well-known artifacts (priority order) + extra work-product files (sorted, `.tmp` skipped), capped at `_MANIFEST_MAX_ENTRIES` (records `artifacts_total`/`truncated`), plus run-level `state`/`result_path`/`error_path` (the last set only for failed/timeout/cancelled runs with a result.txt). Used both by `write_manifest()` (instance, called from every terminal marker after daemon.json/result.txt are final, best-effort via `_safe`, persists `artifacts.json`) and by `_artifacts_summary`'s fallback for old/running runs that have no `artifacts.json`. `MANIFEST_VERSION` mirrors `data_version`
   ├── record_user_send()            — appends user-role entry to chat_history.jsonl
   ├── bump_turn()                   — marks end of LLM round (daemon.json + chat_history + heartbeat)
   ├── set_current_tool()            — marks tool dispatch starting (daemon.json + events + heartbeat)
@@ -96,7 +98,7 @@ daemon/run_dir.py
   ├── record_cli_output()           — records CLI backend stdout/stderr as cli_output events
   ├── append_tokens()               — dual-ledger token accounting (daemon's + parent's); both rows tagged `source="daemon"` + `em_id` + `run_id` so every row self-describes regardless of which ledger it lives in (`sum_token_ledger(scope="main_agent")` therefore excludes all rows of a daemon-local ledger; use `scope="all"` to total one)
   ├── record_cli_tokens()           — accumulates external CLI usage into `daemon.json.cli_tokens` (`input/output/cached/thinking/calls`) for UI display only; never writes either token ledger; appends a `cli_usage` event (with raw usage) to `events.jsonl`
-  ├── mark_done/failed/cancelled/timeout — terminal state markers (result.txt + preview on done); each sets `daemon.json.state` to the authoritative terminal status read back by `_on_emanation_done`
+  ├── mark_done/failed/cancelled/timeout — terminal state markers (result.txt + preview on done); each sets `daemon.json.state` to the authoritative terminal status read back by `_on_emanation_done`, then calls `write_manifest()` to persist `artifacts.json` capturing the final artifact set
   ├── claim_terminal_notification() — atomic once-only claim of the terminal-notification slot (persists `terminal_notified` to daemon.json); returns True on first call, False thereafter so a repeated done-callback never double-wakes the parent
   └── _atomic_write_json()          — tempfile + os.replace for crash-safe writes
 ```

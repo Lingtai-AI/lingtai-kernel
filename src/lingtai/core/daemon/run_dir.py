@@ -172,6 +172,10 @@ class DaemonRunDir:
     def result_path(self) -> Path:
         return self._path / "result.txt"
 
+    @property
+    def manifest_path(self) -> Path:
+        return self._path / "artifacts.json"
+
     def state_snapshot(self) -> dict:
         """Return a shallow copy of the current daemon.json state."""
         return dict(self._state)
@@ -515,6 +519,191 @@ class DaemonRunDir:
         self._safe("record_cli_tokens", _write)
 
     # ------------------------------------------------------------------
+    # Artifact manifest
+    # ------------------------------------------------------------------
+
+    # Manifest schema version — bump when the artifacts.json shape changes so
+    # readers can detect a stale layout (mirrors daemon.json's data_version).
+    MANIFEST_VERSION = 1
+
+    # Hard cap on listed artifacts so a run that writes hundreds of files (e.g.
+    # a daemon that drops many work-product files into its run dir) cannot make
+    # the manifest unbounded. The well-known artifacts are always listed first;
+    # the cap only ever drops *extra* discovered files, and the manifest records
+    # how many were omitted.
+    _MANIFEST_MAX_ENTRIES = 64
+
+    # Inferred role for each well-known artifact, by run-dir-relative path.
+    # Anything not in this map is reported with role=None (still listed).
+    _MANIFEST_ROLES = {
+        "daemon.json": "status",
+        "artifacts.json": "manifest",
+        "result.txt": "result",
+        ".prompt": "prompt",
+        ".heartbeat": "heartbeat",
+        "history/chat_history.jsonl": "transcript",
+        "logs/events.jsonl": "events",
+        "logs/token_ledger.jsonl": "token_ledger",
+    }
+
+    # Order in which well-known artifacts are emitted (most useful first). Files
+    # present on disk but not in this list are appended afterward, sorted by
+    # relative path, until the entry cap is reached.
+    _MANIFEST_WELL_KNOWN_ORDER = (
+        "daemon.json",
+        "result.txt",
+        ".prompt",
+        "history/chat_history.jsonl",
+        "logs/events.jsonl",
+        "logs/token_ledger.jsonl",
+        ".heartbeat",
+    )
+
+    @classmethod
+    def build_manifest(cls, run_path: Path) -> dict:
+        """Compute a compact artifact manifest for a daemon run dir on disk.
+
+        Pure read over ``run_path`` — does not require a live DaemonRunDir, so
+        the ``check``/``list`` historical fallback can compute a manifest for an
+        old run that predates the on-terminal ``artifacts.json`` write. Lists
+        path/size/mtime/role metadata ONLY — never file contents — with a hard
+        entry cap. Best-effort: any per-file ``OSError`` is skipped, and a
+        global read failure yields an ``error``-tagged manifest rather than
+        raising, so a manifest never breaks a ``check`` response.
+
+        Returned shape::
+
+            {
+              "manifest_version": 1,
+              "generated_at": "<ISO8601 UTC>",
+              "run_id": "<folder name>",
+              "state": "<daemon.json state or null>",
+              "result_path": "<abs path or null>",
+              "error_path": "<abs path or null>",   # result.txt for failed runs
+              "artifact_count": <int>,              # files listed
+              "artifacts_total": <int>,             # files found before cap
+              "truncated": <bool>,
+              "artifacts": [
+                {"path": "daemon.json", "size": 1234,
+                 "mtime": "<ISO8601 UTC>", "role": "status"},
+                ...
+              ],
+            }
+        """
+        run_path = Path(run_path)
+        manifest = {
+            "manifest_version": cls.MANIFEST_VERSION,
+            "generated_at": cls._now_iso(),
+            "run_id": run_path.name,
+            "state": None,
+            "result_path": None,
+            "error_path": None,
+            "artifact_count": 0,
+            "artifacts_total": 0,
+            "truncated": False,
+            "artifacts": [],
+        }
+
+        # Pull state + result/error path from daemon.json if readable. A missing
+        # or corrupt daemon.json simply leaves these fields null — the file
+        # listing below still works.
+        daemon_json = run_path / "daemon.json"
+        state_val = None
+        try:
+            data = json.loads(daemon_json.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                state_val = data.get("state")
+                manifest["state"] = state_val
+                rp = data.get("result_path")
+                if isinstance(rp, str) and rp:
+                    manifest["result_path"] = rp
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            pass
+
+        # Discover files: well-known artifacts in priority order first, then any
+        # other regular files anywhere under the run dir (relative paths), sorted
+        # for determinism. De-dup so a well-known file isn't listed twice.
+        ordered_rel: list[str] = []
+        seen: set[str] = set()
+        for rel in cls._MANIFEST_WELL_KNOWN_ORDER:
+            if (run_path / rel).is_file():
+                ordered_rel.append(rel)
+                seen.add(rel)
+
+        extras: list[str] = []
+        try:
+            for fp in run_path.rglob("*"):
+                try:
+                    if not fp.is_file():
+                        continue
+                except OSError:
+                    continue
+                rel = fp.relative_to(run_path).as_posix()
+                # Skip atomic-write tempfiles — transient and never artifacts.
+                if rel.endswith(".tmp"):
+                    continue
+                if rel in seen:
+                    continue
+                seen.add(rel)
+                extras.append(rel)
+        except OSError as e:
+            manifest["error"] = f"scan failed: {e}"
+
+        extras.sort()
+        all_rel = ordered_rel + extras
+        manifest["artifacts_total"] = len(all_rel)
+
+        listed = all_rel[: cls._MANIFEST_MAX_ENTRIES]
+        if len(all_rel) > len(listed):
+            manifest["truncated"] = True
+
+        artifacts: list[dict] = []
+        for rel in listed:
+            fp = run_path / rel
+            try:
+                st = fp.stat()
+            except OSError:
+                continue
+            artifacts.append({
+                "path": rel,
+                "size": st.st_size,
+                "mtime": cls._mtime_iso(st.st_mtime),
+                "role": cls._MANIFEST_ROLES.get(rel),
+            })
+        manifest["artifacts"] = artifacts
+        manifest["artifact_count"] = len(artifacts)
+
+        # error_path: for a failed/timeout/cancelled run, result.txt (if any)
+        # holds the closest thing to a failure record. Point at it explicitly so
+        # the parent doesn't have to infer which file to read.
+        result_txt = run_path / "result.txt"
+        if state_val in ("failed", "timeout", "cancelled") and result_txt.is_file():
+            manifest["error_path"] = str(result_txt)
+
+        return manifest
+
+    @staticmethod
+    def _mtime_iso(epoch: float) -> str:
+        """Format a POSIX mtime as ISO 8601 UTC (matches _now_iso style)."""
+        return datetime.fromtimestamp(epoch, timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+
+    def write_manifest(self) -> None:
+        """Compute and persist this run's artifact manifest to artifacts.json.
+
+        Called at terminal time so the manifest captures the final result.txt.
+        Best-effort: an OSError during the scan or write is swallowed via
+        ``_safe`` so a manifest failure never blocks the terminal transition.
+        Writing artifacts.json before re-scanning would race its own size/mtime,
+        so we build first, then write atomically.
+        """
+        def _write():
+            manifest = self.build_manifest(self._path)
+            self._atomic_write_json(self.manifest_path, manifest)
+        self._safe("write_manifest", _write)
+
+    # ------------------------------------------------------------------
     # Terminal markers
     # ------------------------------------------------------------------
 
@@ -568,6 +757,10 @@ class DaemonRunDir:
             )
             self.heartbeat_path.touch()
         self._safe("mark_done", _write)
+        # Manifest last: result.txt + daemon.json are now final, so the scan
+        # captures the terminal artifact set. Its own _safe means a manifest
+        # failure can't undo the terminal transition above.
+        self.write_manifest()
 
     def mark_failed(self, exc: BaseException) -> None:
         """Exception in run loop. Sets state=failed, error.{type, message}.
@@ -602,6 +795,7 @@ class DaemonRunDir:
                 },
             )
         self._safe("mark_failed", _write)
+        self.write_manifest()
 
     def record_cli_termination(
         self, *, reason: str, signal_name: str, returncode: int | None
@@ -681,3 +875,4 @@ class DaemonRunDir:
                 },
             )
         self._safe(f"mark_{state}", _write)
+        self.write_manifest()

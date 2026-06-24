@@ -5085,9 +5085,53 @@ class DaemonManager:
             "last_output": state.get("last_output"),
             "last_output_at": state.get("last_output_at"),
             "error": state.get("error"),
+            "artifacts": self._artifacts_summary(run_path),
             "events": events,
             "events_total": events_total,
             "events_returned": len(events),
+        }
+
+    def _artifacts_summary(self, run_path: Path) -> dict:
+        """Compact artifact-manifest block for a `check` response.
+
+        Prefers the persisted ``artifacts.json`` (written at terminal time);
+        for an old run that predates it — or a still-running run that has no
+        manifest yet — falls back to computing one on the fly from the run dir.
+        Either way only path/size/mtime/role metadata is surfaced (never file
+        contents). ``source`` distinguishes the persisted manifest from a
+        computed fallback so the parent knows whether it is reading a terminal
+        snapshot or a live view. Never raises: a manifest is a convenience and
+        must not break `check`.
+        """
+        manifest_path = run_path / "artifacts.json"
+        source = "manifest"
+        manifest = None
+        try:
+            if manifest_path.is_file():
+                loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    manifest = loaded
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            manifest = None
+        if manifest is None:
+            # No persisted manifest (old run / still running). Compute a safe
+            # fallback so the parent still gets a file listing.
+            source = "fallback"
+            try:
+                manifest = DaemonRunDir.build_manifest(run_path)
+            except Exception as e:  # never let a manifest break check
+                return {"source": "unavailable", "error": str(e),
+                        "artifacts": []}
+
+        return {
+            "source": source,
+            "state": manifest.get("state"),
+            "result_path": manifest.get("result_path"),
+            "error_path": manifest.get("error_path"),
+            "artifact_count": manifest.get("artifact_count"),
+            "artifacts_total": manifest.get("artifacts_total"),
+            "truncated": manifest.get("truncated", False),
+            "artifacts": manifest.get("artifacts", []),
         }
 
     def _resolve_historical_run_dir(
