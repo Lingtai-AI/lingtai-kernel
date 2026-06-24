@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>T3 Explainer — Redact secrets in relaunch-watcher event persistence</title>
+  <style>
+    :root { --bg:#0f172a; --panel:#111827; --ink:#e5e7eb; --muted:#9ca3af; --accent:#38bdf8; --ok:#22c55e; --warn:#f59e0b; --line:#334155; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:linear-gradient(135deg,#020617,#111827); color:var(--ink); }
+    main { max-width:1100px; margin:0 auto; padding:36px 22px 60px; }
+    h1 { font-size:30px; margin:0 0 8px; }
+    h2 { margin-top:30px; padding-top:18px; border-top:1px solid var(--line); font-size:21px; }
+    h3 { margin-top:20px; color:#bae6fd; }
+    p, li { color:var(--ink); }
+    .muted { color:var(--muted); }
+    .card { background:rgba(17,24,39,.86); border:1px solid var(--line); border-radius:16px; padding:18px; margin:16px 0; box-shadow:0 10px 30px rgba(0,0,0,.25); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
+    .pill { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:3px 10px; margin:2px 6px 2px 0; color:#bfdbfe; background:#0b1220; font-size:13px; }
+    .ok { color:var(--ok); font-weight:700; }
+    .warn { color:var(--warn); font-weight:700; }
+    code, pre { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    code { background:#020617; padding:2px 5px; border-radius:5px; }
+    pre { white-space:pre-wrap; background:#020617; border:1px solid var(--line); border-radius:12px; padding:14px; overflow:auto; }
+    table { width:100%; border-collapse:collapse; margin:12px 0; }
+    th, td { border:1px solid var(--line); padding:9px 10px; vertical-align:top; }
+    th { background:#0b1220; text-align:left; color:#bae6fd; }
+    a { color:var(--accent); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>T3 Explainer — Redact secrets in relaunch-watcher event persistence</h1>
+  <p class="muted">Branch: <code>reliability/t3-secret-redaction-20260624</code>. Wave 1 Track T3 (secret redaction / log security).</p>
+
+  <section class="card">
+    <h2>Conclusion</h2>
+    <p><strong>The refresh/relaunch watcher subprocess persisted its own events to <code>logs/events.jsonl</code> without redaction, so secret-shaped values could leak into the durable event log.</strong> This PR routes that watcher's inline writer through the existing kernel redactor so <code>stderr_tail</code>, <code>cmdline</code>, and <code>error</code> previews are scrubbed before persistence.</p>
+    <p><span class="pill">single write chokepoint</span><span class="pill">reuses trace_redaction</span><span class="pill">fail-open import</span><span class="pill">fake tokens in tests</span><span class="pill">complementary to PR #315</span></p>
+  </section>
+
+  <section class="card">
+    <h2>Why PR #315 did not already cover this</h2>
+    <p>Open PR <strong>#315</strong> applies <code>lingtai_kernel.trace_redaction.redact_text</code> to the <em>Telegram conversation preview</em> boundaries in <code>src/lingtai/mcp_servers/telegram/manager.py</code>. That is a different surface. It does not touch the kernel's refresh/relaunch path.</p>
+    <p>The in-process logging service (<code>services/logging.py</code> &rarr; <code>CompositeLoggingService.log</code>) already wraps every event in <code>redact_for_trajectory</code> before the JSONL/SQLite write. The gap is that the <strong>relaunch watcher runs in a separate subprocess</strong> and writes <code>events.jsonl</code> through its own inline <code>log()</code>, which never reached that redaction step.</p>
+  </section>
+
+  <section class="card">
+    <h2>The leak path</h2>
+    <p><code>base_agent/lifecycle.py</code> generates a self-contained Python watcher script (run via <code>python -c</code>) that supervises relaunch. Its inline <code>log()</code> appends raw JSON lines to <code>events.jsonl</code>. Three fields carry untrusted text:</p>
+    <table>
+      <tr><th>Field</th><th>Source</th><th>Leak risk</th></tr>
+      <tr><td><code>stderr_tail</code></td><td>last 500 chars of the relaunched process's stderr</td><td>A boot/config traceback can echo an env var or token (e.g. a bot token in a config error).</td></tr>
+      <tr><td><code>cmdline</code></td><td><code>ps -o command=</code> of a duplicate process</td><td>Command line may include a token passed as a CLI argument.</td></tr>
+      <tr><td><code>error</code></td><td><code>str(exc)</code> for spawn/kill failures</td><td>Exception text may quote credential-bearing values.</td></tr>
+    </table>
+    <p>Because these went straight to disk, the durable event log could retain a raw secret even when the live conversation never reprinted it &mdash; the exact persistence hazard <code>trace_redaction</code> exists to prevent.</p>
+  </section>
+
+  <section class="card">
+    <h2>The fix</h2>
+    <p>The watcher's single write chokepoint is its inline <code>log()</code>. We add a redaction step there, mirroring <code>CompositeLoggingService.log</code>'s <code>redact_for_trajectory(event)</code>:</p>
+    <pre>try:
+    from lingtai_kernel.trace_redaction import redact_text as _redact_text
+except Exception:
+    def _redact_text(s):
+        return s
+def _redact_entry(value):
+    if isinstance(value, str):
+        try:
+            return _redact_text(value)
+        except Exception:
+            return value
+    if isinstance(value, dict):
+        return {k: _redact_entry(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_entry(v) for v in value]
+    return value
+def log(typ, **kw):
+    entry = {'type': typ, 'address': addr, 'agent_name': name, 'ts': time.time(), **kw}
+    entry = _redact_entry(entry)
+    ...write json...</pre>
+    <ul>
+      <li><strong>Single source of truth.</strong> The watcher imports the same <code>redact_text</code> the in-process path uses; it does not duplicate the regex set.</li>
+      <li><strong>Fail-open.</strong> If the import or a redaction call ever fails, <code>log()</code> degrades to identity rather than crashing the relaunch supervisor &mdash; redaction must never break recovery.</li>
+      <li><strong>Recursive over the whole entry.</strong> Every string field is scrubbed, so future fields are covered without revisiting each call site.</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2>Tests <span class="ok">(all green)</span></h2>
+    <p>Added to <code>tests/test_perform_refresh_handshake.py</code>. <strong>All token literals are fake, fixed-shape values</strong> used only to exercise the redaction regexes:</p>
+    <ul>
+      <li><code>test_refresh_watcher_script_embeds_redactor</code> &mdash; the generated script wires in <code>trace_redaction</code>/<code>redact_text</code> at the write chokepoint.</li>
+      <li><code>test_refresh_watcher_log_redacts_secret_fields</code> &mdash; executing the generated <code>log()</code> with a fake-token-bearing <code>stderr_tail</code> and <code>cmdline</code> writes a record where no fake token survives and a <code>&lt;REDACTED:*&gt;</code> placeholder appears; records remain valid JSON with <code>type</code>/<code>attempt</code>/<code>pid</code> intact.</li>
+    </ul>
+    <p class="muted">Fake shapes covered: Telegram bot token (<code>123456789:AAA…</code>), <code>Bearer …</code>, <code>sk-…</code> API key, and a keyed env assignment (<code>BOT_TOKEN=…</code>).</p>
+  </section>
+
+  <section class="card">
+    <h2>Scope &amp; review focus</h2>
+    <ul>
+      <li>Kernel-only. Two source-affecting files plus tests and anatomy: <code>base_agent/lifecycle.py</code>, <code>tests/test_perform_refresh_handshake.py</code>, <code>base_agent/ANATOMY.md</code>.</li>
+      <li>No change to the redactor itself, to the in-process logging path, or to PR #315's Telegram surface.</li>
+      <li><strong>Review focus:</strong> confirm the watcher subprocess can import <code>lingtai_kernel.trace_redaction</code> in production (it runs in the same venv that relaunches the agent), and that the fail-open fallback is acceptable if it cannot.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

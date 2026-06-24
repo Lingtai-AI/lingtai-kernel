@@ -675,8 +675,32 @@ def _perform_refresh(
         f"addr = {address!r}\n"
         "MAX_ATTEMPTS = 12\n"
         "HEALTH_CHECK_WAIT = 10\n"
+        # The watcher writes events.jsonl through its own log() below, bypassing
+        # the in-process CompositeLoggingService.redact_for_trajectory. Secret-
+        # shaped values reach these events via stderr_tail (relaunched-process
+        # stderr, e.g. a config traceback echoing a token), cmdline, and error
+        # strings, so redact string fields here before persisting. The kernel
+        # redactor is the single source of truth; fail open to identity if it
+        # cannot be imported so the watcher never crashes over redaction.
+        "try:\n"
+        "    from lingtai_kernel.trace_redaction import redact_text as _redact_text\n"
+        "except Exception:\n"
+        "    def _redact_text(s):\n"
+        "        return s\n"
+        "def _redact_entry(value):\n"
+        "    if isinstance(value, str):\n"
+        "        try:\n"
+        "            return _redact_text(value)\n"
+        "        except Exception:\n"
+        "            return value\n"
+        "    if isinstance(value, dict):\n"
+        "        return {k: _redact_entry(v) for k, v in value.items()}\n"
+        "    if isinstance(value, (list, tuple)):\n"
+        "        return [_redact_entry(v) for v in value]\n"
+        "    return value\n"
         "def log(typ, **kw):\n"
         "    entry = {'type': typ, 'address': addr, 'agent_name': name, 'ts': time.time(), **kw}\n"
+        "    entry = _redact_entry(entry)\n"
         "    try:\n"
         "        with open(events, 'a') as f:\n"
         "            f.write(json.dumps(entry) + '\\n')\n"
