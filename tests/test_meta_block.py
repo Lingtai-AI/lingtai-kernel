@@ -6,6 +6,7 @@ import re
 from types import SimpleNamespace
 
 import pytest
+import lingtai_kernel.meta_block as meta_block
 
 from lingtai_kernel.meta_block import (
     GUIDANCE_KEY,
@@ -110,7 +111,7 @@ def test_build_meta_includes_adapter_comment_when_chat_provides_one():
     assert tail["summary"] == "dynamic summary is not kernel-guessed static"
     assert tail["turns_since_epoch_reset"] == 2
     assert "cache_note" not in tail
-    assert tail["meta_guidance_ref"]["ref"] == "meta_guidance"
+    assert "meta_guidance_ref" not in tail
 
 def test_build_meta_omits_empty_adapter_comment():
     agent = _fake_agent()
@@ -167,7 +168,7 @@ def test_build_meta_counts_current_tool_result_chars_excluding_meta():
 
     current = meta["current_tool_result_chars"]
     expected = len(json.dumps(formal_payload, ensure_ascii=False, default=str))
-    assert "top 10" in current["_readme"]
+    assert "_readme" not in current
     assert current["total_chars"] == expected
     assert current["top_results"] == [
         {
@@ -233,37 +234,29 @@ def test_current_tool_result_chars_entries_include_tool_name_and_no_preview():
     ]
 
 
-def test_current_tool_result_chars_readme_describes_threshold_and_no_preview():
-    agent = _agent_with_history([])
+def test_current_tool_result_chars_tail_omits_readme_and_resident_readme_describes_fields():
+    agent = SimpleNamespace(_conversation=[])
 
     current = current_tool_result_chars(agent)
 
-    readme = current["_readme"]
-    assert "top 10" in readme
-    assert "over 1000 chars" in readme
+    assert current["total_chars"] == 0
+    assert current["top_results"] == []
+    assert "_readme" not in current
+    readme = json.dumps(build_meta_readme())
+    assert "top_results" in readme
     assert "no preview" in readme
     assert "top 5" not in readme
 
-
-def test_current_tool_result_chars_readme_says_no_need_to_summarize_helper():
-    agent = _agent_with_history([])
+def test_current_tool_result_chars_readme_is_resident_not_tail_state():
+    agent = SimpleNamespace(_conversation=[])
 
     current = current_tool_result_chars(agent)
 
-    readme = current["_readme"]
-    # The helper metadata itself does not need summarizing: it only ever
-    # appears on the latest tool result _meta, older copies are stripped.
-    assert "no need to summarize this" in readme
-    assert "latest" in readme
-    # It must still point the agent at the listed results and actively tell it
-    # to summarize prior results that no longer need to stay in full.
-    assert "proactively summarize" in readme
-    assert "useless" in readme
-    assert "no longer needed in full" in readme
-    assert "ids/tool names" in readme
+    assert "_readme" not in current
+    readme = json.dumps(build_meta_readme())
+    assert "proactive summarization" in readme
+    assert "top_results" in readme
     assert "ids/previews" not in readme
-    assert "top 5" not in readme
-
 
 def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
     readme = build_meta_readme()
@@ -399,7 +392,7 @@ def test_slim_adapter_comment_for_tail_trims_ledger_without_static_key_guessing(
     assert slim["maintenance_hint"]["non_urgent_summarize"] == "wait"
     assert "reason" not in slim["maintenance_hint"]
     # A hook points at the resident meta_guidance section.
-    assert slim["meta_guidance_ref"]["ref"] == "meta_guidance"
+    assert "meta_guidance_ref" not in slim
 
 def test_attach_active_runtime_tail_guidance_is_ref_not_full_sections():
     agent = _runtime_agent(total_calls=1)
@@ -460,7 +453,7 @@ def test_attach_active_runtime_tail_adapter_comment_has_no_ledger_rows():
     assert "rows" not in json.dumps(tail)
     assert tail["cache_ledger_summary"] == {"api_calls": 1}
     assert "reason" not in tail["maintenance_hint"]
-    assert tail["meta_guidance_ref"]["ref"] == "meta_guidance"
+    assert "meta_guidance_ref" not in tail
 
 def _fake_agent_with_lang(lang: str, *, time_awareness: bool = True):
     return SimpleNamespace(
@@ -1247,7 +1240,7 @@ def test_attach_active_runtime_refreshes_adapter_comment_at_batch_boundary():
     assert tail["adapter"] == "fake"
     assert tail["next_reset_in"] == 5
     assert "summary" not in tail
-    assert tail["meta_guidance_ref"]["ref"] == "meta_guidance"
+    assert "meta_guidance_ref" not in tail
 
 def test_attach_active_runtime_moves_to_latest_and_clears_prior():
     agent = _runtime_agent(total_calls=1)
@@ -1465,97 +1458,81 @@ def test_build_molt_context_absent_without_psyche():
     assert build_molt_context(agent, 0.95) is None
 
 
-def test_build_molt_context_consider_stage_50_to_70():
-    agent = _molt_agent()
-    for usage in (0.50, 0.55, 0.69):
-        molt = build_molt_context(agent, usage)
-        assert molt is not None, f"expected molt at {usage}"
+def test_build_molt_context_consider_stage_50_to_70(monkeypatch):
+    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.5)
+    monkeypatch.setattr(meta_block, "MOLT_PRESSURE_THRESHOLD", 0.7)
+    monkeypatch.setattr(meta_block, "MOLT_URGENCY_THRESHOLD", 0.9)
+    for usage in (0.5, 0.6, 0.699):
+        molt = build_molt_context(_molt_agent(), usage)
         assert molt["stage"] == "consider"
         assert molt["level"] == "notice"
-        assert molt["usage"] == usage
-        # Strengthened guidance: idle -> proactively molt; shorter context is cheaper.
-        assert "idle" in molt["message"]
-        assert "costs less" in molt["message"]
+        assert molt["usage"] == round(usage, 5)
+        assert molt["manual"] == "psyche-manual"
+        assert "idle" in molt["action"]
+        assert "message" not in molt
+        assert "thresholds" not in molt
 
-
-def test_build_molt_context_strong_stage_70_to_90():
-    agent = _molt_agent()
-    for usage in (0.70, 0.80, 0.89):
-        molt = build_molt_context(agent, usage)
-        assert molt is not None, f"expected molt at {usage}"
+def test_build_molt_context_strong_stage_70_to_90(monkeypatch):
+    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.5)
+    monkeypatch.setattr(meta_block, "MOLT_PRESSURE_THRESHOLD", 0.7)
+    monkeypatch.setattr(meta_block, "MOLT_URGENCY_THRESHOLD", 0.9)
+    for usage in (0.7, 0.8, 0.899):
+        molt = build_molt_context(_molt_agent(), usage)
         assert molt["stage"] == "strong"
         assert molt["level"] == "warning"
-        # Strengthened guidance: idle -> proactively molt; shorter context is cheaper;
-        # summarize-first preserved.
-        assert "idle" in molt["message"]
-        assert "costs less" in molt["message"]
-        assert 'system(action="summarize")' in molt["message"]
+        assert molt["usage"] == round(usage, 5)
+        assert "summarize" in molt["action"]
+        assert "message" not in molt
+        assert "thresholds" not in molt
 
-
-def test_build_molt_context_immediate_stage_90_plus():
-    agent = _molt_agent()
-    for usage in (0.90, 0.95, 1.0, 1.05):  # >100% can happen under overflow trim
-        molt = build_molt_context(agent, usage)
-        assert molt is not None, f"expected molt at {usage}"
+def test_build_molt_context_immediate_stage_90_plus(monkeypatch):
+    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.5)
+    monkeypatch.setattr(meta_block, "MOLT_PRESSURE_THRESHOLD", 0.7)
+    monkeypatch.setattr(meta_block, "MOLT_URGENCY_THRESHOLD", 0.9)
+    for usage in (0.9, 0.95, 1.0):
+        molt = build_molt_context(_molt_agent(), usage)
         assert molt["stage"] == "immediate"
-        assert molt["level"] == "critical"
-        assert molt["message"].startswith("Context is above 90%; act now")
-        assert "do it immediately; otherwise molt now" in molt["message"]
+        assert molt["level"] == "immediate"
+        assert "molt" in molt["action"]
+        assert "message" not in molt
+        assert "thresholds" not in molt
 
+def test_build_molt_context_shape_is_short_with_pointer_not_full_procedure(monkeypatch):
+    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.5)
+    monkeypatch.setattr(meta_block, "MOLT_PRESSURE_THRESHOLD", 0.7)
+    monkeypatch.setattr(meta_block, "MOLT_URGENCY_THRESHOLD", 0.9)
+    molt = build_molt_context(_molt_agent(), 0.55)
 
-def test_build_molt_context_shape_is_short_with_pointer_not_full_procedure():
-    agent = _molt_agent()
-    molt = build_molt_context(agent, 0.92)
-    assert molt is not None
-    # Required fields.
-    for key in ("usage", "stage", "level",
-                "message", "procedure_ref", "manual", "thresholds"):
-        assert key in molt, f"missing {key}"
-    # Pointers to the detailed procedure, not the full text inlined.
-    assert molt["procedure_ref"] == "procedures.md#performing-a-molt"
+    assert set(molt) == {"usage", "level", "stage", "action", "manual"}
     assert molt["manual"] == "psyche-manual"
-    # Message stays short — no long procedural recipe inlined.
-    assert len(molt["message"]) < 200, "molt message must stay short"
-    assert "session_journal_path" not in molt["message"]
-    # Context pressure is a hygiene signal: reduce bulky tool results first
-    # when summarize can bring pressure down; do not overreact to temporary spikes.
-    assert "temporary spikes" in molt["message"].lower()
-    assert 'system(action="summarize")' in molt["message"]
-    # Strengthened guidance: a shorter context is cheaper per turn.
-    assert "costs less" in molt["message"]
-    # Thresholds echo the configured stages.
-    assert molt["thresholds"] == {"consider": 0.5, "strong": 0.7, "immediate": 0.9}
+    assert "pressure" not in molt
+    assert "message" not in molt
+    assert "procedure_ref" not in molt
+    assert "thresholds" not in molt
+    serialized = json.dumps(molt)
+    assert len(serialized) < 200
+    assert "procedures.md#performing-a-molt" not in serialized
 
+def test_build_molt_context_ignores_legacy_molt_prompt(monkeypatch):
+    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.5)
+    monkeypatch.setattr(meta_block, "MOLT_PRESSURE_THRESHOLD", 0.7)
+    monkeypatch.setattr(meta_block, "MOLT_URGENCY_THRESHOLD", 0.9)
+    molt = build_molt_context(_molt_agent(), 0.55)
 
-def test_build_molt_context_ignores_legacy_molt_prompt():
-    """A stale molt_prompt on the config must be ignored — the context.molt
-    message is always the hardcoded runtime default now (Jason #4140)."""
-    agent = _molt_agent()
-    # Simulate a legacy config that still carries a molt_prompt attribute.
-    agent._config.molt_prompt = "ship it: molt now please"
-    molt = build_molt_context(agent, 0.93)
-    assert molt is not None
-    # The hardcoded default message is used, NOT the stale override.
-    assert molt["message"] != "ship it: molt now please"
-    assert "Context is above 90%" in molt["message"]
+    assert "Now is the time" not in molt["action"]
+    assert "molt" in molt["action"]
+    assert "message" not in molt
 
+def test_build_molt_context_ignores_legacy_custom_thresholds(monkeypatch):
+    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.5)
+    monkeypatch.setattr(meta_block, "MOLT_PRESSURE_THRESHOLD", 0.7)
+    monkeypatch.setattr(meta_block, "MOLT_URGENCY_THRESHOLD", 0.9)
 
-def test_build_molt_context_ignores_legacy_custom_thresholds():
-    # Stale/custom config thresholds must not shift the kernel-owned stage
-    # boundaries.  Old init/config fields are accepted for compatibility but
-    # ignored at runtime.
-    agent = _molt_agent(notice=0.6, strong=0.8, immediate=0.95)
-
-    assert build_molt_context(agent, 0.49) is None
-    assert build_molt_context(agent, 0.55)["stage"] == "consider"
-    assert build_molt_context(agent, 0.70)["stage"] == "strong"
-    assert build_molt_context(agent, 0.90)["stage"] == "immediate"
-    assert build_molt_context(agent, 0.55)["thresholds"] == {
-        "consider": 0.5,
-        "strong": 0.7,
-        "immediate": 0.9,
-    }
-
+    assert build_molt_context(_molt_agent(), 0.499) is None
+    assert build_molt_context(_molt_agent(), 0.5)["stage"] == "consider"
+    assert build_molt_context(_molt_agent(), 0.7)["stage"] == "strong"
+    assert build_molt_context(_molt_agent(), 0.9)["stage"] == "immediate"
+    assert "thresholds" not in build_molt_context(_molt_agent(), 0.9)
 
 def test_build_meta_attaches_context_molt_only_above_threshold():
     """build_meta integrates build_molt_context: context.molt is absent below

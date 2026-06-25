@@ -271,7 +271,7 @@ def slim_adapter_comment_for_tail(
     if not comment:
         return None
     if not isinstance(comment, Mapping):
-        return {"note": str(comment), "meta_guidance_ref": build_meta_guidance_ref()}
+        return {"note": str(comment)}
 
     slim: dict[str, Any] = dict(comment)
     ledger = slim.pop("cache_ledger", None)
@@ -300,8 +300,6 @@ def slim_adapter_comment_for_tail(
         else:
             slim.pop("maintenance_hint", None)
 
-    if slim:
-        slim.setdefault("meta_guidance_ref", build_meta_guidance_ref())
     return slim or None
 
 
@@ -363,7 +361,6 @@ def current_tool_result_chars(agent, extra_results=()) -> dict:
 
     top.sort(key=lambda item: item["chars"], reverse=True)
     return {
-        "_readme": TOOL_RESULT_CHARS_README,
         "total_chars": total,
         "top_results": top[:TOOL_RESULT_CHARS_TOP_N],
     }
@@ -403,11 +400,11 @@ def build_meta_readme() -> dict:
             "active_turn_tool_calls, current_tool_result_chars, optional "
             "adapter_comment). Latest tool result only; older copies are "
             "stripped as newer results arrive. current_tool_result_chars is "
-            "a dict with total_chars and the top tool results over 1000 chars "
-            "(id, tool_name, chars; no preview) that are proactive "
+            "a compact dict with total_chars and top_results "
+            "(id, tool_name, chars; no preview) for proactive "
             "summarization candidates. adapter_comment is a small "
             "provider/adapter-authored note carrying only dynamic per-turn "
-            "runtime scalars plus a meta_guidance_ref; the adapter's static "
+            "runtime scalars; the adapter's static "
             "rules live in the system-prompt section meta_guidance."
         ),
         GUIDANCE_KEY: (
@@ -528,22 +525,8 @@ META_GUIDANCE_SECTION_ID = "meta_guidance"
 
 
 def build_meta_guidance_ref() -> dict:
-    """Return the lightweight ``_meta.guidance`` hook for the latest tool result.
-
-    The full guidance sections + ``_meta`` readme are resident in the
-    ``meta_guidance`` system-prompt section, so the tail only needs a pointer
-    rather than the whole appendix re-stamped each turn.
-    """
-    return {
-        "ref": META_GUIDANCE_SECTION_ID,
-        "note": (
-            "Kernel guidance (summarize/molt practice, the _meta envelope readme, "
-            "and any adapter runtime rules) is resident in the system prompt "
-            "section meta_guidance; see that section. Dynamic per-result state "
-            "stays under _meta.agent_meta."
-        ),
-    }
-
+    """Return the lightweight ``_meta.guidance`` hook for the latest tool result."""
+    return {"ref": META_GUIDANCE_SECTION_ID}
 
 def _render_guidance_sections_markdown(guidance: dict) -> list[str]:
     """Render guidance.sections (incl. meta_readme) as Markdown subsections."""
@@ -687,63 +670,35 @@ def build_runtime_guidance() -> dict:
 
 
 def build_molt_context(agent, usage: float) -> dict | None:
-    """Return `_meta.agent_meta.context.molt` for context pressure, if needed.
-
-    Molt pressure is agent state, not a dismissible notification. Keep the
-    payload short and progressively disclosed: enough stage/action text for the
-    model to act, plus pointers to the detailed molt procedure.
-    """
-    if "psyche" not in getattr(agent, "_intrinsics", {}):
+    """Return compact `_meta.agent_meta.context.molt` pressure guidance."""
+    if "psyche" not in getattr(agent, "_intrinsics", set()):
         return None
-    if usage < 0:
+    try:
+        pressure = float(usage)
+    except Exception:
         return None
-    # Thresholds are kernel-owned constants.  Legacy config/init fields
-    # (molt_notice/molt_pressure/molt_urgency) are tolerated elsewhere for
-    # backward compatibility but must not affect runtime pressure stages.
-    notice = MOLT_NOTICE_THRESHOLD
-    strong = MOLT_PRESSURE_THRESHOLD
-    immediate = MOLT_URGENCY_THRESHOLD
-    if usage < notice:
+    if pressure < MOLT_NOTICE_THRESHOLD:
         return None
 
-    if usage >= immediate:
+    if pressure >= MOLT_URGENCY_THRESHOLD:
+        level = "immediate"
         stage = "immediate"
-        level = "critical"
-        default_message = (
-            "Context is above 90%; act now. If system(action=\"summarize\") can quickly "
-            "lower pressure, do it immediately; otherwise molt now. Shorter context "
-            "costs less. Temporary spikes are not the issue."
-        )
-    elif usage >= strong:
-        stage = "strong"
+        action = "tend_stores_then_molt_now"
+    elif pressure >= MOLT_PRESSURE_THRESHOLD:
         level = "warning"
-        default_message = (
-            "Context is above 70%; use system(action=\"summarize\") first if it lowers "
-            "pressure, else molt soon. If idle with no pending work, molt now — "
-            "shorter context costs less. Ignore temporary spikes."
-        )
+        stage = "strong"
+        action = "summarize_noisy_results_and_prepare_molt"
     else:
-        stage = "consider"
         level = "notice"
-        default_message = (
-            "Context is above 50%; if idle with no pending work, molt now proactively — "
-            "shorter context costs less. Else use system(action=\"summarize\") first if "
-            "it lowers pressure. Ignore temporary spikes."
-        )
+        stage = "consider"
+        action = "molt_if_idle_or_summarize_first"
 
     return {
-        "usage": usage,
-        "pressure": usage,
+        "usage": round(pressure, 5),
         "level": level,
         "stage": stage,
-        "message": default_message,
-        "procedure_ref": "procedures.md#performing-a-molt",
+        "action": action,
         "manual": "psyche-manual",
-        "thresholds": {
-            "consider": notice,
-            "strong": strong,
-            "immediate": immediate,
-        },
     }
 
 def build_meta(agent) -> dict:
