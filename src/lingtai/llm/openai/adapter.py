@@ -2944,22 +2944,29 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 "non_urgent_summarize": "ok",
                 "reason": "no full epoch in the last 20 Codex API calls",
             }
-        wait_remaining = max(0, 5 - int(last_ws_full_api_calls_ago))
+        delayed_summarize_min_api_calls = 10
+        wait_remaining = max(
+            0, delayed_summarize_min_api_calls - int(last_ws_full_api_calls_ago)
+        )
         if wait_remaining > 0:
             return {
                 "non_urgent_summarize": "wait",
-                "wait_until_last_ws_full_api_calls_ago": 5,
+                "wait_until_last_ws_full_api_calls_ago": delayed_summarize_min_api_calls,
                 "wait_api_calls_remaining": wait_remaining,
                 "reason": (
                     f"last full epoch was {last_ws_full_api_calls_ago} API calls ago; "
-                    f"wait {wait_remaining} more if not urgent"
+                    f"wait {wait_remaining} more if context pressure is low"
                 ),
             }
         return {
             "non_urgent_summarize": "ok",
-            "wait_until_last_ws_full_api_calls_ago": 5,
+            "wait_until_last_ws_full_api_calls_ago": delayed_summarize_min_api_calls,
             "wait_api_calls_remaining": 0,
-            "reason": f"last full epoch was {last_ws_full_api_calls_ago} API calls ago",
+            "reason": (
+                f"last full epoch was {last_ws_full_api_calls_ago} API calls ago; "
+                "delayed summarize window satisfied; prefer batching multiple "
+                "already-consumed results when practical"
+            ),
         }
 
     def adapter_comment(self) -> dict[str, Any] | None:
@@ -3001,10 +3008,13 @@ class CodexResponsesSession(OpenAIResponsesSession):
             "Summarize rewrites older tool-result payloads, compacts redundant "
             "carried-forward context, and can break Codex's previous_response_id/"
             "incremental prefix; the next request must open a fresh full epoch, "
-            "usually causing more cache miss. Wait until >=5 API calls after the "
-            "last full epoch before non-urgent summarize. Notification dismiss is "
-            "only notification cleanup: it does not compact redundant context and "
-            "does not trigger a full epoch reset."
+            "usually causing more cache miss. When context pressure is low, "
+            "prefer delaying non-urgent summarize until >=10 API calls after the "
+            "last full epoch, then batch multiple already-consumed long tool "
+            "results into one summarize call when practical. If context pressure "
+            "is high or a noisy result blocks work, summarize immediately. "
+            "Notification dismiss is only notification cleanup: it does not "
+            "compact redundant context and does not trigger a full epoch reset."
         )
         cache_ledger = self._ws_cache_ledger_comment()
         last_full = cache_ledger["last_full"]

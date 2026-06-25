@@ -1003,7 +1003,9 @@ def test_codex_adapter_comment_explains_epoch_reset_and_cache_ledger():
     assert comment["summarize_ws_full_note"] == note
     assert "full epoch" in note
     assert "incremental prefix" in note
-    assert ">=5 API calls" in note
+    assert ">=10 API calls" in note
+    assert "batch multiple" in note
+    assert "context pressure" in note
     assert "cache miss" in note
     assert "Summarize" in note
     assert "Notification dismiss" in note
@@ -1060,8 +1062,9 @@ def test_codex_adapter_comment_reports_compact_cache_ledger():
     assert comment["last_ws_full_api_calls_ago"] == 0
     assert comment["last_ws_full_reason"] == "pm"
     assert comment["maintenance_hint"]["non_urgent_summarize"] == "wait"
-    assert comment["maintenance_hint"]["wait_api_calls_remaining"] == 5
-    assert "wait 5 more" in comment["maintenance_hint"]["reason"]
+    assert comment["maintenance_hint"]["wait_api_calls_remaining"] == 10
+    assert "wait 10 more" in comment["maintenance_hint"]["reason"]
+    assert "context pressure is low" in comment["maintenance_hint"]["reason"]
 
     ledger = comment["cache_ledger"]
     assert ledger["recorded_api_calls"] == 3
@@ -1102,7 +1105,7 @@ def test_codex_send_populates_cache_ledger_end_to_end():
     assert comment["last_ws_full_api_calls_ago"] == 1
     assert comment["last_ws_full_reason"] == "nb"
     assert comment["maintenance_hint"]["non_urgent_summarize"] == "wait"
-    assert comment["maintenance_hint"]["wait_api_calls_remaining"] == 4
+    assert comment["maintenance_hint"]["wait_api_calls_remaining"] == 9
 
     ledger = comment["cache_ledger"]
     assert ledger["recorded_api_calls"] == 2
