@@ -1122,9 +1122,8 @@ class DaemonManager:
         provider_key = str(provider).lower()
         bucket = dict(base_defaults or {})
         if provider_key == "codex":
-            # A manifest-level fixed id is an agent-level override; daemon traffic
-            # must still use the daemon run identity so it gets its own cache slot.
-            bucket.pop("codex_session_id", None)
+            # Daemon traffic must use the daemon run identity so it gets its own
+            # cache slot, not the parent agent's anchor.
             bucket["codex_session_anchor"] = self._daemon_codex_session_anchor(run_dir)
         if not bucket:
             return None
@@ -1137,7 +1136,6 @@ class DaemonManager:
             "api_compat",
             "base_url",
             "codex_auth_path",
-            "codex_session_id",
             "codex_session_anchor",
             "codex_thread_salt",
             "compact_threshold",

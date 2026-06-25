@@ -1160,7 +1160,7 @@ class Agent(BaseAgent):
             new_provider.lower() == "codex" and saved_interface is not None
         )
         # Compare the resolved provider-defaults bucket as a whole so explicit
-        # init.json changes (codex_session_id/anchor, default_headers,
+        # init.json changes (codex_session_anchor, default_headers,
         # compact_threshold, max_rpm, api_compat, etc.) rebuild coherently.
         if (
             codex_force_rebuild

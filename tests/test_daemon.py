@@ -668,7 +668,6 @@ def test_run_emanation_codex_parent_gets_daemon_cache_anchor(tmp_path, monkeypat
     agent.service._provider_defaults = {
         "codex": {
             "max_rpm": 7,
-            "codex_session_id": "parent-fixed-id",
             "codex_session_anchor": str((agent._working_dir / "init.json").resolve()),
         }
     }
@@ -721,7 +720,6 @@ def test_run_emanation_codex_parent_gets_daemon_cache_anchor(tmp_path, monkeypat
     defaults = captured["init"]["provider_defaults"]
     assert defaults["codex"]["max_rpm"] == 7
     assert defaults["codex"]["codex_session_anchor"] == str((run_dir.path / "daemon.json").resolve())
-    assert "codex_session_id" not in defaults["codex"]
 
 
 def test_run_emanation_non_codex_parent_builds_fresh_daemon_service(tmp_path, monkeypatch):
@@ -847,7 +845,6 @@ def test_run_emanation_codex_preset_gets_daemon_cache_anchor(tmp_path, monkeypat
             "base_url": "https://chatgpt.com/backend-api/codex",
             "api_key": "ignored-by-fake",
             "max_rpm": 11,
-            "codex_session_id": "preset-fixed-id",
             "compact_threshold": None,
         },
     )
@@ -860,7 +857,6 @@ def test_run_emanation_codex_preset_gets_daemon_cache_anchor(tmp_path, monkeypat
     assert defaults["codex"]["max_rpm"] == 11
     assert defaults["codex"]["compact_threshold"] is None
     assert defaults["codex"]["codex_session_anchor"] == str((run_dir.path / "daemon.json").resolve())
-    assert "codex_session_id" not in defaults["codex"]
 
 
 def test_run_emanation_dispatches_tools(tmp_path, monkeypatch):
@@ -2749,9 +2745,9 @@ def test_daemon_llm_defaults_carries_codex_auth_path():
 def test_daemon_provider_defaults_preserves_codex_auth_path(tmp_path):
     """Daemon-scoped Codex defaults keep the agent's ``codex_auth_path``.
 
-    The daemon overrides the cache-affinity anchor (per-run slot) and drops a
-    manifest-level fixed session id, but the chosen token file must survive so
-    daemon traffic authenticates against the same Codex account.
+    The daemon overrides the cache-affinity anchor with the per-run daemon path
+    (its own cache slot), but the chosen token file must survive so daemon
+    traffic authenticates against the same Codex account.
     """
     from types import SimpleNamespace
 
@@ -2764,13 +2760,12 @@ def test_daemon_provider_defaults_preserves_codex_auth_path(tmp_path):
         "codex",
         {
             "codex_auth_path": "/secrets/alice/codex-auth.json",
-            "codex_session_id": "fixed-id-should-be-dropped",
+            "codex_session_anchor": "/agents/alice/init.json",
         },
         run_dir,
     )
     assert out["codex"]["codex_auth_path"] == "/secrets/alice/codex-auth.json"
-    # Per-run anchor replaces any manifest-level fixed id.
-    assert "codex_session_id" not in out["codex"]
+    # The per-run daemon anchor replaces the parent agent's anchor.
     assert out["codex"]["codex_session_anchor"] == str(
         (run_dir.path / "daemon.json").resolve()
     )

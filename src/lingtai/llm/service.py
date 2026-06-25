@@ -59,19 +59,18 @@ def _generate_tool_call_id() -> str:
 # api_compat="anthropic" custom providers (e.g. local GLM proxies) to
 # OpenAIAdapter, which then explodes on raw.choices access. See
 # Lingtai-AI/lingtai#112 for the full failure trace.
-# ``codex_session_id`` / ``codex_session_anchor`` / ``codex_thread_salt`` carry
-# the agent's per-agent Codex identity down to the adapter, which lets the Codex
-# REST path send stable ``session_id`` / ``thread_id`` cache-affinity headers
-# (issue #378; the underscore spelling is mandatory — the Codex backend matches
-# the literal key, and a hyphenated ``session-id`` / ``thread-id`` would lose
-# cache affinity). The adapter layer has no per-agent identity of its own, so the
-# ``codex_session_anchor`` is normally populated *automatically* for Codex
-# agents from the agent path (see ``build_provider_defaults_from_manifest_llm``);
-# the adapter derives an 8-char agent-path hash from it and uses that value
-# byte-identically for session_id, thread_id, and prompt_cache_key.
-# ``codex_session_id`` / ``codex_thread_salt`` remain available as an internal
-# override / testing escape hatch when set on the manifest ``llm`` block
-# directly. The default path no longer injects ``codex_thread_salt``; the salt
+# ``codex_session_anchor`` / ``codex_thread_salt`` carry the agent's per-agent
+# Codex identity down to the adapter, which lets the Codex REST path send
+# ``session_id`` / ``thread_id`` cache-affinity headers (issue #378; the
+# underscore spelling is mandatory — the Codex backend matches the literal key,
+# and a hyphenated ``session-id`` / ``thread-id`` would lose cache affinity). The
+# adapter layer has no per-agent identity of its own, so the
+# ``codex_session_anchor`` is populated *automatically* for Codex agents from the
+# agent path (see ``build_provider_defaults_from_manifest_llm``); the adapter
+# derives an 8-char ``(agent-path, molt_count)`` hash from it and uses that value
+# byte-identically for session_id, thread_id, and prompt_cache_key. There is no
+# operator-level fixed-id override: the identity is always the anchor+molt hash.
+# ``codex_thread_salt`` remains available as a legacy manifest pass-through but
 # no longer derives a separate thread id (the thread tracks the session id), and
 # nothing reads the token ledger to pick the Codex identity.
 #
@@ -94,7 +93,6 @@ def _generate_tool_call_id() -> str:
 # omitted by the factory (legacy default-path behavior).
 _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     "api_compat",
-    "codex_session_id",
     "codex_session_anchor",
     "codex_thread_salt",
     "codex_auth_path",
@@ -123,15 +121,15 @@ def build_provider_defaults_from_manifest_llm(
     When ``working_dir`` is given and the provider is Codex, the agent's
     per-agent Codex identity is injected by default: the ``codex_session_anchor``
     is the resolved ``init.json`` path (the agent's durable identity anchor). The
-    adapter derives an 8-char agent-path hash from that anchor and uses it
-    byte-identically for ``session_id``, ``thread_id``, and ``prompt_cache_key``.
-    This is the normal path — neither opt-in nor opt-out; a Codex agent gets
-    stable cache-affinity values out of the box. Crucially, this no longer reads
-    the token ledger / ``api_call_id`` or molt time: the same ``working_dir``
-    yields the same defaults regardless of ledger contents, so ordinary calls,
-    refresh/rebuild, molt, and clear (same agent path) never rotate the values.
-    An explicit ``codex_session_id`` / ``codex_session_anchor`` on the manifest
-    ``llm`` block still wins (internal override / testing escape hatch).
+    adapter derives an 8-char ``(agent-path, molt_count)`` hash from that anchor
+    and uses it byte-identically for ``session_id``, ``thread_id``, and
+    ``prompt_cache_key``. This is the normal path — neither opt-in nor opt-out; a
+    Codex agent gets cache-affinity values out of the box. This no longer reads
+    the token ledger / ``api_call_id`` or molt time: the values depend only on the
+    agent path and the current ``molt_count``, so ordinary calls, refresh/rebuild,
+    and clear (same agent path, same molt_count) never rotate them; a molt advances
+    them. An explicit ``codex_session_anchor`` on the manifest ``llm`` block still
+    wins (internal override / testing escape hatch).
     """
     provider_key = llm["provider"].lower()
     per_provider: dict = {}
@@ -151,16 +149,15 @@ def build_provider_defaults_from_manifest_llm(
             per_provider[key] = llm[key]
 
     # Default per-agent Codex identity from the agent path only. The adapter
-    # hashes this anchor to one 8-char value shared by session_id, thread_id,
-    # and prompt_cache_key. Manifest-supplied values (handled above) take
-    # precedence; we only fill the gap so the override/testing escape hatch
-    # still works. No token ledger / molt time is consulted.
+    # hashes this anchor together with the current molt_count into one 8-char
+    # value shared by session_id, thread_id, and prompt_cache_key. A
+    # manifest-supplied ``codex_session_anchor`` (handled above) takes precedence;
+    # we only fill the gap. No token ledger / molt time is consulted.
     if provider_key == "codex" and working_dir is not None:
-        if "codex_session_id" not in per_provider:
-            per_provider.setdefault(
-                "codex_session_anchor",
-                str((working_dir / "init.json").resolve()),
-            )
+        per_provider.setdefault(
+            "codex_session_anchor",
+            str((working_dir / "init.json").resolve()),
+        )
 
     return {provider_key: per_provider} if per_provider else None
 

@@ -93,7 +93,7 @@ def test_codex_configured_base_url_preserves_session_anchor_identity():
     The pool routes later using the existing ``prompt_cache_key`` /
     ``session_id`` / ``thread_id`` identity emitted by the Codex adapter. A
     configured base_url alongside a ``codex_session_anchor`` must leave that
-    identity (the 8-char agent-path hash) untouched.
+    identity (the 8-char agent-path + molt-count hash) untouched.
     """
     from lingtai.llm.openai.adapter import _codex_session_id
 
@@ -111,10 +111,11 @@ def test_codex_configured_base_url_preserves_session_anchor_identity():
         )
         adapter = svc.get_adapter("codex", pool_url)
 
-        # Endpoint is the pool; identity is still the pure agent-path hash.
+        # Endpoint is the pool; identity is still the per-agent hash of
+        # (anchor, molt_count). No real .agent.json here, so molt_count is 0.
         assert _client_base_url(adapter) == pool_url
         sid, tid = adapter._resolve_codex_ids("gpt-5.5")
-        assert sid == tid == _codex_session_id(anchor)
+        assert sid == tid == _codex_session_id(anchor, 0)
 
 
 def test_codex_configured_base_url_preserves_auth_path_selection():

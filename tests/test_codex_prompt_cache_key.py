@@ -360,7 +360,7 @@ def test_codex_headers_differ_for_different_agents():
     hb = b._client.responses.kwargs[0]["extra_headers"]
     assert ha["session_id"] != hb["session_id"]
     assert ha["thread_id"] != hb["thread_id"]
-    # Each agent's three values are internally identical (the agent-path hash).
+    # Each agent's three values are internally identical (the agent-path + molt-count hash).
     assert ha["session_id"] == ha["thread_id"]
     assert hb["session_id"] == hb["thread_id"]
 
@@ -416,22 +416,6 @@ def test_codex_rest_omits_previous_response_id_with_anchored_thread():
     assert sent["prompt_cache_key"] == expected
 
 
-def test_codex_explicit_session_id_used_verbatim_for_all_three():
-    explicit = "11111111-2222-3333-4444-555555555555"
-    session = _create_codex_session_cfg(
-        [_completed()], codex_session_id=explicit
-    )
-
-    session.send("x")
-
-    sent = session._client.responses.kwargs[0]
-    headers = sent["extra_headers"]
-    # Explicit id is used byte-identically for session, thread, and cache key.
-    assert headers["session_id"] == explicit
-    assert headers["thread_id"] == explicit
-    assert sent["prompt_cache_key"] == explicit
-
-
 def test_codex_explicit_prompt_cache_key_override_drives_all_three_with_anchor():
     """An adapter-level ``prompt_cache_key`` override + anchor → all three equal.
 
@@ -456,17 +440,107 @@ def test_codex_explicit_prompt_cache_key_override_drives_all_three_with_anchor()
     assert sent["extra_headers"]["thread_id"] == override
 
 
-def test_codex_explicit_session_id_wins_over_anchor():
-    explicit = "11111111-2222-3333-4444-555555555555"
-    session = _create_codex_session_cfg(
-        [_completed()],
-        codex_session_id=explicit,
-        codex_session_anchor="/agents/alice/init.json",
+# ---------------------------------------------------------------------------
+# Cache-affinity id derives from (agent anchor + current molt_count) and
+# refreshes per request — molt does not rebuild the adapter, so a live
+# molt_count change must move the outgoing session_id/thread_id/prompt_cache_key.
+# There is no operator-level fixed-id override; identity is always anchor+molt.
+# ---------------------------------------------------------------------------
+
+
+def _build_codex_adapter(events, **adapter_kw):
+    """Build a Codex adapter (no create_chat) with a fake client wired in."""
+    adapter = CodexOpenAIAdapter(
+        api_key="fake",
+        base_url="http://fake",
+        use_responses=True,
+        force_responses=True,
+        **adapter_kw,
+    )
+    adapter._client = FakeClient(events)
+    return adapter
+
+
+def test_codex_id_same_anchor_same_molt_count_is_stable():
+    """Same anchor + same molt_count -> identical session/thread/cache-key id."""
+    anchor = "/agents/alice/init.json"
+    a = _create_codex_session_cfg(
+        [_completed()], codex_session_anchor=anchor, codex_molt_count=2
+    )
+    b = _create_codex_session_cfg(
+        [_completed()], codex_session_anchor=anchor, codex_molt_count=2
     )
 
-    session.send("x")
+    a.send("x")
+    b.send("x")
 
-    assert session._client.responses.kwargs[0]["extra_headers"]["session_id"] == explicit
+    ha = a._client.responses.kwargs[0]
+    hb = b._client.responses.kwargs[0]
+    expected = _expected_codex_hash(anchor, 2)
+    assert ha["extra_headers"]["session_id"] == expected
+    assert ha["extra_headers"]["thread_id"] == expected
+    assert ha["prompt_cache_key"] == expected
+    assert hb["extra_headers"]["session_id"] == expected
+    assert hb["prompt_cache_key"] == expected
+
+
+def test_codex_id_differs_for_different_molt_count():
+    """Same anchor + different molt_count -> different id (across all three)."""
+    anchor = "/agents/alice/init.json"
+    m0 = _create_codex_session_cfg(
+        [_completed()], codex_session_anchor=anchor, codex_molt_count=0
+    )
+    m1 = _create_codex_session_cfg(
+        [_completed()], codex_session_anchor=anchor, codex_molt_count=1
+    )
+
+    m0.send("x")
+    m1.send("x")
+
+    s0 = m0._client.responses.kwargs[0]
+    s1 = m1._client.responses.kwargs[0]
+    assert s0["extra_headers"]["session_id"] == _expected_codex_hash(anchor, 0)
+    assert s1["extra_headers"]["session_id"] == _expected_codex_hash(anchor, 1)
+    assert s0["extra_headers"]["session_id"] != s1["extra_headers"]["session_id"]
+    assert s0["extra_headers"]["thread_id"] != s1["extra_headers"]["thread_id"]
+    assert s0["prompt_cache_key"] != s1["prompt_cache_key"]
+
+
+def test_codex_id_refreshes_when_agent_json_molt_count_changes(tmp_path):
+    """A live molt (``.agent.json`` molt_count advances) moves the outgoing ids.
+
+    Molt does NOT rebuild the adapter, so the id must be re-derived per request
+    from the live ``.agent.json``. The SAME adapter, sending again after the file
+    advances, emits a different session_id/thread_id/prompt_cache_key.
+    """
+    anchor = str(tmp_path / "init.json")
+    agent_json = tmp_path / ".agent.json"
+    agent_json.write_text(json.dumps({"molt_count": 0}), encoding="utf-8")
+
+    adapter = _build_codex_adapter(
+        [_completed(), _completed()], codex_session_anchor=anchor
+    )
+
+    first = adapter.create_chat(
+        "gpt-5.5", "system prompt", tools=[_function_schema()], force_tool_call=True
+    )
+    first.send("before molt")
+
+    # Molt boundary: molt_count advances on disk, adapter NOT rebuilt.
+    agent_json.write_text(json.dumps({"molt_count": 1}), encoding="utf-8")
+
+    second = adapter.create_chat(
+        "gpt-5.5", "system prompt", tools=[_function_schema()], force_tool_call=True
+    )
+    second.send("after molt")
+
+    s0 = adapter._client.responses.kwargs[0]
+    s1 = adapter._client.responses.kwargs[1]
+    assert s0["extra_headers"]["session_id"] == _expected_codex_hash(anchor, 0)
+    assert s1["extra_headers"]["session_id"] == _expected_codex_hash(anchor, 1)
+    assert s0["extra_headers"]["session_id"] != s1["extra_headers"]["session_id"]
+    assert s0["extra_headers"]["thread_id"] != s1["extra_headers"]["thread_id"]
+    assert s0["prompt_cache_key"] != s1["prompt_cache_key"]
 
 
 def test_codex_session_normalizes_mismatched_ids_to_one_effective_value():
@@ -619,15 +693,16 @@ def test_codex_account_id_does_not_affect_cache_affinity():
 
     Regression guard: the ChatGPT-Account-ID plumbing must not perturb the
     cache-affinity identity (issue #378) in any way."""
-    explicit = "11111111-2222-3333-4444-555555555555"
+    anchor = "/agents/alice/init.json"
+    expected = _expected_codex_hash(anchor)
     with_acct = _create_codex_session_cfg(
         [_completed()],
-        codex_session_id=explicit,
+        codex_session_anchor=anchor,
         codex_account_id=_TEST_ACCOUNT_ID,
     )
     without_acct = _create_codex_session_cfg(
         [_completed()],
-        codex_session_id=explicit,
+        codex_session_anchor=anchor,
     )
 
     with_acct.send("x")
@@ -637,12 +712,12 @@ def test_codex_account_id_does_not_affect_cache_affinity():
     h_without = without_acct._client.responses.kwargs[0]["extra_headers"]
     # The cache-affinity headers + body key are identical with and without the
     # account header.
-    assert h_with["session_id"] == h_without["session_id"] == explicit
-    assert h_with["thread_id"] == h_without["thread_id"] == explicit
+    assert h_with["session_id"] == h_without["session_id"] == expected
+    assert h_with["thread_id"] == h_without["thread_id"] == expected
     assert (
         with_acct._client.responses.kwargs[0]["prompt_cache_key"]
         == without_acct._client.responses.kwargs[0]["prompt_cache_key"]
-        == explicit
+        == expected
     )
 
 
@@ -684,7 +759,7 @@ def test_codex_session_account_id_used_verbatim_on_direct_construction():
 
 
 def test_manifest_config_keys_pass_through_to_provider_defaults():
-    """codex_session_id/anchor/thread_salt survive the manifest->defaults map."""
+    """codex_session_anchor/thread_salt survive the manifest->defaults map."""
     import lingtai  # noqa: F401  (registers adapters / loads service module)
     from lingtai.llm.service import build_provider_defaults_from_manifest_llm
 
@@ -729,9 +804,10 @@ def test_codex_factory_builds_adapter_with_per_agent_ids():
         )
         adapter = svc.get_adapter("codex")
         sid, tid = adapter._resolve_codex_ids("gpt-5.5")
-        # session_id == thread_id == a PURE per-agent hash of the anchor
-        # (no epoch, no time). The thread tracks the session.
-        assert sid == tid == _codex_session_id(anchor)
+        # session_id == thread_id == a per-agent hash of (anchor, molt_count).
+        # No real .agent.json here, so molt_count is 0. The thread tracks the
+        # session.
+        assert sid == tid == _codex_session_id(anchor, 0)
 
         # No config -> the safe default: no per-agent identity, no headers.
         svc2 = LLMService(provider="codex", model="gpt-5.5")
@@ -950,8 +1026,8 @@ def test_default_wiring_session_anchor_differs_by_agent_path(tmp_path):
     )["codex"]
 
     assert da["codex_session_anchor"] != db["codex_session_anchor"]
-    assert _codex_session_id(da["codex_session_anchor"]) != _codex_session_id(
-        db["codex_session_anchor"]
+    assert _codex_session_id(da["codex_session_anchor"], 0) != _codex_session_id(
+        db["codex_session_anchor"], 0
     )
 
 
@@ -973,24 +1049,42 @@ def test_default_wiring_session_id_stable_across_rebuilds(tmp_path):
     )["codex"]
 
     assert d0["codex_session_anchor"] == d1["codex_session_anchor"]
-    assert _codex_session_id(d0["codex_session_anchor"]) == _codex_session_id(
-        d1["codex_session_anchor"]
+    assert _codex_session_id(d0["codex_session_anchor"], 0) == _codex_session_id(
+        d1["codex_session_anchor"], 0
     )
 
 
 def test_codex_session_id_is_8_char_lowercase_hex_sha256_prefix():
-    """The shared id is sha256(anchor).hexdigest()[:8], lowercase hex."""
+    """The shared id is sha256(f"{anchor}\\0{molt_count}").hexdigest()[:8]."""
     import hashlib
 
     from lingtai.llm.openai.adapter import _codex_session_id
 
     anchor = "/agents/alice/init.json"
-    expected = hashlib.sha256(anchor.encode("utf-8")).hexdigest()[:8]
-    got = _codex_session_id(anchor)
+    expected = hashlib.sha256(f"{anchor}\0{0}".encode("utf-8")).hexdigest()[:8]
+    got = _codex_session_id(anchor, 0)
     assert got == expected
     assert len(got) == 8
     assert got == got.lower()
     assert all(c in "0123456789abcdef" for c in got)
+
+
+def test_codex_session_id_same_anchor_same_molt_count_is_stable():
+    """Same (anchor, molt_count) -> same id, every time."""
+    from lingtai.llm.openai.adapter import _codex_session_id
+
+    anchor = "/agents/alice/init.json"
+    assert _codex_session_id(anchor, 3) == _codex_session_id(anchor, 3)
+
+
+def test_codex_session_id_changes_with_molt_count():
+    """Same anchor, different molt_count -> different id (molt re-rolls the slot)."""
+    from lingtai.llm.openai.adapter import _codex_session_id
+
+    anchor = "/agents/alice/init.json"
+    ids = {_codex_session_id(anchor, mc) for mc in range(5)}
+    # Five distinct molt counts produce five distinct ids (no accidental reuse).
+    assert len(ids) == 5
 
 
 # ---------------------------------------------------------------------------
@@ -1113,17 +1207,19 @@ def test_token_ledger_entry_merges_usage_extra(tmp_path):
     assert entry["input"] == 10 and entry["cached"] == 8
 
 
-def _expected_codex_hash(anchor: str) -> str:
-    """The expected root/main Codex id for a per-agent anchor.
+def _expected_codex_hash(anchor: str, molt_count: int = 0) -> str:
+    """The expected root/main Codex id for a per-agent anchor + molt_count.
 
-    The id is a PURE ``hash(anchor)`` (8-char lowercase-hex sha256 prefix), used
-    byte-identically for ``session_id``, ``thread_id``, and the default
-    ``prompt_cache_key``. No epoch, no time dependence — the same anchor always
-    yields the same id.
+    The id is ``hash(anchor, molt_count)`` (8-char lowercase-hex sha256 prefix),
+    used byte-identically for ``session_id``, ``thread_id``, and the default
+    ``prompt_cache_key``. No epoch, no time dependence — the same
+    (anchor, molt_count) pair always yields the same id; a different molt_count
+    yields a different id. Sessions built without a real ``.agent.json`` see
+    ``molt_count == 0`` (the default).
     """
     from lingtai.llm.openai.adapter import _codex_session_id
 
-    return _codex_session_id(anchor)
+    return _codex_session_id(anchor, molt_count)
 
 
 _UUID_RE = re.compile(
@@ -1132,9 +1228,11 @@ _UUID_RE = re.compile(
 
 
 def test_codex_sends_honest_request_and_turn_metadata_headers():
+    anchor = "/agents/alice/init.json"
+    expected = _expected_codex_hash(anchor)
     session = _create_codex_session_cfg(
         [_completed()],
-        codex_session_id="stable123",
+        codex_session_anchor=anchor,
         codex_account_id=_TEST_ACCOUNT_ID,
     )
 
@@ -1145,17 +1243,17 @@ def test_codex_sends_honest_request_and_turn_metadata_headers():
     assert headers["originator"] == "lingtai"
     assert headers["User-Agent"].startswith("LingTai/")
     assert headers["ChatGPT-Account-ID"] == _TEST_ACCOUNT_ID
-    assert kwargs["prompt_cache_key"] == "stable123"
-    assert headers["session_id"] == "stable123"
-    assert headers["thread_id"] == "stable123"
+    assert kwargs["prompt_cache_key"] == expected
+    assert headers["session_id"] == expected
+    assert headers["thread_id"] == expected
 
     assert _UUID_RE.match(headers["x-client-request-id"])
-    assert headers["x-codex-window-id"] == "stable123:0"
+    assert headers["x-codex-window-id"] == f"{expected}:0"
     assert "x-codex-beta-features" not in headers
 
     turn_metadata = json.loads(headers["x-codex-turn-metadata"])
-    assert turn_metadata["session_id"] == "stable123"
-    assert turn_metadata["thread_id"] == "stable123"
+    assert turn_metadata["session_id"] == expected
+    assert turn_metadata["thread_id"] == expected
     assert _UUID_RE.match(turn_metadata["turn_id"])
     assert turn_metadata["sandbox"] == "lingtai"
     assert isinstance(turn_metadata["turn_started_at_unix_ms"], int)

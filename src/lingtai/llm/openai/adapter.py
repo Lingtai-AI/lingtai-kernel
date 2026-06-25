@@ -71,16 +71,21 @@ _AUTO_PROMPT_CACHE_KEY = object()
 # emit; keep prose and code in sync.)
 #
 # For the normal/root main Codex session, the three cache-affinity values are
-# byte-identical and stable for the lifetime of the agent's durable identity:
+# byte-identical:
 #
-#     session_id == thread_id == prompt_cache_key == <8-char agent-path hash>
+#     session_id == thread_id == prompt_cache_key == <8-char (agent-path, molt) hash>
 #
 # The shared value is a deterministic 8-character lowercase-hex digest of the
-# agent's durable identity anchor (the resolved ``init.json`` / agent path).
-# Ordinary LLM calls, ``api_call_id`` rotation, refresh/rebuild, molt, and
-# clear (same agent path) all leave it unchanged — only a different agent path
-# changes it. We do NOT use the latest ``api_call_id``, molt time, or generated
-# UUIDs for these defaults.
+# agent's durable identity anchor (the resolved ``init.json`` / agent path)
+# COMBINED with the agent's current ``molt_count`` (read from ``.agent.json``).
+# It is stable WITHIN a molt segment — ordinary LLM calls, ``api_call_id``
+# rotation, refresh/rebuild, and clear (same agent path, same molt_count) all
+# leave it unchanged — and it INTENTIONALLY changes at each molt boundary, so a
+# molt starts on a fresh cache slot. A different agent path also changes it. We
+# do NOT use the latest ``api_call_id``, molt *time*, or generated UUIDs for
+# these defaults. Because molt does not rebuild the adapter, the id is derived
+# at request time from the live ``molt_count`` — never cached once at
+# construction (see ``_resolve_codex_ids`` / ``_default_prompt_cache_key``).
 #
 # IMPORTANT — these identifiers MUST be per-agent. The value anchors on the
 # agent's durable identity (the resolved ``init.json`` path). It must NOT be
@@ -92,39 +97,52 @@ _AUTO_PROMPT_CACHE_KEY = object()
 # The adapter layer has no per-agent identity of its own, so the host wiring
 # (``lingtai/llm/service.py:build_provider_defaults_from_manifest_llm``) passes
 # the agent path down by default as ``codex_session_anchor``: a normal Codex
-# agent gets a stable per-agent hash used identically for all three values. The
-# constructor kwargs below are the seam those defaults flow through (and an
-# internal override / testing escape hatch).
+# agent gets a per-agent (anchor, molt_count) hash used identically for all
+# three values. The constructor kwarg below is the seam those defaults flow
+# through. There is intentionally NO operator-level fixed-id override: the
+# identity is always the anchor+molt hash (or absent when there is no anchor).
 
 
-def _codex_session_id(anchor: str) -> str:
-    """Derive the stable 8-char Codex cache-affinity id from ``anchor``.
+def _codex_session_id(anchor: str, molt_count: int) -> str:
+    """Derive the 8-char Codex cache-affinity id from ``anchor`` + ``molt_count``.
 
     ``anchor`` MUST be a per-agent identity string (e.g. the agent's resolved
-    ``init.json`` / agent-dir path), NOT a global model-only key. The result is
-    a deterministic 8-character lowercase-hex sha256 prefix: the same anchor
-    always yields the same id; distinct anchors differ. The same value is used
-    byte-identically for ``session_id``, ``thread_id``, and the default
-    ``prompt_cache_key`` on the normal/root path.
-    """
-    return hashlib.sha256(anchor.encode("utf-8")).hexdigest()[:8]
+    ``init.json`` / agent-dir path), NOT a global model-only key. ``molt_count``
+    is the agent's current molt count (read from ``.agent.json`` at request
+    time). The result is a deterministic 8-character lowercase-hex sha256 prefix
+    of ``f"{anchor}\\0{molt_count}"``: the same (anchor, molt_count) pair always
+    yields the same id; a different anchor OR a different molt_count yields a
+    different id. The same value is used byte-identically for ``session_id``,
+    ``thread_id``, and the default ``prompt_cache_key`` on the normal/root path.
 
-# Codex cache-affinity identity is a SINGLE STABLE per-agent value: a pure
-# deterministic hash of the agent's durable identity anchor (the resolved
-# ``init.json`` / agent-dir path), used byte-identically for ``session_id`` /
-# ``thread_id`` / ``prompt_cache_key`` and NEVER changed for the life of the
-# agent's identity. See :func:`_codex_session_id`.
+    The NUL separator keeps the (anchor, molt_count) encoding unambiguous so two
+    distinct pairs can never collide via string concatenation.
+    """
+    seed = f"{anchor}\0{molt_count}"
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8]
+
+# Codex cache-affinity identity is a per-agent value derived from the agent's
+# durable identity anchor (the resolved ``init.json`` / agent-dir path) AND the
+# agent's current molt count, used byte-identically for ``session_id`` /
+# ``thread_id`` / ``prompt_cache_key``. See :func:`_codex_session_id`.
 #
-# Historically there were two churn mechanisms here, both REMOVED because they
-# were empirically counterproductive (the backend routes the prompt cache to a
-# sticky-warm replica off a STABLE session id; changing the id re-rolls the
+# It is STABLE within a molt segment (no time/epoch/rotation churn within a
+# molt) and intentionally CHANGES at each molt boundary so a molt starts on a
+# fresh cache slot. The molt path does NOT rebuild the adapter, so the id MUST
+# be (re)computed at request time from the live ``.agent.json`` molt_count — it
+# is never cached once at construction (see ``_resolve_codex_ids`` /
+# ``_default_prompt_cache_key``).
+#
+# Historically there were two OTHER churn mechanisms here, both REMOVED because
+# they were empirically counterproductive (the backend routes the prompt cache
+# to a sticky-warm replica off a stable session id; churning it re-rolls the
 # routing and discards the warm slot):
 #   - epoch-stamping the id on every adapter (re)build, and
 #   - a "stalled-cache" rotation that changed the id when the cache rate dipped.
-# Both are gone. The id depends only on the agent path — no time, no epoch, no
-# rotation. The ``codex-cache-key`` request header (first chars of the prompt
-# key) was part of the same churn apparatus and is no longer sent; Codex CLI
-# never sends it either.
+# Both are gone — the only intentional id change is the molt boundary. The
+# ``codex-cache-key`` request header (first chars of the prompt key) was part of
+# the same churn apparatus and is no longer sent; Codex CLI never sends it
+# either.
 
 
 # Client-identity headers for the Codex ``/backend-api/codex/responses`` path.
@@ -3545,7 +3563,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
     def __init__(
         self,
         *args,
-        codex_session_id: str | None = None,
         codex_session_anchor: str | None = None,
         codex_thread_salt: str | None = None,
         codex_account_id: str | None = None,
@@ -3554,21 +3571,22 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        # Codex REST cache-affinity identity: ONE stable per-agent value used
+        # Codex REST cache-affinity identity: ONE per-agent value used
         # byte-identically for ``session_id``, ``thread_id``, and the default
-        # ``prompt_cache_key``. It is a PURE deterministic hash of the agent's
-        # durable identity anchor (the resolved ``init.json`` / agent-dir path) —
-        # no epoch, no time, no rotation. The same agent path always yields the
-        # same id across restarts/refresh/molt, so the agent keeps routing to the
-        # same sticky-warm backend cache slot. The adapter has no per-agent
-        # identity of its own; the host wiring passes the anchor down by default
-        # via these kwargs (also an internal override / testing escape hatch):
+        # ``prompt_cache_key``. It is a deterministic hash of the agent's durable
+        # identity anchor (the resolved ``init.json`` / agent-dir path) AND the
+        # agent's current molt count — no epoch, no time, no rotation, no operator
+        # override. It is STABLE within a molt segment and CHANGES at each molt
+        # boundary, so a molt starts on a fresh cache slot. Because the molt path
+        # does NOT rebuild the adapter, the id is NOT computed once here — it is
+        # (re)derived at request time from the live ``.agent.json`` molt_count
+        # (see ``_resolve_codex_ids`` / ``_default_prompt_cache_key``). The
+        # adapter has no per-agent identity of its own; the host wiring passes the
+        # anchor down by default via these kwargs:
         #
-        #   codex_session_id=str     -> use this exact string verbatim for all
-        #                               three (explicit operator override)
-        #   codex_session_anchor=str -> hash the per-agent anchor (the resolved
-        #                               init.json path) into the id for all three
-        #   (neither set)            -> no session_id/thread_id (bare/test path)
+        #   codex_session_anchor=str -> hash (anchor, current molt_count) into the
+        #                               id for all three, refreshed per request
+        #   (not set)                -> no session_id/thread_id (bare/test path)
         #
         # ``codex_thread_salt`` is accepted only as a legacy manifest
         # pass-through; it is intentionally NOT used to derive a separate thread
@@ -3577,16 +3595,11 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         self._codex_session_anchor = (
             str(codex_session_anchor) if codex_session_anchor else None
         )
-        if codex_session_id:
-            # Explicit override: used verbatim.
-            self._codex_id: str | None = str(codex_session_id)
-        elif self._codex_session_anchor:
-            self._codex_id = _codex_session_id(self._codex_session_anchor)
-        else:
-            self._codex_id = None  # no per-agent identity -> no headers
         self._codex_thread_salt = codex_thread_salt  # legacy pass-through; unused
-        installation_anchor = self._codex_session_anchor or self._codex_id
-        self._codex_installation_id = _codex_installation_id(installation_anchor)
+        # The installation id is a stable identification token (not a cache-slot
+        # router): anchor it on the agent path only, so it does NOT churn at molt
+        # boundaries the way the cache-affinity id does.
+        self._codex_installation_id = _codex_installation_id(self._codex_session_anchor)
         # The user's own ChatGPT account id, resolved upstream from their OAuth
         # auth data (explicit ``account_id`` field or decoded id_token claim).
         # Mutable so the token-refresh path can keep it current if refreshed
@@ -3599,9 +3612,10 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         # by (stable per-agent offset + current molt_count) so the endpoint is
         # stable within a molt segment and rotates only at a molt boundary. An
         # empty pool -> the single ``base_url`` resolved at construction (PR #495
-        # behavior, untouched). This NEVER affects the cache identity
-        # (``session_id`` / ``thread_id`` / ``prompt_cache_key``), which is keyed
-        # purely on ``self._codex_id`` above.
+        # behavior, untouched). This is orthogonal to the cache identity
+        # (``session_id`` / ``thread_id`` / ``prompt_cache_key``), which is
+        # derived from the anchor + current molt_count at request time — see
+        # ``_resolve_codex_ids``.
         self._codex_base_urls: tuple[str, ...] = _parse_codex_base_urls(codex_base_urls)
         # ``base_url`` resolved at construction — the fall-back when the pool is
         # empty, and the value ``create_chat`` compares against to detect a
@@ -3620,9 +3634,11 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             else None
         )
         # Stable per-agent offset so different agents distribute across the pool.
-        # Prefer the agent-path anchor; fall back to the cache id, then a fixed
-        # constant for a bare/no-identity adapter (degenerate but deterministic).
-        offset_seed = self._codex_session_anchor or self._codex_id or "codex"
+        # Prefer the agent-path anchor; fall back to a fixed constant for a
+        # bare/no-identity adapter (degenerate but deterministic). Molt-independent
+        # on purpose: the offset must not move with molt_count or the pool index
+        # would advance twice per molt.
+        offset_seed = self._codex_session_anchor or "codex"
         self._codex_pool_offset = int(
             hashlib.sha256(offset_seed.encode("utf-8")).hexdigest(), 16
         )
@@ -3694,38 +3710,62 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         self._repoint_client_if_needed(self._select_codex_endpoint())
         return super().create_chat(*args, **kwargs)
 
+    def _current_codex_id(self) -> str | None:
+        """The current effective Codex cache-affinity id, or ``None``.
+
+        Computed FRESH on every call (never cached at construction) so a molt —
+        which advances ``.agent.json`` ``molt_count`` WITHOUT rebuilding the
+        adapter — changes the outgoing id on the next request:
+
+          * an anchor -> ``hash(anchor, current molt_count)``, stable within a
+            molt segment and changing at each molt boundary;
+          * no anchor -> ``None`` (bare/test adapter: no per-agent identity).
+        """
+        if self._codex_session_anchor:
+            return _codex_session_id(
+                self._codex_session_anchor, self._current_molt_count()
+            )
+        return None
+
     def _resolve_codex_ids(self, model: str) -> tuple[str | None, str | None]:
         """Resolve the (session_id, thread_id) headers for ``model``.
 
         Returns ``(None, None)`` only when no per-agent identity was passed in
         (e.g. a bare adapter built directly in a test). In the normal host path
-        the agent path is always supplied, so both ids are the same stable
-        per-agent hash — the thread id tracks the session id exactly.
+        the agent path is always supplied, so both ids are the same per-agent
+        hash of ``(anchor, current molt_count)`` — the thread id tracks the
+        session id exactly. Computed at request time, so a molt that advances
+        ``.agent.json`` ``molt_count`` changes both ids on the next request even
+        though molt does not rebuild the adapter.
 
-        Restored to the stable-identity form (was an experimental
-        ``(None, None)`` prompt-cache-only probe) because the official Codex CLI
-        source path depends on a stable ``session_id`` / ``thread_id`` /
+        Both ids are sent on every request because the official Codex CLI source
+        path depends on a consistent ``session_id`` / ``thread_id`` /
         ``prompt_cache_key`` identity: the websocket incremental
         ``previous_response_id`` path and per-turn ``x-codex-turn-state`` sticky
-        routing all ride on top of a stable session/thread (see
+        routing all ride on top of the session/thread (see
         ``codex-rs/core/src/client.rs:863-864, 873`` — ``build_session_headers``
         with both ids on every request). Dropping the headers would defeat the
         official path this experiment is mirroring.
         """
-        return self._codex_id, self._codex_id
+        current = self._current_codex_id()
+        return current, current
 
     def _default_prompt_cache_key(self, model: str) -> str:
         # On the normal/root path the cache key is the SAME per-agent value as
         # session_id / thread_id — byte-identical, so all three cache-affinity
-        # levers point at one stable slot for the agent's durable identity (a
-        # pure hash of the agent path, never time/epoch dependent). Never paired
-        # with `prompt_cache_retention` (Codex rejects it).
+        # levers point at one slot. The value is derived from the agent path AND
+        # the current molt_count, so it is stable within a molt segment and moves
+        # at each molt boundary. Computed FRESH here (not a stale id stored at
+        # construction) so a live molt_count change is reflected without an
+        # adapter rebuild. Never paired with `prompt_cache_retention` (Codex
+        # rejects it).
         #
         # The model-keyed ``lingtai-codex:{model}:v1`` form survives only for the
         # truly bare/no-anchor path (e.g. a standalone unit test), where the
         # adapter has no per-agent identity to hash.
-        if self._codex_id:
-            return self._codex_id
+        current = self._current_codex_id()
+        if current:
+            return current
         return f"lingtai-codex:{model}:v1"
 
     def _create_responses_session(
@@ -3774,15 +3814,16 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             previous_response_id=None,
             compact_threshold=None,
             interface=interface,
-            # On the normal/root path this resolves to the SAME stable per-agent
-            # hash as session_id / thread_id (see ``_default_prompt_cache_key``);
-            # it honors an explicit override or a ``prompt_cache_key=False``
-            # disable passed to the adapter. Only the bare/no-anchor path falls
-            # back to ``lingtai-codex:{model}:v1``.
+            # On the normal/root path this resolves to the SAME per-agent
+            # (anchor, molt_count) hash as session_id / thread_id (see
+            # ``_default_prompt_cache_key``); it honors an explicit override or a
+            # ``prompt_cache_key=False`` disable passed to the adapter. Only the
+            # bare/no-anchor path falls back to ``lingtai-codex:{model}:v1``.
             prompt_cache_key=self._resolve_prompt_cache_key(model),
-            # Stable REST cache-affinity headers: both the per-agent hash,
-            # byte-identical, passed down by the host; ``(None, None)`` only for
-            # a bare/test adapter. Never rotated.
+            # REST cache-affinity headers: both the per-agent (anchor, molt_count)
+            # hash, byte-identical, passed down by the host; ``(None, None)`` only
+            # for a bare/test adapter. Stable within a molt segment, refreshed at
+            # each molt boundary (resolved fresh per request above).
             session_id=session_id,
             thread_id=thread_id,
             # The user's own ChatGPT account id (read fresh from the adapter so a

@@ -10,10 +10,12 @@ unchanged and rotates at a molt boundary (deterministic
 already wipes the wire session, so swapping endpoints crosses no live
 continuation state.
 
-Hard invariant: the Codex cache identity
-``prompt_cache_key == session_id == thread_id`` (the pure agent-path hash) must
-NOT change with endpoint or molt_count — the pool routes off that stable
-identity, it does not perturb it.
+Invariant: the Codex cache identity
+``prompt_cache_key == session_id == thread_id`` (the per-agent
+``hash(anchor, molt_count)``) is INDEPENDENT of which endpoint the pool selects.
+It is stable within a molt segment and intentionally rotates at each molt
+boundary (the same molt_count that may shuffle the endpoint), so the pool choice
+and the cache identity move on the same boundary but neither perturbs the other.
 
 These tests make NO network calls — ``CodexTokenManager`` is mocked and we
 inspect the constructed OpenAI client ``base_url`` (the real end-to-end value).
@@ -295,30 +297,57 @@ def test_missing_agent_json_defaults_molt_count_zero(tmp_path):
 # --- (e) identity stable across endpoints / molt counts ---------------------
 
 
-def test_cache_identity_stable_across_endpoints_and_molt(tmp_path):
-    """prompt_cache_key/session_id/thread_id never move with endpoint/molt."""
+def test_cache_identity_independent_of_endpoint_within_a_molt(tmp_path):
+    """prompt_cache_key/session_id/thread_id depend on (anchor, molt) — not endpoint.
+
+    The cache identity is keyed on the agent anchor + current molt_count, so it
+    is byte-identical for all three levers at a fixed molt_count regardless of
+    which pool endpoint is selected. It DOES move at a molt boundary (covered by
+    ``test_cache_identity_rotates_with_molt_count``); here we pin molt_count and
+    only vary the endpoint selection to prove identity is endpoint-independent.
+    """
     from lingtai.llm.openai.adapter import _codex_session_id
 
     mgr, _ = _mock_mgr()
     try:
         anchor = _write_agent_json(tmp_path, 0)
-        expected_id = _codex_session_id(str(anchor))
+        expected_id = _codex_session_id(str(anchor), 0)
 
-        endpoints_seen = set()
+        adapter = _adapter_with(tmp_path, anchor=anchor, codex_base_urls=list(_POOL))
+        sid, tid = adapter._resolve_codex_ids("gpt-5.5")
+        assert sid == tid == expected_id
+        assert adapter._default_prompt_cache_key("gpt-5.5") == expected_id
+    finally:
+        mgr.stop()
+
+
+def test_cache_identity_rotates_with_molt_count(tmp_path):
+    """The cache identity moves at each molt boundary (anchor stable, molt varies).
+
+    A live adapter re-derives the id per request from ``.agent.json``, so an
+    advancing molt_count yields a fresh session/thread/prompt-cache id while the
+    endpoint pool may also rotate (orthogonally).
+    """
+    from lingtai.llm.openai.adapter import _codex_session_id
+
+    mgr, _ = _mock_mgr()
+    try:
+        anchor = _write_agent_json(tmp_path, 0)
+        adapter = _adapter_with(tmp_path, anchor=anchor, codex_base_urls=list(_POOL))
+
+        seen_ids = set()
         for mc in range(len(_POOL)):
             (tmp_path / ".agent.json").write_text(
                 json.dumps({"molt_count": mc}), encoding="utf-8"
             )
-            adapter = _adapter_with(tmp_path, anchor=anchor, codex_base_urls=list(_POOL))
-            endpoints_seen.add(_session_base_url(adapter))
-
+            expected_id = _codex_session_id(str(anchor), mc)
             sid, tid = adapter._resolve_codex_ids("gpt-5.5")
             assert sid == tid == expected_id
             assert adapter._default_prompt_cache_key("gpt-5.5") == expected_id
+            seen_ids.add(sid)
 
-        # We genuinely varied the endpoint, proving identity stability is not
-        # vacuous (the pick actually moved across molts).
-        assert len(endpoints_seen) == len(_POOL)
+        # Each distinct molt_count produced a distinct id (no accidental reuse).
+        assert len(seen_ids) == len(_POOL)
     finally:
         mgr.stop()
 
