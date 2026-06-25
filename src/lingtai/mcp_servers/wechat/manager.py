@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -41,6 +42,12 @@ _NOTIFICATION_HEADER_TEMPLATE = _load_notification_header_template()
 
 TEXT_CHUNK_LIMIT = 4000
 SESSION_EXPIRED_ERRCODE = -14
+
+# Max number of stable inbound signatures retained in the replay-guard
+# index (inbox_seen.json). Sized well above a single refresh backlog so the
+# guard never forgets a message inside the replay window, while keeping the
+# state file bounded.
+SEEN_KEYS_MAX = 5000
 
 SCHEMA = {
     "type": "object",
@@ -163,6 +170,16 @@ class WechatManager:
         self._context_tokens: dict[str, str] = {}  # user_id -> context_token
         self._contacts: dict[str, dict] = {}  # alias -> {user_id, name}
         self._read_ids: set[str] = set()
+        # Replay/idempotency guard. Maps a stable inbound signature (derived
+        # from upstream-stable fields, NOT the local UUID) to the local UUID
+        # we first landed it under. Survives refresh/relaunch so that a stale
+        # get_updates cursor re-fetching the same upstream messages does not
+        # re-land them as fresh unread with new UUIDs. See _stable_key().
+        self._seen_keys: dict[str, str] = {}
+        # Bounded FIFO of stable keys to cap inbox_seen.json growth. The
+        # WeChat replay bug only re-fetches a recent backlog, so a window of
+        # the last N keys is sufficient and avoids unbounded state files.
+        self._seen_order: list[str] = []
         self._lock = threading.Lock()  # guards shared mutable state
         self._loop: asyncio.AbstractEventLoop | None = None
         self._poll_thread: threading.Thread | None = None
@@ -240,11 +257,23 @@ class WechatManager:
                     self._running = False
                     return
 
-                if resp.get_updates_buf:
-                    self._get_updates_buf = resp.get_updates_buf
-
                 for msg in resp.msgs:
                     await self._on_incoming(msg)
+
+                # Advance and checkpoint the cursor only AFTER the batch has
+                # been landed. Previously the cursor was bumped in-memory and
+                # persisted only on a clean stop(), which never runs on a
+                # worker-hang refresh/kill — so the next launch re-fetched from
+                # the stale offset (the replay). Persisting here narrows that
+                # window to a single in-flight batch; the inbox_seen.json guard
+                # in _on_incoming is the durable backstop for whatever still
+                # slips through.
+                if resp.get_updates_buf and resp.get_updates_buf != self._get_updates_buf:
+                    self._get_updates_buf = resp.get_updates_buf
+                    try:
+                        self._save_state()
+                    except Exception as e:  # checkpoint is best-effort
+                        log.warning("WeChat cursor checkpoint failed: %s", e)
 
             except asyncio.CancelledError:
                 return
@@ -362,6 +391,24 @@ class WechatManager:
 
         body = "\n".join(body_parts) if body_parts else "(empty message)"
 
+        # Replay guard. After a worker hang the kernel refreshes via the
+        # chat_history_save_skipped path and relaunches without committing the
+        # WeChat get_updates cursor, so the iLink server re-delivers the same
+        # backlog. Those re-deliveries arrive with identical upstream ids but
+        # would otherwise be landed under brand-new local UUIDs and counted as
+        # fresh unread. Detect them by their stable upstream signature and skip
+        # the second landing entirely — no new inbox entry, no LICC wake.
+        stable_key = self._stable_key(msg, from_user, body)
+        if self._is_replay(stable_key):
+            with self._lock:
+                first_id = self._seen_keys.get(stable_key)
+            log.info(
+                "WeChat inbound replay suppressed: stable_key=%s "
+                "first_local_id=%s from=%s (skipped duplicate landing)",
+                stable_key, first_id, from_user,
+            )
+            return
+
         # Persist to inbox
         msg_id = str(uuid.uuid4())
         msg_dir = self._inbox_dir / msg_id
@@ -372,10 +419,19 @@ class WechatManager:
             "body": body,
             "date": datetime.now(timezone.utc).isoformat(),
             "raw_item_types": [item.type for item in msg.item_list],
+            # Replay-guard provenance: the stable upstream signature this
+            # message was first landed under. Recorded for traceability so a
+            # suppressed duplicate can always be traced back to its original.
+            "stable_key": stable_key,
+            "upstream_message_id": msg.message_id,
+            "upstream_create_time_ms": msg.create_time_ms,
         }
         (msg_dir / "message.json").write_text(
             json.dumps(msg_data, ensure_ascii=False, indent=2), encoding="utf-8",
         )
+        # Record the signature only after the inbox write has succeeded, so a
+        # crash mid-write cannot mark a message as seen without landing it.
+        self._record_seen(stable_key, msg_id)
 
         # Forward to host via LICC. Body is a conversation preview with
         # guidance directing the agent to react only to the latest
@@ -853,6 +909,19 @@ class WechatManager:
             state = json.loads(state_file.read_text(encoding="utf-8"))
             self._get_updates_buf = state.get("get_updates_buf", "")
             self._context_tokens = state.get("context_tokens", {})
+        seen_file = self._wechat_dir / "inbox_seen.json"
+        if seen_file.is_file():
+            try:
+                seen = json.loads(seen_file.read_text(encoding="utf-8"))
+                self._seen_keys = dict(seen.get("keys", {}))
+                self._seen_order = [
+                    k for k in seen.get("order", []) if k in self._seen_keys
+                ]
+            except (ValueError, AttributeError) as e:
+                # Corrupt index degrades to "no guard", never crashes boot.
+                log.warning("Failed to load inbox_seen.json (ignoring): %s", e)
+                self._seen_keys = {}
+                self._seen_order = []
 
     def _save_state(self) -> None:
         state = {
@@ -874,6 +943,79 @@ class WechatManager:
         self._atomic_write(
             self._wechat_dir / "read.json",
             json.dumps(list(self._read_ids), ensure_ascii=False),
+        )
+
+    # ── Inbound replay / idempotency guard ─────────────────────
+
+    @staticmethod
+    def _stable_key(msg: WeixinMessage, from_user: str, body: str) -> str:
+        """Derive a stable, replay-resistant signature for an inbound message.
+
+        The local inbox UUID is regenerated on every fetch, so it cannot be
+        used to detect replays. Instead we prefer upstream-stable identifiers
+        that the iLink server assigns once per message and repeats verbatim
+        when a stale cursor re-fetches the same backlog:
+
+          1. ``message_id``        — upstream per-message id (most stable)
+          2. ``seq``               — upstream monotonic sequence
+          3. first item ``msg_id`` — item-level upstream id
+
+        When none is present we fall back to a content signature over
+        ``(from_user_id, create_time_ms, body_hash)``. ``create_time_ms`` is
+        the upstream send time (NOT the local landing time, which the bug
+        rewrites on replay), so two genuinely distinct messages with the same
+        text at different times still produce different keys — we never drop a
+        real new message.
+        """
+        upstream_id = None
+        if msg.message_id is not None:
+            upstream_id = f"mid:{msg.message_id}"
+        elif msg.seq is not None:
+            upstream_id = f"seq:{msg.seq}"
+        else:
+            for item in msg.item_list:
+                if getattr(item, "msg_id", None):
+                    upstream_id = f"item:{item.msg_id}"
+                    break
+        if upstream_id is not None:
+            # Namespace by sender so an id collision across users (should not
+            # happen, but cheap insurance) cannot suppress a real message.
+            return f"{from_user}|{upstream_id}"
+
+        # Content-signature fallback. Hash the body so we never persist or
+        # log message text in the dedup index, only an opaque digest.
+        body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+        ctime = msg.create_time_ms if msg.create_time_ms is not None else ""
+        return f"{from_user}|content:{ctime}:{body_hash}"
+
+    def _is_replay(self, key: str) -> bool:
+        """True if this stable key was already landed (replay guard hit)."""
+        with self._lock:
+            return key in self._seen_keys
+
+    def _record_seen(self, key: str, local_id: str) -> None:
+        """Persist that ``key`` was landed under ``local_id`` (atomic)."""
+        with self._lock:
+            if key in self._seen_keys:
+                return
+            self._seen_keys[key] = local_id
+            self._seen_order.append(key)
+            # Evict oldest beyond the window to bound the state file.
+            while len(self._seen_order) > SEEN_KEYS_MAX:
+                evicted = self._seen_order.pop(0)
+                self._seen_keys.pop(evicted, None)
+        self._save_seen()
+
+    def _save_seen(self) -> None:
+        with self._lock:
+            payload = {
+                "version": 1,
+                "order": list(self._seen_order),
+                "keys": dict(self._seen_keys),
+            }
+        self._atomic_write(
+            self._wechat_dir / "inbox_seen.json",
+            json.dumps(payload, ensure_ascii=False),
         )
 
     @staticmethod
