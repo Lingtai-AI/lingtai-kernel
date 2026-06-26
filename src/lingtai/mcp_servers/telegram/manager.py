@@ -332,6 +332,119 @@ class TelegramManager:
     def _account_dir(self, account: str) -> Path:
         return self._working_dir / "telegram" / account
 
+    # ------------------------------------------------------------------
+    # Notification reconcile (issue #111)
+    # ------------------------------------------------------------------
+    #
+    # MCP→.notification/ delivery is edge-triggered: the kernel poller
+    # publishes `.notification/mcp.telegram.json` only when it consumes a
+    # *new* inbound LICC event. If that mirror is absent or was dismissed at
+    # the moment a context molt completes — while durable read state
+    # (`read.json`) still has unread Telegram messages — nothing re-derives
+    # the notification until a *fresh* inbound message creates a new edge
+    # (issue #111: the "hello?" workaround). The reconcile tick re-emits a
+    # LICC event from durable unread state so the channel resurfaces on its
+    # own, converting delivery to edge-triggered + periodic level-reconcile.
+
+    def _notification_mirror_path(self) -> Path:
+        return self._working_dir / ".notification" / "mcp.telegram.json"
+
+    def _unread_messages(self, account: str) -> list[dict]:
+        """Durable-unread inbox messages for *account* = persisted inbox
+        minus `read.json`, newest-first. Mirrors the read-state contract
+        used by `_read`/`_mark_read` so reconcile and reads agree."""
+        read_ids = self._read_ids(account)
+        unread = [
+            m for m in self._list_messages(account, "inbox")
+            if m.get("id") and m["id"] not in read_ids
+        ]
+        return unread
+
+    def reconcile_notifications(self) -> int:
+        """Republish `.notification/mcp.telegram.json` from durable unread
+        state when it is missing but unread messages remain.
+
+        Idempotent and conservative:
+          - Emits a LICC event (via the same on_inbound path as a live
+            arrival) only when there is durable unread AND no live mirror
+            exists. The kernel then publishes the mirror through its normal
+            channel, so the post-molt agent is woken without a fresh inbound
+            message (issue #111).
+          - If a live mirror already exists, do nothing — the kernel has
+            already surfaced the channel; re-emitting would churn the wire.
+          - If nothing is unread, do nothing. Clearing a stale mirror is
+            owned by the read-state cleanup (PR #310); reconcile never
+            republishes a stale mirror after the producer has read.
+
+        The mirror is a single per-channel file shared by all accounts, so a
+        present mirror short-circuits the whole tick. Returns the number of
+        LICC events emitted (0 or 1).
+        """
+        if self._notification_mirror_path().exists():
+            # The channel already has a live edge — nothing to reconcile.
+            return 0
+
+        try:
+            accounts = list(self._service.list_accounts())
+        except Exception as exc:
+            log.debug("reconcile_notifications: list_accounts failed: %s", exc)
+            return 0
+
+        unread_by_account: list[tuple[str, list[dict]]] = []
+        for account in accounts:
+            unread = self._unread_messages(account)
+            if unread:
+                unread_by_account.append((account, unread))
+
+        if not unread_by_account:
+            return 0
+
+        # Re-emit a single LICC event for the channel from the account with
+        # the newest unread message, so the kernel mirror reflects real
+        # durable unread rather than a fabricated cumulative digest.
+        account, unread = max(
+            unread_by_account,
+            key=lambda item: item[1][0].get("date", ""),
+        )
+        newest = unread[0]
+        username = (
+            (newest.get("from") or {}).get("username")
+            or (newest.get("from") or {}).get("first_name")
+            or "unknown"
+        )
+        total_unread = sum(len(u) for _, u in unread_by_account)
+        unread_ids = [m["id"] for _, msgs in unread_by_account for m in msgs if m.get("id")]
+
+        chat_id = (newest.get("chat") or {}).get("id")
+        try:
+            preview = self._build_conversation_preview(account, chat_id, newest.get("id"))
+        except Exception as exc:
+            log.debug("reconcile_notifications: preview failed: %s", exc)
+            text = newest.get("text") or newest.get("callback_query") or ""
+            preview = text[:300].replace("\n", " ")
+
+        try:
+            self._on_inbound({
+                "from": username,
+                "subject": (
+                    f"telegram {total_unread} unread message(s) via {account}"
+                ),
+                "body": preview if preview else "(unread telegram messages)",
+                "metadata": {
+                    "type": "reconcile",
+                    "account": account,
+                    "chat_id": chat_id,
+                    "message_id": newest.get("id"),
+                    "unread_count": total_unread,
+                    "unread_ids": unread_ids,
+                },
+                "wake": True,
+            })
+        except Exception as exc:
+            log.error("reconcile_notifications: on_inbound failed: %s", exc)
+            return 0
+        return 1
+
     def _resolve_account(self, args: dict) -> str:
         """Get account alias from args, defaulting to first account."""
         return args.get("account") or self._service.default_account.alias

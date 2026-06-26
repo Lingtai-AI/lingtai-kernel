@@ -143,6 +143,7 @@ class TelegramAccount:
         on_message: Callable[[str, dict], None] | None = None,
         state_dir: Path | None = None,
         commands: list[dict[str, str]] | None = None,
+        on_idle_tick: Callable[[], None] | None = None,
     ) -> None:
         self.alias = alias
         self._bot_token = bot_token
@@ -150,6 +151,10 @@ class TelegramAccount:
         self._poll_interval = poll_interval
         self._on_message = on_message
         self._state_dir = state_dir
+        # Fired once per poll cycle (including no-update long-poll returns) so
+        # the host can run periodic, message-independent work — e.g. the
+        # notification reconcile that recovers the post-molt stall (issue #111).
+        self._on_idle_tick = on_idle_tick
         # If commands is None, fall back to DEFAULT_COMMANDS at registration
         # time. An explicit empty list means "register no commands" and is
         # respected (Telegram clears the menu).
@@ -267,6 +272,15 @@ class TelegramAccount:
                 if self._stop_event.wait(timeout=5.0):
                     return
                 continue
+            # Periodic, message-independent reconcile (issue #111). Runs every
+            # cycle including no-update returns; best-effort, never fatal.
+            if self._on_idle_tick is not None:
+                try:
+                    self._on_idle_tick()
+                except Exception as e:
+                    logger.debug(
+                        "Telegram idle tick error (%s): %s", self.alias, e,
+                    )
             # Brief pause between poll cycles
             if self._stop_event.wait(timeout=self._poll_interval):
                 return

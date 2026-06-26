@@ -28,10 +28,12 @@ class TelegramService:
         accounts_config: list[dict],
         on_message: Callable[[str, dict], None],
         config_source: str | None = None,
+        on_idle_tick: Callable[[], None] | None = None,
     ) -> None:
         self._working_dir = Path(working_dir)
         self._on_message = on_message
         self._config_source = config_source
+        self._on_idle_tick = on_idle_tick
         self._account_order: list[str] = []
         self._accounts: dict[str, TelegramAccount] = {}
 
@@ -46,6 +48,7 @@ class TelegramService:
                 on_message=on_message,
                 state_dir=state_dir,
                 commands=cfg.get("commands"),
+                on_idle_tick=on_idle_tick,
             )
             self._accounts[alias] = acct
             self._account_order.append(alias)
