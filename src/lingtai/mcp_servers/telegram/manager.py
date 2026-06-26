@@ -25,6 +25,8 @@ from uuid import uuid4
 import logging
 import threading
 
+from lingtai_kernel.trace_redaction import redact_text
+
 if TYPE_CHECKING:
     from .service import TelegramService
 
@@ -554,8 +556,11 @@ class TelegramManager:
             )
         except Exception as exc:
             log.warning("_build_conversation_preview failed: %s", exc)
-            preview = text[:300].replace("\n", " ")
-            if len(text) > 300:
+            # Redact before truncating so a credential crossing the 300-char
+            # boundary cannot leak as an unrecognized prefix (issue #134).
+            redacted_text = redact_text(text).replace("\n", " ")
+            preview = redacted_text[:300]
+            if len(redacted_text) > 300:
                 preview += "..."
 
         log.info(
@@ -806,7 +811,9 @@ class TelegramManager:
             if m.get("media"):
                 media_type = m["media"].get("type", "media")
                 text = text or f"[{media_type}]"
-            text_display = text.replace("\n", " ")
+            # Redact credential-shaped substrings before the preview enters the
+            # agent notification body, context, and persisted logs (issue #134).
+            text_display = redact_text(text).replace("\n", " ")
 
             line = f"[{rel}] #{cid} {sender}: {text_display}"
             lines.append(line)
@@ -824,8 +831,9 @@ class TelegramManager:
                         orig_text = (
                             orig.get("text", "") or orig.get("callback_query", "") or ""
                         )
-                        orig_snippet = orig_text[:50]
-                        if len(orig_text) > 50:
+                        redacted_orig = redact_text(orig_text)
+                        orig_snippet = redacted_orig[:50]
+                        if len(redacted_orig) > 50:
                             orig_snippet += "…"
                         lines.append(
                             f"  ↳ [{orig_rel}] #{reply_compound}: {orig_snippet}"
@@ -1273,6 +1281,15 @@ class TelegramManager:
         account = self._resolve_account(args)
         inbox = self._list_messages(account, "inbox")
         sent = self._list_messages(account, "sent")
+        # Tag folder origin so outgoing (bot-sent) messages are never counted
+        # as unread/[NEW]. Sent messages are never written to read.json, so
+        # without this guard every bot reply would surface as unread (issue
+        # #170 point 7). The folder the record was loaded from is the
+        # authoritative direction marker.
+        for m in inbox:
+            m["_folder"] = "inbox"
+        for m in sent:
+            m["_folder"] = "sent"
         messages = inbox + sent
         messages.sort(key=lambda m: m.get("date", ""), reverse=True)
         read_ids = self._read_ids(account)
@@ -1299,7 +1316,15 @@ class TelegramManager:
                     "unread": 0,
                 }
             conversations[cid]["total"] += 1
-            if msg.get("id") and msg["id"] not in read_ids:
+            # Outgoing/bot-sent messages are never "unread" for the agent:
+            # they originate from this bot, not from a human. Counting them
+            # unread made every bot reply surface as [NEW] (issue #170 pt 7).
+            # Inbound unread behavior is unchanged.
+            if (
+                msg.get("_folder") != "sent"
+                and msg.get("id")
+                and msg["id"] not in read_ids
+            ):
                 conversations[cid]["unread"] += 1
 
         return {
