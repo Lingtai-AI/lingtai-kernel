@@ -901,12 +901,15 @@ def _check_molt_pressure(agent) -> None:
     clear_notification(agent._working_dir, "molt")
 
 
-def _post_send_housekeeping(agent) -> None:
-    """Run the post-send housekeeping trio after an LLM round completes.
+def _turn_boundary_housekeeping(agent) -> None:
+    """Run the turn-boundary housekeeping trio.
 
-    Called from every branch that finishes an LLM send (``_handle_request``,
-    the ``_handle_tc_wake`` continuation, and the ``_process_response`` tool
-    loop), always in this order:
+    Called from every branch at an LLM-round boundary. Timing relative to the
+    ``session.send`` differs by path and is deliberately preserved from the
+    pre-refactor inline code: the request path (``_handle_request``) runs the
+    trio *before* the initial send of the turn, while the continuation paths
+    (``_handle_tc_wake`` and the ``_process_response`` tool loop) run it *after*
+    a send completes. In all cases the trio fires in this fixed order:
 
     1. ``_check_molt_pressure`` — clear the legacy pressure-warning channel.
     2. ``_sync_notifications`` — record same-turn notification changes (while
@@ -992,9 +995,10 @@ def _handle_request(agent, msg: Message) -> None:
         pass
     meta = build_meta(agent)
 
-    # Post-send housekeeping: molt pressure + notification sync + large-result
-    # rescan (see _post_send_housekeeping).
-    _post_send_housekeeping(agent)
+    # Turn-boundary housekeeping: molt pressure + notification sync +
+    # large-result rescan. On the request path this runs *before* the initial
+    # send (preserved pre-refactor timing); see _turn_boundary_housekeeping.
+    _turn_boundary_housekeeping(agent)
 
     prefix = render_meta(agent, meta)
     if prefix:
@@ -1177,10 +1181,10 @@ def _handle_tc_wake(agent, msg: Message) -> None:
         agent._last_usage = response.usage
         agent._save_chat_history(ledger_source="tc_wake")
         _process_response(agent, response, ledger_source="tc_wake")
-        # Notification-driven turns also run post-send housekeeping so molt
+        # Notification-driven turns also run turn-boundary housekeeping so molt
         # pressure / notification sync / large-result rescan fire even when the
-        # agent is woken by mail/soul (see _post_send_housekeeping).
-        _post_send_housekeeping(agent)
+        # agent is woken by mail/soul (see _turn_boundary_housekeeping).
+        _turn_boundary_housekeeping(agent)
     except Exception as e:
         from ..llm_utils import WorkerStillRunningError
 
@@ -1648,13 +1652,13 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         agent._last_usage = response.usage
         agent._save_chat_history(ledger_source=ledger_source)
 
-        # Mid-loop post-send housekeeping. Context pressure is now surfaced
+        # Mid-loop turn-boundary housekeeping. Context pressure is now surfaced
         # every tool result under _meta.agent_meta.context.molt
         # (meta_block.build_meta), so _check_molt_pressure here only clears any
         # stale legacy molt.json; the rescan keeps summarize reminders in sync
         # across tool-loop LLM rounds, not only at request/notification-wake
-        # boundaries (see _post_send_housekeeping).
-        _post_send_housekeeping(agent)
+        # boundaries (see _turn_boundary_housekeeping).
+        _turn_boundary_housekeeping(agent)
 
     final_text = "\n".join(collected_text_parts)
     has_errors = bool(collected_errors)
