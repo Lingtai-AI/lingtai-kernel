@@ -138,21 +138,14 @@ python tools/check_anatomy_drift.py --check    # exit 1 if any drift (CI/pre-com
 ```
 
 `tools/check_anatomy_drift.py` scans every `ANATOMY.md` under `src/` and flags
-two mechanically-detectable drift modes: **citation rot** (a `file.py:line`
-citation whose target is missing or whose line is past the end of the file) and
-**stale size claims** (a "~N lines" / "N lines" whole-file claim that no longer
-matches `wc -l`, beyond a tolerance). It resolves cited paths by searching
-upward from each anatomy's directory, so kernel-root-relative citations work.
+**citation rot**: a `file.py:line` citation whose target is missing or whose
+line is past the end of the file. It resolves cited paths by searching upward
+from each anatomy's directory, so kernel-root-relative citations work.
 
-For size claims to be checkable, write them with the path **adjacent** to the
-count — `` `base_agent/__init__.py` (~2170 lines: ...)`` — so the checker can
-bind the count to the file; a count separated from its path by another
-backticked symbol is treated as a function-size note and skipped.
-
-This only catches missing files, out-of-range lines, and stale whole-file size
-claims. It does **not** prove semantic correctness — a citation can be in-range
-yet point at the wrong code — so an agent still has to open the cited line and
-confirm the claim. The checker is the cheap first pass, not the verification.
+This only catches missing files and out-of-range lines. It does **not** prove
+semantic correctness — a citation can be in-range yet point at the wrong code —
+so an agent still has to open the cited line and confirm the claim. The checker
+is the cheap first pass, not the verification.
 
 This is the discipline demonstrated by the historical soul-flow tool-refusal proposal and the soul package refactor (`ffe42d4`). The first round of citation rot happened because the rule was implicit; making it explicit here is part of the convention.
 

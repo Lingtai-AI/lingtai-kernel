@@ -26,37 +26,6 @@ def _write(p: Path, text: str) -> Path:
     return p
 
 
-def test_flags_stale_size_claim(tmp_path):
-    _write(tmp_path / "src" / "mod" / "big.py", "\n".join("x" for _ in range(100)))
-    anatomy = _write(
-        tmp_path / "src" / "mod" / "ANATOMY.md",
-        "- `mod/big.py` (~10 lines: stuff).",
-    )
-    problems = checker.check_size_claims(
-        anatomy, tmp_path, tolerance=0.10, floor=10
-    )
-    assert any("stale size claim" in p and "big.py" in p for p in problems)
-
-
-def test_accepts_size_claim_within_tolerance(tmp_path):
-    _write(tmp_path / "src" / "mod" / "big.py", "\n".join("x" for _ in range(100)))
-    anatomy = _write(
-        tmp_path / "src" / "mod" / "ANATOMY.md",
-        "- `mod/big.py` (~105 lines: stuff).",  # 5 off, within tolerance+floor
-    )
-    assert checker.check_size_claims(anatomy, tmp_path, tolerance=0.10, floor=10) == []
-
-
-def test_function_size_note_is_not_bound_to_file(tmp_path):
-    # "`_heartbeat_loop` (183 lines)" must NOT bind to an earlier file path.
-    _write(tmp_path / "src" / "mod" / "big.py", "\n".join("x" for _ in range(100)))
-    anatomy = _write(
-        tmp_path / "src" / "mod" / "ANATOMY.md",
-        "- stub in `mod/big.py`; `_heartbeat_loop` (183 lines, many calls).",
-    )
-    assert checker.check_size_claims(anatomy, tmp_path, tolerance=0.10, floor=10) == []
-
-
 def test_flags_out_of_range_citation(tmp_path):
     _write(tmp_path / "src" / "mod" / "f.py", "a\nb\nc\n")  # 3 lines
     anatomy = _write(
@@ -95,8 +64,8 @@ def test_resolve_path_searches_upward(tmp_path):
 
 
 def test_check_mode_exit_code(tmp_path, monkeypatch):
-    _write(tmp_path / "src" / "mod" / "big.py", "x\n" * 100)
-    _write(tmp_path / "src" / "mod" / "ANATOMY.md", "- `mod/big.py` (~10 lines).")
+    _write(tmp_path / "src" / "mod" / "f.py", "x\n")
+    _write(tmp_path / "src" / "mod" / "ANATOMY.md", "- see `mod/f.py:2`.")
     monkeypatch.chdir(tmp_path)
     assert checker.main(["--root", "src", "--check"]) == 1
     assert checker.main(["--root", "src"]) == 0  # advisory mode never fails
