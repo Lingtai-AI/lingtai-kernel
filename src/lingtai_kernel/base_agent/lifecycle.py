@@ -119,6 +119,12 @@ def _start(agent) -> None:
     # Export assembled system prompt to system/system.md
     agent._flush_system_prompt()
 
+    # Publish process liveness before the heavier restore/listener startup
+    # work. During this phase the heartbeat loop only emits runtime metadata;
+    # signal and notification handling starts after the main loop exists.
+    agent._heartbeat_runtime_ready = False
+    _start_heartbeat(agent)
+
     # Restore chat session and token state from filesystem if available
     chat_history_file = agent._working_dir / "history" / "chat_history.jsonl"
     if chat_history_file.is_file():
@@ -177,7 +183,7 @@ def _start(agent) -> None:
         name=f"agent-{agent.agent_name or agent._working_dir.name}",
     )
     agent._thread.start()
-    _start_heartbeat(agent)
+    agent._heartbeat_runtime_ready = True
     # Boot state is IDLE (fire-eligible) — start the timer here.
     _start_soul_timer(agent)
 
@@ -307,22 +313,12 @@ def _heartbeat_loop(agent) -> None:
     from ..intrinsics.soul.inquiry import _run_inquiry
 
     while agent._heartbeat_thread is not None:
-        # time.time() (wall clock), not time.monotonic(). Deliberate:
-        # heartbeat is written to a file and read by handshake.is_alive()
-        # in a DIFFERENT process.
-        agent._heartbeat = time.time()
-
-        # Write heartbeat file in ALL living states (everything except SUSPENDED)
-        try:
-            hb_file = agent._working_dir / ".agent.heartbeat"
-            hb_file.write_text(str(agent._heartbeat), encoding="utf-8")
-        except OSError:
-            pass
+        _write_heartbeat_tick(agent)
 
         # Once shutdown is signalled, keep beating the file (above) but stop
         # consuming signal files — the run loop is exiting and reprocessing
         # `.suspend`/`.refresh` here would emit spurious state-change events.
-        if agent._shutdown.is_set():
+        if agent._shutdown.is_set() or not getattr(agent, "_heartbeat_runtime_ready", True):
             time.sleep(1.0)
             continue
 
@@ -555,6 +551,25 @@ def _heartbeat_loop(agent) -> None:
                 agent._last_gc = now_mono
 
         time.sleep(1.0)
+
+
+def _write_heartbeat_tick(agent) -> None:
+    """Write one real runtime heartbeat and best-effort status snapshot."""
+    # time.time() (wall clock), not time.monotonic(). Deliberate:
+    # heartbeat is written to a file and read by handshake.is_alive()
+    # in a DIFFERENT process.
+    agent._heartbeat = time.time()
+
+    try:
+        hb_file = agent._working_dir / ".agent.heartbeat"
+        hb_file.write_text(str(agent._heartbeat), encoding="utf-8")
+    except OSError:
+        pass
+
+    try:
+        agent._write_status_snapshot()
+    except Exception:
+        pass
 
 
 def _perform_refresh(

@@ -33,6 +33,11 @@ class TestHeartbeatInit:
         agent._heartbeat = 1234567890.123
         assert isinstance(agent._heartbeat, float)
         assert agent._heartbeat == 1234567890.123
+        status = agent.status()
+        assert status["identity"]["agent_id"] == agent._agent_id
+        assert status["runtime"]["pid"] > 0
+        assert status["runtime"]["running"] is False
+        assert status["runtime"]["last_heartbeat"] == 1234567890.123
 
 
 class TestHeartbeatBeating:
@@ -81,6 +86,9 @@ class TestHeartbeatFile:
         agent._start_heartbeat()
         time.sleep(1.5)
         assert hb_file.exists()
+        status_file = agent._working_dir / ".status.json"
+        assert status_file.exists()
+        assert '"running": true' in status_file.read_text()
         agent._stop_heartbeat()
         assert not hb_file.exists()
 

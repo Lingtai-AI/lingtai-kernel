@@ -379,6 +379,80 @@ def test_pseudo_agent_outbox_pickup(tmp_path):
     assert received[0]["message"] == "hello from human"
 
 
+def test_runtime_probe_ack_from_pseudo_agent_outbox(tmp_path):
+    """Explicit runtime probes get a structured ack from the real poller."""
+    import json
+    import time
+    from lingtai_kernel.services.mail import FilesystemMailService
+
+    base = tmp_path
+    pseudo_dir = base / "human"
+    my_dir = base / "agent_a"
+    pseudo_dir.mkdir()
+    my_dir.mkdir()
+    (my_dir / ".agent.json").write_text(json.dumps({
+        "agent_id": "agent-1",
+        "agent_name": "agent-a",
+        "address": "agent_a",
+        "state": "asleep",
+        "admin": {},
+    }))
+
+    outbox_dir = pseudo_dir / "mailbox" / "outbox"
+    msg_dir = outbox_dir / "probe-001"
+    msg_dir.mkdir(parents=True)
+    probe = {
+        "id": "probe-001",
+        "_mailbox_id": "probe-001",
+        "from": "human",
+        "to": ["agent_a"],
+        "subject": "probe",
+        "message": json.dumps({
+            "type": "runtime_probe",
+            "correlationId": "corr-1",
+            "taskId": "task-1",
+        }),
+        "type": "runtime_probe",
+        "correlationId": "corr-1",
+        "taskId": "task-1",
+        "received_at": "2026-04-21T10:00:00.000Z",
+    }
+    (msg_dir / "message.json").write_text(json.dumps(probe))
+
+    received: list[dict] = []
+    svc = FilesystemMailService(
+        working_dir=my_dir,
+        pseudo_agent_subscriptions=["../human"],
+    )
+    svc.listen(on_message=lambda p: received.append(p))
+    try:
+        deadline = time.time() + 3.0
+        ack_files = []
+        while time.time() < deadline:
+            ack_files = list((pseudo_dir / "mailbox" / "inbox").glob("*/message.json"))
+            if ack_files:
+                break
+            time.sleep(0.1)
+    finally:
+        svc.stop()
+
+    assert not msg_dir.exists()
+    assert (pseudo_dir / "mailbox" / "sent" / "probe-001").is_dir()
+    assert (my_dir / "mailbox" / "inbox" / "probe-001" / "message.json").is_file()
+    assert received == []
+    assert len(ack_files) == 1
+
+    ack = json.loads(ack_files[0].read_text())
+    assert ack["type"] == "runtime_probe_ack"
+    assert ack["correlationId"] == "corr-1"
+    assert ack["taskId"] == "task-1"
+    assert ack["in_reply_to"] == "probe-001"
+    assert ack["structured"]["status"] == "ok"
+    assert ack["structured"]["correlationId"] == "corr-1"
+    assert ack["structured"]["taskId"] == "task-1"
+    assert json.loads(ack["message"])["type"] == "runtime_probe_ack"
+
+
 def test_pseudo_agent_outbox_lost_race_rollback(tmp_path):
     """When two subscribers race for the same message, exactly one claims it:
     the loser leaves no speculative inbox copy and does not fire on_message."""

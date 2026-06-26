@@ -5,6 +5,7 @@ serializes to disk, and how it reports runtime status.
 """
 from __future__ import annotations
 
+import os
 import platform
 import sys
 import time
@@ -241,11 +242,23 @@ def _status(agent) -> dict:
             "reason": "active",
         }
 
+    heartbeat = float(getattr(agent, "_heartbeat", 0.0) or 0.0)
+    heartbeat_age_seconds = None
+    if heartbeat > 0:
+        heartbeat_age_seconds = round(max(0.0, time.time() - heartbeat), 3)
+
     runtime_block = scrub_time_fields(
         agent,
         {
             "current_time": now_iso(agent),
+            "pid": os.getpid(),
+            "running": (
+                getattr(agent, "_heartbeat_thread", None) is not None
+                and not agent._shutdown.is_set()
+            ),
             "started_at": agent._started_at,
+            "last_heartbeat": heartbeat if heartbeat > 0 else None,
+            "heartbeat_age_seconds": heartbeat_age_seconds,
             "uptime_seconds": round(uptime, 1),
             "stamina": agent._config.stamina,
             "stamina_left": round(stamina_left, 1) if stamina_left is not None else None,
@@ -268,6 +281,7 @@ def _status(agent) -> dict:
 
     result = {
         "identity": {
+            "agent_id": agent._agent_id,
             "address": str(agent._working_dir),
             "agent_name": agent.agent_name,
             "mail_address": mail_addr,

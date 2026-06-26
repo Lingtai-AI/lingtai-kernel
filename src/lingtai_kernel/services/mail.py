@@ -269,20 +269,24 @@ class FilesystemMailService(MailService):
         message, check whether this service's address appears in its ``to``
         field, and if so:
 
-          1. Pre-mark the UUID in ``_seen`` so Phase 1 won't re-dispatch it
+          1. Atomically rename ``<pseudo_dir>/mailbox/outbox/<uuid>/`` to a
+             temporary claim directory under ``sent``. Only one poller can win
+             this claim.
+          2. Pre-mark the UUID in ``_seen`` so Phase 1 won't re-dispatch it
              after we place a copy in own inbox.
-          2. Write ``message.json`` atomically into ``<self>/mailbox/inbox/<uuid>/``
-             (same tmp-write + os.replace pattern as ``send()``) — this is
-             what makes the wake signal truthful: by the time ``on_message``
-             fires, the message really is in this agent's inbox.
-          3. Atomically rename ``<pseudo_dir>/mailbox/outbox/<uuid>/`` to
-             ``<pseudo_dir>/mailbox/sent/<uuid>/`` to claim the message.
-          4. Dispatch via ``on_message(payload)``.
+          3. Write ``message.json`` atomically into
+             ``<self>/mailbox/inbox/<uuid>/``. This makes the wake signal
+             truthful: by the time ``on_message`` fires, the message really is
+             in this agent's inbox.
+          4. Atomically rename the temporary claim directory to
+             ``<pseudo_dir>/mailbox/sent/<uuid>/``.
+          5. Dispatch via ``on_message(payload)`` unless this is a runtime
+             probe handled by the runtime management layer.
 
-        Concurrent pollers racing on the same message: each writes its own
-        speculative inbox copy in step 2, then both race on step 3. Only one
-        rename succeeds; the loser deletes its speculative inbox copy, clears
-        ``_seen``, and silently skips.
+        Concurrent pollers racing on the same message: only one can claim the
+        outbox directory. Losers skip without writing their own inbox. If the
+        winner cannot persist the inbox copy, it restores the claim back to
+        outbox for retry.
         """
         outbox_dir = pseudo_dir / self._mailbox_rel / "outbox"
         if not outbox_dir.is_dir():
@@ -317,13 +321,20 @@ class FilesystemMailService(MailService):
             own_inbox_dir = self._inbox_dir / uuid_name
             own_msg_file = own_inbox_dir / "message.json"
             own_tmp_file = own_inbox_dir / "message.json.tmp"
+            claim_dir = sent_parent / f".{uuid_name}.claim-{uuid.uuid4()}"
+            sent_dir = sent_parent / uuid_name
+
+            try:
+                os.replace(str(entry), str(claim_dir))
+            except OSError:
+                continue
 
             # Pre-mark BEFORE placing the file so Phase 1's own-inbox scan
             # on the next tick doesn't treat this UUID as a new arrival and
             # double-dispatch. Removed on rollback.
             self._seen.add(uuid_name)
 
-            # Step 1: write the payload to own inbox (tmp → rename).
+            # Step 1: write the payload to own inbox (tmp -> rename).
             try:
                 own_inbox_dir.mkdir(parents=True, exist_ok=True)
                 own_tmp_file.write_text(
@@ -340,23 +351,26 @@ class FilesystemMailService(MailService):
                 # do not attempt the sent-rename.
                 self._seen.discard(uuid_name)
                 # Best-effort cleanup of the partial inbox dir.
-                shutil.rmtree(str(own_inbox_dir), ignore_errors=True)
+                _remove_tree_retry(own_inbox_dir)
+                _restore_claim_to_outbox(claim_dir, entry)
                 continue
 
-            # Step 2: atomic claim by renaming outbox → sent. If a concurrent
-            # poller won the race, the source no longer exists — roll back
-            # our speculative inbox copy.
-            sent_dir = sent_parent / uuid_name
+            # Step 2: publish the claim by renaming claim -> sent. If this
+            # fails, roll back our inbox copy and restore the claim for retry.
             try:
-                os.replace(str(entry), str(sent_dir))
+                os.replace(str(claim_dir), str(sent_dir))
             except OSError:
-                shutil.rmtree(str(own_inbox_dir), ignore_errors=True)
+                _remove_tree_retry(own_inbox_dir)
+                _restore_claim_to_outbox(claim_dir, entry)
                 self._seen.discard(uuid_name)
+                continue
+
+            if self._write_runtime_probe_reply(pseudo_dir, payload, uuid_name):
                 continue
 
             # Step 3: best-effort dispatch. If on_message raises, the
             # message is fully persisted (own inbox + sender sent/) and
-            # nothing needs to unwind — just log so silent loss of the
+            # nothing needs to unwind; just log so silent loss of the
             # handler-side effect is observable.
             try:
                 on_message(payload)
@@ -367,9 +381,143 @@ class FilesystemMailService(MailService):
                     pseudo_dir,
                 )
 
+    def _write_runtime_probe_reply(
+        self,
+        pseudo_dir: Path,
+        payload: dict,
+        mailbox_id: str,
+    ) -> bool:
+        """Write a runtime-managed structured ack for explicit probe mail."""
+        probe = _runtime_probe_payload(payload)
+        if probe is None:
+            return False
+
+        correlation_id = _first_nonempty(
+            payload.get("correlationId"),
+            payload.get("correlation_id"),
+            probe.get("correlationId"),
+            probe.get("correlation_id"),
+        )
+        task_id = _first_nonempty(
+            payload.get("taskId"),
+            payload.get("task_id"),
+            probe.get("taskId"),
+            probe.get("task_id"),
+        )
+        if not correlation_id or not task_id:
+            logger.warning(
+                "runtime probe %s from %s missing correlationId/taskId",
+                mailbox_id,
+                pseudo_dir,
+            )
+            return True
+
+        from datetime import datetime, timezone
+
+        ack_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        in_reply_to = payload.get("_mailbox_id") or payload.get("id") or mailbox_id
+        structured = {
+            "type": "runtime_probe_ack",
+            "status": "ok",
+            "correlationId": correlation_id,
+            "taskId": task_id,
+            "inReplyTo": in_reply_to,
+            "agent": self.address,
+            "runtime": "filesystem-mail-service",
+        }
+        ack = {
+            "id": ack_id,
+            "_mailbox_id": ack_id,
+            "from": self.address,
+            "to": [str(payload.get("from") or pseudo_dir.name)],
+            "subject": "Runtime probe ack",
+            "message": json.dumps(structured, ensure_ascii=False, separators=(",", ":")),
+            "type": "runtime_probe_ack",
+            "correlationId": correlation_id,
+            "taskId": task_id,
+            "in_reply_to": in_reply_to,
+            "received_at": now,
+            "attachments": [],
+            "identity": _safe_manifest(self._working_dir),
+            "structured": structured,
+        }
+
+        inbox_dir = pseudo_dir / self._mailbox_rel / "inbox" / ack_id
+        tmp_file = inbox_dir / "message.json.tmp"
+        final_file = inbox_dir / "message.json"
+        try:
+            inbox_dir.mkdir(parents=True, exist_ok=True)
+            tmp_file.write_text(
+                json.dumps(ack, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+            os.replace(str(tmp_file), str(final_file))
+        except OSError:
+            logger.exception(
+                "failed to write runtime probe ack %s to %s",
+                ack_id,
+                pseudo_dir,
+            )
+        return True
+
     def stop(self) -> None:
         """Stop the polling thread."""
         self._poll_stop.set()
         if self._poll_thread is not None:
             self._poll_thread.join(timeout=3.0)
         self._poll_thread = None
+
+
+def _runtime_probe_payload(payload: dict) -> dict | None:
+    if payload.get("type") in {"runtime_probe", "runtime.probe"}:
+        return payload
+
+    message = payload.get("message")
+    if not isinstance(message, str):
+        return None
+    try:
+        decoded = json.loads(message)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    if decoded.get("type") in {"runtime_probe", "runtime.probe"}:
+        return decoded
+    return None
+
+
+def _first_nonempty(*values) -> str:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _safe_manifest(agent_dir: Path) -> dict:
+    try:
+        data = json.loads((agent_dir / ".agent.json").read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"address": agent_dir.name}
+    return {
+        key: data.get(key)
+        for key in ("agent_id", "agent_name", "nickname", "address", "state", "admin")
+        if key in data
+    }
+
+
+def _remove_tree_retry(path: Path) -> None:
+    for _ in range(5):
+        shutil.rmtree(str(path), ignore_errors=True)
+        if not path.exists():
+            return
+        time.sleep(0.05)
+
+
+def _restore_claim_to_outbox(claim_dir: Path, outbox_dir: Path) -> None:
+    if not claim_dir.exists() or outbox_dir.exists():
+        return
+    try:
+        os.replace(str(claim_dir), str(outbox_dir))
+    except OSError:
+        logger.exception("failed to restore claimed pseudo-agent message %s", claim_dir)
