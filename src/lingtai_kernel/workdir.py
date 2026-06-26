@@ -381,7 +381,9 @@ class WorkingDir:
             return {}
 
     def write_manifest(self, manifest: dict) -> None:
-        target = self._path / _MANIFEST_FILE
-        tmp = self._path / ".agent.json.tmp"
-        tmp.write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
-        os.replace(str(tmp), str(target))
+        # Atomic temp-file + os.replace, UTF-8 preserved, no trailing newline.
+        # Routed through the shared helper (issue #510); on-disk format is
+        # byte-identical to the previous inline implementation.
+        from ._fsutil import atomic_write_json
+
+        atomic_write_json(self._path / _MANIFEST_FILE, manifest)
