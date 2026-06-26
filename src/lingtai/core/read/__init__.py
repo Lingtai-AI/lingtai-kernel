@@ -140,6 +140,30 @@ def setup(agent: "BaseAgent") -> None:
         try:
             content = agent._file_io.read(path)
         except FileNotFoundError:
+            # Spill-aware messaging: if the missing file is under
+            # tmp/tool-results/, it was an ephemeral sidecar artifact
+            # that has been cleaned up.  Give a specific hint instead
+            # of the generic "File not found".
+            # Normalize to collapse ".." components so that e.g.
+            # tmp/tool-results/../not-a-spill.txt is NOT misclassified
+            # as a spill path.
+            try:
+                rel = Path(path).resolve().relative_to(
+                    Path(agent._working_dir).resolve()
+                )
+            except (ValueError, OSError):
+                rel = Path(path)
+            parts = rel.parts
+            if len(parts) >= 3 and parts[0] == "tmp" and parts[1] == "tool-results":
+                return {
+                    "status": "error",
+                    "message": (
+                        "Spill artifact expired: this tmp/tool-results/ sidecar file "
+                        "no longer exists. The original tool result content is "
+                        "unavailable. Use the preview from the manifest or rerun the "
+                        "source tool."
+                    ),
+                }
             return {"status": "error", "message": f"File not found: {path}"}
         except Exception as e:
             return {"status": "error", "message": f"Cannot read {path}: {e}"}

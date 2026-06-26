@@ -129,6 +129,16 @@ def _start(agent) -> None:
     chat_history_file = agent._working_dir / "history" / "chat_history.jsonl"
     if chat_history_file.is_file():
         try:
+            # Mark stale spill manifests before the LLM sees them so
+            # expired sidecar files are flagged honestly.
+            from ..tool_result_artifacts import mark_expired_spill_manifests
+            try:
+                expired = mark_expired_spill_manifests(agent._working_dir)
+                if expired:
+                    agent._log("spill_manifests_expired_on_restore", count=expired)
+            except Exception:
+                pass  # best-effort; don't block startup
+
             messages = [
                 json.loads(line)
                 for line in chat_history_file.read_text(encoding="utf-8").splitlines()

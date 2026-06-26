@@ -212,9 +212,9 @@ def spill_oversized_result(
 
     warning = (
         f"Tool result was too large ({original_chars} chars, cap {max_chars}) "
-        "and was written to a sidecar file. Inspect/process it carefully — it "
-        "may be very large. Read it via the read tool, or stream sections "
-        "with grep/bash if it is too big to read whole."
+        "and was written to a sidecar file under tmp/tool-results/ which is "
+        "ephemeral and may be cleaned up. If the file is missing, the full "
+        "content is gone — use the preview below or rerun the source tool."
     )
 
     manifest: dict[str, Any] = {
@@ -231,11 +231,18 @@ def spill_oversized_result(
         "cap_chars": max_chars,
         "timestamp": iso_timestamp,
         "preview": preview,
+        "artifact_lifetime": "ephemeral_tmp",
+        "artifact_state": "available",
     }
     if spill_failed is not None:
         manifest["spill_error"] = spill_failed
     if working_dir is None:
         manifest["spill_error"] = manifest.get("spill_error") or "no working_dir configured"
+
+    # When the sidecar could not be written (no working_dir or write
+    # failure), the full content is unreachable — mark as unavailable.
+    if spill_path_str is None:
+        manifest["artifact_state"] = "unavailable"
 
     # Hoist a small allowlist of provider-visible reserved fields from a
     # dict-shaped original onto the manifest, so loop-guard duplicate
@@ -378,3 +385,109 @@ def compact_oversized_history(
                 except Exception:
                     pass
     return stats
+
+
+def mark_expired_spill_manifests(working_dir: Path | str) -> int:
+    """Scan persisted chat history for spill manifests whose sidecar files are gone.
+
+    Walks ``<working_dir>/history/chat_history.jsonl`` and, for every JSON
+    line that contains a spill manifest (recognised by ``is_spill_manifest``),
+    checks whether the ``spill_path`` file still exists on disk.
+
+    * If **missing**: sets ``artifact_state="expired"`` and stamps
+      ``artifact_expired_at`` with the current UTC ISO timestamp.
+    * If **present**: ensures ``artifact_state="available"`` (no timestamp).
+
+    The file is rewritten **only if** at least one manifest was mutated, so
+    the function is idempotent and cheap when nothing changed.
+
+    Returns the count of manifests whose sidecar was missing (i.e. now
+    marked ``"expired"``).
+    """
+    wd = Path(working_dir)
+    history_path = wd / "history" / "chat_history.jsonl"
+    if not history_path.is_file():
+        return 0
+
+    lines = history_path.read_text(encoding="utf-8").splitlines()
+    changed = False
+    expired_count = 0
+    now_iso: str | None = None  # lazy — only generated if needed
+
+    def _mark_manifest(manifest: dict) -> None:
+        nonlocal changed, expired_count, now_iso
+        spill_path = manifest.get("spill_path")
+        if not spill_path:
+            return
+        # Backfill artifact_lifetime for legacy manifests that predate #192.
+        if "artifact_lifetime" not in manifest:
+            manifest["artifact_lifetime"] = "ephemeral_tmp"
+            changed = True
+        abs_path = wd / spill_path
+        if abs_path.is_file():
+            # Sidecar still on disk — ensure available state.
+            if manifest.get("artifact_state") != "available":
+                manifest["artifact_state"] = "available"
+                manifest.pop("artifact_expired_at", None)
+                changed = True
+        else:
+            # Sidecar gone — mark expired.
+            expired_warning = (
+                "EXPIRED: This tool result was stored in a temporary "
+                "sidecar file that no longer exists. The full content is "
+                "unavailable. Use the preview below if sufficient, or "
+                "rerun the source tool to regenerate the result."
+            )
+            if manifest.get("artifact_state") != "expired":
+                if now_iso is None:
+                    now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat(
+                        timespec="seconds"
+                    )
+                manifest["artifact_state"] = "expired"
+                manifest["artifact_expired_at"] = now_iso
+                manifest["warning"] = expired_warning
+                changed = True
+                expired_count += 1
+            elif "artifact_expired_at" not in manifest:
+                # Already expired but missing timestamp — backfill.
+                if now_iso is None:
+                    now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat(
+                        timespec="seconds"
+                    )
+                manifest["artifact_expired_at"] = now_iso
+                changed = True
+            # Always overwrite stale warning text on expired manifests.
+            if manifest.get("warning") != expired_warning:
+                manifest["warning"] = expired_warning
+                changed = True
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, dict):
+            if is_spill_manifest(value):
+                _mark_manifest(value)
+            else:
+                for v in value.values():
+                    _walk(v)
+        elif isinstance(value, list):
+            for item in value:
+                _walk(item)
+
+    new_lines: list[str] = []
+    for line in lines:
+        if not line.strip():
+            new_lines.append(line)
+            continue
+        try:
+            entry = _json.loads(line)
+        except (_json.JSONDecodeError, ValueError):
+            new_lines.append(line)
+            continue
+        _walk(entry)
+        new_lines.append(_json.dumps(entry, ensure_ascii=False, default=str))
+
+    if changed:
+        history_path.write_text(
+            "\n".join(new_lines) + ("\n" if new_lines else ""),
+            encoding="utf-8",
+        )
+    return expired_count
