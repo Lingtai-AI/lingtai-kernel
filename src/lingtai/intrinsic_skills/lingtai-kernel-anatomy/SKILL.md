@@ -130,26 +130,29 @@ Concretely, if a commit moves `intrinsics/soul.py` → `intrinsics/soul/{config,
 2. Update every match to the new file location and verified line number.
 3. Repeat for any other file the refactor moved.
 
-For cheap mechanical checking, scan anatomy citations before commit:
+For cheap mechanical checking, run the advisory drift checker before commit:
 
 ```bash
-python - <<'PY'
-import pathlib, re
-root = pathlib.Path("src/lingtai_kernel")
-for anatomy in root.rglob("ANATOMY.md"):
-    text = anatomy.read_text()
-    for rel, line in re.findall(r"`?([A-Za-z0-9_./-]+\.py):(\d+)", text):
-        path = root / rel if not rel.startswith("src/") else pathlib.Path(rel)
-        if not path.exists():
-            print(f"{anatomy}: missing citation target {rel}:{line}")
-            continue
-        n = len(path.read_text().splitlines())
-        if int(line) > n:
-            print(f"{anatomy}: out-of-range citation {rel}:{line} > {n}")
-PY
+python tools/check_anatomy_drift.py            # report drift, exit 0
+python tools/check_anatomy_drift.py --check    # exit 1 if any drift (CI/pre-commit)
 ```
 
-This only catches missing files and out-of-range lines. It does not prove semantic correctness; an agent still has to open the cited code and confirm the claim.
+`tools/check_anatomy_drift.py` scans every `ANATOMY.md` under `src/` and flags
+two mechanically-detectable drift modes: **citation rot** (a `file.py:line`
+citation whose target is missing or whose line is past the end of the file) and
+**stale size claims** (a "~N lines" / "N lines" whole-file claim that no longer
+matches `wc -l`, beyond a tolerance). It resolves cited paths by searching
+upward from each anatomy's directory, so kernel-root-relative citations work.
+
+For size claims to be checkable, write them with the path **adjacent** to the
+count — `` `base_agent/__init__.py` (~2170 lines: ...)`` — so the checker can
+bind the count to the file; a count separated from its path by another
+backticked symbol is treated as a function-size note and skipped.
+
+This only catches missing files, out-of-range lines, and stale whole-file size
+claims. It does **not** prove semantic correctness — a citation can be in-range
+yet point at the wrong code — so an agent still has to open the cited line and
+confirm the claim. The checker is the cheap first pass, not the verification.
 
 This is the discipline demonstrated by the historical soul-flow tool-refusal proposal and the soul package refactor (`ffe42d4`). The first round of citation rot happened because the rule was implicit; making it explicit here is part of the convention.
 
