@@ -1353,6 +1353,14 @@ def test_packaged_guidance_resource_is_valid():
     assert len(ids) == len(set(ids)), "section ids must be unique"
     titles = [s["title"] for s in guidance["sections"]]
     assert len(titles) == len(set(titles)), "section titles must be unique"
+    body = "\n".join(section["body"] for section in guidance["sections"])
+    assert "regardless of length" in body
+    assert "token per API call" in body
+    assert "cache/continuation efficiency" in body
+    assert "When the current task is complete" in body
+    assert "molt is the stronger summarize boundary" in body
+    assert "do not pay a separate summarize call" in body
+    assert "below 0.7 of the window" in body
 
 
 def test_validate_runtime_guidance_accepts_well_formed():

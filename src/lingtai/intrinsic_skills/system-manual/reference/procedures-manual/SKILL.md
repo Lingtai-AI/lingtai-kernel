@@ -48,12 +48,14 @@ not bloat the resident prompt with one-off details.
 ### Tool-result digestion
 
 Progressive disclosure applies to tool results as much as to manuals. A raw tool
-result is useful while you inspect it; after you have consumed it, the better
-active-context form is an index-style summary. Summarize deliberately rather than
-on every large result: weigh context pressure, how recoverable the result is from
-logs, and future reuse/token savings, and batch already-digested results instead
-of discharging each immediately. If an adapter/provider comment is present, follow
-its adapter-specific summarize rules on top of these general ones.
+result is useful while you inspect it; after you have consumed it and no longer
+need the raw text visible, the better active-context form is an index-style
+summary. Strongly prefer summarizing already-digested completed tool results
+regardless of length unless you still need raw details for inspection, quotation,
+or comparison. This reduces token per API call and helps cache/continuation
+efficiency. Batch already-digested results instead of discharging each
+immediately when batching is practical. If an adapter/provider comment is present,
+follow its adapter-specific summarize rules on top of these general ones.
 
 The first economy move is to avoid pulling bulky raw output into main context at
 all. Bulky, mechanical, or repetitive work — full test suites, large log scans,
@@ -75,8 +77,12 @@ the runtime reconstructs context automatically on the next request with that
 compacted history; no extra summarize call is needed. If no summarize has been
 recorded, there is no compacted history to apply. Reserve `refresh` for
 emergencies (broken/stale context). If summarize plus that automatic
-reconstruction still cannot get context below the threshold,
-molt deliberately.
+reconstruction still cannot get context below 0.7 of the window, molt
+deliberately. At a task boundary, after necessary reporting and durable stores
+are tended, if there is no concrete next action, molt regardless of context
+size to reduce future token per API call and preserve cache/continuation
+efficiency. If you have already decided to molt, do not summarize first merely
+to prepare: molt is the stronger summarize boundary.
 
 Runtime `_meta.guidance` gives the high-attention reminder when summarization is
 timely. For the full procedure — urgent large-result handling, idle cleanup

@@ -125,9 +125,10 @@ semantics, and the undismissable large-result reminders, read
 ### `summarize`
 
 `summarize` is the system action for tool-result context hygiene: after you have
-consumed a completed prior tool result, replace its context-visible raw payload
-with a summary that preserves the conclusion, evidence, anchors, validation,
-risks, and next steps. Runtime high-attention guidance for this behavior is carried in `_meta.guidance`.
+consumed a completed prior tool result and no longer need the raw text visible,
+replace its context-visible raw payload with a summary regardless of length. The
+summary preserves the conclusion, evidence, anchors, validation, risks, and next
+steps while lowering active context. Runtime high-attention guidance for this behavior is carried in `_meta.guidance`.
 Treat guidance as a system-prompt-like appendix placed at the end of context: it
 is an ordered `sections[]` structure, not a loose metadata bag.  The kernel's
 `meta_readme` explanation of the `_meta` envelope is therefore one guidance
@@ -145,8 +146,14 @@ this delay is normal. If summarized history is pending, then at 0.75 of the
 context window the runtime automatically reconstructs context with that compacted
 history on the next request, with no manual action required. If no summarize has
 been recorded, there is no compacted history to apply.
-`refresh` is reserved for emergency reconstruction (see above); molt is the final
-boundary when summarize/reconstruction cannot get context below the threshold.
+`refresh` is reserved for emergency reconstruction (see above); molt is the
+stronger summarize boundary when summarize/reconstruction cannot get context
+below 0.7 of the window. A completed task is also an efficiency boundary: after
+necessary reporting and durable-store updates, if no concrete next action
+remains, molt regardless of context size. If you have already decided to molt,
+do not spend a separate summarize call merely to prepare. This is not for
+aesthetic cleanliness; it reduces token per API call and protects
+cache/continuation efficiency for later work.
 
 For the full operating procedure — urgent large-result summarization, idle
 cleanup sweeps, original-result recovery by `tool_call_id`, summary quality,

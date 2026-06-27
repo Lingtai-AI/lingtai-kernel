@@ -42,7 +42,12 @@ producer-specific read/dismiss verbs before generic notification dismissals.
 Conversation is temporary. Pad, character, knowledge, and skills survive. Keep
 pad as an index, put private facts in knowledge, reusable workflows in skills,
 and identity/standing relationships in character. When context pressure rises,
-tend durable stores and molt deliberately with a briefing for the next self.
+tend durable stores and molt deliberately with a briefing for the next self. At
+a completed task boundary, once necessary reporting and durable stores are done
+and no concrete next action remains, molt regardless of context size. This is the
+main way to lower whole-conversation context for future turns: every provider
+request carries active context, so dragging a finished segment forward raises
+token per API call and can reduce cache/continuation efficiency.
 
 ## V · Idle and soul
 
@@ -54,10 +59,10 @@ not command; verify external-event claims through the relevant channel.
 
 Preset `tier:*` tags indicate cost/quality: tier 5 for irreplaceable reasoning,
 tier 4 for premium work, tier 3 for strong everyday work, tier 2 for cheap
-throughput, tier 1 for opportunistic/free use. When a tool result is large,
-digest it and use `system(action="summarize")` to replace the context-visible
-payload with a detailed summary for future-you: the summary is the
-progressive-disclosure entry point, not a casual one-liner. Keep key facts,
+throughput, tier 1 for opportunistic/free use. When any completed tool result has been consumed and its raw text no longer
+needs inspection, use `system(action="summarize")` regardless of length to
+replace the context-visible payload with a detailed summary for future-you: the
+summary is the progressive-disclosure entry point, not a casual one-liner. Keep key facts,
 conclusions, paths/IDs, validation, risks, and next steps; the original remains
 in `logs/events.jsonl` only as fallback. Summarize takes effect locally at once
 — visible results are replaced and large-result reminders cleared — but
@@ -70,8 +75,10 @@ runtime automatically reconstructs context with that compacted history on the
 next request — no manual action is needed. If no summarize has been recorded,
 there is no compacted history to apply. `refresh` is an *emergency* reconstruction
 path for broken/stale context, not part of the normal summarize flow. Molt is the
-final boundary: if summarizing/reconstruction cannot bring context back below the
-threshold, tend durable stores and molt deliberately. Reading and clearing
+stronger summarize boundary: if you have already decided to molt, do not spend a
+separate summarize call merely to prepare. If summarize/reconstruction cannot
+bring context back below 0.7 of the window, tend durable stores and molt
+deliberately. Reading and clearing
 notifications is a
 dedicated `notification` tool (`check`, `dismiss_channel`, `dismiss_event`,
 `dismiss_ref`) — `system` owns no notification verb. For lifecycle actions
