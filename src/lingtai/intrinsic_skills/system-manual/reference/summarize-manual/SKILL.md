@@ -17,8 +17,10 @@ purpose, or when you need to explain how summarize differs from molt.
 ## 1 · The principle: progressive disclosure
 
 A raw tool result is the first layer: it is useful while you inspect it. After
-you have consumed it, the better layer is an index that future-you can reason
-from without carrying the raw bulk.
+you have consumed it and no longer need the raw text visible, the better layer is
+an index that future-you can reason from without carrying the raw bulk. Strongly
+prefer summarizing already-digested completed tool results regardless of length;
+keep raw output visible only for active inspection, quotation, or comparison.
 
 A good summary should let future-you decide whether the hidden raw result must
 be reopened. Preserve:
@@ -52,13 +54,18 @@ reminder.
 
 Use this when the task quiets down, before the context window becomes urgent.
 Look back over older tool results that are already digested, obsolete, or only
-useful as evidence anchors, and replace them with summaries. This keeps active
-context small enough that the next task starts clean.
+useful as evidence anchors, and replace them with summaries regardless of length
+when you are continuing in the same session. This lowers token per API call and
+improves cache/continuation efficiency for the next turn.
 
-Idle cleanup is also the right time to prepare for a deliberate molt. If
-substantial work is complete, durable stores are tended, and no human reply is
-pending, prefer molting while context is still cheap over waiting until pressure
-warnings force the issue.
+Idle cleanup is also the right time to choose a deliberate molt. If the current
+task is complete, necessary reporting/durable stores are tended, no human reply
+is pending, and no concrete next action remains, molt regardless of context
+size. Once you have decided to molt, do not spend a separate summarize call
+merely to prepare; molt is the stronger summarize boundary. This is a
+token-economy boundary, not an aesthetic reset: keeping a finished task segment
+alive raises future token per API call and can reduce cache/continuation
+efficiency.
 
 ## 3 · How to call summarize
 
@@ -85,6 +92,41 @@ Operational rules:
 - If a large-result notification points at that result, successful summarize
   clears the reminder.
 - If the result is still ambiguous, reopen or inspect it before summarizing.
+
+## 3a · Local effect now, reconstruction delayed
+
+Summarize has two layers of effect, and they are deliberately decoupled.
+
+**Local effect — immediate.** The moment the call succeeds, the visible
+tool-result blocks are replaced with your summary and any matching large-result
+reminders are cleared. The successful result carries a short reassurance to that
+effect. You see the compacted context right away.
+
+**Provider-side reconstruction — delayed.** Runtimes serve most requests by
+*appending* new turns onto a stable cache/continuation prefix, not by
+*reconstructing* that prefix from scratch each time. Rebuilding the prefix on
+every summarize would throw away the cache/continuation benefit. So summarizing
+does not immediately force the provider to rebuild context:
+
+- **Below 0.75 of the context window:** the summarize stays "pending" at the
+  provider layer. The session keeps appending; you can keep working and may issue
+  more summarize calls safely. This delay is normal and is not a failure.
+- **At or above 0.75 of the context window:** if summarized history is
+  pending, the runtime automatically reconstructs context with that compacted
+  history on the next provider request. You do not need to call summarize again
+  or take manual action for this to happen. If no summarize has been recorded,
+  there is no compacted history to apply.
+
+`refresh` is an **emergency** reconstruction path — for context that is broken or
+stale, or when an immediate rebuild is urgently needed. It is not a routine knob
+for the normal summarize flow; do not reach for it just to "apply" a summarize.
+
+If summarize and the automatic reconstruction still cannot bring context back
+below 0.7 of the window, that is the signal to **molt** (see §6 and
+`psyche-manual`).
+
+Runtimes that already reconstruct on every request simply observe no delay; the
+above is generic behavior, not a single provider's policy.
 
 ## 4 · Recovering the original result
 

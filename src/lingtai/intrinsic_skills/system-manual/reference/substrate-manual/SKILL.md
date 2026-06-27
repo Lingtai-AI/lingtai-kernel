@@ -82,6 +82,12 @@ installed capabilities. Refresh preserves identity and conversation while
 rebuilding the runtime surface. If a new MCP/tool still does not appear after
 refresh, inspect registry/config health before retrying.
 
+Refresh is also the **emergency** context-reconstruction path: reach for it when
+context is broken or stale, or when an immediate provider-side rebuild is urgently
+needed. It is not part of the normal summarize flow — summarize already drives
+delayed reconstruction automatically at 0.75 of the context window (see
+`summarize` below), so do not refresh just to "apply" a summarize.
+
 ### `presets`
 
 Use to list preset bundles and their tier/connectivity/capability tags. Tier tags
@@ -119,9 +125,10 @@ semantics, and the undismissable large-result reminders, read
 ### `summarize`
 
 `summarize` is the system action for tool-result context hygiene: after you have
-consumed a completed prior tool result, replace its context-visible raw payload
-with a summary that preserves the conclusion, evidence, anchors, validation,
-risks, and next steps. Runtime high-attention guidance for this behavior is carried in `_meta.guidance`.
+consumed a completed prior tool result and no longer need the raw text visible,
+replace its context-visible raw payload with a summary regardless of length. The
+summary preserves the conclusion, evidence, anchors, validation, risks, and next
+steps while lowering active context. Runtime high-attention guidance for this behavior is carried in `_meta.guidance`.
 Treat guidance as a system-prompt-like appendix placed at the end of context: it
 is an ordered `sections[]` structure, not a loose metadata bag.  The kernel's
 `meta_readme` explanation of the `_meta` envelope is therefore one guidance
@@ -129,10 +136,30 @@ section inside `sections[]`, alongside the packaged sections from
 `src/lingtai/prompts/guidance.json`; follow that latest guidance first when it
 appears.
 
+Summarize has an immediate local effect and a delayed provider effect. Locally,
+the visible result is replaced and any large-result reminder is cleared at once.
+At the provider layer, runtimes serve requests by *appending* onto a stable
+cache/continuation prefix rather than *reconstructing* it each turn; rebuilding
+that prefix on every summarize would discard the cache benefit. So below 0.75 of
+the context window the summarize stays pending and the session keeps appending —
+this delay is normal. If summarized history is pending, then at 0.75 of the
+context window the runtime automatically reconstructs context with that compacted
+history on the next request, with no manual action required. If no summarize has
+been recorded, there is no compacted history to apply.
+`refresh` is reserved for emergency reconstruction (see above); molt is the
+stronger summarize boundary when summarize/reconstruction cannot get context
+below 0.7 of the window. A completed task is also an efficiency boundary: after
+necessary reporting and durable-store updates, if no concrete next action
+remains, molt regardless of context size. If you have already decided to molt,
+do not spend a separate summarize call merely to prepare. This is not for
+aesthetic cleanliness; it reduces token per API call and protects
+cache/continuation efficiency for later work.
+
 For the full operating procedure — urgent large-result summarization, idle
 cleanup sweeps, original-result recovery by `tool_call_id`, summary quality,
-large-result notification behavior, and the distinction between summarize and
-molt — read `reference/summarize-manual/SKILL.md`.
+large-result notification behavior, append-vs-reconstruction timing, and the
+distinction between summarize and molt — read
+`reference/summarize-manual/SKILL.md`.
 
 ### Sleep, lull, interrupt, suspend, CPR, clear, nirvana
 
