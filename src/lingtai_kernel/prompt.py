@@ -141,27 +141,26 @@ _ACTIVENESS_ALIASES: dict[str, str] = {
 }
 
 
-# Kernel-injected progressive-disclosure layering principle. Resident prompt
-# layers carry operational rules; reference/manual layers carry rationale and
-# examples. Kept in the principle prefix so every agent sees the rule before
-# substrate/procedures/meta_guidance.
+# Kernel-injected progressive-disclosure hook. The detailed layer contract is
+# kernel-owned in the packaged raw `principle` section (`prompts/principle.md`);
+# this localized prefix only tells the agent that one rule should have one source
+# of truth and that resident layers route downward for detail.
 _PROGRESSIVE_DISCLOSURE_PRINCIPLES: dict[str, str] = {
     "en": (
-        "Progressive disclosure principle: resident system-prompt layers carry "
-        "the operating rules — what happens, when to act, and which tool or "
-        "memory layer to use. Reference/manual layers carry why the design works, "
-        "edge cases, examples, and troubleshooting. If a rule must guide ordinary "
-        "turns, keep the rule resident and route only the explanation downward."
+        "Progressive disclosure principle: each prompt layer has one job and "
+        "points to the next. The kernel-owned `principle` section defines the "
+        "role of meta_guidance, procedures, substrate, and references. Keep each "
+        "rule in its owning layer; other layers should route instead of copying."
     ),
     "zh": (
-        "渐进式披露原则：常驻 system prompt 层承载操作规则——发生什么、何时行动、"
-        "该用哪个工具或记忆层；reference/manual 层承载为什么这样设计、边界、例子和排障。"
-        "凡普通回合必须遵守的规则，应留在常驻层，只把解释下沉。"
+        "渐进式披露原则：每个 prompt 层各司一职，并指向下一层。kernel-owned `principle` "
+        "section 定义 meta_guidance、procedures、substrate、references 的职责。"
+        "每条规则应留在拥有它的层里；其他层只指路，不复制。"
     ),
     "wen": (
-        "渐披之则：常驻 system prompt 层载其行法——所发生者、何时当行、当用何器何藏；"
-        "reference/manual 层载其所以、边界、例证、排障。凡常轮所必遵之规，当驻于常驻层；"
-        "其解释乃下沉。"
+        "渐披之则：诸 prompt 层各有其职，递相指路。kernel-owned `principle` section "
+        "定 meta_guidance、procedures、substrate、references 之职。"
+        "凡规则当居其主层；余层但指路，勿复写。"
     ),
 }
 
@@ -410,8 +409,8 @@ def build_system_prompt_batches(
     that want a string can do ``"\\n\\n".join(filter(None, batches))``
     — and build_system_prompt() does exactly that composition.
 
-    The runtime principle prefix (language, activeness, progressive disclosure,
-    token efficiency, and ``base_prompt`` if any) is prepended to Batch 1, the
+    The runtime principle prefix (language, activeness, progressive-disclosure
+    hook, token efficiency, and ``base_prompt`` if any) is prepended to Batch 1, the
     cache-stable prefix batch, using the same
     ``\\n\\n---\\n\\n`` prefix separator that the historical single-string
     builder used between framework-level guidance and sections. Empty

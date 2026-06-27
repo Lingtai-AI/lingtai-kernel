@@ -39,11 +39,14 @@ DEPRECATED_TOP_FIELDS: set[str] = {
 # Legacy fields removed by version-controlled agent-domain migrations. They are
 # known to validation only so stale/restored init.json files do not look like
 # active supported schema fields and do not get type-checked as prompt sections.
-LEGACY_MIGRATED_TOP_FIELDS: set[str] = {"procedures", "procedures_file"}
+LEGACY_MIGRATED_TOP_FIELDS: set[str] = {
+    "principle", "principle_file",
+    "procedures", "procedures_file",
+}
 
 TOP_KNOWN: set[str] = {
     "manifest", "env_file", "venv_path", "addons", "mcp",
-    "principle", "principle_file", "covenant", "covenant_file",
+    "covenant", "covenant_file",
     "substrate", "substrate_file",
     "brief", "brief_file",
     "pad", "pad_file", "prompt", "prompt_file",
@@ -132,7 +135,7 @@ def validate_init(data: dict) -> list[str]:
     # Note: "soul" / "soul_file" was removed in v0.7.6 — the soul-flow
     # voice lives at manifest.soul.{voice,voice_prompt} now. The legacy
     # fields are kept in TOP_KNOWN for silent ignore (no warning).
-    for key in ("principle", "covenant", "pad", "prompt"):
+    for key in ("covenant", "pad", "prompt"):
         file_key = f"{key}_file"
         has_inline = key in data
         has_file = file_key in data

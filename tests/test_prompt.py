@@ -183,9 +183,9 @@ def test_progressive_disclosure_and_token_efficiency_principles_localize():
 def test_progressive_disclosure_principle_states_resident_vs_reference_rule():
     mgr = SystemPromptManager()
     prompt = build_system_prompt(mgr, language="en")
-    assert "resident system-prompt layers carry the operating rules" in prompt
-    assert "what happens, when to act" in prompt
-    assert "Reference/manual layers carry why the design works" in prompt
+    assert "each prompt layer has one job and points to the next" in prompt
+    assert "kernel-owned `principle` section defines" in prompt
+    assert "other layers should route instead of copying" in prompt
     assert "the current session's active context is carried into every provider request" in prompt
     assert "summarize consumed tool results" in prompt
     assert "do not molt automatically" in prompt

@@ -19,6 +19,49 @@ def _valid_init() -> dict:
     }
 
 
+
+def test_principle_no_longer_active_or_required_prompt_field():
+    """principle is LingTai-owned like procedures: legacy-known and ignored."""
+    from lingtai.init_schema import LEGACY_MIGRATED_TOP_FIELDS, TOP_KNOWN, TOP_OPTIONAL
+
+    assert "principle" in LEGACY_MIGRATED_TOP_FIELDS
+    assert "principle" in TOP_KNOWN
+    assert "principle" not in TOP_OPTIONAL
+
+    data = _valid_init()
+    del data["principle"]
+    validate_init(data)  # no longer required
+
+    data["principle"] = {"ignored": "not type-checked"}
+    warnings = validate_init(data)
+    assert all("principle" not in w for w in warnings)
+
+
+def test_principle_file_no_longer_active_prompt_field():
+    """principle_file is legacy-known, not active or deprecated schema."""
+    from lingtai.init_schema import (
+        DEPRECATED_TOP_FIELDS,
+        LEGACY_MIGRATED_TOP_FIELDS,
+        TOP_KNOWN,
+        TOP_OPTIONAL,
+        strip_deprecated,
+    )
+
+    assert "principle_file" not in DEPRECATED_TOP_FIELDS
+    assert "principle_file" in LEGACY_MIGRATED_TOP_FIELDS
+    assert "principle_file" in TOP_KNOWN
+    assert "principle_file" not in TOP_OPTIONAL
+
+    data = _valid_init()
+    data["principle_file"] = 123
+    stripped = strip_deprecated(data)
+    warnings = validate_init(data)
+
+    assert stripped == []
+    assert "principle_file" in data
+    assert all("principle_file" not in w for w in warnings)
+
+
 def test_procedures_no_longer_active_optional_prompt_field():
     """Inline procedures is migrated-legacy-known, not active schema."""
     from lingtai.init_schema import LEGACY_MIGRATED_TOP_FIELDS, TOP_KNOWN, TOP_OPTIONAL

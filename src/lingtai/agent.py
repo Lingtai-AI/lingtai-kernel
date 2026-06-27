@@ -1432,15 +1432,31 @@ class Agent(BaseAgent):
         from lingtai_kernel.intrinsics.psyche import _pad_load
         _pad_load(self, {})
 
-        # --- Principle ---
-        principle = data.get("principle", "")
+        # --- Principle (kernel-owned top-level progressive-disclosure contract) ---
+        # The principle section is LingTai-owned, not operator-owned: init.json
+        # `principle` / `principle_file` values are intentionally ignored here.
+        #
+        # Resolution order:
+        #   1. packaged prompts/principle.md — kernel default, refreshed on boot
+        #   2. system/principle.md          — fallback only if package missing
+        #
+        # The packaged default owns the raison d'être of the resident prompt
+        # layers (meta_guidance/procedures/substrate/references) so the rule does
+        # not drift across files. The on-disk file is a mirror/debug artifact.
+        principle = ""
         principle_file = system_dir / "principle.md"
-        if principle:
-            principle_file.write_text(principle)
-        elif principle_file.is_file():
-            principle = principle_file.read_text(encoding="utf-8")
+        try:
+            from importlib.resources import files
+            packaged = files("lingtai.prompts").joinpath("principle.md").read_text(encoding="utf-8")
+            principle_file.write_text(packaged)
+            principle = packaged
+        except (FileNotFoundError, ModuleNotFoundError, OSError):
+            if principle_file.is_file():
+                principle = principle_file.read_text(encoding="utf-8")
         if principle:
             self._prompt_manager.write_section("principle", principle, protected=True)
+        else:
+            self._prompt_manager.delete_section("principle")
 
         # --- Procedures ---
         # Kernel-owned resident procedures. Legacy init.json procedures values

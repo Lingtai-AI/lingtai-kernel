@@ -79,6 +79,26 @@ def test_agent_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_path):
     assert "fresh full replay/cache epoch effect" not in codex_note
 
 
+
+def test_agent_loads_kernel_owned_principle_prompt(tmp_path):
+    agent = _agent_with_static_comment(tmp_path)
+    agent._reload_prompt_sections({"principle": "operator supplied principle override"})
+
+    prompt = agent._build_system_prompt()
+    principle_file = agent._working_dir / "system" / "principle.md"
+    mirrored = principle_file.read_text(encoding="utf-8")
+
+    assert "Progressive disclosure principle: each resident prompt layer has one job" in mirrored
+    assert "`meta_guidance` is immediate runtime guidance" in mirrored
+    assert "`procedures` is how to act" in mirrored
+    assert "`substrate` is the working model" in mirrored
+    assert "Reference manuals are why" in mirrored
+    assert "operator supplied principle override" not in mirrored
+    assert "operator supplied principle override" not in prompt
+    assert mirrored in prompt
+    assert prompt.index("Progressive disclosure principle: each resident prompt layer") < prompt.index("## meta_guidance")
+
+
 def test_agent_batched_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_path):
     agent = _agent_with_static_comment(tmp_path)
 
