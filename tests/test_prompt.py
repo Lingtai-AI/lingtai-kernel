@@ -1,3 +1,4 @@
+from pathlib import Path
 from lingtai_kernel.prompt import build_system_prompt
 from lingtai_kernel.prompt import build_system_prompt_batches
 from lingtai_kernel.prompt import SystemPromptManager
@@ -187,7 +188,22 @@ def test_progressive_disclosure_principle_states_resident_vs_reference_rule():
     assert "Reference/manual layers carry why the design works" in prompt
     assert "the current session's active context is carried into every provider request" in prompt
     assert "summarize consumed tool results" in prompt
-    assert "molt rather than dragging finished work forward" in prompt
+    assert "do not molt automatically" in prompt
+    assert "current-session API calls exceed 100" in prompt
+
+
+def test_task_boundary_molt_guidance_is_cost_thresholded():
+    prompt_files = [
+        Path("src/lingtai/prompts/substrate.md"),
+        Path("src/lingtai/prompts/procedures.md"),
+        Path("src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md"),
+        Path("src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md"),
+        Path("src/lingtai/intrinsic_skills/system-manual/reference/summarize-manual/SKILL.md"),
+    ]
+    combined = "\n".join(path.read_text() for path in prompt_files)
+    assert "molt regardless of context size" not in combined
+    assert "API calls exceed 100" in combined
+    assert "api_calls > 100" in Path("src/lingtai/prompts/procedures.md").read_text()
 
 
 def test_activeness_principle_aliases_and_unknowns():

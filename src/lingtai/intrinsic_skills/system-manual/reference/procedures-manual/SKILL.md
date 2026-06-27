@@ -81,11 +81,13 @@ recorded, there is no compacted history to apply. Reserve `refresh` for
 emergencies (broken/stale context). If summarize plus that automatic
 reconstruction still cannot get context below `0.6 * context_window`, molt
 deliberately. At a task boundary, after necessary reporting and durable stores
-are tended, if there is no concrete next action, molt regardless of context
-size to reduce future token per API call and preserve cache/continuation
-efficiency. Summarize is a mini molt for a consumed tool result. If you
-have already decided to molt, do not summarize first merely to prepare: molt is
-the stronger whole-conversation summarize boundary.
+are tended, if there is no human reply or concrete next action, default to
+proactive task-boundary molt only when current-session API calls exceed 100.
+Below that threshold, go idle unless context pressure, explicit human request,
+or conversation confusion makes the fresh briefing worth the molt cost.
+Summarize is a mini molt for a consumed tool result. If you have already decided
+to molt, do not summarize first merely to prepare: molt is the stronger
+whole-conversation summarize boundary.
 
 Runtime `_meta.guidance` gives the high-attention reminder when summarization is
 timely. For the full procedure — urgent large-result handling, idle cleanup

@@ -151,12 +151,14 @@ been recorded, there is no compacted history to apply.
 `refresh` is reserved for emergency reconstruction (see above). Summarize
 is a mini molt for a consumed tool result; molt is the stronger
 whole-conversation summarize boundary when summarize/reconstruction cannot get
-context below `0.6 * context_window`. A completed task is also an efficiency boundary: after
-necessary reporting and durable-store updates, if no concrete next action
-remains, molt regardless of context size. If you have already decided to molt,
-do not spend a separate summarize call merely to prepare. This is not for
-aesthetic cleanliness; it reduces token per API call and protects
-cache/continuation efficiency for later work.
+context below `0.6 * context_window`. A completed task can also be an
+efficiency boundary, but molt is not free cleanup: after necessary reporting and
+durable-store updates, if no concrete next action remains, default to proactive
+task-boundary molt only once current-session API calls exceed 100. Below that
+threshold, go idle unless context pressure, explicit human request, or
+conversation confusion makes the fresh briefing worth the molt cost. If you have
+already decided to molt, do not spend a separate summarize call merely to
+prepare.
 
 For the full operating procedure — urgent large-result summarization, idle
 cleanup sweeps, original-result recovery by `tool_call_id`, summary quality,

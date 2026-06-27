@@ -28,11 +28,14 @@ compacted history on the next request. If no summarize has been recorded, there
 is nothing to reconstruct.
 
 **Molt boundary.** At task completion, after necessary reporting and durable
-stores are tended, if no concrete next action remains, molt regardless of
-context size. If you have already decided to molt, do not summarize first merely
-to prepare. If summarize and automatic reconstruction still cannot bring context
-below `0.6 * context_window`, read `psyche-manual`, tend the stores, and molt
-deliberately.
+stores are tended, if no human reply or concrete next action remains, do not
+molt automatically. Default to proactive task-boundary molt only when
+`_meta.agent_meta.token_efficiency.api_calls > 100`; below that threshold, go
+idle unless context pressure is present, summarize plus automatic reconstruction
+still cannot bring context below `0.6 * context_window`, the human explicitly
+asks for a reset, or conversation confusion makes the fresh briefing worth the
+molt cost. If you have already decided to molt, do not summarize first merely to
+prepare; read `psyche-manual`, tend the stores, and molt deliberately.
 
 ### Write Skills As You Work
 

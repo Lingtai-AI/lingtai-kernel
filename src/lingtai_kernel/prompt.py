@@ -172,20 +172,25 @@ _TOKEN_EFFICIENCY_PRINCIPLES: dict[str, str] = {
     "en": (
         "Token efficiency principle: the current session's active context is "
         "carried into every provider request. When continuing, summarize consumed "
-        "tool results whose raw text is no longer needed; at completed task "
-        "boundaries, after reporting and durable stores are tended, molt rather "
-        "than dragging finished work forward. Use daemons to keep bulky or noisy "
-        "work out of the main context."
+        "tool results whose raw text is no longer needed. At completed task "
+        "boundaries, after reporting and durable stores are tended, do not molt "
+        "automatically; default to a proactive task-boundary molt only once "
+        "current-session API calls exceed 100, or when context pressure, explicit "
+        "human request, or conversation confusion makes the molt worth its cost. "
+        "Use daemons to keep bulky or noisy work out of the main context."
     ),
     "zh": (
         "Token efficiency 原则：当前会话的活跃上下文会随每次 provider 请求一起发送。"
-        "继续同一任务时，已消化且不再需要原文的工具结果要摘要；任务完成并完成必要汇报与"
-        "durable stores 后要凝蜕，不要拖着已完成片段前行。嘈杂或大批量工作应先用 daemon 隔离。"
+        "继续同一任务时，已消化且不再需要原文的工具结果要摘要。任务完成并完成必要汇报与"
+        "durable stores 后，不要自动凝蜕；默认只在当前 session API calls 超过 100 时才做"
+        "proactive task-boundary molt，或在上下文压力、人类显式要求、对话已混乱且值得支付 molt 成本时才做。"
+        "嘈杂或大批量工作应先用 daemon 隔离。"
     ),
     "wen": (
         "省筹之则：当会话之活跃上下文随每次 provider 请求而行。续作时，凡工具结果已消化且"
-        "无需原文者，当摘要；事毕、已报且诸藏已理，则凝蜕，毋拖已竟之事而前行。繁重嘈杂之工，"
-        "先遣 daemon 以隔主上下文。"
+        "无须原文者，当摘要。事毕、已报且诸藏已理，毋自动凝蜕；默认须当会话 API calls 逾 100，"
+        "方行 proactive task-boundary molt；或遇上下文之压、人明令重启、对话混乱而其费可偿，乃行之。"
+        "繁重嘈杂之工，先遣 daemon 以隔主上下文。"
     ),
 }
 
