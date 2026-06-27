@@ -1432,7 +1432,7 @@ def test_attach_active_runtime_is_wired_into_turn_boundary():
 # ---------------------------------------------------------------------------
 
 
-def _molt_agent(*, notice=0.5, strong=0.7, immediate=0.9, psyche=True):
+def _molt_agent(*, notice=0.75, strong=0.75, immediate=0.75, psyche=True):
     """Minimal agent stand-in for build_molt_context: reads _intrinsics + _config."""
     return SimpleNamespace(
         _intrinsics={"psyche": object()} if psyche else {},
@@ -1449,8 +1449,8 @@ def _molt_agent(*, notice=0.5, strong=0.7, immediate=0.9, psyche=True):
 
 def test_build_molt_context_absent_below_notice_threshold():
     agent = _molt_agent()
-    # 0.49 < default notice 0.5 -> no molt context emitted.
-    assert build_molt_context(agent, 0.49) is None
+    # 0.749 < default notice 0.75 -> no context-pressure prompt emitted.
+    assert build_molt_context(agent, 0.749) is None
 
 
 def test_build_molt_context_absent_without_psyche():
@@ -1459,50 +1459,24 @@ def test_build_molt_context_absent_without_psyche():
     assert build_molt_context(agent, 0.95) is None
 
 
-def test_build_molt_context_consider_stage_50_to_70(monkeypatch):
-    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.5)
-    monkeypatch.setattr(meta_block, "MOLT_PRESSURE_THRESHOLD", 0.7)
-    monkeypatch.setattr(meta_block, "MOLT_URGENCY_THRESHOLD", 0.9)
-    for usage in (0.5, 0.6, 0.699):
+def test_build_molt_context_single_prompt_at_75_and_above(monkeypatch):
+    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.75)
+    for usage in (0.75, 0.8, 0.95, 1.0):
         molt = build_molt_context(_molt_agent(), usage)
         assert molt["stage"] == "consider"
-        assert molt["level"] == "notice"
-        assert molt["usage"] == round(usage, 5)
-        assert molt["manual"] == "psyche-manual"
-        assert "idle" in molt["action"]
-        assert "message" not in molt
-        assert "thresholds" not in molt
-
-def test_build_molt_context_strong_stage_70_to_90(monkeypatch):
-    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.5)
-    monkeypatch.setattr(meta_block, "MOLT_PRESSURE_THRESHOLD", 0.7)
-    monkeypatch.setattr(meta_block, "MOLT_URGENCY_THRESHOLD", 0.9)
-    for usage in (0.7, 0.8, 0.899):
-        molt = build_molt_context(_molt_agent(), usage)
-        assert molt["stage"] == "strong"
         assert molt["level"] == "warning"
         assert molt["usage"] == round(usage, 5)
+        assert molt["manual"] == "psyche-manual"
+        assert molt["action"] == "summarize_then_molt_if_still_above_threshold"
         assert "summarize" in molt["action"]
-        assert "message" not in molt
-        assert "thresholds" not in molt
-
-def test_build_molt_context_immediate_stage_90_plus(monkeypatch):
-    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.5)
-    monkeypatch.setattr(meta_block, "MOLT_PRESSURE_THRESHOLD", 0.7)
-    monkeypatch.setattr(meta_block, "MOLT_URGENCY_THRESHOLD", 0.9)
-    for usage in (0.9, 0.95, 1.0):
-        molt = build_molt_context(_molt_agent(), usage)
-        assert molt["stage"] == "immediate"
-        assert molt["level"] == "immediate"
         assert "molt" in molt["action"]
         assert "message" not in molt
         assert "thresholds" not in molt
 
+
 def test_build_molt_context_shape_is_short_with_pointer_not_full_procedure(monkeypatch):
-    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.5)
-    monkeypatch.setattr(meta_block, "MOLT_PRESSURE_THRESHOLD", 0.7)
-    monkeypatch.setattr(meta_block, "MOLT_URGENCY_THRESHOLD", 0.9)
-    molt = build_molt_context(_molt_agent(), 0.55)
+    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.75)
+    molt = build_molt_context(_molt_agent(), 0.75)
 
     assert set(molt) == {"usage", "level", "stage", "action", "manual"}
     assert molt["manual"] == "psyche-manual"
@@ -1514,37 +1488,38 @@ def test_build_molt_context_shape_is_short_with_pointer_not_full_procedure(monke
     assert len(serialized) < 200
     assert "procedures.md#performing-a-molt" not in serialized
 
+
 def test_build_molt_context_ignores_legacy_molt_prompt(monkeypatch):
-    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.5)
-    monkeypatch.setattr(meta_block, "MOLT_PRESSURE_THRESHOLD", 0.7)
-    monkeypatch.setattr(meta_block, "MOLT_URGENCY_THRESHOLD", 0.9)
-    molt = build_molt_context(_molt_agent(), 0.55)
+    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.75)
+    molt = build_molt_context(_molt_agent(), 0.75)
 
     assert "Now is the time" not in molt["action"]
+    assert "summarize" in molt["action"]
     assert "molt" in molt["action"]
     assert "message" not in molt
 
-def test_build_molt_context_ignores_legacy_custom_thresholds(monkeypatch):
-    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.5)
-    monkeypatch.setattr(meta_block, "MOLT_PRESSURE_THRESHOLD", 0.7)
-    monkeypatch.setattr(meta_block, "MOLT_URGENCY_THRESHOLD", 0.9)
 
-    assert build_molt_context(_molt_agent(), 0.499) is None
-    assert build_molt_context(_molt_agent(), 0.5)["stage"] == "consider"
-    assert build_molt_context(_molt_agent(), 0.7)["stage"] == "strong"
-    assert build_molt_context(_molt_agent(), 0.9)["stage"] == "immediate"
-    assert "thresholds" not in build_molt_context(_molt_agent(), 0.9)
+def test_build_molt_context_uses_single_threshold(monkeypatch):
+    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.75)
+    # Legacy pressure/urgency values no longer introduce separate 0.5/0.7/0.9 stages.
+
+    assert build_molt_context(_molt_agent(), 0.749) is None
+    assert build_molt_context(_molt_agent(), 0.75)["stage"] == "consider"
+    assert build_molt_context(_molt_agent(), 0.8)["stage"] == "consider"
+    assert build_molt_context(_molt_agent(), 0.95)["stage"] == "consider"
+    assert "thresholds" not in build_molt_context(_molt_agent(), 0.95)
+
 
 def test_build_meta_attaches_context_molt_only_above_threshold():
     """build_meta integrates build_molt_context: context.molt is absent below
-    the notice threshold and present (as a sub-key of context) above it."""
+    the single pressure threshold and present (as a sub-key of context) above it."""
     agent = _molt_agent()
     # No session -> usage sentinel -1.0 -> below threshold -> no molt key.
     meta = build_meta(agent)
     assert "molt" not in meta["context"]
 
     # Inject a fake session whose token decomposition yields usage = 0.9
-    # (system 10 + history 80 over a 100-token window) -> immediate stage.
+    # (system 10 + history 80 over a 100-token window) -> single 0.75 prompt.
     fake_iface = SimpleNamespace(estimate_context_tokens=lambda: 90)
     fake_session = SimpleNamespace(
         _token_decomp_dirty=False,
@@ -1558,4 +1533,4 @@ def test_build_meta_attaches_context_molt_only_above_threshold():
     meta = build_meta(agent)
     assert meta["context"]["usage"] == pytest.approx(0.9)
     assert "molt" in meta["context"]
-    assert meta["context"]["molt"]["stage"] == "immediate"
+    assert meta["context"]["molt"]["stage"] == "consider"

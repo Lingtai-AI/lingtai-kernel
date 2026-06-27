@@ -46,8 +46,6 @@ from importlib import resources as _resources
 
 from .config import (
     MOLT_NOTICE_THRESHOLD,
-    MOLT_PRESSURE_THRESHOLD,
-    MOLT_URGENCY_THRESHOLD,
 )
 from .i18n import t as _t
 from .time_veil import now_iso
@@ -673,7 +671,13 @@ def build_runtime_guidance() -> dict:
 
 
 def build_molt_context(agent, usage: float) -> dict | None:
-    """Return compact `_meta.agent_meta.context.molt` pressure guidance."""
+    """Return compact `_meta.agent_meta.context.molt` pressure guidance.
+
+    The field name is kept for compatibility, but the runtime now emits a
+    single context-pressure prompt at 75% rather than staged early molt
+    nudges.  Summarize is the first action; molt becomes mandatory only when
+    summarizing cannot lower the context back below the threshold.
+    """
     if "psyche" not in getattr(agent, "_intrinsics", set()):
         return None
     try:
@@ -683,24 +687,11 @@ def build_molt_context(agent, usage: float) -> dict | None:
     if pressure < MOLT_NOTICE_THRESHOLD:
         return None
 
-    if pressure >= MOLT_URGENCY_THRESHOLD:
-        level = "immediate"
-        stage = "immediate"
-        action = "tend_stores_then_molt_now"
-    elif pressure >= MOLT_PRESSURE_THRESHOLD:
-        level = "warning"
-        stage = "strong"
-        action = "summarize_noisy_results_and_prepare_molt"
-    else:
-        level = "notice"
-        stage = "consider"
-        action = "molt_if_idle_or_summarize_first"
-
     return {
         "usage": round(pressure, 5),
-        "level": level,
-        "stage": stage,
-        "action": action,
+        "level": "warning",
+        "stage": "consider",
+        "action": "summarize_then_molt_if_still_above_threshold",
         "manual": "psyche-manual",
     }
 
@@ -718,7 +709,7 @@ def build_meta(agent) -> dict:
                 "system_tokens": int,        # sys prompt + tools schema
                 "history_tokens": int,       # conversation history
                 "usage": float,              # fraction of context window used
-                "molt": dict,                # optional pressure stage/action; present at >=50%
+                "molt": dict,                # optional pressure stage/action; present at >=75%
             },
             "stamina_left_seconds": float,   # session time remaining; -1 if unstarted
             "current_tool_result_chars": dict, # total + top formal tool results >1000 chars

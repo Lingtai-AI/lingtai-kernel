@@ -15,9 +15,9 @@ THINKING_LEVELS = ("low", "medium", "high", "xhigh")
 # but are ignored — they no longer override these values. See
 # ``lingtai/agent.py`` (config reload) and ``lingtai/init_schema.py``
 # (MANIFEST_LEGACY_IGNORED).
-MOLT_NOTICE_THRESHOLD = 0.5   # >= this fraction of context used -> "consider" stage
-MOLT_PRESSURE_THRESHOLD = 0.7  # >= this -> "strong" stage
-MOLT_URGENCY_THRESHOLD = 0.9   # >= this -> "immediate" stage (90% hard gate)
+MOLT_NOTICE_THRESHOLD = 0.75  # >= this fraction -> single summarize/molt consideration prompt
+MOLT_PRESSURE_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
+MOLT_URGENCY_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
 DEFAULT_SOUL_DELAY_SECONDS = 999999999.0
 
 
@@ -52,10 +52,10 @@ class AgentConfig:
     # readers (meta_block.build_molt_context, tests) have a single source of
     # truth, but the host MUST construct them from the kernel constants, never
     # from init.json. Legacy init.json molt_notice/molt_pressure/molt_urgency
-    # values are ignored, not honored.
-    molt_notice: float = MOLT_NOTICE_THRESHOLD    # >= this fraction of context used -> "consider" stage
-    molt_pressure: float = MOLT_PRESSURE_THRESHOLD  # >= this -> "strong" stage
-    molt_urgency: float = MOLT_URGENCY_THRESHOLD   # >= this -> "immediate" stage (90% hard gate)
+    # values are ignored, not honored. Only one prompt threshold is active.
+    molt_notice: float = MOLT_NOTICE_THRESHOLD  # >= this fraction -> summarize/molt consideration
+    molt_pressure: float = MOLT_PRESSURE_THRESHOLD  # legacy alias; not a separate stage
+    molt_urgency: float = MOLT_URGENCY_THRESHOLD  # legacy alias; not a separate stage
     ensure_ascii: bool = False  # JSON output: False = readable unicode, True = \uXXXX escapes
     insights_interval: int = 0  # turns between auto-insights; 0 = off
     consultation_past_count: int = 0  # K random past-snapshot consultations per fire; default 0 = current-context soul flow only

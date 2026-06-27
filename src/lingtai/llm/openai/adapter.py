@@ -1701,6 +1701,7 @@ class OpenAIResponsesSession(ChatSession):
         compact_threshold: int | None = None,
         interface: ChatInterface | None = None,
         prompt_cache_key: str | None = None,
+        context_window: int = 0,
     ):
         self._client = client
         self._model = model
@@ -1717,11 +1718,18 @@ class OpenAIResponsesSession(ChatSession):
         # Note: ``prompt_cache_retention`` is deliberately never sent — the
         # Codex backend rejects it (``Unsupported parameter``).
         self._prompt_cache_key = prompt_cache_key
+        try:
+            self._context_window = int(context_window or 0)
+        except Exception:
+            self._context_window = 0
 
     @property
     def interface(self) -> ChatInterface:
         """The canonical ChatInterface for this session."""
         return self._interface
+
+    def context_window(self) -> int:
+        return self._context_window
 
     def _convert_input(self, message) -> list[dict]:
         """Convert messages to Responses API input format.
@@ -2006,6 +2014,7 @@ class OpenAIAdapter(LLMAdapter):
                 force_tool_call,
                 interface,
                 thinking,
+                context_window=context_window,
             )
         else:
             # Fallback: Chat Completions for compatible providers
@@ -2024,6 +2033,7 @@ class OpenAIAdapter(LLMAdapter):
         force_tool_call: bool = False,
         interface: ChatInterface | None = None,
         thinking: str = "default",
+        context_window: int = 0,
     ) -> OpenAIResponsesSession:
         # Create interface if not provided
         if interface is None:
@@ -2064,6 +2074,7 @@ class OpenAIAdapter(LLMAdapter):
             compact_threshold=self._compact_threshold,
             interface=interface,
             prompt_cache_key=self._resolve_prompt_cache_key(model),
+            context_window=context_window,
         )
 
     def _create_completions_session(
@@ -2207,22 +2218,32 @@ _CODEX_PRE_MOLT_SUMMARIZE_NOTE = (
     "context overflow is imminent; molt is the higher-level replacement for "
     "summarize, so pre-molt summarize is wasted work."
 )
-_CODEX_SUMMARIZE_DELAY_THRESHOLD_RATIO = 0.8
+_CODEX_SUMMARIZE_DELAY_THRESHOLD_RATIO = 0.75
 _CODEX_SUMMARIZE_DELAY_NOTE = (
     "For Codex continuation over the Responses API, summarize calls are "
     "accepted and recorded immediately, but their fresh full replay/cache "
-    "epoch effect is delayed until local context reaches roughly 80% of the "
+    "epoch effect is delayed until local context reaches roughly 75% of the "
     "context window. The delay exists because Codex keeps a "
     "previous_response_id/cache epoch; resetting that epoch for every "
     "summarize would discard continuation/cache benefit. Before the delayed "
     "full replay, the existing epoch continues, so you can keep working and "
-    "may issue additional summarize calls safely."
+    "may issue additional summarize calls safely. Timing: below the threshold, "
+    "summarize remains pending and does not reset the epoch. At or above the "
+    "threshold, summarize immediately schedules the fresh full replay and is "
+    "reported as non-pending; the next provider request is sent as that full "
+    "replay with the compacted history. Refresh is only an optional force path "
+    "when you need to rebuild even below the threshold; it is not required for "
+    "the normal above-threshold summarize path."
 )
 _CODEX_LONG_CONTEXT_STRATEGY = (
     "For long logs, diffs, repo scans, papers, issue sweeps, runtime traces, "
     "or other noisy high-context reads, prefer daemon/file-based exploration "
     "and return a distilled report to the main agent. Avoid ingesting large "
-    "raw outputs into the main Codex context just to summarize them later."
+    "raw outputs into the main Codex context just to summarize them later. "
+    "When local context reaches about 75% of the context window, "
+    "summarize/batch the noisy history; if that summarize pass cannot bring "
+    "local context back below that threshold, molt instead of repeatedly "
+    "paying fresh full replays."
 )
 _CODEX_NOTIFICATION_DISMISS_NOTE = (
     "Notification dismiss only clears notification state; it does not compact "
@@ -2407,6 +2428,11 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._summarize_effect_delayed_pending_ids: set[str] = set()
         self._summarize_effect_delayed_last_context: dict[str, Any] = {}
         self._summarize_effect_delayed_last_release_reason: str | None = None
+        # Last real provider request size.  Codex delayed summarize release must
+        # be keyed to the previous request's input tokens, not ChatInterface's
+        # local estimate, because the latter can omit provider-visible prompt and
+        # tool-result mass.  See PR #535 live probe.
+        self._last_provider_input_tokens: int | None = None
         # The user's own ChatGPT account id (decoded upstream from their OAuth
         # auth data). When present it is sent as the ``ChatGPT-Account-ID`` HTTP
         # Account routing is a ChatGPT-account concern and intentionally
@@ -2923,7 +2949,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
         context_window: int | None = None
         usage: float | None = None
         try:
-            current_tokens = int(self._interface.estimate_context_tokens())
+            current_tokens = int(self._last_provider_input_tokens) if self._last_provider_input_tokens else None
         except Exception:
             current_tokens = None
         try:
@@ -2935,6 +2961,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
         return {
             "current_context_tokens": current_tokens,
             "context_window": context_window,
+            "current_context_source": "last_provider_input_tokens" if current_tokens is not None else None,
             "threshold_ratio": self._summarize_delay_threshold_ratio,
             "threshold_context_tokens": (
                 int(context_window * self._summarize_delay_threshold_ratio)
@@ -2976,6 +3003,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._summarize_effect_delayed_pending_ids.update(str(s) for s in summarized_ids)
         self._summarize_effect_delayed_last_context = self._summarize_delay_context()
         self._summarize_effect_delayed_last_release_reason = None
+        # If the last real provider request already crossed the threshold, the
+        # summarize tool should not appear as an agent-facing "pending" state:
+        # schedule the fresh full replay immediately.  The replay itself happens
+        # on the next provider request because summarize runs as a tool result
+        # after the current model call has already completed.
+        usage = self._summarize_effect_delayed_last_context.get("current_context_usage")
+        if usage is not None and usage >= self._summarize_delay_threshold_ratio:
+            self._reset_ws_epoch("summarize_delayed")
 
     def on_notification_dismissed(self, channel: str | None = None) -> None:
         # Notification dismiss is high-frequency housekeeping, not context
@@ -3735,6 +3770,11 @@ class CodexResponsesSession(OpenAIResponsesSession):
             raise
 
         result = acc.finalize(usage=usage)
+        try:
+            provider_input_tokens = int(usage.input_tokens or 0)
+        except Exception:
+            provider_input_tokens = 0
+        self._last_provider_input_tokens = provider_input_tokens if provider_input_tokens > 0 else None
 
         # Record assistant response into the interface so it rides along on
         # the next request. Without this, the stateless backend would never
@@ -4045,6 +4085,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         force_tool_call: bool = False,
         interface: ChatInterface | None = None,
         thinking: str = "default",
+        context_window: int = 0,
     ) -> CodexResponsesSession:
         if interface is None:
             interface = ChatInterface()
@@ -4088,6 +4129,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             # ``prompt_cache_key=False`` disable passed to the adapter. Only the
             # bare/no-anchor path falls back to ``lingtai-codex:{model}:v1``.
             prompt_cache_key=self._resolve_prompt_cache_key(model),
+            context_window=context_window,
             # REST cache-affinity headers: both the per-agent (anchor, molt_count)
             # hash, byte-identical, passed down by the host; ``(None, None)`` only
             # for a bare/test adapter. Stable within a molt segment, refreshed at

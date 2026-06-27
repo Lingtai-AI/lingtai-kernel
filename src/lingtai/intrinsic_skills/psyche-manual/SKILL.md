@@ -195,13 +195,9 @@ Before you call `psyche(object="context", action="molt", ...)`, always verify at
 
 ## 7. Context Pressure Reminder
 
-Context pressure is agent state, not a dismissible notification. Current turns surface it under `_meta.agent_meta.context.molt` when usage reaches the configured notice threshold (default 50%). The stages are intentionally short:
+Context pressure is agent state, not a dismissible notification. Current turns surface it under `_meta.agent_meta.context.molt` when usage reaches the single pressure threshold (default 75%). The field name is historical: the reminder is a context-pressure action, not an early staged molt order.
 
-- 50%-70%: consider whether a molt would help.
-- 70%-90%: prepare durable stores and molt soon if pressure remains.
-- 90%+: molt now if pressure remains.
-
-Do not overreact to a temporary pressure spike. If long/noisy tool results can be digested with `system(action="summarize")` and that will lower context pressure, summarize first; then decide whether a molt is still needed. The reminder points back to this manual/procedure instead of inlining the full workflow.
+At the threshold, summarize or batch already-digested noisy history first when that can lower pressure. If that summarize pass cannot bring context back below the threshold, or if the current work segment is naturally ending, tend durable stores and molt deliberately. There are no earlier staged molt nudges. The reminder points back to this manual/procedure instead of inlining the full workflow.
 
 ## 8. Post-Wipe Recovery
 
