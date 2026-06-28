@@ -2,9 +2,12 @@
 
 LingTai's resident prompt layers are authored as skill-style artifacts: a
 single file carrying a leading ``---`` YAML frontmatter block (developer- and
-coding-agent-facing metadata explaining *why* the fragment exists, its purpose,
-summary, and audience) followed by the Markdown body that is rendered into the
-LLM prompt.
+coding-agent-facing metadata explaining *why* the fragment exists and its
+purpose) followed by the Markdown body that is rendered into the LLM prompt.
+When such frontmatter carries ``related_files``, that field is a body
+cross-reference list: include only file paths explicitly mentioned in the
+Markdown body, and use ``[]`` when the body mentions none. It is not a
+dependency graph, test list, loader list, or packaging manifest.
 
 This module owns the tiny dependency-free frontmatter parser used by both the
 kernel (prompt catalog / guidance loader) and the wrapper (curated MCP skills).

@@ -3,22 +3,22 @@ name: procedures
 kind: prompt-section
 section: procedures
 summary: >
-  Kernel-owned resident procedures: operational triggers, checklists, routing steps, reporting discipline, and concrete tool-use rules — how to act. References/manuals carry the why, boundaries, and troubleshooting.
+  Kernel-owned resident procedures: operational triggers, checklists, routing steps, reporting
+  discipline, and concrete tool-use rules — how to act. References/manuals carry the why,
+  boundaries, and troubleshooting.
 why: >
-  Self-explains why this fragment exists: the concise resident how-to layer that routes the agent to the canonical rule. This frontmatter is developer-facing metadata only — stripped before the body is rendered into the LLM prompt or system.md.
+  Self-explains why this fragment exists: the concise resident how-to layer that routes the agent
+  to the canonical rule. This frontmatter is developer-facing metadata only — stripped before the
+  body is rendered into the LLM prompt or system.md.
 related_files:
-  - "src/lingtai/agent.py"
-  - "src/lingtai_kernel/base_agent/__init__.py"
-  - "tests/test_prompt_catalog.py"
-  - "tests/test_agent_meta_guidance.py"
-  - "tests/test_deep_refresh.py"
-  - "tests/test_prompt.py"
-  - "pyproject.toml"
-  - "MANIFEST.in"
-  - "tests/test_skills.py"
-  - "src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md"
+  - "reference/procedures-manual/SKILL.md"
+  - "knowledge/session-journal/<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md"
+  - "reference/substrate-manual/SKILL.md"
+  - "reference/sqlite-log-query/SKILL.md"
 maintenance: >
-  When editing this file, update this related_files list and inspect the listed paths in the same change so source, runtime mirrors, tests, docs, and package metadata stay connected.
+  When editing this file, update related_files so it contains exactly the file paths explicitly
+  mentioned in the Markdown body. Do not list tests, loaders, manifests, or other indirect
+  dependencies unless their paths appear in the body; use [] when the body mentions no file paths.
 ---
 ### Operating by Progressive Disclosure
 

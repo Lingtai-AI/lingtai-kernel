@@ -31,6 +31,44 @@ from lingtai_kernel.prompt_catalog import (
 )
 
 
+_FILE_PATH_IN_BACKTICKS = re.compile(r"`([^`\n]+)`")
+_RELATED_FILE_ITEM = re.compile(r"-\s*[\"\']?([^\"\']+?)[\"\']?(?=\s+-|$)")
+
+
+def _mentioned_file_paths(body: str) -> list[str]:
+    """Return file paths explicitly mentioned in Markdown body backticks."""
+    paths: list[str] = []
+    for match in _FILE_PATH_IN_BACKTICKS.finditer(body):
+        value = match.group(1).strip()
+        if value.startswith("tests/"):
+            continue
+        if "/" in value or any(
+            suffix in value
+            for suffix in (".md", ".json", ".jsonl", ".py", ".go", ".toml", ".txt")
+        ):
+            paths.append(value)
+    return list(dict.fromkeys(paths))
+
+
+def _related_files(meta: dict[str, str]) -> list[str]:
+    assert "related_files" in meta
+    raw = meta["related_files"].strip()
+    if raw == "[]":
+        return []
+    return [match.group(1) for match in _RELATED_FILE_ITEM.finditer(raw)]
+
+
+def _assert_related_files_are_body_mentions(meta: dict[str, str], body: str) -> None:
+    """`related_files` is a body cross-reference list, not a dependency graph."""
+    related = _related_files(meta)
+    assert related == _mentioned_file_paths(body)
+    assert all(not item.startswith("tests/") for item in related)
+    maintenance = meta.get("maintenance", "")
+    assert "exactly the file paths explicitly mentioned" in maintenance
+    assert "Do not list tests" in maintenance
+    assert "use []" in maintenance
+
+
 # ---------------------------------------------------------------------------
 # Frontmatter primitive
 # ---------------------------------------------------------------------------
@@ -81,12 +119,40 @@ def test_packaged_section_sources_carry_frontmatter(name):
     assert "audience" not in meta
     assert meta.get("summary")
     assert meta.get("why")
-    assert meta.get("related_files"), f"{name} must list connected files"
-    assert "src/lingtai/agent.py" in meta["related_files"]
-    assert meta.get("maintenance") and "editing this file" in meta["maintenance"]
+    _assert_related_files_are_body_mentions(meta, body)
     assert body, "section body must be non-empty"
     # The body must not re-open a frontmatter fence.
     assert not body.startswith("---")
+
+
+def test_principle_body_starts_with_system_prompt_map_and_lingtai_principles():
+    text = files("lingtai.prompts").joinpath("principle.md").read_text(encoding="utf-8")
+    _meta, body = split_frontmatter(text)
+    assert body.startswith("# LingTai System Prompt Map")
+    for section in (
+        "principle",
+        "covenant",
+        "tools",
+        "substrate",
+        "procedures",
+        "comment",
+        "rules",
+        "brief",
+        "mcp",
+        "skills",
+        "knowledge",
+        "identity",
+        "character",
+        "pad",
+        "meta_guidance",
+    ):
+        assert f"| `{section}` |" in body
+    assert "## LingTai operating principles" in body
+    assert "Act on need" in body
+    assert "text output is diary/private scratch" in body
+    assert "Always reply on the channel where the message arrived" in body
+    assert "Progressive disclosure principle: each resident prompt layer" in body
+    assert "Token efficiency principle:" in body
 
 
 # ---------------------------------------------------------------------------
@@ -116,15 +182,12 @@ def test_guidance_catalog_preserves_code_owned_section_order():
     assert ids == list(GUIDANCE_SECTION_ORDER)
 
 
-def test_guidance_index_frontmatter_lists_connected_files():
+def test_guidance_index_frontmatter_related_files_match_body_mentions():
     root = files("lingtai.prompts.guidance")
     meta, body = split_frontmatter(root.joinpath("INDEX.md").read_text(encoding="utf-8"))
     assert meta.get("kind") == "meta-guidance-catalog"
     assert "audience" not in meta
-    assert meta.get("related_files")
-    assert "src/lingtai_kernel/prompt_catalog.py" in meta["related_files"]
-    assert "src/lingtai/prompts/guidance/*.md" in meta["related_files"]
-    assert meta.get("maintenance") and "editing this file" in meta["maintenance"]
+    _assert_related_files_are_body_mentions(meta, body)
     assert not body.strip()
 
 
@@ -139,9 +202,7 @@ def test_guidance_section_frontmatter_is_documentary_not_behavior_config():
         assert "audience" not in meta
         assert meta.get("summary"), f"{sid} must summarize why this fragment exists"
         assert meta.get("why"), f"{sid} must explain purpose/why"
-        assert meta.get("related_files"), f"{sid} must list connected files"
-        assert "src/lingtai_kernel/prompt_catalog.py" in meta["related_files"]
-        assert meta.get("maintenance") and "editing this file" in meta["maintenance"]
+        _assert_related_files_are_body_mentions(meta, body)
         assert not (forbidden & set(meta)), f"behavior config leaked into frontmatter for {sid}"
         assert body and not body.startswith("---")
 
