@@ -7,4 +7,4 @@ Progressive disclosure principle: each resident prompt layer has one job and poi
 
 Keep each layer concise. A rule should have one source of truth; other layers should point to that source instead of restating it.
 
-The dynamic kernel preface (language, activeness, localized progressive-disclosure hook, and token-efficiency rule) is the front of this same principle layer. It renders adjacent to this packaged principle body, before wrapper-level `base_prompt` material, so kernel-owned principles stay together instead of being split around operator or framework text.
+Token efficiency principle: the current session's active context is carried into every provider request. When continuing, summarize consumed tool results whose raw text is no longer needed. At completed task boundaries, after reporting and durable stores are tended, do not molt automatically; default to a proactive task-boundary molt only once current-session API calls exceed 100, or when context pressure, explicit human request, or conversation confusion makes the molt worth its cost. Use daemons to keep bulky or noisy work out of the main context.

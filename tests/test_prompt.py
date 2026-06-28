@@ -101,153 +101,112 @@ def test_character_section_separate_from_covenant():
     assert identity_pos < char_pos
 
 
-def test_language_principle_en_renders_first():
-    """The kernel-injected language principle is the very first thing in
-    the prompt — before base_prompt and all sections."""
-    mgr = SystemPromptManager()
-    mgr.write_section("covenant", "Be good.", protected=True)
-    prompt = build_system_prompt(mgr, base_prompt="Framework guidance.", language="en")
-    assert prompt.startswith("Agent language: English.")
-    assert prompt.index("Agent language: English.") < prompt.index("Framework guidance.")
-    assert prompt.index("Framework guidance.") < prompt.index("Be good.")
+def test_base_prompt_follows_kernel_owned_principle_without_dynamic_injection():
+    """Runtime prompt building must not synthesize principle text.
 
-
-def test_language_principle_zh():
-    mgr = SystemPromptManager()
-    prompt = build_system_prompt(mgr, language="zh")
-    assert prompt.startswith("智能体语言：简体中文。")
-
-
-def test_language_principle_wen():
-    mgr = SystemPromptManager()
-    prompt = build_system_prompt(mgr, language="wen")
-    assert prompt.startswith("器灵之言：文言。")
-
-
-def test_language_principle_unknown_falls_back_to_english_with_code():
-    """Unknown language codes get English wording carrying the raw code."""
-    mgr = SystemPromptManager()
-    prompt = build_system_prompt(mgr, language="fr")
-    assert prompt.startswith("Agent language: fr.")
-    assert "explicit instruction" in prompt
-
-
-def test_activeness_principle_en_renders_between_language_and_base_prompt():
-    mgr = SystemPromptManager()
-    mgr.write_section("covenant", "Be good.", protected=True)
-    prompt = build_system_prompt(
-        mgr,
-        base_prompt="Framework guidance.",
-        language="en",
-        activeness="quiet",
-    )
-    assert prompt.startswith("Agent language: English.")
-    assert "Agent activeness: quiet." in prompt
-    assert "Be swift in action and sparing in words" in prompt
-    assert prompt.index("Agent language: English.") < prompt.index("Agent activeness: quiet.")
-    assert "Progressive disclosure principle:" in prompt
-    assert "Token efficiency principle:" in prompt
-    assert prompt.index("Agent activeness: quiet.") < prompt.index("Progressive disclosure principle:")
-    assert prompt.index("Progressive disclosure principle:") < prompt.index("Token efficiency principle:")
-    assert prompt.index("Token efficiency principle:") < prompt.index("Framework guidance.")
-    assert prompt.index("Framework guidance.") < prompt.index("Be good.")
-
-
-def test_dynamic_prefix_and_kernel_owned_principle_stay_adjacent():
+    All kernel-owned principle prose lives in the raw ``principle`` section. When
+    wrapper/framework guidance exists, it follows that section rather than being
+    injected before it.
+    """
     mgr = SystemPromptManager()
     mgr.write_section("principle", "Kernel-owned principle body.", protected=True)
     mgr.write_section("covenant", "Be good.", protected=True)
     prompt = build_system_prompt(
         mgr,
         base_prompt="Framework guidance.",
-        language="en",
-        activeness="quiet",
+        language="zh",
+        activeness="responsive",
     )
-    assert prompt.startswith("Agent language: English.")
-    assert prompt.index("Agent activeness: quiet.") < prompt.index("Token efficiency principle:")
-    assert prompt.index("Token efficiency principle:") < prompt.index("Kernel-owned principle body.")
+
+    assert prompt.startswith("Kernel-owned principle body.")
+    assert "Agent " + "language:" not in prompt
+    assert "智能体语言" not in prompt
+    assert "器灵之言" not in prompt
+    assert "Agent " + "activeness:" not in prompt
+    assert "智能体主动程度" not in prompt
+    assert "器灵主动" not in prompt
     assert prompt.index("Kernel-owned principle body.") < prompt.index("Framework guidance.")
     assert prompt.index("Framework guidance.") < prompt.index("Be good.")
-    between_preface_and_principle = prompt[
-        prompt.index("Token efficiency principle:") : prompt.index("Kernel-owned principle body.")
-    ]
-    assert "Framework guidance." not in between_preface_and_principle
 
 
-def test_activeness_principle_localized_levels():
-    cases = [
-        ("zh", "balanced", "智能体主动程度：均衡。"),
-        ("wen", "responsive", "器灵主动之度：勤应。"),
-        ("fr", "responsive", "Agent activeness: responsive."),
-    ]
-    for language, activeness, expected in cases:
-        mgr = SystemPromptManager()
-        prompt = build_system_prompt(mgr, language=language, activeness=activeness)
-        assert expected in prompt
-
-
-def test_progressive_disclosure_and_token_efficiency_principles_localize():
-    cases = [
-        ("en", "Progressive disclosure principle:", "Token efficiency principle:"),
-        ("zh", "渐进式披露原则：", "Token efficiency 原则："),
-        ("wen", "渐披之则：", "省筹之则："),
-        ("fr", "Progressive disclosure principle:", "Token efficiency principle:"),
-    ]
-    for language, disclosure, token_efficiency in cases:
-        mgr = SystemPromptManager()
-        prompt = build_system_prompt(mgr, language=language)
-        assert disclosure in prompt
-        assert token_efficiency in prompt
-        assert prompt.index(disclosure) < prompt.index(token_efficiency)
-
-
-def test_progressive_disclosure_principle_states_resident_vs_reference_rule():
+def test_batch_form_keeps_principle_then_base_prompt_in_first_batch():
+    """The cached-batch path must preserve the same principle/base ordering."""
     mgr = SystemPromptManager()
-    prompt = build_system_prompt(mgr, language="en")
-    assert "each prompt layer has one job and points to the next" in prompt
-    assert "kernel-owned `principle` section defines" in prompt
-    assert "other layers should route instead of copying" in prompt
+    mgr.write_section("principle", "Kernel-owned principle body.", protected=True)
+    mgr.write_section("covenant", "Be good.", protected=True)
+
+    batches = build_system_prompt_batches(
+        mgr,
+        base_prompt="Framework guidance.",
+        language="wen",
+        activeness="quiet",
+    )
+
+    assert len(batches) == 2
+    first_blocks = batches[0].split("\n\n---\n\n")
+    assert first_blocks[0] == "Kernel-owned principle body."
+    assert first_blocks[1] == "Framework guidance."
+    assert first_blocks[2].startswith("## covenant\nBe good.")
+    assert "Agent " + "language:" not in batches[0]
+    assert "Agent " + "activeness:" not in batches[0]
+
+
+def test_base_prompt_renders_first_when_no_principle_without_dynamic_fallback():
+    mgr = SystemPromptManager()
+    mgr.write_section("covenant", "Be good.", protected=True)
+    prompt = build_system_prompt(
+        mgr,
+        base_prompt="Framework guidance.",
+        language="fr",
+        activeness="quiet",
+    )
+
+    assert prompt.startswith("Framework guidance.")
+    assert "Agent " + "language:" not in prompt
+    assert "Agent " + "activeness:" not in prompt
+    assert "Progressive disclosure principle:" not in prompt
+    assert "Token efficiency principle:" not in prompt
+    assert prompt.index("Framework guidance.") < prompt.index("Be good.")
+
+
+def test_packaged_principle_owns_static_progressive_and_token_efficiency_rules():
+    mgr = SystemPromptManager()
+    principle = Path("src/lingtai/prompts/principle.md").read_text()
+    mgr.write_section("principle", principle, protected=True)
+    prompt = build_system_prompt(mgr, language="en", activeness="quiet")
+
+    assert "Progressive disclosure principle: each resident prompt layer" in prompt
+    assert "`meta_guidance` is immediate runtime guidance" in prompt
+    assert "`procedures` is how to act" in prompt
+    assert "`substrate` is the working model" in prompt
+    assert "Reference manuals are why" in prompt
+    assert "Token efficiency principle:" in prompt
     assert "the current session's active context is carried into every provider request" in prompt
     assert "summarize consumed tool results" in prompt
     assert "do not molt automatically" in prompt
     assert "current-session API calls exceed 100" in prompt
+    assert "Agent " + "language:" not in prompt
+    assert "Agent " + "activeness:" not in prompt
 
 
 def test_task_boundary_molt_guidance_is_cost_thresholded():
-    prompt_files = [
-        Path("src/lingtai/prompts/substrate.md"),
+    """Resident and manual guidance should agree that task-boundary molt is costed."""
+    paths = [
+        Path("src/lingtai/prompts/principle.md"),
         Path("src/lingtai/prompts/procedures.md"),
-        Path("src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md"),
+        Path("src/lingtai/prompts/substrate.md"),
+        Path("src/lingtai/prompts/guidance.json"),
         Path("src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md"),
+        Path("src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md"),
         Path("src/lingtai/intrinsic_skills/system-manual/reference/summarize-manual/SKILL.md"),
     ]
-    combined = "\n".join(path.read_text() for path in prompt_files)
-    assert "molt regardless of context size" not in combined
-    assert "API calls exceed 100" in combined
-    assert "api_calls > 100" in Path("src/lingtai/prompts/procedures.md").read_text()
+    corpus = "\n".join(path.read_text() for path in paths)
 
-
-def test_activeness_principle_aliases_and_unknowns():
-    mgr = SystemPromptManager()
-    prompt = build_system_prompt(mgr, language="en", activeness="high")
-    assert "Agent activeness: responsive." in prompt
-
-    prompt = build_system_prompt(mgr, language="en", activeness="chatty")
-    assert "Agent activeness: chatty. Unknown activeness level" in prompt
-    assert "quiet, balanced, and responsive" in prompt
-
-
-def test_activeness_principle_defaults_to_balanced():
-    mgr = SystemPromptManager()
-    prompt = build_system_prompt(mgr, language="en")
-    assert "Agent activeness: balanced." in prompt
-    assert "acknowledge human instructions promptly" in prompt
-
-
-def test_empty_activeness_uses_balanced_default():
-    mgr = SystemPromptManager()
-    prompt = build_system_prompt(mgr, language="zh", activeness="")
-    assert "智能体主动程度：均衡。" in prompt
+    assert "molt regardless" + " of context size" not in corpus
+    assert "do not molt automatically" in corpus
+    assert "api_calls > 100" in corpus
+    assert "current-session API calls exceed 100" in corpus
+    assert "proactive task-boundary molt" in corpus
 
 
 def test_batches_byte_identical_to_string():
@@ -276,8 +235,7 @@ def test_batches_byte_identical_to_string():
 
 
 def test_batches_byte_identical_when_empty():
-    """Even with no sections and no base_prompt, the joined batches equal
-    the string form (the kernel-injected principles are the only content)."""
+    """Even with no sections and no base_prompt, no dynamic fallback text is injected."""
     mgr = SystemPromptManager()
     full = build_system_prompt(mgr, language="zh")
     batches = build_system_prompt_batches(mgr, language="zh")
