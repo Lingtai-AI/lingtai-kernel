@@ -994,8 +994,21 @@ def test_reconstruction_tool_meta_at_or_above_recovery_target_warns():
     assert "runtime already rebuilt the provider context" in molt
     assert "70%" in molt
     assert "60%" in molt
+    assert "one batch" in molt
     assert "molt deliberately" in molt
     assert "psyche-manual" in molt
+
+def test_reconstruction_tool_meta_still_above_high_context_threshold_says_to_molt():
+    # B usage still >= 0.75 after reconstruction: do not loop summarize forever.
+    agent = _recon_agent(raw_event=dict(_RAW_EVENT), after_usage=0.80)
+    event = meta_block.build_reconstruction_tool_meta(agent)
+    molt = event["molt"]
+    assert isinstance(molt, str)
+    assert "80%" in molt
+    assert "above the 75% high-context threshold" in molt
+    assert "substantially hurt token efficiency" in molt
+    assert "stop repeating summarize" in molt
+    assert "molt deliberately" in molt
 
 
 def test_reconstruction_tool_meta_exactly_at_recovery_target_warns():
@@ -1751,8 +1764,12 @@ def test_build_molt_context_warns_from_third_high_round():
     assert "Context has stayed high" in molt
     assert "3 consecutive fresh model calls" in molt
     assert "90%" in molt
-    assert "60% recovery target" in molt
-    assert "summarize tool results" in molt
+    assert "recovery target is 60%" in molt
+    assert "batch tool results" in molt
+    assert "Repeated summarize calls while context stays above 75%" in molt
+    assert "substantially hurt token efficiency" in molt
+    assert "batched summarize/reconstruction pass" in molt
+    assert "stop repeating summarize" in molt
     assert "molt deliberately" in molt
     assert "psyche-manual" in molt
 

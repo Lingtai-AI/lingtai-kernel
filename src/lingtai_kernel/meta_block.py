@@ -745,11 +745,12 @@ def build_molt_context(agent, usage: float) -> str | None:
     return (
         f"Context has stayed high across {streak} consecutive fresh model calls "
         f"(currently {usage_text} of the context window). This is a context-pressure "
-        "reminder, not an immediate command: when continuing, summarize tool "
-        "results you have already digested. If summarization and automatic "
-        f"reconstruction still cannot bring the rebuilt context below the "
-        f"{recovery_text} recovery target, tend durable stores and molt "
-        "deliberately. See psyche-manual."
+        "reminder, not an immediate command: when continuing, batch tool results "
+        "you have already digested before summarizing. Repeated summarize calls "
+        "while context stays above 75% substantially hurt token efficiency. "
+        f"The recovery target is {recovery_text}, but if a batched summarize/"
+        "reconstruction pass still leaves context above 75%, stop repeating "
+        "summarize, tend durable stores, and molt deliberately. See psyche-manual."
     )
 
 
@@ -861,14 +862,26 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
     except Exception:
         above_recovery = False
     if above_recovery:
-        event["molt"] = (
-            "The runtime already rebuilt the provider context after summarization, "
-            f"but the rebuilt context is still at {_format_ratio_percent(after_usage)} "
-            f"of the context window, at or above the "
-            f"{_format_ratio_percent(recovery_target)} recovery target. "
-            "If more digested tool results can be summarized, do that first; "
-            "otherwise tend durable stores and molt deliberately. See psyche-manual."
-        )
+        after_text = _format_ratio_percent(after_usage)
+        recovery_text = _format_ratio_percent(recovery_target)
+        if after_usage >= CONTEXT_PRESSURE_RECONSTRUCTION_RATIO:
+            event["molt"] = (
+                "The runtime already rebuilt the provider context after summarization, "
+                f"but the rebuilt context is still at {after_text} of the context "
+                "window, above the 75% high-context threshold. Repeated summarize "
+                "calls while context stays above 75% substantially hurt token "
+                "efficiency; stop repeating summarize, tend durable stores, and molt "
+                "deliberately. See psyche-manual."
+            )
+        else:
+            event["molt"] = (
+                "The runtime already rebuilt the provider context after summarization, "
+                f"but the rebuilt context is still at {after_text} of the context "
+                f"window, at or above the {recovery_text} recovery target. "
+                "If more digested tool results can be summarized, do that as one "
+                "batch; otherwise tend durable stores and molt deliberately. See "
+                "psyche-manual."
+            )
     return event
 
 

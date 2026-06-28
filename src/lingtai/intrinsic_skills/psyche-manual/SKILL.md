@@ -197,7 +197,7 @@ Before you call `psyche(object="context", action="molt", ...)`, always verify at
 
 Context pressure is agent state, not a dismissible notification. Current turns surface a natural-language reminder under `_meta.agent_meta.context.molt` only after context has stayed high for several consecutive fresh provider rounds (the sustained-pressure threshold is 75%). The field name is historical: the reminder is a context-pressure action, not an early staged molt order or a machine-readable tag block.
 
-When this reminder appears, summarize or batch already-digested noisy history first when that can lower pressure. If summarization and automatic reconstruction cannot bring the rebuilt context below the recovery target, or if the current work segment is naturally ending, tend durable stores and molt deliberately. The reminder points back to this manual/procedure without inlining the full workflow.
+When this reminder appears, batch already-digested noisy history before summarizing. Repeated summarize calls while context stays above 75% substantially hurt token efficiency, so avoid summarizing one small piece at a time. If a batched summarize/reconstruction pass still leaves context above 75%, stop repeating summarize, tend durable stores, and molt deliberately. If context falls below the high-pressure threshold but remains above the recovery target, continue only when the current task still needs the carried context; otherwise molt at a natural task boundary. The reminder points back to this manual/procedure without inlining the full workflow.
 
 ## 8. Post-Wipe Recovery
 
