@@ -22,6 +22,15 @@ TOP_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     # mcp is the per-MCP activation map — see core/mcp/manual/SKILL.md.
     # Keys must match registered names; values are subprocess specs.
     "mcp": dict,
+    # base_prompt is the third-party (application / recipe / preset) system-
+    # prompt injection point — one of the three externally changeable prompt
+    # surfaces (with `covenant` and `comment`). It renders right after the raw
+    # kernel-owned `principle` section and before the rest of Batch 1 (see
+    # lingtai_kernel.prompt.build_system_prompt_batches). Inline value or
+    # `base_prompt_file` path; type-checked alongside the other optional text
+    # fields in validate_init().
+    "base_prompt": str,
+    "base_prompt_file": str,
 }
 
 # Top-level fields that were retired in past versions and still have simple
@@ -39,16 +48,26 @@ DEPRECATED_TOP_FIELDS: set[str] = {
 # Legacy fields removed by version-controlled agent-domain migrations. They are
 # known to validation only so stale/restored init.json files do not look like
 # active supported schema fields and do not get type-checked as prompt sections.
+#
+# The externally changeable system-prompt surface is exactly `base_prompt`,
+# `covenant`, and `comment` (the init-prompt contract). Kernel-owned prompt
+# layers — `principle`, `procedures`, and `substrate` — are no longer external
+# overrides; `brief` (secretary-written life context) is likewise retired as an
+# init-injected prompt section. Their inline/_file fields are migrated-legacy-
+# known here: tolerated on old/restored init.json (no error, no warning) but
+# never honored. See agent_m003_init_prompt_contract for the inline-content
+# archival migration.
 LEGACY_MIGRATED_TOP_FIELDS: set[str] = {
     "principle", "principle_file",
     "procedures", "procedures_file",
+    "substrate", "substrate_file",
+    "brief", "brief_file",
 }
 
 TOP_KNOWN: set[str] = {
     "manifest", "env_file", "venv_path", "addons", "mcp",
     "covenant", "covenant_file",
-    "substrate", "substrate_file",
-    "brief", "brief_file",
+    "base_prompt", "base_prompt_file",
     "pad", "pad_file", "prompt", "prompt_file",
     "comment", "comment_file",
 } | DEPRECATED_TOP_FIELDS | LEGACY_MIGRATED_TOP_FIELDS
@@ -147,13 +166,16 @@ def validate_init(data: dict) -> list[str]:
             raise ValueError(f"{file_key}: expected str, got {type(data[file_key]).__name__}")
 
     # Optional text fields: inline value OR _file path (neither required).
-    # `substrate` is the kernel-owned, cross-app-stable system prompt
-    # section that describes the agent's architecture to itself (tool
-    # tiers, data-flow topology, life states, channel discipline,
-    # attention model). Injected between covenant and tools by the prompt
-    # manager. See lingtai issue #39. Opt-in: agents without substrate
-    # configured render the same prompt they did before.
-    for key in ("comment", "brief", "substrate"):
+    # These are the externally changeable prompt surfaces under the init-prompt
+    # contract beyond the required `covenant`:
+    #   - `comment`     — operator note section.
+    #   - `base_prompt` — the third-party (application / recipe / preset) system-
+    #                     prompt injection point. Renders right after the raw
+    #                     kernel-owned `principle` section and before the rest of
+    #                     Batch 1 (lingtai_kernel.prompt.build_system_prompt_batches).
+    # `substrate` and `brief` were retired as external overrides (kernel-owned /
+    # secretary-disk-only respectively) — see LEGACY_MIGRATED_TOP_FIELDS.
+    for key in ("comment", "base_prompt"):
         file_key = f"{key}_file"
         if key in data and not isinstance(data[key], str):
             raise ValueError(f"{key}: expected str, got {type(data[key]).__name__}")

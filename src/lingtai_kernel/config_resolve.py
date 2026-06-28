@@ -114,10 +114,17 @@ def resolve_paths(data: dict, working_dir: str | Path) -> None:
     """
     wd = Path(working_dir)
 
+    # Note: principle_file / procedures_file / substrate_file / brief_file are
+    # retired init prompt-override fields (see
+    # lingtai.init_schema.LEGACY_MIGRATED_TOP_FIELDS). They are left out of
+    # active path resolution — the kernel no longer reads them — but tolerated
+    # if present on stale init.json (resolve_paths simply ignores unknown keys).
+    # The init-prompt contract's third-party injection point is `base_prompt`
+    # (inline or `base_prompt_file`).
     for key in ("env_file", "venv_path",
-                "covenant_file", "principle_file", "procedures_file",
-                "substrate_file",
-                "brief_file", "pad_file",
+                "covenant_file",
+                "base_prompt_file",
+                "pad_file",
                 "prompt_file", "comment_file"):
         if key in data and isinstance(data[key], str) and data[key]:
             p = Path(data[key]).expanduser()

@@ -366,11 +366,19 @@ class Agent(BaseAgent):
             )
 
     def _build_system_prompt(self) -> str:
-        """Override kernel's prompt builder to inject app tool descriptions."""
+        """Override kernel's prompt builder to inject app tool descriptions.
+
+        ``base_prompt`` is the init-prompt contract's third-party (application /
+        recipe / preset) injection point, resolved from init.json by
+        ``_reload_prompt_sections`` into ``self._base_prompt``. The kernel
+        builder renders it right after the raw ``principle`` section and before
+        the rest of Batch 1.
+        """
         self._refresh_tool_inventory_section()
         _refresh_meta_guidance_section(self)
         return build_system_prompt(
             prompt_manager=self._prompt_manager,
+            base_prompt=getattr(self, "_base_prompt", ""),
             language=self._config.language,
             activeness=self._config.activeness,
         )
@@ -382,6 +390,7 @@ class Agent(BaseAgent):
         _refresh_meta_guidance_section(self)
         return build_system_prompt_batches(
             prompt_manager=self._prompt_manager,
+            base_prompt=getattr(self, "_base_prompt", ""),
             language=self._config.language,
             activeness=self._config.activeness,
         )
@@ -1076,11 +1085,16 @@ class Agent(BaseAgent):
         if overwrite_env_file:
             os.environ.pop("LINGTAI_REFRESH_ENV_OVERWRITE", None)
 
-        # Resolve *_file fields for top-level text content.
+        # Resolve *_file fields for active top-level text content.
+        # The externally changeable prompt surface is exactly `base_prompt`,
+        # `covenant`, and `comment` (plus the required agent seed/state fields
+        # `prompt` and `pad`). Retired prompt-override `_file` fields
+        # (principle_file / procedures_file / substrate_file / brief_file) are
+        # legacy-known and intentionally not resolved here.
         # Note: "soul" / "soul_file" were retired in v0.7.6 and are now
         # stripped by strip_deprecated() before we get here.
-        for key in ("covenant", "principle", "substrate",
-                    "brief", "pad", "prompt", "comment"):
+        for key in ("covenant", "base_prompt",
+                    "pad", "prompt", "comment"):
             file_key = f"{key}_file"
             if file_key in data:
                 data[key] = resolve_file(data.get(key), data.pop(file_key))
@@ -1348,16 +1362,42 @@ class Agent(BaseAgent):
             data = self._read_init()
             if data is None:
                 return
-            # Resolve *_file fields (brief_file, covenant_file, etc.)
+            # Resolve active *_file fields (covenant_file, base_prompt_file,
+            # comment_file). Retired prompt-override `_file` fields are
+            # legacy-known and not resolved — see _setup_from_init.
             from lingtai_kernel.config_resolve import resolve_file
-            for key in ("covenant", "principle", "substrate",
-                        "brief", "pad", "comment"):
+            for key in ("covenant", "base_prompt", "pad", "comment"):
                 file_key = f"{key}_file"
                 if file_key in data:
                     data[key] = resolve_file(data.get(key), data.pop(file_key))
 
         system_dir = self._working_dir / "system"
         system_dir.mkdir(exist_ok=True)
+
+        # --- Base prompt (third-party prompt injection point) ---
+        # `base_prompt` is the init-prompt contract's third-party (application /
+        # recipe / preset) system-prompt injection point — one of the three
+        # externally changeable prompt surfaces (with `covenant` and `comment`).
+        # It is NOT a prompt-manager section: the kernel builder renders it right
+        # after the raw kernel-owned `principle` section and before the rest of
+        # Batch 1 (see lingtai_kernel.prompt.build_system_prompt_batches), so it
+        # is threaded through `self._base_prompt` and passed to the builder by
+        # `_build_system_prompt` / `_build_system_prompt_batches`.
+        #
+        # Resolution precedence:
+        #   1. data["base_prompt"]      — inline init.json string (already merged
+        #                                 with base_prompt_file by _setup_from_init)
+        #   2. system/base_prompt.md    — on-disk mirror (fallback)
+        # The on-disk mirror lets the resolved injection survive a post-molt
+        # reload that re-reads init.json from scratch and lets operators inspect
+        # what is actually injected.
+        base_prompt = data.get("base_prompt", "")
+        base_prompt_file = system_dir / "base_prompt.md"
+        if base_prompt:
+            base_prompt_file.write_text(base_prompt)
+        elif base_prompt_file.is_file():
+            base_prompt = base_prompt_file.read_text(encoding="utf-8")
+        self._base_prompt = base_prompt or ""
 
         # --- Covenant (operator contract — covenant.md alone) ---
         covenant = data.get("covenant", "")
@@ -1382,30 +1422,30 @@ class Agent(BaseAgent):
         # the agent's architecture to itself (tool tiers, data-flow
         # topology, life states, channel discipline, attention model).
         #
-        # Resolution precedence (issue #133 — refresh-time refresh):
-        #   1. data["substrate"]          — inline init.json string (operator override)
-        #   2. packaged prompts/substrate.md — kernel default, always wins on every boot
-        #   3. system/substrate.md        — fallback only if package missing
+        # Substrate is kernel-owned: under the init-prompt contract it is NOT an
+        # external override. Legacy init.json `substrate` / `substrate_file`
+        # values are migrated by _read_init() (archived) and ignored here; the
+        # packaged default wins on every boot/refresh.
+        #
+        # Resolution order:
+        #   1. packaged prompts/substrate.md — kernel default, refreshed on boot
+        #   2. system/substrate.md           — fallback only if package missing
         #
         # The packaged default overwrites the on-disk file on every boot so
         # that `pip install -e .` + `system(refresh)` actually propagates
-        # kernel updates. To opt out, set `"substrate": " "` (a single
-        # space, treated as an explicit operator value by step 1).
-        substrate = data.get("substrate", "")
+        # kernel updates. The on-disk file is a mirror/debug artifact.
+        substrate = ""
         substrate_file = system_dir / "substrate.md"
-        if substrate:
-            substrate_file.write_text(substrate)
-        else:
-            try:
-                from importlib.resources import files
-                packaged = files("lingtai.prompts").joinpath("substrate.md").read_text(encoding="utf-8")
-                substrate_file.write_text(packaged)
-                substrate = packaged
-            except (FileNotFoundError, ModuleNotFoundError, OSError):
-                if substrate_file.is_file():
-                    substrate = substrate_file.read_text(encoding="utf-8")
-                else:
-                    substrate = ""
+        try:
+            from importlib.resources import files
+            packaged = files("lingtai.prompts").joinpath("substrate.md").read_text(encoding="utf-8")
+            substrate_file.write_text(packaged)
+            substrate = packaged
+        except (FileNotFoundError, ModuleNotFoundError, OSError):
+            if substrate_file.is_file():
+                substrate = substrate_file.read_text(encoding="utf-8")
+            else:
+                substrate = ""
         if substrate:
             self._prompt_manager.write_section("substrate", substrate, protected=True)
         else:
@@ -1497,15 +1537,20 @@ class Agent(BaseAgent):
         except Exception:
             if not guidance_file.is_file():
                 guidance_file.write_text("{}\n", encoding="utf-8")
-        # --- Brief (externally-maintained, written by secretary) ---
-        brief = data.get("brief", "")
+        # --- Brief (secretary-maintained life context — disk only) ---
+        # Under the init-prompt contract `brief` is no longer an external
+        # init.json prompt override (the external prompt surface is exactly
+        # base_prompt / covenant / comment). Legacy init.json `brief` /
+        # `brief_file` values are migrated by _read_init() (archived) and ignored
+        # here. The `brief` section is now sourced solely from system/brief.md,
+        # which the secretary agent writes directly.
         brief_file = system_dir / "brief.md"
-        if brief:
-            brief_file.write_text(brief)
-        elif brief_file.is_file():
+        if brief_file.is_file():
             brief = brief_file.read_text(encoding="utf-8")
-        if brief:
-            self._prompt_manager.write_section("brief", brief, protected=True)
+            if brief:
+                self._prompt_manager.write_section("brief", brief, protected=True)
+            else:
+                self._prompt_manager.delete_section("brief")
         else:
             self._prompt_manager.delete_section("brief")
 

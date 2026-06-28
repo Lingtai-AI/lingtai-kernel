@@ -40,6 +40,7 @@ from typing import Callable
 
 from .agent_m001_init_procedures_override import migrate_init_procedures_override
 from .agent_m002_mcp_launch_args_rewrite import migrate_mcp_launch_args_rewrite
+from .agent_m003_init_prompt_contract import migrate_init_prompt_contract
 from .m001_context_limit_relocation import migrate_context_limit_relocation
 from .m002_description_object import migrate_description_object
 
@@ -71,6 +72,7 @@ _PRESET_MIGRATIONS: tuple[tuple[int, str, Callable[[Path], None]], ...] = (
 _AGENT_MIGRATIONS: tuple[tuple[int, str, Callable[[Path], None]], ...] = (
     (1, "init_procedures_override", migrate_init_procedures_override),
     (2, "mcp_launch_args_rewrite", migrate_mcp_launch_args_rewrite),
+    (3, "init_prompt_contract", migrate_init_prompt_contract),
 )
 
 # Backwards-compatible alias for tests and older internal callers that inspect

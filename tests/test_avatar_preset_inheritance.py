@@ -183,14 +183,28 @@ def test_avatar_strips_materialized_when_active_equals_default(tmp_path):
     assert "capabilities" not in avatar_init["manifest"]
 
 
-def test_avatar_init_drops_legacy_procedures_override(tmp_path):
-    """Avatar init construction must not copy retired procedures overrides."""
+def test_avatar_init_keeps_base_prompt_and_drops_kernel_prompt_overrides(tmp_path):
+    """Avatar init keeps the active app prompt injection point while dropping
+    retired kernel/secretary-owned prompt override fields."""
     parent_init = _baseline_parent_init()
-    parent_init["procedures"] = "legacy parent procedures"
-    parent_init["procedures_file"] = "relative/procedures.md"
+    parent_init["base_prompt"] = "recipe base prompt"
+    parent_init["base_prompt_file"] = "relative/base_prompt.md"
+    retired = {
+        "principle": "legacy parent principle",
+        "principle_file": "relative/principle.md",
+        "procedures": "legacy parent procedures",
+        "procedures_file": "relative/procedures.md",
+        "substrate": "legacy parent substrate",
+        "substrate_file": "relative/substrate.md",
+        "brief": "legacy parent brief",
+        "brief_file": "relative/brief.md",
+    }
+    parent_init.update(retired)
 
     from lingtai.core.avatar import AvatarManager
     avatar_init = AvatarManager._make_avatar_init(parent_init, "child")
 
-    assert "procedures" not in avatar_init
-    assert "procedures_file" not in avatar_init
+    assert avatar_init["base_prompt"] == "recipe base prompt"
+    assert avatar_init["base_prompt_file"] == "relative/base_prompt.md"
+    for key in retired:
+        assert key not in avatar_init
