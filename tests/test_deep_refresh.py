@@ -495,9 +495,9 @@ def test_init_substrate_override_is_migrated_not_prompted(tmp_path):
     assert len(_events(tmp_path, "init_prompt_contract_migrated")) == 1
 
 
-def test_init_brief_override_is_migrated_and_seeded_to_disk(tmp_path):
-    """Legacy init.json brief content is archived, removed, and seeded into
-    system/brief.md so the disk-sourced brief section preserves life context."""
+def test_init_brief_override_is_ignored_as_deprecated(tmp_path):
+    """Legacy init brief override is deprecated: remove it and do not render or
+    seed prompt content from the ignored field."""
     legacy = "LEGACY-BRIEF-CONTEXT"
     agent = _make_agent(tmp_path, _make_init(brief=legacy))
 
@@ -505,20 +505,17 @@ def test_init_brief_override_is_migrated_and_seeded_to_disk(tmp_path):
 
     data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
     assert "brief" not in data
+    assert not (tmp_path / "system" / "brief.md").exists()
+    assert legacy not in agent._prompt_manager.render()
 
     digest = hashlib.sha256(legacy.encode("utf-8")).hexdigest()
     archive = tmp_path / "system" / "migrations" / f"init-brief-{digest}.md"
-    assert archive.read_text(encoding="utf-8") == legacy
-
-    # Seeded into system/brief.md and rendered from disk.
-    brief_md = tmp_path / "system" / "brief.md"
-    assert brief_md.read_text(encoding="utf-8") == legacy
-    assert legacy in agent._prompt_manager.render()
+    assert not archive.exists()
 
 
-def test_init_brief_file_override_is_removed_and_seeded_to_disk(tmp_path):
-    """Legacy brief_file override is retired from init.json but its content is
-    preserved as the disk-owned brief section when no system/brief.md exists."""
+def test_init_brief_file_override_is_ignored_as_deprecated(tmp_path):
+    """Legacy brief_file override is deprecated: remove it and do not read,
+    archive, seed, or render the referenced content."""
     legacy = "CUSTOM-BRIEF-FILE"
     custom = tmp_path / "custom-brief.md"
     custom.write_text(legacy, encoding="utf-8")
@@ -530,14 +527,12 @@ def test_init_brief_file_override_is_removed_and_seeded_to_disk(tmp_path):
 
     data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
     assert "brief_file" not in data
+    assert not (tmp_path / "system" / "brief.md").exists()
+    assert legacy not in agent._prompt_manager.render()
 
     digest = hashlib.sha256(legacy.encode("utf-8")).hexdigest()
     archive = tmp_path / "system" / "migrations" / f"init-brief-file-{digest}.md"
-    assert archive.read_text(encoding="utf-8") == legacy
-
-    brief_md = tmp_path / "system" / "brief.md"
-    assert brief_md.read_text(encoding="utf-8") == legacy
-    assert legacy in agent._prompt_manager.render()
+    assert not archive.exists()
 
 
 def test_procedures_falls_back_to_system_file_when_packaged_missing(tmp_path):
