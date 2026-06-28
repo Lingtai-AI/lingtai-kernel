@@ -146,16 +146,75 @@ def _canonical_resource_uri(uri: object) -> str:
     return str(uri).rstrip("/")
 
 
-def _resolve_config_path_for_status(config_path_raw: str) -> Path:
+def _resolve_config_path(config_path_raw: str) -> tuple[Path, dict[str, Any]]:
+    """Resolve ``LINGTAI_WECHAT_CONFIG`` to a concrete ``config.json`` path.
+
+    Single source of truth for both the load path and status/diagnostics —
+    keep all base-directory policy here so the two paths can never diverge.
+
+    Policy (matches imap/telegram/feishu, plus a backward-compat fallback):
+
+    - Absolute paths are returned unchanged.
+    - Relative paths prefer ``LINGTAI_AGENT_DIR / relpath`` — the agent working
+      directory, which is where the rest of the platform resolves relative MCP
+      config paths (see ``config_resolve.py``). This is where ``config.json``
+      should live for new setups.
+    - If that candidate does not exist, fall back to the *project root*
+      (``LINGTAI_AGENT_DIR.parent.parent / relpath`` — agent dirs live at
+      ``<project>/.lingtai/<agent>/``) for backward compatibility with older
+      ``lingtai-wechat-bootstrap`` installs that wrote ``.secrets/wechat/``
+      relative to the project root. See ``Lingtai-AI/lingtai#336``.
+    - If ``LINGTAI_AGENT_DIR`` is unset (not a normal kernel-launched run),
+      fall back to the current working directory.
+
+    Returns ``(resolved_path, diagnostics)``. ``diagnostics`` records the base
+    used and the candidate paths considered (paths only — no secrets) so the
+    error/status surfaces can explain *where* it looked. ``resolved_path`` is
+    the first existing candidate, or — if none exist — the preferred candidate
+    (so callers can report the canonical expected location).
+    """
     path = Path(config_path_raw).expanduser()
     if path.is_absolute():
-        return path
-    agent_dir = os.environ.get("LINGTAI_AGENT_DIR")
-    if agent_dir:
-        base = Path(agent_dir).parent.parent
+        return path, {
+            "base": "absolute",
+            "agent_dir": os.environ.get("LINGTAI_AGENT_DIR"),
+            "candidates": [str(path)],
+            "resolved_via": "absolute",
+        }
+
+    agent_dir_raw = os.environ.get("LINGTAI_AGENT_DIR")
+    candidates: list[tuple[str, Path]] = []
+    if agent_dir_raw:
+        agent_dir = Path(agent_dir_raw)
+        # Preferred: agent dir (consistent with imap/telegram/feishu).
+        candidates.append(("agent_dir", agent_dir / path))
+        # Backward-compat: project root (two parents up from the agent dir).
+        candidates.append(("project_root", agent_dir.parent.parent / path))
     else:
-        base = Path.cwd()
-    return base / path
+        candidates.append(("cwd", Path.cwd() / path))
+
+    resolved_via = None
+    resolved = candidates[0][1]
+    for label, cand in candidates:
+        if cand.is_file():
+            resolved = cand
+            resolved_via = label
+            break
+
+    diagnostics = {
+        "base": candidates[0][0],
+        "agent_dir": agent_dir_raw,
+        "candidates": [str(c) for _, c in candidates],
+        # ``None`` means no candidate existed; the resolved path is the
+        # preferred (first) candidate, reported as the canonical location.
+        "resolved_via": resolved_via,
+    }
+    return resolved, diagnostics
+
+
+def _resolve_config_path_for_status(config_path_raw: str) -> Path:
+    path, _ = _resolve_config_path(config_path_raw)
+    return path
 
 
 def _safe_status_payload(
@@ -178,11 +237,18 @@ def _safe_status_payload(
     poll_interval = None
     notes: list[str] = []
 
+    resolution: dict[str, Any] | None = None
     if config_path_raw:
         try:
-            path = _resolve_config_path_for_status(config_path_raw)
+            path, resolution = _resolve_config_path(config_path_raw)
             config_path = str(path)
             credentials_path = str(path.parent / "credentials.json")
+            if resolution.get("resolved_via") not in (None, "absolute", "agent_dir"):
+                notes.append(
+                    "WeChat config resolved via backward-compat "
+                    f"'{resolution['resolved_via']}' base; prefer placing it under "
+                    "LINGTAI_AGENT_DIR."
+                )
             if path.is_file():
                 config_readable = True
                 cfg = json.loads(path.read_text(encoding="utf-8"))
@@ -194,7 +260,12 @@ def _safe_status_payload(
                 cdn_base_url = cfg.get("cdn_base_url")
                 poll_interval = cfg.get("poll_interval")
             else:
-                notes.append("WeChat config path is set but config.json is not readable.")
+                cand = resolution.get("candidates") if resolution else None
+                cand_str = f" Looked in: {', '.join(cand)}." if cand else ""
+                notes.append(
+                    "WeChat config path is set but config.json is not readable."
+                    + cand_str
+                )
 
             creds_path = path.parent / "credentials.json"
             if creds_path.is_file():
@@ -226,6 +297,7 @@ def _safe_status_payload(
         "running": running,
         "config_path_set": bool(config_path_raw),
         "config_path": config_path,
+        "config_resolution": resolution,
         "config_readable": config_readable,
         "credentials_path": credentials_path,
         "credentials_readable": credentials_readable,
@@ -318,9 +390,11 @@ reads `config.json` from the path in `LINGTAI_WECHAT_CONFIG` and reads sibling
 
 ## Environment
 
-- `LINGTAI_WECHAT_CONFIG` — path to `config.json`. Relative paths resolve against
-  the project root (`<project>/.lingtai/<agent>/` → `<project>`), matching the
-  `lingtai-wechat-bootstrap` convention.
+- `LINGTAI_WECHAT_CONFIG` — path to `config.json`. Absolute paths are used as-is.
+  Relative paths resolve against `LINGTAI_AGENT_DIR` (the agent working dir),
+  matching imap/telegram/feishu. For backward compatibility with older
+  `lingtai-wechat-bootstrap` installs, if no file is found there the project
+  root (`<project>/.lingtai/<agent>/` → `<project>`) is tried as a fallback.
 - `LINGTAI_AGENT_DIR` — injected by LingTai; used for state, media, contacts, and LICC.
 - `LINGTAI_MCP_NAME` — injected by LingTai; usually `wechat`.
 
@@ -355,10 +429,11 @@ Security notes:
 
 ## Bootstrap / login
 
-Recommended interactive setup:
+Recommended interactive setup — write secrets under the agent dir (preferred);
+the MCP also accepts a project-root `.secrets/wechat` for backward compat:
 
 ```bash
-lingtai-wechat-bootstrap .secrets/wechat
+lingtai-wechat-bootstrap .lingtai/<agent>/.secrets/wechat
 ```
 
 Headless fallback:
@@ -383,8 +458,12 @@ Set `LINGTAI_WECHAT_CONFIG` to the `config.json` path.
 
 ## `WeChat config not found`
 
-Check the path in `LINGTAI_WECHAT_CONFIG`. Relative paths resolve against the
-project root, not the agent directory. Refresh the agent after config changes.
+Check the path in `LINGTAI_WECHAT_CONFIG`. Relative paths resolve against
+`LINGTAI_AGENT_DIR` first (preferred), then fall back to the project root for
+backward compatibility — the error message lists every candidate path it tried.
+Place `config.json` under the agent directory and refresh the agent after config
+changes. (`wechat(action="check")` status reports the resolution base and
+candidates under `config_resolution`.)
 
 ## `WeChat credentials not found`
 
@@ -649,22 +728,26 @@ def load_config_and_credentials() -> tuple[dict, dict, Path]:
             "LINGTAI_WECHAT_CONFIG env var not set — point it at your "
             "WeChat config.json file"
         )
-    config_path = Path(config_path_raw).expanduser()
-    if not config_path.is_absolute():
-        # Resolve relative paths against the *project root*, not the agent
-        # working directory.  Agent dirs live at <project>/.lingtai/<agent>/,
-        # so the project root is two parents up from LINGTAI_AGENT_DIR.  This
-        # matches the convention used by lingtai-wechat-bootstrap, which writes
-        # config.json + credentials.json relative to the project root (e.g.
-        # .secrets/wechat/).  See GH #2.
-        agent_dir = os.environ.get("LINGTAI_AGENT_DIR")
-        if agent_dir:
-            base = Path(agent_dir).parent.parent  # .lingtai/<agent>/ -> project root
-        else:
-            base = Path.cwd()
-        config_path = base / config_path
+    # Single resolution policy shared with the status/diagnostics path: prefer
+    # LINGTAI_AGENT_DIR (like imap/telegram/feishu), fall back to the project
+    # root for backward compatibility.  See _resolve_config_path / GH #336.
+    config_path, resolution = _resolve_config_path(config_path_raw)
     if not config_path.is_file():
-        raise FileNotFoundError(f"WeChat config not found: {config_path}")
+        candidates = "\n".join(f"  - {c}" for c in resolution["candidates"])
+        if resolution["base"] == "absolute":
+            raise FileNotFoundError(
+                "WeChat config not found. The absolute path "
+                f"{config_path_raw!r} does not exist:\n{candidates}\n"
+                "Point LINGTAI_WECHAT_CONFIG at an existing config.json, "
+                "then refresh the agent."
+            )
+        raise FileNotFoundError(
+            "WeChat config not found. Looked for the relative path "
+            f"{config_path_raw!r} at (in order):\n{candidates}\n"
+            f"LINGTAI_AGENT_DIR={resolution['agent_dir']!r}. "
+            "Place config.json under LINGTAI_AGENT_DIR (preferred) or the "
+            "project root, then refresh the agent."
+        )
 
     file_cfg = json.loads(config_path.read_text(encoding="utf-8"))
 

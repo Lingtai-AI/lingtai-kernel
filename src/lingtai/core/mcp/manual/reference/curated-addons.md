@@ -83,12 +83,13 @@ WeChat has unique pitfalls that catch agents off-guard. Walk this checklist on e
 
 1. **Ensure LingTai's runtime venv is current** — the `lingtai-wechat-bootstrap` script is installed by the `lingtai` wheel and lives inside the venv, not necessarily on the system PATH.
 
-2. **Run bootstrap with the full venv path** from the project root:
+2. **Run bootstrap with the full venv path.** The `LINGTAI_WECHAT_CONFIG` relative path (typically `.secrets/wechat/config.json`) resolves against `LINGTAI_AGENT_DIR` first (the agent working dir, like imap/telegram/feishu), then falls back to the project root for backward compatibility. **Preferred:** write secrets into the agent dir, e.g. from the project root:
    ```bash
-   ~/.lingtai-tui/runtime/venv/bin/lingtai-wechat-bootstrap .secrets/wechat
+   ~/.lingtai-tui/runtime/venv/bin/lingtai-wechat-bootstrap .lingtai/<agent>/.secrets/wechat
    ```
+   Older setups that wrote `.secrets/wechat` at the **project root** still work via the backward-compat fallback — no migration is required (`Lingtai-AI/lingtai#336`).
 
-3. **No manual credential copy needed** — the MCP resolves `LINGTAI_WECHAT_CONFIG` relative to the project root (the parent of `.lingtai/`), so `.secrets/wechat/config.json` works from both bootstrap and the MCP. Credentials are written next to `config.json`.
+3. **No manual credential copy needed** — `config.json` and `credentials.json` are written together in whichever directory you point bootstrap at, and the MCP reads `credentials.json` next to `config.json`.
 
 4. **WSL users**: bootstrap auto-detects WSL and uses `cmd.exe /c start` or `wslview` to open the browser. If neither works, it prints the HTML file path for manual opening.
 
