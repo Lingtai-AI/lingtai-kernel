@@ -38,6 +38,13 @@ def test_rules_renders_after_covenant_and_tools():
     assert cov_pos < tools_pos < rules_pos
 
 
+def test_default_order_and_batches_cover_the_same_sections_once():
+    order = list(SystemPromptManager._DEFAULT_ORDER)
+    flat_batches = [section for batch in SystemPromptManager._BATCHES for section in batch]
+    assert set(flat_batches) == set(order)
+    assert len(flat_batches) == len(set(flat_batches)) == len(order)
+
+
 def test_meta_guidance_renders_between_procedures_and_comment():
     """`meta_guidance` is resident kernel-runtime guidance and renders after
     `procedures` but before `comment`, so operator/project comments can follow
