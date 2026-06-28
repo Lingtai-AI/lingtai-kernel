@@ -43,10 +43,13 @@ _EVENT = {
     "context_window": 100000,
     "before": {"context_tokens": 85000, "usage": 0.85},
     "after": {"context_tokens": 70000, "usage": 0.70},
-    "molt": {
-        "level": "warning",
-        "action": "summarize_reconstruction_attempted_still_above_0_6_consider_molt",
-    },
+    "molt": (
+        "The runtime already rebuilt the provider context after summarization, "
+        "but the rebuilt context is still at 70% of the context window, at or "
+        "above the 60% recovery target. If more digested tool results can be "
+        "summarized, do that first; otherwise tend durable stores and molt "
+        "deliberately. See psyche-manual."
+    ),
 }
 
 
@@ -71,7 +74,9 @@ def test_reconstruction_event_attaches_to_tool_meta(tmp_path):
     assert tm["reconstruction"]["type"] == "delayed_summarize_reconstruction"
     assert tm["reconstruction"]["before"]["usage"] == 0.85
     assert tm["reconstruction"]["after"]["usage"] == 0.70
-    assert tm["reconstruction"]["molt"]["level"] == "warning"
+    assert isinstance(tm["reconstruction"]["molt"], str)
+    assert "runtime already rebuilt the provider context" in tm["reconstruction"]["molt"]
+    assert "molt deliberately" in tm["reconstruction"]["molt"]
 
 
 def test_reconstruction_event_is_one_shot_across_batch(tmp_path):

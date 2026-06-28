@@ -123,6 +123,7 @@ class SessionManager:
         self._token_decomp_dirty = True
         self._token_fallback_warned = False
         self._latest_input_tokens = 0
+        self._latest_token_usage_snapshot: dict[str, Any] | None = None
 
         # Sustained context-pressure streak (channel B). Transient runtime
         # state — not persisted, since a fresh/restored session has fresh
@@ -520,8 +521,11 @@ class SessionManager:
         self._total_thinking_tokens = token_state["thinking"]
         self._total_cached_tokens = token_state["cached"]
         self._api_calls = token_state["api_calls"]
+        self._latest_token_usage_snapshot = None
         if response.usage:
             self._latest_input_tokens = response.usage.input_tokens
+            latest_context_window = -1
+            latest_context_usage = -1.0
             # Record this fresh provider round's context pressure for the
             # sustained-warning streak (channel B). Keyed by _api_calls so it is
             # counted exactly once per real provider response, not once per
@@ -539,7 +543,9 @@ class SessionManager:
                     self._chat.context_window() if self._chat is not None else 0
                 )
                 if ctx_window and ctx_window > 0:
+                    latest_context_window = int(ctx_window)
                     provider_usage = self._latest_input_tokens / ctx_window
+                    latest_context_usage = provider_usage
                 else:
                     provider_usage = -1.0  # window unknown -> sentinel (no change)
                 self.note_context_pressure_round(
@@ -547,6 +553,38 @@ class SessionManager:
                 )
             except Exception:
                 pass
+            usage_extra = getattr(response.usage, "extra", None)
+            api_call_id = response.api_call_id
+            if not api_call_id and isinstance(usage_extra, dict):
+                api_call_id = usage_extra.get("api_call_id")
+            input_tokens = int(getattr(response.usage, "input_tokens", 0) or 0)
+            cached_tokens = int(getattr(response.usage, "cached_tokens", 0) or 0)
+            cache_miss_tokens = max(input_tokens - cached_tokens, 0)
+            snapshot = {
+                "scope": "provider_round",
+                "api_call_index": int(self._api_calls),
+                "input_tokens": input_tokens,
+                "cache_miss_tokens": cache_miss_tokens,
+                "output_tokens": int(getattr(response.usage, "output_tokens", 0) or 0),
+                "thinking_tokens": int(getattr(response.usage, "thinking_tokens", 0) or 0),
+                "cached_tokens": cached_tokens,
+                "cache_rate": (
+                    round(min(cached_tokens / input_tokens, 1.0), 5)
+                    if input_tokens > 0
+                    else 0.0
+                ),
+                "context_tokens": input_tokens,
+                "context_window": latest_context_window,
+                "context_usage": (
+                    round(latest_context_usage, 5)
+                    if latest_context_usage >= 0
+                    else -1.0
+                ),
+                "estimated": bool(fallback),
+            }
+            if api_call_id:
+                snapshot["api_call_id"] = str(api_call_id)
+            self._latest_token_usage_snapshot = snapshot
             usage_track_ms = _elapsed_ms(usage_start)
             telemetry_fields = dict(timing_fields or {})
             telemetry_fields["usage_track_ms"] = usage_track_ms
@@ -560,6 +598,12 @@ class SessionManager:
                 api_call_id=response.api_call_id,
                 **telemetry_fields,
             )
+
+    def latest_token_usage_snapshot(self) -> dict | None:
+        """Return the latest provider-round token/cache usage snapshot."""
+        if isinstance(self._latest_token_usage_snapshot, dict):
+            return dict(self._latest_token_usage_snapshot)
+        return None
 
     def get_token_usage(self) -> dict:
         """Return token usage summary."""

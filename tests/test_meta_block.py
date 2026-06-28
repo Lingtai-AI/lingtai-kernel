@@ -10,6 +10,7 @@ import lingtai_kernel.meta_block as meta_block
 
 from lingtai_kernel.meta_block import (
     GUIDANCE_KEY,
+    TOOL_META_TOKEN_USAGE_PENDING_KEY,
     GuidanceSchemaError,
     attach_active_notifications,
     attach_active_runtime,
@@ -261,6 +262,9 @@ def test_current_tool_result_chars_readme_is_resident_not_tail_state():
 def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
     readme = build_meta_readme()
 
+    assert "token_usage" in readme["tool_meta"]
+    assert "provider-round token/cache snapshot" in readme["tool_meta"]
+    assert "tool_meta.token_usage" in readme["agent_meta"]
     assert "current_tool_result_chars" in readme["agent_meta"]
     assert "top" in readme["agent_meta"]
     assert "proactive summarization candidates" in readme["agent_meta"]
@@ -681,6 +685,26 @@ def test_build_meta_emits_context_fields_when_decomp_ran():
     assert abs(meta["context"]["usage"] - 0.057) < 1e-6
 
 
+def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
+    snapshot = {
+        "scope": "provider_round",
+        "api_call_index": 3,
+        "input_tokens": 190_000,
+        "cache_miss_tokens": 22_000,
+        "output_tokens": 636,
+        "cache_rate": 0.882,
+        "context_usage": 0.759,
+    }
+    agent = _fake_agent()
+    agent._session = SimpleNamespace(
+        _token_decomp_dirty=True,
+        latest_token_usage_snapshot=lambda: snapshot,
+    )
+
+    meta = build_meta(agent)
+
+    assert meta[TOOL_META_TOKEN_USAGE_PENDING_KEY] == snapshot
+
 def test_build_meta_token_efficiency_current_session_snapshot():
     agent = _fake_agent_with_session(
         system_prompt_tokens=1000,
@@ -854,7 +878,7 @@ def test_build_meta_usage_matches_get_context_pressure_after_restore():
 # The adapter records the before-context (A) when an actual reconstruction
 # fires; the kernel pops it once, fills the after-context (B) from the live
 # context decomposition, and attaches the A->B event to the next visible tool
-# result. If B is still >= the 0.6 recovery target, a molt warning/action is
+# result. If B is still >= the 0.6 recovery target, a molt reminder is
 # included; otherwise the A->B event is attached without a warning.
 # ---------------------------------------------------------------------------
 
@@ -982,18 +1006,33 @@ def test_reconstruction_tool_meta_after_falls_back_to_local_estimate():
 
 
 def test_reconstruction_tool_meta_at_or_above_recovery_target_warns():
-    # B usage 0.70 >= 0.60 recovery target -> A->B event WITH molt warning.
+    # B usage 0.70 >= 0.60 recovery target -> A->B event WITH molt reminder.
     agent = _recon_agent(raw_event=dict(_RAW_EVENT), after_usage=0.70)
     event = meta_block.build_reconstruction_tool_meta(agent)
     assert event["after"]["usage"] == pytest.approx(0.70)
     assert "molt" in event
     molt = event["molt"]
-    assert molt["level"] == "warning"
+    assert isinstance(molt, str)
     # Wording: reconstruction/summarize was attempted; pressure still above the
     # recovery target; consider molt.
-    assert "summarize" in molt["action"] or "reconstruction" in molt["action"]
-    assert "molt" in molt["action"]
-    assert molt["recovery_target"] == 0.60
+    assert "runtime already rebuilt the provider context" in molt
+    assert "70%" in molt
+    assert "60%" in molt
+    assert "one batch" in molt
+    assert "molt deliberately" in molt
+    assert "psyche-manual" in molt
+
+def test_reconstruction_tool_meta_still_above_high_context_threshold_says_to_molt():
+    # B usage still >= 0.75 after reconstruction: do not loop summarize forever.
+    agent = _recon_agent(raw_event=dict(_RAW_EVENT), after_usage=0.80)
+    event = meta_block.build_reconstruction_tool_meta(agent)
+    molt = event["molt"]
+    assert isinstance(molt, str)
+    assert "80%" in molt
+    assert "above the 75% high-context threshold" in molt
+    assert "substantially hurt token efficiency" in molt
+    assert "stop repeating summarize" in molt
+    assert "molt deliberately" in molt
 
 
 def test_reconstruction_tool_meta_exactly_at_recovery_target_warns():
@@ -1406,6 +1445,24 @@ def test_attach_active_runtime_counts_current_batch_tool_result_chars():
     ]
 
 
+def test_attach_active_runtime_does_not_leak_tool_meta_token_usage_to_agent_meta():
+    agent = _runtime_agent(total_calls=1)
+    snapshot = {"scope": "provider_round", "input_tokens": 100}
+    block = ToolResultBlock(
+        id="tc-token",
+        name="bash",
+        content=_stamped_result(
+            {"current_time": "T", TOOL_META_TOKEN_USAGE_PENDING_KEY: snapshot},
+            12,
+        ),
+    )
+
+    attach_active_runtime(agent, [block])
+
+    agent_meta = block.content["_meta"]["agent_meta"]
+    assert TOOL_META_TOKEN_USAGE_PENDING_KEY not in agent_meta
+    assert "_runtime_pending" not in block.content
+
 def test_attach_active_runtime_preserves_token_efficiency_snapshot():
     agent = _runtime_agent(total_calls=3)
     token_efficiency = {
@@ -1745,50 +1802,39 @@ def test_build_molt_context_old_immediate_0_60_no_longer_trips():
 def test_build_molt_context_warns_from_third_high_round():
     agent = _molt_agent(warning_active=True, streak=3)
     molt = build_molt_context(agent, 0.90)
-    assert molt["stage"] == "consider"
-    assert molt["level"] == "warning"
-    assert molt["usage"] == round(0.90, 5)
-    assert molt["manual"] == "psyche-manual"
-    assert molt["streak"] == 3
-    # Threshold is the reconstruction ratio (>= 0.75), recovery target 0.6.
-    assert molt["threshold"] == 0.75
-    assert molt["recovery_target"] == 0.60
-    # Action wording: summarize first; molt if still above the 0.6 recovery target.
-    assert molt["action"] == "summarize_then_molt_if_still_above_0_6_context_window"
-    assert "summarize" in molt["action"]
-    assert "molt" in molt["action"]
-    assert "0_6" in molt["action"]
-    assert "message" not in molt
+    assert isinstance(molt, str)
+    assert "Context has stayed high" in molt
+    assert "3 consecutive fresh model calls" in molt
+    assert "90%" in molt
+    assert "recovery target is 60%" in molt
+    assert "batch tool results" in molt
+    assert "Repeated summarize calls while context stays above 75%" in molt
+    assert "substantially hurt token efficiency" in molt
+    assert "batched summarize/reconstruction pass" in molt
+    assert "stop repeating summarize" in molt
+    assert "molt deliberately" in molt
+    assert "psyche-manual" in molt
 
 
 def test_build_molt_context_keeps_warning_while_streak_sustained():
     for streak in (3, 4, 7):
         molt = build_molt_context(_molt_agent(warning_active=True, streak=streak), 0.95)
         assert molt is not None
-        assert molt["streak"] == streak
-        assert molt["stage"] == "consider"
+        assert f"{streak} consecutive fresh model calls" in molt
+        assert "95%" in molt
 
 
-def test_build_molt_context_shape_is_short_with_pointer_not_full_procedure():
+def test_build_molt_context_is_natural_language_not_tag_payload():
     molt = build_molt_context(_molt_agent(warning_active=True, streak=3), 0.90)
 
-    assert set(molt) == {
-        "usage",
-        "level",
-        "stage",
-        "threshold",
-        "recovery_target",
-        "streak",
-        "action",
-        "manual",
-    }
-    assert molt["manual"] == "psyche-manual"
-    assert "pressure" not in molt
-    assert "message" not in molt
-    assert "procedure_ref" not in molt
-    serialized = json.dumps(molt)
-    assert len(serialized) < 250
-    assert "procedures.md#performing-a-molt" not in serialized
+    assert isinstance(molt, str)
+    assert "stage" not in molt
+    assert '"threshold"' not in molt
+    assert "recovery_target" not in molt
+    assert "summarize_then_molt" not in molt
+    assert "procedures.md#performing-a-molt" not in molt
+    serialized = json.dumps({"molt": molt})
+    assert len(serialized) < 650
 
 
 def test_build_molt_context_handles_missing_session_gracefully():
@@ -1825,5 +1871,6 @@ def test_build_meta_attaches_context_molt_only_when_streak_armed():
     fake_session.context_pressure_streak = 3
     meta = build_meta(agent)
     assert "molt" in meta["context"]
-    assert meta["context"]["molt"]["stage"] == "consider"
-    assert meta["context"]["molt"]["streak"] == 3
+    assert isinstance(meta["context"]["molt"], str)
+    assert "Context has stayed high" in meta["context"]["molt"]
+    assert "3 consecutive fresh model calls" in meta["context"]["molt"]

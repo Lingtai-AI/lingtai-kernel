@@ -8,6 +8,10 @@ from unittest.mock import MagicMock
 import pytest
 
 import lingtai_kernel.tool_executor as tool_executor_module
+from lingtai_kernel.meta_block import (
+    TOOL_META_TOKEN_USAGE_KEY,
+    TOOL_META_TOKEN_USAGE_PENDING_KEY,
+)
 from lingtai_kernel.llm.base import ToolCall
 from lingtai_kernel.llm.interface import ToolResultBlock
 from lingtai_kernel.loop_guard import LoopGuard
@@ -906,6 +910,47 @@ def test_tool_executor_uses_meta_fn_for_stamping():
     assert "current_time" not in payload
     assert "_elapsed_ms" not in payload
 
+
+def test_tool_executor_moves_token_usage_snapshot_to_tool_meta():
+    snapshot = {
+        "scope": "provider_round",
+        "api_call_index": 4,
+        "input_tokens": 200_000,
+        "cache_miss_tokens": 30_000,
+        "output_tokens": 600,
+        "thinking_tokens": 0,
+        "cached_tokens": 170_000,
+        "cache_rate": 0.85,
+        "context_tokens": 200_000,
+        "context_window": 250_000,
+        "context_usage": 0.8,
+        "estimated": False,
+    }
+
+    def dispatch(tc):
+        return {"status": "ok"}
+
+    def make_result(name, result, **kw):
+        return {"name": name, "result": result, **kw}
+
+    exe = ToolExecutor(
+        dispatch_fn=dispatch,
+        make_tool_result_fn=make_result,
+        guard=LoopGuard(max_total_calls=10),
+        known_tools={"noop"},
+        parallel_safe_tools=set(),
+        meta_fn=lambda: {
+            "current_time": "T",
+            TOOL_META_TOKEN_USAGE_PENDING_KEY: snapshot,
+        },
+    )
+
+    results, intercepted, _ = exe.execute([ToolCall(id="c1", name="noop", args={})])
+
+    assert not intercepted
+    payload = results[0]["result"]
+    assert payload["_meta"]["tool_meta"][TOOL_META_TOKEN_USAGE_KEY] == snapshot
+    assert TOOL_META_TOKEN_USAGE_PENDING_KEY not in payload["_runtime_pending"]
 
 def test_tool_executor_meta_fn_covers_parallel_path():
     """meta_fn is called per-tool in the parallel execution path too,
