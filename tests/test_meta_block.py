@@ -10,6 +10,7 @@ import lingtai_kernel.meta_block as meta_block
 
 from lingtai_kernel.meta_block import (
     GUIDANCE_KEY,
+    TOOL_META_TOKEN_USAGE_PENDING_KEY,
     GuidanceSchemaError,
     attach_active_notifications,
     attach_active_runtime,
@@ -261,6 +262,9 @@ def test_current_tool_result_chars_readme_is_resident_not_tail_state():
 def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
     readme = build_meta_readme()
 
+    assert "token_usage" in readme["tool_meta"]
+    assert "provider-round token/cache snapshot" in readme["tool_meta"]
+    assert "tool_meta.token_usage" in readme["agent_meta"]
     assert "current_tool_result_chars" in readme["agent_meta"]
     assert "top" in readme["agent_meta"]
     assert "proactive summarization candidates" in readme["agent_meta"]
@@ -680,6 +684,28 @@ def test_build_meta_emits_context_fields_when_decomp_ran():
     # usage = (5500 + 200) / 100000 = 0.057
     assert abs(meta["context"]["usage"] - 0.057) < 1e-6
 
+
+
+
+def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
+    snapshot = {
+        "scope": "provider_round",
+        "api_call_index": 3,
+        "input_tokens": 190_000,
+        "cache_miss_tokens": 22_000,
+        "output_tokens": 636,
+        "cache_rate": 0.882,
+        "context_usage": 0.759,
+    }
+    agent = _fake_agent()
+    agent._session = SimpleNamespace(
+        _token_decomp_dirty=True,
+        latest_token_usage_snapshot=lambda: snapshot,
+    )
+
+    meta = build_meta(agent)
+
+    assert meta[TOOL_META_TOKEN_USAGE_PENDING_KEY] == snapshot
 
 def test_build_meta_token_efficiency_current_session_snapshot():
     agent = _fake_agent_with_session(
@@ -1420,6 +1446,26 @@ def test_attach_active_runtime_counts_current_batch_tool_result_chars():
         }
     ]
 
+
+
+
+def test_attach_active_runtime_does_not_leak_tool_meta_token_usage_to_agent_meta():
+    agent = _runtime_agent(total_calls=1)
+    snapshot = {"scope": "provider_round", "input_tokens": 100}
+    block = ToolResultBlock(
+        id="tc-token",
+        name="bash",
+        content=_stamped_result(
+            {"current_time": "T", TOOL_META_TOKEN_USAGE_PENDING_KEY: snapshot},
+            12,
+        ),
+    )
+
+    attach_active_runtime(agent, [block])
+
+    agent_meta = block.content["_meta"]["agent_meta"]
+    assert TOOL_META_TOKEN_USAGE_PENDING_KEY not in agent_meta
+    assert "_runtime_pending" not in block.content
 
 def test_attach_active_runtime_preserves_token_efficiency_snapshot():
     agent = _runtime_agent(total_calls=3)

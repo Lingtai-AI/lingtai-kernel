@@ -15,6 +15,8 @@ from .meta_block import (
     build_tool_meta_overflow_comment,
     TOOL_META_COMMENT_KEY,
     TOOL_META_COMMENT_OVERFLOW_KEY,
+    TOOL_META_TOKEN_USAGE_KEY,
+    TOOL_META_TOKEN_USAGE_PENDING_KEY,
 )
 from .tool_result_artifacts import (
     PREVENTIVE_MAX_CHARS as _DEFAULT_MAX_RESULT_CHARS,
@@ -379,6 +381,9 @@ class ToolExecutor:
                                 scaffolding (``_runtime_pending``, ``_advisory``,
                                 batch progress notice) are excluded from the count.
           elapsed_ms          — execution time in milliseconds
+          token_usage         — optional provider-round token/cache usage snapshot
+                                copied from the transient runtime snapshot so it
+                                remains permanent per-result evidence
           spilled_char_count  — original sidecar character count when a spill occurred;
                                 omitted for ordinary non-spilled results
           status              — "error" when the result carries status=error; omitted otherwise
@@ -394,6 +399,13 @@ class ToolExecutor:
         if isinstance(meta, dict) and "tool_meta" in meta:
             return result
 
+        pending = result.get("_runtime_pending")
+        token_usage = None
+        if isinstance(pending, dict):
+            candidate = pending.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
+            if isinstance(candidate, dict):
+                token_usage = dict(candidate)
+
         char_count = self._intrinsic_char_count(result)
 
         tool_block: dict = {
@@ -402,6 +414,8 @@ class ToolExecutor:
             "char_count": char_count,
             "elapsed_ms": int(elapsed_ms),
         }
+        if token_usage:
+            tool_block[TOOL_META_TOKEN_USAGE_KEY] = token_usage
         if spilled_char_count is not None:
             tool_block["spilled_char_count"] = int(spilled_char_count)
         if status == "error":

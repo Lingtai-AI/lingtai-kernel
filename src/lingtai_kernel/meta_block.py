@@ -75,6 +75,8 @@ NOTIFICATION_GUIDANCE_KEY = "notification_guidance"
 # per-result note that rides on the permanent ``tool_meta`` block.
 TOOL_META_COMMENT_KEY = "comment"
 TOOL_META_COMMENT_OVERFLOW_KEY = "overflow"
+TOOL_META_TOKEN_USAGE_KEY = "token_usage"
+TOOL_META_TOKEN_USAGE_PENDING_KEY = "_tool_meta_token_usage"
 
 
 def build_tool_meta_overflow_comment(tool_call_id: str | None) -> dict:
@@ -395,7 +397,11 @@ def build_meta_readme() -> dict:
     return {
         TOOL_META_KEY: (
             "Per-result tool/call metadata (id, timestamp, char_count, "
-            "elapsed_ms). Present on every tool result; permanent. May also "
+            "elapsed_ms, optional token_usage). Present on every tool result; "
+            "permanent. token_usage is a provider-round token/cache snapshot "
+            "(input, cache miss, output, cache rate, context usage) copied here "
+            "so agents can inspect historical high-context summarize/rebuild "
+            "costs after the latest agent_meta snapshot has moved on. May also "
             "carry a one-shot 'reconstruction' event when the runtime just "
             "performed a delayed-summarize context reconstruction: it records "
             "the before (A) and after (B) context tokens/usage, context_window, "
@@ -406,17 +412,18 @@ def build_meta_readme() -> dict:
         ),
         AGENT_META_KEY: (
             "Agent/current-state snapshot (time, context usage, stamina, "
-            "token_efficiency, active_turn_tool_calls, "
+            "current-session token_efficiency, active_turn_tool_calls, "
             "current_tool_result_chars, optional adapter_comment). context may "
             "carry a 'molt' reminder string: a SUSTAINED-pressure warning that appears "
             "only after context has been high (>= 0.75) for several consecutive "
             "fresh provider rounds and clears when pressure drops — current "
             "state, not a permanent event (cf. tool_meta.reconstruction). Latest "
             "tool result only; older copies are stripped as newer results "
-            "arrive. token_efficiency is a compact current_session token "
-            "economy snapshot with api_calls, input/cached tokens, cache "
+            "arrive. token_efficiency is a compact latest-only current_session token "
+            "economy snapshot with api_calls, cumulative input/cached tokens, cache "
             "rate, average input tokens per API call, context tokens/window, "
-            "and a guidance_ref back to meta_guidance.token_efficiency. "
+            "and a guidance_ref back to meta_guidance.token_efficiency; per-round "
+            "token/cache facts live permanently in tool_meta.token_usage instead. "
             "current_tool_result_chars is a compact dict with total_chars "
             "and top_results (id, tool_name, chars; no preview) for "
             "proactive summarization candidates. adapter_comment is a small "
@@ -885,6 +892,23 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
     return event
 
 
+
+
+def build_tool_meta_token_usage(agent) -> dict | None:
+    """Return latest provider-round token/cache usage for permanent tool_meta."""
+    session = getattr(agent, "_session", None)
+    snapshot_fn = getattr(session, "latest_token_usage_snapshot", None)
+    if callable(snapshot_fn):
+        try:
+            snapshot = snapshot_fn()
+        except Exception:
+            snapshot = None
+    else:
+        snapshot = getattr(session, "_latest_token_usage_snapshot", None)
+    if not isinstance(snapshot, Mapping):
+        return None
+    return dict(snapshot)
+
 def build_meta(agent) -> dict:
     """Return the current meta-data snapshot for the agent.
 
@@ -1009,6 +1033,10 @@ def build_meta(agent) -> dict:
     if token_efficiency:
         meta["token_efficiency"] = token_efficiency
 
+    tool_meta_token_usage = build_tool_meta_token_usage(agent)
+    if tool_meta_token_usage:
+        meta[TOOL_META_TOKEN_USAGE_PENDING_KEY] = tool_meta_token_usage
+
     # Stamina — transient runtime resource, can't sit in the cached system
     # prompt. Surface here so the agent sees how much session time it has
     # left on every tool result, alongside context.usage. Sentinel -1 when
@@ -1124,6 +1152,7 @@ def build_synthetic_meta_envelope(
     """
     try:
         agent_meta = build_meta(agent)
+        agent_meta.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
     except (AttributeError, TypeError):
         agent_meta = {}
 
@@ -1496,6 +1525,7 @@ def attach_active_runtime(
         return None
 
     agent_meta: dict = dict(pending)
+    agent_meta.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
     calls = _active_turn_tool_calls(agent)
     if calls is not None:
         agent_meta["active_turn_tool_calls"] = calls

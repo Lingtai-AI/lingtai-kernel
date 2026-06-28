@@ -96,6 +96,21 @@ def test_send_tracks_usage():
     assert usage["input_tokens"] == 100
     assert usage["output_tokens"] == 50
     assert usage["api_calls"] == 1
+    latest = sm.latest_token_usage_snapshot()
+    assert latest is not None
+    assert latest["scope"] == "provider_round"
+    assert latest["api_call_index"] == 1
+    assert latest["input_tokens"] == 100
+    assert latest["cache_miss_tokens"] == 80
+    assert latest["output_tokens"] == 50
+    assert latest["thinking_tokens"] == 10
+    assert latest["cached_tokens"] == 20
+    assert latest["cache_rate"] == 0.2
+    assert latest["context_tokens"] == 100
+    assert latest["context_window"] == 100000
+    assert latest["context_usage"] == 0.001
+    assert latest["estimated"] is False
+    assert latest["api_call_id"].startswith("api_")
 
 
 def test_send_does_not_call_compaction():
