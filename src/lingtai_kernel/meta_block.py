@@ -403,7 +403,13 @@ def build_meta_readme() -> dict:
             "provider-round token/cache snapshot — keys input, cache_miss, cache_rate, "
             "context_usage, window, output, thinking — with a current-session "
             "aggregate half — keys session_cache_rate, api_calls, input_tokens, "
-            "cached_tokens, avg_input_tokens_per_api_call. Each half appears only "
+            "cached_tokens, avg_input_tokens_per_api_call. The session-stat fields "
+            "are CURRENT runtime-session deltas (counted since this process "
+            "started/last refreshed), NOT restored lifetime/cumulative totals. The "
+            "block also carries a short ref sentence ('See "
+            "meta_guidance.token_efficiency for details.') hooking the guidance "
+            "subsection that explains how to act on it. Each "
+            "half appears only "
             "when its source data is available; missing values are omitted, not "
             "invented. Copied here so agents can inspect historical high-context "
             "summarize/rebuild costs after newer results arrive. May also "
@@ -550,6 +556,14 @@ def build_guidance_with_meta_readme(base_guidance: Dict[str, Any] | None = None)
 # ---------------------------------------------------------------------------
 
 META_GUIDANCE_SECTION_ID = "meta_guidance"
+
+# Short hook the unified ``tool_meta.token_usage`` block carries back to the
+# resident guidance subsection that explains how to read/act on it. A short
+# sentence (not a bare path) pointing at the ``token_efficiency`` subsection of
+# the ``meta_guidance`` system-prompt section.
+TOKEN_USAGE_GUIDANCE_REF = (
+    f"See {META_GUIDANCE_SECTION_ID}.token_efficiency for details."
+)
 
 
 def build_meta_guidance_ref() -> dict:
@@ -942,14 +956,23 @@ def _build_provider_round_token_usage(agent) -> dict:
 def _build_session_token_economy(agent) -> dict:
     """Return the current-session half of the unified token_usage block.
 
-    Reads the live ``SessionManager`` through ``agent.get_token_usage()`` (no
-    durable-ledger re-read) and projects the current-session aggregate counters
-    agents act on now: ``session_cache_rate`` (cumulative cached/input clamped to
-    a 0-1 fraction), ``api_calls``, cumulative ``input_tokens``/``cached_tokens``,
-    and ``avg_input_tokens_per_api_call``. Returns ``{}`` when no session usage is
-    available; numeric zeros are preserved.
+    Prefers ``agent.get_current_session_token_usage()`` — the CURRENT runtime
+    session deltas (``current_total - session_baseline``), which exclude restored
+    lifetime/persisted totals. Falls back to the lifetime ``agent.get_token_usage()``
+    only when the current-session getter is absent (e.g. older test stubs); the
+    lifetime getter must NOT be the source for live agents, since its restored
+    cumulative totals are exactly the giant numbers this block must avoid.
+
+    Projects the current-session aggregate counters agents act on now:
+    ``session_cache_rate`` (cached/input clamped to a 0-1 fraction), ``api_calls``,
+    ``input_tokens``/``cached_tokens``, and ``avg_input_tokens_per_api_call``,
+    deriving the two rates from the raw counters so the result is consistent
+    regardless of which getter supplied them. Returns ``{}`` when no session usage
+    is available; numeric zeros are preserved.
     """
-    usage_fn = getattr(agent, "get_token_usage", None)
+    usage_fn = getattr(agent, "get_current_session_token_usage", None)
+    if not callable(usage_fn):
+        usage_fn = getattr(agent, "get_token_usage", None)
     if not callable(usage_fn):
         return {}
     try:
@@ -989,14 +1012,21 @@ def build_tool_meta_token_usage(agent) -> dict | None:
       ``cache_rate``, ``context_usage``, ``window``, ``output``, ``thinking``.
     * current-session aggregate: ``session_cache_rate``, ``api_calls``,
       ``input_tokens``, ``cached_tokens``, ``avg_input_tokens_per_api_call``.
+      These are CURRENT runtime-session deltas (not restored lifetime totals);
+      see :func:`_build_session_token_economy`.
 
     Each half is emitted only when its source data is available; missing values
-    are omitted, not invented; numeric zero/sentinel values are preserved.
+    are omitted, not invented; numeric zero/sentinel values are preserved. When
+    the block exists it always carries a short ``ref`` hook
+    (:data:`TOKEN_USAGE_GUIDANCE_REF`) back to the resident guidance subsection.
     Returns ``None`` when neither half has any data (never an empty block).
     """
     compact = _build_provider_round_token_usage(agent)
     compact.update(_build_session_token_economy(agent))
-    return compact or None
+    if not compact:
+        return None
+    compact["ref"] = TOKEN_USAGE_GUIDANCE_REF
+    return compact
 
 def build_meta(agent) -> dict:
     """Return the current meta-data snapshot for the agent.
