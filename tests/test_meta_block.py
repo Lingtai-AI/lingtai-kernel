@@ -854,7 +854,7 @@ def test_build_meta_usage_matches_get_context_pressure_after_restore():
 # The adapter records the before-context (A) when an actual reconstruction
 # fires; the kernel pops it once, fills the after-context (B) from the live
 # context decomposition, and attaches the A->B event to the next visible tool
-# result. If B is still >= the 0.6 recovery target, a molt warning/action is
+# result. If B is still >= the 0.6 recovery target, a molt reminder is
 # included; otherwise the A->B event is attached without a warning.
 # ---------------------------------------------------------------------------
 
@@ -982,18 +982,20 @@ def test_reconstruction_tool_meta_after_falls_back_to_local_estimate():
 
 
 def test_reconstruction_tool_meta_at_or_above_recovery_target_warns():
-    # B usage 0.70 >= 0.60 recovery target -> A->B event WITH molt warning.
+    # B usage 0.70 >= 0.60 recovery target -> A->B event WITH molt reminder.
     agent = _recon_agent(raw_event=dict(_RAW_EVENT), after_usage=0.70)
     event = meta_block.build_reconstruction_tool_meta(agent)
     assert event["after"]["usage"] == pytest.approx(0.70)
     assert "molt" in event
     molt = event["molt"]
-    assert molt["level"] == "warning"
+    assert isinstance(molt, str)
     # Wording: reconstruction/summarize was attempted; pressure still above the
     # recovery target; consider molt.
-    assert "summarize" in molt["action"] or "reconstruction" in molt["action"]
-    assert "molt" in molt["action"]
-    assert molt["recovery_target"] == 0.60
+    assert "runtime already rebuilt the provider context" in molt
+    assert "70%" in molt
+    assert "60%" in molt
+    assert "molt deliberately" in molt
+    assert "psyche-manual" in molt
 
 
 def test_reconstruction_tool_meta_exactly_at_recovery_target_warns():
@@ -1745,50 +1747,35 @@ def test_build_molt_context_old_immediate_0_60_no_longer_trips():
 def test_build_molt_context_warns_from_third_high_round():
     agent = _molt_agent(warning_active=True, streak=3)
     molt = build_molt_context(agent, 0.90)
-    assert molt["stage"] == "consider"
-    assert molt["level"] == "warning"
-    assert molt["usage"] == round(0.90, 5)
-    assert molt["manual"] == "psyche-manual"
-    assert molt["streak"] == 3
-    # Threshold is the reconstruction ratio (>= 0.75), recovery target 0.6.
-    assert molt["threshold"] == 0.75
-    assert molt["recovery_target"] == 0.60
-    # Action wording: summarize first; molt if still above the 0.6 recovery target.
-    assert molt["action"] == "summarize_then_molt_if_still_above_0_6_context_window"
-    assert "summarize" in molt["action"]
-    assert "molt" in molt["action"]
-    assert "0_6" in molt["action"]
-    assert "message" not in molt
+    assert isinstance(molt, str)
+    assert "Context has stayed high" in molt
+    assert "3 consecutive fresh model calls" in molt
+    assert "90%" in molt
+    assert "60% recovery target" in molt
+    assert "summarize tool results" in molt
+    assert "molt deliberately" in molt
+    assert "psyche-manual" in molt
 
 
 def test_build_molt_context_keeps_warning_while_streak_sustained():
     for streak in (3, 4, 7):
         molt = build_molt_context(_molt_agent(warning_active=True, streak=streak), 0.95)
         assert molt is not None
-        assert molt["streak"] == streak
-        assert molt["stage"] == "consider"
+        assert f"{streak} consecutive fresh model calls" in molt
+        assert "95%" in molt
 
 
-def test_build_molt_context_shape_is_short_with_pointer_not_full_procedure():
+def test_build_molt_context_is_natural_language_not_tag_payload():
     molt = build_molt_context(_molt_agent(warning_active=True, streak=3), 0.90)
 
-    assert set(molt) == {
-        "usage",
-        "level",
-        "stage",
-        "threshold",
-        "recovery_target",
-        "streak",
-        "action",
-        "manual",
-    }
-    assert molt["manual"] == "psyche-manual"
-    assert "pressure" not in molt
-    assert "message" not in molt
-    assert "procedure_ref" not in molt
-    serialized = json.dumps(molt)
-    assert len(serialized) < 250
-    assert "procedures.md#performing-a-molt" not in serialized
+    assert isinstance(molt, str)
+    assert "stage" not in molt
+    assert '"threshold"' not in molt
+    assert "recovery_target" not in molt
+    assert "summarize_then_molt" not in molt
+    assert "procedures.md#performing-a-molt" not in molt
+    serialized = json.dumps({"molt": molt})
+    assert len(serialized) < 650
 
 
 def test_build_molt_context_handles_missing_session_gracefully():
@@ -1825,5 +1812,6 @@ def test_build_meta_attaches_context_molt_only_when_streak_armed():
     fake_session.context_pressure_streak = 3
     meta = build_meta(agent)
     assert "molt" in meta["context"]
-    assert meta["context"]["molt"]["stage"] == "consider"
-    assert meta["context"]["molt"]["streak"] == 3
+    assert isinstance(meta["context"]["molt"], str)
+    assert "Context has stayed high" in meta["context"]["molt"]
+    assert "3 consecutive fresh model calls" in meta["context"]["molt"]

@@ -400,15 +400,15 @@ def build_meta_readme() -> dict:
             "performed a delayed-summarize context reconstruction: it records "
             "the before (A) and after (B) context tokens/usage, context_window, "
             "trigger_threshold (0.75) and recovery_target (0.6); if B is still "
-            "at/above the recovery target it includes a molt warning to consider "
-            "molting. This is permanent evidence of a past event, not current "
+            "at/above the recovery target it includes a natural-language molt "
+            "reminder. This is permanent evidence of a past event, not current "
             "state — distinct from agent_meta.context.molt."
         ),
         AGENT_META_KEY: (
             "Agent/current-state snapshot (time, context usage, stamina, "
             "token_efficiency, active_turn_tool_calls, "
             "current_tool_result_chars, optional adapter_comment). context may "
-            "carry a 'molt' sub-block: a SUSTAINED-pressure warning that appears "
+            "carry a 'molt' reminder string: a SUSTAINED-pressure warning that appears "
             "only after context has been high (>= 0.75) for several consecutive "
             "fresh provider rounds and clears when pressure drops — current "
             "state, not a permanent event (cf. tool_meta.reconstruction). Latest "
@@ -694,23 +694,36 @@ def build_runtime_guidance() -> dict:
 
 
 
-def build_molt_context(agent, usage: float) -> dict | None:
-    """Return compact `_meta.agent_meta.context.molt` SUSTAINED-pressure warning.
+def _format_ratio_percent(value: float | int | str | None) -> str:
+    """Return a human-readable percentage for context-pressure reminders."""
+    try:
+        pct = float(value) * 100
+    except Exception:
+        return "an unknown amount"
+    if pct < 0:
+        return "an unknown amount"
+    if abs(pct - round(pct)) < 0.05:
+        return f"{pct:.0f}%"
+    return f"{pct:.1f}%"
+
+
+def build_molt_context(agent, usage: float) -> str | None:
+    """Return `_meta.agent_meta.context.molt` as a natural-language reminder.
 
     This is current-state guidance (latest tool result only), not a permanent
-    event — it belongs in ``agent_meta``.  The corrected contract (channel B)
+    event — it belongs in ``agent_meta``. The corrected contract (channel B)
     replaces the old immediate ``usage >= 0.60`` trip-wire with a
-    *sustained-pressure* signal: the warning appears only once context has been
+    *sustained-pressure* signal: the reminder appears only once context has been
     high (>= the 0.75 reconstruction ratio) for
     ``CONTEXT_PRESSURE_WARN_AFTER_ROUNDS`` consecutive *fresh provider rounds*,
-    tracked by ``SessionManager.note_context_pressure_round``.  The first two
+    tracked by ``SessionManager.note_context_pressure_round``. The first two
     high rounds are the window in which the automatic delayed-summarize
     reconstruction (and any agent summarize) is expected to relieve pressure; a
-    drop below the threshold resets the streak and clears the warning.
+    drop below the threshold resets the streak and clears the reminder.
 
-    Action wording is unchanged: summarize first; if summarize/reconstruction
-    cannot bring context below the ``0.6 * context_window`` recovery target,
-    consider/perform molt.
+    Keep this agent-facing value sentence-like. The agent needs a clear reminder
+    about why it appeared and what to do, not a tag soup of ``stage`` /
+    ``threshold`` / ``action`` fields.
     """
     if "psyche" not in getattr(agent, "_intrinsics", set()):
         return None
@@ -726,16 +739,18 @@ def build_molt_context(agent, usage: float) -> dict | None:
     except Exception:
         pressure = -1.0
 
-    return {
-        "usage": round(pressure, 5),
-        "level": "warning",
-        "stage": "consider",
-        "threshold": CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
-        "recovery_target": CONTEXT_PRESSURE_RECOVERY_TARGET,
-        "streak": int(getattr(session, "context_pressure_streak", 0)),
-        "action": "summarize_then_molt_if_still_above_0_6_context_window",
-        "manual": "psyche-manual",
-    }
+    streak = int(getattr(session, "context_pressure_streak", 0))
+    usage_text = _format_ratio_percent(pressure)
+    recovery_text = _format_ratio_percent(CONTEXT_PRESSURE_RECOVERY_TARGET)
+    return (
+        f"Context has stayed high across {streak} consecutive fresh model calls "
+        f"(currently {usage_text} of the context window). This is a context-pressure "
+        "reminder, not an immediate command: when continuing, summarize tool "
+        "results you have already digested. If summarization and automatic "
+        f"reconstruction still cannot bring the rebuilt context below the "
+        f"{recovery_text} recovery target, tend durable stores and molt "
+        "deliberately. See psyche-manual."
+    )
 
 
 def build_reconstruction_tool_meta(agent) -> dict | None:
@@ -762,10 +777,10 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
     (0, e.g. a provider that returned no usage). The delayed-reconstruction
     threshold is itself provider-input based, so this keeps B on the same ruler.
 
-    If B is still at/above the 0.6 recovery target, a molt warning/action is
-    attached saying summarize/reconstruction was attempted and pressure remains
-    above the recovery target, so consider molt. If B < 0.6, the A->B event is
-    returned without a warning.
+    If B is still at/above the 0.6 recovery target, a natural-language molt
+    reminder is attached saying summarize/reconstruction was attempted and
+    pressure remains above the recovery target, so consider molt. If B < 0.6,
+    the A->B event is returned without a reminder.
 
     Returns ``None`` when no reconstruction is pending (the common case).
     """
@@ -846,13 +861,14 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
     except Exception:
         above_recovery = False
     if above_recovery:
-        event["molt"] = {
-            "level": "warning",
-            "stage": "consider",
-            "recovery_target": recovery_target,
-            "action": "summarize_reconstruction_attempted_still_above_0_6_consider_molt",
-            "manual": "psyche-manual",
-        }
+        event["molt"] = (
+            "The runtime already rebuilt the provider context after summarization, "
+            f"but the rebuilt context is still at {_format_ratio_percent(after_usage)} "
+            f"of the context window, at or above the "
+            f"{_format_ratio_percent(recovery_target)} recovery target. "
+            "If more digested tool results can be summarized, do that first; "
+            "otherwise tend durable stores and molt deliberately. See psyche-manual."
+        )
     return event
 
 
@@ -870,7 +886,7 @@ def build_meta(agent) -> dict:
                 "system_tokens": int,        # sys prompt + tools schema
                 "history_tokens": int,       # conversation history
                 "usage": float,              # fraction of context window used
-                "molt": dict,                # optional pressure stage/action; present at >=60%
+                "molt": str,                 # optional natural-language sustained-pressure reminder
             },
             "stamina_left_seconds": float,   # session time remaining; -1 if unstarted
             "token_efficiency": dict,        # optional current_session token economy

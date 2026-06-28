@@ -1,8 +1,8 @@
 """Tests for the sustained context-pressure streak (channel B).
 
-The molt warning in ``_meta.agent_meta.context.molt`` is no longer an immediate
+The molt reminder in ``_meta.agent_meta.context.molt`` is no longer an immediate
 ``usage >= 0.60`` nudge.  Instead it tracks *fresh provider rounds* whose context
-usage is at/above the reconstruction threshold (0.75).  The warning only begins
+usage is at/above the reconstruction threshold (0.75).  The reminder only begins
 on the THIRD consecutive high round, so a single spike (or even two) does not
 nag the agent before the delayed-summarize reconstruction has had a chance to
 relieve pressure.  Duplicate observations of the same provider round must not
