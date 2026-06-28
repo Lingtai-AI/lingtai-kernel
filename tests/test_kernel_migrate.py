@@ -267,7 +267,7 @@ def _minimal_init() -> dict:
         "principle": "",
         "covenant": "",
         "pad": "",
-        "prompt": "",
+        "lingtai": "",
     }
 
 

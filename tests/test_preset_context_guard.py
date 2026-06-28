@@ -63,7 +63,7 @@ def _build_workdir(wd: Path, plib: Path, active: str = "big"):
             "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 50,
             "admin": {"karma": True}, "streaming": False,
         },
-        "principle": "p", "covenant": "c", "pad": "", "prompt": "",
+        "principle": "p", "covenant": "c", "pad": "", "lingtai": "",
         "soul": "",
         "env_file": str(env),
     }

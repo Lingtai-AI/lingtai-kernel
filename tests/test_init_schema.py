@@ -25,7 +25,7 @@ def _valid_init() -> dict:
         },
         "covenant": "",
         "pad": "",
-        "prompt": "",
+        "lingtai": "",
         "soul": "",
     }
 
@@ -60,7 +60,7 @@ def test_minimal_init_passes():
         },
         "covenant": "",
         "pad": "",
-        "prompt": "",
+        "lingtai": "",
         "soul": "",
     }
     validate_init(data)  # should not raise
@@ -254,7 +254,7 @@ def test_time_awareness_field_valid_bool():
             "time_awareness": False,
         },
         "covenant": "hi",
-        "prompt": "hello",
+        "lingtai": "hello",
         "pad": "",
         "soul": "",
         "principle": "",
@@ -273,7 +273,7 @@ def test_time_awareness_field_wrong_type_raises():
             "time_awareness": "yes",
         },
         "covenant": "hi",
-        "prompt": "hello",
+        "lingtai": "hello",
         "pad": "",
         "soul": "",
         "principle": "",
@@ -291,7 +291,7 @@ def test_timezone_awareness_field_valid_bool():
             "timezone_awareness": False,
         },
         "covenant": "hi",
-        "prompt": "hello",
+        "lingtai": "hello",
         "pad": "",
         "soul": "",
         "principle": "",
@@ -310,7 +310,7 @@ def test_timezone_awareness_field_wrong_type_raises():
             "timezone_awareness": "yes",
         },
         "covenant": "hi",
-        "prompt": "hello",
+        "lingtai": "hello",
         "pad": "",
         "soul": "",
         "principle": "",

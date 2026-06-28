@@ -25,7 +25,7 @@ def _baseline_parent_init(preset_path: str | None = None,
         manifest["preset"] = preset_block
     return {
         "manifest": manifest,
-        "principle": "p", "covenant": "c", "pad": "", "prompt": "",
+        "principle": "p", "covenant": "c", "pad": "", "lingtai": "",
         "soul": "",
     }
 
@@ -114,7 +114,7 @@ def test_avatar_spawns_with_parent_default_when_active_differs(tmp_path):
             "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 50,
             "admin": {}, "streaming": False,
         },
-        "principle": "p", "covenant": "c", "pad": "", "prompt": "", "soul": "",
+        "principle": "p", "covenant": "c", "pad": "", "lingtai": "", "soul": "",
     }
 
     from lingtai.core.avatar import AvatarManager
@@ -144,7 +144,7 @@ def test_avatar_no_preset_block_inherits_flat_config(tmp_path):
             "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 50,
             "admin": {}, "streaming": False,
         },
-        "principle": "p", "covenant": "c", "pad": "", "prompt": "", "soul": "",
+        "principle": "p", "covenant": "c", "pad": "", "lingtai": "", "soul": "",
     }
 
     from lingtai.core.avatar import AvatarManager
@@ -171,7 +171,7 @@ def test_avatar_strips_materialized_when_active_equals_default(tmp_path):
             "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 50,
             "admin": {}, "streaming": False,
         },
-        "principle": "p", "covenant": "c", "pad": "", "prompt": "", "soul": "",
+        "principle": "p", "covenant": "c", "pad": "", "lingtai": "", "soul": "",
     }
 
     from lingtai.core.avatar import AvatarManager
@@ -189,6 +189,9 @@ def test_avatar_init_keeps_base_prompt_and_drops_kernel_prompt_overrides(tmp_pat
     parent_init = _baseline_parent_init()
     parent_init["base_prompt"] = "recipe base prompt"
     parent_init["base_prompt_file"] = "relative/base_prompt.md"
+    # The avatar must not inherit the parent's 灵台 character seed.
+    parent_init["lingtai"] = "parent self-authored identity"
+    parent_init["lingtai_file"] = "relative/lingtai.md"
     retired = {
         "principle": "legacy parent principle",
         "principle_file": "relative/principle.md",
@@ -206,5 +209,9 @@ def test_avatar_init_keeps_base_prompt_and_drops_kernel_prompt_overrides(tmp_pat
 
     assert avatar_init["base_prompt"] == "recipe base prompt"
     assert avatar_init["base_prompt_file"] == "relative/base_prompt.md"
+    # The 灵台 seed is blanked (required field stays present, but empty) and the
+    # _file form is dropped — the avatar starts with no inherited character.
+    assert avatar_init["lingtai"] == ""
+    assert "lingtai_file" not in avatar_init
     for key in retired:
         assert key not in avatar_init

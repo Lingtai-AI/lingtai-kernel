@@ -490,8 +490,10 @@ class AvatarManager:
 
         The spawn brief (parent identity + reasoning) is delivered out-of-band
         via a `.prompt` signal file dropped in the avatar's working dir by the
-        caller — see ``_spawn``. Here we only blank the inherited prompt so the
-        schema sees a present-but-empty field (no stale prompt carried over).
+        caller — see ``_spawn``. Here we only blank the inherited `lingtai`
+        character seed so the schema sees a present-but-empty required field (no
+        stale identity carried over). The `.prompt` signal file is a runtime
+        text-injection channel and is unrelated to the renamed `lingtai` seed.
 
         Avatars inherit the parent's `manifest.preset.allowed` list verbatim.
         Entries are stored as path strings; if any are relative, they are
@@ -500,10 +502,12 @@ class AvatarManager:
         """
         init = json.loads(json.dumps(parent_init))  # deep copy
         init["manifest"]["agent_name"] = name
-        # Blank inherited prompt — schema requires the field to exist, but the
-        # avatar's actual first prompt arrives via the `.prompt` signal file.
-        init["prompt"] = ""
-        init.pop("prompt_file", None)
+        # Blank inherited `lingtai` — schema requires the character seed field to
+        # exist, but the avatar starts with no inherited 灵台; its actual first
+        # prompt arrives via the `.prompt` signal file (a separate runtime
+        # channel, not the `lingtai` seed).
+        init["lingtai"] = ""
+        init.pop("lingtai_file", None)
         # Avatar has no admin privileges
         init["manifest"]["admin"] = {}
         # Comment is not inherited — parent can set one explicitly for the avatar

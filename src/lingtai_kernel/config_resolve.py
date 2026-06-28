@@ -125,7 +125,7 @@ def resolve_paths(data: dict, working_dir: str | Path) -> None:
                 "covenant_file",
                 "base_prompt_file",
                 "pad_file",
-                "prompt_file", "comment_file"):
+                "lingtai_file", "comment_file"):
         if key in data and isinstance(data[key], str) and data[key]:
             p = Path(data[key]).expanduser()
             if not p.is_absolute():

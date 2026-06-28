@@ -42,7 +42,7 @@ def _make_workdir(tmp_path: Path, active_preset: str | None = None,
     env_file.write_text("")
     init = {
         "manifest": manifest,
-        "principle": "p", "covenant": "c", "pad": "", "prompt": "",
+        "principle": "p", "covenant": "c", "pad": "", "lingtai": "",
         "env_file": str(env_file),
     }
     (wd / "init.json").write_text(json.dumps(init))

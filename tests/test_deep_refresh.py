@@ -64,7 +64,7 @@ def _make_init(
         "principle": principle,
         "covenant": covenant,
         "pad": memory,
-        "prompt": "",
+        "lingtai": "",
         "soul": "",
     }
     if base_prompt is not None:

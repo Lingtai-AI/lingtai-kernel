@@ -35,7 +35,7 @@ def _write_init(tmp_path: Path) -> None:
         "principle": "",
         "covenant": "You are a test agent.",
         "pad": "",
-        "prompt": "",
+        "lingtai": "",
     }
     (tmp_path / "init.json").write_text(json.dumps(data))
 

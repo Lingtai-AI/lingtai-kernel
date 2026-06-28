@@ -210,7 +210,7 @@ def _minimal_init_with_compact_threshold(value):
         "principle": "",
         "covenant": "",
         "pad": "",
-        "prompt": "",
+        "lingtai": "",
     }
 
 

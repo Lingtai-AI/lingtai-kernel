@@ -15,7 +15,7 @@ def _valid_init() -> dict:
         "principle": "",
         "covenant": "",
         "pad": "",
-        "prompt": "",
+        "lingtai": "",
     }
 
 
@@ -100,6 +100,65 @@ def test_procedures_file_no_longer_active_optional_prompt_field():
     assert stripped == []
     assert "procedures_file" in data
     assert all("procedures_file" not in w for w in warnings)
+
+
+# --- init seed contract: `lingtai` replaces `prompt` with no legacy alias ---
+#
+# `lingtai` (灵台) is the agent's required initial character seed — distinct from
+# `base_prompt` (third-party injection). It was renamed from `prompt` /
+# `prompt_file`. Jason: no legacy alias, no backward compatibility — a stale
+# `prompt` is an unknown-field warning and a missing `lingtai` is a hard error.
+
+
+def test_lingtai_is_the_required_seed_field():
+    from lingtai.init_schema import TOP_KNOWN
+
+    assert "lingtai" in TOP_KNOWN
+    assert "lingtai_file" in TOP_KNOWN
+
+    data = _valid_init()
+    assert data["lingtai"] == ""
+    validate_init(data)  # present → valid
+
+
+def test_missing_lingtai_is_a_hard_error():
+    import pytest
+
+    data = _valid_init()
+    del data["lingtai"]
+    with pytest.raises(ValueError, match="lingtai"):
+        validate_init(data)
+
+
+def test_lingtai_file_satisfies_the_required_seed():
+    data = _valid_init()
+    del data["lingtai"]
+    data["lingtai_file"] = "system/lingtai.md"
+    validate_init(data)  # _file form satisfies the requirement
+
+
+def test_legacy_prompt_field_is_unknown_no_alias():
+    """No legacy alias: a `prompt` field is neither known nor honored — it
+    surfaces as an unknown-field warning, and on its own it does NOT satisfy
+    the required `lingtai` seed."""
+    import pytest
+    from lingtai.init_schema import TOP_KNOWN, TOP_OPTIONAL
+
+    assert "prompt" not in TOP_KNOWN
+    assert "prompt_file" not in TOP_KNOWN
+    assert "prompt" not in TOP_OPTIONAL
+
+    # `prompt` present but `lingtai` absent → required-field failure.
+    data = _valid_init()
+    del data["lingtai"]
+    data["prompt"] = "stale seed under the old name"
+    with pytest.raises(ValueError, match="lingtai"):
+        validate_init(data)
+
+    # With `lingtai` present, a stray `prompt` is merely an unknown-field warning.
+    data["lingtai"] = ""
+    warnings = validate_init(data)
+    assert any("prompt" in w for w in warnings)
 
 
 # --- init prompt contract: base_prompt is the third-party injection point ---

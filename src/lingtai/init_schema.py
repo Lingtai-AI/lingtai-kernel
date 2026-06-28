@@ -68,7 +68,7 @@ TOP_KNOWN: set[str] = {
     "manifest", "env_file", "venv_path", "addons", "mcp",
     "covenant", "covenant_file",
     "base_prompt", "base_prompt_file",
-    "pad", "pad_file", "prompt", "prompt_file",
+    "pad", "pad_file", "lingtai", "lingtai_file",
     "comment", "comment_file",
 } | DEPRECATED_TOP_FIELDS | LEGACY_MIGRATED_TOP_FIELDS
 
@@ -151,10 +151,20 @@ def validate_init(data: dict) -> list[str]:
     }, prefix="")
 
     # Text fields: inline value OR _file path (at least one required).
+    #
+    # `lingtai` is the agent's initial 灵台 — the seed character / self-authored
+    # identity that is written to system/lingtai.md and rendered as the
+    # `character` prompt section (via psyche._lingtai_load). It is the agent's
+    # OWN voice, NOT to be confused with `base_prompt`, the third-party
+    # (application / recipe / preset) injection point (see TOP_OPTIONAL). The
+    # field was renamed from `prompt` / `prompt_file`; there is NO legacy alias —
+    # an init.json carrying `prompt` instead of `lingtai` fails the required
+    # check (missing `lingtai`) and `prompt` surfaces as an unknown-field warning.
+    #
     # Note: "soul" / "soul_file" was removed in v0.7.6 — the soul-flow
     # voice lives at manifest.soul.{voice,voice_prompt} now. The legacy
     # fields are kept in TOP_KNOWN for silent ignore (no warning).
-    for key in ("covenant", "pad", "prompt"):
+    for key in ("covenant", "pad", "lingtai"):
         file_key = f"{key}_file"
         has_inline = key in data
         has_file = file_key in data

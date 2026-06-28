@@ -45,7 +45,7 @@ def _make_workdir(tmp_path: Path, active_preset: str | None = None,
     env_file.write_text("")
     init = {
         "manifest": manifest,
-        "principle": "p", "covenant": "c", "pad": "", "prompt": "",
+        "principle": "p", "covenant": "c", "pad": "", "lingtai": "",
         "soul": "",
         "env_file": str(env_file),
     }
@@ -259,7 +259,7 @@ def test_materialize_relative_presets_path_resolves_against_workdir(tmp_path, mo
             "admin": {"karma": True},
             "streaming": False,
         },
-        "principle": "p", "covenant": "c", "pad": "", "prompt": "",
+        "principle": "p", "covenant": "c", "pad": "", "lingtai": "",
         "soul": "",
         "env_file": str(env),
     }
@@ -317,7 +317,7 @@ def test_materialize_omitted_path_falls_back_to_default(tmp_path, monkeypatch):
             "admin": {"karma": True},
             "streaming": False,
         },
-        "principle": "p", "covenant": "c", "pad": "", "prompt": "",
+        "principle": "p", "covenant": "c", "pad": "", "lingtai": "",
         "soul": "",
         "env_file": str(env),
     }
@@ -766,7 +766,7 @@ def _build_init_with_active_and_default(
                 "allowed": [active_path, default_path],
             },
         },
-        "principle": "p", "covenant": "c", "pad": "", "prompt": "",
+        "principle": "p", "covenant": "c", "pad": "", "lingtai": "",
         "soul": "",
         "env_file": str(env_file),
     }

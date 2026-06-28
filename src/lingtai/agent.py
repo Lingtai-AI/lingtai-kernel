@@ -1088,13 +1088,16 @@ class Agent(BaseAgent):
         # Resolve *_file fields for active top-level text content.
         # The externally changeable prompt surface is exactly `base_prompt`,
         # `covenant`, and `comment` (plus the required agent seed/state fields
-        # `prompt` and `pad`). Retired prompt-override `_file` fields
+        # `lingtai` and `pad`). `lingtai` is the agent's initial 灵台 / character
+        # seed (system/lingtai.md → `character` section), distinct from
+        # `base_prompt` (third-party injection point); it was renamed from
+        # `prompt` with no legacy alias. Retired prompt-override `_file` fields
         # (principle_file / procedures_file / substrate_file / brief_file) are
         # legacy-known and intentionally not resolved here.
         # Note: "soul" / "soul_file" were retired in v0.7.6 and are now
         # stripped by strip_deprecated() before we get here.
         for key in ("covenant", "base_prompt",
-                    "pad", "prompt", "comment"):
+                    "pad", "lingtai", "comment"):
             file_key = f"{key}_file"
             if file_key in data:
                 data[key] = resolve_file(data.get(key), data.pop(file_key))
@@ -1363,10 +1366,10 @@ class Agent(BaseAgent):
             if data is None:
                 return
             # Resolve active *_file fields (covenant_file, base_prompt_file,
-            # comment_file). Retired prompt-override `_file` fields are
-            # legacy-known and not resolved — see _setup_from_init.
+            # lingtai_file, comment_file). Retired prompt-override `_file` fields
+            # are legacy-known and not resolved — see _setup_from_init.
             from lingtai_kernel.config_resolve import resolve_file
-            for key in ("covenant", "base_prompt", "pad", "comment"):
+            for key in ("covenant", "base_prompt", "pad", "lingtai", "comment"):
                 file_key = f"{key}_file"
                 if file_key in data:
                     data[key] = resolve_file(data.get(key), data.pop(file_key))
@@ -1410,10 +1413,23 @@ class Agent(BaseAgent):
             self._prompt_manager.write_section("covenant", covenant, protected=True)
 
         # --- Character (self-authored identity — system/lingtai.md alone) ---
+        # `lingtai` is the agent's initial 灵台 / character seed: the inline
+        # init.json value (already merged with `lingtai_file` by _setup_from_init)
+        # seeds system/lingtai.md, then the canonical composer loads it into the
+        # `character` section. This mirrors the covenant/base_prompt disk pattern
+        # so the seed survives a post-molt reload that re-reads init.json. It is
+        # the agent's OWN voice — distinct from `covenant` above, from the
+        # third-party `base_prompt` injection point, and from the mechanical
+        # `identity` section written by BaseAgent. (Renamed from `prompt`; no
+        # legacy alias.) Once the agent self-authors lingtai.md, the on-disk file
+        # wins on every boot/refresh — an empty/absent init `lingtai` does NOT
+        # blank it, exactly like covenant.
+        lingtai_seed = data.get("lingtai", "")
+        if lingtai_seed:
+            (system_dir / "lingtai.md").write_text(lingtai_seed)
         # Delegate to the single canonical composer so boot/refresh/molt all
         # produce byte-identical `character` content and no longer depend on
-        # post-molt hook ordering. Distinct from `covenant` above and from the
-        # mechanical `identity` section written by BaseAgent.
+        # post-molt hook ordering.
         from lingtai_kernel.intrinsics.psyche import _lingtai_load
         _lingtai_load(self, {})
 

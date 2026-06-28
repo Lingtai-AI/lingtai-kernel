@@ -285,7 +285,7 @@ def _make_test_agent_for_presets(tmp_path, presets_path=None, active_preset=None
         }
     init = {
         "manifest": manifest,
-        "principle": "p", "covenant": "c", "pad": "", "prompt": "",
+        "principle": "p", "covenant": "c", "pad": "", "lingtai": "",
         "soul": "",
     }
     (wd / "init.json").write_text(json.dumps(init))
@@ -672,7 +672,7 @@ def test_refresh_revert_preset_when_no_preset_configured_errors(tmp_path, monkey
             "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 50,
             "admin": {}, "streaming": False,
         },
-        "principle": "p", "covenant": "c", "pad": "", "prompt": "", "soul": "",
+        "principle": "p", "covenant": "c", "pad": "", "lingtai": "", "soul": "",
     }
     (wd / "init.json").write_text(json.dumps(init))
     agent = BaseAgent(service=svc, agent_name="alice", working_dir=wd)

@@ -30,7 +30,7 @@ def _write_init(tmp_path: Path, overrides: dict | None = None) -> Path:
         "principle": "",
         "covenant": "Be helpful.",
         "pad": "I remember nothing.",
-        "prompt": "",
+        "lingtai": "",
     }
     if overrides:
         # Deep merge manifest if provided
@@ -467,7 +467,7 @@ def test_load_init_runs_agent_migrations_before_validation(tmp_path):
         "principle": "",
         "covenant": "",
         "pad": "",
-        "prompt": "",
+        "lingtai": "",
         "procedures": legacy,
         "procedures_file": "old/procedures.md",
     }

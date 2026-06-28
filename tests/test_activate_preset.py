@@ -52,7 +52,7 @@ def _make_workdir_and_lib(tmp_path: Path) -> tuple[Path, Path]:
             "admin": {"karma": True},
             "streaming": False,
         },
-        "principle": "p", "covenant": "c", "pad": "", "prompt": "",
+        "principle": "p", "covenant": "c", "pad": "", "lingtai": "",
         "soul": "",
     }
     (wd / "init.json").write_text(json.dumps(init))
@@ -168,7 +168,7 @@ def test_activate_preset_uses_default_path_when_unset(tmp_path, monkeypatch):
             "soul": {"delay": 120}, "stamina": 3600, "molt_pressure": 0.8,
             "molt_prompt": "", "max_turns": 50, "admin": {}, "streaming": False,
         },
-        "principle": "p", "covenant": "c", "pad": "", "prompt": "", "soul": "",
+        "principle": "p", "covenant": "c", "pad": "", "lingtai": "", "soul": "",
     }
     (wd / "init.json").write_text(json.dumps(init))
     a = _make_probe_agent(wd)

@@ -9,7 +9,7 @@ def test_avatar_inherits_timezone_awareness_true():
             "timezone_awareness": True,
         },
         "covenant": "x",
-        "prompt": "y",
+        "lingtai": "y",
     }
     child = AvatarManager._make_avatar_init(parent_init, "kid")
     assert child["manifest"]["timezone_awareness"] is True
@@ -22,7 +22,7 @@ def test_avatar_inherits_timezone_awareness_false():
             "timezone_awareness": False,
         },
         "covenant": "x",
-        "prompt": "y",
+        "lingtai": "y",
     }
     child = AvatarManager._make_avatar_init(parent_init, "kid")
     assert child["manifest"]["timezone_awareness"] is False
@@ -35,7 +35,7 @@ def test_avatar_inherits_missing_field_as_missing():
             "agent_name": "mom",
         },
         "covenant": "x",
-        "prompt": "y",
+        "lingtai": "y",
     }
     child = AvatarManager._make_avatar_init(parent_init, "kid")
     assert "timezone_awareness" not in child["manifest"]
