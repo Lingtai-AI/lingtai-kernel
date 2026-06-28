@@ -21,212 +21,14 @@ as the packaged default (v1); the `Agent` subclass copies it to
 `system/substrate.md` on first boot, where the agent (or human) can
 edit it freely.
 
-build_system_prompt() assembles kernel-injected runtime principles +
-base_prompt + rendered sections. The runtime principles include language,
-activeness, progressive-disclosure layering, and token-efficiency action
-rules. They always render first, before base_prompt, so ordinary operating
-rules are pinned before all other prompt material.
+build_system_prompt() assembles the kernel-owned principle section,
+wrapper-level base_prompt material, and rendered prompt sections. Principle
+text is not generated dynamically by this module; the kernel-owned principle
+contract lives in the packaged raw `principle` section.
 """
 from __future__ import annotations
 
 from typing import Optional
-
-# Kernel-injected dynamic runtime principle, keyed by language code. Each
-# entry is written in the target language itself. Unknown codes fall back
-# to English wording with the raw code embedded (see _language_principle).
-_LANGUAGE_PRINCIPLES: dict[str, str] = {
-    "en": (
-        "Agent language: English. Write all ordinary prose and human-facing "
-        "replies in English, unless an explicit instruction from a human or "
-        "the task at hand asks otherwise. Do not switch languages just "
-        "because nearby prompt or source material is in another language. "
-        "Quoting source text, and using code or identifiers as-is, is fine."
-    ),
-    "zh": (
-        "智能体语言：简体中文。所有日常行文与面向人类的回复一律使用简体中文，"
-        "除非人类或当前任务明确要求使用其他语言。不要仅因周围的提示词或资料"
-        "是其他语言就切换语言。引用原文、保留代码与标识符的原样不受此限。"
-    ),
-    "wen": (
-        "器灵之言：文言。凡寻常行文、对人之复，皆以文言书之；"
-        "非人或当下之务明命改易，毋得擅换。毋因旁近提示、材料为他语而随之。"
-        "引录原文、代码、名号，仍其旧貌可也。"
-    ),
-}
-
-
-def _language_principle(language: str) -> str:
-    """Return the dynamic runtime language principle for `language`.
-
-    Known codes (en/zh/wen) get a principle written in the target language.
-    Unknown codes fall back to English wording carrying the raw code.
-    """
-    principle = _LANGUAGE_PRINCIPLES.get(language)
-    if principle is not None:
-        return principle
-    return (
-        f"Agent language: {language}. Write all ordinary prose and "
-        f"human-facing replies in that language ({language}), unless an "
-        "explicit instruction from a human or the task at hand asks "
-        "otherwise. Do not switch languages just because nearby prompt or "
-        "source material is in another language. Quoting source text, and "
-        "using code or identifiers as-is, is fine."
-    )
-
-
-# Kernel-injected dynamic runtime principle for agent activeness /
-# responsiveness posture. Values are intentionally small and stable because
-# they are operator-facing manifest knobs. Unknown values fall back to English
-# wording that names the raw value rather than silently choosing a posture.
-_ACTIVENESS_PRINCIPLES: dict[str, dict[str, str]] = {
-    "quiet": {
-        "en": (
-            "Agent activeness: quiet. Be swift in action and sparing in words: "
-            "do the useful work first, avoid unnecessary chatter, and report "
-            "only decisions, blockers, errors, deliverables, or facts the human "
-            "needs to proceed."
-        ),
-        "zh": (
-            "智能体主动程度：克制。君子敏于行而讷于言：先做有用之事，少作无谓寒暄；"
-            "仅在有决策、阻碍、错误、交付物或人类推进所需事实时回报。"
-        ),
-        "wen": (
-            "器灵主动之度：克制。君子敏于行而讷于言：先行其事，慎其辞令；"
-            "非有决断、阻碍、差误、交付，或人所必需之事实，毋多言也。"
-        ),
-    },
-    "balanced": {
-        "en": (
-            "Agent activeness: balanced. Act without delay, acknowledge human "
-            "instructions promptly, give progress for long work or blockers, "
-            "and keep routine reports concise and evidence-based."
-        ),
-        "zh": (
-            "智能体主动程度：均衡。能做则先做；收到人类指令要及时确认；长任务或遇阻要交代进展；"
-            "日常回报保持简洁，并以事实为据。"
-        ),
-        "wen": (
-            "器灵主动之度：中和。可行则亟行；受人之命则速应；事久或有阻则告其进；"
-            "凡常报，务简而有据。"
-        ),
-    },
-    "responsive": {
-        "en": (
-            "Agent activeness: responsive. Make every human-facing exchange feel "
-            "answered: acknowledge each request, state what you will do next, "
-            "surface errors and uncertainty plainly, and close the loop with "
-            "specific facts, paths, or outcomes."
-        ),
-        "zh": (
-            "智能体主动程度：高响应。句句有回应，事事有交代：每个人类请求都要确认；说明下一步；"
-            "如有错误或不确定性要明说；结束时以具体事实、路径或结果闭环。"
-        ),
-        "wen": (
-            "器灵主动之度：勤应。句句有应，事事有交代：凡人有所请，必先承之；明示次第；"
-            "有差误疑滞则直陈；事毕以实、以径、以果结之。"
-        ),
-    },
-}
-
-_ACTIVENESS_ALIASES: dict[str, str] = {
-    "low": "quiet",
-    "restrained": "quiet",
-    "concise": "quiet",
-    "medium": "balanced",
-    "normal": "balanced",
-    "default": "balanced",
-    "high": "responsive",
-    "active": "responsive",
-    "verbose": "responsive",
-}
-
-
-# Kernel-injected progressive-disclosure hook. The detailed layer contract is
-# kernel-owned in the packaged raw `principle` section (`prompts/principle.md`);
-# this localized prefix only tells the agent that one rule should have one source
-# of truth and that resident layers route downward for detail.
-_PROGRESSIVE_DISCLOSURE_PRINCIPLES: dict[str, str] = {
-    "en": (
-        "Progressive disclosure principle: each prompt layer has one job and "
-        "points to the next. The kernel-owned `principle` section defines the "
-        "role of meta_guidance, procedures, substrate, and references. Keep each "
-        "rule in its owning layer; other layers should route instead of copying."
-    ),
-    "zh": (
-        "渐进式披露原则：每个 prompt 层各司一职，并指向下一层。kernel-owned `principle` "
-        "section 定义 meta_guidance、procedures、substrate、references 的职责。"
-        "每条规则应留在拥有它的层里；其他层只指路，不复制。"
-    ),
-    "wen": (
-        "渐披之则：诸 prompt 层各有其职，递相指路。kernel-owned `principle` section "
-        "定 meta_guidance、procedures、substrate、references 之职。"
-        "凡规则当居其主层；余层但指路，勿复写。"
-    ),
-}
-
-
-# Kernel-injected token-efficiency operating principle. Detailed provider/cache
-# rationale stays in manuals; the resident principle states when to act.
-_TOKEN_EFFICIENCY_PRINCIPLES: dict[str, str] = {
-    "en": (
-        "Token efficiency principle: the current session's active context is "
-        "carried into every provider request. When continuing, summarize consumed "
-        "tool results whose raw text is no longer needed. At completed task "
-        "boundaries, after reporting and durable stores are tended, do not molt "
-        "automatically; default to a proactive task-boundary molt only once "
-        "current-session API calls exceed 100, or when context pressure, explicit "
-        "human request, or conversation confusion makes the molt worth its cost. "
-        "Use daemons to keep bulky or noisy work out of the main context."
-    ),
-    "zh": (
-        "Token efficiency 原则：当前会话的活跃上下文会随每次 provider 请求一起发送。"
-        "继续同一任务时，已消化且不再需要原文的工具结果要摘要。任务完成并完成必要汇报与"
-        "durable stores 后，不要自动凝蜕；默认只在当前 session API calls 超过 100 时才做"
-        "proactive task-boundary molt，或在上下文压力、人类显式要求、对话已混乱且值得支付 molt 成本时才做。"
-        "嘈杂或大批量工作应先用 daemon 隔离。"
-    ),
-    "wen": (
-        "省筹之则：当会话之活跃上下文随每次 provider 请求而行。续作时，凡工具结果已消化且"
-        "无须原文者，当摘要。事毕、已报且诸藏已理，毋自动凝蜕；默认须当会话 API calls 逾 100，"
-        "方行 proactive task-boundary molt；或遇上下文之压、人明令重启、对话混乱而其费可偿，乃行之。"
-        "繁重嘈杂之工，先遣 daemon 以隔主上下文。"
-    ),
-}
-
-
-def _progressive_disclosure_principle(language: str) -> str:
-    """Return the resident-vs-reference layering principle for `language`."""
-    return _PROGRESSIVE_DISCLOSURE_PRINCIPLES.get(language) or _PROGRESSIVE_DISCLOSURE_PRINCIPLES["en"]
-
-
-def _token_efficiency_principle(language: str) -> str:
-    """Return the token-efficiency action principle for `language`."""
-    return _TOKEN_EFFICIENCY_PRINCIPLES.get(language) or _TOKEN_EFFICIENCY_PRINCIPLES["en"]
-
-
-
-def _activeness_principle(activeness: str | None, language: str) -> str:
-    """Return the dynamic runtime activeness principle.
-
-    ``None`` / empty string uses the operator default (balanced). Known levels
-    are quiet, balanced, and responsive, with a few permissive
-    aliases for operator ergonomics. Unknown values render an explicit English
-    warning carrying the raw value instead of silently picking a level.
-    """
-    raw = "balanced" if activeness is None else str(activeness).strip()
-    if not raw:
-        raw = "balanced"
-    key = raw.lower().replace("_", "-")
-    key = _ACTIVENESS_ALIASES.get(key, key)
-    entries = _ACTIVENESS_PRINCIPLES.get(key)
-    if entries is None:
-        return (
-            f"Agent activeness: {raw}. Unknown activeness level; known levels "
-            "are quiet, balanced, and responsive. Follow any explicit human or "
-            "operator instruction about responsiveness, and otherwise use "
-            "balanced responsiveness."
-        )
-    return entries.get(language) or entries["en"]
 
 
 class SystemPromptManager:
@@ -374,10 +176,11 @@ def build_system_prompt(
 ) -> str:
     """Build the full system prompt from components.
 
-    Order: language → activeness → progressive disclosure → token efficiency
-    principles → base prompt → section batches. Runtime principles are
-    kernel-injected and always come first. base_prompt is
-    framework-level guidance injected by the wrapper package (lingtai).
+    The builder no longer injects any principle text at runtime. Kernel-owned
+    principle text must arrive through the raw ``principle`` prompt section
+    (normally mirrored from ``lingtai/prompts/principle.md``). ``language`` and
+    ``activeness`` remain accepted for API compatibility, but they do not
+    synthesize prompt text here.
 
     This delegates to build_system_prompt_batches() and joins non-empty
     batches with ``\\n\\n``. That matches LLMChatSession.update_system_prompt_batches()
@@ -403,36 +206,37 @@ def build_system_prompt_batches(
 ) -> list[str]:
     """Build the system prompt as a list of mutation-frequency batches.
 
-    Same ordering as build_system_prompt, but returned as segments so
-    adapters that support per-block prompt caching (e.g. Anthropic's
-    `cache_control`) can place breakpoints at batch boundaries. Callers
-    that want a string can do ``"\\n\\n".join(filter(None, batches))``
-    — and build_system_prompt() does exactly that composition.
+    Same ordering as build_system_prompt, but returned as segments so adapters
+    that support per-block prompt caching (e.g. Anthropic's `cache_control`) can
+    place breakpoints at batch boundaries. Callers that want a string can do
+    ``"\\n\\n".join(filter(None, batches))`` — and build_system_prompt() does
+    exactly that composition.
 
-    The runtime principle prefix (language, activeness, progressive-disclosure
-    hook, token efficiency, and ``base_prompt`` if any) is prepended to Batch 1, the
-    cache-stable prefix batch, using the same
-    ``\\n\\n---\\n\\n`` prefix separator that the historical single-string
-    builder used between framework-level guidance and sections. Empty
-    non-prefix batches stay empty so caller indexing remains stable.
+    No principle text is injected dynamically. If a raw ``principle`` section is
+    present at the front of Batch 1, it remains first and any wrapper-level
+    ``base_prompt`` follows it. This keeps the kernel-owned principle contract in
+    ``principle.md`` as the single source of truth while preventing framework or
+    operator text from splitting that section. ``language`` and ``activeness``
+    are accepted only for compatibility with existing callers.
     """
+    _ = (language, activeness)  # Compatibility-only parameters; no prompt text.
     batches = prompt_manager.render_batches()
+    if not base_prompt:
+        return batches
 
-    prefix_parts = [_language_principle(language)]
-    activeness_principle = _activeness_principle(activeness, language)
-    if activeness_principle:
-        prefix_parts.append(activeness_principle)
-    prefix_parts.append(_progressive_disclosure_principle(language))
-    prefix_parts.append(_token_efficiency_principle(language))
-    prefix = "\n\n".join(prefix_parts)
-    if base_prompt:
-        prefix = f"{prefix}\n\n---\n\n{base_prompt}"
-
-    if batches[0]:
-        batches[0] = f"{prefix}\n\n---\n\n{batches[0]}"
+    first_batch = batches[0]
+    principle = prompt_manager.read_section("principle")
+    if principle and first_batch.startswith(principle):
+        remaining_first_batch = first_batch[len(principle):]
+        if remaining_first_batch.startswith("\n\n"):
+            remaining_first_batch = remaining_first_batch[2:]
+        blocks = [principle, base_prompt]
+        if remaining_first_batch:
+            blocks.append(remaining_first_batch)
     else:
-        # Keep the dynamic principle in the first/cache-stable batch even when
-        # an otherwise-minimal prompt only has tail sections (or no sections).
-        batches[0] = prefix
+        blocks = [base_prompt]
+        if first_batch:
+            blocks.append(first_batch)
 
+    batches[0] = "\n\n---\n\n".join(blocks)
     return batches

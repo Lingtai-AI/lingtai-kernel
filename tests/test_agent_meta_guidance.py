@@ -95,6 +95,10 @@ def test_agent_loads_kernel_owned_principle_prompt(tmp_path):
     assert "Reference manuals are why" in mirrored
     assert "operator supplied principle override" not in mirrored
     assert "operator supplied principle override" not in prompt
+    assert "dynamic kernel " + "preface" not in mirrored
+    assert "Agent " + "language:" not in prompt
+    assert "Agent " + "activeness:" not in prompt
+    assert "Token efficiency principle:" in mirrored
     assert mirrored in prompt
     assert prompt.index("Progressive disclosure principle: each resident prompt layer") < prompt.index("## meta_guidance")
 
