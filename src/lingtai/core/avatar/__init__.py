@@ -322,9 +322,13 @@ class AvatarManager:
         else:
             avatar_working_dir.mkdir(parents=True, exist_ok=True)
 
-        # Resolve relative file paths to absolute so avatar can find them
-        for key in ("env_file", "covenant_file", "principle_file",
-                    "substrate_file", "comment_file"):
+        # Resolve relative file paths to absolute so avatar can find them.
+        # Only active prompt-contract file fields are re-rooted: env_file plus
+        # the externally changeable prompt surfaces (covenant / base_prompt /
+        # comment). Retired override file fields (principle_file / substrate_file
+        # / brief_file / procedures_file) are not inherited as live paths.
+        for key in ("env_file", "covenant_file",
+                    "base_prompt_file", "comment_file"):
             val = parent_init.get(key)
             if val and not os.path.isabs(val):
                 resolved = parent._working_dir / val
@@ -505,12 +509,17 @@ class AvatarManager:
         # Comment is not inherited — parent can set one explicitly for the avatar
         init["comment"] = comment
         init.pop("comment_file", None)
-        # Brief is not inherited — avatars don't need life context
-        init.pop("brief", None)
-        init.pop("brief_file", None)
-        # Procedures are kernel-owned; legacy parent overrides are not inherited.
-        init.pop("procedures", None)
-        init.pop("procedures_file", None)
+        # Kernel-owned / secretary-owned prompt layers are not inherited as
+        # init.json overrides.  Under the init-prompt contract the only external
+        # prompt surfaces are base_prompt, covenant, and comment; comment is
+        # reset above, while base_prompt and covenant remain inherited.
+        for key in (
+            "principle", "principle_file",
+            "procedures", "procedures_file",
+            "substrate", "substrate_file",
+            "brief", "brief_file",
+        ):
+            init.pop(key, None)
         # Addons (IMAP, Telegram) are not inherited — each agent must be
         # explicitly configured to avoid multiple agents polling the same account
         init.pop("addons", None)

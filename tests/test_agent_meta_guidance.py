@@ -103,6 +103,78 @@ def test_agent_loads_kernel_owned_principle_prompt(tmp_path):
     assert prompt.index("Progressive disclosure principle: each resident prompt layer") < prompt.index("## meta_guidance")
 
 
+def test_init_base_prompt_renders_after_principle_before_covenant(tmp_path):
+    """The init-prompt contract's `base_prompt` is the third-party injection
+    point. After _reload_prompt_sections threads it into self._base_prompt, the
+    builder renders it right after the raw kernel-owned `principle` section and
+    before the rest of Batch 1 (here, `covenant`)."""
+    agent = _agent_with_static_comment(tmp_path)
+    agent._reload_prompt_sections({
+        "base_prompt": "Recipe-injected base prompt.",
+        "covenant": "The operator contract.",
+    })
+
+    prompt = agent._build_system_prompt()
+    batched = "\n".join(agent._build_system_prompt_batches())
+
+    assert "Recipe-injected base prompt." in prompt
+    assert "Recipe-injected base prompt." in batched
+    # principle (raw, kernel-owned) → base_prompt → covenant.
+    principle_pos = prompt.index("Progressive disclosure principle: each resident prompt layer")
+    base_pos = prompt.index("Recipe-injected base prompt.")
+    covenant_pos = prompt.index("The operator contract.")
+    assert principle_pos < base_pos < covenant_pos
+    # Mirrored to disk so it survives a from-scratch post-molt reload and is
+    # inspectable by operators.
+    mirror = agent._working_dir / "system" / "base_prompt.md"
+    assert mirror.read_text(encoding="utf-8") == "Recipe-injected base prompt."
+
+
+def test_init_base_prompt_survives_from_scratch_reload(tmp_path):
+    """A no-arg reload (post-molt hook re-reads init.json from scratch) keeps the
+    base_prompt via the system/base_prompt.md mirror even if the new read has no
+    inline value."""
+    agent = _agent_with_static_comment(tmp_path)
+    agent._reload_prompt_sections({"base_prompt": "Recipe-injected base prompt."})
+    assert agent._base_prompt == "Recipe-injected base prompt."
+
+    # Reload with empty data — disk mirror is the fallback.
+    agent._reload_prompt_sections({})
+    assert agent._base_prompt == "Recipe-injected base prompt."
+    assert "Recipe-injected base prompt." in agent._build_system_prompt()
+
+
+def test_init_substrate_override_is_not_honored(tmp_path):
+    """`substrate` is kernel-owned: an init.json substrate value is ignored at the
+    builder level; the packaged default renders instead."""
+    from importlib.resources import files
+    packaged = files("lingtai.prompts").joinpath("substrate.md").read_text(encoding="utf-8")
+
+    agent = _agent_with_static_comment(tmp_path)
+    agent._reload_prompt_sections({"substrate": "OPERATOR-SUBSTRATE-OVERRIDE"})
+
+    prompt = agent._build_system_prompt()
+    assert "OPERATOR-SUBSTRATE-OVERRIDE" not in prompt
+    assert agent._prompt_manager.read_section("substrate") == packaged
+
+
+def test_init_brief_override_is_not_honored(tmp_path):
+    """`brief` is no longer an init.json prompt override; an inline value is
+    ignored and the section comes only from system/brief.md on disk."""
+    agent = _agent_with_static_comment(tmp_path)
+    agent._reload_prompt_sections({"brief": "INIT-BRIEF-OVERRIDE"})
+
+    prompt = agent._build_system_prompt()
+    assert "INIT-BRIEF-OVERRIDE" not in prompt
+    assert agent._prompt_manager.read_section("brief") is None
+
+    # Disk-sourced brief still renders.
+    brief_md = agent._working_dir / "system" / "brief.md"
+    brief_md.write_text("DISK-BRIEF-CONTEXT", encoding="utf-8")
+    agent._reload_prompt_sections({})
+    assert "DISK-BRIEF-CONTEXT" in agent._build_system_prompt()
+
+
 def test_agent_batched_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_path):
     agent = _agent_with_static_comment(tmp_path)
 

@@ -366,10 +366,9 @@ class BaseAgent:
         elif principle_file.is_file():
             principle = principle_file.read_text(encoding="utf-8")
 
-        # Substrate: same pattern as covenant/principle. Opt-in (issue
-        # #39): kernel-owned, cross-app-stable system prompt section that
-        # describes the agent's architecture to itself; rendered between
-        # covenant and tools by SystemPromptManager.
+        # Substrate: lower-level BaseAgent seed/fallback. The init.json
+        # contract is enforced by lingtai.agent.Agent, where substrate is
+        # kernel-owned and not an external override.
         if substrate:
             substrate_file.write_text(substrate)
         elif substrate_file.is_file():
@@ -381,7 +380,8 @@ class BaseAgent:
         elif procedures_file.is_file():
             procedures = procedures_file.read_text(encoding="utf-8")
 
-        # Brief: externally-maintained context (written by secretary agent).
+        # Brief: disk-owned context (normally written by secretary/briefing
+        # flows). Init.json brief overrides are retired at the Agent wrapper.
         if brief and not brief_file.is_file():
             brief_file.write_text(brief)
         elif brief_file.is_file():

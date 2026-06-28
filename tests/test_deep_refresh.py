@@ -36,6 +36,9 @@ def _make_init(
     covenant: str = "",
     principle: str = "",
     memory: str = "",
+    base_prompt: str | None = None,
+    substrate: str | None = None,
+    brief: str | None = None,
 ) -> dict:
     """Build a minimal valid init.json dict."""
     data = {
@@ -64,6 +67,12 @@ def _make_init(
         "prompt": "",
         "soul": "",
     }
+    if base_prompt is not None:
+        data["base_prompt"] = base_prompt
+    if substrate is not None:
+        data["substrate"] = substrate
+    if brief is not None:
+        data["brief"] = brief
     if addons:
         data["addons"] = addons
     return data
@@ -391,6 +400,145 @@ def test_system_guidance_is_overwritten_by_packaged_default(tmp_path):
     guidance_path = system_dir / "guidance.json"
     assert json.loads(guidance_path.read_text(encoding="utf-8")) == _packaged_guidance()
     assert guidance_path.read_text(encoding="utf-8").endswith("\n")
+
+def _packaged_substrate() -> str:
+    from importlib.resources import files
+
+    return files("lingtai.prompts").joinpath("substrate.md").read_text(encoding="utf-8")
+
+
+def test_init_base_prompt_reaches_rendered_prompt_via_boot(tmp_path):
+    """Boot via build_agent: init.json base_prompt is the third-party injection
+    point and lands in the rendered system prompt after principle, before
+    covenant."""
+    from lingtai.cli import load_init, build_agent
+
+    init = _make_init(
+        capabilities={"read": {}},
+        covenant="Be helpful.",
+        base_prompt="Recipe-injected base prompt.",
+    )
+    (tmp_path / "init.json").write_text(json.dumps(init))
+
+    data = load_init(tmp_path)
+    agent = build_agent(data, tmp_path)
+    try:
+        assert agent._base_prompt == "Recipe-injected base prompt."
+        prompt = agent._build_system_prompt()
+        assert "Recipe-injected base prompt." in prompt
+        assert prompt.index("Recipe-injected base prompt.") < prompt.index("Be helpful.")
+    finally:
+        agent._workdir.release_lock()
+
+
+def test_init_base_prompt_file_reaches_rendered_prompt_via_boot(tmp_path):
+    """base_prompt_file is the file form of the third-party injection point."""
+    from lingtai.cli import load_init, build_agent
+
+    (tmp_path / "recipe-base-prompt.md").write_text(
+        "Recipe base prompt from file.", encoding="utf-8"
+    )
+    init = _make_init(capabilities={"read": {}}, covenant="Be helpful.")
+    init["base_prompt_file"] = "recipe-base-prompt.md"
+    (tmp_path / "init.json").write_text(json.dumps(init))
+
+    data = load_init(tmp_path)
+    agent = build_agent(data, tmp_path)
+    try:
+        assert agent._base_prompt == "Recipe base prompt from file."
+        prompt = agent._build_system_prompt()
+        assert "Recipe base prompt from file." in prompt
+        assert prompt.index("Recipe base prompt from file.") < prompt.index("Be helpful.")
+    finally:
+        agent._workdir.release_lock()
+
+
+def test_init_base_prompt_post_molt_reload_keeps_injection(tmp_path):
+    """Firing post-molt hooks re-reads init.json from scratch; base_prompt must
+    survive (init.json still carries it, plus the on-disk mirror)."""
+    agent = _make_agent(tmp_path, _make_init(base_prompt="Recipe base prompt."))
+    agent._setup_from_init()
+
+    for cb in getattr(agent, "_post_molt_hooks", []):
+        cb()
+
+    assert agent._base_prompt == "Recipe base prompt."
+    assert "Recipe base prompt." in agent._build_system_prompt()
+
+
+def test_init_substrate_override_is_migrated_not_prompted(tmp_path):
+    """Legacy init.json substrate content is archived, removed, and ignored;
+    the packaged substrate renders instead."""
+    legacy = "LEGACY-SUBSTRATE-OVERRIDE"
+    agent = _make_agent(tmp_path, _make_init(substrate=legacy))
+
+    agent._setup_from_init()
+
+    prompt = agent._prompt_manager.render()
+    assert legacy not in prompt
+    assert _packaged_substrate() in prompt
+    data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
+    assert "substrate" not in data
+
+    digest = hashlib.sha256(legacy.encode("utf-8")).hexdigest()
+    archive = tmp_path / "system" / "migrations" / f"init-substrate-{digest}.md"
+    assert archive.read_text(encoding="utf-8") == legacy
+
+    events = _events(tmp_path, "init_prompt_contract_migrated")
+    assert len(events) == 1
+    assert events[0]["touched"]["substrate"]["inline_removed"] is True
+
+    # Idempotent: a second setup does not re-archive or re-log.
+    agent._setup_from_init()
+    archives = list((tmp_path / "system" / "migrations").glob("init-substrate-*.md"))
+    assert archives == [archive]
+    assert len(_events(tmp_path, "init_prompt_contract_migrated")) == 1
+
+
+def test_init_brief_override_is_migrated_and_seeded_to_disk(tmp_path):
+    """Legacy init.json brief content is archived, removed, and seeded into
+    system/brief.md so the disk-sourced brief section preserves life context."""
+    legacy = "LEGACY-BRIEF-CONTEXT"
+    agent = _make_agent(tmp_path, _make_init(brief=legacy))
+
+    agent._setup_from_init()
+
+    data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
+    assert "brief" not in data
+
+    digest = hashlib.sha256(legacy.encode("utf-8")).hexdigest()
+    archive = tmp_path / "system" / "migrations" / f"init-brief-{digest}.md"
+    assert archive.read_text(encoding="utf-8") == legacy
+
+    # Seeded into system/brief.md and rendered from disk.
+    brief_md = tmp_path / "system" / "brief.md"
+    assert brief_md.read_text(encoding="utf-8") == legacy
+    assert legacy in agent._prompt_manager.render()
+
+
+def test_init_brief_file_override_is_removed_and_seeded_to_disk(tmp_path):
+    """Legacy brief_file override is retired from init.json but its content is
+    preserved as the disk-owned brief section when no system/brief.md exists."""
+    legacy = "CUSTOM-BRIEF-FILE"
+    custom = tmp_path / "custom-brief.md"
+    custom.write_text(legacy, encoding="utf-8")
+    init = _make_init()
+    init["brief_file"] = "custom-brief.md"
+    agent = _make_agent(tmp_path, init)
+
+    agent._setup_from_init()
+
+    data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
+    assert "brief_file" not in data
+
+    digest = hashlib.sha256(legacy.encode("utf-8")).hexdigest()
+    archive = tmp_path / "system" / "migrations" / f"init-brief-file-{digest}.md"
+    assert archive.read_text(encoding="utf-8") == legacy
+
+    brief_md = tmp_path / "system" / "brief.md"
+    assert brief_md.read_text(encoding="utf-8") == legacy
+    assert legacy in agent._prompt_manager.render()
+
 
 def test_procedures_falls_back_to_system_file_when_packaged_missing(tmp_path):
     """If the packaged default cannot be read, system/procedures.md is fallback."""
