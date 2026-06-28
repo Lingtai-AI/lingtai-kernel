@@ -16,57 +16,21 @@ from __future__ import annotations
 
 from importlib import resources
 
+# The frontmatter parser is kernel-owned (the kernel must not import from the
+# wrapper, but the wrapper may import from the kernel). Re-exported here so the
+# curated MCPs keep their historical ``from ._skill import split_frontmatter``
+# call site while sharing one implementation with the prompt-section catalog.
+from lingtai_kernel._frontmatter import split_frontmatter
+
 SKILL_FILENAME = "SKILL.md"
 
-
-def split_frontmatter(text: str) -> tuple[dict[str, str], str]:
-    """Split a SKILL.md into (frontmatter dict, body markdown).
-
-    Tiny dependency-free parser for the leading ``---`` YAML block. Handles the
-    flat ``key: value`` and ``key: |``/``key: >`` block-scalar forms used by our
-    skill frontmatter; it does not attempt to be a general YAML parser. Returns
-    an empty mapping and the original text when no frontmatter is present.
-    """
-    if not text.startswith("---"):
-        return {}, text
-    lines = text.splitlines(keepends=True)
-    # lines[0] is the opening '---'; find the closing fence.
-    end = None
-    for i in range(1, len(lines)):
-        if lines[i].rstrip("\n").strip() == "---":
-            end = i
-            break
-    if end is None:
-        return {}, text
-
-    fm_lines = [ln.rstrip("\n") for ln in lines[1:end]]
-    body = "".join(lines[end + 1:]).lstrip("\n")
-
-    meta: dict[str, str] = {}
-    key: str | None = None
-    block_parts: list[str] = []
-
-    def _flush() -> None:
-        if key is not None:
-            meta[key] = " ".join(" ".join(block_parts).split())
-
-    for raw in fm_lines:
-        if key is not None and (raw.startswith((" ", "\t")) or not raw.strip()):
-            # Continuation line of a block scalar (key: | / key: >).
-            block_parts.append(raw.strip())
-            continue
-        if ":" in raw and not raw.startswith((" ", "\t")):
-            _flush()
-            k, _, v = raw.partition(":")
-            key = k.strip()
-            block_parts = []
-            v = v.strip()
-            if v in ("|", ">", "|-", ">-", "|+", ">+"):
-                # Block scalar — value continues on indented lines below.
-                continue
-            block_parts.append(v.strip("'\""))
-    _flush()
-    return meta, body
+__all__ = [
+    "SKILL_FILENAME",
+    "split_frontmatter",
+    "load_skill",
+    "manual_action_description",
+    "manual_payload",
+]
 
 
 def load_skill(package: str) -> tuple[dict[str, str], str, str]:

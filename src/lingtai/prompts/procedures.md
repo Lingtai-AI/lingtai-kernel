@@ -1,3 +1,32 @@
+---
+name: procedures
+kind: prompt-section
+section: procedures
+summary: >
+  Kernel-owned resident procedures: operational triggers, checklists, routing steps, reporting
+  discipline, and concrete tool-use rules — how to act. References/manuals carry the why,
+  boundaries, and troubleshooting.
+why: >
+  Self-explains why this fragment exists: the concise resident how-to layer that routes the agent
+  to the canonical rule. This frontmatter is developer-facing metadata only — stripped before the
+  body is rendered into the LLM prompt or system.md.
+related_files:
+  - "src/lingtai/prompts/principle.md"
+  - "src/lingtai/prompts/substrate.md"
+  - "reference/procedures-manual/SKILL.md"
+  - "knowledge/session-journal/<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md"
+  - "reference/substrate-manual/SKILL.md"
+  - "reference/sqlite-log-query/SKILL.md"
+maintenance: >
+  When editing this file, treat related_files as maintained inner links for the prompt/guidance
+  source graph. Before changing behavior or prose, crawl the listed files, update any affected
+  reciprocal link on the other side (principle links to each prompt/guidance source; each such
+  source links back to principle; guidance INDEX links to each guidance section and each section
+  links back to INDEX), and keep this list generous enough for future maintainers to find adjacent
+  prompt layers. Do not list tests merely because they validate the contract; add loaders,
+  manifests, or package metadata only when this file actually discusses them or the prompt-source
+  relation needs that link.
+---
 ### Operating by Progressive Disclosure
 
 Keep the always-on prompt small. When a procedure needs examples, command
@@ -7,7 +36,7 @@ of relying on resident memory. The unified runtime/procedure router is
 `reference/procedures-manual/SKILL.md`.
 
 High-attention tool-result summarization guidance lives in the runtime
-`guidance.json` prompt resource as resident `meta_guidance`; reference/manual
+guidance catalog as resident `meta_guidance`; reference/manual
 layers explain the rationale, edge cases, examples, and troubleshooting.
 
 **Summarize cadence.** After digesting a completed tool result whose raw text no

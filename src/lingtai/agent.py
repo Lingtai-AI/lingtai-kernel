@@ -19,6 +19,7 @@ from pathlib import Path
 
 from lingtai_kernel.base_agent import BaseAgent
 from lingtai_kernel.base_agent.prompt import _refresh_meta_guidance_section
+from lingtai_kernel._frontmatter import strip_frontmatter as _strip_frontmatter
 from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 from lingtai_kernel.prompt import build_system_prompt
 
@@ -1450,16 +1451,22 @@ class Agent(BaseAgent):
         # The packaged default overwrites the on-disk file on every boot so
         # that `pip install -e .` + `system(refresh)` actually propagates
         # kernel updates. The on-disk file is a mirror/debug artifact.
+        #
+        # The packaged source carries skill-style YAML frontmatter (developer-
+        # facing metadata: purpose/summary/audience). The mirror keeps that
+        # frontmatter so the on-disk artifact stays self-explanatory, but only
+        # the Markdown body is written into the prompt section — the rendered
+        # LLM prompt and final system.md must be body-only.
         substrate = ""
         substrate_file = system_dir / "substrate.md"
         try:
             from importlib.resources import files
             packaged = files("lingtai.prompts").joinpath("substrate.md").read_text(encoding="utf-8")
             substrate_file.write_text(packaged)
-            substrate = packaged
+            substrate = _strip_frontmatter(packaged)
         except (FileNotFoundError, ModuleNotFoundError, OSError):
             if substrate_file.is_file():
-                substrate = substrate_file.read_text(encoding="utf-8")
+                substrate = _strip_frontmatter(substrate_file.read_text(encoding="utf-8"))
             else:
                 substrate = ""
         if substrate:
@@ -1499,16 +1506,18 @@ class Agent(BaseAgent):
         # The packaged default owns the raison d'être of the resident prompt
         # layers (meta_guidance/procedures/substrate/references) so the rule does
         # not drift across files. The on-disk file is a mirror/debug artifact.
+        # As with substrate, the packaged source carries developer-facing YAML
+        # frontmatter; the mirror keeps it but the prompt section gets body-only.
         principle = ""
         principle_file = system_dir / "principle.md"
         try:
             from importlib.resources import files
             packaged = files("lingtai.prompts").joinpath("principle.md").read_text(encoding="utf-8")
             principle_file.write_text(packaged)
-            principle = packaged
+            principle = _strip_frontmatter(packaged)
         except (FileNotFoundError, ModuleNotFoundError, OSError):
             if principle_file.is_file():
-                principle = principle_file.read_text(encoding="utf-8")
+                principle = _strip_frontmatter(principle_file.read_text(encoding="utf-8"))
         if principle:
             self._prompt_manager.write_section("principle", principle, protected=True)
         else:
@@ -1520,16 +1529,18 @@ class Agent(BaseAgent):
         # wins on every boot/refresh. system/procedures.md is only a packaged
         # mirror/debug artifact, and is read as fallback if the package
         # resource is unavailable.
+        # Packaged source carries developer-facing YAML frontmatter; the mirror
+        # keeps it but the prompt section gets body-only.
         procedures = ""
         procedures_file = system_dir / "procedures.md"
         try:
             from importlib.resources import files
             packaged = files("lingtai.prompts").joinpath("procedures.md").read_text(encoding="utf-8")
             procedures_file.write_text(packaged)
-            procedures = packaged
+            procedures = _strip_frontmatter(packaged)
         except (FileNotFoundError, ModuleNotFoundError, OSError):
             if procedures_file.is_file():
-                procedures = procedures_file.read_text(encoding="utf-8")
+                procedures = _strip_frontmatter(procedures_file.read_text(encoding="utf-8"))
             else:
                 procedures = ""
         if procedures:
@@ -1539,15 +1550,17 @@ class Agent(BaseAgent):
 
         # --- Runtime guidance mirror ---
         # `_meta.guidance` is latest-only tool-result metadata, but the TUI
-        # also needs a filesystem-visible copy. Mirror the packaged prompt
-        # resource on every boot/refresh, just like substrate/procedures mirrors.
+        # also needs a filesystem-visible copy. Runtime guidance is now authored
+        # as a skill-style Markdown catalog (lingtai/prompts/guidance/INDEX.md +
+        # <id>.md sections); the kernel assembles it into the same dict shape and
+        # we serialize a *derived* `system/guidance.json` here for back-compat
+        # with TUI/Portal consumers (schema_version is an int; ids are stable).
         guidance_file = system_dir / "guidance.json"
         try:
-            from importlib.resources import files
             from lingtai_kernel.meta_block import validate_runtime_guidance
+            from lingtai_kernel.prompt_catalog import load_guidance_catalog
 
-            guidance_text = files("lingtai.prompts").joinpath("guidance.json").read_text(encoding="utf-8")
-            guidance_payload = json.loads(guidance_text)
+            guidance_payload = load_guidance_catalog()
             validate_runtime_guidance(guidance_payload)
             guidance_file.write_text(json.dumps(guidance_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         except Exception:

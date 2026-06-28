@@ -191,16 +191,25 @@ def test_packaged_principle_owns_static_progressive_and_token_efficiency_rules()
 
 def test_task_boundary_molt_guidance_is_cost_thresholded():
     """Resident and manual guidance should agree that task-boundary molt is costed."""
-    paths = [
+    from lingtai_kernel._frontmatter import strip_frontmatter
+
+    # Skill-style section/manual files carry developer-facing YAML frontmatter;
+    # strip it so the corpus is the rendered body only (not metadata text).
+    md_paths = [
         Path("src/lingtai/prompts/principle.md"),
         Path("src/lingtai/prompts/procedures.md"),
         Path("src/lingtai/prompts/substrate.md"),
-        Path("src/lingtai/prompts/guidance.json"),
         Path("src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md"),
         Path("src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md"),
         Path("src/lingtai/intrinsic_skills/system-manual/reference/summarize-manual/SKILL.md"),
     ]
-    corpus = "\n".join(path.read_text() for path in paths)
+    parts = [strip_frontmatter(path.read_text()) for path in md_paths]
+    # Guidance is now a skill-style Markdown catalog; fold each section body in.
+    from lingtai_kernel.meta_block import build_runtime_guidance
+
+    for section in build_runtime_guidance().get("sections", []):
+        parts.append(section.get("body", ""))
+    corpus = "\n".join(parts)
 
     assert "molt regardless" + " of context size" not in corpus
     assert "do not molt automatically" in corpus

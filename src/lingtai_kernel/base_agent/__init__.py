@@ -354,17 +354,24 @@ class BaseAgent:
 
         system_dir.mkdir(exist_ok=True)
 
+        # The kernel-owned section mirrors (principle/substrate/procedures) may
+        # carry skill-style YAML frontmatter on disk — developer-facing metadata
+        # that must never reach the LLM prompt. Strip it on read so the section
+        # the prompt manager renders is body-only. Covenant mirrors are operator
+        # content with no frontmatter, but stripping is a no-op there too.
+        from .._frontmatter import strip_frontmatter as _strip_frontmatter
+
         # Covenant: constructor value wins, then fall back to file on disk
         if covenant:
             covenant_file.write_text(covenant)
         elif covenant_file.is_file():
-            covenant = covenant_file.read_text(encoding="utf-8")
+            covenant = _strip_frontmatter(covenant_file.read_text(encoding="utf-8"))
 
         # Principle: constructor value wins, then fall back to file on disk
         if principle:
             principle_file.write_text(principle)
         elif principle_file.is_file():
-            principle = principle_file.read_text(encoding="utf-8")
+            principle = _strip_frontmatter(principle_file.read_text(encoding="utf-8"))
 
         # Substrate: lower-level BaseAgent seed/fallback. The init.json
         # contract is enforced by lingtai.agent.Agent, where substrate is
@@ -372,13 +379,13 @@ class BaseAgent:
         if substrate:
             substrate_file.write_text(substrate)
         elif substrate_file.is_file():
-            substrate = substrate_file.read_text(encoding="utf-8")
+            substrate = _strip_frontmatter(substrate_file.read_text(encoding="utf-8"))
 
         # Procedures: same pattern as covenant/principle
         if procedures:
             procedures_file.write_text(procedures)
         elif procedures_file.is_file():
-            procedures = procedures_file.read_text(encoding="utf-8")
+            procedures = _strip_frontmatter(procedures_file.read_text(encoding="utf-8"))
 
         # Brief: disk-owned context (normally written by secretary/briefing
         # flows). Init.json brief overrides are retired at the Agent wrapper.

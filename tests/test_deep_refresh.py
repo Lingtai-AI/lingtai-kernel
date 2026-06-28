@@ -100,7 +100,10 @@ def _make_agent(tmp_path: Path, init_data: dict | None = None):
     return agent
 
 
-def _packaged_procedures() -> str:
+def _packaged_procedures_file() -> str:
+    """Full packaged procedures source, including skill-style frontmatter.
+
+    This is what the `system/procedures.md` mirror keeps on disk."""
     from importlib.resources import files
 
     return files("lingtai.prompts").joinpath("procedures.md").read_text(
@@ -108,14 +111,22 @@ def _packaged_procedures() -> str:
     )
 
 
-def _packaged_guidance() -> dict:
-    from importlib.resources import files
+def _packaged_procedures() -> str:
+    """Rendered procedures body (frontmatter stripped) — what reaches the prompt."""
+    from lingtai_kernel._frontmatter import strip_frontmatter
 
-    return json.loads(
-        files("lingtai.prompts").joinpath("guidance.json").read_text(
-            encoding="utf-8"
-        )
-    )
+    return strip_frontmatter(_packaged_procedures_file())
+
+
+def _packaged_guidance() -> dict:
+    """Assembled runtime-guidance dict from the skill-style Markdown catalog.
+
+    The kernel no longer ships guidance.json; runtime guidance is authored as
+    `lingtai/prompts/guidance/INDEX.md` + `<id>.md` and assembled into this dict
+    shape. The derived `system/guidance.json` mirror is serialized from it."""
+    from lingtai_kernel.prompt_catalog import load_guidance_catalog
+
+    return load_guidance_catalog()
 
 def _events(tmp_path: Path, event_type: str) -> list[dict]:
     log_path = tmp_path / "logs" / "events.jsonl"
@@ -383,9 +394,10 @@ def test_system_procedures_is_overwritten_by_packaged_default(tmp_path):
 
     agent._setup_from_init()
 
-    packaged = _packaged_procedures()
-    assert (system_dir / "procedures.md").read_text(encoding="utf-8") == packaged
-    assert agent._prompt_manager.read_section("procedures") == packaged
+    # The mirror keeps the full skill-style source (frontmatter + body); the
+    # rendered section is the body only.
+    assert (system_dir / "procedures.md").read_text(encoding="utf-8") == _packaged_procedures_file()
+    assert agent._prompt_manager.read_section("procedures") == _packaged_procedures()
 
 
 def test_system_guidance_is_overwritten_by_packaged_default(tmp_path):
@@ -401,10 +413,18 @@ def test_system_guidance_is_overwritten_by_packaged_default(tmp_path):
     assert json.loads(guidance_path.read_text(encoding="utf-8")) == _packaged_guidance()
     assert guidance_path.read_text(encoding="utf-8").endswith("\n")
 
-def _packaged_substrate() -> str:
+def _packaged_substrate_file() -> str:
+    """Full packaged substrate source, including skill-style frontmatter."""
     from importlib.resources import files
 
     return files("lingtai.prompts").joinpath("substrate.md").read_text(encoding="utf-8")
+
+
+def _packaged_substrate() -> str:
+    """Rendered substrate body (frontmatter stripped) — what reaches the prompt."""
+    from lingtai_kernel._frontmatter import strip_frontmatter
+
+    return strip_frontmatter(_packaged_substrate_file())
 
 
 def test_init_base_prompt_reaches_rendered_prompt_via_boot(tmp_path):

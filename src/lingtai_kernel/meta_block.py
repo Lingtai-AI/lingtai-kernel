@@ -42,7 +42,6 @@ from __future__ import annotations
 import json as _json
 import time as _time
 from collections.abc import Mapping
-from importlib import resources as _resources
 
 from .config import (
     MOLT_NOTICE_THRESHOLD,
@@ -459,7 +458,7 @@ def now_iso_plain() -> str:
 
 
 # ---------------------------------------------------------------------------
-# guidance.json — prompt package resource, loaded once.
+# Runtime guidance catalog — prompt package resource, loaded once.
 # ---------------------------------------------------------------------------
 
 _GUIDANCE_CACHE: dict | None = None
@@ -471,7 +470,7 @@ _GUIDANCE_REQUIRED_TOP_KEYS = ("schema_version", "guidance_version", "priority",
 
 
 class GuidanceSchemaError(ValueError):
-    """Raised when guidance.json does not match the expected shape.
+    """Raised when the runtime guidance payload does not match the expected shape.
 
     A structural problem in the *packaged* resource is a build/authoring error,
     not a runtime condition, so this is surfaced loudly to ``validate_runtime_guidance``
@@ -511,7 +510,7 @@ def build_guidance_with_meta_readme(base_guidance: Dict[str, Any] | None = None)
     source = build_runtime_guidance() if base_guidance is None else base_guidance
     guidance = dict(source or {})
     # Preserve packaged guidance keys when available, but keep the fallback shape
-    # valid too: even if guidance.json cannot be loaded, guidance remains the
+    # valid too: even if the guidance catalog cannot be loaded, guidance remains the
     # same system-prompt-like structure with a single meta_readme section.
     guidance.setdefault("schema_version", 1)
     guidance.setdefault("guidance_version", "runtime-meta-readme")
@@ -583,8 +582,8 @@ def build_meta_guidance(agent) -> str:
     Combines the static, rule-like material that previously rode on every tail
     ``_meta``:
 
-      * the runtime guidance sections from ``guidance.json`` (e.g. summarize/molt
-        best practice);
+      * the runtime guidance sections from the Markdown guidance catalog (e.g.
+        summarize/molt best practice);
       * the ``_meta`` envelope readme (which blocks exist and whether each is
         per-result or latest-only);
       * the active adapter's *static* runtime rules (from
@@ -663,22 +662,30 @@ def validate_runtime_guidance(data) -> dict:
 
 
 def build_runtime_guidance() -> dict:
-    """Load, validate, and return the runtime guidance payload from prompts/guidance.json.
+    """Load, validate, and return the runtime guidance payload.
 
-    Cached after first successful load.  The payload is schema-checked via
-    :func:`validate_runtime_guidance`; on a missing/unreadable resource, a JSON
-    parse error, or a schema violation the loader returns an empty dict so a
-    live agent degrades (no guidance) rather than crashing.  Tests should call
-    :func:`validate_runtime_guidance` directly to assert the *packaged* resource
+    Sourced from the skill-style Markdown catalog under
+    ``lingtai/prompts/guidance/`` (``INDEX.md`` + one ``<id>.md`` per section),
+    assembled by :func:`lingtai_kernel.prompt_catalog.load_guidance_catalog` into
+    the same dict shape the kernel has always consumed (``schema_version`` int,
+    ordered ``sections`` with stable ``id``/``title``/``body``). The return type
+    stays a ``dict`` so it can both feed ``build_meta_guidance`` and back the
+    derived ``system/guidance.json`` mirror the TUI/Portal read.
+
+    Cached after first successful load. The assembled payload is schema-checked
+    via :func:`validate_runtime_guidance`; on a missing/unreadable catalog, a
+    malformed file, or a schema violation the loader returns an empty dict so a
+    live agent degrades (no guidance) rather than crashing. Tests should call
+    :func:`validate_runtime_guidance` directly to assert the *packaged* catalog
     is well-formed — that path raises, this one does not.
     """
     global _GUIDANCE_CACHE
     if _GUIDANCE_CACHE is not None:
         return _GUIDANCE_CACHE
     try:
-        pkg = _resources.files("lingtai")
-        data = (pkg / "prompts" / "guidance.json").read_text(encoding="utf-8")
-        parsed = _json.loads(data)
+        from .prompt_catalog import load_guidance_catalog
+
+        parsed = load_guidance_catalog()
         validate_runtime_guidance(parsed)
         _GUIDANCE_CACHE = parsed
         return parsed
@@ -1430,8 +1437,9 @@ def attach_active_runtime(
         snapshot (recorded by :func:`stamp_meta`) into ``_meta.agent_meta``
         (kernel runtime state including ``token_efficiency``, plus
         ``elapsed_ms`` + ``active_turn_tool_calls``)
-        and ``_meta.guidance`` (from ``guidance.json`` plus the latest-only
-        ``meta_readme`` section).
+        and ``_meta.guidance`` (a lightweight ref to resident ``meta_guidance``,
+        whose body is built from the guidance catalog, generated ``meta_readme``,
+        and static adapter rules).
       * Strip the transient ``_runtime_pending`` scaffolding from *all* results.
       * Return the new holder dict (or ``None`` when no live runtime applies).
 

@@ -1568,7 +1568,7 @@ def test_attach_active_runtime_omits_counter_when_no_guard():
 
 
 # ---------------------------------------------------------------------------
-# guidance.json schema validation.
+# Runtime guidance payload/catalog schema validation.
 # ---------------------------------------------------------------------------
 
 
@@ -1586,10 +1586,10 @@ def _valid_guidance():
 
 
 def test_packaged_guidance_resource_is_valid():
-    # The shipped guidance.json must validate — this is the test that catches a
+    # The shipped guidance catalog must validate — this is the test that catches a
     # malformed packaged resource (build_runtime_guidance degrades silently).
     guidance = build_runtime_guidance()
-    assert guidance != {}, "packaged guidance.json failed to load/validate"
+    assert guidance != {}, "packaged guidance catalog failed to load/validate"
     validate_runtime_guidance(guidance)  # must not raise
     ids = [s["id"] for s in guidance["sections"]]
     assert len(ids) == len(set(ids)), "section ids must be unique"

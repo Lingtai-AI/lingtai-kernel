@@ -81,6 +81,8 @@ def test_agent_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_path):
 
 
 def test_agent_loads_kernel_owned_principle_prompt(tmp_path):
+    from lingtai_kernel._frontmatter import split_frontmatter
+
     agent = _agent_with_static_comment(tmp_path)
     agent._reload_prompt_sections({"principle": "operator supplied principle override"})
 
@@ -88,18 +90,28 @@ def test_agent_loads_kernel_owned_principle_prompt(tmp_path):
     principle_file = agent._working_dir / "system" / "principle.md"
     mirrored = principle_file.read_text(encoding="utf-8")
 
-    assert "Progressive disclosure principle: each resident prompt layer has one job" in mirrored
-    assert "`meta_guidance` is immediate runtime guidance" in mirrored
-    assert "`procedures` is how to act" in mirrored
-    assert "`substrate` is the working model" in mirrored
-    assert "Reference manuals are why" in mirrored
+    # The disk mirror is a skill-style artifact: developer-facing YAML
+    # frontmatter + the Markdown body. The frontmatter stays on disk (self-
+    # explanatory section source) but is stripped before the body is rendered
+    # into the LLM prompt / system.md.
+    meta, body = split_frontmatter(mirrored)
+    assert mirrored.startswith("---"), "mirror should keep its frontmatter"
+    assert meta.get("name") == "principle"
+    assert "Progressive disclosure principle: each resident prompt layer has one job" in body
+    assert "`meta_guidance` is immediate runtime guidance" in body
+    assert "`procedures` is how to act" in body
+    assert "`substrate` is the working model" in body
+    assert "Reference manuals are why" in body
     assert "operator supplied principle override" not in mirrored
     assert "operator supplied principle override" not in prompt
     assert "dynamic kernel " + "preface" not in mirrored
     assert "Agent " + "language:" not in prompt
     assert "Agent " + "activeness:" not in prompt
-    assert "Token efficiency principle:" in mirrored
-    assert mirrored in prompt
+    assert "Token efficiency principle:" in body
+    # The rendered prompt carries the body only — no frontmatter markers.
+    assert body in prompt
+    assert "---\nname: principle" not in prompt
+    assert "kind: prompt-section" not in prompt
     assert prompt.index("Progressive disclosure principle: each resident prompt layer") < prompt.index("## meta_guidance")
 
 
@@ -148,6 +160,8 @@ def test_init_substrate_override_is_not_honored(tmp_path):
     """`substrate` is kernel-owned: an init.json substrate value is ignored at the
     builder level; the packaged default renders instead."""
     from importlib.resources import files
+    from lingtai_kernel._frontmatter import strip_frontmatter
+
     packaged = files("lingtai.prompts").joinpath("substrate.md").read_text(encoding="utf-8")
 
     agent = _agent_with_static_comment(tmp_path)
@@ -155,7 +169,69 @@ def test_init_substrate_override_is_not_honored(tmp_path):
 
     prompt = agent._build_system_prompt()
     assert "OPERATOR-SUBSTRATE-OVERRIDE" not in prompt
-    assert agent._prompt_manager.read_section("substrate") == packaged
+    # The packaged source carries developer-facing frontmatter; the rendered
+    # section is the body only.
+    assert agent._prompt_manager.read_section("substrate") == strip_frontmatter(packaged)
+
+
+def test_section_mirrors_keep_frontmatter_but_prompt_is_body_only(tmp_path):
+    """Jason's contract: `system/*.md` section mirrors may carry frontmatter, but
+    the rendered LLM prompt and the final `system/system.md` must be body-only.
+    """
+    from lingtai_kernel._frontmatter import split_frontmatter
+
+    agent = _agent_with_static_comment(tmp_path)
+    agent._reload_prompt_sections({})
+    prompt = agent._build_system_prompt()
+
+    system_dir = agent._working_dir / "system"
+    for name in ("principle", "substrate", "procedures"):
+        mirror = (system_dir / f"{name}.md").read_text(encoding="utf-8")
+        meta, body = split_frontmatter(mirror)
+        # Mirror keeps the developer-facing frontmatter on disk.
+        assert mirror.startswith("---"), f"{name} mirror should keep frontmatter"
+        assert meta.get("name") == name
+        # The body (not the frontmatter) is what renders.
+        assert body and body in prompt
+
+    # The rendered prompt carries no frontmatter fence / metadata keys.
+    assert "\n---\nname: " not in prompt
+    assert not prompt.startswith("---\n")
+    assert "kind: prompt-section" not in prompt
+
+    # The final rendered system.md is body-only too.
+    from lingtai_kernel.base_agent.prompt import _flush_system_prompt
+
+    _flush_system_prompt(agent)
+    system_md = (system_dir / "system.md").read_text(encoding="utf-8")
+    assert not system_md.startswith("---")
+    assert "kind: prompt-section" not in system_md
+    assert "kind: meta-guidance" not in system_md
+
+
+def test_base_agent_seeds_body_only_from_frontmatter_mirror(tmp_path):
+    """T6 — a `system/*.md` mirror that carries frontmatter must seed a body-only
+    section when read directly by the lower-level BaseAgent constructor path."""
+    from lingtai_kernel.base_agent import BaseAgent
+    from tests._service_helpers import make_gemini_mock_service as make_mock_service
+
+    workdir = tmp_path / "ba"
+    system_dir = workdir / "system"
+    system_dir.mkdir(parents=True)
+    # A frontmatter-bearing mirror, body-only section expected.
+    (system_dir / "substrate.md").write_text(
+        "---\nname: substrate\nkind: prompt-section\n---\nSUBSTRATE-BODY-ONLY\n",
+        encoding="utf-8",
+    )
+
+    agent = BaseAgent(
+        service=make_mock_service(),
+        agent_name="ba-test",
+        working_dir=workdir,
+    )
+    section = agent._prompt_manager.read_section("substrate")
+    assert section == "SUBSTRATE-BODY-ONLY\n"
+    assert "kind: prompt-section" not in (section or "")
 
 
 def test_init_brief_override_is_not_honored(tmp_path):
