@@ -162,10 +162,15 @@ class Agent(BaseAgent):
     def _setup_capability(self, name: str, **kwargs: Any) -> Any:
         """Load a named capability.
 
+        ``None`` from setup means success without a manager object. A setup that
+        cannot register must return ``CAPABILITY_UNAVAILABLE`` before adding any
+        tools so this wrapper can leave the capability absent from public
+        registration surfaces.
+
         Not directly sealed — but setup() calls add_tool() which checks the seal.
         Must only be called from __init__ (before start()).
         """
-        from .capabilities import setup_capability
+        from .capabilities import CAPABILITY_UNAVAILABLE, setup_capability
 
         serializable_kw = {
             k: v for k, v in kwargs.items()
@@ -178,6 +183,9 @@ class Agent(BaseAgent):
             # Roll back the entry so _capabilities only lists registered caps.
             self._capabilities.pop()
             raise
+        if mgr is CAPABILITY_UNAVAILABLE:
+            self._capabilities.pop()
+            return None
         self._capability_managers[name] = mgr
         return mgr
 
