@@ -1,3 +1,19 @@
+---
+related_files:
+  - src/lingtai/ANATOMY.md
+  - src/lingtai/core/daemon/__init__.py
+  - src/lingtai/core/daemon/claude_interactive.py
+  - src/lingtai/core/daemon/manual/SKILL.md
+  - src/lingtai/core/daemon/run_dir.py
+  - tests/test_daemon.py
+  - tests/test_daemon_run_dir.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # core/daemon
 
 Daemon capability (分神) — dispatch ephemeral subagents (分神) that operate

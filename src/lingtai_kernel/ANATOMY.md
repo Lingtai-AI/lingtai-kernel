@@ -1,3 +1,69 @@
+---
+related_files:
+  - ANATOMY.md
+  - MANIFEST.in
+  - pyproject.toml
+  - src/lingtai/ANATOMY.md
+  - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/SKILL.md
+  - src/lingtai_kernel/__init__.py
+  - src/lingtai_kernel/_frontmatter.py
+  - src/lingtai_kernel/_fsutil.py
+  - src/lingtai_kernel/base_agent/ANATOMY.md
+  - src/lingtai_kernel/base_agent/__init__.py
+  - src/lingtai_kernel/base_agent/lifecycle.py
+  - src/lingtai_kernel/base_agent/messaging.py
+  - src/lingtai_kernel/base_agent/prompt.py
+  - src/lingtai_kernel/base_agent/turn.py
+  - src/lingtai_kernel/base_agent/worker_recovery.py
+  - src/lingtai_kernel/config.py
+  - src/lingtai_kernel/config_resolve.py
+  - src/lingtai_kernel/handshake.py
+  - src/lingtai_kernel/i18n/ANATOMY.md
+  - src/lingtai_kernel/intrinsics/ANATOMY.md
+  - src/lingtai_kernel/intrinsics/notification/__init__.py
+  - src/lingtai_kernel/intrinsics/soul/flow.py
+  - src/lingtai_kernel/llm/ANATOMY.md
+  - src/lingtai_kernel/llm/interface.py
+  - src/lingtai_kernel/llm_utils.py
+  - src/lingtai_kernel/logging.py
+  - src/lingtai_kernel/loop_guard.py
+  - src/lingtai_kernel/maintenance/ANATOMY.md
+  - src/lingtai_kernel/message.py
+  - src/lingtai_kernel/meta_block.py
+  - src/lingtai_kernel/migrate/ANATOMY.md
+  - src/lingtai_kernel/notifications.py
+  - src/lingtai_kernel/nudge/ANATOMY.md
+  - src/lingtai_kernel/preset_connectivity.py
+  - src/lingtai_kernel/presets.py
+  - src/lingtai_kernel/prompt.py
+  - src/lingtai_kernel/prompt_catalog.py
+  - src/lingtai_kernel/runtime_identity.py
+  - src/lingtai_kernel/safety_limits.py
+  - src/lingtai_kernel/sent_message_tracker.py
+  - src/lingtai_kernel/services/ANATOMY.md
+  - src/lingtai_kernel/services/logging.py
+  - src/lingtai_kernel/session.py
+  - src/lingtai_kernel/state.py
+  - src/lingtai_kernel/tc_inbox.py
+  - src/lingtai_kernel/time_veil.py
+  - src/lingtai_kernel/token_counter.py
+  - src/lingtai_kernel/token_ledger.py
+  - src/lingtai_kernel/tool_call_guard.py
+  - src/lingtai_kernel/tool_executor.py
+  - src/lingtai_kernel/tool_result_artifacts.py
+  - src/lingtai_kernel/tool_result_recovery.py
+  - src/lingtai_kernel/tool_timing.py
+  - src/lingtai_kernel/trace_redaction.py
+  - src/lingtai_kernel/types.py
+  - src/lingtai_kernel/workdir.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # lingtai_kernel
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.

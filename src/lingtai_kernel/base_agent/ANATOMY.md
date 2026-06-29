@@ -1,3 +1,22 @@
+---
+related_files:
+  - src/lingtai/agent.py
+  - src/lingtai_kernel/ANATOMY.md
+  - src/lingtai_kernel/base_agent/__init__.py
+  - src/lingtai_kernel/base_agent/identity.py
+  - src/lingtai_kernel/base_agent/lifecycle.py
+  - src/lingtai_kernel/base_agent/messaging.py
+  - src/lingtai_kernel/base_agent/prompt.py
+  - src/lingtai_kernel/base_agent/tools.py
+  - src/lingtai_kernel/base_agent/turn.py
+  - src/lingtai_kernel/base_agent/worker_recovery.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # base_agent
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.

@@ -1,3 +1,20 @@
+---
+related_files:
+  - src/lingtai/ANATOMY.md
+  - src/lingtai/agent.py
+  - src/lingtai/core/daemon/__init__.py
+  - src/lingtai/core/skills/__init__.py
+  - src/lingtai/core/skills/manual/SKILL.md
+  - src/lingtai/init_schema.py
+  - tests/test_skills.py
+  - tests/test_validate_skill.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # core/skills
 
 Skills capability — per-agent skill catalog and skill-manual surface. This is the renamed successor of the old `library` capability. It scans the existing `.library/` directory plus configured extra paths, renders a YAML catalog (one `- name:` block per skill with `location:` and a `description:` block scalar), and injects it into the `skills` prompt section. It never writes skill files; installation remains the Agent initializer's job.
