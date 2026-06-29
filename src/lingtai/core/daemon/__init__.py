@@ -22,6 +22,7 @@ import subprocess
 import threading
 import time
 import yaml
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
@@ -356,12 +357,165 @@ _BACKEND_ALIASES = {
     "omp": "oh-my-pi",
 }
 
+_QWEN_CODE_ASK_UNSUPPORTED_MESSAGE = (
+    "qwen-code daemon backend does not support daemon(action='ask') yet; "
+    "start a new qwen-code emanation instead."
+)
+
+
+@dataclass(frozen=True)
+class _BackendSpec:
+    id: str
+    is_cli: bool
+    runner_attr: str | None
+    ask_handler_attr: str | None
+    ask_unsupported_msg: str | None
+    reserved_flags: frozenset[str]
+
+
+@dataclass(frozen=True)
+class _CliTaskContext:
+    """Passive per-task CLI context; MCP entries are registration dicts only."""
+
+    backend_argv: list[str]
+    system_prompt: str | None
+    skill_catalog: str | None
+    mcp_catalog: str | None
+    mcp_regs: list[dict]
+
+
+_CLAUDE_INTERACTIVE_RESERVED_FLAGS = frozenset(
+    _CLAUDE_COMMON_RESERVED_BACKEND_FLAGS
+    | _CLAUDE_INTERACTIVE_RESERVED_BACKEND_FLAGS
+)
+
+_BACKEND_SPECS: dict[str, _BackendSpec] = {
+    "lingtai": _BackendSpec(
+        id="lingtai",
+        is_cli=False,
+        runner_attr=None,
+        ask_handler_attr=None,
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(),
+    ),
+    "claude": _BackendSpec(
+        id="claude",
+        is_cli=True,
+        runner_attr="_run_claude_interactive_emanation",
+        ask_handler_attr="_handle_ask_claude_interactive",
+        ask_unsupported_msg=None,
+        reserved_flags=_CLAUDE_INTERACTIVE_RESERVED_FLAGS,
+    ),
+    "claude-interactive": _BackendSpec(
+        id="claude-interactive",
+        is_cli=True,
+        runner_attr="_run_claude_interactive_emanation",
+        ask_handler_attr="_handle_ask_claude_interactive",
+        ask_unsupported_msg=None,
+        reserved_flags=_CLAUDE_INTERACTIVE_RESERVED_FLAGS,
+    ),
+    "claude-p": _BackendSpec(
+        id="claude-p",
+        is_cli=True,
+        runner_attr="_run_claude_code_emanation",
+        ask_handler_attr="_handle_ask_cli",
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(_CLAUDE_COMMON_RESERVED_BACKEND_FLAGS),
+    ),
+    "claude-code": _BackendSpec(
+        id="claude-code",
+        is_cli=True,
+        runner_attr="_run_claude_code_emanation",
+        ask_handler_attr="_handle_ask_cli",
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(_CLAUDE_COMMON_RESERVED_BACKEND_FLAGS),
+    ),
+    "codex": _BackendSpec(
+        id="codex",
+        is_cli=True,
+        runner_attr="_run_codex_emanation",
+        ask_handler_attr="_handle_ask_codex",
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(),
+    ),
+    "opencode": _BackendSpec(
+        id="opencode",
+        is_cli=True,
+        runner_attr="_run_opencode_emanation",
+        ask_handler_attr="_handle_ask_opencode",
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(_OPENCODE_FAMILY_RESERVED_BACKEND_FLAGS),
+    ),
+    "mimocode": _BackendSpec(
+        id="mimocode",
+        is_cli=True,
+        runner_attr="_run_mimocode_emanation",
+        ask_handler_attr="_handle_ask_mimocode",
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(_OPENCODE_FAMILY_RESERVED_BACKEND_FLAGS),
+    ),
+    "qwen-code": _BackendSpec(
+        id="qwen-code",
+        is_cli=True,
+        runner_attr="_run_qwen_code_emanation",
+        ask_handler_attr=None,
+        ask_unsupported_msg=_QWEN_CODE_ASK_UNSUPPORTED_MESSAGE,
+        reserved_flags=frozenset(_QWEN_RESERVED_BACKEND_FLAGS),
+    ),
+    "oh-my-pi": _BackendSpec(
+        id="oh-my-pi",
+        is_cli=True,
+        runner_attr="_run_oh_my_pi_emanation",
+        ask_handler_attr="_handle_ask_oh_my_pi",
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(_OH_MY_PI_RESERVED_BACKEND_FLAGS),
+    ),
+    "cursor": _BackendSpec(
+        id="cursor",
+        is_cli=True,
+        runner_attr="_run_cursor_emanation",
+        ask_handler_attr="_handle_ask_cursor",
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(),
+    ),
+}
+
+_BACKEND_SCHEMA_ENUM = [
+    "lingtai",
+    "claude-p",
+    "claude-code",
+    "codex",
+    "opencode",
+    "mimocode",
+    "mimo",
+    "qwen-code",
+    "qwen",
+    "oh-my-pi",
+    "omp",
+    "cursor",
+]
+
+_HIDDEN_SCHEMA_BACKENDS = frozenset({"claude", "claude-interactive"})
+assert all(name == spec.id for name, spec in _BACKEND_SPECS.items())
+assert set(_BACKEND_ALIASES.values()).issubset(_BACKEND_SPECS)
+assert set(_BACKEND_SCHEMA_ENUM) == (
+    (set(_BACKEND_SPECS) - _HIDDEN_SCHEMA_BACKENDS)
+    | set(_BACKEND_ALIASES)
+)
+
 
 def _normalize_backend(backend: str | None) -> str:
     """Map a caller-supplied backend (incl. aliases) to its canonical id."""
     if not backend:
         return "lingtai"
     return _BACKEND_ALIASES.get(backend, backend)
+
+
+def _backend_spec(backend: str | None) -> _BackendSpec | None:
+    """Return the runtime backend spec for a stored backend id, if known."""
+    if not backend:
+        return None
+    return _BACKEND_SPECS.get(backend)
 
 
 def _validate_claude_backend_argv(backend: str, argv: list[str]) -> None:
@@ -379,20 +533,11 @@ def _validate_claude_backend_argv(backend: str, argv: list[str]) -> None:
 
     Despite the historical name, this validator now covers all CLI backends.
     """
-    if backend in ("claude", "claude-interactive", "claude-p", "claude-code"):
-        reserved = set(_CLAUDE_COMMON_RESERVED_BACKEND_FLAGS)
-        if backend in ("claude", "claude-interactive"):
-            reserved.update(_CLAUDE_INTERACTIVE_RESERVED_BACKEND_FLAGS)
-    elif backend in ("opencode", "mimocode"):
-        reserved = set(_OPENCODE_FAMILY_RESERVED_BACKEND_FLAGS)
-    elif backend == "qwen-code":
-        reserved = set(_QWEN_RESERVED_BACKEND_FLAGS)
-    elif backend == "oh-my-pi":
-        reserved = set(_OH_MY_PI_RESERVED_BACKEND_FLAGS)
-    else:
+    spec = _backend_spec(backend)
+    if spec is None or not spec.reserved_flags:
         return
     for token in argv:
-        if token in reserved:
+        if token in spec.reserved_flags:
             raise ValueError(f"{token} is reserved by the {backend} daemon backend")
 
 
@@ -518,20 +663,7 @@ def get_schema(lang: str = "en") -> dict:
             },
             "backend": {
                 "type": "string",
-                "enum": [
-                    "lingtai",
-                    "claude-p",
-                    "claude-code",
-                    "codex",
-                    "opencode",
-                    "mimocode",
-                    "mimo",
-                    "qwen-code",
-                    "qwen",
-                    "oh-my-pi",
-                    "omp",
-                    "cursor",
-                ],
+                "enum": list(_BACKEND_SCHEMA_ENUM),
                 "description": (
                     "Execution backend: 'lingtai' (default — parallel LLM reasoning, uses your current model), "
                     "'claude-p' (Claude Code print-mode backend; 'claude-code' is a compatibility alias), "
@@ -2410,10 +2542,8 @@ class DaemonManager:
         self._pools = [(p, c) for p, c in self._pools if not c.is_set()]
 
         # --- External CLI backends: skip preset resolution entirely ---
-        if backend in (
-            "claude", "claude-interactive", "claude-p", "claude-code",
-            "codex", "opencode", "mimocode", "qwen-code", "oh-my-pi", "cursor",
-        ):
+        backend_spec = _backend_spec(backend)
+        if backend_spec is not None and backend_spec.is_cli:
             return self._handle_emanate_cli(
                 tasks, backend=backend,
                 effective_max_turns=effective_max_turns,
@@ -2625,35 +2755,43 @@ class DaemonManager:
         run directory; only terminal completion/failure emits a compact
         system notification.
         """
+        backend_spec = _backend_spec(backend)
+        if (
+            backend_spec is None
+            or not backend_spec.is_cli
+            or backend_spec.runner_attr is None
+        ):
+            return {"status": "error", "message": f"Unknown CLI backend: {backend}"}
+
         # Pre-flight: validate per-task backend_options BEFORE creating any
         # run_dir or scheduling work, so a single bad spec refuses the whole
         # batch with a clear message instead of leaving half-spawned daemons.
-        resolved_backend_argv: list[list[str]] = []
-        task_system_prompts: list[str | None] = []
-        task_skill_catalogs: list[str | None] = []
-        task_mcp_catalogs: list[str | None] = []
-        task_mcp_registrations: list[list[dict]] = []
+        contexts: list[_CliTaskContext] = []
         for i, spec in enumerate(tasks):
             try:
-                task_system_prompts.append(self._task_system_prompt(spec))
-                task_skill_catalogs.append(self._task_skill_catalog(spec))
+                task_system_prompt = self._task_system_prompt(spec)
+                task_skill_catalog = self._task_skill_catalog(spec)
                 task_mcp_regs, task_mcp_catalog = self._task_mcp_registrations(spec)
-                task_mcp_registrations.append(task_mcp_regs)
-                task_mcp_catalogs.append(task_mcp_catalog)
             except ValueError as e:
                 return {"status": "error",
                         "message": f"tasks[{i}]: {e}"}
             raw_opts = spec.get("backend_options")
             if raw_opts is None:
-                resolved_backend_argv.append([])
-                continue
-            try:
-                argv = _backend_options_to_argv(raw_opts)
-                _validate_claude_backend_argv(backend, argv)
-                resolved_backend_argv.append(argv)
-            except ValueError as e:
-                return {"status": "error",
-                        "message": f"tasks[{i}].backend_options: {e}"}
+                backend_argv = []
+            else:
+                try:
+                    backend_argv = _backend_options_to_argv(raw_opts)
+                    _validate_claude_backend_argv(backend, backend_argv)
+                except ValueError as e:
+                    return {"status": "error",
+                            "message": f"tasks[{i}].backend_options: {e}"}
+            contexts.append(_CliTaskContext(
+                backend_argv=backend_argv,
+                system_prompt=task_system_prompt,
+                skill_catalog=task_skill_catalog,
+                mcp_catalog=task_mcp_catalog,
+                mcp_regs=task_mcp_regs,
+            ))
 
         cancel_event = threading.Event()
         timeout_event = threading.Event()
@@ -2665,19 +2803,15 @@ class DaemonManager:
         parent_addr = self._agent._working_dir.name
         parent_pid = os.getpid()
 
-        for i, spec in enumerate(tasks):
+        for spec, context in zip(tasks, contexts):
             em_id = f"em-{self._next_id}"
             self._next_id += 1
             ids.append(em_id)
-            backend_argv = resolved_backend_argv[i]
+            backend_argv = context.backend_argv
             backend_options = spec.get("backend_options") or None
 
-            task_system_prompt = task_system_prompts[i]
-            task_skill_catalog = task_skill_catalogs[i]
-            task_mcp_catalog = task_mcp_catalogs[i]
-            task_mcp_regs = task_mcp_registrations[i]
             task_context = self._combine_oneshot_context(
-                task_system_prompt, task_skill_catalog, task_mcp_catalog
+                context.system_prompt, context.skill_catalog, context.mcp_catalog
             )
             system_prompt = f"[{backend} backend — task delegated to external CLI]"
             if task_context:
@@ -2703,8 +2837,11 @@ class DaemonManager:
                         "task": spec["task"],
                         "tools": spec.get("tools", []),
                         "skills": spec.get("skills", []),
-                        "mcp": [self._redact_mcp_registration_for_prompt(r) for r in task_mcp_regs],
-                        "system_prompt": task_system_prompt,
+                        "mcp": [
+                            self._redact_mcp_registration_for_prompt(r)
+                            for r in context.mcp_regs
+                        ],
+                        "system_prompt": context.system_prompt,
                         "backend_options": backend_options,
                     },
                     log_callback=self._log,
@@ -2726,25 +2863,7 @@ class DaemonManager:
                       em_id=em_id, backend=backend,
                       argv=list(backend_argv))
 
-            if backend == "codex":
-                run_fn = self._run_codex_emanation
-            elif backend == "opencode":
-                run_fn = self._run_opencode_emanation
-            elif backend == "mimocode":
-                run_fn = self._run_mimocode_emanation
-            elif backend == "qwen-code":
-                run_fn = self._run_qwen_code_emanation
-            elif backend == "oh-my-pi":
-                run_fn = self._run_oh_my_pi_emanation
-            elif backend == "cursor":
-                run_fn = self._run_cursor_emanation
-            elif backend in ("claude", "claude-interactive"):
-                run_fn = self._run_claude_interactive_emanation
-            else:
-                # ``claude-p`` is the new explicit name for the existing
-                # print-mode backend; ``claude-code`` remains a compatibility
-                # alias for older callers and stored daemon entries.
-                run_fn = self._run_claude_code_emanation
+            run_fn = getattr(self, backend_spec.runner_attr)
             future = pool.submit(
                 run_fn,
                 em_id, run_dir, cli_task,
@@ -3245,23 +3364,13 @@ class DaemonManager:
         # All stream progress into the daemon run directory so
         # `daemon(check)` shows live progress.
         backend = entry.get("backend")
-        if backend in ("claude", "claude-interactive"):
-            return self._handle_ask_claude_interactive(em_id, entry, message)
-        if backend in ("claude-p", "claude-code"):
-            return self._handle_ask_cli(em_id, entry, message)
-        if backend == "codex":
-            return self._handle_ask_codex(em_id, entry, message)
-        if backend == "opencode":
-            return self._handle_ask_opencode(em_id, entry, message)
-        if backend == "mimocode":
-            return self._handle_ask_mimocode(em_id, entry, message)
-        if backend == "oh-my-pi":
-            return self._handle_ask_oh_my_pi(em_id, entry, message)
-        if backend == "qwen-code":
-            return {"status": "error", "id": em_id,
-                    "message": "qwen-code daemon backend does not support daemon(action='ask') yet; start a new qwen-code emanation instead."}
-        if backend == "cursor":
-            return self._handle_ask_cursor(em_id, entry, message)
+        backend_spec = _backend_spec(backend)
+        if backend_spec is not None and backend_spec.is_cli:
+            if backend_spec.ask_handler_attr is None:
+                return {"status": "error", "id": em_id,
+                        "message": backend_spec.ask_unsupported_msg}
+            ask_handler = getattr(self, backend_spec.ask_handler_attr)
+            return ask_handler(em_id, entry, message)
 
         if entry["future"].done():
             return {"status": "error", "message": "not running"}
