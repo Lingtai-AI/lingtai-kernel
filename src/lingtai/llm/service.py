@@ -207,6 +207,24 @@ class LLMService(LLMServiceABC):
         self._provider = provider.lower()
         self._model = model
         self._context_window = context_window
+        # Normalize base_url: if it contains a path component (e.g.
+        # ``/api/coding``) but lacks a trailing slash, append one.
+        # Python's ``urljoin`` treats the last segment as a *file* when
+        # there is no trailing slash, silently stripping it:
+        #   urljoin('https://x.com/api/coding', '/v1/messages')
+        #   → 'https://x.com/v1/messages'   ← wrong!
+        # With a trailing slash the path is preserved:
+        #   urljoin('https://x.com/api/coding/', '/v1/messages')
+        #   → 'https://x.com/api/coding/v1/messages'
+        # This affects any provider whose endpoint sits behind a non-root
+        # path (Volcano Engine Ark, Azure OpenAI, etc.).
+        if (
+            base_url
+            and isinstance(base_url, str)
+            and "/" in base_url.split("://", 1)[-1]
+            and not base_url.endswith("/")
+        ):
+            base_url += "/"
         self._base_url = base_url
         self._key_resolver = key_resolver or (lambda p: os.environ.get(f"{p.upper()}_API_KEY"))
         self._provider_defaults = provider_defaults or {}

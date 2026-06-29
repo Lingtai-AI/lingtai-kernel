@@ -196,3 +196,61 @@ def test_direct_api_key_reaches_boot_adapter_unchanged(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["api_key"] == "sk-direct"
     assert calls[0]["base_url"] == "https://proxy.example/v1"
+
+
+# ---------------------------------------------------------------------------
+# base_url trailing-slash normalization
+# ---------------------------------------------------------------------------
+
+class _FakeAdapter:
+    """Minimal adapter stub for testing LLMService construction."""
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+
+def _ensure_fake_adapter():
+    """Register a fake adapter if not already present."""
+    try:
+        LLMService.register_adapter("fake", lambda **kw: _FakeAdapter(**kw))
+    except Exception:
+        pass  # already registered
+
+
+def test_base_url_normalization_adds_trailing_slash():
+    """LLMService should append '/' to a base_url with a path component."""
+    _ensure_fake_adapter()
+    svc = LLMService(
+        provider="fake",
+        model="test",
+        base_url="https://ark.example.com/api/coding",
+    )
+    assert svc._base_url == "https://ark.example.com/api/coding/"
+
+
+def test_base_url_normalization_preserves_existing_slash():
+    """LLMService should not double-append '/' if already present."""
+    _ensure_fake_adapter()
+    svc = LLMService(
+        provider="fake",
+        model="test",
+        base_url="https://ark.example.com/api/coding/",
+    )
+    assert svc._base_url == "https://ark.example.com/api/coding/"
+
+
+def test_base_url_normalization_skips_root_urls():
+    """LLMService should not modify a base_url with no path component."""
+    _ensure_fake_adapter()
+    svc = LLMService(
+        provider="fake",
+        model="test",
+        base_url="https://api.example.com",
+    )
+    assert svc._base_url == "https://api.example.com"
+
+
+def test_base_url_normalization_handles_none():
+    """LLMService should accept base_url=None without error."""
+    _ensure_fake_adapter()
+    svc = LLMService(provider="fake", model="test", base_url=None)
+    assert svc._base_url is None
