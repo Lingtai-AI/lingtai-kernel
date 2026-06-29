@@ -1,3 +1,42 @@
+---
+related_files:
+  - ANATOMY.md
+  - src/lingtai/__init__.py
+  - src/lingtai/__main__.py
+  - src/lingtai/agent.py
+  - src/lingtai/auth/ANATOMY.md
+  - src/lingtai/capabilities/ANATOMY.md
+  - src/lingtai/capabilities/__init__.py
+  - src/lingtai/cli.py
+  - src/lingtai/core/avatar/ANATOMY.md
+  - src/lingtai/core/bash/ANATOMY.md
+  - src/lingtai/core/daemon/ANATOMY.md
+  - src/lingtai/core/knowledge/ANATOMY.md
+  - src/lingtai/core/mcp/ANATOMY.md
+  - src/lingtai/core/skills/ANATOMY.md
+  - src/lingtai/i18n/ANATOMY.md
+  - src/lingtai/init_schema.py
+  - src/lingtai/intrinsic_skills/__init__.py
+  - src/lingtai/llm/ANATOMY.md
+  - src/lingtai/mcp_catalog.json
+  - src/lingtai/mcp_servers/ANATOMY.md
+  - src/lingtai/mcp_servers/wechat/manager.py
+  - src/lingtai/network.py
+  - src/lingtai/presets.py
+  - src/lingtai/services/ANATOMY.md
+  - src/lingtai/venv_resolve.py
+  - src/lingtai_kernel/ANATOMY.md
+  - tests/test_agent_preset_manifest.py
+  - tests/test_cli.py
+  - tests/test_deep_refresh.py
+  - tests/test_kernel_migrate.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # lingtai
 
 PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset materialization, CLI, and public re-exports.
