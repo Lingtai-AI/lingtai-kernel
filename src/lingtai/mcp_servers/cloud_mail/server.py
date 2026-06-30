@@ -44,6 +44,7 @@ import mcp.types as types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
+from .. import _config
 from .licc import push_inbox_event
 from .manager import CloudMailManager, DESCRIPTION, SCHEMA
 
@@ -70,19 +71,7 @@ def load_config() -> dict:
     Path is resolved relative to LINGTAI_AGENT_DIR (or cwd as fallback)
     when not absolute. Plaintext only — no *_env indirection.
     """
-    config_path_raw = os.environ.get(CONFIG_ENV)
-    if not config_path_raw:
-        raise ValueError(
-            f"{CONFIG_ENV} env var not set — point it at your Cloud Mail "
-            "config JSON file"
-        )
-    config_path = Path(config_path_raw).expanduser()
-    if not config_path.is_absolute():
-        base = Path(os.environ.get("LINGTAI_AGENT_DIR", os.getcwd()))
-        config_path = base / config_path
-    if not config_path.is_file():
-        raise FileNotFoundError(f"Cloud Mail config not found: {config_path}")
-    return json.loads(config_path.read_text(encoding="utf-8"))
+    return _config.load_config_file(CONFIG_ENV, label="Cloud Mail")[0]
 
 
 def accounts_from_config(cfg: dict) -> list[dict]:
