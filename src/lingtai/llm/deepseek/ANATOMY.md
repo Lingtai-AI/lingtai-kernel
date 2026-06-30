@@ -22,25 +22,24 @@ DeepSeek adapter — thin OpenAI-compat wrapper that satisfies DeepSeek V4 think
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 0 | Empty |
-| `adapter.py` | ~130 | `DeepSeekAdapter`, `DeepSeekChatSession`, `_fallback_reasoning_for` |
+| `adapter.py` | ~100 | `DeepSeekAdapter`, `DeepSeekChatSession` |
 
 ### Classes
 
 - **`DeepSeekAdapter(OpenAIAdapter)`** — pinned to DeepSeek endpoint, sets `_session_class`; overrides `_default_prompt_cache_key` → `lingtai-deepseek:{model}:v1` (clean provider namespace for the default-on OpenAI-compatible prompt cache key; see `../openai/ANATOMY.md`).
-- **`DeepSeekChatSession(OpenAIChatSession)`** — overrides only `_build_messages`. Real reasoning round-trip is handled upstream by `interface_converters.to_openai`; this subclass only fills in a fallback when an assistant turn has no captured ThinkingBlock.
+- **`DeepSeekChatSession(OpenAIChatSession)`** — provider-named session class that sets `_requires_reasoning_content_after_tool_call = True`. Real reasoning round-trip is handled upstream by `interface_converters.to_openai`; shared `OpenAIChatSession` logic fills in a fallback when an assistant turn has no captured ThinkingBlock.
 
 ### Module-level
 
 | Symbol | Purpose |
 |--------|---------|
 | `_DEEPSEEK_BASE_URL` | `"https://api.deepseek.com"` |
-| `_fallback_reasoning_for` | Per-turn-unique reasoning stub for assistant turns lacking real reasoning (inlines tool name + call ids or content snippet + turn index) |
 
 ## Connections
 
 - **Inherits**: `OpenAIAdapter` / `OpenAIChatSession` from `../openai/adapter.py`.
 - **No additional imports**: Only `openai` SDK (inherited), no new external deps.
-- **Hook points used**: `_build_messages` (overridden on session), `_session_class` and `_default_prompt_cache_key` (overridden on adapter).
+- **Hook points used**: `_requires_reasoning_content_after_tool_call` (enabled on session), `_session_class` and `_default_prompt_cache_key` (overridden on adapter).
 
 ## Composition
 
@@ -53,11 +52,9 @@ DeepSeek adapter — thin OpenAI-compat wrapper that satisfies DeepSeek V4 think
 
 All other `LLMAdapter` methods (`create_chat`, `generate`, `make_tool_result_message`, `is_quota_error`) are **inherited unchanged** from `OpenAIAdapter`.
 
-### ChatSession method overrides (`DeepSeekChatSession`)
+### ChatSession behavior (`DeepSeekChatSession`)
 
-| Method | Notes |
-|--------|-------|
-| `_build_messages` | Calls `super()._build_messages()` (which already emits real `reasoning_content` from any ThinkingBlock via `to_openai`). Then walks assistant messages: once any has `tool_calls`, all subsequent assistant messages without a non-empty `reasoning_content` get `_fallback_reasoning_for(msg, turn_idx)` filled in. |
+`DeepSeekChatSession` does not override methods. It enables the shared `OpenAIChatSession._build_messages()` fallback path: after `to_openai` emits any real `reasoning_content` from ThinkingBlocks, the shared post-pass walks assistant messages; once any has `tool_calls`, all subsequent assistant messages without a non-empty `reasoning_content` get a per-turn-unique stub.
 
 `send` and `send_stream` are no longer overridden — there's no placeholder-echo to strip.
 
@@ -67,7 +64,7 @@ Real reasoning is preserved end-to-end:
 
 1. **Capture** — `OpenAIChatSession._record_assistant_response` (non-streaming) and the streaming finalize path read `message.reasoning_content` (or `.reasoning` for OpenRouter) and append a `ThinkingBlock` to the assistant interface entry.
 2. **Replay** — `interface_converters.to_openai` emits the ThinkingBlock text back as `reasoning_content` on the wire.
-3. **Fallback** — `DeepSeekChatSession._build_messages` fills in `_fallback_reasoning_for` only on assistant turns that lack real reasoning (typically: rehydrated history from before this fix, or turns where the provider returned no reasoning text). The fallback inlines tool names + call ids (or content snippet for plain-text post-tool turns) plus a turn index, which is byte-different per turn by construction.
+3. **Fallback** — `DeepSeekChatSession` enables the shared `OpenAIChatSession` fallback only on assistant turns that lack real reasoning (typically: rehydrated history from before this fix, or turns where the provider returned no reasoning text). The fallback inlines tool names + call ids (or content snippet for plain-text post-tool turns) plus a turn index, which is byte-different per turn by construction.
 
 ### Why per-turn-unique matters
 
@@ -92,7 +89,7 @@ Replacing the placeholder with anything per-turn-byte-unique drives the empty ra
 
 ## Notes
 
-- **Minimal footprint**: ~130 LOC, ~25 lines of unique logic.
+- **Minimal footprint**: provider-specific endpoint/cache-key wiring only; reasoning fallback mechanics live in `OpenAIChatSession` and are shared with MiMo.
 - **No `defaults.py`**: DeepSeek adapter is not registered via the `DEFAULTS` config pattern — likely invoked directly by `LLMService`.
 - **Pre-fix history compatibility**: rehydrated chat_history.jsonl entries that lack ThinkingBlocks (written before this fix shipped) get the per-turn-unique fallback automatically; no migration needed.
 - Git history: 4 commits on the original placeholder approach (afc7ddc → a9382dc → 23599ca → 86c2a3d), then issue-#9 rewrite to preserve real reasoning end-to-end.

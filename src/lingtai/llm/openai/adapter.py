@@ -1180,6 +1180,8 @@ class OpenAIChatSession(ChatSession):
     Uses ChatInterface as the single source of truth.
     """
 
+    _requires_reasoning_content_after_tool_call = False
+
     def __init__(
         self,
         client: openai.OpenAI,
@@ -1223,12 +1225,56 @@ class OpenAIChatSession(ChatSession):
         """Return the message list to send to the API.
 
         Default: the canonical OpenAI serialization of the current
-        interface. Subclasses override to mutate or wrap — e.g. the
-        DeepSeek session injects ``reasoning_content`` onto assistant
-        turns that carry tool calls, which DeepSeek V4 thinking mode
-        requires for the round-trip.
+        interface. Some OpenAI-compatible providers require
+        ``reasoning_content`` on assistant turns after thinking mode is
+        invoked by tool calls; subclasses opt into that fallback with
+        ``_requires_reasoning_content_after_tool_call``.
         """
-        return to_openai(self._interface)
+        messages = to_openai(self._interface)
+        if self._requires_reasoning_content_after_tool_call:
+            self._inject_reasoning_content_fallbacks(messages)
+        return messages
+
+    @staticmethod
+    def _inject_reasoning_content_fallbacks(messages: list[dict]) -> None:
+        """Fill missing assistant ``reasoning_content`` after the first tool call.
+
+        Real reasoning_content is emitted by ``interface_converters.to_openai``
+        when the canonical interface has a ThinkingBlock on the assistant turn.
+        This fallback only covers older rehydrated history or provider turns
+        where no reasoning text was returned. The injected string must be
+        byte-different per turn: DeepSeek cache fast-paths and MiMo thinking
+        replay both behave badly with a constant placeholder.
+        """
+        seen_tool_call = False
+        turn_idx = 0
+        for msg in messages:
+            if msg.get("role") != "assistant":
+                continue
+            if msg.get("tool_calls"):
+                seen_tool_call = True
+            if seen_tool_call:
+                turn_idx += 1
+                if not msg.get("reasoning_content"):
+                    msg["reasoning_content"] = (
+                        OpenAIChatSession._fallback_reasoning_content_for(
+                            msg, turn_idx
+                        )
+                    )
+
+    @staticmethod
+    def _fallback_reasoning_content_for(msg: dict, turn_idx: int) -> str:
+        """Build a per-turn-unique reasoning stub for an assistant message."""
+        tool_calls = msg.get("tool_calls") or []
+        if tool_calls:
+            names = ",".join(
+                (tc.get("function", {}) or {}).get("name", "") for tc in tool_calls
+            )
+            ids = ",".join(tc.get("id", "") for tc in tool_calls)
+            return f"call {names} [{ids}] (turn {turn_idx})"
+        content = msg.get("content") or ""
+        snippet = content[:64].replace("\n", " ")
+        return f"reply [{snippet}] (turn {turn_idx})"
 
     @staticmethod
     def _is_context_overflow_error(exc: Exception) -> bool:

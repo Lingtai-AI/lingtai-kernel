@@ -191,7 +191,8 @@ When a Codex session has a stable LingTai session/thread identity, `CodexRespons
 - **`CodexResponsesSession._current_id`** — the single per-agent affinity id (the hash of the agent path + current molt count) handed to this session, used byte-identically for `_prompt_cache_key` / `_session_id` / `_thread_id`. Set once per session at construction — a NEW session is built for each `create_chat`, and the adapter resolves the molt-current id at that point, so a molt-advanced id reaches the next session without any in-session mutation (no rotation, no epoch, no clock).
 - **Codex Responses trace** — opt-in diagnostics write JSONL metadata to `logs/codex_responses_trace.jsonl` when `LINGTAI_CODEX_RESPONSES_TRACE=1` (override path with `LINGTAI_CODEX_RESPONSES_TRACE_PATH`). Default off; stores event/item shapes, lengths/hashes, usage, and accumulator counts, not raw content.
 - **`OpenAIAdapter._client`** — shared `openai.OpenAI` instance. `_client_kwargs` stored for session `reset()`.
-- **`OpenAIAdapter._session_class`** — class var, subclasses override (e.g. DeepSeek and MiMo inject `reasoning_content` round-trip fallbacks).
+- **`OpenAIChatSession._requires_reasoning_content_after_tool_call`** — opt-in provider flag used by DeepSeek and MiMo. When true, `_build_messages()` fills missing assistant `reasoning_content` after the first assistant tool-call turn using a per-turn-unique fallback; real ThinkingBlock-sourced reasoning is preserved verbatim.
+- **`OpenAIAdapter._session_class`** — class var, subclasses override (e.g. DeepSeek and MiMo select provider-named chat session classes).
 
 ## Notes
 
