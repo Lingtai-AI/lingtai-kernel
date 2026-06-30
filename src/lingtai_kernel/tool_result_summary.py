@@ -46,6 +46,12 @@ from .meta_block import formal_tool_result_content, formal_tool_result_visible_l
 # Distinct from the a-posteriori ``lingtai_agent_summarized_result`` marker.
 APRIORI_SUMMARY_MARKER = "lingtai_apriori_tool_result_summary"
 
+# Relative path (from the agent working dir) of the durable event log where the
+# raw tool result is preserved by ``tool_call_id``. Surfaced as the ``log`` field
+# of the structured ``raw_locator`` so retrieval is machine-readable, not only
+# the human-readable ``retrieval_hint`` prose.
+EVENTS_LOG_RELPATH = "logs/events.jsonl"
+
 # Hard character cap on the formal visible payload. Above this, do NOT call the
 # LLM — return a refusal. Keeps a single huge result from ballooning a summarize
 # round (and its cost/latency) and from leaking the raw into context on the
@@ -184,6 +190,22 @@ def _retrieval_hint(tool_call_id: str | None) -> str:
     )
 
 
+def _raw_locator(tool_call_id: str | None) -> dict:
+    """Structured, machine-readable sibling of ``_retrieval_hint``.
+
+    Both point at the same preserved raw (the ``tool_result`` event in
+    ``logs/events.jsonl`` keyed by ``tool_call_id``); the hint is prose for the
+    model to read, the locator is fields for tooling to consume without parsing
+    that prose. Stamped on every a-priori payload (success, refusal, error).
+    """
+    return {
+        "tool_call_id": tool_call_id,
+        "log": EVENTS_LOG_RELPATH,
+        "event_type": "tool_result",
+        "query": f"grep '{tool_call_id or '<unknown>'}' <workdir>/{EVENTS_LOG_RELPATH}",
+    }
+
+
 def build_summary_replacement(
     *,
     tool_name: str,
@@ -191,8 +213,19 @@ def build_summary_replacement(
     summary_text: str,
     reason: str | None,
     original_visible_chars: int,
+    summary_input_chars: int,
+    summary_input_truncated: bool,
 ) -> dict:
-    """Build the visible replacement dict for a successful a-priori summary."""
+    """Build the visible replacement dict for a successful a-priori summary.
+
+    ``summary_input_chars`` is how many characters were actually fed to the
+    summarizer, and ``summary_input_truncated`` whether that input was a
+    truncated slice of the full visible raw. The a-priori path feeds the whole
+    formal visible payload (it caps-and-refuses above ``APRIORI_SUMMARY_CAP``
+    rather than truncating), so in practice ``summary_input_chars`` equals
+    ``original_visible_chars`` and ``summary_input_truncated`` is ``False`` —
+    these fields make that contract explicit and machine-checkable.
+    """
     return {
         "artifact": APRIORI_SUMMARY_MARKER,
         "summary_kind": "apriori_generated",
@@ -201,10 +234,13 @@ def build_summary_replacement(
         "generated_summary": summary_text,
         "summary_chars": len(summary_text),
         "original_visible_chars": original_visible_chars,
+        "summary_input_chars": summary_input_chars,
+        "summary_input_truncated": summary_input_truncated,
         "summarized_at": _now_utc(),
         "summary_reason": (reason or "").strip() or None,
         "canonical": False,
         "raw_preserved": True,
+        "raw_locator": _raw_locator(tool_call_id),
         "retrieval_hint": _retrieval_hint(tool_call_id),
     }
 
@@ -229,7 +265,11 @@ def build_cap_refusal(
         "canonical": False,
         "raw_preserved": True,
         "original_visible_chars": original_visible_chars,
+        # No LLM input exists on this path — the summarizer is never called.
+        "summary_input_chars": 0,
+        "summary_input_truncated": False,
         "cap_chars": APRIORI_SUMMARY_CAP,
+        "raw_locator": _raw_locator(tool_call_id),
         "message": (
             f"summary=true was requested, but the tool result is "
             f"{original_visible_chars} characters, which exceeds the "
@@ -254,6 +294,8 @@ def build_summary_error(
     tool_call_id: str | None,
     original_visible_chars: int,
     error: str,
+    summary_input_chars: int = 0,
+    summary_input_truncated: bool = False,
 ) -> dict:
     """Build the error dict when the summarizer call fails.
 
@@ -262,6 +304,11 @@ def build_summary_error(
     a provider failure carrying a large payload (e.g. a Cloudflare challenge HTML
     page) cannot balloon context or leak the raw challenge page back to the
     model; the full original error is preserved in the durable event log.
+
+    ``summary_input_chars``/``summary_input_truncated`` describe the input that
+    was fed to the summarizer when one was attempted (the exception/empty-output
+    paths); they default to ``0``/``False`` for paths where no LLM call was made
+    (e.g. no summarizer wired).
     """
     return {
         "artifact": APRIORI_SUMMARY_MARKER,
@@ -272,6 +319,9 @@ def build_summary_error(
         "canonical": False,
         "raw_preserved": True,
         "original_visible_chars": original_visible_chars,
+        "summary_input_chars": summary_input_chars,
+        "summary_input_truncated": summary_input_truncated,
+        "raw_locator": _raw_locator(tool_call_id),
         "error": sanitize_error_text(error),
         "message": (
             "summary=true was requested, but generating the summary failed. The "
@@ -370,6 +420,11 @@ def maybe_summarize_result(
         reason = args.get("_reasoning") or ""
 
     raw_text = _visible_text_for_summary(result)
+    # The full formal visible payload is fed to the summarizer — the a-priori
+    # path caps-and-refuses above APRIORI_SUMMARY_CAP rather than truncating, so
+    # the input is never a truncated slice of the raw.
+    summary_input_chars = len(raw_text)
+    summary_input_truncated = False
     prompt = _build_summarizer_prompt(reason, raw_text)
 
     try:
@@ -387,6 +442,8 @@ def maybe_summarize_result(
             tool_call_id=tool_call_id,
             original_visible_chars=original_visible_chars,
             error=f"{type(exc).__name__}: {exc}",
+            summary_input_chars=summary_input_chars,
+            summary_input_truncated=summary_input_truncated,
         )
 
     if not isinstance(summary_text, str) or not summary_text.strip():
@@ -399,6 +456,8 @@ def maybe_summarize_result(
             tool_call_id=tool_call_id,
             original_visible_chars=original_visible_chars,
             error="summarizer returned an empty or non-text summary",
+            summary_input_chars=summary_input_chars,
+            summary_input_truncated=summary_input_truncated,
         )
 
     _log(
@@ -412,6 +471,8 @@ def maybe_summarize_result(
         summary_text=summary_text,
         reason=reason,
         original_visible_chars=original_visible_chars,
+        summary_input_chars=summary_input_chars,
+        summary_input_truncated=summary_input_truncated,
     )
 
 

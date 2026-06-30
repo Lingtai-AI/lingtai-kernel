@@ -131,6 +131,15 @@ def test_summary_true_under_cap_replaces_with_summary_and_preserves_raw(tmp_path
     assert "RAWSECRET" in seen["user_prompt"]
     # The RAW result was durably logged before replacement (preservation).
     assert _raw_logged(events, needle="RAWSECRET")
+    # Structured machine-readable locator points at the preserved raw, and the
+    # summary-input metadata records the full untruncated input.
+    loc = content["raw_locator"]
+    assert loc["tool_call_id"] == "t3"
+    assert loc["log"] == "logs/events.jsonl"
+    assert loc["event_type"] == "tool_result"
+    assert "t3" in loc["query"]
+    assert content["summary_input_chars"] == content["original_visible_chars"]
+    assert content["summary_input_truncated"] is False
 
 
 def test_summary_true_over_cap_refuses_without_llm_and_hides_raw(tmp_path):
@@ -161,6 +170,11 @@ def test_summary_true_over_cap_refuses_without_llm_and_hides_raw(tmp_path):
     # The oversized raw is NOT dumped into the wire content.
     assert "BIGRAW" not in str(content)
     assert "t4" in content["retrieval_hint"]
+    # Structured locator present on the refusal too; no LLM input was consumed.
+    assert content["raw_locator"]["tool_call_id"] == "t4"
+    assert content["raw_locator"]["log"] == "logs/events.jsonl"
+    assert content["summary_input_chars"] == 0
+    assert content["summary_input_truncated"] is False
     # Raw still preserved in durable log.
     assert _raw_logged(events, needle="BIGRAW")
 

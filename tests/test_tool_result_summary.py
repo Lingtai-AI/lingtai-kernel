@@ -13,8 +13,10 @@ import pytest
 from lingtai_kernel.tool_result_summary import (
     APRIORI_SUMMARY_CAP,
     APRIORI_SUMMARY_MARKER,
+    EVENTS_LOG_RELPATH,
     SUMMARIZER_SYSTEM_PROMPT,
     build_cap_refusal,
+    build_summary_error,
     build_summary_replacement,
     is_apriori_summary,
     maybe_summarize_result,
@@ -57,6 +59,8 @@ def test_replacement_is_non_canonical_with_locator():
         summary_text="exit code 0; build succeeded",
         reason="capture the exit code",
         original_visible_chars=12345,
+        summary_input_chars=12345,
+        summary_input_truncated=False,
     )
     assert repl["artifact"] == APRIORI_SUMMARY_MARKER
     assert repl["tool_call_id"] == "toolu_abc"
@@ -93,6 +97,121 @@ def test_cap_refusal_states_cap_and_preserves_raw():
     assert "toolu_xyz" in refusal["retrieval_hint"]
     assert "events.jsonl" in refusal["retrieval_hint"]
     assert is_apriori_summary(refusal)
+
+
+# --- structured raw locator: machine-readable sibling of retrieval_hint -----
+
+def test_replacement_has_structured_raw_locator():
+    repl = build_summary_replacement(
+        tool_name="bash",
+        tool_call_id="toolu_abc",
+        summary_text="ok",
+        reason="r",
+        original_visible_chars=100,
+        summary_input_chars=100,
+        summary_input_truncated=False,
+    )
+    loc = repl["raw_locator"]
+    assert loc["tool_call_id"] == "toolu_abc"
+    assert loc["log"] == EVENTS_LOG_RELPATH == "logs/events.jsonl"
+    assert loc["event_type"] == "tool_result"
+    # A copy-pasteable query that locates the raw by tool_call_id.
+    assert "toolu_abc" in loc["query"]
+    assert "events.jsonl" in loc["query"]
+    # Human-readable hint is still present for compatibility.
+    assert "events.jsonl" in repl["retrieval_hint"]
+
+
+def test_cap_refusal_has_structured_raw_locator():
+    refusal = build_cap_refusal(
+        tool_name="grep",
+        tool_call_id="toolu_xyz",
+        original_visible_chars=600_000,
+    )
+    loc = refusal["raw_locator"]
+    assert loc["tool_call_id"] == "toolu_xyz"
+    assert loc["log"] == "logs/events.jsonl"
+    assert loc["event_type"] == "tool_result"
+    assert "toolu_xyz" in loc["query"]
+    assert "events.jsonl" in refusal["retrieval_hint"]
+
+
+def test_summary_error_has_structured_raw_locator():
+    err = build_summary_error(
+        tool_name="read",
+        tool_call_id="toolu_err",
+        original_visible_chars=42,
+        error="boom",
+    )
+    loc = err["raw_locator"]
+    assert loc["tool_call_id"] == "toolu_err"
+    assert loc["log"] == "logs/events.jsonl"
+    assert loc["event_type"] == "tool_result"
+    assert "toolu_err" in loc["query"]
+
+
+def test_raw_locator_handles_missing_tool_call_id():
+    repl = build_summary_replacement(
+        tool_name="bash",
+        tool_call_id=None,
+        summary_text="ok",
+        reason="r",
+        original_visible_chars=10,
+        summary_input_chars=10,
+        summary_input_truncated=False,
+    )
+    # Locator is still structured and explicit about the unknown id.
+    assert repl["raw_locator"]["tool_call_id"] is None
+    assert repl["raw_locator"]["log"] == "logs/events.jsonl"
+
+
+# --- summary-input metadata: how much was fed to the summarizer -------------
+
+def test_replacement_records_summary_input_metadata():
+    repl = build_summary_replacement(
+        tool_name="bash",
+        tool_call_id="t1",
+        summary_text="ok",
+        reason="r",
+        original_visible_chars=1234,
+        summary_input_chars=1234,
+        summary_input_truncated=False,
+    )
+    assert repl["summary_input_chars"] == 1234
+    assert repl["summary_input_truncated"] is False
+
+
+def test_cap_refusal_summary_input_metadata_is_zero_untruncated():
+    # No LLM input exists on the cap-refusal path (LLM not called).
+    refusal = build_cap_refusal(
+        tool_name="grep",
+        tool_call_id="t1",
+        original_visible_chars=600_000,
+    )
+    assert refusal["summary_input_chars"] == 0
+    assert refusal["summary_input_truncated"] is False
+
+
+def test_orchestrator_success_records_full_untruncated_input():
+    raw = {"matches": ["foo", "bar"], "count": 2}
+    captured = {}
+
+    def fake(system_prompt, user_prompt, tool_name, tool_call_id):
+        captured["user_prompt"] = user_prompt
+        return "SUM"
+
+    out = maybe_summarize_result(
+        raw,
+        args={"summary": True, "_reasoning": "r"},
+        tool_name="grep",
+        tool_call_id="t1",
+        summarizer_fn=fake,
+    )
+    # The a-priori path feeds the FULL formal visible payload to the summarizer
+    # (it caps-and-refuses above 500k rather than truncating), so the recorded
+    # input length equals the original visible length and is never truncated.
+    assert out["summary_input_chars"] == out["original_visible_chars"]
+    assert out["summary_input_truncated"] is False
 
 
 # --- orchestrator: summary=false is an exact no-op --------------------------
@@ -298,6 +417,8 @@ def test_already_summarized_passes_through():
         summary_text="prior",
         reason="r",
         original_visible_chars=10,
+        summary_input_chars=10,
+        summary_input_truncated=False,
     )
     out = maybe_summarize_result(
         already,
