@@ -3489,25 +3489,10 @@ class DaemonManager:
         Return value is captured by the future for tests/debugging; the
         agent observes the result through the run_dir + notification.
         """
-        stderr_lines: list[str] = []
-
-        def _drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stripped = line.rstrip("\n")
-                if not stripped:
-                    continue
-                stderr_lines.append(stripped)
-                try:
-                    run_dir.record_cli_output(stripped, stream="stderr")
-                except Exception:
-                    pass
-
-        stderr_thread = threading.Thread(
-            target=_drain_stderr, daemon=True,
-            name=f"daemon-claude-ask-stderr-{em_id}",
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir, thread_name=f"daemon-claude-ask-stderr-{em_id}",
         )
-        stderr_thread.start()
+        stderr_lines = stderr_thread.lines
 
         final_result_text: str | None = None
         final_is_error = False
@@ -3705,25 +3690,10 @@ class DaemonManager:
         for terminal acknowledgement. Always clears ``ask_in_flight`` and
         detaches ``proc`` from ``_cli_procs``.
         """
-        stderr_lines: list[str] = []
-
-        def _drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stripped = line.rstrip("\n")
-                if not stripped:
-                    continue
-                stderr_lines.append(stripped)
-                try:
-                    run_dir.record_cli_output(stripped, stream="stderr")
-                except Exception:
-                    pass
-
-        stderr_thread = threading.Thread(
-            target=_drain_stderr, daemon=True,
-            name=f"daemon-codex-ask-stderr-{em_id}",
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir, thread_name=f"daemon-codex-ask-stderr-{em_id}",
         )
-        stderr_thread.start()
+        stderr_lines = stderr_thread.lines
 
         agent_message_texts: list[str] = []
         turn_completed = False
@@ -4380,25 +4350,11 @@ class DaemonManager:
         text. Always clears ``ask_in_flight`` and detaches ``proc`` from
         ``_cli_procs`` on exit.
         """
-        stderr_lines: list[str] = []
-
-        def _drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stripped = line.rstrip("\n")
-                if not stripped:
-                    continue
-                stderr_lines.append(stripped)
-                try:
-                    run_dir.record_cli_output(stripped, stream="stderr")
-                except Exception:
-                    pass
-
-        stderr_thread = threading.Thread(
-            target=_drain_stderr, daemon=True,
-            name=f"daemon-{backend_name}-ask-stderr-{em_id}",
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir,
+            thread_name=f"daemon-{backend_name}-ask-stderr-{em_id}",
         )
-        stderr_thread.start()
+        stderr_lines = stderr_thread.lines
 
         text_chunks: list[str] = []
         final_text: str | None = None
@@ -4744,25 +4700,10 @@ class DaemonManager:
         run_dir: DaemonRunDir,
     ) -> dict:
         """Background worker: stream an ``agent -p --resume`` subprocess."""
-        stderr_lines: list[str] = []
-
-        def _drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stripped = line.rstrip("\n")
-                if not stripped:
-                    continue
-                stderr_lines.append(stripped)
-                try:
-                    run_dir.record_cli_output(stripped, stream="stderr")
-                except Exception:
-                    pass
-
-        stderr_thread = threading.Thread(
-            target=_drain_stderr, daemon=True,
-            name=f"daemon-cursor-ask-stderr-{em_id}",
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir, thread_name=f"daemon-cursor-ask-stderr-{em_id}",
         )
-        stderr_thread.start()
+        stderr_lines = stderr_thread.lines
 
         text_chunks: list[str] = []
         final_text: str | None = None
