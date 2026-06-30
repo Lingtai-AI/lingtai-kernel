@@ -1273,7 +1273,28 @@ def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
             agent, "_summarize_notification_threshold", None
         ),
         reconstruction_event_fn=lambda: build_reconstruction_tool_meta(agent),
+        summarizer_fn=_build_apriori_summarizer_fn(agent),
     )
+
+
+def _build_apriori_summarizer_fn(agent):
+    """Build the one-shot a-priori (``summary=true``) summarizer closure.
+
+    Returns ``None`` when the agent's service has no usable one-shot ``generate``
+    gateway, so ``summary=true`` degrades to an inert no-op rather than erroring.
+    The closure signature is ``(system_prompt, user_prompt, tool_name) -> str``;
+    it returns the model's text. Errors propagate to the caller, which fails
+    closed to a summary-layer error (never leaking the raw payload).
+    """
+    service = getattr(agent, "service", None)
+    if service is None or not callable(getattr(service, "generate", None)):
+        return None
+
+    def _summarize(system_prompt: str, user_prompt: str, tool_name: str) -> str:
+        response = service.generate(user_prompt, system_prompt=system_prompt)
+        return getattr(response, "text", "") or ""
+
+    return _summarize
 
 
 def _check_external_send(agent, tool_calls, tool_results=None) -> None:

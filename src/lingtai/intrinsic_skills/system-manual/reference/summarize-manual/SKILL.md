@@ -1,11 +1,13 @@
 ---
 name: summarize-manual
 description: >-
-  Detailed operational guide for system(action="summarize"): what tool-result
-  summarization is, why it implements progressive disclosure, when to summarize
-  urgently versus during idle cleanup, how to write good summaries, how to
-  recover the original tool result by tool_call_id, and how summarize differs
-  from molt.
+  Detailed operational guide for tool-result summarization across LingTai's
+  three context-compression / continuation modes: a-priori reasoning-guided
+  (summary=true on bash/read/grep), a-posteriori agent-guided
+  (system(action="summarize")), and molt. Covers what tool-result summarization
+  is, why it implements progressive disclosure, when to summarize urgently versus
+  during idle cleanup, how to write good summaries, how to recover the original
+  tool result by tool_call_id, and how summarize differs from molt.
 last_changed_at: "2026-06-29T08:16:06Z"
 ---
 
@@ -21,6 +23,69 @@ history.
 Use this manual when runtime guidance tells you to summarize, when a
 `large_tool_result` reminder appears, when tool output has served its immediate
 purpose, or when you need to explain how summarize differs from molt.
+
+## 0 · The three modes (a priori, a posteriori, molt)
+
+Tool-result summarization is one face of a larger idea: keeping context lean.
+LingTai gives you three deliberate modes, ordered from local to
+whole-conversation. All three preserve the raw original in durable logs and none
+is canonical.
+
+| Mode | Trigger | When the raw is hidden | Authored by |
+|---|---|---|---|
+| **A priori** — reasoning-guided | `summary=true` on `bash`/`read`/`grep` | *before* the result ever enters context | the runtime LLM, driven by your `reasoning` |
+| **A posteriori** — agent-guided | `system(action="summarize")` | *after* you have already seen and digested it | you |
+| **Molt** — context-pressure-triggered | `psyche(context, molt, ...)` | the whole conversation is continued/reset | you (briefing) |
+
+A priori is the cheapest when you can predict bulk and do not need the raw text.
+A posteriori reclaims context after the fact for results you have consumed. Molt
+is the strongest boundary when per-result summarization is not enough. Sections
+1–6 below are mostly about the a-posteriori `summarize` action; §1a covers the
+a-priori `summary=true` option; §6 contrasts both with molt.
+
+## 1a · A priori summary: `summary=true` on bash / read / grep
+
+`bash`, `read`, and `grep` accept an optional boolean `summary` (default
+`false`). When `true`:
+
+- The tool runs **normally**. The raw result is written to the durable event log
+  and (if oversized) spilled, exactly as with `summary=false` — nothing is lost
+  and the raw is recoverable by `tool_call_id` (see §4).
+- **Before** the result enters your model-visible context, the runtime replaces
+  it with a generated summary. The summary is driven by your `reasoning` field
+  on that call — so when you set `summary=true`, make `reasoning` specific about
+  what to retain (e.g. "I only need the failing test names and their assertion
+  messages", "I only need the list of changed file paths").
+- The replacement is clearly marked **generated and non-canonical** and carries
+  a retrieval hint pointing back at the preserved raw by `tool_call_id`.
+
+When to set `summary=true`:
+
+- The expected output is large (rule of thumb: >10k chars) **and** you do not
+  need the exact raw text — you need a conclusion, a count, a list of anchors,
+  or a yes/no.
+
+When to leave it `false` (the default):
+
+- You need exact line/file/diff/stderr text — anything you will quote, diff,
+  patch, or compare character-by-character. Leave `false` and read the raw.
+
+**Hard cap.** If the raw visible payload exceeds **500,000 characters**, the
+runtime does **not** call the summarizer LLM. Instead you receive a small
+summary-layer refusal that says the result exceeded the cap, that the raw is
+preserved, and how to retrieve / narrow / rerun. The oversized raw is **not**
+dumped into your context on this path. Narrow the call (tighter command, path,
+pattern, or `offset`/`limit`) and rerun, or rerun with `summary=false` to take
+the raw (capped/spilled) result directly.
+
+**Untrusted output.** The summarizer treats the tool output strictly as data: it
+will not follow instructions embedded inside the tool result. This is the same
+prompt-injection posture the rest of the runtime uses for external text.
+
+**Fail-closed.** `summary=true` is a request *not* to put the raw into context.
+If the summarizer call fails or returns nothing, you get a summary-layer error
+with the retrieval locator — never the raw payload. Rerun with `summary=false`
+if you actually need the raw.
 
 ## 1 · The principle: progressive disclosure
 
@@ -177,9 +242,10 @@ Bad uses:
 
 ## 6 · Summarize is not molt
 
-`system(action="summarize")` reduces active-context bulk for selected tool
-results. It does not update pad, character, knowledge, skills, or the
-session-journal, and it does not shed the conversation.
+Neither summary mode is a molt. Both a-priori (`summary=true`) and a-posteriori
+(`system(action="summarize")`) reduce active-context bulk for selected tool
+results. Neither updates pad, character, knowledge, skills, or the
+session-journal, and neither sheds the conversation.
 
 Molt is a psyche operation. It preserves durable stores, writes the session
 journal and molt briefing, and starts a fresh conversation context. Before

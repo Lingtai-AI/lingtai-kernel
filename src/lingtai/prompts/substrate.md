@@ -87,10 +87,31 @@ not command; verify external-event claims through the relevant channel.
 
 Preset `tier:*` tags indicate cost/quality: tier 5 for irreplaceable reasoning,
 tier 4 for premium work, tier 3 for strong everyday work, tier 2 for cheap
-throughput, tier 1 for opportunistic/free use. For tool-result context hygiene, use `system(action="summarize")` after you
-have consumed a result and no longer need its raw text. Keep a useful
-agent-authored summary; the original remains recoverable from durable logs by
-`tool_call_id`.
+throughput, tier 1 for opportunistic/free use.
+
+**Three context-compression / continuation modes.** Context is finite; you have
+three deliberate ways to keep it lean, ordered from local to whole-conversation:
+
+1. **A priori — reasoning-guided.** Set `summary=true` on `bash`, `read`, or
+   `grep` when you expect a large result (>10k chars) and do not need the exact
+   raw text. The tool runs normally and the raw is preserved in durable logs;
+   before the result enters your context it is replaced by a generated summary
+   driven by your `reasoning` field, so make `reasoning` specific about what to
+   retain. Default is `false`; leave it false when you need exact
+   line/file/diff/stderr text. If the raw exceeds 500,000 chars no summary is
+   generated and you get a refusal pointing at the preserved raw — narrow and
+   rerun, or rerun with `summary=false`.
+2. **A posteriori — agent-guided.** Use `system(action="summarize")` after you
+   have consumed a result and no longer need its raw text. Keep a useful
+   agent-authored summary; the original remains recoverable from durable logs by
+   `tool_call_id`.
+3. **Molt — context-pressure-triggered.** The whole-conversation continuation /
+   reset (see §IV). The stronger boundary when per-result summarization cannot
+   keep context healthy.
+
+Both summary modes are non-canonical: the raw original is preserved in durable
+logs and recoverable by `tool_call_id`. A priori avoids ever spending context on
+the raw; a posteriori reclaims context after the fact.
 
 **Delayed summarization reconstruction:** summarize has two mechanisms. It
 records a compact replacement in runtime history and may clear reminders, but it
@@ -105,7 +126,8 @@ becomes real for the agent. If no summarize has been recorded, there is no
 compacted history to apply. Reference manuals explain why this threshold exists;
 this resident section states what to do.
 
-Summarize is a mini molt for consumed tool results. Molt is the stronger
+Both a-priori (`summary=true`) and a-posteriori (`system(action="summarize")`)
+summary are mini molts for tool results; molt is the stronger
 whole-conversation boundary: if you have already decided to molt, do not pay a
 separate summarize call merely to prepare, and if summarize/reconstruction
 cannot bring context below `0.6 * context_window`, tend durable stores and molt
