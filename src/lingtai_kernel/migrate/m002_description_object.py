@@ -27,21 +27,13 @@ import logging
 import os
 from pathlib import Path
 
+from lingtai_kernel.config_resolve import load_jsonc
+
 log = logging.getLogger(__name__)
 
 _PRESET_SUFFIXES = (".json", ".jsonc")
 _TIER_PREFIX = "tier:"
 _TIER_VALUES = {"1", "2", "3", "4", "5"}
-
-
-def _load_jsonc(path: Path):
-    """Local copy of the jsonc reader to avoid importing from lingtai."""
-    raw = path.read_text(encoding="utf-8")
-    if path.suffix == ".jsonc":
-        import re
-        raw = re.sub(r"//[^\n]*", "", raw)
-        raw = re.sub(r",(\s*[}\]])", r"\1", raw)
-    return json.loads(raw)
 
 
 def _extract_tier(tags) -> str | None:
@@ -84,7 +76,7 @@ def migrate_description_object(presets_path: Path) -> None:
             continue  # internal files like _kernel_meta.json
 
         try:
-            data = _load_jsonc(entry)
+            data = load_jsonc(entry)
         except (OSError, json.JSONDecodeError) as e:
             log.warning("m002: skipping unreadable preset %s: %s", entry, e)
             skipped += 1
