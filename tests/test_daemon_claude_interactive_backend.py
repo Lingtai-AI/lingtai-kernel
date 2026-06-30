@@ -200,7 +200,11 @@ def test_emanate_claude_p_dispatches_legacy_print_runner(tmp_path):
         em_id = result["ids"][0]
         mgr._emanations[em_id]["future"].result(timeout=5)
 
-    assert captured == {"backend": "claude-p", "task": "Use print mode"}
+    assert captured["backend"] == "claude-p"
+    # claude-p tasks are prefixed with the print-mode background-job operating
+    # contract (no notification re-entry), then the original task.
+    assert captured["task"].endswith("Task:\nUse print mode")
+    assert "will NOT notify you" in captured["task"]
 
 
 @pytest.mark.parametrize(

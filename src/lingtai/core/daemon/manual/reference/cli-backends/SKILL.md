@@ -5,8 +5,8 @@ description: >
   daemon(action=list), claude-p/codex/opencode behavior,
   backend_options flag passing, preset/capability inheritance, and Codex modal
   capabilities.
-version: 1.3.0
-last_changed_at: "2026-06-15T22:36:44-07:00"
+version: 1.4.0
+last_changed_at: "2026-06-30T00:00:00-07:00"
 ---
 
 # Daemon CLI Backend Reference
@@ -72,6 +72,18 @@ proved unreliable under the daemon watchdog (mid-exploration SIGTERM / exit code
 driving a TUI. The interactive code path remains in the tree only so older
 callers and stored daemon entries that recorded `backend="claude"` keep
 resolving.
+
+> **`claude-p` is one-shot `claude --print`: background-job notifications do not
+> fire inside it.** The inner Claude has no interactive session, so its
+> `run_in_background` Bash jobs (and `&`/wait-loops) get **no** completion
+> `<task-notification>` and the model is **never** re-invoked when they finish.
+> A daemon that ends its turn "waiting for a background job to notify me" has
+> stranded that job — dependent validation/commit/push never ran. Run any
+> validation you depend on **synchronously** with an adequate explicit timeout,
+> then commit/push/report in the same turn. The print backend now guards this:
+> if a `claude-p` run's final message is still awaiting a background-job
+> notification, the run is marked **`failed`** (not `done`) with an explanatory
+> error so the parent finishes the work instead of being told it succeeded.
 
 | Backend | CLI command | Session resume | Notes |
 |---------|-------------|----------------|-------|

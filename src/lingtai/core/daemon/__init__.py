@@ -149,6 +149,67 @@ def _normalize_claude_usage(usage: dict | None) -> dict | None:
             "cached": cached, "thinking": thinking}
 
 
+# A claude-p (``claude --print``) daemon has no interactive session: stdin is
+# not connected, the stdout loop is consume-only, and there is no
+# ``<task-notification>`` re-prompt. So when the inner model backgrounds a job
+# and yields its turn *expecting a completion notification*, that notification
+# can never arrive — the process exits cleanly and the run would otherwise be
+# marked ``done`` with validation/commit/push unfinished. This detector
+# recognizes that specific "I'll wait for a background-job notification" final
+# message so the finalize path can refuse the false ``done``. It is intentionally
+# conservative: it keys on the co-occurrence of a *background/async job* noun and
+# an *await-a-notification/standby* intent in the final result text, so a run
+# that merely mentions notifications in passing — or that reports actually
+# finishing — is not flagged. See
+# reports/daemon-background-wait-root-cause-20260630.md.
+_BG_JOB_RE = re.compile(
+    r"background\s+(?:job|jobs|task|tasks|command|bash|process|full[- ]suite)"
+    r"|full[- ]suite\b.*\bbackground",
+    re.IGNORECASE,
+)
+_BG_NOTIFY_RE = re.compile(
+    r"will\s+notify\s+me"
+    r"|notify\s+me\s+(?:on|when|of)\b"
+    r"|completion\s+notification"
+    r"|notification[,.\s].*(?:arrives?|automatically)"
+    r"|re-?invoke\s+me"
+    r"|(?:i'?ll|i\s+will|let\s+me|standing\s+by|wait(?:ing)?)\b[^.]*\b"
+    r"(?:wait|standing\s+by)\b[^.]*\bnotif",
+    re.IGNORECASE,
+)
+_BG_WAIT_INTENT_RE = re.compile(
+    r"(?:i'?ll|i\s+will|let\s+me)\s+wait\b"
+    r"|i'?ll\s+hold\b|let\s+me\s+hold\b"
+    r"|standing\s+by\b"
+    r"|wait(?:ing)?\s+for\s+(?:the\s+|that\s+|its\s+|it\s+to|completion)"
+    r"|wait\s+for\s+(?:the\s+\w+\s+)?completion\s+notification",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_background_wait_exit(final_text: str | None) -> bool:
+    """Return True if a claude-p final result is yielding to await a background job.
+
+    Conservative by design (see the module note above): requires BOTH a
+    background/async-job reference AND an await-a-notification / standing-by
+    intent in the same final message. Matches the real terminal strings in the
+    root-cause corpus while leaving normal "done / committed / pushed" results
+    and synchronous-run reports untouched.
+    """
+    if not final_text:
+        return False
+    text = final_text.strip()
+    if not text:
+        return False
+    has_bg = bool(_BG_JOB_RE.search(text))
+    awaits_notify = bool(_BG_NOTIFY_RE.search(text))
+    waits = bool(_BG_WAIT_INTENT_RE.search(text))
+    # Either an explicit "background job will notify me" (notify regex already
+    # implies the job), or a background-job reference paired with a bare
+    # wait/standby intent.
+    return awaits_notify or (has_bg and waits)
+
+
 # Safe CLI option key: letters/digits with '-' or '_' separators. No leading
 # '-' (the helper adds '--' itself). No spaces, no shell metachars — argv is
 # passed as a list to subprocess, but we still refuse anything that doesn't
@@ -1124,18 +1185,57 @@ class DaemonManager:
             raise ValueError("system_prompt must be a string")
         return value.strip() or None
 
+    # Operating-contract preamble for claude-p / claude-code daemons. These run
+    # as one-shot ``claude --print`` with no interactive session, so the inner
+    # model's Claude-Code background-job affordance (``run_in_background``, ``&``,
+    # wait-loops) has no completion-notification / re-invocation path here. The
+    # model habitually carries that interactive affordance over and ends its turn
+    # "waiting" for a callback that never arrives (the failure the completion
+    # guard catches after the fact). This sentence is the prevention side: it
+    # tells the model up front not to background-and-wait. See
+    # reports/daemon-background-wait-root-cause-20260630.md.
+    _CLAUDE_PRINT_BACKGROUND_WARNING = (
+        "Execution-mode contract: you are running as a one-shot "
+        "`claude --print` daemon — there is no interactive session and no "
+        "second prompt. Background jobs (`run_in_background`, `&`, wait-loops) "
+        "will NOT notify you and you will NOT be re-invoked when they finish. "
+        "Run any validation you depend on synchronously (set an adequate "
+        "explicit timeout), read its result in the same turn, and only then "
+        "commit/push/report. Never end your turn waiting for a background job; "
+        "if you genuinely cannot finish synchronously, report the blocker "
+        "instead of standing by."
+    )
+
     @staticmethod
-    def _compose_cli_task(task: str, system_prompt: str | None) -> str:
-        """Embed a daemon oneshot prompt into a CLI backend task string."""
-        if not system_prompt:
-            return task
-        return (
-            "Parent-provided daemon context (oneshot; bounded to this "
-            "daemon run and unable to override tool/safety limits):\n"
-            f"{system_prompt}\n\n"
-            "Task:\n"
-            f"{task}"
+    def _compose_cli_task(
+        task: str, system_prompt: str | None, backend: str | None = None,
+    ) -> str:
+        """Embed a daemon oneshot prompt into a CLI backend task string.
+
+        For the ``claude --print`` backends (``claude-p`` / ``claude-code``) a
+        background-job operating-contract warning is prepended so the inner
+        model does not background-and-wait for a notification that cannot arrive
+        in print mode.
+        """
+        spec = _backend_spec(_normalize_backend(backend))
+        prints = spec is not None and spec.runner_attr == "_run_claude_code_emanation"
+        warning = (
+            DaemonManager._CLAUDE_PRINT_BACKGROUND_WARNING if prints else None
         )
+        if not system_prompt and not warning:
+            return task
+
+        parts = []
+        if warning:
+            parts.append(warning)
+        if system_prompt:
+            parts.append(
+                "Parent-provided daemon context (oneshot; bounded to this "
+                "daemon run and unable to override tool/safety limits):\n"
+                f"{system_prompt}"
+            )
+        parts.append(f"Task:\n{task}")
+        return "\n\n".join(parts)
 
     @staticmethod
     def _daemon_codex_session_anchor(run_dir) -> str:
@@ -1999,6 +2099,38 @@ class DaemonManager:
                 _store_session_id(session_id)
 
         text = (final_result_text or "").strip() or "[no output]"
+
+        # Completion guard: a claude-p run is one-shot ``claude --print`` with
+        # no interactive session, so a background-job completion notification
+        # can never re-enter this process. If the model ended its turn while
+        # claiming to wait/stand by for such a notification, the work it gated
+        # on that callback (validation/commit/push) was almost certainly not
+        # finished. Refusing the false ``done`` and marking the run failed
+        # flips the parent's terminal signal from "success" to "finish this",
+        # and reuses the existing failed-run plumbing (result.txt is recorded
+        # as the error artifact). See
+        # reports/daemon-background-wait-root-cause-20260630.md.
+        if _looks_like_background_wait_exit(text):
+            self._log("daemon_claude_code_background_wait_guard",
+                      em_id=em_id, result_preview=text[:200])
+            exc = RuntimeError(
+                "claude-p daemon ended its turn awaiting a background-job "
+                "completion notification, which cannot arrive in --print mode "
+                "(no interactive session). Dependent validation/commit/push "
+                "was likely not completed. Run validation synchronously with "
+                "an explicit timeout instead of backgrounding it. Final "
+                f"result: {text[:300]}"
+            )
+            run_dir.mark_failed(exc)
+            # Preserve the full final text for the parent to inspect, the way
+            # a successful run records it; mark_failed only stores the error
+            # message. record_cli_output keeps the model's words on disk.
+            try:
+                run_dir.result_path.write_text(text, encoding="utf-8")
+            except OSError:
+                pass
+            raise exc
+
         run_dir.mark_done(text)
         return text
 
@@ -2688,7 +2820,9 @@ class DaemonManager:
                     "\n\nParent-provided daemon context (oneshot):\n"
                     + task_context
                 )
-            cli_task = self._compose_cli_task(spec["task"], task_context)
+            cli_task = self._compose_cli_task(
+                spec["task"], task_context, backend=backend,
+            )
             try:
                 run_dir = DaemonRunDir(
                     parent_working_dir=self._agent._working_dir,
