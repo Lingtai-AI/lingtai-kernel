@@ -588,6 +588,40 @@ def test_m001_handles_jsonc_files(tmp_path):
     assert "context_limit" not in after["manifest"]
 
 
+def test_jsonc_migrations_preserve_double_slash_inside_strings(tmp_path):
+    """The shared JSONC reader preserves URLs while both preset migrations run."""
+    plib = tmp_path / "presets"
+    plib.mkdir()
+    body = '''{
+      "name": "urlish", // outside-string comment still strips
+      "description": "Docs at https://example.test/path?from=kernel",
+      "manifest": {
+        "llm": {"provider": "p", "model": "m"},
+        "capabilities": {
+          "docs": {"homepage": "https://example.test/docs//nested"},
+        },
+        "context_limit": 45678,
+      },
+      "tags": ["tier:4"],
+    }'''
+    p = plib / "urlish.jsonc"
+    p.write_text(body, encoding="utf-8")
+
+    run_migrations(plib)
+
+    after = _read(p)
+    assert after["description"] == {
+        "summary": "Docs at https://example.test/path?from=kernel",
+        "tier": "4",
+    }
+    assert after["manifest"]["capabilities"]["docs"]["homepage"] == (
+        "https://example.test/docs//nested"
+    )
+    assert after["manifest"]["llm"]["context_limit"] == 45678
+    assert "context_limit" not in after["manifest"]
+    assert "tags" not in after
+
+
 def test_m001_skips_subdirectories_and_non_json(tmp_path):
     """Non-preset entries are ignored without errors."""
     plib = tmp_path / "presets"

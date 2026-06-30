@@ -17,26 +17,11 @@ import logging
 import os
 from pathlib import Path
 
+from lingtai_kernel.config_resolve import load_jsonc
+
 log = logging.getLogger(__name__)
 
 _PRESET_SUFFIXES = (".json", ".jsonc")
-
-
-def _load_jsonc(path: Path):
-    """Local copy of the jsonc reader to avoid importing from lingtai during migrate."""
-    raw = path.read_text(encoding="utf-8")
-    if path.suffix == ".jsonc":
-        # Strip // line comments and trailing commas. Same approach as
-        # lingtai.config_resolve.load_jsonc — duplicated here to keep this
-        # module's import surface minimal.
-        import re
-        # Remove // comments (but not inside strings — naive approach is good
-        # enough for our own preset files; user-authored JSONC with //
-        # inside strings would be unusual)
-        raw = re.sub(r"//[^\n]*", "", raw)
-        # Remove trailing commas
-        raw = re.sub(r",(\s*[}\]])", r"\1", raw)
-    return json.loads(raw)
 
 
 def migrate_context_limit_relocation(presets_path: Path) -> None:
@@ -63,7 +48,7 @@ def migrate_context_limit_relocation(presets_path: Path) -> None:
             continue  # internal files like _kernel_meta.json
 
         try:
-            data = _load_jsonc(entry)
+            data = load_jsonc(entry)
         except (OSError, json.JSONDecodeError) as e:
             log.warning("m001: skipping unreadable preset %s: %s", entry, e)
             skipped += 1
