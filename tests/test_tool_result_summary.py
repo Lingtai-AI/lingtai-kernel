@@ -247,6 +247,48 @@ def test_summarizer_empty_output_fails_closed():
     assert out["status"] == "summary_unavailable"
 
 
+def test_summarizer_exception_error_text_is_bounded_and_sanitized():
+    """A provider exception carrying a huge HTML challenge page (e.g. a
+    Cloudflare block on a PermissionDeniedError) must NOT be dumped verbatim
+    into model-visible context. The fail-closed error keeps the exception class
+    plus a short, length-capped preview — enough to diagnose, without leaking
+    the full HTML or ballooning the context. Regression for the live PR #586
+    observation (visible error ~23k–35k chars of provider HTML).
+    """
+    from lingtai_kernel.tool_result_summary import APRIORI_SUMMARY_ERROR_MAX_CHARS
+
+    # A challenge page is a huge run of repeated tokens — the live shape.
+    html_blob = "<html>" + ("CLOUDFLARE-CHALLENGE " * 5000) + "</html>"
+
+    class PermissionDeniedError(Exception):
+        pass
+
+    def boom(system_prompt, user_prompt, tool_name, tool_call_id):
+        raise PermissionDeniedError(html_blob)
+
+    out = maybe_summarize_result(
+        {"stdout": "x" * 100},
+        args={"summary": True, "_reasoning": "r"},
+        tool_name="bash",
+        tool_call_id="t_html",
+        summarizer_fn=boom,
+    )
+    assert is_apriori_summary(out)
+    assert out["status"] == "summary_unavailable"
+    error_text = out["error"]
+    # The exception class survives for diagnosis.
+    assert "PermissionDeniedError" in error_text
+    # Bounded length — at most the cap, and far smaller than the raw blob, so a
+    # tens-of-thousands-char HTML dump never reaches model-visible context.
+    assert len(error_text) <= APRIORI_SUMMARY_ERROR_MAX_CHARS
+    assert len(error_text) < 4000
+    assert len(error_text) < len(html_blob)
+    # The wall of identical repeated tokens is collapsed, not dumped verbatim:
+    # at most a couple of literal copies survive (boundary tokens), never the
+    # thousands that were raised.
+    assert error_text.count("CLOUDFLARE-CHALLENGE") <= 3
+
+
 # --- orchestrator: already-summarized is idempotent -------------------------
 
 def test_already_summarized_passes_through():

@@ -52,6 +52,15 @@ APRIORI_SUMMARY_MARKER = "lingtai_apriori_tool_result_summary"
 # refusal path.
 APRIORI_SUMMARY_CAP = 500_000
 
+# Hard character cap on the model-visible ``error`` text in a fail-closed
+# summary error. A provider failure can carry a large payload in its message
+# (e.g. a Cloudflare challenge HTML page on a PermissionDeniedError — observed
+# live at ~23k–35k chars on PR #586). The exact provider error already lives in
+# the durable event log; the model-visible error only needs the exception class
+# plus a short preview to diagnose. Bounding it keeps the failure mode from
+# ballooning context and from leaking the raw challenge page back to the model.
+APRIORI_SUMMARY_ERROR_MAX_CHARS = 2_000
+
 # System prompt for the one-shot summarizer call. Deliberately simple and
 # explicit, and hardened against prompt injection from tool output.
 SUMMARIZER_SYSTEM_PROMPT = (
@@ -72,6 +81,50 @@ SUMMARIZER_SYSTEM_PROMPT = (
 
 def _now_utc() -> str:
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def sanitize_error_text(error: str) -> str:
+    """Bound and de-noise a summarizer-failure error string for model context.
+
+    Provider failures sometimes carry a large repetitive payload in their
+    message (e.g. a Cloudflare challenge HTML page on a PermissionDeniedError).
+    Dumping that verbatim into the fail-closed error dict both balloons context
+    and leaks the raw challenge page back to the model. The full original error
+    is preserved in the durable event log; the model-visible text only needs the
+    exception class (kept by the caller, which prefixes ``type(exc).__name__``)
+    plus a short, length-bounded preview to diagnose.
+
+    Strategy:
+    - Collapse any short substring repeated 3+ times in a row to a single
+      occurrence plus a ``(×N)`` marker, so a repeated-unit blob (the typical
+      shape of a challenge page) shrinks to a readable preview instead of a wall
+      of duplicates that would survive a naive head-truncate. Operates on the raw
+      string (not tokens) so it is robust to where whitespace falls relative to
+      the repeated unit.
+    - Hard-truncate the result to ``APRIORI_SUMMARY_ERROR_MAX_CHARS`` with an
+      explicit elision marker, so the bound holds even for non-repetitive noise.
+    """
+    import re
+
+    if not isinstance(error, str):
+        error = str(error)
+
+    # Collapse ``unit unit unit …`` (unit ≤ 80 chars, repeated 3+ times) to one
+    # copy plus a count. Non-greedy unit + backreference finds the shortest
+    # repeating cell; the trailing group keeps the count accurate.
+    def _collapse(match: "re.Match[str]") -> str:
+        unit = match.group(1)
+        total = len(match.group(0))
+        count = total // len(unit) if unit else 1
+        return f"{unit}(×{count})"
+
+    error = re.sub(r"(.{1,80}?)\1{2,}", _collapse, error, flags=re.DOTALL)
+
+    if len(error) > APRIORI_SUMMARY_ERROR_MAX_CHARS:
+        marker = " …[truncated]"
+        keep = max(APRIORI_SUMMARY_ERROR_MAX_CHARS - len(marker), 0)
+        error = error[:keep] + marker
+    return error
 
 
 def is_apriori_summary(content: Any) -> bool:
@@ -205,6 +258,10 @@ def build_summary_error(
     """Build the error dict when the summarizer call fails.
 
     Fail-closed: the model sees this error (with locator), never the raw payload.
+    The ``error`` text is bounded and de-noised (see ``sanitize_error_text``) so
+    a provider failure carrying a large payload (e.g. a Cloudflare challenge HTML
+    page) cannot balloon context or leak the raw challenge page back to the
+    model; the full original error is preserved in the durable event log.
     """
     return {
         "artifact": APRIORI_SUMMARY_MARKER,
@@ -215,7 +272,7 @@ def build_summary_error(
         "canonical": False,
         "raw_preserved": True,
         "original_visible_chars": original_visible_chars,
-        "error": error,
+        "error": sanitize_error_text(error),
         "message": (
             "summary=true was requested, but generating the summary failed. The "
             "raw result was deliberately NOT placed into your context to honor "

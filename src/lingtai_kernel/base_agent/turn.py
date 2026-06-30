@@ -1287,12 +1287,13 @@ def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
 def _record_apriori_summary_usage(agent, response, tool_name, tool_call_id) -> None:
     """Append the a-priori summarizer call's token usage to the MAIN ledger.
 
-    The one-shot ``service.generate`` gateway does not flow through
-    ``ChatSession.send``'s post-call hook, so its ``usage`` would otherwise be
-    invisible to the agent's lifetime totals / cost analytics. We attribute it
-    with ``source="summarize_apriori"`` (see ``APRIORI_SUMMARY_LEDGER_SOURCE``),
-    plus ``tool_name``/``tool_call_id`` so the row is correlatable with the
-    durable tool_result event.
+    The one-shot summarizer session is created with ``tracked=False`` and is
+    driven outside ``BaseAgent``'s main-loop ``session.send`` hook, so its
+    ``usage`` would otherwise be invisible to the agent's lifetime totals / cost
+    analytics. We attribute it with ``source="summarize_apriori"`` (see
+    ``APRIORI_SUMMARY_LEDGER_SOURCE``), plus ``tool_name``/``tool_call_id`` so
+    the row is correlatable with the durable tool_result event. This mirrors the
+    soul one-shot accounting in ``intrinsics/soul/consultation._write_soul_tokens``.
 
     Fail-open on *accounting*: a ledger write failure must never break the
     summary path (content-side fail-closed is handled by the orchestrator),
@@ -1335,7 +1336,7 @@ def _record_apriori_summary_usage(agent, response, tool_name, tool_call_id) -> N
 def _build_apriori_summarizer_fn(agent):
     """Build the one-shot a-priori (``summary=true``) summarizer closure.
 
-    Returns ``None`` when the agent's service has no usable one-shot ``generate``
+    Returns ``None`` when the agent's service has no usable one-shot session
     gateway. (The orchestrator then *fails closed* to a summary-layer error
     rather than dumping the raw into context — see ``maybe_summarize_result``.)
     The closure signature is
@@ -1343,9 +1344,23 @@ def _build_apriori_summarizer_fn(agent):
     the model's text and records the call's token usage on the MAIN agent's
     ledger. Errors propagate to the caller, which fails closed to a summary-layer
     error (never leaking the raw payload).
+
+    Why ``create_session().send()`` and not ``service.generate()``:
+    ``generate`` routes through the adapter's one-shot path
+    (``chat.completions.create`` for the OpenAI-family adapters). On the
+    Codex/ChatGPT-OAuth provider that path targets
+    ``/backend-api/codex/chat/completions``, which is not a served Codex backend
+    endpoint and returns a Cloudflare challenge → ``PermissionDeniedError``
+    (observed live on PR #586). The supported one-shot path on this provider is
+    the same Responses session the main agent uses: ``create_session(...)`` (which
+    builds a ``CodexResponsesSession``) followed by ``session.send(...)``. This is
+    exactly how the kernel's other internal one-shot calls work — see
+    ``intrinsics/soul/inquiry.soul_inquiry`` and
+    ``intrinsics/soul/consultation``. Using it here makes the a-priori summary
+    work on every provider the main agent itself works on.
     """
     service = getattr(agent, "service", None)
-    if service is None or not callable(getattr(service, "generate", None)):
+    if service is None or not callable(getattr(service, "create_session", None)):
         return None
 
     def _summarize(
@@ -1354,7 +1369,21 @@ def _build_apriori_summarizer_fn(agent):
         tool_name: str,
         tool_call_id: str | None = None,
     ) -> str:
-        response = service.generate(user_prompt, system_prompt=system_prompt)
+        # Untracked one-shot session, no tools, scoped to the agent's own
+        # provider/model so it rides the same supported transport as the main
+        # agent. No ``interface`` → a fresh, empty conversation (the untrusted
+        # tool output and reason are carried entirely in ``user_prompt``).
+        config = getattr(agent, "_config", None)
+        provider = getattr(config, "provider", None)
+        model = getattr(config, "model", None) or getattr(service, "model", None)
+        session = service.create_session(
+            system_prompt=system_prompt,
+            tools=None,
+            model=model,
+            tracked=False,
+            provider=provider,
+        )
+        response = session.send(user_prompt)
         _record_apriori_summary_usage(agent, response, tool_name, tool_call_id)
         return getattr(response, "text", "") or ""
 

@@ -165,14 +165,7 @@ def test_summary_true_over_cap_refuses_without_llm_and_hides_raw(tmp_path):
     assert _raw_logged(events, needle="BIGRAW")
 
 
-# --- factory: degrades to None without a generate gateway -------------------
-
-class _NoGenerateService:
-    model = "m"
-
-    def make_tool_result(self, *a, **k):  # pragma: no cover
-        return {}
-
+# --- factory: degrades to None without a one-shot session gateway ------------
 
 class _Usage:
     def __init__(self, input_tokens, output_tokens, thinking_tokens=0, cached_tokens=0):
@@ -182,34 +175,113 @@ class _Usage:
         self.cached_tokens = cached_tokens
 
 
-class _WithGenerateService:
+class _NoSessionService:
+    """A service with no usable one-shot gateway at all."""
+
     model = "m"
-    _base_url = "https://example.test"
 
-    class _Resp:
-        text = "ok"
-        usage = _Usage(123, 45, 6, 7)
+    def make_tool_result(self, *a, **k):  # pragma: no cover
+        return {}
 
-    def generate(self, prompt, *, system_prompt=None, **kw):
-        return self._Resp()
+
+class _Resp:
+    def __init__(self, text="ok", usage=None):
+        self.text = text
+        self.usage = usage or _Usage(123, 45, 6, 7)
+
+
+class _FakeSession:
+    """Stand-in ChatSession recording the single send it receives."""
+
+    def __init__(self, resp, recorder):
+        self._resp = resp
+        self._recorder = recorder
+
+    def send(self, content):
+        self._recorder["sent"] = content
+        return self._resp
+
+
+class _SessionService:
+    """A Codex-shaped service: ``create_session().send()`` works, and a direct
+    ``generate()`` is *broken* (raises), exactly like the Codex OAuth backend
+    that only serves the Responses endpoint via the session path.
+    """
+
+    model = "m"
+    _base_url = "https://chatgpt.com/backend-api/codex"
+
+    def __init__(self, resp=None):
+        self._resp = resp or _Resp()
+        self.create_session_calls: list[dict] = []
+        self.recorder: dict = {}
+
+    def create_session(self, *, system_prompt, tools=None, model=None,
+                        thinking="default", tracked=True, interface=None,
+                        provider=None, **kw):
+        self.create_session_calls.append({
+            "system_prompt": system_prompt,
+            "tools": tools,
+            "tracked": tracked,
+            "provider": provider,
+            "interface": interface,
+        })
+        return _FakeSession(self._resp, self.recorder)
+
+    def generate(self, *a, **k):  # pragma: no cover - must never be called
+        raise AssertionError("service.generate must not be used for Codex summary")
+
+
+class _Config:
+    def __init__(self, provider="codex", model="m", retry_timeout=60):
+        self.provider = provider
+        self.model = model
+        self.retry_timeout = retry_timeout
 
 
 class _AgentStub:
-    def __init__(self, service, *, working_dir=None, agent_name="stub"):
+    def __init__(self, service, *, working_dir=None, agent_name="stub",
+                 provider="codex"):
         self.service = service
         self._working_dir = working_dir
         self.agent_name = agent_name
+        self._config = _Config(provider=provider)
+        self._chat = None
+
+    def _log(self, *a, **k):
+        pass
 
 
-def test_summarizer_factory_none_without_generate():
-    fn = turn._build_apriori_summarizer_fn(_AgentStub(_NoGenerateService()))
+def test_summarizer_factory_none_without_session_gateway():
+    fn = turn._build_apriori_summarizer_fn(_AgentStub(_NoSessionService()))
     assert fn is None
 
 
-def test_summarizer_factory_closure_calls_generate():
-    fn = turn._build_apriori_summarizer_fn(_AgentStub(_WithGenerateService()))
+def test_summarizer_uses_session_send_not_generate():
+    """The a-priori summarizer must drive a one-shot ``create_session().send()``
+    (the supported Responses path) — NOT ``service.generate`` (which on the
+    Codex/ChatGPT OAuth backend hits ``/chat/completions`` and is rejected with
+    a Cloudflare challenge / PermissionDeniedError). Regression for the live
+    failure observed on PR #586.
+    """
+    service = _SessionService(_Resp(text="GENERATED"))
+    agent = _AgentStub(service)
+    fn = turn._build_apriori_summarizer_fn(agent)
     assert fn is not None
-    assert fn("sys", "user", "bash", "tcid") == "ok"
+
+    out = fn("SYS", "USERPROMPT", "bash", "tcid")
+    assert out == "GENERATED"
+
+    # Exactly one untracked one-shot session was created, scoped to the agent's
+    # provider, with no tools, and the summarizer system prompt.
+    assert len(service.create_session_calls) == 1
+    call = service.create_session_calls[0]
+    assert call["tracked"] is False
+    assert call["provider"] == "codex"
+    assert call["tools"] is None
+    assert call["system_prompt"] == "SYS"
+    # The user prompt was sent on that session.
+    assert service.recorder["sent"] == "USERPROMPT"
 
 
 def _read_ledger_rows(ledger_path):
@@ -229,7 +301,7 @@ def test_apriori_summary_writes_main_ledger_row(tmp_path):
     correlatable by tool_call_id, and NOT a daemon row."""
     from lingtai_kernel.token_ledger import is_daemon_entry
 
-    agent = _AgentStub(_WithGenerateService(), working_dir=tmp_path)
+    agent = _AgentStub(_SessionService(), working_dir=tmp_path)
     fn = turn._build_apriori_summarizer_fn(agent)
     assert fn is not None
 
@@ -261,7 +333,7 @@ def test_apriori_summary_ledger_failure_does_not_break_summary(tmp_path):
         def __truediv__(self, other):
             raise OSError("ledger path explode")
 
-    agent = _AgentStub(_WithGenerateService(), working_dir=_BadWorkingDir())
+    agent = _AgentStub(_SessionService(), working_dir=_BadWorkingDir())
     fn = turn._build_apriori_summarizer_fn(agent)
     assert fn is not None
     # Despite the ledger write blowing up, the summary text is returned.
