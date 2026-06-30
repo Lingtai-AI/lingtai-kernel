@@ -11,12 +11,13 @@ string is used so the notification tool documents its own behavior.
 from __future__ import annotations
 
 LARGE_RESULT_DISMISS_ACTION_NOTE = (
-    "large_tool_result reminders can be dismissed as an escape hatch "
-    "(for example, stale pre-molt refs). Prefer system(action=summarize) "
-    "when the result is still accessible: summarize records a compact "
-    "runtime-history replacement and auto-clears the reminder. Dismissal only "
-    "clears the notification surface; the original result stays in chat "
-    "history and events.jsonl. See notification-manual."
+    "Legacy: the kernel no longer raises large_tool_result reminders — large "
+    "results are ranked under _meta.agent_meta.current_tool_result_chars and "
+    "compacted via system(action=summarize). Any large_tool_result event still "
+    "present (e.g. persisted before this change or pre-molt) can be dismissed "
+    "as an escape hatch. Dismissal only clears the notification surface; the "
+    "original result stays in chat history and events.jsonl. See "
+    "notification-manual."
 )
 
 LARGE_RESULT_FORCE_NOTE = (

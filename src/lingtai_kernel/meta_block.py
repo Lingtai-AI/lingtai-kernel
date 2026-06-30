@@ -119,8 +119,9 @@ def build_tool_meta_overflow_comment(tool_call_id: str | None) -> dict:
     }
 
 # Keys that are kernel/runtime scaffolding, not the formal tool-result payload.
-# Summarize and large-result reminder sizing must ignore these so notification
-# or guidance text is not treated as result content to be summarized.
+# Summarize and the current_tool_result_chars char-ranking must ignore these so
+# notification or guidance text is not treated as result content to be summarized
+# or counted toward a result's size.
 FORMAL_TOOL_RESULT_EXCLUDED_KEYS = frozenset({
     META_ENVELOPE_KEY,
     "_runtime_pending",
@@ -135,8 +136,8 @@ def formal_tool_result_content(content):
 
     The ``_meta`` envelope can contain notifications and guidance that are
     channel/runtime state, not the payload returned by the tool.  Context
-    summarization and large-result reminder sizing operate on this formal body
-    only, so notification contents are neither threshold-counted nor
+    summarization and the ``current_tool_result_chars`` char-ranking operate on
+    this formal body only, so notification contents are neither size-counted nor
     summarized as if they were the result.
     """
     if not isinstance(content, dict):
@@ -307,6 +308,11 @@ def slim_adapter_comment_for_tail(
 
 TOOL_RESULT_CHARS_TOP_N = 5
 TOOL_RESULT_CHARS_MIN_TOP_CHARS = 1000
+# Fallback large-result hint threshold (chars) used by current_tool_result_chars
+# when the agent has no ``_summarize_notification_threshold`` set.  Mirrors
+# BaseAgent's default and messaging.DEFAULT_SUMMARIZE_NOTIFICATION_THRESHOLD;
+# kept local to avoid a base_agent import cycle.
+DEFAULT_LARGE_RESULT_THRESHOLD = 3000
 TOOL_RESULT_CHARS_README = (
     "listing top 5 tool results over 1000 chars by char count "
     "(id, tool_name, chars; no preview); no need to summarize this helper "
@@ -337,17 +343,30 @@ def current_tool_result_chars(agent, extra_results=()) -> dict:
     ``formal_tool_result_visible_len``.  ``extra_results`` lets latest-result
     stamping include the just-created tool-result batch before those blocks are
     appended to chat history.
+
+    The returned dict also carries ``threshold`` (the agent's configured
+    large-result hint threshold in chars) and ``over_threshold_count`` (how many
+    in-context formal results exceed it).  Together with ``top_results`` these
+    let the agent see what counts as "large" and how many candidates exist —
+    the context the removed ``large_tool_result`` notification used to carry —
+    so it can decide what to ``system(action="summarize")``.
     """
+    threshold = getattr(
+        agent, "_summarize_notification_threshold", DEFAULT_LARGE_RESULT_THRESHOLD
+    )
     total = 0
+    over_threshold_count = 0
     top: list[dict] = []
     seen: set[int] = set()
 
     def visit(block) -> None:
-        nonlocal total
+        nonlocal total, over_threshold_count
         seen.add(id(block))
         content = getattr(block, "content", "")
         chars = formal_tool_result_visible_len(content)
         total += chars
+        if isinstance(threshold, int) and threshold > 0 and chars > threshold:
+            over_threshold_count += 1
         if chars > TOOL_RESULT_CHARS_MIN_TOP_CHARS:
             top.append(
                 {
@@ -367,6 +386,8 @@ def current_tool_result_chars(agent, extra_results=()) -> dict:
     top.sort(key=lambda item: item["chars"], reverse=True)
     return {
         "total_chars": total,
+        "threshold": threshold,
+        "over_threshold_count": over_threshold_count,
         "top_results": top[:TOOL_RESULT_CHARS_TOP_N],
     }
 
@@ -438,7 +459,9 @@ def build_meta_readme() -> dict:
             "facts — both per-provider-round and current-session aggregate — live "
             "permanently in tool_meta.token_usage instead (see "
             "meta_guidance.token_efficiency). "
-            "current_tool_result_chars is a compact dict with total_chars "
+            "current_tool_result_chars is a compact dict with total_chars, "
+            "threshold (the large-result hint size in chars), "
+            "over_threshold_count (how many in-context formal results exceed it), "
             "and top_results (id, tool_name, chars; no preview) for "
             "proactive summarization candidates. adapter_comment is a small "
             "provider/adapter-authored note carrying only dynamic per-turn "
