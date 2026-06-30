@@ -252,6 +252,27 @@ def test_mcp_show_unknown_action_returns_error(tmp_path):
     handler = agent._tool_handlers.get("mcp")
     result = handler({"action": "register"})  # not supported in slice
     assert result["status"] == "error"
+    # Exact model-visible envelope must survive the dispatch-helper migration
+    # (issue #513).
+    assert result == {
+        "status": "error",
+        "message": "unknown action: 'register', only 'show' is supported",
+    }
+    # Missing action key renders the empty-string default, not None.
+    assert handler({}) == {
+        "status": "error",
+        "message": "unknown action: '', only 'show' is supported",
+    }
+    # Invalid JSON can make `action` unhashable (issue #513 blocker): the router
+    # must render the unknown-action envelope, not raise TypeError.
+    assert handler({"action": []}) == {
+        "status": "error",
+        "message": "unknown action: [], only 'show' is supported",
+    }
+    assert handler({"action": {}}) == {
+        "status": "error",
+        "message": "unknown action: {}, only 'show' is supported",
+    }
 
 
 # ---------------------------------------------------------------------------
