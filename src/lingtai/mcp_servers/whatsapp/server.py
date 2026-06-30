@@ -12,6 +12,7 @@ import mcp.types as types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
+from .. import _config
 from .licc import push_inbox_event
 from .manager import WhatsAppManager, SCHEMA, DESCRIPTION
 from .resources import resource_text
@@ -26,15 +27,11 @@ _SERVER_INSTRUCTIONS = (
 
 
 def load_config() -> tuple[dict[str, Any], Path]:
-    raw = os.environ.get("LINGTAI_WHATSAPP_CONFIG")
-    if not raw:
-        raise ValueError("LINGTAI_WHATSAPP_CONFIG env var not set")
-    path = Path(raw).expanduser()
-    if not path.is_absolute():
-        path = Path(os.environ.get("LINGTAI_AGENT_DIR", os.getcwd())) / path
-    if not path.is_file():
-        raise FileNotFoundError(f"WhatsApp config not found: {path}")
-    return json.loads(path.read_text(encoding="utf-8")), path
+    return _config.load_config_file(
+        "LINGTAI_WHATSAPP_CONFIG",
+        label="WhatsApp",
+        missing_env_msg="LINGTAI_WHATSAPP_CONFIG env var not set",
+    )
 
 
 def _accounts_from_config(cfg: dict[str, Any]) -> list[dict[str, Any]]:

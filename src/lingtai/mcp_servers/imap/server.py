@@ -44,6 +44,7 @@ from mcp.server import Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
 
+from .. import _config
 from ._migrate import migrate_legacy_state
 from .bridge import FilesystemMailBridge
 from .licc import push_inbox_event
@@ -475,19 +476,7 @@ def load_config() -> dict:
     Path is resolved relative to LINGTAI_AGENT_DIR (or cwd as fallback)
     if not absolute. Plaintext only — no *_env indirection.
     """
-    config_path_raw = os.environ.get("LINGTAI_IMAP_CONFIG")
-    if not config_path_raw:
-        raise ValueError(
-            "LINGTAI_IMAP_CONFIG env var not set — point it at your IMAP "
-            "config JSON file"
-        )
-    config_path = Path(config_path_raw).expanduser()
-    if not config_path.is_absolute():
-        base = Path(os.environ.get("LINGTAI_AGENT_DIR", os.getcwd()))
-        config_path = base / config_path
-    if not config_path.is_file():
-        raise FileNotFoundError(f"IMAP config not found: {config_path}")
-    return json.loads(config_path.read_text(encoding="utf-8"))
+    return _config.load_config_file("LINGTAI_IMAP_CONFIG", label="IMAP")[0]
 
 
 def _accounts_from_config(cfg: dict) -> list[dict]:
