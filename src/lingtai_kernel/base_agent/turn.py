@@ -945,8 +945,10 @@ def _turn_boundary_housekeeping(agent) -> None:
     1. ``_check_molt_pressure`` — clear the legacy pressure-warning channel.
     2. ``_sync_notifications`` — record same-turn notification changes (while
        ACTIVE this defers delivery to the next IDLE boundary).
-    3. ``_rescan_large_tool_results`` — rediscover large unsummarized tool
-       results already in chat history (e.g. after refresh / migration).
+    3. ``_rescan_large_tool_results`` — retained inert no-op. Large results are
+       no longer re-notified at the turn boundary; they are ranked under
+       ``_meta.agent_meta.current_tool_result_chars`` instead. The call is kept
+       so the trio's order and error-handling contract are unchanged.
 
     Steps 2 and 3 are best-effort and must never abort the turn, so each is
     guarded independently. This deliberately excludes the standalone

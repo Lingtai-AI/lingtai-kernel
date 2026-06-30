@@ -11,8 +11,10 @@ Actions (voluntary, agent-callable):
     nirvana   — permanently destroy an agent's working directory (requires nirvana)
     presets   — list available presets in the agent's library
     summarize — record an agent-authored compact replacement for a prior
-                tool-result block in runtime history; a successful summarize of a
-                ``large_tool_result`` tool_call_id auto-clears its reminder.
+                tool-result block in runtime history. Pick targets from
+                ``_meta.agent_meta.current_tool_result_chars.top_results``.
+                (Legacy: a successful summarize of a ``large_tool_result``
+                tool_call_id still auto-clears any leftover reminder.)
 
 Notification verbs (``check``/``dismiss_channel``/``dismiss_event``/
 ``dismiss_ref``) are **not** on ``system`` — they live exclusively on the
@@ -91,8 +93,10 @@ def handle(agent, args: dict) -> dict:
     ``dismiss`` compatibility aliases are **not** handled here: they live
     exclusively on the standalone ``notification`` tool.  ``summarize`` remains
     a system action (it is a context-hygiene operation, not a notification
-    verb), and a successful summarize still auto-clears the matching
-    ``large_tool_result`` reminder internally.
+    verb).  Legacy: a successful summarize still auto-clears any leftover
+    ``large_tool_result`` reminder internally — though the kernel no longer
+    raises new ones (large results are ranked under
+    ``_meta.agent_meta.current_tool_result_chars``).
     """
     action = args.get("action")
     handler = {

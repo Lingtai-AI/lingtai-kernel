@@ -4,101 +4,16 @@ from __future__ import annotations
 import time
 
 from ..message import _make_message, MSG_REQUEST
-from ..meta_block import formal_tool_result_preview, formal_tool_result_visible_len
 
-# Default large-result notification size threshold (chars).  A tool result whose
-# effective length exceeds this is a "pending large-result case".  Configurable
-# via ``manifest.summarize_notification_threshold`` in init.json + refresh.
+# Default large-result *hint* threshold (chars).  A tool result whose effective
+# length exceeds this is treated as "large": the ToolExecutor stamps a
+# tool_meta.comment.overflow hint and the result is surfaced for summarization
+# through ``_meta.agent_meta.current_tool_result_chars`` (see
+# meta_block.current_tool_result_chars).  Large results no longer raise a
+# ``large_tool_result`` system notification.  Configurable via
+# ``manifest.summarize_notification_threshold`` in init.json + refresh.  Imported
+# by tool_executor.py for the overflow-hint default.
 DEFAULT_SUMMARIZE_NOTIFICATION_THRESHOLD = 3000
-
-# Total-length gate: large-result system notifications are suppressed until the
-# *combined* effective length of all pending large-result cases (each above the
-# size threshold) is *strictly greater than* this many chars.  A single pending
-# result over the gate triggers by itself; several smaller long results trigger
-# once their sum exceeds the gate, regardless of how many there are.  This
-# replaces the earlier count-based (>5 pending) gate.
-LARGE_RESULT_TOTAL_LEN_GATE = 50000
-
-
-def _pending_large_result_len(block, threshold: int):
-    """Return the effective length of ``block`` if it is a pending large result.
-
-    A "pending large-result case" is a non-synthesized, non-``daemon_tool_result``,
-    unsummarized ``ToolResultBlock`` whose effective formal-result length exceeds ``threshold``.
-    For spill manifests the effective length is ``original_char_count`` (the
-    wire-visible manifest is small, but the original payload may have been large).
-
-    Kernel metadata under ``_meta`` (including notifications/guidance) is excluded.
-
-    Returns the effective char length when the block qualifies, else ``None``.
-    This is the single source of truth shared by the total-length summer
-    (``_pending_large_result_total_len``) and the rescan emitter
-    (``_rescan_large_tool_results``) so both agree on what "pending" means.
-    """
-    from ..llm.interface import ToolResultBlock
-    from ..intrinsics.system.summarize import _is_already_summarized
-    from ..tool_result_artifacts import is_spill_manifest
-
-    if not isinstance(block, ToolResultBlock):
-        return None
-    if getattr(block, "synthesized", False):
-        return None
-    if block.name == "daemon_tool_result":
-        return None
-    if _is_already_summarized(block.content):
-        return None
-
-    content = block.content
-    if is_spill_manifest(content):
-        original_char_count = (
-            content.get("original_char_count") if isinstance(content, dict) else None
-        )
-        if not isinstance(original_char_count, int) or original_char_count <= threshold:
-            return None
-        return original_char_count
-
-    result_len = formal_tool_result_visible_len(content)
-
-    if result_len <= threshold:
-        return None
-    return result_len
-
-
-def _pending_large_result_total_len(agent) -> int:
-    """Sum the effective lengths of all pending large-result cases in live history.
-
-    A pending case is an unsummarized, non-excluded ``ToolResultBlock`` whose
-    effective length exceeds ``_summarize_notification_threshold`` (see
-    ``_pending_large_result_len``).  This returns the total of those effective
-    lengths (the visible/original chars), or 0 when the threshold is disabled
-    (<= 0) or there is no chat session yet.
-
-    Used to gate large-result system notifications: they are only published once
-    this total is strictly greater than ``LARGE_RESULT_TOTAL_LEN_GATE`` (>50000).
-    """
-    threshold = getattr(
-        agent, "_summarize_notification_threshold", DEFAULT_SUMMARIZE_NOTIFICATION_THRESHOLD
-    )
-    if threshold <= 0:
-        return 0
-
-    chat = getattr(agent, "_chat", None)
-    if chat is None:
-        return 0
-    iface = getattr(chat, "interface", None)
-    if iface is None:
-        return 0
-    entries = getattr(iface, "_entries", [])
-
-    total = 0
-    for entry in entries:
-        if entry.role != "user":
-            continue
-        for block in entry.content:
-            eff_len = _pending_large_result_len(block, threshold)
-            if eff_len is not None:
-                total += eff_len
-    return total
 
 
 def _on_mail_received(agent, payload: dict) -> None:
@@ -337,272 +252,22 @@ def _enqueue_system_notification(
 
 
 def _rescan_large_tool_results(agent) -> int:
-    """Scan live chat history for large unsummarized tool results and notify.
+    """Retained no-op: large tool results no longer trigger notifications.
 
-    Called at every turn/round boundary so existing oversized
-    ``ToolResultBlock``s in context — blocks that arrived before a refresh,
-    after a notification was dismissed, or from a history migration — can
-    trigger a ``large_tool_result`` system notification even though no new
-    tool execution has happened.
+    This turn-boundary hook used to scan live chat history for large
+    unsummarized ``ToolResultBlock``s and publish a ``large_tool_result``
+    system notification for each pending case (gated by a combined
+    total-length threshold).  That mechanism has been removed: large results
+    are surfaced as a ranked list under
+    ``_meta.agent_meta.current_tool_result_chars.top_results`` (see
+    :func:`meta_block.current_tool_result_chars`) and digested via
+    ``system(action="summarize")``.  Nothing is published or injected here.
 
-    Total-length gate:
-      - The whole batch of notifications is suppressed until the *combined*
-        effective length of all pending large-result cases above the size
-        threshold is *strictly greater than* ``LARGE_RESULT_TOTAL_LEN_GATE``
-        (>50000 chars).  Below that total nothing fires; once the total exceeds
-        the gate, all pending cases are (re-)notified in one sweep.  A single
-        pending result over the gate triggers by itself.  This avoids repeated
-        wasteful interruptions for a small amount of pending large-result text.
-
-    Skips:
-      - threshold <= 0 (disabled)
-      - pending large-result total <= LARGE_RESULT_TOTAL_LEN_GATE (gate not met)
-      - ``daemon_tool_result`` tool names (child-daemon relays)
-      - blocks already summarized (``artifact == SUMMARIZE_MARKER``)
-      - synthesized blocks (``block.synthesized == True``)
-      - spill manifests whose ``original_char_count`` is missing or <= threshold
-
-    Dedup:
-      - Uses ``skip_if_ref_id_exists=True`` in ``_enqueue_system_notification``
-        so an already-present notification (same ``ref_id``) is never duplicated.
-      - If the notification was previously dismissed (no longer in system.json),
-        the rescan will re-emit it on the next turn — by design (requirement §3).
-
-    Returns the count of notifications published (0 when nothing fired, the
-    threshold is disabled, or the total-length gate is not met).
+    The function is kept (and still called from the turn-boundary
+    housekeeping trio) as a stable seam so the call sites and their error
+    handling are unchanged; it simply returns 0.
     """
-    from ..llm.interface import ToolResultBlock
-    from ..intrinsics.system.summarize import _is_already_summarized
-    from ..tool_result_artifacts import is_spill_manifest
-
-    threshold = getattr(
-        agent, "_summarize_notification_threshold", DEFAULT_SUMMARIZE_NOTIFICATION_THRESHOLD
-    )
-    if threshold <= 0:
-        return 0
-
-    chat = getattr(agent, "_chat", None)
-    if chat is None:
-        return 0
-    iface = getattr(chat, "interface", None)
-    if iface is None:
-        return 0
-    entries = getattr(iface, "_entries", [])
-
-    # Load acknowledged large-result ref_ids so we can skip them in this rescan.
-    # These are set when the agent dismisses a large-result reminder as an escape
-    # hatch (instead of summarizing).  Acks are purged when the result is no
-    # longer in live history (summarized or chat compacted away).
-    from ..notifications import (
-        load_large_result_acks,
-        purge_stale_large_result_acks,
-    )
-    workdir = getattr(agent, "_working_dir", None)
-    existing_acks: set[str] = set()
-    if workdir is not None:
-        try:
-            existing_acks = load_large_result_acks(workdir)
-        except Exception:
-            existing_acks = set()
-
-    # Total-length gate: suppress until the combined effective length of all
-    # pending large-result cases is strictly greater than
-    # LARGE_RESULT_TOTAL_LEN_GATE (>50000 chars).  Below that total, stay quiet.
-    pending_total = _pending_large_result_total_len(agent)
-    if pending_total <= LARGE_RESULT_TOTAL_LEN_GATE:
-        # Even below the gate, purge stale acks for results no longer in history.
-        if workdir is not None and existing_acks:
-            try:
-                # Build live ref_ids from pending large-result cases.
-                live_for_purge: set[str] = set()
-                for _entry in entries:
-                    if _entry.role != "user":
-                        continue
-                    for _block in _entry.content:
-                        eff = _pending_large_result_len(
-                            _block,
-                            getattr(agent, "_summarize_notification_threshold",
-                                    DEFAULT_SUMMARIZE_NOTIFICATION_THRESHOLD)
-                        )
-                        if eff is not None and _block.id:
-                            live_for_purge.add(f"large_tool_result:{_block.id}")
-                purge_stale_large_result_acks(workdir, live_for_purge)
-            except Exception:
-                pass
-        return 0
-
-    # Collect live ref_ids to purge stale acks after the scan.
-    live_ref_ids: set[str] = set()
-
-    published = 0
-    for entry in entries:
-        if entry.role != "user":
-            continue
-        for block in entry.content:
-            if not isinstance(block, ToolResultBlock):
-                continue
-
-            # Skip synthesized heal / notification placeholder blocks.
-            if getattr(block, "synthesized", False):
-                continue
-
-            # Exclude daemon child result relays.
-            if block.name == "daemon_tool_result":
-                continue
-
-            # Skip already-summarized blocks.
-            if _is_already_summarized(block.content):
-                continue
-
-            content = block.content
-            tool_call_id = block.id or "<unknown>"
-            candidate_ref_id = f"large_tool_result:{tool_call_id}"
-
-            # Determine effective length — mirrors _maybe_notify_large_tool_result.
-            is_spill = is_spill_manifest(content)
-            if is_spill:
-                original_char_count = (
-                    content.get("original_char_count")
-                    if isinstance(content, dict)
-                    else None
-                )
-                if not isinstance(original_char_count, int) or original_char_count <= threshold:
-                    continue
-                result_len = original_char_count
-                spill_path = content.get("spill_path") if isinstance(content, dict) else None
-                preview_text = None
-            else:
-                result_len = formal_tool_result_visible_len(content)
-                preview_text = formal_tool_result_preview(content, 200)
-
-                if result_len <= threshold:
-                    continue
-                spill_path = None
-
-            # Track live ref_ids for ack purge after the scan.
-            live_ref_ids.add(candidate_ref_id)
-
-            # Skip if this ref_id was already acknowledged by a prior dismiss.
-            # The ack means the agent explicitly chose not to be re-notified for
-            # this specific large result (escape hatch for stale/pre-molt refs).
-            if candidate_ref_id in existing_acks:
-                continue
-
-            # Build notification body — same templates as _maybe_notify_large_tool_result.
-            _threshold_policy = (
-                f"This reminder is batched: it only appears once the combined length of "
-                f"pending large-result cases (each above the {threshold}-char threshold) "
-                f"exceeds {LARGE_RESULT_TOTAL_LEN_GATE} chars ({pending_total} chars pending now). "
-                f"The threshold ({threshold} chars, default {DEFAULT_SUMMARIZE_NOTIFICATION_THRESHOLD}) "
-                f"is set via manifest.summarize_notification_threshold "
-                f"in init.json and takes effect after system(action='refresh'). "
-                f"It cannot be changed temporarily at runtime. "
-                f"If you intentionally keep large results visible, you must either: "
-                f"(a) summarize/digest all pending large-result cases in one deliberate batch, or "
-                f"(b) tolerate these repeated reminders until you update the persistent config and refresh."
-            )
-            _dismiss_policy = (
-                "Dismiss policy: notification(action='dismiss_event'/'dismiss_ref') "
-                "can acknowledge and clear this reminder as an escape hatch — e.g. for "
-                "stale or pre-molt refs that can no longer be summarized. "
-                "Summarization via system(action='summarize') remains preferred: it "
-                "records an agent-authored compact replacement in runtime history and "
-                "auto-clears the reminder. Provider-context replacement waits for "
-                "delayed reconstruction. Dismissal only clears the notification; "
-                "the original result stays in chat history and events.jsonl."
-            )
-            if is_spill and spill_path:
-                body = (
-                    f"[large tool result — spilled] tool_name={block.name!r} tool_call_id={tool_call_id}\n"
-                    f"Original result length: {result_len} chars "
-                    f"(current summarize notification threshold: {threshold} chars).\n"
-                    f"The result was too large for the context window and was written to: {spill_path!r}\n"
-                    f"Read the sidecar file to access the full content, then call:\n"
-                    f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
-                    f"to record an agent-authored summary for this spill manifest in runtime history.\n"
-                    f"Large-result cleanup is background context hygiene, not a higher-priority instruction: "
-                    f"if a human/chat notification is pending, handle the human first. If this result still "
-                    f"matters for the task, digest it and call system(action='summarize') for the tool_call_id; "
-                    f"successful summarize clears the reminder automatically. Do not repeatedly summarize "
-                    f"cleanup metadata; summarize the original substantive result once, then continue.\n"
-                    f"{_dismiss_policy}\n"
-                    f"{_threshold_policy}\n"
-                    f"The full original remains in the sidecar file and in events.jsonl by tool_call_id."
-                )
-            elif is_spill:
-                body = (
-                    f"[large tool result — spilled] tool_name={block.name!r} tool_call_id={tool_call_id}\n"
-                    f"Original result length: {result_len} chars "
-                    f"(current summarize notification threshold: {threshold} chars).\n"
-                    f"The result was spilled to a sidecar file (path not available). "
-                    f"Check the spill manifest in your conversation history for the path.\n"
-                    f"After reading the sidecar, call:\n"
-                    f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
-                    f"to record an agent-authored summary for this spill manifest in runtime history.\n"
-                    f"Large-result cleanup is background context hygiene, not a higher-priority instruction: "
-                    f"if a human/chat notification is pending, handle the human first. If this result still "
-                    f"matters for the task, digest it and call system(action='summarize') for the tool_call_id; "
-                    f"successful summarize clears the reminder automatically. Do not repeatedly summarize "
-                    f"cleanup metadata; summarize the original substantive result once, then continue.\n"
-                    f"{_dismiss_policy}\n"
-                    f"{_threshold_policy}"
-                )
-            else:
-                body = (
-                    f"[large tool result] tool_name={block.name!r} tool_call_id={tool_call_id}\n"
-                    f"Result length: {result_len} chars "
-                    f"(current summarize notification threshold: {threshold} chars).\n"
-                    f"Preview (first 200 chars): {preview_text!r}\n\n"
-                    f"After you have digested this result, call:\n"
-                    f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
-                    f"to record an agent-authored compact summary in runtime history and clear this reminder.\n"
-                    f"Large-result cleanup is background context hygiene, not a higher-priority instruction: "
-                    f"if a human/chat notification is pending, handle the human first. If this result still "
-                    f"matters for the task, digest it and call system(action='summarize') for the tool_call_id; "
-                    f"successful summarize clears the reminder automatically. Do not repeatedly summarize "
-                    f"cleanup metadata; summarize the original substantive result once, then continue.\n"
-                    f"{_dismiss_policy}\n"
-                    f"{_threshold_policy}\n"
-                    f"The full original remains retrievable from events.jsonl by tool_call_id."
-                )
-
-            try:
-                enqueue_fn = getattr(agent, "_enqueue_system_notification", None)
-                if enqueue_fn is None:
-                    continue
-                event_id = enqueue_fn(
-                    source="large_tool_result",
-                    ref_id=f"large_tool_result:{tool_call_id}",
-                    body=body,
-                    skip_if_ref_id_exists=True,
-                )
-                if event_id:
-                    agent._log(
-                        "large_tool_result_rescan_notification_published",
-                        tool_name=block.name,
-                        tool_call_id=tool_call_id,
-                        result_len=result_len,
-                        threshold=threshold,
-                        is_spill=is_spill,
-                    )
-                    published += 1
-            except Exception as exc:
-                agent._log(
-                    "large_tool_result_rescan_notification_failed",
-                    tool_name=block.name,
-                    tool_call_id=tool_call_id,
-                    error=str(exc),
-                )
-
-    # Purge ack entries for ref_ids that are no longer in live history so the
-    # ack store does not grow without bound across summarize/compact cycles.
-    if workdir is not None and existing_acks:
-        try:
-            purge_stale_large_result_acks(workdir, live_ref_ids)
-        except Exception:
-            pass
-
-    return published
+    return 0
 
 
 def _notify(agent, sender: str, text: str) -> None:

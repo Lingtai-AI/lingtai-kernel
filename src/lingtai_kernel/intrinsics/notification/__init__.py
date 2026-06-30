@@ -30,11 +30,12 @@ All three dismiss verbs delegate to the single canonical
 ``invoked_by="notification"``.  The decision logic (allowlist, ``post-molt``
 ack-reason, protected channels, generic-dismiss guard, and stale-channel-version
 refusal) lives there, so every guard holds through this tool by construction.
-``large_tool_result`` reminders may be dismissed as an escape hatch (e.g. for
-stale or pre-molt refs that can no longer be summarized); doing so acknowledges
-the ref_id so the rescan does not immediately recreate the same notification.
-Summarization via ``system(action="summarize")`` remains the preferred discharge
-and auto-clears the matching reminder.
+Legacy ``large_tool_result`` reminders — the kernel no longer raises these
+(large results are ranked under ``_meta.agent_meta.current_tool_result_chars``
+and compacted via ``system(action="summarize")``) — but any event still present
+from before this change (or a pre-molt session) may be dismissed as an escape
+hatch; doing so acknowledges the ref_id.  Summarization via
+``system(action="summarize")`` still auto-clears any such matching reminder.
 """
 from __future__ import annotations
 
