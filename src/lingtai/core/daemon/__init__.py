@@ -1248,7 +1248,6 @@ class DaemonManager:
         tool_names = self._expand_requested_tools(requested)
 
         intrinsic_schemas, intrinsic_handlers = self._daemon_intrinsic_surface()
-        tool_names |= set(intrinsic_schemas)
         mcp_schemas, mcp_handlers = mcp_surface or ({}, {})
         parent_mcp_names = self._parent_mcp_tool_names()
         reserved_names = ({s.name for s in self._agent._tool_schemas} - parent_mcp_names) | set(intrinsic_schemas)
@@ -1285,12 +1284,15 @@ class DaemonManager:
             parent_host_names = (set(parent_schema_map)
                                  & _parent_host_tool_floor()) - parent_mcp_names
             # Available surface = preset capabilities ∪ parent host-floor tools
-            # ∪ task-scoped MCP tools ∪ daemon-eligible intrinsics (email).
+            # ∪ task-scoped MCP tools ∪ explicitly requestable daemon intrinsics
+            # (email). Only task MCP tools are auto-included below.
             available = (set(preset_schemas.keys()) | parent_host_names
                          | set(mcp_schemas) | set(intrinsic_schemas))
-            # The narrow daemon intrinsic surface and task MCP surface are
-            # auto-included for this one run.
-            tool_names |= set(mcp_schemas) | set(intrinsic_schemas)
+            # Task MCP tools are auto-included for this one run because the
+            # task supplied full one-run registrations. Daemon intrinsics such
+            # as email remain available, but must be explicitly requested via
+            # `tools` so result-only `tools=[]` daemons cannot communicate.
+            tool_names |= set(mcp_schemas)
 
             missing = tool_names - available
             if missing:
