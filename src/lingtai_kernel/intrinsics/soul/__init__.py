@@ -127,6 +127,34 @@ def handle(agent, args: dict) -> dict:
     action = args.get("action", "")
 
     if action == "flow":
+        # Opt-in gate: soul flow is disabled by default. When disabled,
+        # return an explicit, stable "disabled" status BEFORE touching the
+        # lock or spawning a fire thread — so a disabled agent burns no
+        # thread and does not wait for IDLE. This is expected config state,
+        # not an error to retry (see soul-manual).
+        from .flow import _soul_flow_enabled, SOUL_FLOW_ENABLED_ENV
+        if not _soul_flow_enabled():
+            agent._log("soul_flow_voluntary_disabled")
+            return {
+                "status": "disabled",
+                "enabled": False,
+                "env_var": SOUL_FLOW_ENABLED_ENV,
+                "message": (
+                    "Soul flow is disabled by default on this agent. It is "
+                    "opt-in: set the environment variable "
+                    f"{SOUL_FLOW_ENABLED_ENV}=1 (also true/yes/on), then "
+                    "refresh/restart, to enable periodic and voluntary "
+                    "past-self consultation. delay_seconds is only the "
+                    "cadence AFTER this opt-in — it is not an off switch, "
+                    "and soul(action='config') does not enable flow. "
+                    "inquiry, config, voice, and dismiss remain available "
+                    "while flow is disabled. Do not retry flow blindly; the "
+                    "operator must set the env var first. See soul-manual "
+                    "skill for how to enable/disable, troubleshoot, and the "
+                    "privacy/cost rationale."
+                ),
+            }
+
         # Voluntary trigger: try-acquire the fire lock non-blocking. If
         # held, another fire is already in flight (timer-fired or a prior
         # voluntary call) — refuse so the agent isn't surprised by a

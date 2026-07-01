@@ -19,9 +19,9 @@ description: >
   handling, runtime/kernel update checks, molt/memory questions, MCP/addon
   ownership, preset tiers, collaboration/network topology, resident prompt
   design, and the `system` tool actions.
-version: 1.3.0
+version: 1.4.0
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks]
-last_changed_at: "2026-06-23T23:50:45-07:00"
+last_changed_at: "2026-07-01T09:00:00-07:00"
 ---
 
 # System Manual — Progressive Disclosure Router
@@ -117,6 +117,7 @@ selects that topic.
 | Runtime/kernel state; `nudge` notification channel; `.notification/nudge.json`; `kind: kernel_version`; running vs installed vs latest LingTai kernel; editable/dev/source installs; daily update checks; safe `system(action='refresh')`; ask the human before downloading/updating | `reference/runtime-update-checks/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Molt mechanics, pad tending, session journals, post-wipe recovery | `psyche-manual` |
+| Soul tool; soul flow opt-in (`LINGTAI_SOUL_FLOW_ENABLED`); disabled-flow behavior; `delay_seconds` as cadence-not-off-switch; inquiry/config/voice/dismiss; privacy/cost rationale | `soul-manual` |
 | Authoring/publishing skills or changing skill catalog behavior | `skills-manual` |
 | Knowledge-entry layout and private durable memory | `knowledge-manual` |
 | MCP registration/activation/addon ownership | `mcp-manual` |

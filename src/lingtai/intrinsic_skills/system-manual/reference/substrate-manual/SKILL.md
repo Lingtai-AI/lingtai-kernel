@@ -10,9 +10,9 @@ description: >
   idle/soul behavior, preset tiers, and resident substrate maintenance. This is
   a nested skill-reference under `system-manual`, not a standalone catalog skill;
   its folder may carry scripts/assets as the substrate reference grows.
-version: 1.0.0
+version: 1.0.1
 tags: [lingtai, system-manual, substrate, runtime, lifecycle, communication, memory, notifications, mcp]
-last_changed_at: "2026-06-27T21:13:46-07:00"
+last_changed_at: "2026-07-01T09:00:00-07:00"
 ---
 
 # Substrate Manual
@@ -303,11 +303,17 @@ reconfigure the orchestrator-owned integration; escalate or ask the orchestrator
 ## 9. Idle and soul
 
 When there is no concrete task, go idle/asleep rather than spinning, polling, or
-using timed sleeps. Idle keeps listeners available and lets soul flow reflect.
+using timed sleeps. Idle keeps listeners available.
 
-Soul flow is advice, not command. Verify external-event claims through the
-relevant channel before acting. Use self-inquiry when you need a deliberate pause
-for judgment; use durable stores for conclusions that should survive molt.
+Soul flow is advice, not command — and it is **opt-in, disabled by default**
+(gated by the `LINGTAI_SOUL_FLOW_ENABLED` env var). When it is off,
+`soul(action='flow')` returns a `disabled` status; `inquiry`/`config`/`voice`/
+`dismiss` still work. Verify external-event claims through the relevant channel
+before acting on any voice. Use self-inquiry when you need a deliberate pause for
+judgment; use durable stores for conclusions that should survive molt. For the
+full soul-flow mechanics — the env gate, disabled behavior, `delay_seconds` as
+cadence-not-off-switch, enabling/disabling, and the privacy/cost rationale — read
+the `soul-manual` skill.
 
 ## 10. Resident substrate maintenance
 
