@@ -13,20 +13,53 @@ The kernel calls into this module at lifecycle moments:
 from __future__ import annotations
 
 import json
+import os
 import time
+
+
+# Environment gate for soul flow. Soul flow (both the wall-clock timer and
+# voluntary ``soul(action='flow')`` calls) is OPT-IN and default DISABLED.
+# This replaces the old "trust a giant delay_seconds sentinel" approach — a
+# large delay only muted the *timer* while the *voluntary* path stayed live
+# and could loop against the sleep gate. The env var gates both paths
+# structurally, independent of delay_seconds.
+SOUL_FLOW_ENABLED_ENV = "LINGTAI_SOUL_FLOW_ENABLED"
+# Case-insensitive truthy set. Anything else (including unset and "") = off.
+_SOUL_FLOW_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def _soul_flow_enabled() -> bool:
+    """True only when soul flow is explicitly opted in via env.
+
+    Set ``LINGTAI_SOUL_FLOW_ENABLED`` to one of ``1``/``true``/``yes``/``on``
+    (case-insensitive) to enable periodic + voluntary past-self consultation.
+    Unset, empty, or any other value disables BOTH the wall-clock timer and
+    voluntary ``soul(action='flow')``. ``inquiry``/``config``/``voice``/
+    ``dismiss`` remain available regardless. See the ``soul-manual`` skill.
+
+    ``delay_seconds`` is only the cadence *after* this env opt-in; it is NOT
+    an off switch (that is what this gate is for).
+    """
+    return os.environ.get(SOUL_FLOW_ENABLED_ENV, "").strip().lower() in _SOUL_FLOW_TRUTHY
 
 
 def _start_soul_timer(agent) -> None:
     """Start the soul cadence timer.
 
-    Runs only while the agent is IDLE.  Cancelled by _set_state on
-    entry to any non-IDLE state (ACTIVE, STUCK, ASLEEP, SUSPENDED).
-    Started by _set_state on transition to IDLE.  Does NOT reschedule
-    itself after firing — the next IDLE transition starts a fresh timer.
+    No-op unless soul flow is opted in via ``LINGTAI_SOUL_FLOW_ENABLED``
+    (default disabled — see ``_soul_flow_enabled``). When enabled, runs only
+    while the agent is IDLE.  Cancelled by _set_state on entry to any
+    non-IDLE state (ACTIVE, STUCK, ASLEEP, SUSPENDED).  Started by _set_state
+    on transition to IDLE.  Does NOT reschedule itself after firing — the
+    next IDLE transition starts a fresh timer.
     """
     import threading
 
     if agent._shutdown.is_set():
+        return
+    if not _soul_flow_enabled():
+        # Opt-in gate: leave no armed timer so the fire path stays dead.
+        _cancel_soul_timer(agent)
         return
     _cancel_soul_timer(agent)
     agent._soul_timer = threading.Timer(agent._soul_delay, _soul_whisper, args=(agent,))
@@ -193,6 +226,14 @@ def _run_consultation_fire(agent) -> None:
     from datetime import datetime, timezone
     import secrets as _secrets
     from ...message import _make_message, MSG_TC_WAKE
+
+    # Opt-in gate (belt-and-suspenders): even if a residual caller reaches
+    # here while flow is disabled, no fire runs. This closes the loophole
+    # where a giant delay_seconds muted the timer but a live voluntary path
+    # (or stray thread) could still fire — see the dev-1 trajectory audit.
+    if not _soul_flow_enabled():
+        agent._log("soul_flow_disabled", path="consultation_fire")
+        return
 
     state = agent._state
     state_val = state.value if hasattr(state, "value") else str(state)

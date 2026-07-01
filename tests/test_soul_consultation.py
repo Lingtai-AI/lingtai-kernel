@@ -32,6 +32,17 @@ from lingtai_kernel.llm.interface import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _enable_soul_flow(monkeypatch):
+    """Soul flow is opt-in / disabled by default (LINGTAI_SOUL_FLOW_ENABLED).
+
+    This module exercises the consultation/fire mechanics that only run when
+    flow is enabled, so enable the gate for every test here. The disabled
+    behavior is covered in tests/test_soul.py.
+    """
+    monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

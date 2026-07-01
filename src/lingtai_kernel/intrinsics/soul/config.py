@@ -105,11 +105,26 @@ def _handle_config(agent, args: dict) -> dict:
         log_kw["persist_error"] = persist_error
     agent._log("soul_config", **log_kw)
 
-    return {
+    result: dict = {
         "status": "ok",
         "old": old_values,
         "new": new_values,
     }
+
+    # Soul flow is opt-in via env (default disabled). config tunes cadence
+    # knobs but does NOT enable flow — surface that so an agent lowering
+    # delay_seconds isn't misled into expecting fires. See soul-manual.
+    from .flow import _soul_flow_enabled, SOUL_FLOW_ENABLED_ENV
+    if not _soul_flow_enabled():
+        result["soul_flow_enabled"] = False
+        result["note"] = (
+            f"Soul flow is currently disabled ({SOUL_FLOW_ENABLED_ENV} is not "
+            "set). These knobs are saved but no fires will occur until an "
+            f"operator sets {SOUL_FLOW_ENABLED_ENV}=1 and refreshes. "
+            "See soul-manual skill."
+        )
+
+    return result
 
 
 def _handle_voice(agent, args: dict) -> dict:

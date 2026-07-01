@@ -19,6 +19,8 @@ import threading
 import time
 from unittest.mock import MagicMock
 
+import pytest
+
 from lingtai_kernel.config import AgentConfig
 from lingtai_kernel.intrinsics import soul
 
@@ -43,6 +45,14 @@ def _make_mock_service():
 
 
 class TestSoulHandle:
+
+    @pytest.fixture(autouse=True)
+    def _enable_soul_flow(self, monkeypatch):
+        # Soul flow is opt-in / disabled by default (issue: env gate).
+        # This class exercises the ENABLED flow mechanics; the disabled
+        # behavior is covered in TestVoluntaryFlowOptIn. inquiry/unknown
+        # tests are unaffected by the gate.
+        monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
 
     def test_inquiry_returns_voice(self):
         agent = _make_mock_agent()
@@ -201,6 +211,13 @@ class TestSoulSchema:
 
 class TestSoulTimer:
 
+    @pytest.fixture(autouse=True)
+    def _enable_soul_flow(self, monkeypatch):
+        # Timer arming is gated on the opt-in env var (default off). These
+        # tests cover timer mechanics when flow is enabled; the disabled
+        # case is covered in TestSoulTimerOptIn.
+        monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
+
     def test_soul_attributes_initialized_default(self, tmp_path):
         """BaseAgent with default config has soul_delay=999999999."""
         from lingtai_kernel import BaseAgent
@@ -330,6 +347,219 @@ class TestSoulFireAllowed:
         assert _soul_fire_allowed(agent) is False
 
 
+# ---------------------------------------------------------------------------
+# Soul flow opt-in gate — LINGTAI_SOUL_FLOW_ENABLED (default disabled)
+# ---------------------------------------------------------------------------
+
+
+class TestSoulFlowEnvParsing:
+    """_soul_flow_enabled parses the env var truthy/falsey, default off."""
+
+    def test_unset_is_disabled(self, monkeypatch):
+        from lingtai_kernel.intrinsics.soul.flow import _soul_flow_enabled
+        monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
+        assert _soul_flow_enabled() is False
+
+    def test_truthy_values_enable(self, monkeypatch):
+        from lingtai_kernel.intrinsics.soul.flow import _soul_flow_enabled
+        for val in ("1", "true", "TRUE", "Yes", "on", " on ", "ON"):
+            monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", val)
+            assert _soul_flow_enabled() is True, f"{val!r} should enable"
+
+    def test_falsey_values_disable(self, monkeypatch):
+        from lingtai_kernel.intrinsics.soul.flow import _soul_flow_enabled
+        for val in ("0", "", "false", "no", "off", "disabled", "2", "  "):
+            monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", val)
+            assert _soul_flow_enabled() is False, f"{val!r} should disable"
+
+
+class TestSoulTimerOptIn:
+    """The wall-clock timer arms only when soul flow is opted in."""
+
+    def test_timer_not_armed_when_disabled(self, tmp_path, monkeypatch):
+        from lingtai_kernel import BaseAgent
+        monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
+        agent = BaseAgent(
+            service=_make_mock_service(),
+            agent_name="test",
+            working_dir=tmp_path / "test_agent",
+        )
+        agent._soul_delay = 300.0
+        agent._start_soul_timer()
+        assert agent._soul_timer is None
+
+    def test_timer_armed_when_enabled(self, tmp_path, monkeypatch):
+        from lingtai_kernel import BaseAgent
+        monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
+        agent = BaseAgent(
+            service=_make_mock_service(),
+            agent_name="test",
+            working_dir=tmp_path / "test_agent",
+        )
+        agent._soul_delay = 300.0
+        try:
+            agent._start_soul_timer()
+            assert agent._soul_timer is not None
+            assert agent._soul_timer.is_alive()
+        finally:
+            agent.stop(timeout=1.0)
+
+    def test_timer_follows_idle_only_when_enabled(self, tmp_path, monkeypatch):
+        """_set_state IDLE entry does not arm the timer while disabled."""
+        from lingtai_kernel import AgentState, BaseAgent
+        monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
+        agent = BaseAgent(
+            service=_make_mock_service(),
+            agent_name="test",
+            working_dir=tmp_path / "test_agent",
+        )
+        agent._soul_delay = 300.0
+        agent._set_state(AgentState.ACTIVE, reason="test")
+        agent._set_state(AgentState.IDLE, reason="done")
+        # Disabled: entering IDLE must not arm a timer.
+        assert agent._soul_timer is None
+
+
+class TestVoluntaryFlowOptIn:
+    """Voluntary soul(action='flow') is gated on the env var."""
+
+    def test_disabled_returns_disabled_payload_no_thread(self, monkeypatch):
+        """Disabled voluntary flow returns a stable disabled payload and
+        does NOT spawn the fire thread or touch the lock."""
+        import threading as _threading
+        from lingtai_kernel.intrinsics.soul.flow import SOUL_FLOW_ENABLED_ENV
+        monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
+        agent = _make_mock_agent()
+        # A live lock — the gate must return BEFORE any lock interaction.
+        agent._soul_fire_lock = _threading.Lock()
+
+        before = _threading.active_count()
+        result = soul.handle(agent, {"action": "flow"})
+        # No fire thread spawned.
+        assert _threading.active_count() == before
+
+        assert result["status"] == "disabled"
+        assert result["enabled"] is False
+        assert result["env_var"] == SOUL_FLOW_ENABLED_ENV
+        assert SOUL_FLOW_ENABLED_ENV in result["message"]
+        assert "soul-manual" in result["message"]
+        # It is NOT an error — agents must not retry blindly.
+        assert "error" not in result
+        # Lock was never taken.
+        assert agent._soul_fire_lock.acquire(blocking=False) is True
+        agent._soul_fire_lock.release()
+
+    def test_enabled_preserves_voluntary_ok(self, monkeypatch):
+        """When enabled, voluntary flow behaves as before (status ok)."""
+        import threading as _threading
+        monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
+        agent = _make_mock_agent()
+        agent._soul_fire_lock = _threading.Lock()
+        result = soul.handle(agent, {"action": "flow"})
+        assert result.get("status") == "ok"
+        assert "soul flow triggered" in result.get("message", "").lower()
+
+
+class TestConsultationFireOptIn:
+    """_run_consultation_fire defensively no-ops when disabled."""
+
+    def test_fire_noops_when_disabled(self, monkeypatch):
+        from lingtai_kernel.intrinsics.soul import flow
+        from lingtai_kernel.state import AgentState
+        monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
+
+        agent = MagicMock()
+        agent._state = AgentState.IDLE
+        logs = []
+        agent._log.side_effect = lambda ev, **kw: logs.append((ev, kw))
+
+        publish = MagicMock()
+        monkeypatch.setattr(
+            "lingtai_kernel.intrinsics.system.publish_notification",
+            publish,
+            raising=False,
+        )
+        monkeypatch.setattr(flow, "_append_soul_flow_record", MagicMock())
+
+        flow._run_consultation_fire(agent)
+
+        publish.assert_not_called()
+        assert any(ev == "soul_flow_disabled" for ev, _ in logs)
+        # It must not even reach the fire gate check.
+        assert not any(ev == "soul_fire_gate_check" for ev, _ in logs)
+
+    def test_fire_runs_when_enabled(self, monkeypatch):
+        """Sanity: with env enabled the fire proceeds past the env gate to
+        the existing state/lock gates (reaches soul_fire_gate_check)."""
+        from lingtai_kernel.intrinsics.soul import flow
+        from lingtai_kernel.state import AgentState
+        monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
+
+        agent = MagicMock()
+        # ACTIVE so it stops at the existing state gate, not the env gate.
+        agent._state = AgentState.ACTIVE
+        logs = []
+        agent._log.side_effect = lambda ev, **kw: logs.append((ev, kw))
+        monkeypatch.setattr(flow, "_append_soul_flow_record", MagicMock())
+
+        flow._run_consultation_fire(agent)
+
+        # Reached the gate check (env gate passed) but stopped on state.
+        assert any(ev == "soul_fire_gate_check" for ev, _ in logs)
+        assert any(ev == "consultation_skipped_state" for ev, _ in logs)
+        assert not any(ev == "soul_flow_disabled" for ev, _ in logs)
+
+
+class TestNonFlowActionsUnaffectedByOptIn:
+    """inquiry/config/voice/dismiss work regardless of the flow env gate."""
+
+    def test_inquiry_works_when_flow_disabled(self, monkeypatch):
+        monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
+        agent = _make_mock_agent()
+        agent._config.retry_timeout = 30.0
+        result = soul.handle(agent, {"action": "inquiry", "inquiry": "Am I ok?"})
+        assert result["status"] == "ok"
+        assert "voice" in result
+
+    def test_config_works_when_flow_disabled_and_notes_state(self, tmp_path, monkeypatch):
+        """config succeeds when flow is disabled and appends a disabled note."""
+        from lingtai_kernel import BaseAgent
+        from lingtai_kernel.intrinsics.soul.flow import SOUL_FLOW_ENABLED_ENV
+        monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
+        agent = BaseAgent(
+            service=_make_mock_service(),
+            agent_name="test",
+            working_dir=tmp_path / "test_agent",
+        )
+        try:
+            result = soul.handle(agent, {"action": "config", "delay_seconds": 300})
+            assert result["status"] == "ok"
+            assert result["new"]["delay_seconds"] == 300.0
+            # Disabled note surfaced; config does not enable flow.
+            assert result.get("soul_flow_enabled") is False
+            assert SOUL_FLOW_ENABLED_ENV in result.get("note", "")
+            # config must NOT arm a timer while flow is disabled.
+            assert agent._soul_timer is None
+        finally:
+            agent.stop(timeout=1.0)
+
+    def test_config_no_note_when_flow_enabled(self, tmp_path, monkeypatch):
+        from lingtai_kernel import BaseAgent
+        monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
+        agent = BaseAgent(
+            service=_make_mock_service(),
+            agent_name="test",
+            working_dir=tmp_path / "test_agent",
+        )
+        try:
+            result = soul.handle(agent, {"action": "config", "delay_seconds": 300})
+            assert result["status"] == "ok"
+            assert "soul_flow_enabled" not in result
+            assert "note" not in result
+        finally:
+            agent.stop(timeout=1.0)
+
+
 def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
     """If the agent becomes STUCK while consultation is running, the late
     result must not enqueue a TC wake into an unsafe interface window.
@@ -341,6 +571,10 @@ def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
     from lingtai_kernel.intrinsics.soul import flow
     from lingtai_kernel.llm.interface import TextBlock
     from lingtai_kernel.state import AgentState
+
+    # Soul flow is opt-in / disabled by default — enable it so this test
+    # exercises the fire path past the env gate.
+    monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
 
     agent = MagicMock()
     agent._state = AgentState.IDLE  # Must start IDLE to pass the gate
