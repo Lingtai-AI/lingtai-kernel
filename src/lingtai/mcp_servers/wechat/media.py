@@ -240,7 +240,9 @@ async def download_media(
     if not url:
         raise ValueError("CDN media has no full_url")
 
-    dest_path = dest_dir / filename
+    # Sanitize: use basename only to prevent path traversal via sender-controlled filenames
+    safe_name = Path(filename).name or "file"
+    dest_path = dest_dir / safe_name
     async with httpx.AsyncClient() as client:
         resp = await client.get(url, timeout=60.0)
         resp.raise_for_status()
