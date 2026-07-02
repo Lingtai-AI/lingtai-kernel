@@ -665,8 +665,19 @@ def _perform_refresh(
     *,
     skip_chat_history_save: bool = False,
     skip_save_reason: str | None = None,
+    rebuild_context: bool = False,
 ) -> None:
     """Refresh = .refresh handshake + deferred relaunch.
+
+    ``rebuild_context`` (default ``False``) is the explicit opt-in that lets a
+    refresh ALSO force a fresh provider-context rebuild. When ``True`` it is
+    threaded to the relaunched process via a one-shot ``LINGTAI_REFRESH_
+    REBUILD_CONTEXT=1`` env marker consumed by the boot's ``_setup_from_init``;
+    when ``False`` (the default) the marker is absent and the relaunched agent
+    keeps its warm continuation/cache prefix rather than forcing a rebuild.
+    Note: a relaunch is a new process, so in-memory provider continuation state
+    is not carried across the boundary regardless; the marker governs the
+    adapter's *explicit* forced-rebuild lever, not the process boundary itself.
 
     Self-sufficient across all call sites — heartbeat, tool-call (intrinsic
     ``system(action='refresh')``), and AED preset-fallback in ``turn.py`` all
@@ -1137,6 +1148,14 @@ def _perform_refresh(
         "log('refresh_failed_permanent', alert_id=alert_id, **meta)\n"
     )
     watcher_env = {**os.environ, "LINGTAI_REFRESH_ENV_OVERWRITE": "1"}
+    # One-shot opt-in marker: only an explicit rebuild_context=true refresh asks
+    # the relaunched process to force a fresh provider-context rebuild at boot.
+    # Absent by default so a plain refresh keeps the warm continuation prefix.
+    # (The old env value, if any, is dropped when omitted so it can't leak in.)
+    if rebuild_context:
+        watcher_env["LINGTAI_REFRESH_REBUILD_CONTEXT"] = "1"
+    else:
+        watcher_env.pop("LINGTAI_REFRESH_REBUILD_CONTEXT", None)
     subprocess.Popen(
         [sys.executable, "-c", relaunch_script],
         stdin=subprocess.DEVNULL,
