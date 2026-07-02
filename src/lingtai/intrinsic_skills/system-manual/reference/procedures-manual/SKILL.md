@@ -84,7 +84,12 @@ automatically on the next request with the compacted history. No extra summarize
 call is needed for the automatic path; if that emergency path fires, the one-shot
 `reconstruction.proactive_hint` says a proactive 75% rebuild-only call could have
 relieved pressure earlier. If no summarize has been recorded, there is nothing
-to apply.
+to apply. At task completion, default to proactive task-boundary molt only when
+session (since-last-molt) API calls exceed 100. Below that threshold, go idle
+unless context pressure, explicit human request, or conversation confusion makes
+the fresh briefing worth the molt cost. Summarize is a mini molt for a consumed
+tool result. If you have already decided to molt, do not summarize first merely
+to prepare: molt is the stronger whole-conversation summarize boundary.
 
 Reserve `refresh` for emergencies (broken/stale context). If summarize or a
 rebuild still cannot bring context below `0.6 * context_window`, tend durable

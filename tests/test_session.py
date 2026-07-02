@@ -295,20 +295,15 @@ def test_restore_token_state():
 
 
 # ------------------------------------------------------------------
-# Current-runtime-session token usage (deltas, not lifetime totals)
+# Runtime-session token usage — the CLEARLY NAMED since-refresh/process-start
+# delta getter. ``get_runtime_session_token_usage`` is the canonical name;
+# ``get_current_session_token_usage`` remains only as a deprecated compat alias
+# that delegates to it (its old ambiguous name read like "since last molt",
+# which is the injected ``token_usage.session`` semantic instead — that lives on
+# the cumulative ``get_token_usage`` totals).
 # ------------------------------------------------------------------
 
-def test_current_session_token_usage_default_zero():
-    sm, _, _ = make_session_manager()
-    usage = sm.get_current_session_token_usage()
-    assert usage["api_calls"] == 0
-    assert usage["input_tokens"] == 0
-    assert usage["cached_tokens"] == 0
-    assert usage["session_cache_rate"] == 0.0
-    assert usage["avg_input_tokens_per_api_call"] == 0
-
-
-def test_current_session_token_usage_tracks_runtime_deltas():
+def test_runtime_session_token_usage_reports_since_refresh_deltas():
     sm, _, _ = make_session_manager()
     response = MagicMock()
     response.usage.input_tokens = 100
@@ -318,7 +313,7 @@ def test_current_session_token_usage_tracks_runtime_deltas():
     sm._track_usage(response)
     sm._track_usage(response)
 
-    usage = sm.get_current_session_token_usage()
+    usage = sm.get_runtime_session_token_usage()
     assert usage["api_calls"] == 2
     assert usage["input_tokens"] == 200
     assert usage["cached_tokens"] == 40
@@ -326,9 +321,74 @@ def test_current_session_token_usage_tracks_runtime_deltas():
     assert usage["session_cache_rate"] == 0.2
 
 
-def test_current_session_token_usage_excludes_restored_lifetime_totals():
-    # Restored cumulative lifetime totals (huge persisted numbers) must NOT leak
-    # into the current-runtime-session deltas: the restore re-baselines so that
+def test_runtime_session_token_usage_resets_on_refresh_restore():
+    # Runtime session = since last refresh/process start: restore re-baselines so
+    # post-refresh deltas begin at zero (contrast the injected since-molt
+    # ``token_usage.session``, which reads cumulative totals that SURVIVE refresh).
+    sm, _, _ = make_session_manager()
+    sm.restore_token_state({
+        "input_tokens": 5_000_000_000, "output_tokens": 1_000_000,
+        "thinking_tokens": 500_000, "cached_tokens": 4_000_000_000,
+        "api_calls": 27_863,
+    })
+    usage = sm.get_runtime_session_token_usage()
+    assert usage["api_calls"] == 0
+    assert usage["input_tokens"] == 0
+    assert usage["cached_tokens"] == 0
+
+
+def test_get_current_session_token_usage_is_deprecated_alias_of_runtime():
+    # The old ambiguous name must remain ONLY as a compatibility alias that
+    # returns exactly what the clearly-named runtime getter returns.
+    sm, _, _ = make_session_manager()
+    response = MagicMock()
+    response.usage.input_tokens = 100
+    response.usage.output_tokens = 50
+    response.usage.thinking_tokens = 10
+    response.usage.cached_tokens = 20
+    sm._track_usage(response)
+
+    assert (
+        sm.get_current_session_token_usage()
+        == sm.get_runtime_session_token_usage()
+    )
+
+
+# ------------------------------------------------------------------
+# Runtime-session token usage (since-refresh deltas, not since-molt session totals)
+# ------------------------------------------------------------------
+
+def test_runtime_session_token_usage_default_zero():
+    sm, _, _ = make_session_manager()
+    usage = sm.get_runtime_session_token_usage()
+    assert usage["api_calls"] == 0
+    assert usage["input_tokens"] == 0
+    assert usage["cached_tokens"] == 0
+    assert usage["session_cache_rate"] == 0.0
+    assert usage["avg_input_tokens_per_api_call"] == 0
+
+
+def test_runtime_session_token_usage_tracks_runtime_deltas():
+    sm, _, _ = make_session_manager()
+    response = MagicMock()
+    response.usage.input_tokens = 100
+    response.usage.output_tokens = 50
+    response.usage.thinking_tokens = 10
+    response.usage.cached_tokens = 20
+    sm._track_usage(response)
+    sm._track_usage(response)
+
+    usage = sm.get_runtime_session_token_usage()
+    assert usage["api_calls"] == 2
+    assert usage["input_tokens"] == 200
+    assert usage["cached_tokens"] == 40
+    assert usage["avg_input_tokens_per_api_call"] == 100
+    assert usage["session_cache_rate"] == 0.2
+
+
+def test_runtime_session_token_usage_excludes_restored_session_totals():
+    # Restored since-molt session totals (huge persisted numbers) must NOT leak
+    # into the runtime-session deltas: the restore re-baselines so that
     # post-restore usage starts counting from zero.
     sm, _, _ = make_session_manager()
     sm.restore_token_state({
@@ -337,8 +397,8 @@ def test_current_session_token_usage_excludes_restored_lifetime_totals():
         "api_calls": 27_863,
     })
 
-    # Immediately after restore, the current runtime session is empty.
-    before = sm.get_current_session_token_usage()
+    # Immediately after restore, the runtime session is empty.
+    before = sm.get_runtime_session_token_usage()
     assert before["api_calls"] == 0
     assert before["input_tokens"] == 0
     assert before["cached_tokens"] == 0
@@ -351,16 +411,16 @@ def test_current_session_token_usage_excludes_restored_lifetime_totals():
     response.usage.cached_tokens = 20
     sm._track_usage(response)
 
-    after = sm.get_current_session_token_usage()
+    after = sm.get_runtime_session_token_usage()
     assert after["api_calls"] == 1
     assert after["input_tokens"] == 100
     assert after["cached_tokens"] == 20
-    # Lifetime getter still reflects the restored cumulative totals.
+    # Session getter still reflects the restored since-molt totals.
     assert sm.get_token_usage()["input_tokens"] == 5_000_000_000 + 100
     assert sm.get_token_usage()["api_calls"] == 27_863 + 1
 
 
-def test_current_session_token_usage_clamps_negative_deltas_to_zero():
+def test_runtime_session_token_usage_clamps_negative_deltas_to_zero():
     # A restore to LOWER totals than the live counters must not produce negatives.
     sm, _, _ = make_session_manager()
     response = MagicMock()
@@ -374,7 +434,7 @@ def test_current_session_token_usage_clamps_negative_deltas_to_zero():
         "input_tokens": 10_000, "output_tokens": 0,
         "thinking_tokens": 0, "cached_tokens": 10_000, "api_calls": 50,
     })
-    usage = sm.get_current_session_token_usage()
+    usage = sm.get_runtime_session_token_usage()
     assert usage["api_calls"] == 0
     assert usage["input_tokens"] == 0
     assert usage["cached_tokens"] == 0
@@ -579,27 +639,51 @@ def test_health_check_noop_when_message_is_tool_results():
     mock_session.interface.close_pending_tool_calls.assert_not_called()
     assert not [e for e, _ in events if e == "health_check"]
 
-def test_reset_current_session_token_usage_rebaselines_deltas():
+def test_reset_runtime_session_token_usage_rebaselines_deltas():
     sm, _, _ = make_session_manager()
 
     sm.send("hello")
-    current = sm.get_current_session_token_usage()
+    current = sm.get_runtime_session_token_usage()
     assert current["input_tokens"] == 100
     assert current["cached_tokens"] == 20
     assert current["api_calls"] == 1
 
-    sm.reset_current_session_token_usage()
+    sm.reset_runtime_session_token_usage()
 
-    current = sm.get_current_session_token_usage()
+    current = sm.get_runtime_session_token_usage()
     assert current["input_tokens"] == 0
     assert current["cached_tokens"] == 0
     assert current["api_calls"] == 0
     assert current["session_cache_rate"] == 0.0
     assert current["avg_input_tokens_per_api_call"] == 0
 
-    # Lifetime totals remain intact; only the current-session/molt-cycle
+    # Session totals remain intact; only the runtime-session
     # baseline moves forward.
     totals = sm.get_token_usage()
     assert totals["input_tokens"] == 100
     assert totals["cached_tokens"] == 20
     assert totals["api_calls"] == 1
+
+
+def test_reset_session_token_usage_starts_fresh_since_molt_counter():
+    sm, _, _ = make_session_manager()
+
+    sm.send("hello")
+    assert sm.get_token_usage()["input_tokens"] == 100
+    assert sm.get_token_usage()["cached_tokens"] == 20
+    assert sm.get_token_usage()["api_calls"] == 1
+
+    sm.reset_session_token_usage(context_tokens=321)
+
+    totals = sm.get_token_usage()
+    assert totals["input_tokens"] == 0
+    assert totals["output_tokens"] == 0
+    assert totals["thinking_tokens"] == 0
+    assert totals["cached_tokens"] == 0
+    assert totals["api_calls"] == 0
+    assert totals["ctx_total_tokens"] == 321
+
+    runtime = sm.get_runtime_session_token_usage()
+    assert runtime["input_tokens"] == 0
+    assert runtime["cached_tokens"] == 0
+    assert runtime["api_calls"] == 0

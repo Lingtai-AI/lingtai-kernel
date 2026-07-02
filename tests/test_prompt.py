@@ -194,7 +194,7 @@ def test_packaged_principle_owns_static_progressive_and_token_efficiency_rules()
     assert "the current session's active context is carried into every provider request" in prompt
     assert "summarize consumed tool results" in prompt
     assert "do not molt automatically" in prompt
-    assert "current-session API calls exceed 100" in prompt
+    assert "session (since-last-molt) API calls exceed 100" in prompt
     assert "Agent " + "language:" not in prompt
     assert "Agent " + "activeness:" not in prompt
 
@@ -224,7 +224,7 @@ def test_task_boundary_molt_guidance_is_cost_thresholded():
     assert "molt regardless" + " of context size" not in corpus
     assert "do not molt automatically" in corpus
     assert "api_calls > 100" in corpus
-    assert "current-session API calls exceed 100" in corpus
+    assert "session (since-last-molt) API calls exceed 100" in corpus
     assert "proactive task-boundary molt" in corpus
 
 

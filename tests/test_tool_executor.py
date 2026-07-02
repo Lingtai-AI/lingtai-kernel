@@ -917,14 +917,14 @@ def test_tool_executor_moves_token_usage_snapshot_to_tool_meta():
     # build_meta places the NESTED token_usage object (current_call + session
     # halves, plus a shared ref) under the private pending key; the executor
     # moves it verbatim into _meta.tool_meta.token_usage and must not leak the
-    # private pending key onto the result.
+    # private pending key onto the result. current_call carries ONLY this call's
+    # own token/cache/output facts; current context state (context_*) rides on
+    # the session half.
     snapshot = {
         "current_call": {
             "input": 200_000,
             "cache_miss": 30_000,
             "cache_rate": 0.85,
-            "context_usage": 0.8,
-            "window": 250_000,
             "output": 600,
             "thinking": 0,
         },
@@ -935,6 +935,9 @@ def test_tool_executor_moves_token_usage_snapshot_to_tool_meta():
             "cached_tokens": 6_000,
             "avg_input_tokens_per_api_call": 13_333,
             "cache_miss_tokens": 34_000,
+            "context_tokens": 200_000,
+            "context_window": 250_000,
+            "context_usage": 0.8,
         },
         "ref": "See meta_guidance.token_efficiency for details.",
     }
@@ -961,7 +964,12 @@ def test_tool_executor_moves_token_usage_snapshot_to_tool_meta():
 
     assert not intercepted
     payload = results[0]["result"]
-    assert payload["_meta"]["tool_meta"][TOOL_META_TOKEN_USAGE_KEY] == snapshot
+    moved = payload["_meta"]["tool_meta"][TOOL_META_TOKEN_USAGE_KEY]
+    assert moved == snapshot
+    # current_call carries none of the context-state keys; they live on session.
+    assert "context_usage" not in moved["current_call"]
+    assert "window" not in moved["current_call"]
+    assert moved["session"]["context_usage"] == 0.8
     assert TOOL_META_TOKEN_USAGE_PENDING_KEY not in payload["_runtime_pending"]
 
 def test_tool_executor_meta_fn_covers_parallel_path():

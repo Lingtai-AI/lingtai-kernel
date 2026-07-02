@@ -426,9 +426,10 @@ def _context_molt(agent, args: dict) -> dict:
     iface.add_assistant_message(content=[molt_call_block])
 
     after_tokens = iface.estimate_context_tokens()
-    # Start a fresh per-molt token-budget cycle after the context has been
-    # replaced.  Lifetime token totals remain intact on the session manager.
-    agent._session.reset_current_session_token_usage()
+    # Start a fresh SESSION (since-last-molt) token counter now that the
+    # context has been replaced. Runtime-session (since-refresh) baselines are
+    # re-anchored inside the same helper.
+    agent._session.reset_session_token_usage(context_tokens=after_tokens)
 
     agent._log(
         "psyche_molt",
@@ -646,8 +647,9 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
     iface.add_assistant_message(content=[synth_call])
 
     after_tokens = iface.estimate_context_tokens()
-    # Forced/system molts also begin a new token-budget cycle.
-    agent._session.reset_current_session_token_usage()
+    # Forced/system molts also start a fresh SESSION (since-last-molt) token
+    # counter and re-anchor runtime-session (since-refresh) baselines.
+    agent._session.reset_session_token_usage(context_tokens=after_tokens)
 
     # Persist the system-authored summary to system/summaries/. Best-effort —
     # source field captures origin (warning_ladder / aed / signal name) so

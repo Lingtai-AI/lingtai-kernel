@@ -194,7 +194,7 @@ whole-conversation summarize boundary when summarize/reconstruction cannot get
 context below `0.6 * context_window`. A completed task can also be an
 efficiency boundary, but molt is not free cleanup: after necessary reporting and
 durable-store updates, if no concrete next action remains, default to proactive
-task-boundary molt only once current-session API calls exceed 100. Below that
+task-boundary molt only once session (since-last-molt) API calls exceed 100. Below that
 threshold, go idle unless context pressure, explicit human request, or
 conversation confusion makes the fresh briefing worth the molt cost. If you have
 already decided to molt, do not spend a separate summarize call merely to
