@@ -4,11 +4,11 @@ description: |
   Progressive-disclosure usage manual for the Telegram MCP tool. Read this when
   you need detail beyond the one-line action descriptions: media.type='document'
   vs 'photo' for charts/reports/generated artifacts, placeholder/progress
-  messages, reply vs send, read/check/search, parse_mode/entities, chat_action,
+  messages, reply vs send, read/check/search, parse_mode/entities, chat_action, dynamic slash commands,
   and error surfacing. Pulled on demand via action='manual'; you do not need to
   call it before every send.
-version: 1.0.0
-last_changed_at: "2026-06-26T14:00:36-07:00"
+version: 1.1.0
+last_changed_at: "2026-07-02T15:34:00-07:00"
 ---
 
 # Telegram MCP — usage manual (progressive disclosure)
@@ -68,6 +68,67 @@ descriptions; you do not need to call it before every send.
   `'upload_voice'`) on a send with no text/media sends just the indicator. It
   auto-expires after ~5s, so re-send periodically during long work. Pass `''`
   for no chat action.
+
+## SLASH COMMANDS: dynamic Telegram menu entries
+
+Telegram has two separate slash-command layers:
+
+1. **Bot menu registration** (`setMyCommands`): what appears in Telegram's `/`
+   command picker. The LingTai Telegram addon registers this menu at bot startup
+   from each account's optional `commands` config list.
+2. **Runtime handling**: what happens when a user sends the slash command. A
+   small built-in set is handled locally by the addon without an LLM call
+   (`/kanban`, `/refresh`, `/sleep`, `/system`). Other slash commands are not
+   swallowed; they pass through as normal inbound messages for the host agent to
+   answer or route.
+
+To dynamically add a command such as `/tokenstats` to a bot's Telegram menu:
+
+1. Edit the Telegram config file used by that agent (normally
+   `<agent>/.secrets/telegram.json`; the active path is exposed as
+   `LINGTAI_TELEGRAM_CONFIG` in the MCP process, and `lingtai://status` reports
+   only a redacted, non-secret view).
+2. Add or update the account's `commands` list. Command names are stored
+   **without** the leading slash and should follow Telegram's Bot API
+   constraints (lowercase letters, digits, underscores; 1-32 characters; short
+   human-readable description):
+
+   ```json
+   {
+     "accounts": [
+       {
+         "alias": "codex",
+         "bot_token": "<secret>",
+         "allowed_users": [6859932159],
+         "commands": [
+           {"command": "kanban", "description": "Show agent dashboard"},
+           {"command": "tokenstats", "description": "Show recent token usage stats"}
+         ]
+       }
+     ]
+   }
+   ```
+
+3. Run `system(action="refresh")` (or restart the agent). On startup the
+   addon calls Telegram Bot API `setMyCommands` best-effort; failure is logged
+   but does not block the bot.
+4. Verify with the Telegram `/` picker or `lingtai://status` / `telegram.accounts`;
+   status shows `commands_count` but never exposes the bot token.
+
+Important behavior notes:
+
+- Adding a command to `commands` **only registers the menu entry**. It does not
+  by itself create a local no-LLM implementation. For `/tokenstats`, either
+  teach the host agent (via pad/skill/standing instructions) how to respond
+  when it receives `/tokenstats`, or add a code-level local handler in
+  `TelegramAccount._handle_slash_command()` if the command should be served
+  without invoking the agent.
+- If you include `commands: []`, the addon sends an empty list to
+  `setMyCommands`, which clears the Telegram command menu for that account.
+- If `commands` is omitted or `null`, the addon falls back to its built-in
+  default command menu.
+- Do not edit or print `bot_token` values while documenting or debugging slash
+  commands.
 
 ## ERROR SURFACING
 
