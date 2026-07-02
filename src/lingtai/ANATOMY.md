@@ -30,6 +30,7 @@ related_files:
   - tests/test_cli.py
   - tests/test_deep_refresh.py
   - tests/test_kernel_migrate.py
+  - tests/test_venv_resolve.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -54,7 +55,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `network.py` | Read-only network topology crawler — avatar/contact/mail edge discovery |
 | `presets.py` | Compatibility shim re-exporting the kernel preset library (`lingtai_kernel.presets`) |
 | `init_schema.py` | `validate_init()` plus `strip_deprecated()` — strict schema for active init.json fields, simple deprecated-field cleanup, and known-but-inactive legacy fields migrated by `lingtai_kernel.migrate` |
-| `venv_resolve.py` | Python venv resolution — init.json → global runtime → auto-create |
+| `venv_resolve.py` | Python venv resolution — explicit `init.json` venv → global runtime → auto-create, plus kernel-owned `.lingtai-env.json` marker check/stamp semantics for TUI and kernel callers |
 | `intrinsic_skills/__init__.py` | Standalone skill bundles (docs-only) copied into `.library/intrinsic/` |
 | `mcp_servers/` | Curated MCP server implementations shipped in the `lingtai` distribution and launched by `mcp_catalog.json` via `python -m lingtai.mcp_servers.<name>`; see `mcp_servers/ANATOMY.md` for the bundled `SKILL.md` manual-action and sidecar packaging contract. Stateful curated servers may own per-agent sidecars: the WeChat manager checkpoints `wechat/state.json` cursor progress and `wechat/inbox_seen.json` replay guards in `mcp_servers/wechat/manager.py:266` and `mcp_servers/wechat/manager.py:912`. |
 
@@ -70,7 +71,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **`network.py`**: `build_network` :306 · `_discover_agents` :143 · `_build_avatar_edges` :168
 
-**`venv_resolve.py`**: `resolve_venv` :19 · `venv_python` :40
+**`venv_resolve.py`**: `resolve_venv` :74 · `venv_python` :101 · `_is_default_runtime_dir` :108 · `_test_venv` :118 · `_env_marker_status` :298 · `_env_marker_status_detail` :303 · `_remove_mismatched_managed_venv` :353 · `_env_marker_main` :362
 
 > Config-resolution helpers (`load_jsonc`/`resolve_env`/`resolve_paths`/`_resolve_capabilities`) and preset-connectivity probing (`check_connectivity`/`check_many`) live in the kernel — import directly from `lingtai_kernel.config_resolve` / `lingtai_kernel.preset_connectivity`. The former wrapper-side compatibility shims were removed (no back-compat shims per repo policy).
 
@@ -115,3 +116,4 @@ Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai_kernel/` (
 - **AgentConfig hydration:** `_setup_from_init` :1137 rebuilds runtime config via `build_agent_config`, overlaying explicit init.json values onto `lingtai_kernel.config.AgentConfig` defaults. `manifest.cache_miss_budget` overlays `AgentConfig.cache_miss_budget` (default 1,000,000). Legacy `max_turns` and `molt_*` manifest values remain deliberately ignored.
 - **Addon decompression** runs BEFORE capability setup so `mcp` capability sees populated `mcp_registry.jsonl` on first reconcile (`Agent.__init__` :33, `_setup_from_init` :989).
 - **MCP retry contract (issue #34):** `_load_mcp_from_workdir` :376 records every registered init.json mcp entry into `self._mcp_init_specs` (name → `{cfg, source, client}`). `_retry_failed_mcps` :524 walks this dict, closes any dead client (`is_connected()` False), respawns with the original config, and reports `{retried, recovered, still_failed, healthy}`. `system(action="refresh")` calls it via `intrinsics/system/preset.py:_refresh` before `_perform_refresh` so the documented "fix config → refresh" recovery path works without full process restart.
+- **Runtime venv markers:** `venv_resolve.py` accepts legacy managed venvs without `.lingtai-env.json` if `import lingtai` succeeds, then stamps the marker best-effort. Marker read/parse/probe failures are `error`, not `mismatch`, and never delete the managed runtime. A valid marker that proves a different OS/arch/Python environment is a confirmed mismatch: explicit `init.venv_path` candidates are rejected but left on disk, while only the managed global runtime venv (`~/.lingtai-tui/runtime/venv/`) may be removed before auto-create. The TUI calls this same logic through `python -m lingtai.venv_resolve env-marker {check,stamp} --venv <path>`.
