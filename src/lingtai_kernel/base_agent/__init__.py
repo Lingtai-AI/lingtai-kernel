@@ -1893,14 +1893,16 @@ class BaseAgent:
             }
         return self._session.get_token_usage()
 
-    def get_current_session_token_usage(self) -> dict:
-        """Return current-runtime-session token usage DELTAS (not lifetime totals).
+    def get_runtime_session_token_usage(self) -> dict:
+        """Return RUNTIME-SESSION token usage DELTAS — since last refresh/process start.
 
-        Delegates to :meth:`SessionManager.get_current_session_token_usage`. Used
-        by the injected ``_meta.tool_meta.token_usage.session`` half so that
-        restored cumulative/persisted totals never leak in as current-session
-        activity. Distinct from :meth:`get_token_usage`, which reports lifetime
-        totals for status/identity surfaces.
+        Delegates to :meth:`SessionManager.get_runtime_session_token_usage`.
+        "Runtime session" = the live process, counted since it last started or
+        refreshed. This is NOT the source of the injected
+        ``_meta.tool_meta.token_usage.session`` half: that half is "since last
+        molt" and reads cumulative :meth:`get_token_usage` totals (which survive
+        refresh), so it is not zeroed on refresh. This runtime getter's baseline
+        resets on every refresh, so it is used only for since-refresh diagnostics.
         """
         if not hasattr(self, "_session"):
             return {
@@ -1910,7 +1912,16 @@ class BaseAgent:
                 "session_cache_rate": 0.0,
                 "avg_input_tokens_per_api_call": 0,
             }
-        return self._session.get_current_session_token_usage()
+        return self._session.get_runtime_session_token_usage()
+
+    def get_current_session_token_usage(self) -> dict:
+        """DEPRECATED compat alias for :meth:`get_runtime_session_token_usage`.
+
+        The ``current_session`` name was ambiguous (it read like "since last
+        molt" but always meant "since last refresh"). Retained only for external
+        callers; new code must use :meth:`get_runtime_session_token_usage`.
+        """
+        return self.get_runtime_session_token_usage()
 
     def get_chat_state(self) -> dict:
         """Serialize current chat session for persistence."""

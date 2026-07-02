@@ -416,12 +416,13 @@ class ToolExecutor:
                                 batch progress notice) are excluded from the count.
           elapsed_ms          — execution time in milliseconds
           token_usage         — optional nested token/cache diagnostics with a
-                                current_call half (this result's provider round:
-                                input, cache_miss, cache_rate, context_usage,
-                                window, output, thinking) and a session half
-                                (current-runtime-session aggregate), copied
-                                verbatim from the transient runtime snapshot so it
-                                remains permanent per-result evidence
+                                current_call half (ONLY this provider call's own
+                                facts: input, cache_miss, cache_rate, output,
+                                thinking) and a session half (since-last-molt
+                                cumulative aggregate + current context state
+                                context_tokens/context_window/context_usage),
+                                copied verbatim from the transient runtime snapshot
+                                so it remains permanent per-result evidence
           spilled_char_count  — original sidecar character count when a spill occurred;
                                 omitted for ordinary non-spilled results
           status              — "error" when the result carries status=error; omitted otherwise

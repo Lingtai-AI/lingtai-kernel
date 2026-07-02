@@ -132,13 +132,14 @@ class SessionManager:
         self._total_thinking_tokens = 0
         self._total_cached_tokens = 0
         self._api_calls = 0
-        # Current-runtime-session baselines. The ``_total_*``/``_api_calls``
-        # counters above are CUMULATIVE/lifetime and survive restore; these
-        # baselines mark where the live runtime session began so callers can
-        # compute deltas (current_total - baseline). At a fresh init the live
-        # counters are zero, so the baselines are zero too. On
-        # ``restore_token_state`` they are re-anchored to the restored lifetime
-        # totals so post-restart usage starts counting from zero again.
+        # Runtime-session baselines. The ``_total_*``/``_api_calls`` counters
+        # above are SESSION totals (since last molt) and survive refresh/restore;
+        # these baselines mark where the live runtime session began so callers
+        # can compute since-refresh/process-start deltas (current_total -
+        # baseline). At a fresh init the live counters are zero, so the
+        # baselines are zero too. On ``restore_token_state`` they are
+        # re-anchored to the restored session totals so post-restart usage starts
+        # counting from zero again.
         self._session_baseline_input_tokens = 0
         self._session_baseline_cached_tokens = 0
         self._session_baseline_api_calls = 0
@@ -645,15 +646,25 @@ class SessionManager:
             "ctx_total_tokens": self._latest_input_tokens,
         }
 
-    def get_current_session_token_usage(self) -> dict:
-        """Return current-runtime-session token usage as DELTAS, not lifetime totals.
+    def get_runtime_session_token_usage(self) -> dict:
+        """Return RUNTIME-SESSION token usage as DELTAS — since last refresh/process start.
 
-        Unlike :meth:`get_token_usage` (which reports the cumulative/persisted
-        ``_total_*``/``_api_calls`` counters that survive ``restore_token_state``),
-        this reports only what the *live* runtime session has accrued since it
-        started — ``current_total - session_baseline`` for ``api_calls``,
-        ``input_tokens`` and ``cached_tokens`` — so restored lifetime totals do
-        not leak into the injected ``tool_meta.token_usage`` session stats.
+        "Runtime session" = the live process/session, counted since it last
+        started or refreshed/restored. This is deliberately DISTINCT from the
+        injected ``_meta.tool_meta.token_usage.session`` half, whose contract is
+        "since last molt": that reads the cumulative :meth:`get_token_usage`
+        totals (which SURVIVE ``restore_token_state``), so a refresh does not zero
+        it out. Do NOT feed this runtime-session getter into that injected
+        ``session`` half — its baseline resets on every refresh, which is exactly
+        the since-refresh reset the injected metadata must avoid.
+
+        Unlike :meth:`get_token_usage` (which reports the session totals that
+        survive ``restore_token_state`` but are reset by a successful molt), this
+        reports only what the *live* runtime session has accrued since it started
+        — ``current_total - session_baseline`` for ``api_calls``,
+        ``input_tokens`` and ``cached_tokens``. The baseline is re-anchored on
+        ``restore_token_state`` (refresh/restart) and on successful molt via
+        ``reset_session_token_usage``, so this value is "since last refresh".
 
         ``session_cache_rate`` and ``avg_input_tokens_per_api_call`` are derived
         from those deltas. All counters are clamped to ``>= 0`` so a restore to
@@ -681,6 +692,18 @@ class SessionManager:
             "session_cache_rate": session_cache_rate,
             "avg_input_tokens_per_api_call": avg_input,
         }
+
+    def get_current_session_token_usage(self) -> dict:
+        """DEPRECATED compat alias for :meth:`get_runtime_session_token_usage`.
+
+        The name ``current_session`` was ambiguous — it read like "since last
+        molt" but always meant "since last refresh/process start" (the runtime
+        session). It is retained only so external callers do not break; new code
+        must call :meth:`get_runtime_session_token_usage`. The injected
+        ``token_usage.session`` half no longer uses this getter at all (it reads
+        cumulative :meth:`get_token_usage` totals instead).
+        """
+        return self.get_runtime_session_token_usage()
 
     # ------------------------------------------------------------------
     # Session persistence
@@ -735,25 +758,52 @@ class SessionManager:
                 )
         self.ensure_session()
 
-    def reset_current_session_token_usage(self) -> None:
-        """Re-baseline current-session token deltas at the current totals.
+    def reset_runtime_session_token_usage(self) -> None:
+        """Re-baseline the RUNTIME-SESSION token deltas at the current totals.
 
-        Lifetime totals stay intact, but fields returned by
-        :meth:`get_current_session_token_usage` restart from zero.  Successful
-        context molts use this to start a new per-molt cache-miss budget cycle
-        without pretending historical token usage disappeared.
+        Runtime session = since last refresh/process start. This helper does NOT
+        reset the injected ``_meta.tool_meta.token_usage.session`` half; it only
+        changes the baseline used by :meth:`get_runtime_session_token_usage`.
         """
         self._session_baseline_input_tokens = self._total_input_tokens
         self._session_baseline_cached_tokens = self._total_cached_tokens
         self._session_baseline_api_calls = self._api_calls
 
+    def reset_current_session_token_usage(self) -> None:
+        """DEPRECATED compat alias for :meth:`reset_runtime_session_token_usage`."""
+        self.reset_runtime_session_token_usage()
+
+    def reset_session_token_usage(self, *, context_tokens: int | None = None) -> None:
+        """Start a fresh SESSION token counter after a successful molt.
+
+        Session = since last molt. A deliberate/system molt creates a new
+        session for injected ``_meta.tool_meta.token_usage.session`` purposes, so
+        cumulative token/API counters reset to zero while the durable event log
+        remains the source for older historical accounting. The runtime-session
+        (since-refresh) baseline is re-anchored to the new zero totals too.
+
+        ``context_tokens`` may carry the freshly-estimated post-molt context size
+        so the session context snapshot is not left pointing at the pre-molt
+        provider input.
+        """
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self._total_thinking_tokens = 0
+        self._total_cached_tokens = 0
+        self._api_calls = 0
+        if context_tokens is not None:
+            self._latest_input_tokens = max(0, int(context_tokens))
+        self.reset_runtime_session_token_usage()
+
     def restore_token_state(self, state: dict) -> None:
         """Restore cumulative token counters from a saved session.
 
-        Re-anchors the current-runtime-session baselines to the restored lifetime
-        totals so :meth:`get_current_session_token_usage` deltas start from zero
-        after a refresh/restart — restored cumulative totals are lifetime facts
-        and must not be reported as current-session activity.
+        Re-anchors the RUNTIME-SESSION (since-refresh) baselines to the restored
+        session totals so :meth:`get_runtime_session_token_usage` deltas start
+        from zero after a refresh/restart. The session totals themselves are
+        preserved, so :meth:`get_token_usage` — and thus the injected since-molt
+        ``token_usage.session`` — still reports the restored totals (refresh does
+        not reset the since-last-molt session).
         """
         self._total_input_tokens = state.get("input_tokens", 0)
         self._total_output_tokens = state.get("output_tokens", 0)

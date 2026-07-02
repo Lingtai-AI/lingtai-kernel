@@ -161,7 +161,7 @@ improves cache/continuation efficiency for the next turn.
 Idle cleanup is also the right time to decide whether a deliberate molt is
 worth its cost. If the current task is complete, necessary reporting/durable
 stores are tended, no human reply is pending, and no concrete next action
-remains, default to proactive task-boundary molt only when current-session API
+remains, default to proactive task-boundary molt only when session (since-last-molt) API
 calls exceed 100. Below that threshold, go idle unless context pressure, explicit
 human request, or conversation confusion makes the fresh briefing worth the molt
 cost. Summarize is a mini molt for a consumed tool result. Once you have decided

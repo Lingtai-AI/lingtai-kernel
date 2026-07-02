@@ -268,8 +268,9 @@ def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
     readme = build_meta_readme()
 
     assert "token_usage" in readme["tool_meta"]
-    assert "provider-round token/cache snapshot" in readme["tool_meta"]
-    # The block documents both halves: current-call + current-session.
+    # current_call documents this provider call's own facts.
+    assert "own token/cache/output facts" in readme["tool_meta"]
+    # The block documents both halves: current_call + since-last-molt session.
     assert "session_cache_rate" in readme["tool_meta"]
     assert "api_calls" in readme["tool_meta"]
     assert "tool_meta.token_usage" in readme["agent_meta"]
@@ -309,7 +310,7 @@ def test_build_meta_readme_documents_cache_miss_budget_guard():
 
 def test_build_meta_readme_documents_always_on_session_cache_miss_telemetry():
     """The tool_meta readme must tell agents that token_usage carries always-on
-    current-session cache-miss/budget fields, and to molt proactively (not
+    since-last-molt cache-miss/budget fields, and to molt proactively (not
     summarize/reconstruct) when at/nearing budget."""
     tool_meta_doc = build_meta_readme()["tool_meta"]
     # The three always-on field names are documented.
@@ -763,17 +764,16 @@ def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
     meta = build_meta(agent)
 
     # The token_usage block is NESTED: a `current_call` half (this result's own
-    # provider round) and a `session` half (current-runtime-session aggregate),
-    # each under its own explicit key, plus a shared `ref`. No session getter
-    # here, so only `current_call` + `ref` are present (the `session` half is
-    # omitted entirely rather than left empty).
+    # provider round — ONLY its own token/cache/output facts, no context state)
+    # and a `session` half (since-last-molt cumulative aggregate), each under its
+    # own explicit key, plus a shared `ref`. No session getter here, so only
+    # `current_call` + `ref` are present (the `session` half — which is where
+    # context_usage/window now live — is omitted entirely rather than left empty).
     assert meta[TOOL_META_TOKEN_USAGE_PENDING_KEY] == {
         "current_call": {
             "input": 190_000,
             "cache_miss": 22_000,
             "cache_rate": 0.882,
-            "context_usage": 0.759,
-            "window": 250_000,
             "output": 636,
             "thinking": 40,
         },
@@ -788,20 +788,23 @@ def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
 _TOKEN_USAGE_CURRENT_CALL_KEY = "current_call"
 _TOKEN_USAGE_SESSION_KEY = "session"
 
-# Keys carried INSIDE the `current_call` half (snapshot-derived).
+# Keys carried INSIDE the `current_call` half (snapshot-derived). This half is
+# ONLY this provider call's own token/cache/output facts — context state
+# (context_usage/window) moved to the `session` half, which is where current
+# context lives.
 _PROVIDER_TOKEN_USAGE_KEYS = {
     "input",
     "cache_miss",
     "cache_rate",
-    "context_usage",
-    "window",
     "output",
     "thinking",
 }
-# Keys carried INSIDE the `session` half (get_token_usage-derived).
-# ``cache_miss_tokens`` is always present with the session half (derivable from
-# the session counters); ``cache_miss_budget`` / ``cache_miss_remaining_tokens``
-# ride along only when a positive-int budget is resolvable from agent._config.
+# Keys carried INSIDE the `session` half (cumulative get_token_usage-derived —
+# since last molt, surviving refresh). ``cache_miss_tokens`` is always present
+# (derivable from the cumulative counters); ``cache_miss_budget`` /
+# ``cache_miss_remaining_tokens`` ride along only when a positive-int budget is
+# resolvable from agent._config. Current context state (context_tokens/
+# context_window/context_usage) rides here too whenever it is resolvable.
 _SESSION_TOKEN_USAGE_KEYS = {
     "session_cache_rate",
     "api_calls",
@@ -809,6 +812,12 @@ _SESSION_TOKEN_USAGE_KEYS = {
     "cached_tokens",
     "avg_input_tokens_per_api_call",
     "cache_miss_tokens",
+}
+# Current-context state keys under the `session` half (present when resolvable).
+_SESSION_CONTEXT_STATE_KEYS = {
+    "context_tokens",
+    "context_window",
+    "context_usage",
 }
 # The two budget-derived always-on fields (present only with a configured budget).
 _SESSION_CACHE_MISS_BUDGET_KEYS = {
@@ -834,9 +843,12 @@ def _current_call_half(compact):
 
 def test_build_tool_meta_token_usage_compacts_full_snapshot_to_exact_keys():
     # A full provider-round snapshot (the internal-logging shape) must compact to
-    # exactly the seven provider keys, dropping scope/api_call_index/
-    # cached_tokens/context_tokens/context_window/estimated/api_call_id and the
-    # long names. With no get_token_usage, the session half is omitted.
+    # exactly the five current_call keys — this call's OWN token/cache/output
+    # facts — dropping scope/api_call_index/cached_tokens/context_tokens/
+    # context_window/context_usage/estimated/api_call_id and the long names.
+    # context_usage/window are NO LONGER in current_call (they belong with
+    # current context state under the session half). With no get_token_usage,
+    # the session half is omitted.
     snapshot = {
         "scope": "provider_round",
         "api_call_index": 3,
@@ -866,13 +878,13 @@ def test_build_tool_meta_token_usage_compacts_full_snapshot_to_exact_keys():
             "input": 190_000,
             "cache_miss": 22_000,
             "cache_rate": 0.882,
-            "context_usage": 0.759,
-            "window": 250_000,
             "output": 636,
             "thinking": 40,
         },
         "ref": "See meta_guidance.token_efficiency for details.",
     }
+    # current_call carries none of the context-state keys anymore.
+    assert not (_SESSION_CONTEXT_STATE_KEYS & set(compact[_TOKEN_USAGE_CURRENT_CALL_KEY]))
 
 
 def test_build_tool_meta_token_usage_merges_session_aggregate_into_one_block():
@@ -910,8 +922,6 @@ def test_build_tool_meta_token_usage_merges_session_aggregate_into_one_block():
             "input": 190_000,
             "cache_miss": 22_000,
             "cache_rate": 0.882,
-            "context_usage": 0.759,
-            "window": 250_000,
             "output": 636,
             "thinking": 40,
         },
@@ -924,15 +934,20 @@ def test_build_tool_meta_token_usage_merges_session_aggregate_into_one_block():
             # always-on cache-miss telemetry (no _config -> no budget-derived
             # fields, but cache_miss_tokens is always present: 22_000 - 5_500)
             "cache_miss_tokens": 16_500,
+            # context state is omitted here — get_token_usage() carried no
+            # ctx_total_tokens, so context_tokens/context_usage are unresolvable.
         },
         # short guidance hook, shared across both halves
         "ref": "See meta_guidance.token_efficiency for details.",
     }
     # No dropped/noisy keys leak into either half — and the hook is the short
-    # `ref`, never the long `guidance_ref`.
+    # `ref`, never the long `guidance_ref`. context_usage/window no longer sit
+    # in current_call.
     flat = json.dumps(compact)
-    for noisy in ("scope", "guidance_ref", "context_tokens", "estimated", "api_call_id"):
+    for noisy in ("scope", "guidance_ref", "estimated", "api_call_id"):
         assert noisy not in flat
+    assert "window" not in compact["current_call"]
+    assert "context_usage" not in compact["current_call"]
 
 
 def test_build_tool_meta_token_usage_session_only_when_no_snapshot():
@@ -959,7 +974,9 @@ def test_build_tool_meta_token_usage_session_only_when_no_snapshot():
 
 def test_build_tool_meta_token_usage_preserves_zero_and_sentinel_values():
     # Existing numeric zero / sentinel values are kept, not dropped or invented,
-    # inside the current_call half.
+    # inside the current_call half. The provider snapshot's context_window/
+    # context_usage are IGNORED for current_call now (context state is a session
+    # concern), so a zero/sentinel window does not leak into current_call.
     snapshot = {
         "input_tokens": 0,
         "cache_miss_tokens": 0,
@@ -980,8 +997,6 @@ def test_build_tool_meta_token_usage_preserves_zero_and_sentinel_values():
             "input": 0,
             "cache_miss": 0,
             "cache_rate": 0.0,
-            "context_usage": -1.0,
-            "window": 0,
             "output": 0,
             "thinking": 0,
         },
@@ -1031,9 +1046,78 @@ def test_build_meta_folds_session_economy_into_token_usage_not_efficiency():
     assert session["cached_tokens"] == 5500
     assert session["session_cache_rate"] == 0.25
     assert session["avg_input_tokens_per_api_call"] == 5500
-    # Dropped noisy/invalid fields never reappear in the session half.
-    for noisy in ("scope", "guidance_ref", "context_tokens", "context_window"):
+    # Current context state now rides on the session half: context_tokens from
+    # ctx_total_tokens, context_window from the configured limit, context_usage
+    # from tokens/window.
+    assert session["context_tokens"] == 99999
+    assert session["context_window"] == 10000
+    assert session["context_usage"] == round(99999 / 10000, 5)
+    # Genuinely-noisy internal-logging fields never reappear in the session half.
+    for noisy in ("scope", "guidance_ref"):
         assert noisy not in session
+
+
+def test_injected_session_survives_refresh_baseline_reset():
+    """Headline #679-correction contract (Jason FINAL): after a refresh restores
+    the cumulative totals AND re-anchors the runtime-session (since-refresh)
+    baseline to zero, the injected token_usage.session must STILL report the
+    restored/since-last-molt totals — not the zeroed since-refresh deltas.
+
+    Uses a real SessionManager so the restore_token_state re-baselining path is
+    exercised, not a stub.
+    """
+    from unittest.mock import MagicMock
+    from lingtai_kernel.session import SessionManager
+    from lingtai_kernel.config import AgentConfig
+
+    svc = MagicMock()
+    svc.model = "test-model"
+    session = SessionManager(
+        llm_service=svc,
+        config=AgentConfig(),
+        agent_name="test",
+        streaming=False,
+        build_system_prompt_fn=lambda: "p",
+        build_tool_schemas_fn=lambda: [],
+        logger_fn=None,
+    )
+    # Simulate a refresh: restore since-last-molt session totals from persisted token state.
+    # restore_token_state re-anchors the since-refresh baseline to these totals,
+    # so get_runtime_session_token_usage() is now ~0.
+    session.restore_token_state({
+        "input_tokens": 3_000_000,
+        "output_tokens": 100_000,
+        "thinking_tokens": 10_000,
+        "cached_tokens": 2_400_000,
+        "api_calls": 512,
+    })
+    assert session.get_runtime_session_token_usage()["input_tokens"] == 0
+
+    agent = SimpleNamespace(
+        _config=SimpleNamespace(
+            time_awareness=False,
+            timezone_awareness=True,
+            cache_miss_budget=1_000_000,
+        ),
+        _session=session,
+        _intrinsics=set(),
+        get_token_usage=session.get_token_usage,
+        get_runtime_session_token_usage=session.get_runtime_session_token_usage,
+    )
+
+    meta = build_meta(agent)
+    injected = meta[TOOL_META_TOKEN_USAGE_PENDING_KEY]["session"]
+
+    # The since-last-molt totals survive the refresh — NOT the zeroed deltas.
+    assert injected["input_tokens"] == 3_000_000
+    assert injected["cached_tokens"] == 2_400_000
+    assert injected["api_calls"] == 512
+    # session_cache_rate = cached/input over the surviving cumulative totals.
+    assert injected["session_cache_rate"] == round(2_400_000 / 3_000_000, 5)  # 0.8
+    # cache-miss telemetry is also on the surviving cumulative basis, so the
+    # remaining budget did NOT reset to the full 1M on refresh.
+    assert injected["cache_miss_tokens"] == 600_000  # 3.0M - 2.4M
+    assert injected["cache_miss_remaining_tokens"] == 400_000  # 1M - 600k
 
 
 def test_build_meta_session_cache_rate_clamps_to_fraction():
@@ -1104,11 +1188,14 @@ def test_synthetic_meta_envelope_omits_token_usage_when_no_data():
     assert "token_usage" not in envelope["tool_meta"]
 
 
-def test_session_economy_prefers_current_session_over_lifetime_totals():
-    # The session-stat half MUST come from get_current_session_token_usage()
-    # (current runtime deltas), never the lifetime get_token_usage() totals.
-    # Lifetime get_token_usage carries giant restored numbers; the injected
-    # session stats must be the small current-runtime deltas instead.
+def test_session_half_uses_cumulative_totals_not_since_refresh_deltas():
+    # Jason FINAL: `token_usage.session` means "since last molt" and MUST read the
+    # cumulative/restored get_token_usage() totals, which SURVIVE refresh — NOT
+    # the since-refresh get_runtime_session_token_usage() deltas (which reset to
+    # ~0 on every refresh and were the #679 bug). Here get_token_usage carries the
+    # restored cumulative totals and the runtime-session getter reports the small
+    # post-refresh deltas; the injected session half must reflect the cumulative
+    # totals, so a refresh does not zero it out.
     agent = SimpleNamespace(
         _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
         get_token_usage=lambda: {
@@ -1116,7 +1203,7 @@ def test_session_economy_prefers_current_session_over_lifetime_totals():
             "input_tokens": 5_000_000_000,
             "cached_tokens": 4_000_000_000,
         },
-        get_current_session_token_usage=lambda: {
+        get_runtime_session_token_usage=lambda: {
             "api_calls": 2,
             "input_tokens": 200,
             "cached_tokens": 40,
@@ -1128,19 +1215,123 @@ def test_session_economy_prefers_current_session_over_lifetime_totals():
     compact = build_tool_meta_token_usage(agent)
 
     session = _session_half(compact)
-    assert session["api_calls"] == 2
-    assert session["input_tokens"] == 200
-    assert session["cached_tokens"] == 40
-    assert session["avg_input_tokens_per_api_call"] == 100
-    assert session["session_cache_rate"] == 0.2
-    # The lifetime giants never leak in.
-    assert session["api_calls"] != 27_863
-    assert session["input_tokens"] != 5_000_000_000
+    # Cumulative/restored totals — the since-molt-surviving numbers.
+    assert session["api_calls"] == 27_863
+    assert session["input_tokens"] == 5_000_000_000
+    assert session["cached_tokens"] == 4_000_000_000
+    # session_cache_rate/avg are recomputed from the cumulative counters.
+    assert session["session_cache_rate"] == 0.8  # 4e9 / 5e9
+    assert session["avg_input_tokens_per_api_call"] == round(5_000_000_000 / 27_863)
+    # The small since-refresh deltas never leak in.
+    assert session["api_calls"] != 2
+    assert session["input_tokens"] != 200
 
 
-def test_session_economy_falls_back_to_lifetime_getter_when_no_current_session():
-    # Compatibility fallback: stubs without get_current_session_token_usage still
-    # populate the session half from get_token_usage().
+def test_session_half_ignores_runtime_getter_entirely():
+    # Even with the runtime/since-refresh getter present, the session half is
+    # built purely from get_token_usage(); the runtime getter is never consulted.
+    runtime_called = {"n": 0}
+
+    def runtime_getter():
+        runtime_called["n"] += 1
+        return {"api_calls": 999, "input_tokens": 1, "cached_tokens": 0}
+
+    agent = SimpleNamespace(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
+        get_token_usage=lambda: {
+            "api_calls": 4,
+            "input_tokens": 22_000,
+            "cached_tokens": 5_500,
+        },
+        get_runtime_session_token_usage=runtime_getter,
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    session = _session_half(compact)
+    assert session["api_calls"] == 4
+    assert session["input_tokens"] == 22_000
+    assert session["cached_tokens"] == 5_500
+    assert runtime_called["n"] == 0
+
+
+def test_session_half_session_cache_rate_is_cached_over_input_cumulative():
+    # session_cache_rate must equal cached_tokens / input_tokens over the
+    # cumulative/since-molt totals (rounded to 5 dp, clamped to <= 1.0).
+    agent = SimpleNamespace(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
+        get_token_usage=lambda: {
+            "api_calls": 10,
+            "input_tokens": 800_000,
+            "cached_tokens": 600_000,
+        },
+    )
+
+    session = _session_half(build_tool_meta_token_usage(agent))
+    assert session["session_cache_rate"] == round(600_000 / 800_000, 5)  # 0.75
+    assert session["avg_input_tokens_per_api_call"] == 80_000
+
+
+def test_session_half_carries_current_context_state_from_get_token_usage():
+    # context_usage belongs with session/current context state, NOT current_call.
+    # context_tokens comes from get_token_usage()'s ctx_total_tokens; context_window
+    # from the provider snapshot (or configured window); context_usage = tokens/window.
+    snapshot = {
+        "input_tokens": 190_000,
+        "cache_miss_tokens": 22_000,
+        "cache_rate": 0.882,
+        "context_window": 250_000,
+        "context_usage": 0.759,  # snapshot's own value — session recomputes from tokens/window
+        "output_tokens": 636,
+        "thinking_tokens": 40,
+    }
+    agent = SimpleNamespace(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: snapshot),
+        get_token_usage=lambda: {
+            "api_calls": 4,
+            "input_tokens": 22_000,
+            "cached_tokens": 5_500,
+            "ctx_total_tokens": 190_000,
+        },
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    # current_call has NO context state.
+    assert "context_usage" not in compact["current_call"]
+    assert "window" not in compact["current_call"]
+    assert "context_tokens" not in compact["current_call"]
+    # session carries the current context state.
+    session = _session_half(compact)
+    assert session["context_tokens"] == 190_000
+    assert session["context_window"] == 250_000
+    assert session["context_usage"] == round(190_000 / 250_000, 5)  # 0.76
+    assert _SESSION_CONTEXT_STATE_KEYS <= set(session)
+
+
+def test_session_half_context_window_falls_back_to_configured_limit():
+    # With no provider snapshot window, context_window uses the configured
+    # context_limit and context_usage is computed against it.
+    agent = SimpleNamespace(
+        _config=SimpleNamespace(context_limit=500_000),
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
+        get_token_usage=lambda: {
+            "api_calls": 4,
+            "input_tokens": 22_000,
+            "cached_tokens": 5_500,
+            "ctx_total_tokens": 250_000,
+        },
+    )
+
+    session = _session_half(build_tool_meta_token_usage(agent))
+    assert session["context_window"] == 500_000
+    assert session["context_tokens"] == 250_000
+    assert session["context_usage"] == round(250_000 / 500_000, 5)  # 0.5
+
+
+def test_session_half_omits_context_state_when_unresolvable():
+    # No ctx_total_tokens and no window -> context state fields are omitted, never
+    # invented; the economy fields still emit.
     agent = SimpleNamespace(
         _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
         get_token_usage=lambda: {
@@ -1150,12 +1341,9 @@ def test_session_economy_falls_back_to_lifetime_getter_when_no_current_session()
         },
     )
 
-    compact = build_tool_meta_token_usage(agent)
-
-    session = _session_half(compact)
+    session = _session_half(build_tool_meta_token_usage(agent))
+    assert not (_SESSION_CONTEXT_STATE_KEYS & set(session))
     assert session["api_calls"] == 4
-    assert session["input_tokens"] == 22_000
-    assert session["cached_tokens"] == 5_500
 
 
 def test_token_usage_block_carries_short_guidance_ref():
@@ -1177,7 +1365,7 @@ def test_token_usage_block_carries_short_guidance_ref():
 
 
 # ---------------------------------------------------------------------------
-# Always-on current-session cache-miss/budget telemetry in the session half of
+# Always-on since-last-molt cache-miss/budget telemetry in the session half of
 # token_usage (Jason's follow-up to PR #641).  Distinct from the
 # tool_meta.context guard (build_cache_miss_budget_context), which surfaces only
 # at/above budget: these three fields ride on EVERY result whenever the session
@@ -1188,14 +1376,17 @@ def test_token_usage_block_carries_short_guidance_ref():
 def _session_agent_with_budget(
     *, input_tokens, cached_tokens, api_calls=1, budget=1_000_000, with_config=True
 ):
-    """SimpleNamespace agent exposing the current-session getter and a budget.
+    """SimpleNamespace agent exposing the cumulative token getter and a budget.
 
-    ``with_config=False`` drops ``_config`` entirely so the config-less-stub
-    path (cache_miss_tokens present; budget-derived fields omitted) is exercised.
+    The session half (and its always-on cache-miss telemetry) now reads the
+    cumulative/since-molt ``get_token_usage()`` totals, so this helper exposes
+    that getter. ``with_config=False`` drops ``_config`` entirely so the
+    config-less-stub path (cache_miss_tokens present; budget-derived fields
+    omitted) is exercised.
     """
     kwargs = dict(
         _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
-        get_current_session_token_usage=lambda: {
+        get_token_usage=lambda: {
             "api_calls": api_calls,
             "input_tokens": input_tokens,
             "cached_tokens": cached_tokens,
@@ -1293,18 +1484,21 @@ def test_session_half_honors_custom_budget():
     assert session["cache_miss_remaining_tokens"] == 50_000  # 250k - 200k
 
 
-def test_session_half_cache_miss_uses_current_session_not_lifetime():
-    # The always-on cache-miss telemetry MUST derive from the current-session
-    # getter, never the lifetime get_token_usage() giants.
+def test_session_half_cache_miss_uses_cumulative_totals_surviving_refresh():
+    # Jason FINAL: the always-on cache-miss telemetry is SINCE LAST MOLT — it
+    # derives from the cumulative/restored get_token_usage() totals so a refresh
+    # does not reset cache_miss_remaining_tokens. It must NOT use the
+    # since-refresh runtime deltas (which would drop cache_miss back near zero on
+    # every restart).
     agent = SimpleNamespace(
         _config=SimpleNamespace(cache_miss_budget=1_000_000),
         _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
         get_token_usage=lambda: {
-            "api_calls": 27_863,
-            "input_tokens": 5_000_000_000,
-            "cached_tokens": 4_000_000_000,
+            "api_calls": 30,
+            "input_tokens": 900_000,
+            "cached_tokens": 100_000,
         },
-        get_current_session_token_usage=lambda: {
+        get_runtime_session_token_usage=lambda: {
             "api_calls": 2,
             "input_tokens": 200,
             "cached_tokens": 40,
@@ -1314,8 +1508,10 @@ def test_session_half_cache_miss_uses_current_session_not_lifetime():
     compact = build_tool_meta_token_usage(agent)
 
     session = _session_half(compact)
-    assert session["cache_miss_tokens"] == 160  # 200 - 40, not the lifetime giant
-    assert session["cache_miss_remaining_tokens"] == 999_840
+    # cache_miss from cumulative totals: 900k - 100k = 800k (not the tiny
+    # since-refresh 200-40 delta).
+    assert session["cache_miss_tokens"] == 800_000
+    assert session["cache_miss_remaining_tokens"] == 200_000  # 1M - 800k
 
 
 def test_build_meta_token_usage_carries_always_on_cache_miss_below_budget():
@@ -2570,10 +2766,13 @@ def test_packaged_guidance_resource_is_valid():
     assert "does not mean the active provider-side context" in body
     assert "0.6 * context_window" in body
     # Unified contract: token diagnostics live in tool_meta.token_usage; the
-    # guidance points there and describes the current-session aggregate half.
+    # guidance points there and describes the since-last-molt session aggregate
+    # half (cumulative/restored, surviving refresh — Jason FINAL correction).
     assert "token_usage" in body
-    assert "current-session" in body
+    assert "since-last-molt" in body
     assert "session_cache_rate" in body
+    # Current context state now documented under the session half.
+    assert "context_usage" in body
     assert "guiding_avg_input_tokens_per_api_call" not in body
     assert "recent human-channel instructions" in body
     assert "last 30 Telegram messages" in body
@@ -2842,14 +3041,15 @@ def test_build_meta_current_molt_carries_reminder_and_event_payload():
 # ---------------------------------------------------------------------------
 # build_cache_miss_budget_context / cache-miss budget guard.
 #
-# A per-molt/runtime-session soft cap on total cache-miss (uncached input)
-# tokens. The current-session cache-miss total is derived from
-# agent.get_current_session_token_usage() as max(input_tokens - cached_tokens, 0).
-# Once it reaches/exceeds agent._config.cache_miss_budget, build_meta restamps a
-# "cache miss budget {budget} reached, molt now" reminder into the
-# _tool_meta_context transit sub-object (promoted to permanent
-# tool_meta.context.molt) and surfaces cache_miss_budget / cache_miss_tokens
-# under tool_meta.context. It is a soft signal, not a new event route.
+# A since-last-molt soft cap on total cache-miss (uncached input) tokens. The
+# cache-miss total is derived from the cumulative/restored
+# agent.get_token_usage() totals as max(input_tokens - cached_tokens, 0), so a
+# refresh does NOT reset it (Jason FINAL). Once it reaches/exceeds
+# agent._config.cache_miss_budget, build_meta restamps a "cache miss budget
+# {budget} reached, molt now" reminder into the _tool_meta_context transit
+# sub-object (promoted to permanent tool_meta.context.molt) and surfaces
+# cache_miss_budget / cache_miss_tokens under tool_meta.context. It is a soft
+# signal, not a new event route.
 # ---------------------------------------------------------------------------
 
 
@@ -2865,9 +3065,10 @@ def _budget_agent(
 ):
     """Minimal agent stand-in for build_cache_miss_budget_context / build_meta.
 
-    Carries a get_current_session_token_usage() returning the given
-    input/cached token deltas, plus the streak fields build_molt_context reads
-    (so the "both warnings active" case can be exercised through build_meta).
+    Carries a get_token_usage() returning the given cumulative input/cached
+    token totals (the since-last-molt basis the guard now reads), plus the
+    streak fields build_molt_context reads (so the "both warnings active" case
+    can be exercised through build_meta).
     """
     session = SimpleNamespace(
         _token_decomp_dirty=True,
@@ -2885,7 +3086,7 @@ def _budget_agent(
         _session=session,
     )
     if has_getter:
-        agent.get_current_session_token_usage = lambda: {
+        agent.get_token_usage = lambda: {
             "input_tokens": input_tokens,
             "cached_tokens": cached_tokens,
             "api_calls": 1,

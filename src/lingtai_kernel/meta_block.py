@@ -96,10 +96,11 @@ TOOL_META_COMMENT_OVERFLOW_KEY = "overflow"
 TOOL_META_TOKEN_USAGE_KEY = "token_usage"
 TOOL_META_TOKEN_USAGE_PENDING_KEY = "_tool_meta_token_usage"
 # The two nested halves of ``tool_meta.token_usage``.  ``current_call`` carries
-# this result's own provider-round token/cache fields; ``session`` carries the
-# current-runtime-session aggregate.  Splitting them into named sub-objects (vs
-# the former single flat dict) removes the confusing flat ``input`` vs
-# ``input_tokens`` adjacency — see :func:`build_tool_meta_token_usage`.
+# ONLY this result's own provider-call token/cache/output fields; ``session``
+# carries the since-last-molt cumulative aggregate (surviving refresh) plus the
+# current context state.  Splitting them into named sub-objects (vs the former
+# single flat dict) removes the confusing flat ``input`` vs ``input_tokens``
+# adjacency — see :func:`build_tool_meta_token_usage`.
 TOKEN_USAGE_CURRENT_CALL_KEY = "current_call"
 TOKEN_USAGE_SESSION_KEY = "session"
 TOOL_META_CURRENT_TIME_KEY = "current_time"
@@ -125,8 +126,8 @@ TOOL_META_CONTEXT_REBUILD_KEY = "rebuild"
 TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY = "cache_miss_budget"
 TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY = "cache_miss_tokens"
 
-# Always-on current-session cache-miss/budget telemetry surfaced inside the
-# ``session`` (current-runtime-session) half of ``tool_meta.token_usage`` (see
+# Always-on since-last-molt cache-miss/budget telemetry surfaced inside the
+# ``session`` (since-last-molt cumulative) half of ``tool_meta.token_usage`` (see
 # :func:`_build_session_token_economy`).  Unlike the ``tool_meta.context`` guard
 # above — which appears ONLY once the session cache-miss total reaches/exceeds
 # the budget — these three fields ride on EVERY result whenever the session
@@ -142,6 +143,17 @@ TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY = "cache_miss_tokens"
 TOKEN_USAGE_CACHE_MISS_TOKENS_KEY = "cache_miss_tokens"
 TOKEN_USAGE_CACHE_MISS_BUDGET_KEY = "cache_miss_budget"
 TOKEN_USAGE_CACHE_MISS_REMAINING_KEY = "cache_miss_remaining_tokens"
+
+# Current context state carried under the ``session`` half of
+# ``tool_meta.token_usage`` (moved off ``current_call``, since context usage is
+# current session/context state, not this provider call's own facts).  Emitted
+# only when resolvable: ``context_tokens`` from the cumulative
+# ``get_token_usage().ctx_total_tokens``; ``context_window`` from the provider
+# snapshot's ``context_window`` or the configured/live window; ``context_usage``
+# = ``context_tokens / context_window`` when both are positive.
+TOKEN_USAGE_CONTEXT_TOKENS_KEY = "context_tokens"
+TOKEN_USAGE_CONTEXT_WINDOW_KEY = "context_window"
+TOKEN_USAGE_CONTEXT_USAGE_KEY = "context_usage"
 
 
 def build_tool_meta_overflow_comment(tool_call_id: str | None) -> dict:
@@ -506,29 +518,32 @@ def build_meta_readme() -> dict:
             "both warnings are preserved in context.molt (the budget line is "
             "appended). The action when warned is to molt. token_usage is the single token-diagnostics block "
             "(see meta_guidance.token_efficiency). It is NESTED into two explicitly "
-            "named halves (not one flat dict): current_call — this result's own "
-            "provider-round token/cache snapshot, keys input, cache_miss, cache_rate, "
-            "context_usage, window, output, thinking; and session — the "
-            "current-runtime-session aggregate, keys session_cache_rate, api_calls, "
-            "input_tokens, cached_tokens, avg_input_tokens_per_api_call, plus ALWAYS-ON "
-            "current-session cache-miss/budget telemetry: cache_miss_tokens "
-            "(current-session cumulative cache miss = max(input_tokens - "
-            "cached_tokens, 0)), cache_miss_budget (the configured budget), and "
-            "cache_miss_remaining_tokens (max(cache_miss_budget - cache_miss_tokens, "
-            "0)). The nesting removes the confusing flat current_call.input vs "
-            "session.input_tokens adjacency. These three cache-miss fields ride under "
-            "session on EVERY result whenever session aggregate token "
-            "usage is available (cache_miss_budget/cache_miss_remaining_tokens are "
-            "present only when a budget is configured), so you can always read your "
-            "current cumulative cache miss and remaining budget here without "
-            "recomputing input_tokens - cached_tokens or remembering the default "
-            "budget — distinct from the context.* guard above, which appears only "
-            "once you have reached/exceeded the budget. If you have reached or are "
-            "nearing the cache-miss budget, do NOT use summarize to reconstruct "
-            "context because reconstruction itself will create a large cache miss; "
-            "molt proactively. The session-half fields "
-            "are CURRENT runtime-session deltas (counted since this process "
-            "started/last refreshed), NOT restored lifetime/cumulative totals. The "
+            "named halves (not one flat dict): current_call — ONLY this provider "
+            "call's own token/cache/output facts, keys input, cache_miss, cache_rate, "
+            "output, thinking (context state is NOT here); and session — the "
+            "SINCE-LAST-MOLT cumulative aggregate, keys session_cache_rate, api_calls, "
+            "input_tokens, cached_tokens, avg_input_tokens_per_api_call, the current "
+            "context state context_tokens/context_window/context_usage (when "
+            "resolvable), plus ALWAYS-ON since-last-molt cache-miss/budget telemetry: "
+            "cache_miss_tokens (since-last-molt cumulative cache miss = "
+            "max(input_tokens - cached_tokens, 0)), cache_miss_budget (the configured "
+            "budget), and cache_miss_remaining_tokens (max(cache_miss_budget - "
+            "cache_miss_tokens, 0)). The nesting removes the confusing flat "
+            "current_call.input vs session.input_tokens adjacency. These three "
+            "cache-miss fields ride under session on EVERY result whenever session "
+            "aggregate token usage is available (cache_miss_budget/"
+            "cache_miss_remaining_tokens are present only when a budget is "
+            "configured), so you can always read your current cumulative cache miss "
+            "and remaining budget here without recomputing input_tokens - "
+            "cached_tokens or remembering the default budget — distinct from the "
+            "context.* guard above, which appears only once you have reached/exceeded "
+            "the budget. If you have reached or are nearing the cache-miss budget, do "
+            "NOT use summarize to reconstruct context because reconstruction itself "
+            "will create a large cache miss; molt proactively. The session-half "
+            "fields are SINCE-LAST-MOLT cumulative/restored totals — they SURVIVE a "
+            "refresh/restart (they read the durable cumulative counters, NOT the "
+            "since-refresh runtime-session deltas), so a refresh does not zero them "
+            "and cache_miss_remaining_tokens does not reset. The "
             "block also carries a short top-level ref sentence ('See "
             "meta_guidance.token_efficiency for details.') hooking the guidance "
             "subsection that explains how to act on it. Each "
@@ -556,8 +571,10 @@ def build_meta_readme() -> dict:
             "Agent/current-state snapshot (elapsed_ms, active_turn_tool_calls, "
             "current_tool_result_chars, optional "
             "adapter_comment). Numeric context/token diagnostics are deliberately "
-            "not duplicated here: provider-round context_usage/window and session "
-            "token totals live permanently in tool_meta.token_usage instead (see "
+            "not duplicated here: the per-call token/cache facts and the "
+            "since-last-molt session aggregate (including current context state "
+            "context_tokens/context_window/context_usage) live permanently in "
+            "tool_meta.token_usage instead (see "
             "meta_guidance.token_efficiency). The sustained-pressure context.molt "
             "reminder is NOT here either — it now lives in permanent "
             "tool_meta.context.molt so it persists on every result while active. "
@@ -572,7 +589,8 @@ def build_meta_readme() -> dict:
             "newest one; scan backward for the last-emitted snapshot, and read "
             "each emitted agent_meta as the agent state at that update point. "
             "agent_meta carries NO token diagnostics: all token/cache "
-            "facts — both per-provider-round and current-session aggregate — live "
+            "facts — both this call's own facts and the since-last-molt session "
+            "aggregate — live "
             "permanently in tool_meta.token_usage instead (see "
             "meta_guidance.token_efficiency). "
             "current_tool_result_chars is a compact dict with total_chars, "
@@ -964,11 +982,12 @@ def _resolve_cache_miss_budget(agent) -> int | None:
 def build_cache_miss_budget_context(agent) -> dict | None:
     """Return the cache-miss budget guard sub-object, or ``None``.
 
-    A soft per-molt/runtime-session cap on total cache-miss (uncached input)
-    tokens.  The current-session cache-miss total is derived from
-    ``agent.get_current_session_token_usage()`` — the CURRENT runtime-session
-    deltas, whose reset/baseline matches the existing per-molt token-usage deltas
-    (NOT a lifetime/cumulative counter) — as::
+    A soft since-last-molt cap on total cache-miss (uncached input) tokens.  The
+    cache-miss total is derived from ``agent.get_token_usage()`` — the
+    CUMULATIVE / restored totals, which SURVIVE ``restore_token_state`` — so a
+    refresh does NOT reset the guard (Jason FINAL; matches the always-on
+    ``session`` telemetry in :func:`_build_session_token_economy`, both on the
+    same cumulative basis) as::
 
         cache_miss = max(input_tokens - cached_tokens, 0)
 
@@ -989,9 +1008,9 @@ def build_cache_miss_budget_context(agent) -> dict | None:
 
     Returns ``None`` (no guard) when: the ``psyche`` intrinsic is absent (matching
     :func:`build_molt_context`, since ``molt`` presupposes the molt action), the
-    budget is not a positive int, the session-usage getter is missing/raising, or
-    the cache-miss total is below the budget.  It is a soft signal only — nothing
-    is blocked — and NOT a new event route (no emission-event payload).
+    budget is not a positive int, the cumulative-usage getter is missing/raising,
+    or the cache-miss total is below the budget.  It is a soft signal only —
+    nothing is blocked — and NOT a new event route (no emission-event payload).
     """
     if "psyche" not in getattr(agent, "_intrinsics", set()):
         return None
@@ -1002,7 +1021,10 @@ def build_cache_miss_budget_context(agent) -> dict | None:
     if budget is None:
         return None
 
-    usage_fn = getattr(agent, "get_current_session_token_usage", None)
+    # Since-last-molt basis: read the cumulative/restored totals so a refresh
+    # does not reset the guard (identical source to the always-on session-half
+    # cache-miss telemetry).
+    usage_fn = getattr(agent, "get_token_usage", None)
     if not callable(usage_fn):
         return None
     try:
@@ -1191,15 +1213,21 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
 def _build_provider_round_token_usage(agent) -> dict:
     """Return the ``current_call`` (provider-round) half of the token_usage block.
 
+    ``current_call`` is ONLY this provider call's own token/cache/output facts.
     Reads ``SessionManager.latest_token_usage_snapshot()`` — the full
     provider-round record kept for internal logging (scope, api-call index/id,
     cached/context tokens, estimated flag, ...) — and projects only the per-result
-    evidence agents need: ``input``/``cache_miss``/``cache_rate``/``context_usage``/
-    ``window``/``output``/``thinking``, mapped from the snapshot's long field names.
-    Noisy/invalid/duplicate fields (scope, api_call_id, context_tokens,
-    context_window-as-duplicate, estimated, the provider-round cached_tokens) are
-    dropped. Missing fields are omitted rather than invented; existing numeric
-    zero/sentinel values are preserved. Returns ``{}`` when no snapshot exists.
+    evidence agents need: ``input``/``cache_miss``/``cache_rate``/``output``/
+    ``thinking``, mapped from the snapshot's long field names.
+
+    Current CONTEXT state (``context_usage``/``window``/context tokens) is NOT
+    part of this call's own facts — it is current session/context state and now
+    lives in the ``session`` half (see :func:`_build_session_token_economy`), so
+    it is deliberately dropped here along with the other noisy/invalid/duplicate
+    fields (scope, api_call_id, context_tokens, estimated, the provider-round
+    cached_tokens). Missing fields are omitted rather than invented; existing
+    numeric zero/sentinel values are preserved. Returns ``{}`` when no snapshot
+    exists.
     """
     session = getattr(agent, "_session", None)
     snapshot_fn = getattr(session, "latest_token_usage_snapshot", None)
@@ -1214,13 +1242,12 @@ def _build_provider_round_token_usage(agent) -> dict:
         return {}
     # Map full snapshot field names -> compact injected keys. Only emit a key
     # when the source field is present, so the injected object stays robust to
-    # partial snapshots without inventing values.
+    # partial snapshots without inventing values. NOTE: context_usage/window are
+    # intentionally absent — they moved to the session half.
     field_map = (
         ("input", "input_tokens"),
         ("cache_miss", "cache_miss_tokens"),
         ("cache_rate", "cache_rate"),
-        ("context_usage", "context_usage"),
-        ("window", "context_window"),
         ("output", "output_tokens"),
         ("thinking", "thinking_tokens"),
     )
@@ -1231,42 +1258,78 @@ def _build_provider_round_token_usage(agent) -> dict:
     }
 
 
+def _session_context_window(agent) -> int:
+    """Return the context window for the ``session`` context state, or ``0``.
+
+    Prefers the latest provider-round snapshot's ``context_window`` (the value the
+    provider actually served the current context against); falls back to the
+    configured/live window via :func:`_fallback_context_window` (config
+    ``context_limit`` then ``chat.context_window()``).  Returns ``0`` when no
+    positive window is resolvable, so callers omit the context-state fields
+    rather than dividing by an unknown window.
+    """
+    session = getattr(agent, "_session", None)
+    snapshot_fn = getattr(session, "latest_token_usage_snapshot", None)
+    snapshot = None
+    if callable(snapshot_fn):
+        try:
+            snapshot = snapshot_fn()
+        except Exception:
+            snapshot = None
+    else:
+        snapshot = getattr(session, "_latest_token_usage_snapshot", None)
+    if isinstance(snapshot, Mapping):
+        window = _non_negative_int(snapshot.get("context_window"))
+        if window > 0:
+            return window
+    fallback = _fallback_context_window(agent)
+    return fallback if isinstance(fallback, int) and fallback > 0 else 0
+
+
 def _build_session_token_economy(agent) -> dict:
-    """Return the ``session`` (current-runtime-session) half of the token_usage block.
+    """Return the ``session`` (since-last-molt) half of the token_usage block.
 
-    Prefers ``agent.get_current_session_token_usage()`` — the CURRENT runtime
-    session deltas (``current_total - session_baseline``), which exclude restored
-    lifetime/persisted totals. Falls back to the lifetime ``agent.get_token_usage()``
-    only when the current-session getter is absent (e.g. older test stubs); the
-    lifetime getter must NOT be the source for live agents, since its restored
-    cumulative totals are exactly the giant numbers this block must avoid.
+    Sources the aggregate from ``agent.get_token_usage()`` — the CUMULATIVE /
+    restored ``_total_*``/``_api_calls`` counters, which SURVIVE
+    ``restore_token_state`` (refresh/restart).  This is the "since last molt"
+    contract: the injected ``token_usage.session`` must NOT reset on refresh, so
+    it deliberately reads the cumulative totals rather than
+    ``get_runtime_session_token_usage()`` (the since-refresh deltas, which zero
+    out on every restart — that was the #679 defect).  The since-refresh runtime
+    getter is never consulted here.
 
-    Projects the current-session aggregate counters agents act on now:
-    ``session_cache_rate`` (cached/input clamped to a 0-1 fraction), ``api_calls``,
+    Projects the aggregate counters agents act on now: ``session_cache_rate``
+    (cached/input clamped to a 0-1 fraction), ``api_calls``,
     ``input_tokens``/``cached_tokens``, and ``avg_input_tokens_per_api_call``,
-    deriving the two rates from the raw counters so the result is consistent
-    regardless of which getter supplied them.
+    deriving the rates from the raw counters.
 
-    It also carries the ALWAYS-ON current-session cache-miss/budget telemetry so
-    an agent never has to recompute ``input_tokens - cached_tokens`` or remember
-    the default budget (contrast the ``tool_meta.context`` guard, which appears
-    only at/above budget):
+    It also carries the current CONTEXT state (moved off ``current_call``, since
+    context usage is current session/context state, not this call's own facts),
+    when resolvable:
+
+    * ``context_tokens`` from ``get_token_usage().ctx_total_tokens``;
+    * ``context_window`` from the provider snapshot or configured window (see
+      :func:`_session_context_window`);
+    * ``context_usage`` = ``context_tokens / context_window`` when both positive.
+
+    And the ALWAYS-ON since-last-molt cache-miss/budget telemetry so an agent
+    never has to recompute ``input_tokens - cached_tokens`` or remember the
+    default budget (contrast the ``tool_meta.context`` guard, which appears only
+    at/above budget):
 
     * ``cache_miss_tokens`` = ``max(input_tokens - cached_tokens, 0)`` — the
-      current-session cumulative cache miss, on the same runtime-session-delta
-      basis as :func:`build_cache_miss_budget_context`.  Always emitted here,
-      since it needs only the session counters.
+      since-last-molt cumulative cache miss, on the same cumulative basis as
+      :func:`build_cache_miss_budget_context`, so a refresh does not reset it.
+      Always emitted here, since it needs only the aggregate counters.
     * ``cache_miss_budget`` = ``agent._config.cache_miss_budget`` and
       ``cache_miss_remaining_tokens`` = ``max(cache_miss_budget - cache_miss_tokens, 0)``
       — emitted only when a positive-int budget is resolvable from the agent
       config (see :func:`_resolve_cache_miss_budget`); omitted, never invented,
       for config-less stubs.
 
-    Returns ``{}`` when no session usage is available; numeric zeros are preserved.
+    Returns ``{}`` when no aggregate usage is available; numeric zeros are preserved.
     """
-    usage_fn = getattr(agent, "get_current_session_token_usage", None)
-    if not callable(usage_fn):
-        usage_fn = getattr(agent, "get_token_usage", None)
+    usage_fn = getattr(agent, "get_token_usage", None)
     if not callable(usage_fn):
         return {}
     try:
@@ -1292,9 +1355,21 @@ def _build_session_token_economy(agent) -> dict:
         "input_tokens": input_tokens,
         "cached_tokens": cached_tokens,
         "avg_input_tokens_per_api_call": avg_input,
-        # Always-on: derivable from the session counters alone.
+        # Always-on: derivable from the cumulative counters alone.
         TOKEN_USAGE_CACHE_MISS_TOKENS_KEY: cache_miss,
     }
+
+    # Current context state — only when resolvable (never invented).
+    if "ctx_total_tokens" in usage:
+        context_tokens = _non_negative_int(usage.get("ctx_total_tokens"))
+        economy[TOKEN_USAGE_CONTEXT_TOKENS_KEY] = context_tokens
+        window = _session_context_window(agent)
+        if window > 0:
+            economy[TOKEN_USAGE_CONTEXT_WINDOW_KEY] = window
+            economy[TOKEN_USAGE_CONTEXT_USAGE_KEY] = round(
+                context_tokens / window, 5
+            )
+
     budget = _resolve_cache_miss_budget(agent)
     if budget is not None:
         economy[TOKEN_USAGE_CACHE_MISS_BUDGET_KEY] = budget
@@ -1311,17 +1386,19 @@ def build_tool_meta_token_usage(agent) -> dict | None:
     named halves so the confusing flat ``input`` vs ``input_tokens`` adjacency is
     gone; each half keeps its own local key convention:
 
-    * ``current_call`` — this tool result's own provider round (per-result
-      evidence): ``input``, ``cache_miss``, ``cache_rate``, ``context_usage``,
-      ``window``, ``output``, ``thinking`` (see
-      :func:`_build_provider_round_token_usage`).
-    * ``session`` — the current-runtime-session aggregate: ``session_cache_rate``,
+    * ``current_call`` — ONLY this tool result's own provider-call token/cache/
+      output facts: ``input``, ``cache_miss``, ``cache_rate``, ``output``,
+      ``thinking`` (see :func:`_build_provider_round_token_usage`).  Current
+      context state is NOT here — it moved to the ``session`` half.
+    * ``session`` — the SINCE-LAST-MOLT cumulative aggregate: ``session_cache_rate``,
       ``api_calls``, ``input_tokens``, ``cached_tokens``,
-      ``avg_input_tokens_per_api_call``, plus the always-on cache-miss/budget
-      telemetry ``cache_miss_tokens`` and (when a positive-int budget is
-      configured) ``cache_miss_budget`` / ``cache_miss_remaining_tokens``.  These
-      are CURRENT runtime-session deltas (not restored lifetime totals); see
-      :func:`_build_session_token_economy`.
+      ``avg_input_tokens_per_api_call``, the current context state
+      ``context_tokens`` / ``context_window`` / ``context_usage`` (when
+      resolvable), plus the always-on cache-miss/budget telemetry
+      ``cache_miss_tokens`` and (when a positive-int budget is configured)
+      ``cache_miss_budget`` / ``cache_miss_remaining_tokens``.  These are
+      cumulative/restored totals that SURVIVE refresh (NOT the since-refresh
+      runtime-session deltas); see :func:`_build_session_token_economy`.
 
     Each half is emitted only when its source data is available (an empty half is
     omitted entirely, not left as an empty sub-object); missing inner values are
