@@ -17,8 +17,9 @@ Config schema (plaintext, no env-indirection):
           "bot_token": "1234567890:ABC...",
           "allowed_users": [12345678],     // optional allow-list of user IDs
           "poll_interval": 1.0,             // optional, seconds
-          "commands": [                      // optional, registered via setMyCommands
-            {"command": "status", "description": "Show agent status"}
+          "commands": [                      // optional menu entries for setMyCommands
+            {"command": "status", "description": "Show agent status"},
+            {"command": "tokenstats", "description": "Show recent token usage stats"}
           ]
         }
       ]
@@ -311,7 +312,11 @@ Common optional fields:
   argument. Defaults are handled by the manager if omitted.
 - `allowed_users` — list of Telegram user IDs allowed to contact the bot.
 - `poll_interval` — update polling interval in seconds.
-- `commands` — commands registered with Telegram `setMyCommands`.
+- `commands` — commands registered with Telegram `setMyCommands`; names are
+  stored without the leading slash. Registration changes the Telegram menu only:
+  built-in local handlers such as `/kanban` are handled by the addon, while
+  unknown slash commands pass through as normal inbound messages for the host
+  agent unless a code-level handler is added.
 
 ## Tool entrypoint
 
