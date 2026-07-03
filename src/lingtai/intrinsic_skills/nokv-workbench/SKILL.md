@@ -62,9 +62,10 @@ the agent's absolute working directory. The same registry line therefore works
 verbatim for every agent — no per-agent editing. This is path-scoped isolation
 enforced by the NoKV MCP (an agent's tools can only address paths under its own
 root); it is not a server-side ACL, which matches LingTai's local trust model.
-Record the owner in each run manifest (e.g. `"owner": "{agent_id}"`) so the
-provenance is explicit; the committed `run_manifest.json` also embeds the full
-`workbench_path`, which already contains the owning agent id.
+Record the resolved owner in each run manifest (for example, `"owner": "scout"`
+for agent `scout`) so provenance is explicit. Do not expect placeholders to expand
+inside committed run manifests; the committed `run_manifest.json` also embeds the
+full `workbench_path`, which already contains the owning agent id.
 
 The MCP tools are intentionally prefixed with `workbench_` so they do not replace
 LingTai's local `read`, `write`, `edit`, `grep`, or `glob` tools.
