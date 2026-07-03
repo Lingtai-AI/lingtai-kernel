@@ -6,8 +6,8 @@ description: >
   hunch, understand `daemon(action="list")`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.5.1
-last_changed_at: "2026-06-23T16:35:37-07:00"
+version: 0.5.2
+last_changed_at: "2026-07-03T10:53:00-07:00"
 ---
 
 # Daemon Manual — Router
@@ -171,13 +171,14 @@ files, not standalone top-level skills.
   `daemon(action="check", id=...)` (and read `result.txt` for the full output).
 - **`check` still resolves a daemon after refresh/molt.** A refresh/molt gives
   you a fresh daemon registry with no in-memory entries, but the run folders
-  and their notifications survive on disk. `daemon(action="check", id=...)`
-  falls back to the durable `daemons/<run_id>/` folders on a registry miss: a
-  full `run_id` resolves exactly; a short id (e.g. `em-5`, which the counter
-  reuses across sessions) resolves to the most recent matching run and returns
-  `source="history"` plus `ambiguous`/`match_count`/`other_run_dirs` when more
-  than one run shares that id. To target an older run, pass its full `run_id`
-  from the notification or `daemon(action="list")` rather than the short id.
+  and their notifications survive on disk. New daemon ids are compact run ids
+  such as `em-a1b2` (or `em-a1b2-1` after a collision), and
+  `daemon(action="check", id=...)` exact-matches that `daemons/<run_id>/` folder
+  on a registry miss. Legacy short handles such as `em-5` are accepted only when
+  they resolve to one historical run; if several old runs share the handle,
+  `check` returns an ambiguity error with `match_count`/`latest_run_id` instead
+  of an unbounded path list. Use the exact `run_id` from the notification or
+  `daemon(action="list")` when a legacy handle is ambiguous.
 - **Defense-in-depth, not primary signal: a self-wake guards against a daemon
   that never reaches a terminal state at all.** The terminal notification covers
   every state a run can *finish* in, but a run that hangs without the watchdog

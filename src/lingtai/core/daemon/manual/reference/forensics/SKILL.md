@@ -5,8 +5,8 @@ description: >
   daemons/em-* folders, daemon.json status fields, artifacts.json manifest,
   chat_history.jsonl, token_ledger.jsonl, events.jsonl, exit code 143 / SIGTERM,
   and how to inspect progress without guessing.
-version: 1.2.0
-last_changed_at: "2026-06-24T16:53:19-07:00"
+version: 1.2.1
+last_changed_at: "2026-07-03T10:53:00-07:00"
 ---
 
 # Daemon Forensics Reference
@@ -16,18 +16,18 @@ on-disk state, transcript, or token/event artifacts.
 
 ## Each emanation is a forensic mini-avatar
 
-Every time you call `daemon(action="emanate", tasks=[...])`, each task gets a working folder under `daemons/` in your own directory. The folder is named:
+Every time you call `daemon(action="emanate", tasks=[...])`, each task gets a working folder under `daemons/` in your own directory. New manager-created runs use one compact id everywhere — the returned daemon id, `daemon.json.run_id`, and the folder name:
 
-    daemons/em-<N>-<YYYYMMDD-HHMMSS>-<6 hex>/
+    daemons/em-<4 hex of time hash>[-<collision suffix>]/
 
-where `em-<N>` is the in-context handle (e.g. `em-3`). The handle resets to `em-1` after `reclaim`, but the timestamp+hash means historical folders never collide. **Folders persist forever** — `reclaim` only stops processes, not files. They're cleaned up incidentally when you molt (which wipes the working directory).
+For example, `em-a1b2` or `em-a1b2-1`. There is no separate short id/long id pair for new runs. **Folders persist forever** — `reclaim` only stops processes, not files. They're cleaned up incidentally when you molt (which wipes the working directory).
 
 This means: when an emanation looks stuck, you can read its actual state instead of guessing. Don't kill it on a hunch — inspect first.
 
 ## Folder layout
 
 ```
-daemons/em-3-20260427-094215-a1b2c3/
+daemons/em-a1b2/
 ├── daemon.json                  ← versioned identity card + live status snapshot + visible call parameters
 ├── artifacts.json               ← compact artifact manifest (path/size/mtime/role per file) — written at terminal time
 ├── result.txt                   ← full terminal result when available

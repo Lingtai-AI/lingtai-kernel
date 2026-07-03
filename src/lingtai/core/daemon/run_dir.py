@@ -21,8 +21,12 @@ from lingtai_kernel.token_ledger import append_token_entry
 class DaemonRunDir:
     """Filesystem-backed mini-avatar log surface for one daemon emanation.
 
-    Folder layout:
-        <parent>/daemons/em-<N>-<YYYYMMDD-HHMMSS>-<hash6>/
+    Folder layout for new manager-created runs:
+        <parent>/daemons/em-<hash4>[-<collision-suffix>]/
+
+    Direct callers that omit ``run_id`` retain the legacy timestamp/hash folder
+    form for compatibility with older tests and integrations:
+        <parent>/daemons/<handle>-<YYYYMMDD-HHMMSS>-<hash6>/
             daemon.json                  # identity card + live status
             .prompt                      # system prompt verbatim
             .heartbeat                   # mtime-touched on activity
@@ -48,6 +52,7 @@ class DaemonRunDir:
         parent_pid: int,
         system_prompt: str,
         log_callback=None,
+        run_id: str | None = None,
         preset_name: str | None = None,
         preset_provider: str | None = None,
         preset_model: str | None = None,
@@ -64,10 +69,14 @@ class DaemonRunDir:
         self._started_monotonic = time.monotonic()
         started_at_iso = self._now_iso()
 
-        # run_id format: em-<N>-<YYYYMMDD-HHMMSS>-<6 hex>
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        hash6 = secrets.token_hex(3)
-        self._run_id = f"{handle}-{timestamp}-{hash6}"
+        # New daemon-manager callers pass a compact id as ``run_id`` so the
+        # user-facing id and folder name are identical. If omitted, keep the
+        # legacy long folder form for direct callers and old tests.
+        if run_id is None:
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            hash6 = secrets.token_hex(3)
+            run_id = f"{handle}-{timestamp}-{hash6}"
+        self._run_id = run_id
 
         self._path = parent_working_dir / "daemons" / self._run_id
 
