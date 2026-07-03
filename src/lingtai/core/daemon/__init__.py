@@ -846,9 +846,9 @@ class DaemonManager:
         self._default_model = agent.service.model
         self._notify_threshold = notify_threshold
 
-        # Emanation registry: em_id → entry dict
+        # Emanation registry: compact daemon id → entry dict
         self._emanations: dict[str, dict] = {}
-        self._next_id = 1
+        # New ids are compact and collision-checked in _new_emanation_id().
         # Pool tracking for reclaim
         self._pools: list[tuple[ThreadPoolExecutor, threading.Event]] = []
         # CLI process tracking for direct process-group kill on reclaim/timeout.
@@ -2805,8 +2805,7 @@ class DaemonManager:
         parent_pid = os.getpid()
 
         for i, spec in enumerate(tasks):
-            em_id = f"em-{self._next_id}"
-            self._next_id += 1
+            em_id = self._new_emanation_id(reserved_ids=set(ids))
             ids.append(em_id)
             resolved = resolved_presets[i]
 
@@ -2844,6 +2843,7 @@ class DaemonManager:
                 run_dir = DaemonRunDir(
                     parent_working_dir=self._agent._working_dir,
                     handle=em_id,
+                    run_id=em_id,
                     task=spec["task"],
                     tools=spec["tools"],
                     model=effective_model,
@@ -3016,8 +3016,7 @@ class DaemonManager:
         parent_pid = os.getpid()
 
         for spec, context in zip(tasks, contexts):
-            em_id = f"em-{self._next_id}"
-            self._next_id += 1
+            em_id = self._new_emanation_id(reserved_ids=set(ids))
             ids.append(em_id)
             user_backend_argv = list(context.backend_argv)
             backend_argv = list(user_backend_argv)
@@ -3039,6 +3038,7 @@ class DaemonManager:
                 run_dir = DaemonRunDir(
                     parent_working_dir=self._agent._working_dir,
                     handle=em_id,
+                    run_id=em_id,
                     task=spec["task"],
                     tools=spec.get("tools", []),
                     model=backend,
@@ -3379,7 +3379,7 @@ class DaemonManager:
     ) -> dict:
         old = dict(existing_state or {})
         run_id = str(old.get("run_id") or run_path.name)
-        handle = str(old.get("handle") or self._handle_from_run_id(run_id) or run_id.split("-")[0] or run_id)
+        handle = str(old.get("handle") or self._handle_from_run_id(run_id) or run_id)
         events = self._read_daemon_events_tail(run_path)
         inferred_state, inferred_finished_at, inferred_error = self._infer_terminal_state_from_events(events)
         result_preview, result_path = self._result_preview_from_file(run_path)
@@ -5443,9 +5443,10 @@ class DaemonManager:
         # DaemonManager whose registry is empty (__init__ does NOT reconstruct
         # entries from disk), yet the terminal notification still points at a
         # valid daemons/<run_id>/ folder. Fall back to the durable run dirs so
-        # `check` by the notification's short id resolves the historical run
-        # instead of answering "Unknown emanation". `list` already scans this
-        # history; `check` now joins it. See GH (daemon check after refresh).
+        # `check` by the notification's compact id resolves the historical run
+        # instead of answering "Unknown emanation". Legacy short handles are
+        # still accepted only when they resolve uniquely. `list` already scans
+        # this history; `check` now joins it. See GH (daemon check after refresh).
         resolved = self._resolve_historical_run_dir(em_id)
         if resolved is None:
             return {"status": "error", "message": f"Unknown emanation: {em_id}"}
@@ -5461,14 +5462,25 @@ class DaemonManager:
         if snapshot.get("status") == "error":
             return snapshot
         # Flag the disk-resolved nature so the parent can tell it apart from a
-        # live registry hit, and surface ambiguity rather than hiding it.
-        snapshot["source"] = "history"
+        # live registry hit. Legacy short-id ambiguity is rejected instead of
+        # injecting an unbounded list of historical run directories into the
+        # tool result. New compact ids exact-match their run directory names.
         if len(matches) > 1:
-            snapshot["ambiguous"] = True
-            snapshot["match_count"] = len(matches)
-            snapshot["other_run_dirs"] = [
-                str(p) for p in matches if p != run_path
-            ]
+            matches.sort(key=lambda p: p.name)
+            latest = matches[-1]
+            return {
+                "status": "error",
+                "message": (
+                    f"Ambiguous historical daemon id: {em_id} matched "
+                    f"{len(matches)} run dirs; use the exact run_id instead"
+                ),
+                "id": em_id,
+                "source": "history",
+                "ambiguous": True,
+                "match_count": len(matches),
+                "latest_run_id": latest.name,
+            }
+        snapshot["source"] = "history"
         return snapshot
 
     def _check_snapshot_from_paths(
@@ -5585,16 +5597,14 @@ class DaemonManager:
     def _resolve_historical_run_dir(
         self, em_id: str
     ) -> tuple[Path, list[Path]] | None:
-        """Resolve a daemon short id / run id to a durable run dir on disk.
+        """Resolve a daemon id to a durable run dir on disk.
 
-        Returns ``(chosen_run_path, all_matches)`` or ``None`` if nothing on
-        disk matches. ``em_id`` may be a full ``run_id`` (folder name, e.g.
-        ``em-5-20260623-223922-625c40``) for an exact, unambiguous hit, or a
-        short ``handle`` (e.g. ``em-5``) which the daemon counter reuses across
-        refreshes — so a short id can map to several historical run dirs. We
-        resolve the most recent deterministically (folder names embed a
-        ``YYYYMMDD-HHMMSS`` timestamp, so lexical order == chronological order)
-        and return every match so the caller can report the ambiguity.
+        New daemon ids exact-match their run directory names (for example
+        ``em-a1b2`` or ``em-a1b2-1``). Legacy run dirs may still carry a
+        sequential handle such as ``em-5`` inside ``daemon.json``; a unique
+        legacy match is accepted for post-refresh compatibility, while multiple
+        legacy matches are returned so the caller can reject the ambiguous
+        short id without listing every path.
         """
         em_id = (em_id or "").strip()
         if not em_id:
@@ -5610,17 +5620,19 @@ class DaemonManager:
             # Exact run-id (folder name) match wins unambiguously.
             if run_path.name == em_id:
                 return run_path, [run_path]
-            # Otherwise match the recorded handle. Prefer the persisted
-            # daemon.json handle; fall back to parsing it from the folder name
-            # so a missing/corrupt daemon.json doesn't drop a real match.
+            # Legacy compatibility only: otherwise match the recorded handle.
+            # Prefer the persisted daemon.json handle; fall back to parsing it
+            # from old long folder names so a missing/corrupt daemon.json
+            # doesn't drop a real legacy match.
             handle = self._run_dir_handle(run_path)
             if handle == em_id:
                 matches.append(run_path)
 
         if not matches:
             return None
-        # Folder name = handle-YYYYMMDD-HHMMSS-hash6 → lexical sort is
-        # chronological; pick the most recent.
+        # Legacy folder name = handle-YYYYMMDD-HHMMSS-hash6, so lexical sort is
+        # chronological for the old format. The caller rejects multi-match
+        # ambiguity rather than injecting every path into the result.
         matches.sort(key=lambda p: p.name)
         return matches[-1], matches
 
@@ -5725,7 +5737,6 @@ class DaemonManager:
             )
 
         self._emanations.clear()
-        self._next_id = 1  # handles can be re-used; folder names disambiguate
 
         report = {
             "status": "shutdown",
@@ -6013,6 +6024,30 @@ class DaemonManager:
         # cancel_event until that command finishes. Scoped to this batch only.
         if cli_group_id is not None:
             self._kill_cli_group(cli_group_id)
+
+    def _new_emanation_id(self, *, reserved_ids: set[str] | None = None) -> str:
+        """Return a compact, collision-safe daemon id for a new run.
+
+        Older daemon handles were sequential (``em-1``) while run directories
+        carried a longer timestamp/hash suffix. That split made short ids
+        ambiguous after refreshes. New runs use one compact id everywhere:
+        the user-facing id, daemon.json handle, and run directory name.
+        """
+        reserved_ids = reserved_ids or set()
+        daemons_dir = self._agent._working_dir / "daemons"
+        now_ns = time.time_ns()
+        digest = ((now_ns >> 16) ^ now_ns) & 0xFFFF
+        base = f"em-{digest:04x}"
+        candidate = base
+        suffix = 1
+        while (
+            candidate in reserved_ids
+            or candidate in self._emanations
+            or (daemons_dir / candidate).exists()
+        ):
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+        return candidate
 
     def _log(self, event_type: str, **fields) -> None:
         """Log through the parent agent's logging system."""

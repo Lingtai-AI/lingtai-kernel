@@ -29,6 +29,11 @@ def _reuse_parent_service(monkeypatch, agent):
     return agent.service
 
 
+
+def _assert_compact_daemon_id(em_id: str) -> None:
+    assert re.fullmatch(r"em-[0-9a-f]{4}(?:-\d+)?", em_id), em_id
+
+
 def _write_daemon_json(tmp_path, run_id, **overrides):
     daemon_dir = tmp_path / "daemon-agent" / "daemons" / run_id
     daemon_dir.mkdir(parents=True)
@@ -1063,7 +1068,7 @@ def test_run_emanation_respects_cancel_before_first_send(tmp_path):
 
 
 def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
-    """emanate dispatches tasks and returns sequential IDs."""
+    """emanate dispatches tasks and returns compact unique IDs."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
@@ -1083,11 +1088,15 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
     ]})
     assert result["status"] == "dispatched"
     assert result["count"] == 2
-    assert result["ids"] == ["em-1", "em-2"]
+    ids = result["ids"]
+    assert len(ids) == 2
+    assert len(set(ids)) == 2
+    for em_id in ids:
+        _assert_compact_daemon_id(em_id)
     assert re.fullmatch(r"dg-\d{8}-\d{6}-[0-9a-f]{6}", result["group_id"])
 
     group_ids = []
-    for em_id in result["ids"]:
+    for em_id in ids:
         run_dir = mgr._emanations[em_id]["run_dir"]
         data = json.loads(run_dir.daemon_json_path.read_text())
         group_ids.append(data["group_id"])
@@ -1095,7 +1104,7 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
 
     list_result = mgr._handle_list()
     listed_groups = {item["id"]: item.get("group_id") for item in list_result["emanations"]}
-    assert listed_groups == {"em-1": result["group_id"], "em-2": result["group_id"]}
+    assert listed_groups == {em_id: result["group_id"] for em_id in ids}
 
     time.sleep(1)
 
@@ -1105,7 +1114,7 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
     events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
     assert len(events) == 2
     assert {e["source"] for e in events} == {"daemon"}
-    assert {e["ref_id"] for e in events} == {"em-1", "em-2"}
+    assert {e["ref_id"] for e in events} == set(ids)
     assert all("[daemon:em-" not in e["body"] for e in events)
 
 
@@ -1480,22 +1489,23 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
         {"task": "summarize architecture", "tools": ["file"]},
     ]})
     assert result["status"] == "dispatched"
-    assert result["ids"] == ["em-1"]
+    em_id = result["ids"][0]
+    _assert_compact_daemon_id(em_id)
 
     time.sleep(0.1)
     time.sleep(2)
 
     list_result = mgr._handle_list()
     statuses = {e["id"]: e["status"] for e in list_result["emanations"]}
-    assert statuses.get("em-1") == "done"
+    assert statuses.get(em_id) == "done"
 
     from lingtai_kernel.notifications import collect_notifications
 
     assert agent.inbox.empty()
     events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
-    assert any(e["source"] == "daemon" and e["ref_id"] == "em-1" for e in events)
+    assert any(e["source"] == "daemon" and e["ref_id"] == em_id for e in events)
     assert any("Task done" in e["body"] for e in events)
-    assert any("daemon(action=\"check\", id=\"em-1\")" in e["body"] for e in events)
+    assert any(f"daemon(action=\"check\", id=\"{em_id}\")" in e["body"] for e in events)
     assert all("[daemon:em-" not in e["body"] for e in events)
 
     reclaim_result = mgr._handle_reclaim()
@@ -1747,7 +1757,7 @@ def test_terminal_notification_not_blocked_by_prior_followup(tmp_path):
 
 
 def test_sequential_emanate_increments_ids(tmp_path):
-    """Multiple emanate calls produce sequential IDs."""
+    """Multiple emanate calls produce distinct compact IDs."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
@@ -1765,8 +1775,11 @@ def test_sequential_emanate_increments_ids(tmp_path):
     time.sleep(0.5)
     r2 = mgr.handle({"action": "emanate", "tasks": [{"task": "b", "tools": ["file"]}]})
 
-    assert r1["ids"] == ["em-1"]
-    assert r2["ids"] == ["em-2"]
+    id1 = r1["ids"][0]
+    id2 = r2["ids"][0]
+    _assert_compact_daemon_id(id1)
+    _assert_compact_daemon_id(id2)
+    assert id1 != id2
 
 
 def test_emanate_creates_folder_on_disk(tmp_path):
@@ -1795,17 +1808,20 @@ def test_emanate_creates_folder_on_disk(tmp_path):
             {"task": "find todos", "tools": ["file"]},
         ]})
         assert result["status"] == "dispatched"
+        em_id = result["ids"][0]
+        _assert_compact_daemon_id(em_id)
 
         daemons_dir = agent._working_dir / "daemons"
         assert daemons_dir.is_dir()
         children = list(daemons_dir.iterdir())
         assert len(children) == 1
         folder = children[0]
-        # Folder name matches em-1-<YYYYMMDD-HHMMSS>-<6 hex>
-        assert re.fullmatch(r"em-1-\d{8}-\d{6}-[0-9a-f]{6}", folder.name)
+        # New daemon ids are compact and identical to the folder/run id.
+        assert folder.name == em_id
         # daemon.json exists with state=running and identity fields
         data = json.loads((folder / "daemon.json").read_text())
-        assert data["handle"] == "em-1"
+        assert data["handle"] == em_id
+        assert data["run_id"] == em_id
         assert data["task"] == "find todos"
         assert data["tools"] == ["file"]
         assert data["state"] == "running"
@@ -1813,8 +1829,8 @@ def test_emanate_creates_folder_on_disk(tmp_path):
         release_send.set()
 
 
-def test_reclaim_resets_next_id_to_1(tmp_path):
-    """After reclaim, the next emanate gets em-1 again. Folder timestamps disambiguate."""
+def test_reclaim_preserves_compact_id_uniqueness(tmp_path):
+    """After reclaim, new compact ids do not reuse an existing daemon folder."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
@@ -1829,11 +1845,14 @@ def test_reclaim_resets_next_id_to_1(tmp_path):
     agent.service.create_session = MagicMock(return_value=mock_session)
 
     r1 = mgr.handle({"action": "emanate", "tasks": [{"task": "a", "tools": ["file"]}]})
-    assert r1["ids"] == ["em-1"]
+    id1 = r1["ids"][0]
+    _assert_compact_daemon_id(id1)
     time.sleep(0.5)
     mgr.handle({"action": "reclaim"})
     r2 = mgr.handle({"action": "emanate", "tasks": [{"task": "b", "tools": ["file"]}]})
-    assert r2["ids"] == ["em-1"]  # handle reused after reclaim
+    id2 = r2["ids"][0]
+    _assert_compact_daemon_id(id2)
+    assert id2 != id1
 
 
 def test_reclaim_preserves_folders(tmp_path):
@@ -1884,7 +1903,7 @@ def test_handle_list_includes_run_id_and_path(tmp_path):
     em = listing["emanations"][0]
     assert "run_id" in em
     assert "path" in em
-    assert em["run_id"].startswith("em-1-")
+    _assert_compact_daemon_id(em["run_id"])
     assert em["path"].endswith(em["run_id"])
 
 

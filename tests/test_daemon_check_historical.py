@@ -4,21 +4,20 @@ Regression coverage for the post-refresh/molt bug: immediately after a
 refresh or molt the parent gets a fresh ``DaemonManager`` whose in-memory
 ``_emanations`` registry is empty (``__init__`` deliberately does NOT
 reconstruct registry entries from disk). A daemon terminal notification still
-points at a valid ``daemons/<run_id>/result.txt``, but
-``daemon(action="check", id="em-5")`` used to answer ``Unknown emanation``
-because it only consulted the empty in-memory registry.
+points at a valid ``daemons/<run_id>/result.txt``, but historical lookup used
+to consult only the empty in-memory registry.
 
 These tests build completed historical run dirs on disk, then construct a
 fresh manager (empty registry, simulating post-refresh) and assert that
-``check`` resolves the historical run by short id / run id instead of
-erroring.
+``check`` resolves compact exact run ids and unique legacy handles, while
+rejecting ambiguous legacy short ids without returning an unbounded path list.
 """
 import json
 
 from tests._daemon_helpers import make_daemon_agent as _make_agent
 
 
-def _make_completed_run_dir(agent, em_id="em-5", result="final report text"):
+def _make_completed_run_dir(agent, em_id="em-5", result="final report text", run_id=None):
     """Create a real on-disk run dir, mark it done, then forget it.
 
     Returns the DaemonRunDir so the test can read back its paths. The caller
@@ -29,6 +28,7 @@ def _make_completed_run_dir(agent, em_id="em-5", result="final report text"):
     rd = DaemonRunDir(
         parent_working_dir=agent._working_dir,
         handle=em_id,
+        run_id=run_id,
         task="historical task",
         tools=["file"],
         model="mock-model",
@@ -75,6 +75,22 @@ def test_check_resolves_completed_historical_run_by_short_id(tmp_path):
     assert "daemon_done" in event_types
 
 
+
+def test_check_resolves_completed_historical_run_by_compact_id(tmp_path):
+    agent = _make_agent(tmp_path)
+    rd = _make_completed_run_dir(agent, "em-abcd", "compact daemon work", run_id="em-abcd")
+
+    mgr = _fresh_manager(agent)
+    out = mgr.handle({"action": "check", "id": "em-abcd"})
+
+    assert out.get("status") != "error", out
+    assert out["id"] == "em-abcd"
+    assert out["run_id"] == "em-abcd"
+    assert out["path"] == str(rd.path)
+    assert out["result_preview"] == "compact daemon work"
+    assert out.get("source") == "history"
+    assert "other_run_dirs" not in out
+
 def test_check_resolves_completed_historical_run_by_run_id(tmp_path):
     agent = _make_agent(tmp_path)
     rd = _make_completed_run_dir(agent, "em-6", "by run id")
@@ -89,14 +105,12 @@ def test_check_resolves_completed_historical_run_by_run_id(tmp_path):
     assert out.get("source") == "history"
 
 
-def test_check_picks_most_recent_when_short_id_is_ambiguous(tmp_path):
-    """When a short id maps to several historical run dirs (the counter resets
-    on refresh, so em-5 can recur), check resolves the most recent one
-    deterministically and reports the ambiguity."""
+def test_check_rejects_ambiguous_legacy_short_id_without_path_list(tmp_path):
+    """Ambiguous legacy short ids are rejected without bloating the result."""
     agent = _make_agent(tmp_path)
 
-    # Two completed runs share the short id em-7. Folder names embed a
-    # YYYYMMDD-HHMMSS timestamp; craft them so ordering is unambiguous.
+    # Two completed legacy runs share the short handle em-7. Exact run ids must
+    # still work, but the ambiguous handle should not return every matching path.
     daemons = agent._working_dir / "daemons"
     daemons.mkdir(parents=True, exist_ok=True)
 
@@ -127,15 +141,18 @@ def test_check_picks_most_recent_when_short_id_is_ambiguous(tmp_path):
     mgr = _fresh_manager(agent)
     out = mgr.handle({"action": "check", "id": "em-7"})
 
-    assert out.get("status") != "error", out
-    assert out["run_id"] == "em-7-20260623-110000-bbbbbb"
-    assert out["path"] == str(newer)
-    assert out["result_preview"] == "newer run"
-    # Ambiguity is surfaced, not hidden.
+    assert out["status"] == "error"
     assert out.get("ambiguous") is True
     assert out.get("match_count") == 2
-    assert isinstance(out.get("other_run_dirs"), list)
-    assert any("em-7-20260623-100000-aaaaaa" in p for p in out["other_run_dirs"])
+    assert out.get("latest_run_id") == "em-7-20260623-110000-bbbbbb"
+    assert "use the exact run_id" in out["message"]
+    assert "other_run_dirs" not in out
+
+    exact = mgr.handle({"action": "check", "id": "em-7-20260623-110000-bbbbbb"})
+    assert exact.get("status") != "error", exact
+    assert exact["run_id"] == "em-7-20260623-110000-bbbbbb"
+    assert exact["path"] == str(newer)
+    assert exact["result_preview"] == "newer run"
 
 
 def test_check_truly_unknown_id_still_errors(tmp_path):

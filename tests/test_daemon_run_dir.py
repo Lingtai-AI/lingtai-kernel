@@ -39,11 +39,21 @@ def test_construct_creates_folder_structure(tmp_path):
 
 
 def test_run_id_format(tmp_path):
-    """run_id is em-<N>-<YYYYMMDD-HHMMSS>-<6 hex chars>."""
+    """Direct callers without explicit run_id retain the legacy long format."""
     rd = _make_run_dir(tmp_path, handle="em-7")
     assert re.fullmatch(r"em-7-\d{8}-\d{6}-[0-9a-f]{6}", rd.run_id)
     assert rd.path.name == rd.run_id
 
+
+
+
+def test_explicit_compact_run_id_is_folder_name(tmp_path):
+    rd = _make_run_dir(tmp_path, handle="em-abcd", run_id="em-abcd")
+    assert rd.run_id == "em-abcd"
+    assert rd.path.name == "em-abcd"
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["handle"] == "em-abcd"
+    assert data["run_id"] == "em-abcd"
 
 def test_folder_lives_under_parent_daemons_dir(tmp_path):
     rd = _make_run_dir(tmp_path)
