@@ -33,6 +33,15 @@ class TestT:
         assert result == "nonexistent.key"
 
 
+    def test_stuck_revive_uses_err_desc_placeholder(self):
+        for lang in ("en", "zh", "wen"):
+            result = t(lang, "system.stuck_revive", ts="T", err_desc="ERR")
+            assert "T" in result
+            assert "ERR" in result
+            assert "{tool_calls}" not in result
+            assert "{err_desc}" not in result
+
+
 class TestContextBreakdownKeys:
     def test_context_breakdown_en(self):
         result = t("en", "system.context_breakdown", pct="7.1%", sys=4720, ctx=9450)

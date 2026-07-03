@@ -329,7 +329,7 @@ def _prepare_aed_retry_message(agent, err_desc: str) -> Message:
         agent._config.language,
         "system.stuck_revive",
         ts=ts,
-        tool_calls=err_desc,
+        err_desc=err_desc,
     )
     return _make_message(MSG_REQUEST, "system", aed_msg)
 
