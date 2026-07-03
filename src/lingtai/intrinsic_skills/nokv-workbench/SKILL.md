@@ -4,9 +4,10 @@ description: >
   Thin routing manual for NoKV-controlled workbenches. Use when an agent is
   asked to persist task inputs, scripts, outputs, logs, provenance, or run
   manifests through the `workbench_*` MCP tools instead of ordinary local
-  file writes. Covers MCP registration, directory layout, commit discipline,
-  segmented logs, and snapshot references.
-version: 0.1.0
+  file writes. Covers MCP registration, directory layout, append and edit
+  discipline, conditional reads, cross-workbench queries, commit discipline,
+  and snapshot references.
+version: 0.2.0
 tags: [nokv, mcp, workbench, artifacts, provenance, snapshots]
 ---
 
@@ -42,7 +43,8 @@ Activate it from `init.json`:
 Keep the global NoKV flags before `mcp`, and set them to the same metadata
 server and object-store bucket used by the running NoKV service. If your
 deployment uses a non-default S3/RustFS endpoint or credentials, add the
-matching `--s3-*` flags here as well.
+matching `--s3-*` flags here as well. Developer deployment steps live in
+`assets/PREFLIGHT.md`, not here.
 
 ### Per-agent root (tenant isolation)
 
@@ -66,32 +68,6 @@ provenance is explicit; the committed `run_manifest.json` also embeds the full
 
 The MCP tools are intentionally prefixed with `workbench_` so they do not replace
 LingTai's local `read`, `write`, `edit`, `grep`, or `glob` tools.
-
-## TUI runtime preflight
-
-Before installing a workbench-enabled LingTai branch into the TUI runtime,
-check the runtime package version:
-
-```bash
-~/.lingtai-tui/runtime/venv/bin/python - <<'PY'
-import importlib.metadata as md
-print(md.version("lingtai"))
-PY
-```
-
-Do not install a source branch that is older than the runtime package already
-used by TUI. Rebase or cherry-pick this workbench skill onto the matching or
-newer upstream LingTai release, build/install that branch, then verify that the
-runtime can see the skill:
-
-```bash
-~/.lingtai-tui/runtime/venv/bin/python - <<'PY'
-from pathlib import Path
-import lingtai.intrinsic_skills as skills
-root = Path(skills.__file__).parent
-print((root / "nokv-workbench" / "SKILL.md").exists())
-PY
-```
 
 ## Layout
 
@@ -136,15 +112,26 @@ with `workbench_create`.
    that section: use `section="outputs", path="spectrum.csv"`, not
    `path="outputs/spectrum.csv"`.
 
-3. For logs, write segmented files rather than appending:
+3. Grow logs and journals with `workbench_append` — one file per stream,
+   appended record by record:
 
-```text
-logs/agent_trace/000001.log
-logs/tool_calls/000001.jsonl
-logs/tool_calls/000002.jsonl
+```json
+{"id":"spedas-task-001","section":"logs","path":"tool_calls.jsonl","text":"{\"tool\":\"bash\",\"status\":\"ok\"}\n"}
 ```
 
-4. Commit only after required outputs are present:
+   Append creates the file if it does not exist. Concurrent appends to the
+   same file are retried automatically with backoff; under sustained
+   contention a conflict error can still surface — retry the append once
+   before treating it as a coordination bug. Do not re-upload a growing file
+   with `put_file replace=true`, and do not hand-number segment files — both
+   are obsolete workarounds.
+
+4. Make small in-place changes with `workbench_edit` (same semantics as the
+   local `edit` tool: `old_string` must match exactly once unless
+   `replace_all=true`; the error texts match too). Reserve
+   `put_file replace=true` for whole-file replacement.
+
+5. Commit only after required outputs are present:
 
 ```json
 {
@@ -154,7 +141,7 @@ logs/tool_calls/000002.jsonl
     "inputs": ["input/event.json", "input/dataset-ref.json"],
     "scripts": ["scripts/analysis.py"],
     "outputs": ["outputs/plot_001.png", "outputs/spectrum.csv"],
-    "logs": ["logs/tool_calls/000001.jsonl"],
+    "logs": ["logs/tool_calls.jsonl"],
     "provenance": "metadata/provenance.json"
   }
 }
@@ -163,35 +150,75 @@ logs/tool_calls/000002.jsonl
 `workbench_commit` publishes `metadata/run_manifest.json`. In v0 this file
 is the completion marker. A workbench without it is not complete.
 
-5. Snapshot the committed workbench with `workbench_snapshot` and cite the
+6. Snapshot the committed workbench with `workbench_snapshot` and cite the
 returned `snapshot_id` and `read_version` in final reports or handoff notes.
 
 ## Concurrency
 
 For the MVP, use a parent-created workbench and child-filled files:
 
-- The parent agent creates the workbench, assigns disjoint section-relative
-  paths, validates outputs, commits, and snapshots.
+- The parent agent creates the workbench, assigns section-relative paths,
+  validates outputs, commits, and snapshots.
 - Child or daemon agents only write the paths assigned by the parent. They do
   not create, commit, snapshot, or write `metadata/run_manifest.json`.
-- Assign disjoint prefixes such as `outputs/agent-a/` and `logs/agent-a/`.
-- Do not let two agents write the same file path. Same-path writes with
-  `replace=false` intentionally fail with an exists conflict; treat that as a
-  coordination bug, not a reason to bypass with `replace=true`.
+- Multiple writers may `workbench_append` to the same log file — appends are
+  serialized by the server with automatic retry. Everything else stays
+  disjoint: assign prefixes such as `outputs/agent-a/` and never let two
+  agents `put_file` or `edit` the same path. Same-path `put_file` with
+  `replace=false` intentionally fails with an exists conflict; treat that as
+  a coordination bug, not a reason to bypass with `replace=true`.
 
 ## Read and search
 
-Use `workbench_find` to query across workbenches. By default it returns
-compact committed-state and manifest summaries rather than full manifest
-bodies. Pass `include_manifest=true` only when the full
-`metadata/run_manifest.json` envelope is needed.
+Reading inside one workbench:
 
-Use `workbench_list`, `workbench_stat`, `workbench_read`, and
-`workbench_grep` for content inside one workbench. Query tools return
-flat `section`, `relative_path`, and `path` fields so follow-up calls can reuse
-`section` and `relative_path` directly. NoKV grep is a case-insensitive
-literal substring search, not regex. Use LingTai's local `grep` for local
-workdir text and NoKV grep for workbench artifacts.
+- `workbench_read` pages structured records (JSON, text lines) with
+  `cursor`/`offset`/`limit` (limit up to 300 records). For polling or
+  re-checking a file you already read, pass
+  `if_none_match: <generation from the previous response>` — an unchanged
+  file returns a tiny `not_modified` response instead of the full body.
+  Exception: right after a context molt, read without `if_none_match`; you
+  need the content back, not a not-modified marker.
+- Files larger than the structured limit: use `format="bytes"` with
+  `offset`/`limit` ranges (bytes come back base64-encoded), or
+  `workbench_grep` to locate lines first.
+- Record shape depends on content type: `.json` files parse into JSON
+  records; `.jsonl`, `.log`, and other text files come back as `text_lines`
+  records whose `value.text` holds the raw line — parse it yourself when the
+  line is JSON.
+- `workbench_grep` searches file bodies for case-insensitive **literal**
+  substrings (not regex). Pass several alternatives at once with
+  `patterns: ["营养", "食谱", "recipe"]` (OR semantics); a single `pattern`
+  containing `|` is split into alternatives automatically. Filter files with
+  `glob` (basename match, `*` and `?`, CJK-safe, e.g. `"*.md"`). `limit`
+  accepts up to 300 matches. Narrow with `section`/`glob` first; huge result
+  sets get compacted out of your context later.
+
+Searching across workbenches:
+
+- `workbench_find` answers "which workbenches are committed / mention X in
+  the manifest". It returns compact committed-state and manifest summaries;
+  pass `include_manifest=true` only when the full
+  `metadata/run_manifest.json` envelope is needed.
+- `workbench_search` answers path- and metadata-level queries: predicates
+  over the built-in fields with sort, projection, and facets. Omit `id` to
+  search every workbench under your root; matches come back with
+  `workbench_id`, `section`, and `relative_path`. Built-in queryable fields
+  (no index registration needed): `path`, `name`, `kind`, `size_bytes`,
+  `body.content_type`, `body.producer`, `body.manifest_id`. A single
+  `workbench_search` with `facets: ["body.content_type"]` replaces a
+  list-then-stat sweep.
+- `workbench_aggregate` computes count/sum/avg/min/max with `group_by` over
+  the same fields. `workbench_catalog` lists the queryable fields; until
+  custom indexes exist it always returns the built-in set above, so calling
+  it is rarely necessary.
+- **Content search stays with `workbench_grep`** — `workbench_search`
+  matches paths and metadata, not file contents.
+
+Query tools return flat `section`, `relative_path`, and `path` fields so
+follow-up calls can reuse `section` and `relative_path` directly. Use
+LingTai's local `grep` for local workdir text and NoKV tools for workbench
+artifacts.
 
 ## Commit checklist
 
@@ -201,5 +228,5 @@ Before calling `workbench_commit`, verify:
 - `scripts/` has code or notebooks needed to reproduce the result.
 - `outputs/` has the requested deliverables.
 - `metadata/provenance.json` exists when provenance is required.
-- `logs/` contains evidence segments rather than one append-only file.
+- `logs/` contains the evidence streams (appended files are fine).
 - The manifest lists relative paths inside the workbench sections.
