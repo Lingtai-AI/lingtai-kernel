@@ -8,9 +8,12 @@ feeds deltas through the accumulator's methods, then calls finalize().
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from .base import LLMResponse, ToolCall, UsageMetadata
+
+logger = logging.getLogger(__name__)
 
 
 class StreamingAccumulator:
@@ -176,5 +179,6 @@ def _finalize_tool(pending: dict[str, str]) -> ToolCall:
     try:
         args = json.loads(args_json) if args_json else {}
     except json.JSONDecodeError:
+        logger.warning("streamed tool-call args JSON parse failed; defaulting to {}")
         args = {}
     return ToolCall(name=pending["name"], args=args, id=pending["id"] or None)
