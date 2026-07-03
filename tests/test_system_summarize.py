@@ -282,7 +282,7 @@ def test_done_marker_not_counted_pending_after_rebuild():
 
 
 def test_automatic_release_hook_marks_pending_done():
-    # The tiny hook the automatic 0.95 delayed reconstruction uses:
+    # The tiny hook the 1.0 hard-boundary forced rebuild uses:
     # mark_pending_summaries_done flips pending → done in history, and a later
     # summarize-only comment then excludes those markers from pending totals.
     iface = ChatInterface()
