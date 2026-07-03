@@ -35,11 +35,11 @@ def get_schema(lang: str = "en") -> dict:
             },
             "rebuild_only": {
                 "type": "boolean",
-                "description": "For action='summarize': request a one-shot provider-context rebuild without summarizing any items. Use with no items.",
+                "description": "For action='summarize': request a one-shot provider-context rebuild that makes already-recorded summaries active in the provider context now, without summarizing any new items. Use with no items. Ordinary summarize only records compact replacements in runtime history; it does NOT rebuild the active provider context on its own. This is the explicit path (offered by the 75% context.rebuild hint) to apply recorded summaries sooner than the automatic 95% reconstruction.",
             },
             "dry_run": {
                 "type": "boolean",
-                "description": "Alias for rebuild_only for action='summarize'; performs no compression and only requests rebuild.",
+                "description": "Alias for rebuild_only for action='summarize'. NOT a no-op simulation despite the name: it performs no compression but does request a real one-shot provider-context rebuild, exactly like rebuild_only=true. Use with no items.",
             },
             "items": {
                 "type": "array",

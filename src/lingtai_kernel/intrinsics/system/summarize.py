@@ -116,11 +116,12 @@ def _request_rebuild_only(agent, *, current_threshold: int) -> dict:
         "rebuild_requested": requested,
         "notification_threshold_chars": current_threshold,
         "reconstruction": (
-            "No tool results were summarized. A one-shot provider-context rebuild "
-            "was requested for the next model call."
+            "No tool results were summarized (rebuild-only). A one-shot, no-compression "
+            "provider-context rebuild was requested for the next model call, making any "
+            "already-recorded summaries active without waiting for the automatic 95% path."
             if requested
-            else "No tool results were summarized. This chat backend has no explicit "
-            "rebuild hook (or continuation is disabled), so there may be no "
+            else "No tool results were summarized (rebuild-only). This chat backend has no "
+            "explicit rebuild hook (or continuation is disabled), so there may be no "
             "provider-context action to take."
         ),
     }
@@ -378,23 +379,27 @@ def _summarize(agent, args: dict) -> dict:
     }
 
     # Reassure the agent that runtime-history bookkeeping happened while
-    # provider-side context reconstruction is intentionally delayed.  The
-    # chat-history block was updated and large-result reminders were cleared
-    # immediately above; the active provider request may still ride the existing
-    # append/continuation prefix with the old raw block until summarized history
-    # is pending and context reaches the runtime reconstruction threshold (0.95
-    # of the window). Above 0.75 the runtime stamps a manual rebuild hint so the
-    # agent may call rebuild_only once if a fresh provider context is worth the
-    # cost. This is a short, generic status, not a per-provider policy object —
+    # provider-side context reconstruction is intentionally delayed.  Recording a
+    # summary updates runtime history and clears matching large-result reminders;
+    # it does NOT by itself rebuild the active provider context, even above 0.75.
+    # The active provider request may still ride the existing append/continuation
+    # prefix with the old raw block until summarized history is pending and context
+    # reaches the automatic reconstruction threshold (0.95 of the window). Above
+    # 0.75 the runtime stamps a manual rebuild HINT — a permission/decision prompt,
+    # not an automatic rebuild — so the agent may explicitly call rebuild_only once
+    # to make recorded summaries active sooner if a fresh provider context is worth
+    # the cost. This is a short, generic status, not a per-provider policy object —
     # runtimes that reconstruct on every request simply observe no delay.
     if summarized_count > 0:
         result["reconstruction"] = (
-            "Summary recorded in runtime history. The active provider context may still "
-            "contain the old result until delayed reconstruction; when summarized history "
-            "is pending, reconstruction happens automatically once context reaches 0.95 "
-            "of the window. Above 0.75, _meta.tool_meta.context.rebuild may invite "
-            "a one-shot system(action='summarize', rebuild_only=true) if you want to "
-            "pay for an earlier rebuild without compression. This is normal — keep "
+            "Summary recorded in runtime history. This does NOT itself rebuild the active "
+            "provider context: it may still contain the old raw result until reconstruction. "
+            "When summarized history is pending, an automatic rebuild happens once context "
+            "reaches 0.95 of the window (the safety path). Above 0.75, "
+            "_meta.tool_meta.context.rebuild is a permission/decision prompt, not an "
+            "automatic rebuild: if making these recorded summaries active sooner is worth "
+            "the cost, you MAY call system(action='summarize', rebuild_only=true) once (no "
+            "items) to force an earlier no-compression rebuild. This is normal — keep "
             "working. See meta_guidance and substrate for details."
         )
 

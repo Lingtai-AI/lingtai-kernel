@@ -231,12 +231,16 @@ def test_summarize_single_item_success():
     assert result["items"][0]["tool_call_id"] == "tc-001"
     # A successful summarize carries a short, generic reassurance that the
     # summary bookkeeping is recorded now and provider reconstruction is delayed.
+    # The wording makes explicit that recording a summary does NOT itself rebuild
+    # the active provider context (the 75% hint is a permission, the 95% path is
+    # automatic) — it does not imply ordinary summarize triggers a rebuild.
     assert "reconstruction" in result
     assert "runtime history" in result["reconstruction"]
-    assert "active provider context may still contain the old result" in result["reconstruction"]
-    assert "delayed" in result["reconstruction"]
+    assert "does NOT itself rebuild the active provider context" in result["reconstruction"]
+    assert "old raw result" in result["reconstruction"]
+    assert "0.95" in result["reconstruction"]
+    assert "permission/decision prompt, not an" in result["reconstruction"]
     assert "keep working" in result["reconstruction"]
-    assert "summarized history" in result["reconstruction"]
     assert "See meta_guidance and substrate for details" in result["reconstruction"]
     # Not a provider-specific policy object — a plain status string.
     assert isinstance(result["reconstruction"], str)

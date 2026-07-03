@@ -954,10 +954,13 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
     if pressure < CONTEXT_PRESSURE_HIGH_RATIO:
         return None
     return (
-        "context now above 75%, you are allowed to rebuild context via "
-        "system(action='summarize', rebuild_only=true) or summarize already-"
-        "digested results; forced rebuild will be triggered at 95% context; "
-        "see meta_guidance for details."
+        "context now above 75%: recording summaries does NOT itself rebuild the "
+        "active provider context. If recorded summaries are worth making active "
+        "sooner, you MAY pay for a one-shot provider-context rebuild via "
+        "system(action='summarize', rebuild_only=true) (no items). This is a "
+        "permitted option, not a requirement; if pending summaries exist, an "
+        "automatic rebuild still happens at 95%. Keep summarizing digested "
+        "results to shrink recorded history either way. See meta_guidance for details."
     )
 
 

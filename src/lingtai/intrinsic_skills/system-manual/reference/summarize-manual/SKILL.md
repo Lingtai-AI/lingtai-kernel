@@ -215,9 +215,13 @@ summarize would discard cache benefit.
   layer and the session keeps appending. This delay is normal, not a failure; do
   not call `refresh` merely to "apply" the summary.
 - **At or above 0.75 of the context window:** `_meta.tool_meta.context.rebuild`
-  is stamped continuously. If an earlier fresh provider context is worth the
-  cost, make one explicit `system(action="summarize", rebuild_only=true)` call
-  with no items. Do not loop rebuild-only calls.
+  is stamped continuously. It is a decision prompt / permission, not an automatic
+  rebuild — recording summaries never triggers a provider-context rebuild on its
+  own. If making already-recorded summaries active in the provider context earlier
+  is worth the cost, make one explicit `system(action="summarize",
+  rebuild_only=true)` call with no items (its `dry_run=true` alias behaves
+  identically — despite the name it is not a no-op simulation, it requests the same
+  real one-shot no-compression rebuild). Do not loop rebuild-only calls.
 - **At or above 0.95 of the context window:** if summarized history is pending,
   the runtime automatically reconstructs with compacted history on the next
   provider request. No repeat summarize call or manual action is required for the
