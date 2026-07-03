@@ -335,6 +335,41 @@ def test_empty_llm_response_error_carries_provider_diagnostics():
     )
 
 
+
+
+def test_empty_llm_response_allows_missing_usage_metadata():
+    logs: list[tuple[str, dict]] = []
+    agent = SimpleNamespace(
+        _cancel_event=threading.Event(),
+        _executor=SimpleNamespace(guard=SimpleNamespace()),
+        _log=lambda event, **fields: logs.append((event, fields)),
+    )
+    response = LLMResponse(
+        text="",
+        tool_calls=[],
+        thoughts=[],
+        usage=None,
+        raw=None,
+        api_call_id="api_no_usage",
+    )
+
+    with pytest.raises(turn.EmptyLLMResponseError) as excinfo:
+        turn._process_response(agent, response, ledger_source="tc_wake")
+
+    assert excinfo.value.api_call_id == "api_no_usage"
+    assert logs == [
+        (
+            "empty_llm_response",
+            {
+                "ledger_source": "tc_wake",
+                "in_tool_loop": False,
+                "output_tokens": 0,
+                "thinking_tokens": 0,
+                "api_call_id": "api_no_usage",
+            },
+        )
+    ]
+
 def test_tc_wake_error_logs_empty_response_diagnostics(tmp_path):
     from lingtai_kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
     from lingtai_kernel.message import _make_message, MSG_TC_WAKE
