@@ -1558,12 +1558,13 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                     _diag["finish_reason"] = getattr(
                         choices[0], "finish_reason", None
                     )
+            usage = getattr(response, "usage", None)
             agent._log(
                 "empty_llm_response",
                 ledger_source=ledger_source,
                 in_tool_loop=in_tool_loop,
-                output_tokens=response.usage.output_tokens,
-                thinking_tokens=response.usage.thinking_tokens,
+                output_tokens=getattr(usage, "output_tokens", 0) or 0,
+                thinking_tokens=getattr(usage, "thinking_tokens", 0) or 0,
                 api_call_id=getattr(response, "api_call_id", None),
                 **_diag,
             )
