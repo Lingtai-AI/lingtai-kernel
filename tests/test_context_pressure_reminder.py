@@ -14,6 +14,7 @@ import pytest
 
 from lingtai_kernel.config import (
     CONTEXT_PRESSURE_HIGH_RATIO,
+    CONTEXT_PRESSURE_FORCED_REBUILD_RATIO,
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
     CONTEXT_PRESSURE_RECOVERY_TARGET,
     CONTEXT_PRESSURE_WARN_AFTER_ROUNDS,
@@ -46,7 +47,9 @@ from lingtai_kernel.reminders.context_pressure import (
 def test_defaults_match_kernel_constants():
     r = ContextPressureReminder()
     assert r.reconstruction_ratio == CONTEXT_PRESSURE_HIGH_RATIO == 0.75
-    assert CONTEXT_PRESSURE_RECONSTRUCTION_RATIO == 0.95
+    assert CONTEXT_PRESSURE_FORCED_REBUILD_RATIO == 1.0
+    # back-compat alias now points at the 1.0 hard forced-rebuild boundary
+    assert CONTEXT_PRESSURE_RECONSTRUCTION_RATIO == CONTEXT_PRESSURE_FORCED_REBUILD_RATIO == 1.0
     assert r.warn_after_rounds == CONTEXT_PRESSURE_WARN_AFTER_ROUNDS == 3
     assert r.recovery_target == CONTEXT_PRESSURE_RECOVERY_TARGET == 0.60
 
@@ -410,7 +413,7 @@ def test_current_molt_emission_descriptor_fields():
 def test_reconstruction_molt_emission_descriptor_still_high_branch():
     event = {
         "type": "delayed_summarize_reconstruction",
-        "trigger_threshold": 0.95,
+        "trigger_threshold": 1.0,
         "recovery_target": 0.60,
         "before": {"usage": 0.85},
         "after": {"usage": 0.80, "source": "provider_input_tokens"},
@@ -422,7 +425,7 @@ def test_reconstruction_molt_emission_descriptor_still_high_branch():
     assert payload["target_path"] == RECONSTRUCTION_MOLT_TARGET_PATH
     assert payload["target_path"] == "_meta.tool_meta.reconstruction.molt"
     assert payload["message_hash"] == reminder_message_hash(message)
-    assert payload["trigger_threshold"] == 0.95
+    assert payload["trigger_threshold"] == 1.0
     assert payload["recovery_target"] == 0.60
     assert payload["before_usage"] == pytest.approx(0.85)
     assert payload["after_usage"] == pytest.approx(0.80)
@@ -436,7 +439,7 @@ def test_reconstruction_molt_emission_descriptor_still_high_branch():
 
 def test_reconstruction_molt_emission_descriptor_above_recovery_branch():
     event = {
-        "trigger_threshold": 0.95,
+        "trigger_threshold": 1.0,
         "recovery_target": 0.60,
         "before": {"usage": 0.85},
         "after": {"usage": 0.70, "source": "local_estimate"},
@@ -450,7 +453,7 @@ def test_reconstruction_molt_emission_descriptor_above_recovery_branch():
 
 def test_reconstruction_molt_emission_descriptor_missing_before_is_none():
     event = {
-        "trigger_threshold": 0.95,
+        "trigger_threshold": 1.0,
         "recovery_target": 0.60,
         "after": {"usage": 0.80},
     }

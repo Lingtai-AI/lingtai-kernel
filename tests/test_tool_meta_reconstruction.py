@@ -54,9 +54,34 @@ def _tool_meta(wire):
     return wire.get("_meta", {}).get("tool_meta", {})
 
 
+# A 1.0 forced-rebuild event as build_reconstruction_tool_meta emits it: one
+# unified `warning`, no separate proactive_hint/molt.
 _EVENT = {
     "type": "delayed_summarize_reconstruction",
-    "trigger_threshold": 0.95,
+    "trigger_threshold": 1.0,
+    "recovery_target": 0.60,
+    "context_window": 100000,
+    "before": {"context_tokens": 100000, "usage": 1.0},
+    "after": {"context_tokens": 70000, "usage": 0.70},
+    "warning": (
+        "Forced provider-context rebuild applied at the 100% hard context boundary. "
+        "Context changed from 100000 tokens (100%) before to 70000 tokens (70%) "
+        "after. Reaching the full-context boundary means waiting until context was "
+        "full was not ideal — when context is high, prefer a proactive "
+        "system(action='summarize', rebuild=true) at the 75% rebuild hint instead of "
+        "letting the emergency boundary force it. If the rebuilt context is still "
+        "above the 60% recovery target, tend durable stores and molt. See "
+        "meta_guidance, substrate, and procedures."
+    ),
+}
+
+
+# A MANUAL rebuild=true reconstruction event still carries a molt reminder (not
+# the forced-rebuild warning) when the rebuilt context stays above recovery.
+_MANUAL_MOLT_EVENT = {
+    "type": "summarize_rebuild_only_reconstruction",
+    "reason": "summarize_rebuild_only_reconstruction",
+    "trigger_threshold": 1.0,
     "recovery_target": 0.60,
     "context_window": 100000,
     "before": {"context_tokens": 85000, "usage": 0.85},
@@ -67,14 +92,6 @@ _EVENT = {
         "above the 60% recovery target. If more digested tool results can be "
         "summarized, do that first; otherwise tend durable stores and molt "
         "deliberately. See psyche-manual."
-    ),
-    "proactive_hint": (
-        "Emergency provider-context rebuild has been applied automatically at 95% "
-        "of the context window. You should have used system(action='summarize', "
-        "rebuild_only=true) once after context passed 75% to proactively rebuild "
-        "context and reduce pressure before the forced path was needed. See "
-        "meta_guidance and summarize-manual for the manual 75% rebuild vs "
-        "automatic 95% rebuild rule."
     ),
 }
 
@@ -98,13 +115,15 @@ def test_reconstruction_event_attaches_to_tool_meta(tmp_path):
     assert tm["id"] == "tc-1"
     # Event rides on tool_meta (permanent), not agent_meta.
     assert tm["reconstruction"]["type"] == "delayed_summarize_reconstruction"
-    assert tm["reconstruction"]["before"]["usage"] == 0.85
+    assert tm["reconstruction"]["before"]["usage"] == 1.0
     assert tm["reconstruction"]["after"]["usage"] == 0.70
-    assert isinstance(tm["reconstruction"]["molt"], str)
-    assert "runtime already rebuilt the provider context" in tm["reconstruction"]["molt"]
-    assert "molt deliberately" in tm["reconstruction"]["molt"]
-    assert "proactive_hint" in tm["reconstruction"]
-    assert "rebuild_only=true" in tm["reconstruction"]["proactive_hint"]
+    # 1.0 forced rebuild: one unified warning, no proactive_hint/molt.
+    assert isinstance(tm["reconstruction"]["warning"], str)
+    assert "Forced provider-context rebuild" in tm["reconstruction"]["warning"]
+    assert "rebuild=true" in tm["reconstruction"]["warning"]
+    assert "molt" in tm["reconstruction"]["warning"]
+    assert "proactive_hint" not in tm["reconstruction"]
+    assert "molt" not in tm["reconstruction"]
 
 
 def test_reconstruction_event_is_one_shot_across_batch(tmp_path):
@@ -168,12 +187,13 @@ def _capture_logger():
 
 
 def test_reconstruction_event_emits_reminder_event_when_molt_attached(tmp_path):
+    # A MANUAL rebuild=true event still carries a molt reminder -> emit the event.
     events, logger = _capture_logger()
     calls = {"n": 0}
 
     def fn():
         calls["n"] += 1
-        return dict(_EVENT) if calls["n"] == 1 else None
+        return dict(_MANUAL_MOLT_EVENT) if calls["n"] == 1 else None
 
     executor, captured = _make_executor(
         dispatch_fn=lambda tc: {"ok": True},
@@ -193,7 +213,7 @@ def test_reconstruction_event_emits_reminder_event_when_molt_attached(tmp_path):
     assert payload["before_usage"] == 0.85
     assert payload["after_usage"] == 0.70
     assert payload["branch"] == "above_recovery"
-    assert payload["trigger_threshold"] == 0.95
+    assert payload["trigger_threshold"] == 1.0
     assert payload["recovery_target"] == 0.60
     # Redaction-safe: no full reminder prose in the event payload.
     import json
@@ -201,21 +221,26 @@ def test_reconstruction_event_emits_reminder_event_when_molt_attached(tmp_path):
     assert "runtime already rebuilt" not in json.dumps(payload)
 
 
-def test_reconstruction_event_no_reminder_event_when_no_molt(tmp_path):
-    # Event below the recovery target carries no molt -> no reminder event, but
-    # the structured evidence is still attached.
+def test_forced_rebuild_warning_does_not_emit_molt_reminder_event(tmp_path):
+    # A 1.0 forced-rebuild event carries `warning`, not `molt`, so NO molt-reminder
+    # event is emitted, but the structured evidence (including the warning) is
+    # still attached.
     events, logger = _capture_logger()
-    event_no_molt = {k: v for k, v in _EVENT.items() if k != "molt"}
 
     executor, captured = _make_executor(
         dispatch_fn=lambda tc: {"ok": True},
         working_dir=tmp_path,
-        reconstruction_event_fn=lambda: event_no_molt,
+        reconstruction_event_fn=lambda: dict(_EVENT),
         logger_fn=logger,
     )
     executor.execute([ToolCall(name="read", args={}, id="tc-1")])
     _, wire = captured.call_args.args
-    assert "reconstruction" in _tool_meta(wire)
+    tm = _tool_meta(wire)
+    assert "reconstruction" in tm
+    assert "warning" in tm["reconstruction"]
+    assert "molt" not in tm["reconstruction"]
+    emitted = [e for e in events if e[0] == "context_pressure_reconstruction_molt_reminder_emitted"]
+    assert emitted == []
     assert "molt" not in _tool_meta(wire)["reconstruction"]
     assert not any(
         e[0] == "context_pressure_reconstruction_molt_reminder_emitted" for e in events

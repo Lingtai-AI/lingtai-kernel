@@ -33,13 +33,9 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "boolean",
                 "description": t(lang, "system_tool.revert_preset_description"),
             },
-            "rebuild_only": {
+            "rebuild": {
                 "type": "boolean",
-                "description": "For action='summarize': request a one-shot provider-context rebuild without summarizing any items. Use with no items.",
-            },
-            "dry_run": {
-                "type": "boolean",
-                "description": "Alias for rebuild_only for action='summarize'; performs no compression and only requests rebuild.",
+                "description": "For action='summarize' (default false): request a provider-context rebuild that makes recorded summaries active in the active provider context now. With items, summaries are recorded first and then the rebuild is requested; with no items, it is a pure rebuild using the already-pending summaries. When false (the default), summarize only records compact replacements in runtime history and does NOT rebuild the active provider context — the old raw result may still ride the current continuation until a rebuild applies it (a manual rebuild=true, or the 1.0 full-context hard boundary where the runtime forces a rebuild regardless of pending). Prefer one tactical rebuild=true call when context is high (>=0.75 / the context.rebuild hint) or a fresh context is worth the cache-miss cost; do not loop rebuild. Note: rebuild=false with no items is an invalid no-op.",
             },
             "items": {
                 "type": "array",

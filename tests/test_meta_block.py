@@ -401,7 +401,7 @@ def test_build_meta_guidance_renders_guidance_meta_readme_and_adapter():
     assert "progressive disclosure" in section
     assert "Delayed summarization reconstruction threshold" in section
     assert "0.75" in section
-    assert "0.95" in section
+    assert "1.0" in section
     assert "Do not call `refresh` just to apply a summarize" in section
     assert "does not mean the active provider-side context" in section
     # meta_readme content (the _meta envelope explanation) is present.
@@ -1716,10 +1716,23 @@ def _recon_agent(
     return agent
 
 
+# The 1.0 FORCED rebuild event. trigger_threshold is now the 1.0 hard boundary,
+# before-context is at/above full (100%).
 _RAW_EVENT = {
     "type": "delayed_summarize_reconstruction",
     "reason": "delayed_summarize_reconstruction",
-    "trigger_threshold": 0.95,
+    "trigger_threshold": 1.0,
+    "recovery_target": 0.60,
+    "context_window": 100000,
+    "before": {"context_tokens": 100000, "usage": 1.0},
+}
+
+# The MANUAL rebuild=true event still uses the recovery molt (not the forced
+# unified warning).
+_RAW_MANUAL_EVENT = {
+    "type": "summarize_rebuild_only_reconstruction",
+    "reason": "summarize_rebuild_only_reconstruction",
+    "trigger_threshold": 1.0,
     "recovery_target": 0.60,
     "context_window": 100000,
     "before": {"context_tokens": 85000, "usage": 0.85},
@@ -1731,38 +1744,47 @@ def test_reconstruction_tool_meta_none_when_no_pending_event():
     assert meta_block.build_reconstruction_tool_meta(agent) is None
 
 
-def test_reconstruction_tool_meta_below_recovery_target_no_warning():
-    # B usage 0.40 < 0.60 recovery target -> A->B event, NO molt warning.
+def test_forced_rebuild_always_carries_unified_warning_even_when_low():
+    # 1.0 forced rebuild: the unified warning is ALWAYS present, even when the
+    # rebuilt context dropped well below the recovery target. No separate molt or
+    # proactive_hint field — one unified string.
     agent = _recon_agent(raw_event=dict(_RAW_EVENT), after_usage=0.40)
     event = meta_block.build_reconstruction_tool_meta(agent)
     assert event is not None
     assert event["type"] == "delayed_summarize_reconstruction"
-    assert event["trigger_threshold"] == 0.95
+    assert event["trigger_threshold"] == 1.0
     assert event["recovery_target"] == 0.60
-    assert event["context_window"] == 100000
-    assert event["before"]["usage"] == 0.85
+    assert event["before"]["usage"] == 1.0
     assert event["after"]["usage"] == pytest.approx(0.40)
     assert event["after"]["context_tokens"] == 40000
     assert event["after"]["source"] == "provider_input_tokens"
+    # Unified warning, always present; no branching molt/proactive_hint.
     assert "molt" not in event
-    hint = event["proactive_hint"]
-    assert "Emergency provider-context rebuild" in hint
-    assert "95%" in hint
-    assert "75%" in hint
-    assert "rebuild_only=true" in hint
-    assert "meta_guidance" in hint
-    assert "summarize-manual" in hint
-
-
-def test_reconstruction_tool_meta_manual_rebuild_only_has_no_proactive_hint():
-    raw = dict(_RAW_EVENT)
-    raw["type"] = "summarize_rebuild_only_reconstruction"
-    raw["reason"] = "summarize_rebuild_only_reconstruction"
-    agent = _recon_agent(raw_event=raw, after_usage=0.40)
-    event = meta_block.build_reconstruction_tool_meta(agent)
-    assert event["type"] == "summarize_rebuild_only_reconstruction"
     assert "proactive_hint" not in event
+    warning = event["warning"]
+    assert "Forced provider-context rebuild applied at the 100% hard context boundary" in warning
+    assert "100000 tokens (100%) before" in warning
+    assert "40000 tokens (40%) after" in warning
+    assert "prefer a proactive" in warning
+    assert "rebuild=true" in warning
+    assert "0.75" in warning or "75%" in warning
+    assert "60%" in warning or "0.6" in warning
+    assert "molt" in warning
+    assert "meta_guidance" in warning
+
+
+def test_forced_rebuild_unified_warning_present_when_still_high():
+    # Same unified warning whether after landed low or stayed high — no branching.
+    agent = _recon_agent(raw_event=dict(_RAW_EVENT), after_usage=0.80)
+    event = meta_block.build_reconstruction_tool_meta(agent)
+    assert "warning" in event
     assert "molt" not in event
+    assert "proactive_hint" not in event
+    warning = event["warning"]
+    assert "Forced provider-context rebuild" in warning
+    assert "80000 tokens (80%) after" in warning
+    # The conditional molt instruction is inside the one unified string.
+    assert "molt" in warning
 
 
 def test_reconstruction_tool_meta_after_prefers_provider_input_tokens():
@@ -1776,9 +1798,8 @@ def test_reconstruction_tool_meta_after_prefers_provider_input_tokens():
     assert event["after"]["usage"] == pytest.approx(0.70)
     assert event["after"]["context_tokens"] == 70000
     assert event["after"]["source"] == "provider_input_tokens"
-    # 0.70 >= 0.60 recovery target -> warning, proving provider value (not the
-    # local 0.30) decides the molt warning.
-    assert "molt" in event
+    # Provider value (not the local 0.30) is reported in the unified warning.
+    assert "70000 tokens (70%) after" in event["warning"]
 
 
 def test_reconstruction_tool_meta_after_falls_back_to_local_estimate():
@@ -1791,43 +1812,32 @@ def test_reconstruction_tool_meta_after_falls_back_to_local_estimate():
     assert event["after"]["usage"] == pytest.approx(0.55)
     assert event["after"]["context_tokens"] == 55000
     assert event["after"]["source"] == "local_estimate"
-    assert "molt" not in event  # 0.55 < 0.60
+    assert "55000 tokens (55%) after" in event["warning"]
 
 
-def test_reconstruction_tool_meta_at_or_above_recovery_target_warns():
-    # B usage 0.70 >= 0.60 recovery target -> A->B event WITH molt reminder.
-    agent = _recon_agent(raw_event=dict(_RAW_EVENT), after_usage=0.70)
+def test_manual_rebuild_event_uses_recovery_molt_not_forced_warning():
+    # The manual rebuild=true event carries NO forced-rebuild warning; when the
+    # rebuilt context is still above the recovery target it carries the recovery
+    # molt reminder instead.
+    agent = _recon_agent(raw_event=dict(_RAW_MANUAL_EVENT), after_usage=0.70)
     event = meta_block.build_reconstruction_tool_meta(agent)
-    assert event["after"]["usage"] == pytest.approx(0.70)
-    assert "molt" in event
+    assert event["type"] == "summarize_rebuild_only_reconstruction"
+    assert "warning" not in event
+    assert "proactive_hint" not in event
     molt = event["molt"]
     assert isinstance(molt, str)
-    # Wording: reconstruction/summarize was attempted; pressure still above the
-    # recovery target; consider molt.
     assert "runtime already rebuilt the provider context" in molt
     assert "70%" in molt
     assert "60%" in molt
-    assert "one batch" in molt
-    assert "molt deliberately" in molt
-    assert "psyche-manual" in molt
-
-def test_reconstruction_tool_meta_still_above_high_context_threshold_says_to_molt():
-    # B usage still >= 0.75 after reconstruction: do not loop summarize forever.
-    agent = _recon_agent(raw_event=dict(_RAW_EVENT), after_usage=0.80)
-    event = meta_block.build_reconstruction_tool_meta(agent)
-    molt = event["molt"]
-    assert isinstance(molt, str)
-    assert "80%" in molt
-    assert "above the 75% high-context threshold" in molt
-    assert "substantially hurt token efficiency" in molt
-    assert "stop repeating summarize" in molt
     assert "molt deliberately" in molt
 
 
-def test_reconstruction_tool_meta_exactly_at_recovery_target_warns():
-    agent = _recon_agent(raw_event=dict(_RAW_EVENT), after_usage=0.60)
+def test_manual_rebuild_event_below_recovery_target_no_molt():
+    agent = _recon_agent(raw_event=dict(_RAW_MANUAL_EVENT), after_usage=0.40)
     event = meta_block.build_reconstruction_tool_meta(agent)
-    assert "molt" in event  # >= recovery target is inclusive
+    assert event["type"] == "summarize_rebuild_only_reconstruction"
+    assert "molt" not in event
+    assert "warning" not in event
 
 
 def test_reconstruction_tool_meta_is_one_shot():
@@ -2761,7 +2771,7 @@ def test_packaged_guidance_resource_is_valid():
     assert "stronger whole-conversation boundary" in body
     assert "skip pre-molt summarize" in body
     assert "0.75" in body
-    assert "0.95" in body
+    assert "1.0" in body
     assert "Do not call `refresh` just to apply a summarize" in body
     assert "does not mean the active provider-side context" in body
     assert "0.6 * context_window" in body
@@ -3252,7 +3262,11 @@ def test_build_context_rebuild_hint_stamps_after_high_ratio():
 
     assert hint is not None
     assert "context now above 75%" in hint
-    assert "rebuild_only=true" in hint
-    assert "forced rebuild will be triggered at 95% context" in hint
+    assert "rebuild=true" in hint
+    # The hint clarifies that recording summaries does not itself rebuild the
+    # provider context, that rebuild=true is a permitted option (not required),
+    # and that the runtime forces a rebuild at the 1.0 hard boundary otherwise.
+    assert "does NOT itself rebuild the active provider context" in hint
+    assert "forces a rebuild at the 1.0 hard boundary" in hint
     assert "meta_guidance" in hint
     assert build_context_rebuild_hint(SimpleNamespace(_intrinsics=set()), 0.90) is None

@@ -12,7 +12,7 @@ description: >
   its folder may carry scripts/assets as the substrate reference grows.
 version: 1.0.1
 tags: [lingtai, system-manual, substrate, runtime, lifecycle, communication, memory, notifications, mcp]
-last_changed_at: "2026-07-01T09:00:00-07:00"
+last_changed_at: "2026-07-03T00:00:00Z"
 ---
 
 # Substrate Manual
@@ -86,9 +86,9 @@ refresh, inspect registry/config health before retrying.
 Refresh is also the **emergency** context-reconstruction path: reach for it when
 context is broken or stale, or when an immediate provider-side rebuild is urgently
 needed. It is not part of the normal summarize flow — summarize records compact
-history now, offers an explicit rebuild-only path at 0.75 via
-`system(action="summarize", rebuild_only=true)`, and otherwise drives automatic
-delayed reconstruction at 0.95 of the context window (see `summarize` below), so
+history now, offers an explicit proactive rebuild path at 0.75 via
+`system(action="summarize", rebuild=true)`, and otherwise the runtime forces a
+rebuild at the 1.0 full-context hard boundary (see `summarize` below), so
 do not refresh just to "apply" a summarize.
 
 ### `presets`
@@ -164,7 +164,7 @@ of length. The
 summary preserves the conclusion, evidence, anchors, validation, risks, and next
 steps while lowering active context. Runtime high-attention guidance for this
 behavior is carried in `_meta.guidance`, including the resident 0.75 manual
-rebuild hint and 0.95 automatic delayed-reconstruction rule.
+rebuild hint and the 1.0 hard forced-rebuild boundary rule.
 Treat guidance as a system-prompt-like appendix placed at the end of context: it
 is an ordered `sections[]` structure, not a loose metadata bag.  The kernel's
 `meta_readme` explanation of the `_meta` envelope is therefore one guidance
@@ -177,17 +177,22 @@ Summarize records a compact replacement in runtime history and may clear large-r
 reminders, but active provider-side reconstruction is delayed.
 At the provider layer, runtimes serve requests by *appending* onto a stable
 cache/continuation prefix rather than *reconstructing* it each turn; rebuilding
-that prefix on every summarize would discard the cache benefit. So below 0.95 of
-the context window the summarize stays pending and the session keeps appending —
+that prefix on every summarize would discard the cache benefit. So below the
+full-context boundary the summarize stays pending and the session keeps appending —
 this delay is normal. Once context is at/above 0.75, the runtime stamps
 `_meta.tool_meta.context.rebuild`; if an earlier fresh provider context is worth
-the cost, make one explicit `system(action="summarize", rebuild_only=true)` call
-with no items. If summarized history is pending, then at 0.95 of the context
-window the runtime automatically reconstructs context with that compacted history
-on the next request. If that automatic 95% path fires, the one-shot
-`reconstruction.proactive_hint` points back here and explains that one proactive
-75% `rebuild_only` call could have relieved pressure before the forced rebuild.
-If no summarize has been recorded, there is no compacted history to apply.
+the cost, make one proactive tactical `system(action="summarize", rebuild=true)`
+call — with new items (record then apply the pending set) or with no items (pure
+rebuild of the already-pending summaries); applied summaries flip to
+`status: done`. Do not loop rebuild/summarize. At context usage 1.0 (the
+full-context hard boundary) the runtime forces a rebuild on the next request
+regardless of whether pending summaries exist: pending markers are applied and
+marked done, and with no pending summaries it still runs to release transient
+context. Every 1.0 forced rebuild ALWAYS carries a one-shot
+`reconstruction.warning` (before→after context, proactive-0.75-rebuild advice, and
+"if still above the 0.6 recovery target, molt"). Waiting until full context is not
+ideal — prefer the proactive 0.75 rebuild; if the pending total is 0, the forced
+rebuild has nothing to apply, so summarize more or molt instead.
 `refresh` is reserved for emergency reconstruction (see above). Summarize
 is a mini molt for a consumed tool result; molt is the stronger
 whole-conversation summarize boundary when summarize/reconstruction cannot get

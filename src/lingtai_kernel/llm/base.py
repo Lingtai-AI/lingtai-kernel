@@ -191,10 +191,11 @@ class ChatSession(ABC):
     def request_history_rebuild(self, reason: str = "summarize_rebuild_only") -> bool:
         """Request a provider-context rebuild without mutating chat history.
 
-        Used by ``system(action='summarize', rebuild_only=true)``. Adapters with
-        continuation/cache state can start a fresh full replay on the next model
-        request and return True; adapters that always rebuild or have no such
-        state may leave the default False.
+        Used by ``system(action='summarize', rebuild=true)`` (the ``reason``
+        default remains the internal ``summarize_rebuild_only`` epoch-reset label).
+        Adapters with continuation/cache state can start a fresh full replay on the
+        next model request and return True; adapters that always rebuild or have no
+        such state may leave the default False.
         """
 
         return False

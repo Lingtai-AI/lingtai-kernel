@@ -23,8 +23,8 @@ The abstraction owns:
     debugging (thresholds, streak, active, last usage/round, and why).
 
 Reminder prose now separates the 0.75 high-context/manual-rebuild threshold from
-the 0.95 automatic reconstruction trigger: high rounds still drive the sustained
-3-round warning, while forced delayed-summarize reconstruction is rarer.  The
+the 1.0 hard forced-rebuild boundary: high rounds still drive the sustained
+3-round warning, while the forced rebuild at full context is rarer.  The
 current sustained-pressure reminder lives in permanent tool metadata: it moved
 from ``_meta.agent_meta.context.molt`` to permanent ``_meta.tool_meta.context.molt``;
 the reconstruction reminder stays at ``_meta.tool_meta.reconstruction.molt``.  See
@@ -38,7 +38,8 @@ from dataclasses import dataclass
 
 from ..config import (
     CONTEXT_PRESSURE_HIGH_RATIO,
-    CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
+    CONTEXT_PRESSURE_FORCED_REBUILD_RATIO,
+    CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,  # back-compat alias == FORCED_REBUILD_RATIO
     CONTEXT_PRESSURE_RECOVERY_TARGET,
     CONTEXT_PRESSURE_WARN_AFTER_ROUNDS,
 )
@@ -203,7 +204,7 @@ class ContextPressureReminder:
     values drove a decision (and so tests can inject variants).  The historical
     field name ``reconstruction_ratio`` is retained for compatibility, but on the
     current-state reminder it means the 75% high-context/manual-rebuild ratio,
-    not the 95% forced-reconstruction trigger.
+    not the 1.0 hard forced-rebuild boundary.
     """
 
     reconstruction_ratio: float = CONTEXT_PRESSURE_HIGH_RATIO
@@ -423,36 +424,50 @@ def render_reconstruction_molt(
     )
 
 
-def render_reconstruction_emergency_hint(
-    *,
-    after_usage: float,
-    trigger_threshold: float = CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
-    high_threshold: float = CONTEXT_PRESSURE_HIGH_RATIO,
-) -> str:
-    """Render the one-shot proactive hint for an automatic 0.95 rebuild.
+def _format_tokens(value) -> str:
+    """Render a token count as an int string, or 'unknown'."""
+    try:
+        return str(int(value))
+    except (TypeError, ValueError):
+        return "unknown"
 
-    This is distinct from ``render_reconstruction_molt``: ``molt`` is a recovery
-    warning emitted only when the rebuilt context is still too large, while this
-    hint is permanent evidence that the runtime had to take the emergency
-    automatic path.  It is attached only to automatic delayed-summarize
-    reconstruction events, not to manual ``rebuild_only`` events.
+
+def render_forced_rebuild_warning(
+    *,
+    before_tokens=None,
+    before_usage: float | None = None,
+    after_tokens=None,
+    after_usage: float | None = None,
+    trigger_threshold: float = CONTEXT_PRESSURE_FORCED_REBUILD_RATIO,
+    high_threshold: float = CONTEXT_PRESSURE_HIGH_RATIO,
+    recovery_target: float = CONTEXT_PRESSURE_RECOVERY_TARGET,
+) -> str:
+    """Render the ONE unified warning always emitted after a 1.0 forced rebuild.
+
+    This is a single template — it does NOT branch into different text based on
+    whether the rebuilt context landed high or low. Every 1.0 forced rebuild
+    carries the same warning: what happened (forced rebuild at the hard boundary),
+    the before→after context change, the proactive-rebuild advice (prefer the 0.75
+    hint next time), and the conditional molt instruction (if still above the 0.6
+    recovery target). The agent reads the after-context and the 0.6 clause and
+    decides whether to molt.
     """
     trigger_text = _format_ratio_percent(trigger_threshold)
     high_text = _format_ratio_percent(high_threshold)
-    try:
-        after = float(after_usage)
-    except (TypeError, ValueError):
-        after = -1.0
-    after_clause = (
-        f" The rebuilt context is now at {_format_ratio_percent(after)}."
-        if after >= 0
-        else ""
+    recovery_text = _format_ratio_percent(recovery_target)
+    before_str = (
+        f"{_format_tokens(before_tokens)} tokens ({_format_ratio_percent(before_usage)})"
+    )
+    after_str = (
+        f"{_format_tokens(after_tokens)} tokens ({_format_ratio_percent(after_usage)})"
     )
     return (
-        "Emergency provider-context rebuild has been applied automatically at "
-        f"{trigger_text} of the context window. You should have used "
-        "system(action='summarize', rebuild_only=true) once after context passed "
-        f"{high_text} to proactively rebuild context and reduce pressure before "
-        f"the forced path was needed.{after_clause} See meta_guidance and "
-        "summarize-manual for the manual 75% rebuild vs automatic 95% rebuild rule."
+        f"Forced provider-context rebuild applied at the {trigger_text} hard context "
+        f"boundary. Context changed from {before_str} before to {after_str} after. "
+        f"Reaching the full-context boundary means waiting until context was full was "
+        f"not ideal — when context is high, prefer a proactive "
+        f"system(action='summarize', rebuild=true) at the {high_text} rebuild hint "
+        f"instead of letting the emergency boundary force it. If the rebuilt context "
+        f"is still above the {recovery_text} recovery target, tend durable stores and "
+        f"molt. See meta_guidance, substrate, and procedures."
     )

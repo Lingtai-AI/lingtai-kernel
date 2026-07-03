@@ -23,9 +23,12 @@ import pytest
 
 from lingtai_kernel.intrinsics.system.summarize import (
     SUMMARIZE_MARKER,
+    SUMMARY_STATUS_DONE,
+    SUMMARY_STATUS_PENDING,
     _is_already_summarized,
     _summarize,
     _visible_len,
+    mark_pending_summaries_done,
 )
 from lingtai_kernel.llm.interface import (
     ChatInterface,
@@ -40,16 +43,24 @@ from lingtai_kernel.llm.interface import (
 # ---------------------------------------------------------------------------
 
 
-def _make_stub_agent(chat_interface: ChatInterface | None = None):
-    """Return a minimal stub agent with a chat session wired up."""
+def _make_stub_agent(chat_interface: ChatInterface | None = None, *, rebuild_return=None):
+    """Return a minimal stub agent with a chat session wired up.
+
+    Pass ``rebuild_return`` (True/False) to wire a ``request_history_rebuild`` mock
+    on the chat that returns it; omit for a chat with no rebuild hook.
+    """
     iface = chat_interface if chat_interface is not None else ChatInterface()
 
     class _StubChat:
         interface = iface
 
+    chat = _StubChat()
+    chat.interface = iface
+    if rebuild_return is not None:
+        chat.request_history_rebuild = MagicMock(return_value=rebuild_return)
+
     agent = MagicMock()
-    agent._chat = _StubChat()
-    agent._chat.interface = iface
+    agent._chat = chat
     agent._log = MagicMock()
     saved = []
     agent._save_chat_history = MagicMock(side_effect=lambda **kw: saved.append(kw))
@@ -61,6 +72,19 @@ def _add_tool_pair(iface: ChatInterface, call_id: str, tool_name: str, result_co
     """Append an assistant[tool_call] + user[tool_result] pair to the interface."""
     iface.add_assistant_message([ToolCallBlock(id=call_id, name=tool_name, args={})])
     iface.add_tool_results([ToolResultBlock(id=call_id, name=tool_name, content=result_content)])
+
+
+def _marker_status(iface, tool_call_id):
+    """Return the ``status`` of the summarize marker for *tool_call_id*, or None."""
+    for entry in iface._entries:
+        for b in entry.content:
+            if (
+                isinstance(b, ToolResultBlock)
+                and b.id == tool_call_id
+                and _is_already_summarized(b.content)
+            ):
+                return b.content.get("status")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -82,56 +106,260 @@ def test_schema_has_items_property():
     assert items_schema["type"] == "array"
 
 
-def test_schema_has_rebuild_only_properties():
+def test_schema_has_rebuild_boolean_property():
     from lingtai_kernel.intrinsics.system.schema import get_schema
     schema = get_schema("en")
-    assert schema["properties"]["rebuild_only"]["type"] == "boolean"
-    assert schema["properties"]["dry_run"]["type"] == "boolean"
+    assert schema["properties"]["rebuild"]["type"] == "boolean"
 
 
+def test_schema_removed_legacy_rebuild_params():
+    # The old public params are gone with NO legacy aliases retained.
+    from lingtai_kernel.intrinsics.system.schema import get_schema
+    schema = get_schema("en")
+    assert "rebuild_only" not in schema["properties"]
+    assert "dry_run" not in schema["properties"]
 
 
-def test_rebuild_only_with_no_items_requests_chat_rebuild():
-    agent = _make_stub_agent()
-    agent._chat.request_history_rebuild = MagicMock(return_value=True)
+def test_summarize_writes_pending_status_marker():
+    # Ordinary summarize records the marker with an explicit status: pending.
+    iface = ChatInterface()
+    _add_tool_pair(iface, "tc-1", "read", "X" * 5000)
+    agent = _make_stub_agent(iface)
 
-    result = _summarize(agent, {"action": "summarize", "rebuild_only": True})
+    _summarize(agent, {"action": "summarize", "items": [{"tool_call_id": "tc-1", "summary": "s"}]})
+    assert _marker_status(iface, "tc-1") == SUMMARY_STATUS_PENDING
+
+
+def test_rebuild_true_with_no_items_no_pending_markers():
+    # Pure rebuild with nothing pending: applied totals count 0, and the comment
+    # carries no pending totals line.
+    agent = _make_stub_agent(rebuild_return=True)
+
+    result = _summarize(agent, {"action": "summarize", "rebuild": True})
 
     assert result["status"] == "ok"
-    assert result["mode"] == "rebuild_only"
+    assert result["mode"] == "rebuild"
     assert result["summarized"] == 0
     assert result["items"] == []
     assert result["rebuild_requested"] is True
+    assert result["applied_summary_totals"]["pending_summaries"] == 0
+    assert result["marked_done"] == []
+    assert "context" in result
     agent._chat.request_history_rebuild.assert_called_once_with(
         reason="summarize_rebuild_only"
     )
     agent._save_chat_history.assert_not_called()
 
 
-def test_dry_run_alias_requests_rebuild_without_items():
-    agent = _make_stub_agent()
-    agent._chat.request_history_rebuild = MagicMock(return_value=True)
+def test_rebuild_true_no_items_applies_existing_pending_markers():
+    # rebuild=true with no items applies exactly the existing status: pending
+    # markers, reports their totals, and flips them to done.
+    iface = ChatInterface()
+    _add_tool_pair(iface, "tc-a", "read", "A" * 3000)
+    _add_tool_pair(iface, "tc-b", "read", "B" * 2000)
+    agent = _make_stub_agent(iface, rebuild_return=True)
 
-    result = _summarize(agent, {"action": "summarize", "dry_run": True})
+    _summarize(agent, {"action": "summarize", "items": [{"tool_call_id": "tc-a", "summary": "aaa"}]})
+    _summarize(agent, {"action": "summarize", "items": [{"tool_call_id": "tc-b", "summary": "bb"}]})
+    assert _marker_status(iface, "tc-a") == SUMMARY_STATUS_PENDING
+    assert _marker_status(iface, "tc-b") == SUMMARY_STATUS_PENDING
+
+    result = _summarize(agent, {"action": "summarize", "rebuild": True})
+    assert result["mode"] == "rebuild"
+    assert result["rebuild_requested"] is True
+    applied = result["applied_summary_totals"]
+    assert applied["pending_summaries"] == 2
+    assert applied["pending_original_chars"] == 5000
+    assert applied["pending_summary_chars"] == len("aaa") + len("bb")
+    assert set(result["marked_done"]) == {"tc-a", "tc-b"}
+    # Markers are now done.
+    assert _marker_status(iface, "tc-a") == SUMMARY_STATUS_DONE
+    assert _marker_status(iface, "tc-b") == SUMMARY_STATUS_DONE
+
+
+def test_rebuild_true_no_items_no_hook_reports_forced_boundary_fallback():
+    # Backend without a rebuild hook: rebuild_requested is False, still ok, and the
+    # comment points at the 1.0 hard forced-rebuild boundary as the fallback.
+    agent = _make_stub_agent()  # no request_history_rebuild attribute
+
+    result = _summarize(agent, {"action": "summarize", "rebuild": True})
 
     assert result["status"] == "ok"
-    assert result["mode"] == "rebuild_only"
-    assert result["rebuild_requested"] is True
+    assert result["mode"] == "rebuild"
+    assert result["rebuild_requested"] is False
+    assert "no explicit rebuild hook" in result["reconstruction"]
+    assert "1.0 hard context boundary" in result["reconstruction"]
 
 
-def test_rebuild_only_rejects_items():
+def test_missing_items_without_rebuild_is_invalid_no_op():
+    # rebuild=false (default) with no items is an invalid no-op.
     agent = _make_stub_agent()
+    result = _summarize(agent, {"action": "summarize"})
+    assert result["status"] == "error"
+    assert result["reason"] == "missing_items"
+    assert "invalid no-op" in result["message"]
+
+    result_false = _summarize(agent, {"action": "summarize", "rebuild": False})
+    assert result_false["reason"] == "missing_items"
+
+
+def test_rebuild_true_with_items_records_marks_done_then_rebuilds():
+    iface = ChatInterface()
+    _add_tool_pair(iface, "tc-r1", "read", "X" * 5000)
+    agent = _make_stub_agent(iface, rebuild_return=True)
+
     result = _summarize(
         agent,
         {
             "action": "summarize",
-            "rebuild_only": True,
-            "items": [{"tool_call_id": "x", "summary": "y"}],
+            "rebuild": True,
+            "items": [{"tool_call_id": "tc-r1", "summary": "short digest"}],
         },
     )
 
-    assert result["status"] == "error"
-    assert result["reason"] == "rebuild_only_with_items"
+    assert result["status"] == "ok"
+    assert result["summarized"] == 1
+    assert result["mode"] == "rebuild"
+    assert result["rebuild_requested"] is True
+    agent._save_chat_history.assert_called_once()
+    agent._chat.request_history_rebuild.assert_called_once_with(
+        reason="summarize_rebuild_only"
+    )
+    # Category-B comment.
+    recon = result["reconstruction"]
+    assert "Rebuild successful" in recon
+    assert "marked done" in recon
+    assert "recovery target" in recon
+    assert "molt" in recon
+    # Applied totals reflect the batch that was pending; the marker is now done.
+    applied = result["applied_summary_totals"]
+    assert applied["pending_summaries"] == 1
+    assert applied["pending_original_chars"] == 5000
+    assert applied["pending_summary_chars"] == len("short digest")
+    assert set(result["marked_done"]) == {"tc-r1"}
+    assert _marker_status(iface, "tc-r1") == SUMMARY_STATUS_DONE
+
+
+def test_summarize_only_pending_totals_include_all_pending_markers():
+    # A later summarize-only call aggregates every status: pending marker — the new
+    # one plus any earlier still-pending one.
+    iface = ChatInterface()
+    _add_tool_pair(iface, "tc-a", "read", "A" * 3000)
+    _add_tool_pair(iface, "tc-b", "read", "B" * 2000)
+    agent = _make_stub_agent(iface)
+
+    _summarize(agent, {"action": "summarize", "items": [{"tool_call_id": "tc-a", "summary": "aaa"}]})
+    result = _summarize(agent, {"action": "summarize", "items": [{"tool_call_id": "tc-b", "summary": "bb"}]})
+
+    totals = result["pending_summary_totals"]
+    assert totals["pending_summaries"] == 2
+    assert totals["pending_original_chars"] == 5000
+    assert totals["pending_summary_chars"] == len("aaa") + len("bb")
+    assert totals["net_chars"] == 5000 - (len("aaa") + len("bb"))
+    assert totals["est_tokens"] == totals["net_chars"] // 4
+
+
+def test_done_marker_not_counted_pending_after_rebuild():
+    # THE BUG (now fixed via marker status): a marker applied by an earlier rebuild
+    # (status: done) must NOT be counted as pending by a later summarize-only call —
+    # even though its marker block is still in local history.
+    iface = ChatInterface()
+    _add_tool_pair(iface, "tc-old", "read", "O" * 4000)
+    _add_tool_pair(iface, "tc-new", "read", "N" * 1000)
+    agent = _make_stub_agent(iface, rebuild_return=True)
+
+    # Summarize tc-old then rebuild → tc-old's marker becomes done (stays in history).
+    _summarize(agent, {"action": "summarize", "items": [{"tool_call_id": "tc-old", "summary": "old"}]})
+    _summarize(agent, {"action": "summarize", "rebuild": True})
+    assert _marker_status(iface, "tc-old") == SUMMARY_STATUS_DONE
+
+    # A later summarize-only of tc-new must report ONLY tc-new as pending.
+    result = _summarize(agent, {"action": "summarize", "items": [{"tool_call_id": "tc-new", "summary": "n"}]})
+    totals = result["pending_summary_totals"]
+    assert totals["pending_summaries"] == 1
+    assert totals["pending_original_chars"] == 1000  # tc-old (4000) excluded
+    assert totals["pending_summary_chars"] == len("n")
+
+
+def test_automatic_release_hook_marks_pending_done():
+    # The tiny hook the 1.0 hard-boundary forced rebuild uses:
+    # mark_pending_summaries_done flips pending → done in history, and a later
+    # summarize-only comment then excludes those markers from pending totals.
+    iface = ChatInterface()
+    _add_tool_pair(iface, "tc-x", "read", "X" * 4000)
+    _add_tool_pair(iface, "tc-y", "read", "Y" * 1000)
+    agent = _make_stub_agent(iface)
+
+    _summarize(agent, {"action": "summarize", "items": [{"tool_call_id": "tc-x", "summary": "x"}]})
+    assert _marker_status(iface, "tc-x") == SUMMARY_STATUS_PENDING
+
+    # Simulate the automatic delayed reconstruction applying pending summaries.
+    flipped = mark_pending_summaries_done(iface)
+    assert flipped == ["tc-x"]
+    assert _marker_status(iface, "tc-x") == SUMMARY_STATUS_DONE
+
+    result = _summarize(agent, {"action": "summarize", "items": [{"tool_call_id": "tc-y", "summary": "y"}]})
+    totals = result["pending_summary_totals"]
+    assert totals["pending_summaries"] == 1  # only tc-y, tc-x already done
+    assert totals["pending_original_chars"] == 1000
+
+
+def test_legacy_marker_without_status_not_counted_pending():
+    # A marker written before the status field existed must be treated as
+    # done/unknown, NEVER as pending-forever.
+    iface = ChatInterface()
+    _add_tool_pair(iface, "tc-new", "read", "N" * 1000)
+    agent = _make_stub_agent(iface)
+    # Inject a legacy marker with NO status field directly into history.
+    iface.add_assistant_message([ToolCallBlock(id="tc-legacy", name="read", args={})])
+    iface.add_tool_results([
+        ToolResultBlock(id="tc-legacy", name="read", content={
+            "artifact": SUMMARIZE_MARKER,
+            "tool_call_id": "tc-legacy",
+            "original_visible_chars": 9999,
+            "summary_chars": 10,
+        })
+    ])
+    assert _marker_status(iface, "tc-legacy") is None
+
+    result = _summarize(agent, {"action": "summarize", "items": [{"tool_call_id": "tc-new", "summary": "n"}]})
+    totals = result["pending_summary_totals"]
+    assert totals["pending_summaries"] == 1  # legacy marker excluded
+    assert totals["pending_original_chars"] == 1000
+
+
+def test_summarize_only_pending_positive_offers_forced_boundary_and_proactive():
+    # A summarize-only call with pending > 0 tells the agent the 1.0 forced boundary
+    # applies pending summaries, OR to rebuild proactively (preferred).
+    iface = ChatInterface()
+    _add_tool_pair(iface, "tc-1", "read", "X" * 5000)
+    agent = _make_stub_agent(iface)
+
+    result = _summarize(agent, {"action": "summarize", "items": [{"tool_call_id": "tc-1", "summary": "s"}]})
+    assert result["pending_summary_totals"]["pending_summaries"] == 1
+    recon = result["reconstruction"]
+    assert "1.0 hard context boundary" in recon
+    assert "rebuild=true" in recon
+    assert "Proactive is better" in recon
+
+
+def test_summarize_only_wording_conditional_pending_zero():
+    # Force the pending==0 branch of the summarize-only comment builder and assert
+    # it does NOT present the 1.0 forced rebuild as a useful way to compact.
+    from lingtai_kernel.intrinsics.system import summarize as _mod
+
+    snapshot = {"usage": 0.80, "tokens": 8000, "window": 10000}
+    zero_totals = {
+        "pending_summaries": 0,
+        "pending_original_chars": 0,
+        "pending_summary_chars": 0,
+        "net_chars": 0,
+        "est_tokens": 0,
+    }
+    comment = _mod._build_summarize_only_reconstruction(snapshot, zero_totals)
+    assert "no pending summarized history" in comment
+    assert "1.0 forced rebuild would have no summaries to apply" in comment
+    assert "summarize more" in comment or "molt" in comment
 
 # ---------------------------------------------------------------------------
 # _is_already_summarized
@@ -229,15 +457,24 @@ def test_summarize_single_item_success():
     assert len(result["items"]) == 1
     assert result["items"][0]["status"] == "ok"
     assert result["items"][0]["tool_call_id"] == "tc-001"
-    # A successful summarize carries a short, generic reassurance that the
-    # summary bookkeeping is recorded now and provider reconstruction is delayed.
+    # A summarize-only (rebuild=false, default) call is category A: summaries
+    # recorded in runtime history, active provider context may still hold the old
+    # raw result until rebuild. The comment names both apply-paths (the 1.0 forced
+    # boundary OR one tactical rebuild=true), warns against looping, and references
+    # the durable stores/molt fallback below the 0.6 recovery target.
+    assert result["mode"] == "summarize"
     assert "reconstruction" in result
     assert "runtime history" in result["reconstruction"]
-    assert "active provider context may still contain the old result" in result["reconstruction"]
-    assert "delayed" in result["reconstruction"]
-    assert "keep working" in result["reconstruction"]
-    assert "summarized history" in result["reconstruction"]
-    assert "See meta_guidance and substrate for details" in result["reconstruction"]
+    assert "does NOT itself rebuild the active provider context" in result["reconstruction"]
+    assert "old raw result" in result["reconstruction"]
+    assert "1.0 hard context boundary" in result["reconstruction"]
+    assert "rebuild=true" in result["reconstruction"]
+    assert "0.6 recovery target" in result["reconstruction"]
+    assert "do not loop rebuild/summarize" in result["reconstruction"]
+    assert "meta_guidance" in result["reconstruction"]
+    # Dynamic pending totals + context snapshot accompany the comment.
+    assert result["pending_summary_totals"]["pending_summaries"] == 1
+    assert "context" in result
     # Not a provider-specific policy object — a plain status string.
     assert isinstance(result["reconstruction"], str)
 

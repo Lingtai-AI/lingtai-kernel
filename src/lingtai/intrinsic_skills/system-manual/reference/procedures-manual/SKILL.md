@@ -13,7 +13,7 @@ description: >
   guidance grows.
 version: 1.2.0
 tags: [lingtai, system-manual, procedures, progressive-disclosure, responsiveness, deliverables, issue-reporting]
-last_changed_at: "2026-06-27T15:15:34-07:00"
+last_changed_at: "2026-07-03T00:00:00Z"
 ---
 
 # Procedures Manual
@@ -71,20 +71,25 @@ methodology.
 ### Delayed summarization reconstruction threshold
 
 Summarize records compact replacements in runtime history and may clear large-result
-reminders immediately, but active provider-side reconstruction is deliberately
-delayed. Runtimes usually append onto a stable cache/continuation prefix instead
-of rebuilding that prefix every turn. Below 0.95 of the context window, keep
-working: do not treat pending summarized history as failure, and do not call
-`refresh` just to force a rebuild. Once context is at/above 0.75, the runtime
-stamps `_meta.tool_meta.context.rebuild`; if a fresh provider context is worth
-the cost before the automatic threshold, make one explicit
-`system(action="summarize", rebuild_only=true)` call with no items. When
-summarized history is pending and context reaches 0.95, the runtime reconstructs
-automatically on the next request with the compacted history. No extra summarize
-call is needed for the automatic path; if that emergency path fires, the one-shot
-`reconstruction.proactive_hint` says a proactive 75% rebuild-only call could have
-relieved pressure earlier. If no summarize has been recorded, there is nothing
-to apply. At task completion, default to proactive task-boundary molt only when
+reminders immediately, but provider-side reconstruction is deliberate: recording a
+summary does not by itself rebuild the active provider context. Runtimes usually
+append onto a stable cache/continuation prefix instead of rebuilding that prefix
+every turn. Below the full-context boundary, keep working: do not treat pending
+summarized history as failure, and do not call `refresh` just to force a rebuild.
+Once context is at/above 0.75, the runtime stamps `_meta.tool_meta.context.rebuild`;
+if a fresh provider context is worth the cost, make one proactive tactical
+`system(action="summarize", rebuild=true)` call — with new items (record then
+apply the pending set) or with no items (pure rebuild of the already-pending
+summaries); applied summaries flip to `status: done`. Do not loop
+rebuild/summarize. At context usage 1.0 (the full-context hard boundary) the
+runtime forces a rebuild on the next request regardless of whether pending
+summaries exist: pending markers are applied and marked done, and with no pending
+summaries it still runs to release transient context. Every 1.0 forced rebuild
+ALWAYS carries a one-shot `reconstruction.warning` (before→after context,
+proactive-0.75-rebuild advice, and "if still above the 0.6 recovery target, molt").
+Waiting for the 1.0 boundary is not ideal — prefer the proactive 0.75 rebuild; if
+the pending total is 0, the forced rebuild has nothing to apply, so summarize more
+or molt instead. At task completion, default to proactive task-boundary molt only when
 session (since-last-molt) API calls exceed 100. Below that threshold, go idle
 unless context pressure, explicit human request, or conversation confusion makes
 the fresh briefing worth the molt cost. Summarize is a mini molt for a consumed
