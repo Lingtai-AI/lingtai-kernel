@@ -238,6 +238,19 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert "reference/cli-backends/SKILL.md" in daemon_body
         assert "reference/cleanup/SKILL.md" in daemon_body
 
+        nokv_md = (
+            workdir / ".library" / "intrinsic" / "capabilities" / "nokv-workbench" / "SKILL.md"
+        )
+        assert nokv_md.is_file()
+        nokv_body = nokv_md.read_text(encoding="utf-8")
+        assert "name: nokv-workbench" in nokv_body
+        assert "workbench_find" in nokv_body
+        assert "workbench_commit" in nokv_body
+        assert "metadata/run_manifest.json" in nokv_body
+        assert (
+            nokv_md.parent / "assets" / "mcp_registry.example.jsonl"
+        ).is_file()
+
         daemon_reference_dir = daemon_md.parent / "reference"
         for reference_name in ("forensics", "inspection", "cli-backends", "cleanup"):
             daemon_reference = daemon_reference_dir / reference_name / "SKILL.md"
