@@ -203,10 +203,10 @@ Summarize has two decoupled effects:
 1. **Runtime-history replacement now.** The prior tool-result block in local
    history is replaced with your agent-authored summary, stamped `status: pending`,
    and matching large-result reminders may clear.
-2. **Provider-side reconstruction later.** The current provider continuation may
-   still contain the old raw block until the runtime rebuilds the provider prefix
-   around compacted history. When that happens (manual `rebuild=true` or the
-   automatic 0.95 path), the applied markers flip to `status: done`.
+2. **Provider-side rebuild later.** The current provider continuation may still
+   contain the old raw block until the runtime rebuilds the provider prefix around
+   compacted history. When that happens (manual `rebuild=true` or the 1.0 hard
+   forced rebuild), the applied markers flip to `status: done`.
 
 The dynamic pending totals in the result comment scan only `status: pending`
 markers — already-applied (`done`) markers and legacy markers without a status
@@ -216,34 +216,38 @@ Provider-side reconstruction is delayed because runtimes usually append turns
 onto a stable cache/continuation prefix. Rebuilding that prefix on every
 summarize would discard cache benefit.
 
-- **Below 0.95 of the context window:** summarize stays pending at the provider
+- **Below 1.0 of the context window:** summarize stays pending at the provider
   layer and the session keeps appending. This delay is normal, not a failure; do
   not call `refresh` merely to "apply" the summary.
 - **At or above 0.75 of the context window:** `_meta.tool_meta.context.rebuild`
   is stamped continuously. It is a decision prompt / permission, not an automatic
   rebuild — recording summaries never triggers a provider-context rebuild on its
   own. If making already-recorded summaries active in the provider context earlier
-  is worth the cost, make one tactical `system(action="summarize", rebuild=true)`
-  call. `rebuild=true` **with** new items records those summaries and then applies
-  the pending set; `rebuild=true` **with no items** is a pure rebuild that applies
-  the already-pending summaries. Do not loop rebuild/summarize calls.
-- **At or above 0.95 of the context window (conditional):** *if* pending
-  summarized history exists (pending total > 0), the runtime automatically
-  reconstructs with the compacted history on the next provider request — no repeat
-  summarize call or manual action is required. **If the pending total is 0**
-  (nothing recorded since the last rebuild, or all already applied), waiting for
-  0.95 applies nothing and gives no compaction benefit: summarize more digested
-  results to create pending compaction, or molt. If you reach the automatic path
-  with pending history you could have applied earlier, the runtime notes that one
-  proactive 75% `rebuild=true` call could have relieved pressure before the forced
-  rebuild.
+  is worth the cost, make one proactive tactical
+  `system(action="summarize", rebuild=true)` call. `rebuild=true` **with** new
+  items records those summaries and then applies the pending set; `rebuild=true`
+  **with no items** is a pure rebuild that applies the already-pending summaries.
+  Do not loop rebuild/summarize calls.
+- **At 1.0 of the context window (the full-context HARD boundary):** the runtime
+  **forces** a provider-context rebuild / fresh replay on the next request
+  **regardless of whether pending summaries exist**. If pending summaries exist,
+  they are applied and their markers marked done. If none exist, the rebuild still
+  runs because it may release transient context (agent_meta, notifications,
+  cleared surfaces). Every 1.0 forced rebuild ALWAYS carries a one-shot
+  `_meta.tool_meta.reconstruction.warning`: it reports the before→after context
+  change, advises that reaching the full boundary means waiting was not ideal (prefer
+  a proactive 0.75 `rebuild=true`), and says that if the rebuilt context is still
+  above the 0.6 recovery target you should tend durable stores and molt. This is
+  one unified warning — it does not branch on whether context dropped low or stayed
+  high.
 
-If no summarize is pending, there is no compacted history to apply, though
-`rebuild=true` with no items can still force a fresh replay of current history on
-adapters that support it. `refresh` remains the emergency path for broken/stale
-context or explicit human direction, not the normal way to apply summarize. If
-summarize or a rebuild still cannot bring context below `0.6 * context_window`
-(the recovery target), tend durable stores and molt deliberately.
+Waiting for the 1.0 forced boundary is the emergency path — prefer the proactive
+0.75 rebuild. If no summary is pending, the forced rebuild has nothing to apply,
+though it still replays current history to shed transient context. `refresh`
+remains the emergency path for broken/stale context or explicit human direction,
+not the normal way to apply summarize. If summarize or a rebuild still cannot
+bring context below `0.6 * context_window` (the recovery target), tend durable
+stores and molt deliberately.
 
 ## 4 · Recovering the original result
 

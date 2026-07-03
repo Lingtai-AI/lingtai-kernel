@@ -29,12 +29,15 @@ MOLT_NOTICE_THRESHOLD = 0.60  # legacy name; now the molt RECOVERY TARGET (see b
 #     inclusive threshold (``usage >= 0.75``) also continuously stamps
 #     ``_meta.tool_meta.context.rebuild`` with permission to manually rebuild via
 #     ``system(action='summarize', rebuild=true)``.  It does NOT force an
-#     automatic provider-context rebuild.
-#   * CONTEXT_PRESSURE_RECONSTRUCTION_RATIO (0.95) — a pending summarize's
-#     delayed provider-context reconstruction is forced on the next model request
-#     only once context reaches this inclusive threshold.  Keeping this much
-#     higher than the 75% hint avoids costly automatic rebuilds while still
-#     protecting near-full context windows.
+#     automatic provider-context rebuild — it is the proactive hint boundary.
+#   * CONTEXT_PRESSURE_FORCED_REBUILD_RATIO (1.0) — the HARD boundary. Once
+#     context usage reaches this inclusive threshold, the runtime forces a
+#     provider-context rebuild / fresh replay on the next model request
+#     REGARDLESS of whether pending summaries exist: if pending markers exist they
+#     are applied and marked done; if none exist the rebuild still runs because it
+#     may release transient context (agent_meta, notifications, cleared surfaces).
+#     A one-shot unified warning is ALWAYS emitted after this forced rebuild.
+#     (``CONTEXT_PRESSURE_RECONSTRUCTION_RATIO`` is a back-compat alias.)
 #   * CONTEXT_PRESSURE_WARN_AFTER_ROUNDS (3) — the resident ``context.molt``
 #     warning begins on the THIRD consecutive high round; earlier high rounds get
 #     the manual-rebuild hint but not the stronger molt reminder.
@@ -43,7 +46,10 @@ MOLT_NOTICE_THRESHOLD = 0.60  # legacy name; now the molt RECOVERY TARGET (see b
 #     action.  This is the new meaning of the legacy 0.60 constant: a recovery
 #     target, not an immediate trip-wire.
 CONTEXT_PRESSURE_HIGH_RATIO = 0.75
-CONTEXT_PRESSURE_RECONSTRUCTION_RATIO = 0.95
+CONTEXT_PRESSURE_FORCED_REBUILD_RATIO = 1.0
+# Back-compat alias for the pre-1.0 name (was 0.95, "delayed reconstruction");
+# the boundary is now the hard 1.0 forced rebuild.
+CONTEXT_PRESSURE_RECONSTRUCTION_RATIO = CONTEXT_PRESSURE_FORCED_REBUILD_RATIO
 CONTEXT_PRESSURE_WARN_AFTER_ROUNDS = 3
 CONTEXT_PRESSURE_RECOVERY_TARGET = MOLT_NOTICE_THRESHOLD  # 0.60
 

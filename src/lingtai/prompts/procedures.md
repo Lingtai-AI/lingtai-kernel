@@ -45,25 +45,27 @@ IDs, validation, risks, and next steps for future-you. Batch already-digested
 results when practical, and keep noisy/bulky work out of main context by using
 daemons before it lands here.
 
-**Delayed summarization reconstruction.** Treat summarize as a two-step
-mechanism: summary bookkeeping now (recorded `status: pending`), provider-context
-reconstruction later. A successful summarize records the compacted replacement in
-runtime history, but it does not necessarily rebuild the active provider-side
-context immediately. Below `0.95` of the context window, pending summarized
-history is normal; keep working, do not assume the old raw block has left the
-current continuation, and do not use `refresh` to force it. Once context is
-at/above `0.75`, the runtime stamps `_meta.tool_meta.context.rebuild`; if a fresh
-provider context is worth the cost before the automatic threshold, make one
-tactical `system(action="summarize", rebuild=true)` call (with new items to record
-and apply, or with no items to apply already-pending summaries); applied summaries
-flip to `status: done`. The `0.95` automatic path is conditional on there being
-pending summarized history: if pending total > 0, the runtime applies it
-automatically when context reaches `0.95`; **if pending total is 0, waiting for
-`0.95` compacts nothing — summarize more or molt.** The one-shot reconstruction
-event carries `reconstruction.proactive_hint` on the automatic 95% path to say a
-manual `rebuild=true` call after the 75% hint should have reduced pressure
-earlier. Do not loop rebuild/summarize; if rebuild cannot recover below the `0.6`
-target, tend durable stores and molt.
+**Forced context rebuild boundary.** Treat summarize as a two-step mechanism:
+summary bookkeeping now (recorded `status: pending`), provider-context rebuild
+later. A successful summarize records the compacted replacement in runtime
+history, but it does not by itself rebuild the active provider-side context.
+Below the full-context boundary, pending summarized history is normal; keep
+working, do not assume the old raw block has left the current continuation, and
+do not use `refresh` to force it. Once context is at/above `0.75`, the runtime
+stamps `_meta.tool_meta.context.rebuild`; if a fresh provider context is worth
+the cost, make one proactive tactical `system(action="summarize", rebuild=true)`
+call (with new items to record and apply, or with no items to apply
+already-pending summaries); applied summaries flip to `status: done`. At context
+usage `1.0` (the full-context hard boundary) the runtime **forces** a rebuild on
+the next request **regardless of whether pending summaries exist** — pending
+markers are applied and marked done, and with no pending summaries it still runs
+to release transient context. Every `1.0` forced rebuild ALWAYS attaches a
+one-shot `reconstruction.warning` (before→after context, proactive-`0.75`-rebuild
+advice, and "if still above the `0.6` recovery target, molt"). Waiting until full
+context is not ideal — prefer the proactive `0.75` rebuild. If pending total is 0,
+the forced rebuild has nothing to apply, so summarize more or molt. Do not loop
+rebuild/summarize; if rebuild cannot recover below the `0.6` target, tend durable
+stores and molt.
 
 **Molt boundary.** At task completion, after necessary reporting and durable
 stores are tended, if no human reply or concrete next action remains, do not

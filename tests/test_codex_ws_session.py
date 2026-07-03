@@ -789,57 +789,87 @@ def test_rest_summarize_delays_epoch_reset_below_context_threshold(monkeypatch):
 
 
 def test_reconstruction_event_recorded_on_immediate_release(monkeypatch):
-    """When summarize is recorded while context is already >= 0.95, the delayed
-    reconstruction fires immediately (epoch reset reason 'summarize_delayed').
-    That actual reconstruction must record a one-shot pending event capturing the
-    before-context (A) and the fixed trigger/recovery metadata."""
-    client = RealisticRestClient(input_tokens=950)
+    """When summarize is recorded while context is already at the 1.0 hard
+    boundary, the forced rebuild fires immediately (epoch reset reason
+    'summarize_delayed'). That actual rebuild must record a one-shot pending event
+    capturing the before-context (A) and the fixed trigger/recovery metadata."""
+    # Baseline below the boundary (0.9); no forced rebuild yet. Then reach full
+    # context and record a summarize -> immediate forced release.
+    client = RealisticRestClient(input_tokens=900)
     session = _make_rest_session(client)
     monkeypatch.setattr(session, "context_window", lambda: 1000)
 
     session.send("one")
-    session.send("two")
-    # No event before reconstruction.
+    # No event before the boundary is reached.
     assert session.take_pending_reconstruction_event() is None
 
-    session.on_history_summarized(["call_old"])  # immediate release at 0.85
+    # Context reaches full; a send updates _last_provider_input_tokens to 1000.
+    client.responses._input_tokens = 1000
+    session.send("two")
+    session.take_pending_reconstruction_event()  # clear the forced-at-boundary event
+
+    session.on_history_summarized(["call_old"])  # immediate release at 1.0
 
     event = session.take_pending_reconstruction_event()
     assert event is not None
     assert event["type"] == "delayed_summarize_reconstruction"
-    assert event["trigger_threshold"] == 0.95
+    assert event["trigger_threshold"] == 1.0
     assert event["recovery_target"] == 0.60
     assert event["context_window"] == 1000
-    # Before-context (A): the provider input that crossed the threshold.
-    assert event["before"]["context_tokens"] == 950
-    assert event["before"]["usage"] == pytest.approx(0.95)
+    # Before-context (A): the provider input that crossed the boundary.
+    assert event["before"]["context_tokens"] == 1000
+    assert event["before"]["usage"] == pytest.approx(1.0)
 
     # One-shot: a second take returns None.
     assert session.take_pending_reconstruction_event() is None
 
 
 def test_reconstruction_event_recorded_on_delayed_release(monkeypatch):
-    """Below threshold the summarize stays pending; the reconstruction fires on a
-    later send once context crosses 0.95. That release must also record the
+    """Below the boundary the summarize stays pending; the forced rebuild fires on
+    a later send once context reaches 1.0. That release must also record the
     one-shot event."""
-    client = RealisticRestClient(input_tokens=950)
+    client = RealisticRestClient(input_tokens=1000)
     session = _make_rest_session(client)
     monkeypatch.setattr(session, "context_window", lambda: 1000)
 
-    # First two sends are below threshold (last_provider_input starts low), so
-    # record summarize while pending, then let a high-usage send release it.
+    # First send records summarize while pending, then a full-context send releases.
     session.send("one")
     session.on_history_summarized(["call_old"])
-    # Force the pending state (simulate below-threshold-at-summarize-time).
+    # Force the pending state (simulate below-boundary-at-summarize-time).
     session._summarize_effect_delayed_pending_ids.add("call_old")
     session.take_pending_reconstruction_event()  # clear any immediate event
 
-    # Next send is at 0.85 -> delayed release fires.
+    # Next send is at 1.0 -> forced rebuild fires.
     session.send("three")
     event = session.take_pending_reconstruction_event()
     assert event is not None
     assert event["type"] == "delayed_summarize_reconstruction"
-    assert event["before"]["usage"] == pytest.approx(0.95)
+    assert event["before"]["usage"] == pytest.approx(1.0)
+
+
+def test_forced_rebuild_fires_at_boundary_with_no_pending(monkeypatch):
+    """At the 1.0 hard boundary the runtime forces a rebuild even when NO summaries
+    are pending (releasing transient context). The event is recorded and the epoch
+    reset reason is 'summarize_delayed'."""
+    # Baseline below the boundary; then reach full context with NO pending.
+    client = RealisticRestClient(input_tokens=900)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+
+    session.send("one")
+    # No pending summaries at all.
+    assert not session._summarize_effect_delayed_pending_ids
+    session.take_pending_reconstruction_event()  # clear any prior
+
+    # The last provider request reported full context; the next send's boundary
+    # check (_maybe_reset_ws_epoch, run before the request) forces the rebuild.
+    session._last_provider_input_tokens = 1000
+    session.send("two")
+    assert session._summarize_effect_delayed_last_release_reason == "summarize_delayed"
+    event = session.take_pending_reconstruction_event()
+    assert event is not None
+    assert event["type"] == "delayed_summarize_reconstruction"
+    assert event["before"]["usage"] == pytest.approx(1.0)
 
 
 def test_reconstruction_event_not_recorded_for_turn_count_reset(monkeypatch):
@@ -879,7 +909,7 @@ def test_request_history_rebuild_records_manual_reconstruction_event(monkeypatch
     assert event is not None
     assert event["type"] == "summarize_rebuild_only_reconstruction"
     assert event["reason"] == "summarize_rebuild_only_reconstruction"
-    assert event["trigger_threshold"] == 0.95
+    assert event["trigger_threshold"] == 1.0
     assert event["recovery_target"] == 0.60
     assert event["context_window"] == 1000
     assert event["before"]["context_tokens"] == 800
@@ -920,10 +950,10 @@ def _marker_status(iface, tool_call_id):
 
 
 def test_automatic_delayed_reconstruction_marks_pending_markers_done(monkeypatch):
-    # The tiny session→history hook: when the automatic 0.95 delayed reconstruction
-    # actually applies pending summaries (_reset_ws_epoch("summarize_delayed")), it
-    # flips every status: pending summarize marker in local history to done.
-    client = RealisticRestClient(input_tokens=950)
+    # The tiny session→history hook: when the 1.0 forced rebuild actually applies
+    # pending summaries (_reset_ws_epoch("summarize_delayed")), it flips every
+    # status: pending summarize marker in local history to done.
+    client = RealisticRestClient(input_tokens=1000)
     session = _make_rest_session(client)
     monkeypatch.setattr(session, "context_window", lambda: 1000)
 
@@ -946,14 +976,19 @@ def test_turn_count_reset_does_not_mark_markers_done(monkeypatch):
     assert _marker_status(session._interface, "call_pending") == "pending"
 
 
-def test_rest_summarize_releases_delayed_epoch_reset_at_context_threshold(monkeypatch):
-    client = RealisticRestClient(input_tokens=950)
+def test_rest_summarize_releases_forced_rebuild_at_context_boundary(monkeypatch):
+    # Baseline sends stay below the 1.0 boundary (0.9), so the epoch stays
+    # incremental; the third send is at full context (1.0), which forces a rebuild.
+    client = RealisticRestClient(input_tokens=900)
     session = _make_rest_session(client)
     monkeypatch.setattr(session, "context_window", lambda: 1000)
 
     first = session.send("one")
     second = session.send("two")
     session.on_history_summarized(["call_old"])
+    # The last provider request reported full context; the next send's boundary
+    # check forces the rebuild.
+    session._last_provider_input_tokens = 1000
     third = session.send("three")
 
     assert first.usage.extra["codex_request_mode"] == "rest_full"
@@ -965,10 +1000,10 @@ def test_rest_summarize_releases_delayed_epoch_reset_at_context_threshold(monkey
 
 def test_rest_summarize_release_uses_previous_provider_input_not_interface_estimate(monkeypatch):
     """Live PR #535 regression: ChatInterface's local estimate can stay low even
-    when the real previous provider request crossed the 95% automatic reconstruction threshold.
-    Delayed summarize release must use the provider input-token count.
+    when the real previous provider request reached the 1.0 forced-rebuild boundary.
+    The forced release must use the provider input-token count.
     """
-    client = RealisticRestClient(input_tokens=237_500)
+    client = RealisticRestClient(input_tokens=250_000)
     session = _make_rest_session(client, context_window=250_000)
     monkeypatch.setattr(session._interface, "estimate_context_tokens", lambda: 10)
 
@@ -985,19 +1020,21 @@ def test_rest_summarize_release_uses_previous_provider_input_not_interface_estim
 
 def test_rest_summarize_uses_configured_context_window_when_base_returns_zero(monkeypatch):
     """Real Codex Responses sessions inherit ChatSession's 0 default unless the
-    service-level context_window is carried into the session.  At 187.5k/250k the
-    0.95 threshold must release the delayed summarize effect.
+    service-level context_window is carried into the session.  At 250k/250k the
+    1.0 hard boundary must force the rebuild.
     """
-    client = RealisticRestClient(input_tokens=237_500)
+    # Baseline below the boundary (0.9 of 250k); reach full context to force.
+    client = RealisticRestClient(input_tokens=225_000)
     session = _make_rest_session(client, context_window=250_000)
 
     first = session.send("one")
     second = session.send("two")
     session.on_history_summarized(["call_old"])
-    assert session._summarize_effect_delayed_last_release_reason == "summarize_delayed"
-    assert not session._summarize_effect_delayed_pending_ids
+    session._last_provider_input_tokens = 250_000
     third = session.send("three")
 
+    assert session._summarize_effect_delayed_last_release_reason == "summarize_delayed"
+    assert not session._summarize_effect_delayed_pending_ids
     assert session.context_window() == 250_000
     assert first.usage.extra["codex_request_mode"] == "rest_full"
     assert second.usage.extra["codex_request_mode"] == "rest_incremental"
@@ -1315,7 +1352,9 @@ def test_rest_cache_ledger_counts_real_requests_not_pending_summarize_events(mon
 
 
 def test_rest_cache_ledger_counts_one_full_when_multiple_pending_summarizes_release(monkeypatch):
-    client = RealisticRestClient(input_tokens=950)
+    # Baseline below the boundary; two pending summarizes then a full-context send
+    # forces a single rebuild (one full, not one per summarize).
+    client = RealisticRestClient(input_tokens=900)
     session = _make_rest_session(client)
     monkeypatch.setattr(session, "context_window", lambda: 1000)
 
@@ -1323,6 +1362,7 @@ def test_rest_cache_ledger_counts_one_full_when_multiple_pending_summarizes_rele
     second = session.send("two")
     session.on_history_summarized(["call_old_1"])
     session.on_history_summarized(["call_old_2"])
+    session._last_provider_input_tokens = 1000
     third = session.send("three")
 
     assert first.usage.extra["codex_request_mode"] == "rest_full"
@@ -1437,18 +1477,20 @@ def test_history_summarized_delays_next_ws_full_below_context_threshold(monkeypa
     assert t.sent_frames[2]["previous_response_id"] == "resp_ws_2"
 
 
-def test_history_summarized_releases_delayed_ws_full_at_context_threshold(monkeypatch):
-    t = FakeWsTransport(input_tokens=950)
+def test_history_summarized_releases_forced_ws_full_at_context_boundary(monkeypatch):
+    # Baseline below the boundary (0.9); reach full context to force the ws_full.
+    t = FakeWsTransport(input_tokens=900)
     session = _make_session(t)
     monkeypatch.setattr(session, "context_window", lambda: 1000)
 
     first = session.send("one")
     second = session.send("two")
     session.on_history_summarized(["call_old"])
-    assert session._summarize_effect_delayed_last_release_reason == "summarize_delayed"
-    assert not session._summarize_effect_delayed_pending_ids
+    session._last_provider_input_tokens = 1000
     third = session.send("three")
 
+    assert session._summarize_effect_delayed_last_release_reason == "summarize_delayed"
+    assert not session._summarize_effect_delayed_pending_ids
     assert first.usage.extra["codex_request_mode"] == "ws_full"
     assert second.usage.extra["codex_request_mode"] == "ws_incremental"
     assert third.usage.extra["codex_request_mode"] == "ws_full"

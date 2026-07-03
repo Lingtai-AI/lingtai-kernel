@@ -17,7 +17,8 @@ from .config import (
     # ``ContextPressureReminder`` and reads these off ``config`` directly, but
     # ``from lingtai_kernel.session import CONTEXT_PRESSURE_*`` remains a public
     # import path (see tests/test_context_pressure_streak.py).
-    CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
+    CONTEXT_PRESSURE_FORCED_REBUILD_RATIO,
+    CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,  # back-compat alias for the above
     CONTEXT_PRESSURE_WARN_AFTER_ROUNDS,
     CONTEXT_PRESSURE_RECOVERY_TARGET,
 )
@@ -40,6 +41,7 @@ from .token_counter import count_tokens, count_tool_tokens
 __all__ = [
     "SessionManager",
     "CONTEXT_PRESSURE_HIGH_RATIO",
+    "CONTEXT_PRESSURE_FORCED_REBUILD_RATIO",
     "CONTEXT_PRESSURE_RECONSTRUCTION_RATIO",
     "CONTEXT_PRESSURE_WARN_AFTER_ROUNDS",
     "CONTEXT_PRESSURE_RECOVERY_TARGET",

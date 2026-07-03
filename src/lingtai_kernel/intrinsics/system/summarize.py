@@ -25,11 +25,11 @@ SUMMARIZE_MARKER = "lingtai_agent_summarized_result"
 # Explicit lifecycle status stamped in each summarize marker block. A marker is
 # `pending` from the moment it is recorded until the summaries it belongs to are
 # actually applied to the provider context — either by a manual
-# `system(action="summarize", rebuild=true)` or by the automatic delayed
-# reconstruction at 0.95 — at which point it flips to `done`. Marker blocks stay
-# in local history after being applied, so this status (NOT mere presence) is the
-# source of truth for "still pending". Markers written before this field existed
-# carry no status and are treated as done/unknown, never as pending-forever.
+# `system(action="summarize", rebuild=true)` or by the 1.0 hard forced rebuild —
+# at which point it flips to `done`. Marker blocks stay in local history after
+# being applied, so this status (NOT mere presence) is the source of truth for
+# "still pending". Markers written before this field existed carry no status and
+# are treated as done/unknown, never as pending-forever.
 SUMMARY_STATUS_PENDING = "pending"
 SUMMARY_STATUS_DONE = "done"
 
@@ -57,8 +57,8 @@ def mark_pending_summaries_done(iface) -> list[str]:
     """Flip every ``status: pending`` summarize marker in *iface* to ``done``.
 
     Called when pending summaries are actually applied to the provider context:
-    the manual ``rebuild=true`` path (via the intrinsic) and the automatic 0.95
-    delayed reconstruction (via a small adapter/session hook). Returns the list of
+    the manual ``rebuild=true`` path (via the intrinsic) and the 1.0 hard forced
+    rebuild (via a small adapter/session hook). Returns the list of
     tool_call_ids that were flipped. Idempotent: markers already ``done`` or
     without an explicit status are left untouched (the latter are legacy markers
     treated as done/unknown, never pending). Safe to call on an interface with no
@@ -140,7 +140,7 @@ def _summary_totals_over_pending(agent) -> dict:
     ``status == "pending"`` — this is the current pending set at the moment the
     result comment is generated, so a summarize-only call naturally includes its
     own just-recorded (pending) markers plus any earlier still-pending ones.
-    Markers already ``done`` (applied by a rebuild / the 0.95 automatic path) and
+    Markers already ``done`` (applied by a rebuild / the 1.0 forced path) and
     legacy markers with no status are excluded — they are not pending. Returns
     pending count, original/summary char totals, net char reduction, and a rough
     estimated token reduction (clearly labeled).
@@ -327,9 +327,9 @@ def _build_rebuild_reconstruction(snapshot: dict, applied_totals, *, requested: 
         return (
             "Rebuild requested, but this chat backend has no explicit rebuild hook "
             "(or continuation is disabled), so there may be no provider-context action "
-            "to take. Any recorded summaries stay pending; if pending summarized history "
-            "exists, the runtime applies it automatically when context reaches 0.95 of "
-            "the window. See meta_guidance, substrate, and summarize-manual."
+            "to take. Any recorded summaries stay pending; the runtime forces a rebuild "
+            "at the 1.0 hard context boundary regardless. See meta_guidance, substrate, "
+            "and summarize-manual."
         )
     return (
         f"{_context_line(snapshot)}Rebuild successful: the pending summaries have been "
@@ -347,10 +347,11 @@ def _build_rebuild_reconstruction(snapshot: dict, applied_totals, *, requested: 
 def _build_summarize_only_reconstruction(snapshot: dict, totals: dict) -> str:
     """Category A comment: summarize-only (rebuild=false, the default).
 
-    The 0.95 wording is CONDITIONAL on there being pending summarized history:
-    waiting for 0.95 only helps when pending total > 0. When pending total is 0,
-    there is nothing to apply at 0.95, so the agent is told to summarize more or
-    molt instead of waiting.
+    The forced-rebuild wording is CONDITIONAL on there being pending summarized
+    history: the 1.0 hard boundary forces a rebuild regardless, but that only
+    APPLIES PENDING SUMMARIES when pending total > 0. When pending total is 0,
+    there is nothing to apply, so the agent is told to summarize more or molt
+    rather than relying on the forced boundary for compaction.
     """
     prefix = (
         f"Summary recorded in runtime history (status: pending). This does NOT itself "
@@ -360,18 +361,18 @@ def _build_summarize_only_reconstruction(snapshot: dict, totals: dict) -> str:
     )
     if _pending_count(totals) > 0:
         body = (
-            "Two ways to apply the pending summaries: if pending summarized history "
-            "exists (it does now), the runtime applies it automatically once context "
-            "reaches 0.95 of the window, OR make one tactical "
-            "system(action='summarize', rebuild=true) call proactively — preferably when "
-            "context is high (>=0.75 / the runtime rebuild hint) or a fresh context is "
-            "worth the cache-miss cost. "
+            "Two ways to apply the pending summaries: let the runtime force a rebuild "
+            "at the 1.0 hard context boundary (it applies pending summaries then), OR "
+            "make one tactical system(action='summarize', rebuild=true) call proactively "
+            "— preferably when context is high (>=0.75 / the runtime rebuild hint) or a "
+            "fresh context is worth the cache-miss cost. Proactive is better: the 1.0 "
+            "forced path is the emergency boundary. "
         )
     else:
         body = (
-            "There is no pending summarized history right now, so waiting for the 0.95 "
-            "automatic reconstruction would apply nothing and give no compaction benefit: "
-            "summarize more digested results to create pending compaction, or molt. "
+            "There is no pending summarized history right now, so the 1.0 forced rebuild "
+            "would have no summaries to apply and give no compaction benefit: summarize "
+            "more digested results to create pending compaction, or molt. "
         )
     return (
         f"{prefix}{body}Be tactical with token efficiency: do not loop "
@@ -557,9 +558,9 @@ def _summarize(agent, args: dict) -> dict:
             "summary_chars": len(summary),
             "original_visible_chars": original_visible_len,
             # Pending until applied to provider context (manual rebuild=true or the
-            # automatic 0.95 delayed reconstruction), at which point it flips to
-            # "done". This explicit status — not mere marker presence — is the
-            # source of truth for the dynamic pending totals.
+            # 1.0 hard forced rebuild), at which point it flips to "done". This
+            # explicit status — not mere marker presence — is the source of truth
+            # for the dynamic pending totals.
             "status": SUMMARY_STATUS_PENDING,
             "retrieval_hint": (
                 f"This is your own agent-authored summary of the original tool result. "
@@ -653,7 +654,8 @@ def _summarize(agent, args: dict) -> dict:
     #      with status: pending; the active provider context may still contain the
     #      old raw result until they are applied. Dynamic pending totals scan ALL
     #      status: pending markers (this call's new ones plus any earlier still-
-    #      pending ones). The comment's 0.95 wording is conditional on pending > 0.
+    #      pending ones). The comment's forced-rebuild wording is conditional on
+    #      pending > 0 (the 1.0 boundary applies pending summaries only if any exist).
     #   B. summarize+rebuild=true — the pending markers (this call's + any earlier
     #      pending) are the applied batch: their totals are captured, they are
     #      flipped to done, then the rebuild is requested. The comment reports the

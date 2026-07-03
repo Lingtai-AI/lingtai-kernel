@@ -26,7 +26,7 @@ import openai
 from lingtai_kernel.logging import get_logger
 from lingtai_kernel.config import (
     THINKING_LEVELS,
-    CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
+    CONTEXT_PRESSURE_FORCED_REBUILD_RATIO,
     CONTEXT_PRESSURE_RECOVERY_TARGET,
 )
 
@@ -2239,7 +2239,10 @@ class OpenAIAdapter(LLMAdapter):
 # ---------------------------------------------------------------------------
 
 
-_CODEX_SUMMARIZE_DELAY_THRESHOLD_RATIO = CONTEXT_PRESSURE_RECONSTRUCTION_RATIO
+# The hard forced-rebuild boundary (1.0). At/above this context usage the runtime
+# forces a fresh provider-context replay on the next request regardless of whether
+# pending summaries exist.
+_CODEX_FORCED_REBUILD_THRESHOLD_RATIO = CONTEXT_PRESSURE_FORCED_REBUILD_RATIO
 
 
 class CodexResponsesSession(OpenAIResponsesSession):
@@ -2346,7 +2349,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
             self._ws_epoch_reset_turn_limit = max(0, int(ws_epoch_reset_turns))
         self._ws_turns_since_epoch_reset = 0
         self._ws_epoch_reset_reason_pending: str | None = None
-        self._summarize_delay_threshold_ratio = _CODEX_SUMMARIZE_DELAY_THRESHOLD_RATIO
+        self._forced_rebuild_threshold_ratio = _CODEX_FORCED_REBUILD_THRESHOLD_RATIO
         self._summarize_effect_delayed_pending_ids: set[str] = set()
         self._summarize_effect_delayed_last_context: dict[str, Any] = {}
         self._summarize_effect_delayed_last_release_reason: str | None = None
@@ -2874,9 +2877,10 @@ class CodexResponsesSession(OpenAIResponsesSession):
             # The compacted history is now being applied to provider context, so
             # flip every still-pending summarize marker to done. The manual
             # rebuild=true path already marked its batch done in the intrinsic
-            # (this is idempotent); the automatic 0.95 delayed reconstruction has
-            # no other place to do it, so this is that hook. Kept tiny and
-            # defensive — never let bookkeeping abort the reconstruction.
+            # (this is idempotent); the 1.0 hard forced rebuild has no other place
+            # to do it, so this is that hook. When no pending markers exist the flip
+            # is a no-op — the forced rebuild still ran to release transient context.
+            # Kept tiny and defensive — never let bookkeeping abort the rebuild.
             try:
                 from lingtai_kernel.intrinsics.system.summarize import (
                     mark_pending_summaries_done,
@@ -2892,9 +2896,13 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._ws_frozen_outputs.clear()
         self._ws_turns_since_epoch_reset = 0
         self._ws_epoch_reset_reason_pending = reason
+        # Record the release reason for the summarize/rebuild reasons even when no
+        # ids were pending (a 1.0 forced rebuild runs regardless of pending); clear
+        # any pending set that WAS present.
+        if reason in {"summarize_delayed", "summarize_rebuild_only"}:
+            self._summarize_effect_delayed_last_release_reason = reason
         if self._summarize_effect_delayed_pending_ids:
             self._summarize_effect_delayed_pending_ids.clear()
-            self._summarize_effect_delayed_last_release_reason = reason
 
     def _record_reconstruction_event(self, *, reason: str = "summarize_delayed") -> None:
         """Record the one-shot summarize/rebuild reconstruction event (channel A).
@@ -2918,7 +2926,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._pending_reconstruction_event = {
             "type": event_type,
             "reason": event_type,
-            "trigger_threshold": self._summarize_delay_threshold_ratio,
+            "trigger_threshold": self._forced_rebuild_threshold_ratio,
             "recovery_target": CONTEXT_PRESSURE_RECOVERY_TARGET,
             "context_window": context_window,
             "before": {
@@ -2951,29 +2959,34 @@ class CodexResponsesSession(OpenAIResponsesSession):
             "current_context_tokens": current_tokens,
             "context_window": context_window,
             "current_context_source": "last_provider_input_tokens" if current_tokens is not None else None,
-            "threshold_ratio": self._summarize_delay_threshold_ratio,
+            "threshold_ratio": self._forced_rebuild_threshold_ratio,
             "threshold_context_tokens": (
-                int(context_window * self._summarize_delay_threshold_ratio)
+                int(context_window * self._forced_rebuild_threshold_ratio)
                 if context_window and context_window > 0
                 else None
             ),
             "current_context_usage": usage,
         }
 
-    def _maybe_release_delayed_summarize_effect(self) -> bool:
-        if not self._summarize_effect_delayed_pending_ids:
-            return False
+    def _maybe_force_rebuild_at_boundary(self) -> bool:
+        # HARD 1.0 boundary: once context usage reaches the forced-rebuild ratio,
+        # force a fresh provider-context replay on the next request REGARDLESS of
+        # whether pending summaries exist. If pending markers exist they are applied
+        # and marked done (via _reset_ws_epoch's marking hook); if none exist the
+        # rebuild still runs because it may release transient context (agent_meta,
+        # notifications, cleared surfaces). This is why the pending-set guard that
+        # used to gate the pre-1.0 delayed release is gone.
         ctx = self._summarize_delay_context()
         self._summarize_effect_delayed_last_context = ctx
         usage = ctx.get("current_context_usage")
-        if usage is None or usage < self._summarize_delay_threshold_ratio:
+        if usage is None or usage < self._forced_rebuild_threshold_ratio:
             return False
         self._reset_ws_epoch("summarize_delayed")
         return True
 
     def _maybe_reset_ws_epoch(self) -> None:
         self._refresh_ws_epoch_reset_turn_limit()
-        if self._maybe_release_delayed_summarize_effect():
+        if self._maybe_force_rebuild_at_boundary():
             return
         limit = self._ws_epoch_reset_turn_limit
         if limit <= 0:
@@ -2992,13 +3005,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._summarize_effect_delayed_pending_ids.update(str(s) for s in summarized_ids)
         self._summarize_effect_delayed_last_context = self._summarize_delay_context()
         self._summarize_effect_delayed_last_release_reason = None
-        # If the last real provider request already crossed the threshold, the
-        # summarize tool should not appear as an agent-facing "pending" state:
-        # schedule the fresh full replay immediately.  The replay itself happens
-        # on the next provider request because summarize runs as a tool result
-        # after the current model call has already completed.
+        # If the last real provider request is already at/above the 1.0 hard
+        # boundary, schedule the forced fresh replay immediately rather than waiting
+        # for the next _maybe_reset_ws_epoch. The replay itself happens on the next
+        # provider request because summarize runs as a tool result after the current
+        # model call has already completed. Below 1.0 the summary stays pending; the
+        # agent applies it via a manual rebuild=true or waits for the 1.0 boundary.
         usage = self._summarize_effect_delayed_last_context.get("current_context_usage")
-        if usage is not None and usage >= self._summarize_delay_threshold_ratio:
+        if usage is not None and usage >= self._forced_rebuild_threshold_ratio:
             self._reset_ws_epoch("summarize_delayed")
 
     def request_history_rebuild(self, reason: str = "summarize_rebuild_only") -> bool:
@@ -3006,7 +3020,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # summarize intrinsic before this hook, so no compression happens here — the
         # agent asked to discard the remote continuation prefix and replay the
         # current local history on the next model request. This is the manual path
-        # advertised at 75%; automatic delayed-summarize release remains at 95%. The
+        # advertised at 75%; the hard forced rebuild remains at the 1.0 boundary. The
         # ``reason`` default keeps the internal ``summarize_rebuild_only`` epoch label.
         if not self._continuation_enabled:
             return False

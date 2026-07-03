@@ -177,9 +177,9 @@ def test_rebuild_true_no_items_applies_existing_pending_markers():
     assert _marker_status(iface, "tc-b") == SUMMARY_STATUS_DONE
 
 
-def test_rebuild_true_no_items_no_hook_reports_conditional_wording():
+def test_rebuild_true_no_items_no_hook_reports_forced_boundary_fallback():
     # Backend without a rebuild hook: rebuild_requested is False, still ok, and the
-    # 0.95 language is conditional ("if pending summarized history exists").
+    # comment points at the 1.0 hard forced-rebuild boundary as the fallback.
     agent = _make_stub_agent()  # no request_history_rebuild attribute
 
     result = _summarize(agent, {"action": "summarize", "rebuild": True})
@@ -188,7 +188,7 @@ def test_rebuild_true_no_items_no_hook_reports_conditional_wording():
     assert result["mode"] == "rebuild"
     assert result["rebuild_requested"] is False
     assert "no explicit rebuild hook" in result["reconstruction"]
-    assert "if pending summarized history exists" in result["reconstruction"]
+    assert "1.0 hard context boundary" in result["reconstruction"]
 
 
 def test_missing_items_without_rebuild_is_invalid_no_op():
@@ -328,26 +328,24 @@ def test_legacy_marker_without_status_not_counted_pending():
     assert totals["pending_original_chars"] == 1000
 
 
-def test_summarize_only_zero_pending_wording_does_not_suggest_waiting():
-    # After all pending markers are applied, a summarize-only call whose own item
-    # then also gets applied... but here we drive the pending==0 branch directly by
-    # making the recorded marker's own totals be the only pending, then verifying
-    # the >0 branch; the ==0 branch is exercised by a pure rebuild comment with no
-    # pending. We assert the conditional wording explicitly.
+def test_summarize_only_pending_positive_offers_forced_boundary_and_proactive():
+    # A summarize-only call with pending > 0 tells the agent the 1.0 forced boundary
+    # applies pending summaries, OR to rebuild proactively (preferred).
     iface = ChatInterface()
     _add_tool_pair(iface, "tc-1", "read", "X" * 5000)
     agent = _make_stub_agent(iface)
 
     result = _summarize(agent, {"action": "summarize", "items": [{"tool_call_id": "tc-1", "summary": "s"}]})
-    # This call has pending > 0 (its own new marker), so it offers the 0.95 path.
     assert result["pending_summary_totals"]["pending_summaries"] == 1
-    assert "if pending summarized history exists" in result["reconstruction"]
-    assert "reaches 0.95" in result["reconstruction"]
+    recon = result["reconstruction"]
+    assert "1.0 hard context boundary" in recon
+    assert "rebuild=true" in recon
+    assert "Proactive is better" in recon
 
 
-def test_summarize_only_wording_conditional_pending_zero(monkeypatch):
+def test_summarize_only_wording_conditional_pending_zero():
     # Force the pending==0 branch of the summarize-only comment builder and assert
-    # it does NOT suggest waiting for 0.95 as useful.
+    # it does NOT present the 1.0 forced rebuild as a useful way to compact.
     from lingtai_kernel.intrinsics.system import summarize as _mod
 
     snapshot = {"usage": 0.80, "tokens": 8000, "window": 10000}
@@ -360,7 +358,7 @@ def test_summarize_only_wording_conditional_pending_zero(monkeypatch):
     }
     comment = _mod._build_summarize_only_reconstruction(snapshot, zero_totals)
     assert "no pending summarized history" in comment
-    assert "waiting for the 0.95" in comment
+    assert "1.0 forced rebuild would have no summaries to apply" in comment
     assert "summarize more" in comment or "molt" in comment
 
 # ---------------------------------------------------------------------------
@@ -461,15 +459,15 @@ def test_summarize_single_item_success():
     assert result["items"][0]["tool_call_id"] == "tc-001"
     # A summarize-only (rebuild=false, default) call is category A: summaries
     # recorded in runtime history, active provider context may still hold the old
-    # raw result until rebuild. The comment names both apply-paths (automatic 0.95
-    # reconstruction OR one tactical rebuild=true), warns against looping, and
-    # references the durable stores/molt fallback below the 0.6 recovery target.
+    # raw result until rebuild. The comment names both apply-paths (the 1.0 forced
+    # boundary OR one tactical rebuild=true), warns against looping, and references
+    # the durable stores/molt fallback below the 0.6 recovery target.
     assert result["mode"] == "summarize"
     assert "reconstruction" in result
     assert "runtime history" in result["reconstruction"]
     assert "does NOT itself rebuild the active provider context" in result["reconstruction"]
     assert "old raw result" in result["reconstruction"]
-    assert "0.95" in result["reconstruction"]
+    assert "1.0 hard context boundary" in result["reconstruction"]
     assert "rebuild=true" in result["reconstruction"]
     assert "0.6 recovery target" in result["reconstruction"]
     assert "do not loop rebuild/summarize" in result["reconstruction"]

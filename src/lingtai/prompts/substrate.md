@@ -123,27 +123,29 @@ Both summary modes are non-canonical: the raw original is preserved in durable
 logs and recoverable by `tool_call_id`. A priori avoids ever spending context on
 the raw; a posteriori reclaims context after the fact.
 
-**Delayed summarization reconstruction:** summarize has two mechanisms. It
-records a compact replacement in runtime history marked `status: pending`, but it
-does not necessarily rebuild the active provider-side context immediately. Below
-`0.95` of the context window, pending summarized history may remain at the
-provider layer while the session keeps appending; from the agent's perspective,
-the old raw block may still be in the current continuation. Do not call
-`refresh` just to apply summarize. Once context is at/above `0.75`, the runtime
-also stamps `_meta.tool_meta.context.rebuild`, which permits a manual
-provider-context rebuild with `system(action="summarize", rebuild=true)` —
-either with new items (record then apply) or with no items (apply already-pending
-summaries) — when the fresh context is worth the cost; applied summaries flip to
-`status: done`. The `0.95` automatic path is conditional: **if pending summarized
-history exists**, the runtime applies it automatically when context reaches
-`0.95`, and that is when provider-context replacement becomes real. **If the
-pending total is `0`** (nothing recorded since the last rebuild, or all already
-applied), waiting for `0.95` compacts nothing — summarize more digested results
-or molt instead. The one-shot reconstruction event carries
-`reconstruction.proactive_hint` on the automatic 95% path, reminding you that one
-manual `rebuild=true` call after the 75% hint should have reduced pressure before
-the emergency rebuild. Do not loop rebuild/summarize. Reference manuals explain
-why this threshold exists; this resident section states what to do.
+**Forced context rebuild boundary:** summarize has two mechanisms. It records a
+compact replacement in runtime history marked `status: pending`, but it does not
+by itself rebuild the active provider-side context. Below the full-context
+boundary, pending summarized history may remain at the provider layer while the
+session keeps appending; from the agent's perspective, the old raw block may
+still be in the current continuation. Do not call `refresh` just to apply
+summarize. Once context is at/above `0.75`, the runtime stamps
+`_meta.tool_meta.context.rebuild`, which permits a proactive manual rebuild with
+`system(action="summarize", rebuild=true)` — either with new items (record then
+apply) or with no items (apply already-pending summaries) — when the fresh
+context is worth the cost; applied summaries flip to `status: done`. At context
+usage `1.0` (the full-context hard boundary) the runtime **forces** a
+provider-context rebuild / fresh replay on the next request **regardless of
+whether pending summaries exist**: pending markers are applied and marked done,
+and even with no pending summaries the rebuild still runs because it may release
+transient context (agent_meta, notifications, cleared surfaces). Every `1.0`
+forced rebuild ALWAYS attaches a one-shot `reconstruction.warning`
+(before→after context, proactive-`0.75`-rebuild advice, and "if still above the
+`0.6` recovery target, molt"). Waiting until full context is not ideal — prefer
+the proactive `0.75` rebuild. If pending total is `0`, the forced rebuild has no
+summaries to apply, so summarize more or molt rather than relying on it for
+compaction. Do not loop rebuild/summarize. Reference manuals explain why this
+boundary exists; this resident section states what to do.
 
 Both a-priori (`summary=true`) and a-posteriori (`system(action="summarize")`)
 summary are mini molts for tool results; molt is the stronger

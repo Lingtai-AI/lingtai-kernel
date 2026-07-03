@@ -49,7 +49,9 @@ def make_session_manager(**kw):
 
 def test_constants_match_contract():
     assert CONTEXT_PRESSURE_HIGH_RATIO == 0.75
-    assert CONTEXT_PRESSURE_RECONSTRUCTION_RATIO == 0.95
+    # The reconstruction ratio is now the 1.0 hard forced-rebuild boundary
+    # (CONTEXT_PRESSURE_RECONSTRUCTION_RATIO is a back-compat alias).
+    assert CONTEXT_PRESSURE_RECONSTRUCTION_RATIO == 1.0
     assert CONTEXT_PRESSURE_WARN_AFTER_ROUNDS == 3
 
 

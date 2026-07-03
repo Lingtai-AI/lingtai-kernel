@@ -56,14 +56,15 @@ from collections.abc import Mapping
 
 from .config import (
     CONTEXT_PRESSURE_HIGH_RATIO,
-    CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
+    CONTEXT_PRESSURE_FORCED_REBUILD_RATIO,
+    CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,  # back-compat alias == FORCED_REBUILD_RATIO
     CONTEXT_PRESSURE_RECOVERY_TARGET,
 )
 from .i18n import t as _t
 from .reminders.context_pressure import (
     current_molt_emission_descriptor,
     render_current_molt_context,
-    render_reconstruction_emergency_hint,
+    render_forced_rebuild_warning,
     render_reconstruction_molt,
 )
 from .time_veil import now_iso
@@ -552,19 +553,19 @@ def build_meta_readme() -> dict:
             "invented. Copied here so agents can inspect historical high-context "
             "summarize/rebuild costs after newer results arrive. May also "
             "carry a one-shot 'reconstruction' event when the runtime just "
-            "rebuilt provider context for delayed summarize or a manual rebuild: "
-            "it records the event type (delayed_summarize_reconstruction or "
+            "rebuilt provider context at the 1.0 forced boundary or for a manual "
+            "rebuild: it records the event type (delayed_summarize_reconstruction or "
             "summarize_rebuild_only_reconstruction), the before (A) and after (B) "
-            "context tokens/usage, context_window, trigger_threshold (0.95 "
-            "automatic rebuild trigger), threshold_high (0.75 manual/high-context "
-            "hint), and recovery_target (0.6). Automatic 95% rebuild events also "
-            "carry reconstruction.proactive_hint, noting that one manual "
-            "summarize(rebuild=true) after the 75% hint could have relieved "
-            "pressure earlier; manual rebuild events do not carry that hint. "
-            "If B is still at/above the recovery target, the event includes a "
-            "natural-language molt reminder at reconstruction.molt (a one-shot; "
-            "distinct from the sustained-pressure tool_meta.context.molt above). "
-            "This is permanent evidence of a past event, not current state."
+            "context tokens/usage, context_window, trigger_threshold (1.0 hard "
+            "forced-rebuild boundary), threshold_high (0.75 manual/high-context "
+            "hint), and recovery_target (0.6). A 1.0 forced-rebuild event ALWAYS "
+            "carries a single unified reconstruction.warning (before->after change, "
+            "proactive 0.75-rebuild advice, and the conditional 'if still above 0.6, "
+            "molt' instruction, no high/low branching). Manual rebuild events do "
+            "not carry that warning; if B is still at/above the recovery target they "
+            "instead include a natural-language molt reminder at reconstruction.molt "
+            "(a one-shot; distinct from the sustained-pressure tool_meta.context.molt "
+            "above). This is permanent evidence of a past event, not current state."
         ),
         AGENT_META_KEY: (
             "Agent/current-state snapshot (elapsed_ms, active_turn_tool_calls, "
@@ -942,8 +943,8 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
     stamped under ``_meta.tool_meta.context.rebuild`` whenever context is at/above
     ``CONTEXT_PRESSURE_HIGH_RATIO`` and the system intrinsic is available, so the
     agent may explicitly request a rebuild via
-    ``system(action='summarize', rebuild=true)`` instead of waiting for the
-    95% automatic delayed-summarize trigger.
+    ``system(action='summarize', rebuild=true)`` instead of letting the
+    1.0 hard boundary force one.
     """
     if "system" not in getattr(agent, "_intrinsics", set()):
         return None
@@ -958,9 +959,11 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
         "active provider context. If recorded summaries are worth making active "
         "sooner, you MAY pay for a provider-context rebuild via "
         "system(action='summarize', rebuild=true) (with or without new items). This "
-        "is a permitted option, not a requirement; if pending summaries exist, an "
-        "automatic rebuild still happens at 95%. Keep summarizing digested "
-        "results to shrink recorded history either way. See meta_guidance for details."
+        "is a permitted option, not a requirement; if you do nothing, the runtime "
+        "forces a rebuild at the 1.0 hard boundary (full context) regardless. "
+        "Preferring a proactive rebuild here avoids the emergency forced path. Keep "
+        "summarizing digested results to shrink recorded history either way. See "
+        "meta_guidance for details."
     )
 
 
@@ -1165,7 +1168,7 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
         "type": raw.get("type", "delayed_summarize_reconstruction"),
         "reason": raw.get("reason", "delayed_summarize_reconstruction"),
         "trigger_threshold": raw.get(
-            "trigger_threshold", CONTEXT_PRESSURE_RECONSTRUCTION_RATIO
+            "trigger_threshold", CONTEXT_PRESSURE_FORCED_REBUILD_RATIO
         ),
         "threshold_high": raw.get("threshold_high", CONTEXT_PRESSURE_HIGH_RATIO),
         "recovery_target": raw.get("recovery_target", CONTEXT_PRESSURE_RECOVERY_TARGET),
@@ -1178,25 +1181,34 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
         },
     }
 
+    recovery_target = event["recovery_target"]
+
     if event["type"] == "delayed_summarize_reconstruction":
-        proactive_hint = render_reconstruction_emergency_hint(
+        # 1.0 HARD forced rebuild: ALWAYS attach the one unified warning,
+        # regardless of whether the rebuilt context dropped low or stayed high. It
+        # folds the before→after change, the proactive-rebuild advice, and the
+        # conditional "if still above 0.6, molt" instruction into a single string —
+        # no after-high/low branching.
+        before = event.get("before") if isinstance(event.get("before"), dict) else {}
+        event["warning"] = render_forced_rebuild_warning(
+            before_tokens=before.get("context_tokens"),
+            before_usage=before.get("usage"),
+            after_tokens=after_tokens,
             after_usage=after_usage,
             trigger_threshold=event.get(
-                "trigger_threshold", CONTEXT_PRESSURE_RECONSTRUCTION_RATIO
+                "trigger_threshold", CONTEXT_PRESSURE_FORCED_REBUILD_RATIO
             ),
             high_threshold=event.get("threshold_high", CONTEXT_PRESSURE_HIGH_RATIO),
+            recovery_target=recovery_target,
         )
-        if proactive_hint:
-            event["proactive_hint"] = proactive_hint
+        return event
 
-    # The warning decision + prose (channel A) live in the reminder abstraction;
-    # this function owns only the event assembly (provider-vs-local after-context
-    # resolution, event shape). Delegate to the session's reminder when present,
-    # falling back to the pure renderer for session stand-ins without one. Pass
-    # the event's own recovery_target so the decision uses exactly the value
-    # stamped into the event.
+    # Manual rebuild=true reconstruction (summarize_rebuild_only_reconstruction):
+    # the agent already acted proactively, so no forced-rebuild warning. Keep the
+    # recovery molt reminder (channel A) when the rebuilt context is still above the
+    # recovery target. Delegate to the session's reminder when present, falling back
+    # to the pure renderer for session stand-ins without one.
     reminder = getattr(session, "context_pressure_reminder", None)
-    recovery_target = event["recovery_target"]
     if reminder is not None:
         molt = reminder.annotate_reconstruction(
             after_usage, recovery_target=recovery_target
