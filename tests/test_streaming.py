@@ -64,13 +64,15 @@ def test_sequential_tool_empty_args():
     assert result.tool_calls[0].args == {}
 
 
-def test_sequential_tool_malformed_json():
+def test_sequential_tool_malformed_json(caplog):
     acc = StreamingAccumulator()
     acc.start_tool(id="t1", name="broken")
     acc.add_tool_args("{not valid json")
-    acc.finish_tool()
+    with caplog.at_level("WARNING", logger="lingtai_kernel.llm.streaming"):
+        acc.finish_tool()
     result = acc.finalize()
     assert result.tool_calls[0].args == {}
+    assert "streamed tool-call args JSON parse failed; defaulting to {}" in caplog.text
 
 
 def test_finish_tool_noop_when_no_pending():
