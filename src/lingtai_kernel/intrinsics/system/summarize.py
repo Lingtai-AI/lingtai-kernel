@@ -70,61 +70,232 @@ def _truthy_flag(value: Any) -> bool:
     return False
 
 
-def _request_rebuild_only(agent, *, current_threshold: int) -> dict:
-    """Handle summarize rebuild-only mode (no compression, just rebuild)."""
+# Rough chars-per-token divisor for the clearly-labeled token estimate in the
+# dynamic pending-summary totals. This is a display heuristic only — the exact
+# token counts live in _meta.tool_meta.token_usage; the char-derived figure is
+# a rough guide so the agent can weigh a rebuild.
+_CHARS_PER_TOKEN_ESTIMATE = 4
+
+
+def _iter_summarize_blocks(agent):
+    """Yield every current SUMMARIZE_MARKER replacement block in live history.
+
+    Each yielded block's ``content`` carries ``original_visible_chars`` and
+    ``summary_chars`` stamped at summarize time. These blocks stay in local
+    history — and thus in the active provider continuation — until a rebuild
+    releases them, so they are the natural source of truth for the total pending
+    (recorded-but-not-yet-rebuilt) summary state.
+    """
+    from ...llm.interface import ToolResultBlock  # local import — no circular dep
+
+    chat = getattr(agent, "_chat", None)
+    iface = getattr(chat, "interface", None) if chat is not None else None
+    if iface is None:
+        return
+    for entry in getattr(iface, "_entries", []):
+        if getattr(entry, "role", None) != "user":
+            continue
+        for block in getattr(entry, "content", []):
+            if isinstance(block, ToolResultBlock) and _is_already_summarized(block.content):
+                yield block
+
+
+def _pending_summary_totals(agent) -> dict:
+    """Aggregate ALL pending summaries currently recorded in local history.
+
+    Not just the current summarize call: every summarize replacement block still
+    present in history contributes, because they all still ride the provider
+    continuation until a rebuild is requested. Returns a dict with the pending
+    original visible chars total, pending compacted summary chars total, net char
+    reduction, a rough estimated token reduction (clearly labeled), and the count
+    of pending summaries.
+    """
+    original_chars = 0
+    summary_chars = 0
+    count = 0
+    for block in _iter_summarize_blocks(agent):
+        content = block.content
+        try:
+            original_chars += int(content.get("original_visible_chars", 0) or 0)
+            summary_chars += int(content.get("summary_chars", 0) or 0)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        count += 1
+    net_chars = original_chars - summary_chars
+    return {
+        "pending_summaries": count,
+        "pending_original_chars": original_chars,
+        "pending_summary_chars": summary_chars,
+        "net_chars": net_chars,
+        "est_tokens": net_chars // _CHARS_PER_TOKEN_ESTIMATE,
+    }
+
+
+def _current_context_snapshot(agent) -> dict:
+    """Return current context usage/tokens/window when resolvable, else Nones.
+
+    Reuses the same meta_block sources the tool-meta token_usage block uses so the
+    figures reported here match ``_meta.tool_meta.token_usage.session``.
+    """
+    from ...meta_block import _current_context_usage, _session_context_window
+
+    usage = None
+    tokens = None
+    window = None
+    try:
+        raw_usage = float(_current_context_usage(agent))
+        if raw_usage >= 0:
+            usage = raw_usage
+    except Exception:
+        usage = None
+    try:
+        window = int(_session_context_window(agent)) or None
+    except Exception:
+        window = None
+    try:
+        raw = agent.get_token_usage()
+        tokens = int(raw.get("ctx_total_tokens", 0)) or None
+    except Exception:
+        tokens = None
+    return {"usage": usage, "tokens": tokens, "window": window}
+
+
+def _context_line(snapshot: dict) -> str:
+    """One-line current-context prefix for the reconstruction comments."""
+    usage = snapshot.get("usage")
+    tokens = snapshot.get("tokens")
+    window = snapshot.get("window")
+    if usage is not None and tokens and window:
+        return f"Current context: {usage:.2f} ({tokens}/{window} tokens). "
+    if usage is not None:
+        return f"Current context: {usage:.2f}. "
+    return ""
+
+
+def _pending_totals_line(totals: dict, *, applied: bool) -> str:
+    """One-line dynamic pending-summary totals for the reconstruction comments.
+
+    ``applied=False`` (summarize-only) frames the totals as what a rebuild WOULD
+    replace; ``applied=True`` (rebuild success) frames them as what was
+    submitted to the rebuild path before pending state clears.
+    """
+    if totals.get("pending_summaries", 0) <= 0:
+        return ""
+    original = totals["pending_original_chars"]
+    summary = totals["pending_summary_chars"]
+    net = totals["net_chars"]
+    est = totals["est_tokens"]
+    if applied:
+        return (
+            f"Pending summaries applied to the rebuild path: {original} visible chars "
+            f"replaced with {summary} summary chars, a reduction of {net} chars "
+            f"(~{est} tokens, rough estimate). "
+        )
+    return (
+        f"Pending summaries would replace {original} visible chars with {summary} "
+        f"summary chars after rebuild, an estimated reduction of {net} chars "
+        f"(~{est} tokens, rough estimate). "
+    )
+
+
+def _request_rebuild(agent, *, reason: str) -> bool:
+    """Ask the chat session to rebuild the provider context. Returns success.
+
+    Raises nothing; returns False when there is no session, no hook, or the hook
+    declines/errors. Callers surface the boolean as ``rebuild_requested``.
+    """
     chat = getattr(agent, "_chat", None)
     if chat is None:
+        return False
+    hook = getattr(chat, "request_history_rebuild", None)
+    if not callable(hook):
+        return False
+    try:
+        requested = bool(hook(reason=reason))
+    except TypeError:
+        requested = bool(hook())
+    except Exception as exc:  # pragma: no cover - defensive hook isolation
+        try:
+            agent._log("history_rebuild_request_failed", error=type(exc).__name__)
+        except Exception:
+            pass
+        return False
+    try:
+        agent._log("history_rebuild_requested", requested=requested, reason=reason)
+    except Exception:
+        pass
+    return requested
+
+
+def _pure_rebuild_result(agent, *, current_threshold: int) -> dict:
+    """Handle rebuild=true with no items — a pure rebuild of pending summaries.
+
+    No new summaries are recorded; the already-pending recorded summaries are
+    submitted to the provider-context rebuild path.
+    """
+    if getattr(agent, "_chat", None) is None:
         return {
             "status": "error",
             "reason": "no_chat_session",
             "message": "No active chat session — cannot request a context rebuild.",
             "notification_threshold_chars": current_threshold,
         }
-    hook = getattr(chat, "request_history_rebuild", None)
-    requested = False
-    if callable(hook):
-        try:
-            requested = bool(hook(reason="summarize_rebuild_only"))
-        except TypeError:
-            requested = bool(hook())
-        except Exception as exc:  # pragma: no cover - defensive hook isolation
-            try:
-                agent._log("history_rebuild_only_request_failed", error=type(exc).__name__)
-            except Exception:
-                pass
-            return {
-                "status": "error",
-                "reason": "rebuild_request_failed",
-                "message": "The chat session rejected the rebuild-only request.",
-                "notification_threshold_chars": current_threshold,
-            }
-    try:
-        agent._log(
-            "history_rebuild_only_requested",
-            requested=requested,
-            reason="summarize_rebuild_only",
-        )
-    except Exception:
-        pass
-    return {
+    totals = _pending_summary_totals(agent)
+    snapshot = _current_context_snapshot(agent)
+    requested = _request_rebuild(agent, reason="summarize_rebuild_only")
+    result = {
         "status": "ok",
-        "mode": "rebuild_only",
+        "mode": "rebuild",
         "summarized": 0,
         "failed": 0,
         "items": [],
         "cleared_reminders": [],
         "rebuild_requested": requested,
+        "pending_summary_totals": totals,
+        "context": snapshot,
         "notification_threshold_chars": current_threshold,
-        "reconstruction": (
-            "No tool results were summarized (rebuild-only). A one-shot, no-compression "
-            "provider-context rebuild was requested for the next model call, making any "
-            "already-recorded summaries active without waiting for the automatic 95% path."
-            if requested
-            else "No tool results were summarized (rebuild-only). This chat backend has no "
-            "explicit rebuild hook (or continuation is disabled), so there may be no "
-            "provider-context action to take."
+        "reconstruction": _build_rebuild_reconstruction(
+            snapshot, totals, requested=requested
         ),
     }
+    return result
+
+
+def _build_rebuild_reconstruction(snapshot: dict, totals: dict, *, requested: bool) -> str:
+    """Category B comment: summarize+rebuild=true success (or attempted rebuild)."""
+    if not requested:
+        return (
+            "Rebuild requested, but this chat backend has no explicit rebuild hook "
+            "(or continuation is disabled), so there may be no provider-context action "
+            "to take. Recorded summaries remain pending until the automatic 95% "
+            "reconstruction. See meta_guidance, substrate, and summarize-manual."
+        )
+    return (
+        f"{_context_line(snapshot)}Rebuild successful: the recorded summaries have been "
+        f"applied to the provider-context rebuild path and will take effect on the next "
+        f"model request. {_pending_totals_line(totals, applied=True)}Next round, inspect "
+        f"_meta.tool_meta.token_usage.session.context_usage and the reconstruction "
+        f"metadata to decide whether context recovered. If it remains above the 0.6 "
+        f"recovery target, tend durable stores and molt rather than repeating rebuild. "
+        f"Be tactical with token efficiency — do not loop rebuild/summarize. See "
+        f"meta_guidance, substrate, and summarize-manual."
+    )
+
+
+def _build_summarize_only_reconstruction(snapshot: dict, totals: dict) -> str:
+    """Category A comment: summarize-only (rebuild=false, the default)."""
+    return (
+        f"Summaries recorded in runtime history. This does NOT itself rebuild the active "
+        f"provider context: it may still contain the old raw result until rebuild. "
+        f"{_context_line(snapshot)}{_pending_totals_line(totals, applied=False)}Two ways to "
+        f"apply them: wait for automatic delayed reconstruction once context reaches 0.95 "
+        f"of the window, OR make one tactical system(action='summarize', rebuild=true) call "
+        f"proactively — preferably when context is high (>=0.75 / the runtime rebuild hint) "
+        f"or a fresh context is worth the cache-miss cost. Be tactical with token "
+        f"efficiency: do not loop rebuild/summarize. If rebuild cannot recover below the "
+        f"0.6 recovery target, tend durable stores and molt. See meta_guidance, substrate, "
+        f"and summarize-manual."
+    )
 
 
 def _summarize(agent, args: dict) -> dict:
@@ -137,12 +308,24 @@ def _summarize(agent, args: dict) -> dict:
           "items": [
             {"tool_call_id": "toolu_...", "summary": "Agent-authored text ..."},
             ...
-          ]
+          ],
+          "rebuild": false  # default; true also requests a provider-context rebuild
         }
 
+    ``rebuild`` (boolean, default false) controls the provider-context rebuild:
+
+      * ``rebuild=false`` with items — record summaries only (category A comment).
+      * ``rebuild=true`` with items — record summaries, then request a rebuild
+        that applies them to the provider context (category B comment).
+      * ``rebuild=true`` with no items — pure rebuild using already-pending
+        summaries (category B comment).
+      * no items and ``rebuild=false`` — invalid no-op (``missing_items`` error).
+
     Returns a dict with per-item results (``"items"`` list), aggregate counts
-    (``"summarized"``, ``"failed"``), and the current threshold
-    (``"notification_threshold_chars"``).
+    (``"summarized"``, ``"failed"``), the current threshold
+    (``"notification_threshold_chars"``), and — on success — ``mode``
+    (``"summarize"`` or ``"rebuild"``), ``pending_summary_totals`` (aggregated
+    over ALL pending summaries), and ``context`` (current usage/tokens/window).
 
     Note: ``notification_threshold_chars`` is NOT accepted at runtime.  The
     threshold is set exclusively via ``manifest.summarize_notification_threshold``
@@ -169,32 +352,25 @@ def _summarize(agent, args: dict) -> dict:
             "notification_threshold_chars": current_threshold,
         }
 
-    rebuild_only = _truthy_flag(args.get("rebuild_only")) or _truthy_flag(args.get("dry_run"))
+    rebuild = _truthy_flag(args.get("rebuild"))
     items_arg = args.get("items")
+    has_items = isinstance(items_arg, list) and len(items_arg) > 0
 
-    if rebuild_only:
-        if isinstance(items_arg, list) and len(items_arg) > 0:
-            return {
-                "status": "error",
-                "reason": "rebuild_only_with_items",
-                "message": (
-                    "system(action='summarize', rebuild_only=true) performs no "
-                    "compression; call it with no items, or omit rebuild_only to "
-                    "summarize tool results."
-                ),
-                "notification_threshold_chars": current_threshold,
-            }
-        return _request_rebuild_only(agent, current_threshold=current_threshold)
+    # rebuild=true with no items → pure rebuild using already-pending summaries.
+    if rebuild and not has_items:
+        return _pure_rebuild_result(agent, current_threshold=current_threshold)
 
-    if not isinstance(items_arg, list) or len(items_arg) == 0:
+    # No items and rebuild=false → invalid no-op.
+    if not has_items:
         return {
             "status": "error",
             "reason": "missing_items",
             "message": (
                 "system(action='summarize') requires a non-empty 'items' list, "
                 "each with 'tool_call_id' and 'summary'. To rebuild provider "
-                "context without compression, call system(action='summarize', "
-                "rebuild_only=true) with no items."
+                "context using already-pending summaries without recording new "
+                "ones, call system(action='summarize', rebuild=true) with no items. "
+                "rebuild=false with no items is an invalid no-op."
             ),
             "notification_threshold_chars": current_threshold,
         }
@@ -378,29 +554,40 @@ def _summarize(agent, args: dict) -> dict:
         "notification_threshold_chars": current_threshold,
     }
 
-    # Reassure the agent that runtime-history bookkeeping happened while
-    # provider-side context reconstruction is intentionally delayed.  Recording a
-    # summary updates runtime history and clears matching large-result reminders;
-    # it does NOT by itself rebuild the active provider context, even above 0.75.
-    # The active provider request may still ride the existing append/continuation
-    # prefix with the old raw block until summarized history is pending and context
-    # reaches the automatic reconstruction threshold (0.95 of the window). Above
-    # 0.75 the runtime stamps a manual rebuild HINT — a permission/decision prompt,
-    # not an automatic rebuild — so the agent may explicitly call rebuild_only once
-    # to make recorded summaries active sooner if a fresh provider context is worth
-    # the cost. This is a short, generic status, not a per-provider policy object —
-    # runtimes that reconstruct on every request simply observe no delay.
+    # The final result-comment has exactly two successful categories, keyed on the
+    # `rebuild` flag (Jason, Telegram 4093/4095/4097):
+    #
+    #   A. summarize-only (rebuild=false, default) — summaries are recorded in
+    #      runtime history but the active provider context may still contain the old
+    #      raw result until a rebuild. Recording a summary does NOT by itself rebuild
+    #      the active provider context, even above 0.75. The reconstruction comment
+    #      reports current context + ALL pending-summary totals and explains the two
+    #      ways to apply them (automatic 0.95 delayed reconstruction, or one tactical
+    #      rebuild=true call), warning against looping.
+    #   B. summarize+rebuild=true — after recording, the pending summaries are
+    #      submitted to the provider-context rebuild path; the comment reports the
+    #      pending totals that were applied and tells the agent next round's _meta
+    #      decides recovery vs molt.
+    #
+    # Both dynamic totals aggregate ALL pending summaries (via
+    # _pending_summary_totals), not just this call, and are computed BEFORE the
+    # rebuild request clears the adapter's pending state.
     if summarized_count > 0:
-        result["reconstruction"] = (
-            "Summary recorded in runtime history. This does NOT itself rebuild the active "
-            "provider context: it may still contain the old raw result until reconstruction. "
-            "When summarized history is pending, an automatic rebuild happens once context "
-            "reaches 0.95 of the window (the safety path). Above 0.75, "
-            "_meta.tool_meta.context.rebuild is a permission/decision prompt, not an "
-            "automatic rebuild: if making these recorded summaries active sooner is worth "
-            "the cost, you MAY call system(action='summarize', rebuild_only=true) once (no "
-            "items) to force an earlier no-compression rebuild. This is normal — keep "
-            "working. See meta_guidance and substrate for details."
-        )
+        totals = _pending_summary_totals(agent)
+        snapshot = _current_context_snapshot(agent)
+        result["pending_summary_totals"] = totals
+        result["context"] = snapshot
+        if rebuild:
+            requested = _request_rebuild(agent, reason="summarize_rebuild_only")
+            result["mode"] = "rebuild"
+            result["rebuild_requested"] = requested
+            result["reconstruction"] = _build_rebuild_reconstruction(
+                snapshot, totals, requested=requested
+            )
+        else:
+            result["mode"] = "summarize"
+            result["reconstruction"] = _build_summarize_only_reconstruction(
+                snapshot, totals
+            )
 
     return result

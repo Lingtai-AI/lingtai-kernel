@@ -500,7 +500,7 @@ def build_meta_readme() -> dict:
             "Present on every tool result; "
             "permanent. context, when present, may carry context.rebuild — a "
             "lightweight line stamped continuously once context is >= 0.75 saying "
-            "the agent may manually rebuild via summarize(rebuild_only=true). It "
+            "the agent may manually rebuild via summarize(rebuild=true). It "
             "may also carry the SUSTAINED-pressure context.molt reminder string — "
             "a stronger warning that appears only after context has been high "
             "(>= 0.75) for several consecutive fresh provider rounds and clears "
@@ -552,15 +552,15 @@ def build_meta_readme() -> dict:
             "invented. Copied here so agents can inspect historical high-context "
             "summarize/rebuild costs after newer results arrive. May also "
             "carry a one-shot 'reconstruction' event when the runtime just "
-            "rebuilt provider context for delayed summarize or manual rebuild-only: "
+            "rebuilt provider context for delayed summarize or a manual rebuild: "
             "it records the event type (delayed_summarize_reconstruction or "
             "summarize_rebuild_only_reconstruction), the before (A) and after (B) "
             "context tokens/usage, context_window, trigger_threshold (0.95 "
             "automatic rebuild trigger), threshold_high (0.75 manual/high-context "
             "hint), and recovery_target (0.6). Automatic 95% rebuild events also "
             "carry reconstruction.proactive_hint, noting that one manual "
-            "summarize(rebuild_only=true) after the 75% hint could have relieved "
-            "pressure earlier; manual rebuild-only events do not carry that hint. "
+            "summarize(rebuild=true) after the 75% hint could have relieved "
+            "pressure earlier; manual rebuild events do not carry that hint. "
             "If B is still at/above the recovery target, the event includes a "
             "natural-language molt reminder at reconstruction.molt (a one-shot; "
             "distinct from the sustained-pressure tool_meta.context.molt above). "
@@ -941,8 +941,8 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
     This is not a molt warning and not an event route.  It is a current-state line
     stamped under ``_meta.tool_meta.context.rebuild`` whenever context is at/above
     ``CONTEXT_PRESSURE_HIGH_RATIO`` and the system intrinsic is available, so the
-    agent may explicitly request a one-shot rebuild via
-    ``system(action='summarize', rebuild_only=true)`` instead of waiting for the
+    agent may explicitly request a rebuild via
+    ``system(action='summarize', rebuild=true)`` instead of waiting for the
     95% automatic delayed-summarize trigger.
     """
     if "system" not in getattr(agent, "_intrinsics", set()):
@@ -956,9 +956,9 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
     return (
         "context now above 75%: recording summaries does NOT itself rebuild the "
         "active provider context. If recorded summaries are worth making active "
-        "sooner, you MAY pay for a one-shot provider-context rebuild via "
-        "system(action='summarize', rebuild_only=true) (no items). This is a "
-        "permitted option, not a requirement; if pending summaries exist, an "
+        "sooner, you MAY pay for a provider-context rebuild via "
+        "system(action='summarize', rebuild=true) (with or without new items). This "
+        "is a permitted option, not a requirement; if pending summaries exist, an "
         "automatic rebuild still happens at 95%. Keep summarizing digested "
         "results to shrink recorded history either way. See meta_guidance for details."
     )

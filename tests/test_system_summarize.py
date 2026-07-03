@@ -82,56 +82,124 @@ def test_schema_has_items_property():
     assert items_schema["type"] == "array"
 
 
-def test_schema_has_rebuild_only_properties():
+def test_schema_has_rebuild_boolean_property():
     from lingtai_kernel.intrinsics.system.schema import get_schema
     schema = get_schema("en")
-    assert schema["properties"]["rebuild_only"]["type"] == "boolean"
-    assert schema["properties"]["dry_run"]["type"] == "boolean"
+    assert schema["properties"]["rebuild"]["type"] == "boolean"
 
 
+def test_schema_removed_legacy_rebuild_params():
+    # The old public params are gone with NO legacy aliases retained.
+    from lingtai_kernel.intrinsics.system.schema import get_schema
+    schema = get_schema("en")
+    assert "rebuild_only" not in schema["properties"]
+    assert "dry_run" not in schema["properties"]
 
 
-def test_rebuild_only_with_no_items_requests_chat_rebuild():
+def test_rebuild_true_with_no_items_requests_pure_rebuild():
     agent = _make_stub_agent()
     agent._chat.request_history_rebuild = MagicMock(return_value=True)
 
-    result = _summarize(agent, {"action": "summarize", "rebuild_only": True})
+    result = _summarize(agent, {"action": "summarize", "rebuild": True})
 
     assert result["status"] == "ok"
-    assert result["mode"] == "rebuild_only"
+    assert result["mode"] == "rebuild"
     assert result["summarized"] == 0
     assert result["items"] == []
     assert result["rebuild_requested"] is True
+    # A pure rebuild aggregates pending totals and reports current context.
+    assert "pending_summary_totals" in result
+    assert result["pending_summary_totals"]["pending_summaries"] == 0
+    assert "context" in result
     agent._chat.request_history_rebuild.assert_called_once_with(
         reason="summarize_rebuild_only"
     )
+    # No new summaries recorded, so history is not persisted.
     agent._save_chat_history.assert_not_called()
 
 
-def test_dry_run_alias_requests_rebuild_without_items():
-    agent = _make_stub_agent()
-    agent._chat.request_history_rebuild = MagicMock(return_value=True)
+def test_rebuild_true_no_items_no_hook_reports_no_action():
+    # Backend without a rebuild hook: rebuild_requested is False, still ok.
+    agent = _make_stub_agent()  # no request_history_rebuild attribute
 
-    result = _summarize(agent, {"action": "summarize", "dry_run": True})
+    result = _summarize(agent, {"action": "summarize", "rebuild": True})
 
     assert result["status"] == "ok"
-    assert result["mode"] == "rebuild_only"
-    assert result["rebuild_requested"] is True
+    assert result["mode"] == "rebuild"
+    assert result["rebuild_requested"] is False
+    assert "no explicit rebuild hook" in result["reconstruction"]
 
 
-def test_rebuild_only_rejects_items():
+def test_missing_items_without_rebuild_is_invalid_no_op():
+    # rebuild=false (default) with no items is an invalid no-op.
     agent = _make_stub_agent()
+    result = _summarize(agent, {"action": "summarize"})
+    assert result["status"] == "error"
+    assert result["reason"] == "missing_items"
+    assert "invalid no-op" in result["message"]
+
+    result_false = _summarize(agent, {"action": "summarize", "rebuild": False})
+    assert result_false["reason"] == "missing_items"
+
+
+def test_rebuild_true_with_items_records_then_rebuilds():
+    iface = ChatInterface()
+    _add_tool_pair(iface, "tc-r1", "read", "X" * 5000)
+    agent = _make_stub_agent(iface)
+    agent._chat.request_history_rebuild = MagicMock(return_value=True)
+
     result = _summarize(
         agent,
         {
             "action": "summarize",
-            "rebuild_only": True,
-            "items": [{"tool_call_id": "x", "summary": "y"}],
+            "rebuild": True,
+            "items": [{"tool_call_id": "tc-r1", "summary": "short digest"}],
         },
     )
 
-    assert result["status"] == "error"
-    assert result["reason"] == "rebuild_only_with_items"
+    assert result["status"] == "ok"
+    assert result["summarized"] == 1
+    assert result["mode"] == "rebuild"
+    assert result["rebuild_requested"] is True
+    # Summaries were recorded (history persisted) AND a rebuild was requested.
+    agent._save_chat_history.assert_called_once()
+    agent._chat.request_history_rebuild.assert_called_once_with(
+        reason="summarize_rebuild_only"
+    )
+    # Category-B comment: rebuild successful, applied totals, next-round _meta decides.
+    recon = result["reconstruction"]
+    assert "Rebuild successful" in recon
+    assert "applied to the provider-context rebuild path" in recon
+    assert "recovery target" in recon
+    assert "molt" in recon
+    # Dynamic pending totals aggregate the one recorded summary.
+    totals = result["pending_summary_totals"]
+    assert totals["pending_summaries"] == 1
+    assert totals["pending_original_chars"] == 5000
+    assert totals["pending_summary_chars"] == len("short digest")
+    assert totals["net_chars"] == 5000 - len("short digest")
+
+
+def test_pending_summary_totals_aggregate_all_pending():
+    # Two separately-summarized results must both contribute to pending totals,
+    # not just the current call's item.
+    iface = ChatInterface()
+    _add_tool_pair(iface, "tc-a", "read", "A" * 3000)
+    _add_tool_pair(iface, "tc-b", "read", "B" * 2000)
+    agent = _make_stub_agent(iface)
+
+    # First summarize records tc-a.
+    _summarize(agent, {"action": "summarize", "items": [{"tool_call_id": "tc-a", "summary": "aaa"}]})
+    # Second summarize records tc-b and its totals must include BOTH pending.
+    result = _summarize(agent, {"action": "summarize", "items": [{"tool_call_id": "tc-b", "summary": "bb"}]})
+
+    totals = result["pending_summary_totals"]
+    assert totals["pending_summaries"] == 2
+    assert totals["pending_original_chars"] == 5000
+    assert totals["pending_summary_chars"] == len("aaa") + len("bb")
+    assert totals["net_chars"] == 5000 - (len("aaa") + len("bb"))
+    # Rough estimate is clearly derived from net chars.
+    assert totals["est_tokens"] == totals["net_chars"] // 4
 
 # ---------------------------------------------------------------------------
 # _is_already_summarized
@@ -229,19 +297,24 @@ def test_summarize_single_item_success():
     assert len(result["items"]) == 1
     assert result["items"][0]["status"] == "ok"
     assert result["items"][0]["tool_call_id"] == "tc-001"
-    # A successful summarize carries a short, generic reassurance that the
-    # summary bookkeeping is recorded now and provider reconstruction is delayed.
-    # The wording makes explicit that recording a summary does NOT itself rebuild
-    # the active provider context (the 75% hint is a permission, the 95% path is
-    # automatic) — it does not imply ordinary summarize triggers a rebuild.
+    # A summarize-only (rebuild=false, default) call is category A: summaries
+    # recorded in runtime history, active provider context may still hold the old
+    # raw result until rebuild. The comment names both apply-paths (automatic 0.95
+    # reconstruction OR one tactical rebuild=true), warns against looping, and
+    # references the durable stores/molt fallback below the 0.6 recovery target.
+    assert result["mode"] == "summarize"
     assert "reconstruction" in result
     assert "runtime history" in result["reconstruction"]
     assert "does NOT itself rebuild the active provider context" in result["reconstruction"]
     assert "old raw result" in result["reconstruction"]
     assert "0.95" in result["reconstruction"]
-    assert "permission/decision prompt, not an" in result["reconstruction"]
-    assert "keep working" in result["reconstruction"]
-    assert "See meta_guidance and substrate for details" in result["reconstruction"]
+    assert "rebuild=true" in result["reconstruction"]
+    assert "0.6 recovery target" in result["reconstruction"]
+    assert "do not loop rebuild/summarize" in result["reconstruction"]
+    assert "meta_guidance" in result["reconstruction"]
+    # Dynamic pending totals + context snapshot accompany the comment.
+    assert result["pending_summary_totals"]["pending_summaries"] == 1
+    assert "context" in result
     # Not a provider-specific policy object — a plain status string.
     assert isinstance(result["reconstruction"], str)
 

@@ -33,13 +33,9 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "boolean",
                 "description": t(lang, "system_tool.revert_preset_description"),
             },
-            "rebuild_only": {
+            "rebuild": {
                 "type": "boolean",
-                "description": "For action='summarize': request a one-shot provider-context rebuild that makes already-recorded summaries active in the provider context now, without summarizing any new items. Use with no items. Ordinary summarize only records compact replacements in runtime history; it does NOT rebuild the active provider context on its own. This is the explicit path (offered by the 75% context.rebuild hint) to apply recorded summaries sooner than the automatic 95% reconstruction.",
-            },
-            "dry_run": {
-                "type": "boolean",
-                "description": "Alias for rebuild_only for action='summarize'. NOT a no-op simulation despite the name: it performs no compression but does request a real one-shot provider-context rebuild, exactly like rebuild_only=true. Use with no items.",
+                "description": "For action='summarize' (default false): request a provider-context rebuild that makes recorded summaries active in the active provider context now. With items, summaries are recorded first and then the rebuild is requested; with no items, it is a pure rebuild using the already-pending summaries. When false (the default), summarize only records compact replacements in runtime history and does NOT rebuild the active provider context — the old raw result may still ride the current continuation until the automatic 95% reconstruction. Prefer one tactical rebuild=true call when context is high (>=0.75 / the context.rebuild hint) or a fresh context is worth the cache-miss cost; do not loop rebuild. Note: rebuild=false with no items is an invalid no-op.",
             },
             "items": {
                 "type": "array",

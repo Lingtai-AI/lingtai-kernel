@@ -12,7 +12,7 @@ description: >
   its folder may carry scripts/assets as the substrate reference grows.
 version: 1.0.1
 tags: [lingtai, system-manual, substrate, runtime, lifecycle, communication, memory, notifications, mcp]
-last_changed_at: "2026-07-01T09:00:00-07:00"
+last_changed_at: "2026-07-03T00:00:00Z"
 ---
 
 # Substrate Manual
@@ -86,8 +86,8 @@ refresh, inspect registry/config health before retrying.
 Refresh is also the **emergency** context-reconstruction path: reach for it when
 context is broken or stale, or when an immediate provider-side rebuild is urgently
 needed. It is not part of the normal summarize flow — summarize records compact
-history now, offers an explicit rebuild-only path at 0.75 via
-`system(action="summarize", rebuild_only=true)`, and otherwise drives automatic
+history now, offers an explicit rebuild path at 0.75 via
+`system(action="summarize", rebuild=true)`, and otherwise drives automatic
 delayed reconstruction at 0.95 of the context window (see `summarize` below), so
 do not refresh just to "apply" a summarize.
 
@@ -181,12 +181,14 @@ that prefix on every summarize would discard the cache benefit. So below 0.95 of
 the context window the summarize stays pending and the session keeps appending —
 this delay is normal. Once context is at/above 0.75, the runtime stamps
 `_meta.tool_meta.context.rebuild`; if an earlier fresh provider context is worth
-the cost, make one explicit `system(action="summarize", rebuild_only=true)` call
-with no items. If summarized history is pending, then at 0.95 of the context
+the cost, make one tactical `system(action="summarize", rebuild=true)` call —
+with new items (record then apply the pending set) or with no items (pure rebuild
+of the already-pending summaries). Do not loop rebuild/summarize. If summarized
+history is pending, then at 0.95 of the context
 window the runtime automatically reconstructs context with that compacted history
 on the next request. If that automatic 95% path fires, the one-shot
 `reconstruction.proactive_hint` points back here and explains that one proactive
-75% `rebuild_only` call could have relieved pressure before the forced rebuild.
+75% `rebuild=true` call could have relieved pressure before the forced rebuild.
 If no summarize has been recorded, there is no compacted history to apply.
 `refresh` is reserved for emergency reconstruction (see above). Summarize
 is a mini molt for a consumed tool result; molt is the stronger

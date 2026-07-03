@@ -53,14 +53,16 @@ Below `0.95` of the context window, pending summarized history is normal; keep
 working, do not assume the old raw block has left the current continuation, and
 do not use `refresh` to force it. Once context is at/above `0.75`, the runtime
 stamps `_meta.tool_meta.context.rebuild`; if a fresh provider context is worth
-the cost before the automatic threshold, make one explicit
-`system(action="summarize", rebuild_only=true)` call with no items. When pending
+the cost before the automatic threshold, make one tactical
+`system(action="summarize", rebuild=true)` call (with new items to record and
+apply, or with no items to apply already-pending summaries). When pending
 summarized history exists and context reaches `0.95`, the runtime automatically
 reconstructs with the compacted history on the next request; the one-shot
 reconstruction event carries `reconstruction.proactive_hint` on the automatic
-95% path to say a manual `rebuild_only` call after the 75% hint should have
-reduced pressure earlier. If no summarize has been recorded, there is nothing to
-reconstruct.
+95% path to say a manual `rebuild=true` call after the 75% hint should have
+reduced pressure earlier. Do not loop rebuild/summarize; if rebuild cannot
+recover below the `0.6` target, tend durable stores and molt. If no summarize
+has been recorded, there is nothing to reconstruct.
 
 **Molt boundary.** At task completion, after necessary reporting and durable
 stores are tended, if no human reply or concrete next action remains, do not

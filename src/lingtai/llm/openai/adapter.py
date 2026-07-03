@@ -2988,10 +2988,12 @@ class CodexResponsesSession(OpenAIResponsesSession):
             self._reset_ws_epoch("summarize_delayed")
 
     def request_history_rebuild(self, reason: str = "summarize_rebuild_only") -> bool:
-        # Explicit rebuild-only summarize: no history compression happened, but the
+        # Explicit summarize rebuild=true: any history compression already ran in the
+        # summarize intrinsic before this hook, so no compression happens here — the
         # agent asked to discard the remote continuation prefix and replay the
         # current local history on the next model request. This is the manual path
-        # advertised at 75%; automatic delayed-summarize release remains at 95%.
+        # advertised at 75%; automatic delayed-summarize release remains at 95%. The
+        # ``reason`` default keeps the internal ``summarize_rebuild_only`` epoch label.
         if not self._continuation_enabled:
             return False
         self._summarize_effect_delayed_last_context = self._summarize_delay_context()

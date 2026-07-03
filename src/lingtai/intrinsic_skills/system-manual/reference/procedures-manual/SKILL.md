@@ -13,7 +13,7 @@ description: >
   guidance grows.
 version: 1.2.0
 tags: [lingtai, system-manual, procedures, progressive-disclosure, responsiveness, deliverables, issue-reporting]
-last_changed_at: "2026-06-27T15:15:34-07:00"
+last_changed_at: "2026-07-03T00:00:00Z"
 ---
 
 # Procedures Manual
@@ -77,12 +77,14 @@ of rebuilding that prefix every turn. Below 0.95 of the context window, keep
 working: do not treat pending summarized history as failure, and do not call
 `refresh` just to force a rebuild. Once context is at/above 0.75, the runtime
 stamps `_meta.tool_meta.context.rebuild`; if a fresh provider context is worth
-the cost before the automatic threshold, make one explicit
-`system(action="summarize", rebuild_only=true)` call with no items. When
+the cost before the automatic threshold, make one tactical
+`system(action="summarize", rebuild=true)` call — with new items (record then
+apply the pending set) or with no items (pure rebuild of the already-pending
+summaries). Do not loop rebuild/summarize. When
 summarized history is pending and context reaches 0.95, the runtime reconstructs
 automatically on the next request with the compacted history. No extra summarize
 call is needed for the automatic path; if that emergency path fires, the one-shot
-`reconstruction.proactive_hint` says a proactive 75% rebuild-only call could have
+`reconstruction.proactive_hint` says a proactive 75% `rebuild=true` call could have
 relieved pressure earlier. If no summarize has been recorded, there is nothing
 to apply. At task completion, default to proactive task-boundary molt only when
 session (since-last-molt) API calls exceed 100. Below that threshold, go idle

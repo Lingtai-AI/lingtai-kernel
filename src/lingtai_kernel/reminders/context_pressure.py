@@ -435,7 +435,7 @@ def render_reconstruction_emergency_hint(
     warning emitted only when the rebuilt context is still too large, while this
     hint is permanent evidence that the runtime had to take the emergency
     automatic path.  It is attached only to automatic delayed-summarize
-    reconstruction events, not to manual ``rebuild_only`` events.
+    reconstruction events, not to manual ``rebuild=true`` events.
     """
     trigger_text = _format_ratio_percent(trigger_threshold)
     high_text = _format_ratio_percent(high_threshold)
@@ -451,7 +451,7 @@ def render_reconstruction_emergency_hint(
     return (
         "Emergency provider-context rebuild has been applied automatically at "
         f"{trigger_text} of the context window. You should have used "
-        "system(action='summarize', rebuild_only=true) once after context passed "
+        "system(action='summarize', rebuild=true) once after context passed "
         f"{high_text} to proactively rebuild context and reduce pressure before "
         f"the forced path was needed.{after_clause} See meta_guidance and "
         "summarize-manual for the manual 75% rebuild vs automatic 95% rebuild rule."

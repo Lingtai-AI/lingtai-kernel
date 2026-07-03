@@ -130,17 +130,19 @@ does not necessarily rebuild the active provider-side context immediately. Below
 provider layer while the session keeps appending; from the agent's perspective,
 the old raw block may still be in the current continuation. Do not call
 `refresh` just to apply summarize. Once context is at/above `0.75`, the runtime
-also stamps `_meta.tool_meta.context.rebuild`, which permits a one-shot manual
-provider-context rebuild with `system(action="summarize", rebuild_only=true)`
-when the fresh context is worth the cost. When pending summarized history exists
-and context reaches `0.95`, the runtime automatically reconstructs with the
-compacted history on the next request; that is when provider-context replacement
-becomes real for the agent. The one-shot reconstruction event also carries
-`reconstruction.proactive_hint` on the automatic 95% path, reminding you that one
-manual `rebuild_only` call after the 75% hint should have reduced pressure
-before the emergency rebuild. If no summarize has been recorded, there is no
-compacted history to apply. Reference manuals explain why this threshold exists;
-this resident section states what to do.
+also stamps `_meta.tool_meta.context.rebuild`, which permits a manual
+provider-context rebuild with `system(action="summarize", rebuild=true)` —
+either with new items (record then apply) or with no items (apply already-pending
+summaries) — when the fresh context is worth the cost. When pending summarized
+history exists and context reaches `0.95`, the runtime automatically reconstructs
+with the compacted history on the next request; that is when provider-context
+replacement becomes real for the agent. The one-shot reconstruction event also
+carries `reconstruction.proactive_hint` on the automatic 95% path, reminding you
+that one manual `rebuild=true` call after the 75% hint should have reduced
+pressure before the emergency rebuild. Do not loop rebuild/summarize. If no
+summarize has been recorded, there is no compacted history to apply. Reference
+manuals explain why this threshold exists; this resident section states what to
+do.
 
 Both a-priori (`summary=true`) and a-posteriori (`system(action="summarize")`)
 summary are mini molts for tool results; molt is the stronger

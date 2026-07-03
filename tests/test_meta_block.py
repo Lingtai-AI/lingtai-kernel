@@ -1749,7 +1749,7 @@ def test_reconstruction_tool_meta_below_recovery_target_no_warning():
     assert "Emergency provider-context rebuild" in hint
     assert "95%" in hint
     assert "75%" in hint
-    assert "rebuild_only=true" in hint
+    assert "rebuild=true" in hint
     assert "meta_guidance" in hint
     assert "summarize-manual" in hint
 
@@ -3252,9 +3252,9 @@ def test_build_context_rebuild_hint_stamps_after_high_ratio():
 
     assert hint is not None
     assert "context now above 75%" in hint
-    assert "rebuild_only=true" in hint
+    assert "rebuild=true" in hint
     # The hint clarifies that recording summaries does not itself rebuild the
-    # provider context, that rebuild_only is a permitted option (not required),
+    # provider context, that rebuild=true is a permitted option (not required),
     # and that the automatic rebuild still fires at 95%.
     assert "does NOT itself rebuild the active provider context" in hint
     assert "automatic rebuild still happens at 95%" in hint

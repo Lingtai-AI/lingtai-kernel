@@ -28,7 +28,7 @@ MOLT_NOTICE_THRESHOLD = 0.60  # legacy name; now the molt RECOVERY TARGET (see b
 #     usage is at/above this fraction counts as a "high" round.  The same
 #     inclusive threshold (``usage >= 0.75``) also continuously stamps
 #     ``_meta.tool_meta.context.rebuild`` with permission to manually rebuild via
-#     ``system(action='summarize', rebuild_only=true)``.  It does NOT force an
+#     ``system(action='summarize', rebuild=true)``.  It does NOT force an
 #     automatic provider-context rebuild.
 #   * CONTEXT_PRESSURE_RECONSTRUCTION_RATIO (0.95) — a pending summarize's
 #     delayed provider-context reconstruction is forced on the next model request

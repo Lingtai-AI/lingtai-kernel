@@ -8,7 +8,7 @@ description: >-
   is, why it implements progressive disclosure, when to summarize urgently versus
   during idle cleanup, how to write good summaries, how to recover the original
   tool result by tool_call_id, and how summarize differs from molt.
-last_changed_at: "2026-06-29T08:16:06Z"
+last_changed_at: "2026-07-03T00:00:00Z"
 ---
 
 # Summarize Manual
@@ -218,23 +218,23 @@ summarize would discard cache benefit.
   is stamped continuously. It is a decision prompt / permission, not an automatic
   rebuild — recording summaries never triggers a provider-context rebuild on its
   own. If making already-recorded summaries active in the provider context earlier
-  is worth the cost, make one explicit `system(action="summarize",
-  rebuild_only=true)` call with no items (its `dry_run=true` alias behaves
-  identically — despite the name it is not a no-op simulation, it requests the same
-  real one-shot no-compression rebuild). Do not loop rebuild-only calls.
+  is worth the cost, make one tactical `system(action="summarize", rebuild=true)`
+  call. `rebuild=true` **with** new items records those summaries and then applies
+  the pending set; `rebuild=true` **with no items** is a pure rebuild that applies
+  the already-pending summaries. Do not loop rebuild/summarize calls.
 - **At or above 0.95 of the context window:** if summarized history is pending,
   the runtime automatically reconstructs with compacted history on the next
   provider request. No repeat summarize call or manual action is required for the
   automatic path. If you reach this emergency path without having used
-  rebuild-only earlier, the runtime notes that one proactive 75% rebuild-only
+  `rebuild=true` earlier, the runtime notes that one proactive 75% rebuild
   call could have relieved pressure before the forced rebuild was needed.
 
 If no summarize has been recorded, there is no compacted history to apply, though
-rebuild-only can still force a fresh replay of current history on adapters that
-support it. `refresh` remains the emergency path for broken/stale context or
-explicit human direction, not the normal way to apply summarize. If summarize or
-a rebuild still cannot bring context below `0.6 * context_window`, tend durable
-stores and molt deliberately.
+`rebuild=true` with no items can still force a fresh replay of current history on
+adapters that support it. `refresh` remains the emergency path for broken/stale
+context or explicit human direction, not the normal way to apply summarize. If
+summarize or a rebuild still cannot bring context below `0.6 * context_window`
+(the recovery target), tend durable stores and molt deliberately.
 
 ## 4 · Recovering the original result
 
