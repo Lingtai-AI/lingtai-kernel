@@ -144,6 +144,11 @@ class JSONLLoggingService(LoggingService):
         line = json.dumps(event, ensure_ascii=self._ensure_ascii, default=str)
         payload = (line + "\n").encode("utf-8")
         with self._lock:
+            # Re-check under the lock: a concurrent close() (or one triggered
+            # during serialization above) may have closed the file after the
+            # pre-lock check. Never write/tell/flush a closed file.
+            if self._closed:
+                return None
             source_offset = self._file.tell()
             self._file.write(payload)
             self._file.flush()
@@ -166,9 +171,10 @@ class JSONLLoggingService(LoggingService):
             return events
 
     def close(self) -> None:
-        if not self._closed:
-            self._closed = True
-            self._file.close()
+        with self._lock:
+            if not self._closed:
+                self._closed = True
+                self._file.close()
 
 
 class SQLiteEventIndex:

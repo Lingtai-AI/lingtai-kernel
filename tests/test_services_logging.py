@@ -56,6 +56,31 @@ class TestJSONLLoggingService:
         svc.log({"type": "test"})  # should not raise
         assert log_file.read_text().strip() == ""
 
+    def test_close_during_log_serialization_is_noop(self, tmp_path):
+        """A close() that lands after the pre-lock _closed check must not make
+        log() write to (or tell/flush) an already-closed file.
+
+        This reproduces the close/log interleaving deterministically: log()
+        serializes the event with ``default=str`` before taking the write lock,
+        so an object whose ``__str__`` closes the service closes the file inside
+        that window. Without lock-guarded close/write, log() then touches a
+        closed file and raises ValueError.
+        """
+        log_file = tmp_path / "test.jsonl"
+        svc = JSONLLoggingService(log_file)
+
+        class ClosesOnStr:
+            def __str__(self) -> str:
+                svc.close()
+                return "closed-during-serialization"
+
+        result = svc.log({"type": "test", "trigger": ClosesOnStr()})
+
+        # The service closed mid-log, so nothing should have been written and
+        # the call must report "not written" rather than raise.
+        assert result is None
+        assert log_file.read_text() == ""
+
     def test_creates_parent_dirs(self, tmp_path):
         """Parent directories are created if they don't exist."""
         log_file = tmp_path / "nested" / "dir" / "test.jsonl"
