@@ -1,4 +1,5 @@
 ---
+last_changed_at: 2026-07-03T01:26:14-07:00
 name: nokv-workbench
 description: >
   Thin routing manual for NoKV-controlled workbenches. Use when an agent is
