@@ -2871,6 +2871,20 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # genuinely rebuilt around the compacted history.
         if reason in {"summarize_delayed", "summarize_rebuild_only"}:
             self._record_reconstruction_event(reason=reason)
+            # The compacted history is now being applied to provider context, so
+            # flip every still-pending summarize marker to done. The manual
+            # rebuild=true path already marked its batch done in the intrinsic
+            # (this is idempotent); the automatic 0.95 delayed reconstruction has
+            # no other place to do it, so this is that hook. Kept tiny and
+            # defensive — never let bookkeeping abort the reconstruction.
+            try:
+                from lingtai_kernel.intrinsics.system.summarize import (
+                    mark_pending_summaries_done,
+                )
+
+                mark_pending_summaries_done(self._interface)
+            except Exception:
+                pass
 
         self._close_ws_transport()
         self._ws_session = _CodexWebsocketSession()
@@ -2986,19 +3000,6 @@ class CodexResponsesSession(OpenAIResponsesSession):
         usage = self._summarize_effect_delayed_last_context.get("current_context_usage")
         if usage is not None and usage >= self._summarize_delay_threshold_ratio:
             self._reset_ws_epoch("summarize_delayed")
-
-    def pending_summary_ids(self):
-        # Summaries recorded but not yet applied to provider context. Codex holds
-        # the remote previous_response_id epoch alive until a delayed/manual reset
-        # fires; _reset_ws_epoch(...) clears this set once the compacted history is
-        # applied, even though the marker blocks stay in local history. Return a
-        # copy so callers cannot mutate adapter state. When continuation is
-        # disabled the adapter does not carry delayed-pending state (every request
-        # rebuilds), so report None — the intrinsic then falls back to just the
-        # current call's ids rather than assuming prior markers are pending.
-        if not self._continuation_enabled:
-            return None
-        return set(self._summarize_effect_delayed_pending_ids)
 
     def request_history_rebuild(self, reason: str = "summarize_rebuild_only") -> bool:
         # Explicit summarize rebuild=true: any history compression already ran in the

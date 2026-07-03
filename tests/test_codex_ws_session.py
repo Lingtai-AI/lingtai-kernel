@@ -890,33 +890,60 @@ def test_request_history_rebuild_records_manual_reconstruction_event(monkeypatch
     assert second.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_rebuild_only"
 
 
-def test_pending_summary_ids_tracks_recorded_and_clears_on_rebuild(monkeypatch):
-    # The adapter hook the summarize intrinsic reads for HONEST pending totals:
-    # recorded-but-not-applied ids while below threshold, empty after a rebuild
-    # applies+clears them (even though marker blocks stay in local history).
+def _add_pending_marker(iface, tool_call_id, *, original=4000, summary=10):
+    """Append a status: pending summarize marker to a session interface."""
+    from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
+    from lingtai_kernel.intrinsics.system.summarize import (
+        SUMMARIZE_MARKER,
+        SUMMARY_STATUS_PENDING,
+    )
+
+    iface.add_assistant_message([ToolCallBlock(id=tool_call_id, name="read", args={})])
+    iface.add_tool_results([
+        ToolResultBlock(id=tool_call_id, name="read", content={
+            "artifact": SUMMARIZE_MARKER,
+            "tool_call_id": tool_call_id,
+            "status": SUMMARY_STATUS_PENDING,
+            "original_visible_chars": original,
+            "summary_chars": summary,
+        })
+    ])
+
+
+def _marker_status(iface, tool_call_id):
+    from lingtai_kernel.llm.interface import ToolResultBlock
+    for entry in iface._entries:
+        for b in entry.content:
+            if isinstance(b, ToolResultBlock) and b.id == tool_call_id and isinstance(b.content, dict):
+                return b.content.get("status")
+    return None
+
+
+def test_automatic_delayed_reconstruction_marks_pending_markers_done(monkeypatch):
+    # The tiny session→history hook: when the automatic 0.95 delayed reconstruction
+    # actually applies pending summaries (_reset_ws_epoch("summarize_delayed")), it
+    # flips every status: pending summarize marker in local history to done.
+    client = RealisticRestClient(input_tokens=950)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+
+    _add_pending_marker(session._interface, "call_pending")
+    assert _marker_status(session._interface, "call_pending") == "pending"
+
+    session._reset_ws_epoch("summarize_delayed")
+    assert _marker_status(session._interface, "call_pending") == "done"
+
+
+def test_turn_count_reset_does_not_mark_markers_done(monkeypatch):
+    # A plain turn_count epoch reset carries no summarized history to apply, so it
+    # must NOT flip pending markers to done.
     client = RealisticRestClient(input_tokens=100)
     session = _make_rest_session(client)
     monkeypatch.setattr(session, "context_window", lambda: 1000)
 
-    assert session.pending_summary_ids() == set()
-    session.on_history_summarized(["call_a"])
-    session.on_history_summarized(["call_b"])
-    assert session.pending_summary_ids() == {"call_a", "call_b"}
-    # Returned set is a copy — mutating it must not affect adapter state.
-    session.pending_summary_ids().add("bogus")
-    assert session.pending_summary_ids() == {"call_a", "call_b"}
-    # A rebuild applies+clears the pending set.
-    assert session.request_history_rebuild() is True
-    assert session.pending_summary_ids() == set()
-
-
-def test_pending_summary_ids_none_when_continuation_disabled(monkeypatch):
-    # No delayed-pending tracking → None, so the intrinsic falls back conservatively
-    # instead of claiming historical markers are pending.
-    client = RealisticRestClient(input_tokens=100)
-    session = _make_rest_session(client)
-    session._continuation_enabled = False
-    assert session.pending_summary_ids() is None
+    _add_pending_marker(session._interface, "call_pending")
+    session._reset_ws_epoch("turn_count")
+    assert _marker_status(session._interface, "call_pending") == "pending"
 
 
 def test_rest_summarize_releases_delayed_epoch_reset_at_context_threshold(monkeypatch):

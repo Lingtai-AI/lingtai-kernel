@@ -183,13 +183,15 @@ this delay is normal. Once context is at/above 0.75, the runtime stamps
 `_meta.tool_meta.context.rebuild`; if an earlier fresh provider context is worth
 the cost, make one tactical `system(action="summarize", rebuild=true)` call —
 with new items (record then apply the pending set) or with no items (pure rebuild
-of the already-pending summaries). Do not loop rebuild/summarize. If summarized
-history is pending, then at 0.95 of the context
-window the runtime automatically reconstructs context with that compacted history
-on the next request. If that automatic 95% path fires, the one-shot
-`reconstruction.proactive_hint` points back here and explains that one proactive
-75% `rebuild=true` call could have relieved pressure before the forced rebuild.
-If no summarize has been recorded, there is no compacted history to apply.
+of the already-pending summaries); applied summaries flip to `status: done`. Do
+not loop rebuild/summarize. The 0.95 automatic path is conditional: if pending
+summarized history exists, then at 0.95 of the context window the runtime
+automatically reconstructs context with that compacted history on the next
+request; if the pending total is 0, waiting for 0.95 applies nothing and gives no
+compaction benefit, so summarize more or molt instead. If that automatic 95% path
+fires with pending history, the one-shot `reconstruction.proactive_hint` points
+back here and explains that one proactive 75% `rebuild=true` call could have
+relieved pressure before the forced rebuild.
 `refresh` is reserved for emergency reconstruction (see above). Summarize
 is a mini molt for a consumed tool result; molt is the stronger
 whole-conversation summarize boundary when summarize/reconstruction cannot get

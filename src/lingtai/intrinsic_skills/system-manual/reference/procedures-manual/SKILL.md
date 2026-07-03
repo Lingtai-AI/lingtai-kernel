@@ -80,13 +80,14 @@ stamps `_meta.tool_meta.context.rebuild`; if a fresh provider context is worth
 the cost before the automatic threshold, make one tactical
 `system(action="summarize", rebuild=true)` call — with new items (record then
 apply the pending set) or with no items (pure rebuild of the already-pending
-summaries). Do not loop rebuild/summarize. When
-summarized history is pending and context reaches 0.95, the runtime reconstructs
-automatically on the next request with the compacted history. No extra summarize
-call is needed for the automatic path; if that emergency path fires, the one-shot
+summaries); applied summaries flip to `status: done`. Do not loop
+rebuild/summarize. The 0.95 automatic path is conditional: if pending summarized
+history exists, the runtime reconstructs automatically on the next request with
+the compacted history; if the pending total is 0, waiting for 0.95 applies nothing
+and gives no compaction benefit, so summarize more or molt instead. If that
+emergency path fires with pending history, the one-shot
 `reconstruction.proactive_hint` says a proactive 75% `rebuild=true` call could have
-relieved pressure earlier. If no summarize has been recorded, there is nothing
-to apply. At task completion, default to proactive task-boundary molt only when
+relieved pressure earlier. At task completion, default to proactive task-boundary molt only when
 session (since-last-molt) API calls exceed 100. Below that threshold, go idle
 unless context pressure, explicit human request, or conversation confusion makes
 the fresh briefing worth the molt cost. Summarize is a mini molt for a consumed

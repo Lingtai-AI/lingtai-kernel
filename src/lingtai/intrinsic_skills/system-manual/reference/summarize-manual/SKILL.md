@@ -201,11 +201,16 @@ Operational rules:
 Summarize has two decoupled effects:
 
 1. **Runtime-history replacement now.** The prior tool-result block in local
-   history is replaced with your agent-authored summary, and matching large-result
-   reminders may clear.
+   history is replaced with your agent-authored summary, stamped `status: pending`,
+   and matching large-result reminders may clear.
 2. **Provider-side reconstruction later.** The current provider continuation may
    still contain the old raw block until the runtime rebuilds the provider prefix
-   around compacted history.
+   around compacted history. When that happens (manual `rebuild=true` or the
+   automatic 0.95 path), the applied markers flip to `status: done`.
+
+The dynamic pending totals in the result comment scan only `status: pending`
+markers — already-applied (`done`) markers and legacy markers without a status
+are not counted as pending.
 
 Provider-side reconstruction is delayed because runtimes usually append turns
 onto a stable cache/continuation prefix. Rebuilding that prefix on every
@@ -222,14 +227,18 @@ summarize would discard cache benefit.
   call. `rebuild=true` **with** new items records those summaries and then applies
   the pending set; `rebuild=true` **with no items** is a pure rebuild that applies
   the already-pending summaries. Do not loop rebuild/summarize calls.
-- **At or above 0.95 of the context window:** if summarized history is pending,
-  the runtime automatically reconstructs with compacted history on the next
-  provider request. No repeat summarize call or manual action is required for the
-  automatic path. If you reach this emergency path without having used
-  `rebuild=true` earlier, the runtime notes that one proactive 75% rebuild
-  call could have relieved pressure before the forced rebuild was needed.
+- **At or above 0.95 of the context window (conditional):** *if* pending
+  summarized history exists (pending total > 0), the runtime automatically
+  reconstructs with the compacted history on the next provider request — no repeat
+  summarize call or manual action is required. **If the pending total is 0**
+  (nothing recorded since the last rebuild, or all already applied), waiting for
+  0.95 applies nothing and gives no compaction benefit: summarize more digested
+  results to create pending compaction, or molt. If you reach the automatic path
+  with pending history you could have applied earlier, the runtime notes that one
+  proactive 75% `rebuild=true` call could have relieved pressure before the forced
+  rebuild.
 
-If no summarize has been recorded, there is no compacted history to apply, though
+If no summarize is pending, there is no compacted history to apply, though
 `rebuild=true` with no items can still force a fresh replay of current history on
 adapters that support it. `refresh` remains the emergency path for broken/stale
 context or explicit human direction, not the normal way to apply summarize. If
