@@ -188,6 +188,29 @@ class ChatSession(ABC):
 
         return None
 
+    def pending_summary_ids(self):
+        """Return the set of summarized tool_call_ids not yet applied to context.
+
+        These are summaries recorded in local history whose compacted form has
+        NOT yet reached the provider context — i.e. a rebuild
+        (``request_history_rebuild`` / an automatic 0.95 delayed reconstruction)
+        has not yet fired for them. Once such a rebuild applies them, the adapter
+        drops them from this set even though the summarize-marker blocks remain in
+        local history.
+
+        Used by ``system(action='summarize')`` to compute HONEST dynamic
+        pending-summary totals: the intrinsic must not treat every historical
+        summarize-marker block as still-pending, because already-applied markers
+        persist in local history until the next molt/refresh.
+
+        Returns a ``set[str]`` (possibly empty) when the adapter tracks
+        delayed-pending state, or ``None`` when it has no such tracking (adapters
+        that rebuild on every request, or have no continuation state). ``None``
+        tells the caller to fall back conservatively to just the ids recorded by
+        the current call rather than claiming any prior markers are pending.
+        """
+        return None
+
     def request_history_rebuild(self, reason: str = "summarize_rebuild_only") -> bool:
         """Request a provider-context rebuild without mutating chat history.
 

@@ -890,6 +890,35 @@ def test_request_history_rebuild_records_manual_reconstruction_event(monkeypatch
     assert second.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_rebuild_only"
 
 
+def test_pending_summary_ids_tracks_recorded_and_clears_on_rebuild(monkeypatch):
+    # The adapter hook the summarize intrinsic reads for HONEST pending totals:
+    # recorded-but-not-applied ids while below threshold, empty after a rebuild
+    # applies+clears them (even though marker blocks stay in local history).
+    client = RealisticRestClient(input_tokens=100)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+
+    assert session.pending_summary_ids() == set()
+    session.on_history_summarized(["call_a"])
+    session.on_history_summarized(["call_b"])
+    assert session.pending_summary_ids() == {"call_a", "call_b"}
+    # Returned set is a copy — mutating it must not affect adapter state.
+    session.pending_summary_ids().add("bogus")
+    assert session.pending_summary_ids() == {"call_a", "call_b"}
+    # A rebuild applies+clears the pending set.
+    assert session.request_history_rebuild() is True
+    assert session.pending_summary_ids() == set()
+
+
+def test_pending_summary_ids_none_when_continuation_disabled(monkeypatch):
+    # No delayed-pending tracking → None, so the intrinsic falls back conservatively
+    # instead of claiming historical markers are pending.
+    client = RealisticRestClient(input_tokens=100)
+    session = _make_rest_session(client)
+    session._continuation_enabled = False
+    assert session.pending_summary_ids() is None
+
+
 def test_rest_summarize_releases_delayed_epoch_reset_at_context_threshold(monkeypatch):
     client = RealisticRestClient(input_tokens=950)
     session = _make_rest_session(client)

@@ -77,49 +77,89 @@ def _truthy_flag(value: Any) -> bool:
 _CHARS_PER_TOKEN_ESTIMATE = 4
 
 
-def _iter_summarize_blocks(agent):
-    """Yield every current SUMMARIZE_MARKER replacement block in live history.
+def _summary_chars_by_id(agent) -> dict:
+    """Map every SUMMARIZE_MARKER block in live history to its char counts.
 
-    Each yielded block's ``content`` carries ``original_visible_chars`` and
-    ``summary_chars`` stamped at summarize time. These blocks stay in local
-    history — and thus in the active provider continuation — until a rebuild
-    releases them, so they are the natural source of truth for the total pending
-    (recorded-but-not-yet-rebuilt) summary state.
+    Returns ``{tool_call_id: (original_visible_chars, summary_chars)}`` for each
+    summarize replacement block currently present in local history. Marker blocks
+    remain in history until the next molt/refresh even after a rebuild has applied
+    them to provider context, so this map is a lookup table keyed by id — it is
+    NOT itself the pending set. Callers intersect it with the actual pending ids
+    (:func:`_read_pending_summary_ids`) so already-applied markers are not
+    double-counted as still-pending.
     """
     from ...llm.interface import ToolResultBlock  # local import — no circular dep
 
     chat = getattr(agent, "_chat", None)
     iface = getattr(chat, "interface", None) if chat is not None else None
+    out: dict[str, tuple[int, int]] = {}
     if iface is None:
-        return
+        return out
     for entry in getattr(iface, "_entries", []):
         if getattr(entry, "role", None) != "user":
             continue
         for block in getattr(entry, "content", []):
-            if isinstance(block, ToolResultBlock) and _is_already_summarized(block.content):
-                yield block
+            if not (isinstance(block, ToolResultBlock) and _is_already_summarized(block.content)):
+                continue
+            content = block.content
+            try:
+                tool_call_id = content.get("tool_call_id")
+                original = int(content.get("original_visible_chars", 0) or 0)
+                summary = int(content.get("summary_chars", 0) or 0)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if isinstance(tool_call_id, str) and tool_call_id:
+                out[tool_call_id] = (original, summary)
+    return out
 
 
-def _pending_summary_totals(agent) -> dict:
-    """Aggregate ALL pending summaries currently recorded in local history.
+def _read_pending_summary_ids(agent):
+    """Return the adapter's delayed-pending summarized-id set, or ``None``.
 
-    Not just the current summarize call: every summarize replacement block still
-    present in history contributes, because they all still ride the provider
-    continuation until a rebuild is requested. Returns a dict with the pending
-    original visible chars total, pending compacted summary chars total, net char
-    reduction, a rough estimated token reduction (clearly labeled), and the count
-    of pending summaries.
+    Reads ``chat.pending_summary_ids()`` — the summaries recorded but not yet
+    applied to provider context. ``None`` means the adapter has no delayed-pending
+    tracking (e.g. continuation disabled / rebuild-every-request), in which case
+    the caller must fall back conservatively to the CURRENT call's ids rather than
+    assuming any historical marker is still pending. A returned set (possibly
+    empty) is authoritative.
+    """
+    chat = getattr(agent, "_chat", None)
+    hook = getattr(chat, "pending_summary_ids", None)
+    if not callable(hook):
+        return None
+    try:
+        ids = hook()
+    except Exception:
+        return None
+    if ids is None:
+        return None
+    try:
+        return {str(i) for i in ids}
+    except TypeError:
+        return None
+
+
+def _pending_summary_totals(agent, pending_ids, char_map) -> dict:
+    """Aggregate pending-summary totals over a SPECIFIC set of pending ids.
+
+    ``pending_ids`` is the set of summarized ids whose compacted form has NOT yet
+    reached provider context (the current action's affected set). ``char_map`` is
+    :func:`_summary_chars_by_id`. Only ids present in BOTH are counted — an id with
+    no marker in history is skipped rather than invented. This is the honest total:
+    already-applied historical markers are excluded because they are not in
+    ``pending_ids``. Returns pending original/summary char totals, net char
+    reduction, a rough estimated token reduction (clearly labeled), and the count.
     """
     original_chars = 0
     summary_chars = 0
     count = 0
-    for block in _iter_summarize_blocks(agent):
-        content = block.content
-        try:
-            original_chars += int(content.get("original_visible_chars", 0) or 0)
-            summary_chars += int(content.get("summary_chars", 0) or 0)
-        except (AttributeError, TypeError, ValueError):
+    for tool_call_id in pending_ids:
+        entry = char_map.get(tool_call_id)
+        if entry is None:
             continue
+        original, summary = entry
+        original_chars += original
+        summary_chars += summary
         count += 1
     net_chars = original_chars - summary_chars
     return {
@@ -172,14 +212,16 @@ def _context_line(snapshot: dict) -> str:
     return ""
 
 
-def _pending_totals_line(totals: dict, *, applied: bool) -> str:
+def _pending_totals_line(totals, *, applied: bool) -> str:
     """One-line dynamic pending-summary totals for the reconstruction comments.
 
     ``applied=False`` (summarize-only) frames the totals as what a rebuild WOULD
     replace; ``applied=True`` (rebuild success) frames them as what was
-    submitted to the rebuild path before pending state clears.
+    submitted to the rebuild path before pending state clears. ``totals`` is
+    ``None`` when the pending set is unknown (adapter without tracking, pure
+    rebuild) — no totals line is emitted in that case.
     """
-    if totals.get("pending_summaries", 0) <= 0:
+    if not totals or totals.get("pending_summaries", 0) <= 0:
         return ""
     original = totals["pending_original_chars"]
     summary = totals["pending_summary_chars"]
@@ -227,6 +269,44 @@ def _request_rebuild(agent, *, reason: str) -> bool:
     return requested
 
 
+_UNSET = object()
+
+
+def _totals_for_action(agent, *, new_ids, prior_pending=_UNSET):
+    """Compute honest pending-summary totals for the CURRENT action.
+
+    ``new_ids`` are the ids recorded by this call (empty for a pure rebuild). The
+    affected pending set is the adapter's existing delayed-pending ids UNION
+    ``new_ids``:
+
+      * When the adapter exposes pending tracking, prior recorded-but-not-applied
+        summaries plus the ones this call just recorded are all still pending, so
+        both contribute.
+      * When the adapter has NO tracking (``pending_summary_ids()`` -> ``None``),
+        we fall back conservatively to ``new_ids`` only — never claiming that old
+        historical marker blocks (which may already be applied) are still pending.
+        If there are also no ``new_ids`` (a pure rebuild on such an adapter), the
+        pending set is genuinely unknown and this returns ``None`` so the caller
+        omits dynamic totals rather than reporting a misleading zero.
+
+    ``prior_pending`` may be passed in when the caller has already snapshotted the
+    adapter set BEFORE ``on_history_summarized`` ran (which can clear it on a
+    same-turn auto-release); when omitted it is read now. It is either a set or
+    ``None`` (no tracking), matching :func:`_read_pending_summary_ids`.
+    """
+    if prior_pending is _UNSET:
+        prior_pending = _read_pending_summary_ids(agent)
+    new_set = {str(i) for i in new_ids}
+    if prior_pending is None:
+        if not new_set:
+            return None  # genuinely unknown — omit totals
+        affected = new_set
+    else:
+        affected = set(prior_pending) | new_set
+    char_map = _summary_chars_by_id(agent)
+    return _pending_summary_totals(agent, affected, char_map)
+
+
 def _pure_rebuild_result(agent, *, current_threshold: int) -> dict:
     """Handle rebuild=true with no items — a pure rebuild of pending summaries.
 
@@ -240,7 +320,9 @@ def _pure_rebuild_result(agent, *, current_threshold: int) -> dict:
             "message": "No active chat session — cannot request a context rebuild.",
             "notification_threshold_chars": current_threshold,
         }
-    totals = _pending_summary_totals(agent)
+    # Totals BEFORE the rebuild request, over the existing pending set only (no
+    # new items). None => adapter has no pending tracking => totals unknown.
+    totals = _totals_for_action(agent, new_ids=())
     snapshot = _current_context_snapshot(agent)
     requested = _request_rebuild(agent, reason="summarize_rebuild_only")
     result = {
@@ -251,13 +333,14 @@ def _pure_rebuild_result(agent, *, current_threshold: int) -> dict:
         "items": [],
         "cleared_reminders": [],
         "rebuild_requested": requested,
-        "pending_summary_totals": totals,
         "context": snapshot,
         "notification_threshold_chars": current_threshold,
         "reconstruction": _build_rebuild_reconstruction(
             snapshot, totals, requested=requested
         ),
     }
+    if totals is not None:
+        result["pending_summary_totals"] = totals
     return result
 
 
@@ -501,6 +584,12 @@ def _summarize(agent, args: dict) -> dict:
         summarized_count += 1
         summarized_ids.append(tool_call_id)
 
+    # Snapshot the adapter's delayed-pending set BEFORE on_history_summarized may
+    # clear it (a same-turn auto-release at >=0.95 clears the set). This is the
+    # prior recorded-but-not-applied set that, unioned with THIS call's ids, is
+    # what the current result's pending totals must reflect.
+    prior_pending = _read_pending_summary_ids(agent) if summarized_count > 0 else _UNSET
+
     # Persist history so summarization survives refresh/molt.
     if summarized_count > 0:
         save_fn = getattr(agent, "_save_chat_history", None)
@@ -561,7 +650,7 @@ def _summarize(agent, args: dict) -> dict:
     #      runtime history but the active provider context may still contain the old
     #      raw result until a rebuild. Recording a summary does NOT by itself rebuild
     #      the active provider context, even above 0.75. The reconstruction comment
-    #      reports current context + ALL pending-summary totals and explains the two
+    #      reports current context + the pending-summary totals and explains the two
     #      ways to apply them (automatic 0.95 delayed reconstruction, or one tactical
     #      rebuild=true call), warning against looping.
     #   B. summarize+rebuild=true — after recording, the pending summaries are
@@ -569,13 +658,18 @@ def _summarize(agent, args: dict) -> dict:
     #      pending totals that were applied and tells the agent next round's _meta
     #      decides recovery vs molt.
     #
-    # Both dynamic totals aggregate ALL pending summaries (via
-    # _pending_summary_totals), not just this call, and are computed BEFORE the
-    # rebuild request clears the adapter's pending state.
+    # Dynamic totals cover the pending set THIS action affects — the adapter's
+    # existing delayed-pending ids (snapshotted above as `prior_pending`, before
+    # on_history_summarized could clear it) UNION this call's ids — NOT every
+    # historical marker block (already-applied markers stay in history but are not
+    # pending). Totals are computed BEFORE requesting the rebuild.
     if summarized_count > 0:
-        totals = _pending_summary_totals(agent)
+        totals = _totals_for_action(
+            agent, new_ids=summarized_ids, prior_pending=prior_pending
+        )
         snapshot = _current_context_snapshot(agent)
-        result["pending_summary_totals"] = totals
+        if totals is not None:
+            result["pending_summary_totals"] = totals
         result["context"] = snapshot
         if rebuild:
             requested = _request_rebuild(agent, reason="summarize_rebuild_only")

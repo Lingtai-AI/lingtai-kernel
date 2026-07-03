@@ -2987,6 +2987,19 @@ class CodexResponsesSession(OpenAIResponsesSession):
         if usage is not None and usage >= self._summarize_delay_threshold_ratio:
             self._reset_ws_epoch("summarize_delayed")
 
+    def pending_summary_ids(self):
+        # Summaries recorded but not yet applied to provider context. Codex holds
+        # the remote previous_response_id epoch alive until a delayed/manual reset
+        # fires; _reset_ws_epoch(...) clears this set once the compacted history is
+        # applied, even though the marker blocks stay in local history. Return a
+        # copy so callers cannot mutate adapter state. When continuation is
+        # disabled the adapter does not carry delayed-pending state (every request
+        # rebuilds), so report None — the intrinsic then falls back to just the
+        # current call's ids rather than assuming prior markers are pending.
+        if not self._continuation_enabled:
+            return None
+        return set(self._summarize_effect_delayed_pending_ids)
+
     def request_history_rebuild(self, reason: str = "summarize_rebuild_only") -> bool:
         # Explicit summarize rebuild=true: any history compression already ran in the
         # summarize intrinsic before this hook, so no compression happens here — the
