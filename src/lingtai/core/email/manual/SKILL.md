@@ -13,7 +13,7 @@ description: >
   skill (the lingtai-imap addon owns that surface).
 version: 1.0.0
 tags: [capabilities, email, communication]
-last_changed_at: "2026-06-20T13:05:49-07:00"
+last_changed_at: "2026-07-02T21:50:00-07:00"
 ---
 
 # Email Manual — the internal `email` tool
@@ -163,34 +163,17 @@ email(action="send", address="<your-own-name>", delay=3600,
       subject="check on long task", message="Did `daemon(check, id=...)` finish?")
 ```
 
-Combined with self-send, this gives you cheap alarms without standing up a cron. The notification is delivered exactly once. For **recurring** reminders, use `schedule` (§8).
+Combined with self-send, this gives you cheap one-shot alarms without standing up a cron. The notification is delivered exactly once. For **recurring** reminders, use a host scheduler (cron, launchd, systemd, or an event watcher) via `bash-manual`; do not use the email tool for recurring execution.
 
 Use delayed self-send as a **future nudge**, not delayed tool execution. The message should tell the future you what to inspect and why, then let that future turn decide with current context whether to run `bash(action="poll")`, `daemon(check)`, a channel read, or nothing at all. This is the preferred escape hatch when a repeated-call `_advisory` tells you that you may be polling the same thing: write one concrete reminder, then yield/idle instead of immediately calling the same tool again.
 
-## 8. Scheduled email — recurring alarms
+## 8. Recurring reminders live outside email
 
-For repeating messages, use the `schedule` family — a nested action on the email tool:
-
-```python
-# Every 30 min, up to 10 times
-email(schedule={
-    "action":   "create",
-    "interval": 1800,
-    "count":    10,
-}, address="<your-own-name>",
-   subject="watering reminder", message="check the build")
-
-# List active/inactive schedules
-email(schedule={"action": "list"})
-
-# Cancel one
-email(schedule={"action": "cancel", "schedule_id": "<id>"})
-
-# Reactivate (schedules go `inactive` on agent startup by default)
-email(schedule={"action": "reactivate", "schedule_id": "<id>"})
-```
-
-Schedule lifecycle: `active` → `inactive` (on cancel) or `completed` (count hit zero). The scheduler reconciles on startup by flipping all `active` schedules to `inactive` so nothing fires unexpectedly after a restart — you must `reactivate` deliberately.
+The internal `email` tool no longer has a recurring scheduling API. Use delayed
+self-send (`delay=`) for one-shot time capsules only. For repeating reminders or
+agent-side scheduled work, use a host scheduler (cron, launchd, systemd, or an
+event watcher) following `bash-manual`; consult `system-manual` for lifecycle and
+notification behavior.
 
 ## 9. Privacy — internal IDs
 
@@ -208,7 +191,7 @@ This skill is the manual for the **kernel-intrinsic `email` tool** only. Adjacen
 | Send Telegram / Feishu / WeChat messages           | `mcp-manual` → respective MCP addon          |
 | Send a notification-style ping to another agent    | This skill — it IS the notification channel  |
 | Schedule a one-off wake-up of your own loop        | This skill, `delay` + self-send (§7)         |
-| Schedule recurring agent-side work                 | This skill, `schedule={action: "create"}` (§8) |
+| Run recurring agent-side work                       | Host scheduler / event watcher via `bash-manual` (§8) |
 
 The IMAP, Telegram, Feishu, and WeChat MCP addons each ship their own SKILL.md and `mcp-manual` entry. They are separate processes, separate auth surfaces, and separate failure modes. **Do not** try to use the `email` tool to reach an external address — you will write a file into a non-existent `.lingtai/foo@bar.com/` and the message will bounce silently.
 
@@ -238,9 +221,8 @@ email(action="send", address="<self>", subject="resume", message="next: ...")
 email(action="send", address="<self>", delay=300,
       subject="ding", message="check the deploy")
 
-# Recurring nudge every 10 min, 6 times
-email(schedule={"action": "create", "interval": 600, "count": 6},
-      address="<self>", subject="stretch", message="stand up")
+# Recurring nudges/work are not an email feature; use a host scheduler
+# or event watcher via bash-manual/system-manual instead.
 
 # Find related mail
 email(action="search", query="helmholtz",
@@ -257,9 +239,9 @@ email(action="add_contact", address="mimo-1", name="MiMo (vision)",
 ## Cleanup / Footprint
 
 Internal email persists under the agent mailbox: inbox/archive/sent message
-files, attachments, contacts, and schedule metadata. Mail is also memory: do not
-blindly delete it. Prefer `email(archive)`, `email(delete)`, or schedule cancel
-verbs over `rm`, and never delete mail that is the only copy of a decision,
+files, attachments, contacts, and read/archive state. Mail is also memory: do not
+blindly delete it. Prefer `email(archive)` or `email(delete)` verbs over `rm`,
+and never delete mail that is the only copy of a decision,
 handoff, or attachment the human may expect you to retain.
 
 Footprint check (read-only, records the audit):
