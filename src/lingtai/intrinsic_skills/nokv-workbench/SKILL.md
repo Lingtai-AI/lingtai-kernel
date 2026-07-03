@@ -189,7 +189,8 @@ Reading inside one workbench:
 - `workbench_grep` searches file bodies for case-insensitive **literal**
   substrings (not regex). Pass several alternatives at once with
   `patterns: ["营养", "食谱", "recipe"]` (OR semantics); a single `pattern`
-  containing `|` is split into alternatives automatically. Filter files with
+  containing `|` is split into alternatives automatically. At most 16
+  alternatives per call — batch synonyms accordingly. Filter files with
   `glob` (basename match, `*` and `?`, CJK-safe, e.g. `"*.md"`). `limit`
   accepts up to 300 matches. Narrow with `section`/`glob` first; huge result
   sets get compacted out of your context later.
@@ -215,8 +216,11 @@ Searching across workbenches:
 - **Content search stays with `workbench_grep`** — `workbench_search`
   matches paths and metadata, not file contents.
 
-Query tools return flat `section`, `relative_path`, and `path` fields so
-follow-up calls can reuse `section` and `relative_path` directly. Use
+`workbench_search`, `workbench_grep`, `workbench_list`, `workbench_stat`,
+and `workbench_read` return flat `section`, `relative_path`, and `path`
+fields so follow-up calls can reuse `section` and `relative_path` directly
+(`workbench_find` returns manifest summaries and `workbench_aggregate`
+returns grouped values — neither carries per-file path fields). Use
 LingTai's local `grep` for local workdir text and NoKV tools for workbench
 artifacts.
 
