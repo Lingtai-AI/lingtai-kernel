@@ -208,7 +208,7 @@ This skill is the manual for the **kernel-intrinsic `email` tool** only. Adjacen
 | Send Telegram / Feishu / WeChat messages           | `mcp-manual` → respective MCP addon          |
 | Send a notification-style ping to another agent    | This skill — it IS the notification channel  |
 | Schedule a one-off wake-up of your own loop        | This skill, `delay` + self-send (§7)         |
-| Schedule recurring agent-side work                 | This skill, `schedule={action: "create"}` (§8) |
+| Schedule recurring agent-side work                 | `bash-manual` → host scheduler; use this skill only as the optional wake-up target |
 
 The IMAP, Telegram, Feishu, and WeChat MCP addons each ship their own SKILL.md and `mcp-manual` entry. They are separate processes, separate auth surfaces, and separate failure modes. **Do not** try to use the `email` tool to reach an external address — you will write a file into a non-existent `.lingtai/foo@bar.com/` and the message will bounce silently.
 
