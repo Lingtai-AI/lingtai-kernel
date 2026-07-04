@@ -272,7 +272,22 @@ class EmailManager:
             base_payload["cc"] = cc
         attachments = args.get("attachments", [])
         if attachments:
-            base_payload["attachments"] = attachments
+            # Confinement: only allow attachment paths within the agent's
+            # working directory (issue #624).
+            working_dir = self._agent._working_dir.resolve()
+            safe_attachments: list[str] = []
+            for att_path in attachments:
+                ap = Path(att_path)
+                if ap.is_absolute():
+                    candidate = ap.resolve()
+                else:
+                    candidate = (working_dir / ap).resolve()
+                try:
+                    candidate.relative_to(working_dir)
+                except ValueError:
+                    return {"error": f"Attachment path escapes working directory: {att_path!r}"}
+                safe_attachments.append(str(candidate))
+            base_payload["attachments"] = safe_attachments
 
         deliver_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
         all_recipients = to_list + cc + bcc

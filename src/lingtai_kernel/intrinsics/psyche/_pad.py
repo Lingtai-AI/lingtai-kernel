@@ -40,9 +40,24 @@ def _save_append_list(agent, files: list[str]) -> None:
 
 
 def _resolve_path(agent, fpath: str) -> Path:
+    """Resolve a file path, confining it to the agent's working directory.
+
+    Rejects absolute paths and ``../`` traversals that escape the working
+    directory, preventing sandbox breakout via pad append/edit (issue #624).
+    """
+    working_dir = agent._working_dir.resolve()
     if os.path.isabs(fpath):
-        return Path(fpath)
-    return agent._working_dir / fpath
+        candidate = Path(fpath).resolve()
+    else:
+        candidate = (working_dir / fpath).resolve()
+    try:
+        candidate.relative_to(working_dir)
+    except ValueError:
+        raise ValueError(
+            f"Path escapes working directory: {fpath!r}. "
+            "Only paths within the agent working directory are allowed."
+        )
+    return candidate
 
 
 def _read_append_content(agent, files: list[str]) -> tuple[str, list[str]]:
@@ -50,7 +65,11 @@ def _read_append_content(agent, files: list[str]) -> tuple[str, list[str]]:
     parts: list[str] = []
     not_found: list[str] = []
     for fpath in files:
-        resolved = _resolve_path(agent, fpath)
+        try:
+            resolved = _resolve_path(agent, fpath)
+        except ValueError:
+            not_found.append(fpath)
+            continue
         if not resolved.is_file():
             not_found.append(fpath)
             continue
@@ -95,10 +114,10 @@ def _pad_edit(agent, args: dict) -> dict:
 
     not_found: list[str] = []
     for i, fpath in enumerate(files, start=1):
-        if os.path.isabs(fpath):
-            resolved = Path(fpath)
-        else:
-            resolved = agent._working_dir / fpath
+        try:
+            resolved = _resolve_path(agent, fpath)
+        except ValueError as e:
+            return {"error": str(e)}
         if not resolved.is_file():
             not_found.append(fpath)
             continue
@@ -183,7 +202,10 @@ def _pad_append(agent, args: dict) -> dict:
     not_found: list[str] = []
     not_text: list[str] = []
     for fpath in files:
-        resolved = _resolve_path(agent, fpath)
+        try:
+            resolved = _resolve_path(agent, fpath)
+        except ValueError as e:
+            return {"error": str(e)}
         if not resolved.is_file():
             not_found.append(fpath)
         elif not _is_text_file(resolved):
