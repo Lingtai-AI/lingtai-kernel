@@ -492,6 +492,8 @@ def test_daemon_common_context_requires_fail_closed_for_missing_required_inputs(
     assert "required local input, file path, or brief" in context
     assert "fail closed" in context
     assert "finish(status=\"incomplete\", reason=...)" in context
+    assert "when the finish tool is available" in context
+    assert "otherwise state incomplete in the final result" in context
     assert "Do not broad-search for substitute evidence" in context
 
 
@@ -527,6 +529,8 @@ def test_build_emanation_prompt_lists_required_inputs_before_task(tmp_path):
     assert "## Required inputs validated by parent before launch" in prompt
     assert required[0] in prompt
     assert "finish(status=\"incomplete\", reason=...)" in prompt
+    assert "when the finish tool is available" in prompt
+    assert "otherwise state incomplete in the final result" in prompt
     assert "do not substitute unrelated materials" in prompt
     assert prompt.index("## Required inputs") < prompt.index("Your task:")
 

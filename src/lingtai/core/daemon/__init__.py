@@ -1075,7 +1075,9 @@ class DaemonManager:
             lines.append(f"- {path}")
         lines.append(
             "If any later becomes unreadable or does not contain the expected material, "
-            "call `finish(status=\"incomplete\", reason=...)`; do not substitute unrelated materials."
+            "report `incomplete` (call `finish(status=\"incomplete\", reason=...)` "
+            "when the finish tool is available; otherwise state incomplete in the final result); "
+            "do not substitute unrelated materials."
         )
         return "\n".join(lines)
 
@@ -1278,9 +1280,11 @@ class DaemonManager:
             "inspect its result in this run, then call `finish`. If the task "
             "specifies a required local input, file path, or brief and you "
             "cannot access it after direct resolution from the stated context "
-            "or working directory, fail closed: call "
-            "`finish(status=\"incomplete\", reason=...)` and report the "
-            "missing input. Do not broad-search for substitute evidence or "
+            "or working directory, fail closed: report `incomplete` "
+            "(call `finish(status=\"incomplete\", reason=...)` when the "
+            "finish tool is available; otherwise state incomplete in the final "
+            "result) and report the missing input. Do not broad-search for "
+            "substitute evidence or "
             "complete the task from unrelated materials unless the parent "
             "explicitly authorizes a fallback source."
         )
