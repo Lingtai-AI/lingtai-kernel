@@ -651,6 +651,15 @@ def get_schema(lang: str = "en") -> dict:
                             "items": {"type": "object"},
                             "description": t(lang, "daemon.tasks.mcp"),
                         },
+                        "required_inputs": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Optional paths that must exist before this daemon is "
+                                "scheduled. Relative paths resolve against the parent "
+                                "agent working directory."
+                            ),
+                        },
                         "preset": {
                             "type": "string",
                             "description": t(lang, "daemon.tasks.preset"),
@@ -995,6 +1004,81 @@ class DaemonManager:
             handlers[name] = self._agent._intrinsics[name]
         return schemas, handlers
 
+
+    @staticmethod
+    def _resolve_required_input_path(raw_path: str, working_dir: Path) -> Path:
+        """Resolve one required input path relative to the parent agent cwd."""
+        p = Path(raw_path).expanduser()
+        if not p.is_absolute():
+            p = working_dir / p
+        return p.resolve(strict=False)
+
+    def _preflight_required_inputs(self, tasks: list[dict]) -> list[list[str]] | dict:
+        """Validate all per-task required_inputs before any run is created."""
+        normalized_by_task: list[list[str]] = []
+        for i, spec in enumerate(tasks):
+            raw_inputs = spec.get("required_inputs")
+            if raw_inputs is None:
+                normalized_by_task.append([])
+                continue
+            if not isinstance(raw_inputs, list):
+                return {
+                    "status": "error",
+                    "message": f"tasks[{i}].required_inputs must be an array of strings",
+                }
+            normalized: list[str] = []
+            for j, raw in enumerate(raw_inputs):
+                field = f"tasks[{i}].required_inputs[{j}]"
+                if not isinstance(raw, str):
+                    return {
+                        "status": "error",
+                        "message": f"{field} must be a non-empty string path",
+                    }
+                if not raw.strip():
+                    return {
+                        "status": "error",
+                        "message": f"{field} must be a non-empty string path",
+                    }
+                resolved = self._resolve_required_input_path(raw, self._agent._working_dir)
+                try:
+                    exists = resolved.exists()
+                    readable = os.access(resolved, os.R_OK)
+                except OSError as e:
+                    return {
+                        "status": "error",
+                        "message": f"{field} is invalid: {resolved}: {e}",
+                    }
+                if not exists:
+                    return {
+                        "status": "error",
+                        "message": f"{field} does not exist: {resolved}",
+                    }
+                if not readable:
+                    return {
+                        "status": "error",
+                        "message": f"{field} is not readable: {resolved}",
+                    }
+                normalized.append(str(resolved))
+            normalized_by_task.append(normalized)
+        return normalized_by_task
+
+    @staticmethod
+    def _render_required_inputs_block(required_inputs: list[str] | None) -> str | None:
+        """Render the validated input manifest shown to the daemon."""
+        if not required_inputs:
+            return None
+        lines = [
+            "## Required inputs validated by parent before launch",
+            "The parent verified these paths existed and were readable before scheduling this daemon:",
+        ]
+        for path in required_inputs:
+            lines.append(f"- {path}")
+        lines.append(
+            "If any later becomes unreadable or does not contain the expected material, "
+            "call `finish(status=\"incomplete\", reason=...)`; do not substitute unrelated materials."
+        )
+        return "\n".join(lines)
+
     @staticmethod
     def _resolve_task_skill_path(raw_path: str, working_dir: Path) -> Path:
         """Resolve one daemon task skill path to a concrete SKILL.md file."""
@@ -1191,7 +1275,14 @@ class DaemonManager:
             "contract, background-and-wait is invalid: do not start a background "
             "job and end your turn expecting a later notification or re-entry. "
             "Run required validation synchronously with an explicit timeout, "
-            "inspect its result in this run, then call `finish`."
+            "inspect its result in this run, then call `finish`. If the task "
+            "specifies a required local input, file path, or brief and you "
+            "cannot access it after direct resolution from the stated context "
+            "or working directory, fail closed: call "
+            "`finish(status=\"incomplete\", reason=...)` and report the "
+            "missing input. Do not broad-search for substitute evidence or "
+            "complete the task from unrelated materials unless the parent "
+            "explicitly authorizes a fallback source."
         )
 
     @staticmethod
@@ -1776,6 +1867,7 @@ class DaemonManager:
         task: str,
         schemas: list[FunctionSchema],
         system_prompt: str | None = None,
+        required_inputs: list[str] | None = None,
     ) -> str:
         """Build the system prompt for an emanation."""
         lines = [
@@ -1811,6 +1903,11 @@ class DaemonManager:
                 "approval guard."
             )
             lines.append(system_prompt)
+
+        required_inputs_block = self._render_required_inputs_block(required_inputs)
+        if required_inputs_block:
+            lines.append("")
+            lines.append(required_inputs_block)
 
         lines.append("")
         lines.append("Your task:")
@@ -2718,6 +2815,10 @@ class DaemonManager:
         else:
             effective_timeout = self._timeout
 
+        required_inputs_by_task = self._preflight_required_inputs(tasks)
+        if isinstance(required_inputs_by_task, dict):
+            return required_inputs_by_task
+
         # Clear completed emanations and stale pools.
         # Keep completed CLI emanations (backend != lingtai) so that `ask`
         # can still route to `_handle_ask_cli` / `_handle_ask_codex` /
@@ -2736,6 +2837,7 @@ class DaemonManager:
                 tasks, backend=backend,
                 effective_max_turns=effective_max_turns,
                 effective_timeout=effective_timeout,
+                required_inputs_by_task=required_inputs_by_task,
             )
 
         # Pre-flight: resolve any per-task presets BEFORE scheduling.
@@ -2859,6 +2961,7 @@ class DaemonManager:
                         "skills": spec.get("skills", []),
                         "mcp": [],
                         "system_prompt": task_system_prompt,
+                        "required_inputs": required_inputs_by_task[i],
                     },
                     log_callback=self._log,
                     preset_name=resolved["name"] if resolved else None,
@@ -2886,7 +2989,10 @@ class DaemonManager:
                     mcp_surface=(mcp_schemas, mcp_handlers),
                 )
                 system_prompt = self._build_emanation_prompt(
-                    spec["task"], schemas, system_prompt=task_context
+                    spec["task"],
+                    schemas,
+                    system_prompt=task_context,
+                    required_inputs=required_inputs_by_task[i],
                 )
                 run_dir.prompt_path.write_text(system_prompt, encoding="utf-8")
                 run_dir._state["call_parameters"]["mcp"] = [
@@ -2955,6 +3061,7 @@ class DaemonManager:
         backend: str,
         effective_max_turns: int,
         effective_timeout: float,
+        required_inputs_by_task: list[list[str]],
     ) -> dict:
         """Dispatch emanations via an external CLI backend.
 
@@ -3029,6 +3136,13 @@ class DaemonManager:
             )
             if _cli_backend_loads_common_mcp(backend):
                 task_context = self._append_daemon_common_context(task_context)
+            required_inputs_block = self._render_required_inputs_block(
+                required_inputs_by_task[len(ids) - 1]
+            )
+            if required_inputs_block:
+                task_context = "\n\n".join(
+                    part for part in (task_context, required_inputs_block) if part
+                )
             if task_context:
                 system_prompt += (
                     "\n\nParent-provided daemon context (oneshot):\n"
@@ -3055,6 +3169,7 @@ class DaemonManager:
                         "mcp": [],
                         "system_prompt": context.system_prompt,
                         "backend_options": backend_options,
+                        "required_inputs": required_inputs_by_task[len(ids) - 1],
                     },
                     log_callback=self._log,
                     backend=backend,
@@ -3076,6 +3191,13 @@ class DaemonManager:
                 if _cli_backend_loads_common_mcp(backend):
                     task_context = self._append_daemon_common_context(task_context)
                 system_prompt = f"[{backend} backend — task delegated to external CLI]"
+                required_inputs_block = self._render_required_inputs_block(
+                    required_inputs_by_task[len(ids) - 1]
+                )
+                if required_inputs_block:
+                    task_context = "\n\n".join(
+                        part for part in (task_context, required_inputs_block) if part
+                    )
                 if task_context:
                     system_prompt += (
                         "\n\nParent-provided daemon context (oneshot):\n"

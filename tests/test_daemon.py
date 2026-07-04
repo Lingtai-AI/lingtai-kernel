@@ -363,6 +363,9 @@ def test_daemon_schema_accepts_task_system_prompt_and_skills():
     assert "mcp" in task_props
     assert task_props["mcp"]["type"] == "array"
     assert task_props["mcp"]["items"]["type"] == "object"
+    assert "required_inputs" in task_props
+    assert task_props["required_inputs"]["type"] == "array"
+    assert task_props["required_inputs"]["items"]["type"] == "string"
     assert "custom_system_prompt" not in task_props
 
 
@@ -476,6 +479,177 @@ def test_build_emanation_prompt_includes_oneshot_system_prompt(tmp_path):
     assert prompt.index("Only inspect Python files") < prompt.index("Your task:")
 
 
+
+
+
+def test_daemon_common_context_requires_fail_closed_for_missing_required_inputs(tmp_path):
+    """Default daemon completion contract rejects substituting unrelated evidence."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    context = mgr._daemon_common_context()
+
+    assert "required local input, file path, or brief" in context
+    assert "fail closed" in context
+    assert "finish(status=\"incomplete\", reason=...)" in context
+    assert "Do not broad-search for substitute evidence" in context
+
+
+def test_build_emanation_prompt_carries_missing_input_fail_closed_contract(tmp_path):
+    """LingTai daemon prompts include the default fail-closed completion context."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    schemas, _ = mgr._build_tool_surface(["file"])
+    context = mgr._append_daemon_common_context(None)
+
+    prompt = mgr._build_emanation_prompt(
+        "Use work/audit/missing_brief.md as the required brief.",
+        schemas,
+        system_prompt=context,
+    )
+
+    assert "Use work/audit/missing_brief.md as the required brief." in prompt
+    assert "fail closed" in prompt
+    assert "Do not broad-search for substitute evidence" in prompt
+    assert prompt.index("fail closed") < prompt.index("Your task:")
+
+def test_build_emanation_prompt_lists_required_inputs_before_task(tmp_path):
+    """Validated required inputs render as a compact no-substitution block."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    schemas, _ = mgr._build_tool_surface(["file"])
+    required = [str((agent._working_dir / "brief.md").resolve())]
+
+    prompt = mgr._build_emanation_prompt(
+        "Review the brief.", schemas, required_inputs=required
+    )
+
+    assert "## Required inputs validated by parent before launch" in prompt
+    assert required[0] in prompt
+    assert "finish(status=\"incomplete\", reason=...)" in prompt
+    assert "do not substitute unrelated materials" in prompt
+    assert prompt.index("## Required inputs") < prompt.index("Your task:")
+
+
+def test_required_inputs_relative_path_normalizes_into_run_params_and_prompt(tmp_path, monkeypatch):
+    """Relative required input paths resolve against the parent agent working dir."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    brief = agent._working_dir / "brief.md"
+    brief.parent.mkdir(parents=True, exist_ok=True)
+    brief.write_text("brief", encoding="utf-8")
+    normalized = str(brief.resolve())
+
+    def fake_run(em_id, run_dir, *args, **kwargs):
+        run_dir.mark_done("ok")
+        return "ok"
+
+    monkeypatch.setattr(mgr, "_run_emanation", fake_run)
+    result = mgr.handle({
+        "action": "emanate",
+        "tasks": [{
+            "task": "Review the brief.",
+            "tools": ["file"],
+            "required_inputs": ["brief.md"],
+        }],
+    })
+
+    assert result["status"] == "dispatched"
+    em_id = result["ids"][0]
+    mgr._emanations[em_id]["future"].result(timeout=5)
+    run_dir = mgr._emanations[em_id]["run_dir"]
+    data = json.loads(run_dir.daemon_json_path.read_text(encoding="utf-8"))
+    prompt = run_dir.prompt_path.read_text(encoding="utf-8")
+    assert data["call_parameters"]["required_inputs"] == [normalized]
+    assert normalized in prompt
+    assert "do not substitute unrelated materials" in prompt
+
+
+def test_required_inputs_missing_preflight_refuses_without_run_creation(tmp_path):
+    """A missing required input is a tool-level error before scheduling."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+
+    result = mgr.handle({
+        "action": "emanate",
+        "tasks": [{
+            "task": "Review the missing brief.",
+            "tools": ["file"],
+            "required_inputs": ["missing.md"],
+        }],
+    })
+
+    assert result["status"] == "error"
+    assert "tasks[0].required_inputs[0]" in result["message"]
+    assert "does not exist" in result["message"]
+    assert mgr._emanations == {}
+    assert not (agent._working_dir / "daemons").exists()
+
+
+def test_required_inputs_batch_refuses_whole_batch_before_scheduling(tmp_path):
+    """One bad required input refuses the entire daemon batch."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    ok = agent._working_dir / "ok.md"
+    ok.parent.mkdir(parents=True, exist_ok=True)
+    ok.write_text("ok", encoding="utf-8")
+
+    result = mgr.handle({
+        "action": "emanate",
+        "tasks": [
+            {"task": "A", "tools": ["file"], "required_inputs": ["ok.md"]},
+            {"task": "B", "tools": ["file"], "required_inputs": ["missing.md"]},
+        ],
+    })
+
+    assert result["status"] == "error"
+    assert "tasks[1].required_inputs[0]" in result["message"]
+    assert mgr._emanations == {}
+    assert not (agent._working_dir / "daemons").exists()
+
+
+def test_cli_backend_missing_required_input_refuses_before_spawn(tmp_path, monkeypatch):
+    """CLI backends share required-input preflight before runner scheduling."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    def should_not_spawn(*args, **kwargs):  # pragma: no cover - defensive
+        raise AssertionError("CLI runner should not be scheduled")
+
+    monkeypatch.setattr(mgr, "_run_codex_emanation", should_not_spawn)
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "codex",
+        "tasks": [{
+            "task": "Review missing input.",
+            "tools": [],
+            "required_inputs": ["missing.md"],
+        }],
+    })
+
+    assert result["status"] == "error"
+    assert "tasks[0].required_inputs[0]" in result["message"]
+    assert mgr._emanations == {}
+    assert not (agent._working_dir / "daemons").exists()
+
+
+def test_required_inputs_reject_invalid_shapes(tmp_path):
+    """required_inputs accepts only arrays of non-empty string paths."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    cases = [
+        ({"required_inputs": "brief.md"}, "tasks[0].required_inputs"),
+        ({"required_inputs": [""]}, "tasks[0].required_inputs[0]"),
+        ({"required_inputs": [None]}, "tasks[0].required_inputs[0]"),
+    ]
+    for extra, expected in cases:
+        spec = {"task": "x", "tools": []}
+        spec.update(extra)
+        result = mgr.handle({"action": "emanate", "tasks": [spec]})
+        assert result["status"] == "error"
+        assert expected in result["message"]
+        assert mgr._emanations == {}
 
 
 def test_task_system_prompt_allows_blank_string(tmp_path):
