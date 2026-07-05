@@ -86,7 +86,17 @@ GUIDANCE_KEY = "guidance"
 NOTIFICATIONS_KEY = "notifications"
 NOTIFICATION_GUIDANCE_KEY = "notification_guidance"
 NOTIFICATION_PERSISTENT_KEY = "notification_persistent"
+# Telegram lives under an `mcp` namespace level to mirror the ephemeral
+# `notifications.mcp.telegram` shape and match Jason #6148: the required path is
+# `_meta.notification_persistent.mcp.telegram` (NOT `...notification_persistent.telegram`).
+NOTIFICATION_PERSISTENT_MCP_KEY = "mcp"
 NOTIFICATION_PERSISTENT_TELEGRAM_CHANNEL = "telegram"
+# Full dotted path used in hook comments / docs so both the string and the
+# structure stay in sync.
+NOTIFICATION_PERSISTENT_TELEGRAM_PATH = (
+    f"_meta.{NOTIFICATION_PERSISTENT_KEY}."
+    f"{NOTIFICATION_PERSISTENT_MCP_KEY}.{NOTIFICATION_PERSISTENT_TELEGRAM_CHANNEL}"
+)
 NOTIFICATION_PERSISTENT_TELEGRAM_MIN_CONTEXT = 20
 NOTIFICATION_PERSISTENT_TELEGRAM_SEEN_LIMIT = 200
 
@@ -636,11 +646,15 @@ def build_meta_readme() -> dict:
         NOTIFICATION_PERSISTENT_KEY: (
             "Sparse communication-context lane, currently Telegram-only. Carries "
             "structured recent/new Telegram messages under "
-            "_meta.notification_persistent.telegram.messages plus an optional "
-            "comment pointing to the previous block for more context. It is not a "
-            "notification/action/dismiss channel and is not part of the formal "
-            "tool-result payload; older blocks intentionally remain in history so "
-            "later deltas can refer to them."
+            f"{NOTIFICATION_PERSISTENT_TELEGRAM_PATH}.messages plus a "
+            "previous_block hook pointing to the prior Telegram block (and an "
+            "optional human-readable comment). This is the durable source of "
+            "truth for Telegram conversation context — the ephemeral "
+            "_meta.notifications.mcp.telegram lane keeps only routing metadata, "
+            "not the message text. It is not a notification/action/dismiss "
+            "channel and is not part of the formal tool-result payload; older "
+            "blocks intentionally remain in history so later deltas can refer to "
+            "them via their previous_block hook."
         ),
     }
 
@@ -1755,13 +1769,33 @@ def build_notification_persistent_payload(agent, notification_payload: dict) -> 
         messages = candidates[-NOTIFICATION_PERSISTENT_TELEGRAM_MIN_CONTEXT:]
 
     telegram_payload: dict = {"messages": messages}
+
+    # Every Telegram persistent block carries an explicit hook to the previous
+    # Telegram block (Jason #6148). The first block after startup/molt has no
+    # predecessor: it is marked `is_first_block: true` with `tool_result_id: null`.
+    # Later blocks point `tool_result_id` at the prior tool result id.
     previous_tool_id = getattr(agent, "_notification_persistent_telegram_last_tool_id", None)
-    if has_recent_context and previous_tool_id:
-        telegram_payload["comment"] = (
-            "For more Telegram context, see tool result "
-            f"{previous_tool_id} at _meta.notification_persistent.telegram."
+    is_first_block = previous_tool_id is None
+    previous_block: dict = {
+        "path": NOTIFICATION_PERSISTENT_TELEGRAM_PATH,
+        "tool_result_id": previous_tool_id if isinstance(previous_tool_id, str) else None,
+    }
+    if is_first_block:
+        previous_block["is_first_block"] = True
+    else:
+        previous_block["comment"] = (
+            "For earlier Telegram context, see tool result "
+            f"{previous_tool_id} at {NOTIFICATION_PERSISTENT_TELEGRAM_PATH}."
         )
-    return {NOTIFICATION_PERSISTENT_KEY: {NOTIFICATION_PERSISTENT_TELEGRAM_CHANNEL: telegram_payload}}
+    telegram_payload["previous_block"] = previous_block
+
+    return {
+        NOTIFICATION_PERSISTENT_KEY: {
+            NOTIFICATION_PERSISTENT_MCP_KEY: {
+                NOTIFICATION_PERSISTENT_TELEGRAM_CHANNEL: telegram_payload
+            }
+        }
+    }
 
 
 def record_notification_persistent_delivery(
@@ -1776,7 +1810,10 @@ def record_notification_persistent_delivery(
     persistent = notification_persistent_payload.get(NOTIFICATION_PERSISTENT_KEY)
     if not isinstance(persistent, dict):
         return
-    telegram = persistent.get(NOTIFICATION_PERSISTENT_TELEGRAM_CHANNEL)
+    mcp = persistent.get(NOTIFICATION_PERSISTENT_MCP_KEY)
+    if not isinstance(mcp, dict):
+        return
+    telegram = mcp.get(NOTIFICATION_PERSISTENT_TELEGRAM_CHANNEL)
     if not isinstance(telegram, dict):
         return
     messages = telegram.get("messages")
@@ -1802,6 +1839,63 @@ def record_notification_persistent_delivery(
             agent._notification_persistent_telegram_last_tool_id = tool_call_id
     except Exception:
         pass
+
+
+# Durable per-message Telegram fields that must live ONLY in
+# `notification_persistent.mcp.telegram` (Jason #6148: MOVE, not duplicate).
+# Once the persistent block has been built, these are stripped from every
+# ephemeral `notifications.mcp.telegram` preview so the model-visible transient
+# lane never re-ships the last-20 conversation text.
+_TELEGRAM_EPHEMERAL_DURABLE_PREVIEW_FIELDS = (
+    "recent_messages",    # structured message array (moved to persistent)
+    "latest_incoming",    # distilled newest incoming (moved to persistent)
+    "preview",            # markdown conversation transcript body
+    "preview_truncated",  # transcript-truncation scalar
+)
+
+
+def sanitize_telegram_notification_after_persistent(notification_payload: dict) -> None:
+    """Trim the durable Telegram message text out of the ephemeral lane in place.
+
+    Jason #6148 asks to *move* Telegram conversation context from the ephemeral
+    ``_meta.notifications.mcp.telegram`` lane into the durable
+    ``_meta.notification_persistent.mcp.telegram`` lane. After the persistent
+    block has been built (which reads the preview arrays), this strips the
+    durable message list / transcript text from each ephemeral preview so the
+    model never sees the last-20 conversation twice. Routing metadata the
+    notification handler still needs (``conversation_ref``, ``message_ref``,
+    ``platform``, ``from``, ``subject``, and the top-level ``count`` / ``source``
+    / ``has_human_messages`` scalars) is preserved.
+
+    No-op when there is no telegram notification. Safe to call unconditionally.
+    """
+    notifications = notification_payload.get(NOTIFICATIONS_KEY)
+    if not isinstance(notifications, dict):
+        return
+    telegram = notifications.get("mcp.telegram")
+    if not isinstance(telegram, dict):
+        return
+    data = telegram.get("data")
+    if not isinstance(data, dict):
+        return
+    previews = data.get("previews")
+    if not isinstance(previews, list):
+        return
+    for preview in previews:
+        if not isinstance(preview, dict):
+            continue
+        # Strip preview text only for Telegram previews that carry the durable
+        # conversation fields used to build notification_persistent.  Generic
+        # MCP telegram notifications without these fields remain ordinary
+        # ephemeral previews and keep their short preview text.
+        has_durable_telegram_context = (
+            "recent_messages" in preview or "latest_incoming" in preview
+        )
+        preview.pop("recent_messages", None)
+        preview.pop("latest_incoming", None)
+        if has_durable_telegram_context:
+            preview.pop("preview", None)
+            preview.pop("preview_truncated", None)
 
 
 def _result_tool_call_id(result: dict) -> str | None:
@@ -2173,6 +2267,12 @@ def attach_active_notifications(
     # Nest the canonical notification payload under the result's _meta
     # envelope (alongside any tool_meta/agent_meta/guidance blocks).
     persistent_payload = build_notification_persistent_payload(agent, payload)
+    # Move (not duplicate): Telegram durable fields are always stripped from the
+    # model-visible ephemeral lane, even when every message id was already
+    # delivered and no new persistent block is emitted this round.  `payload` is
+    # freshly materialized for this delivery cycle, so in-place preview trimming
+    # cannot mutate producer-owned on-disk notification state.
+    sanitize_telegram_notification_after_persistent(payload)
     meta_block = _meta_block(target)
     meta_block.update(payload)
     if persistent_payload:

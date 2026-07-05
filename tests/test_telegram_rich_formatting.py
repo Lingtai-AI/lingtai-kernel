@@ -262,6 +262,59 @@ def test_reply_persists_reply_to_message_id_in_sent_record(tmp_path):
     assert read_result["messages"][0]["_direction"] == "outgoing"
 
 
+def test_send_accepts_public_reply_target_fields(tmp_path):
+    manager, account = _manager(tmp_path)
+
+    result = manager._send({
+        "account": "mybot",
+        "chat_id": 123,
+        "text": "reply text",
+        "message_id": "mybot:123:456",
+    })
+
+    assert result == {"status": "sent", "message_id": "mybot:123:111"}
+    assert account.calls[0][4] == 456
+
+    read_result = manager._read({"account": "mybot", "chat_id": 123, "limit": 1})
+    assert read_result["messages"][0]["reply_to_message_id"] == 456
+
+
+def test_send_accepts_raw_reply_to_message_id(tmp_path):
+    manager, account = _manager(tmp_path)
+
+    result = manager._send({
+        "account": "mybot",
+        "chat_id": 123,
+        "text": "reply text",
+        "reply_to_message_id": 456,
+    })
+
+    assert result == {"status": "sent", "message_id": "mybot:123:111"}
+    assert account.calls[0][4] == 456
+
+    read_result = manager._read({"account": "mybot", "chat_id": 123, "limit": 1})
+    assert read_result["messages"][0]["reply_to_message_id"] == 456
+
+
+def test_send_reply_target_precedence_prefers_private_field(tmp_path):
+    manager, account = _manager(tmp_path)
+
+    result = manager._send({
+        "account": "mybot",
+        "chat_id": 123,
+        "text": "reply text",
+        "_reply_to_message_id": 111,
+        "reply_to_message_id": 222,
+        "message_id": "mybot:123:333",
+    })
+
+    assert result == {"status": "sent", "message_id": "mybot:123:111"}
+    assert account.calls[0][4] == 111
+
+    read_result = manager._read({"account": "mybot", "chat_id": 123, "limit": 1})
+    assert read_result["messages"][0]["reply_to_message_id"] == 111
+
+
 def test_send_without_formatting_is_unchanged(tmp_path):
     """Backward compatibility: a plain send forwards no formatting kwargs."""
     manager, account = _manager(tmp_path)

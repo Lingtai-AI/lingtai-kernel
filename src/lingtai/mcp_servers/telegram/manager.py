@@ -1302,7 +1302,17 @@ class TelegramManager:
             }
 
         acct = self._service.get_account(account)
+        # Resolve the reply target from any of the accepted inputs: the private
+        # `_reply_to_message_id` (set by `_reply`), the public/raw
+        # `reply_to_message_id`, or a compound `message_id` (account:chat:msgid).
         reply_to = args.get("_reply_to_message_id")
+        if reply_to is None:
+            reply_to = args.get("reply_to_message_id")
+        if reply_to is None and args.get("message_id"):
+            try:
+                _account, _chat_id, reply_to = self._parse_compound_id(str(args["message_id"]))
+            except Exception:
+                reply_to = None
 
         # Placeholder mode: fire a typing action before sending so the user
         # sees "is typing…" alongside the placeholder text. Best-effort —
