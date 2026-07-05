@@ -95,6 +95,33 @@ def _merge_consecutive_same_role(messages: list[dict]) -> list[dict]:
     return result
 
 
+def _ensure_first_user_message(messages: list[dict]) -> list[dict]:
+    """Prepend a minimal user message if the first non-system message is not user.
+
+    GLM rejects (HTTP 400, error 1214) a wire where the first non-system
+    message has role ``assistant`` — which can happen after a molt when the
+    reconstructed conversation starts with the assistant's summary.  This
+    function injects a ``{"role": "user", "content": "Continue."}`` placeholder
+    after any leading system messages so the wire satisfies GLM's requirement.
+    """
+    # Find the insertion point: right after any leading system messages.
+    insert_at = 0
+    for i, msg in enumerate(messages):
+        role = msg.get("role", "")
+        if role == "system":
+            insert_at = i + 1
+            continue
+        if role == "user":
+            return messages  # first non-system is already user
+        break  # first non-system is not user → inject at insert_at
+
+    # Only system messages (or empty) → nothing to inject.
+    if insert_at >= len(messages):
+        return messages
+
+    return messages[:insert_at] + [{"role": "user", "content": "Continue."}] + messages[insert_at:]
+
+
 class ZhipuChatSession(OpenAIChatSession):
     """Chat session that merges consecutive same-role messages for Zhipu GLM.
 
@@ -106,7 +133,9 @@ class ZhipuChatSession(OpenAIChatSession):
 
     def _build_messages(self) -> list[dict]:
         messages = super()._build_messages()
-        return _merge_consecutive_same_role(messages)
+        messages = _merge_consecutive_same_role(messages)
+        messages = _ensure_first_user_message(messages)
+        return messages
 
 
 class ZhipuAdapter(OpenAIAdapter):
