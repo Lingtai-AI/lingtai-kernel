@@ -2,6 +2,7 @@
 """Tests for the daemon (神識) capability — subagent system."""
 import json
 import os
+import pytest
 import queue
 import re
 import threading
@@ -663,8 +664,7 @@ def test_run_emanation_returns_text(tmp_path, monkeypatch):
 
 
 
-def test_run_emanation_codex_parent_gets_daemon_cache_anchor(tmp_path, monkeypatch):
-    """Builtin Codex daemon runs get a per-run cache anchor, not parent service."""
+def _run_builtin_codex_daemon_and_capture(tmp_path, monkeypatch, *, provider_defaults_extra=None, send_side_effect=None):
     agent = _make_agent(tmp_path, ["file", "daemon"])
     agent.service.provider = "codex"
     agent.service.model = "gpt-5.5"
@@ -673,12 +673,13 @@ def test_run_emanation_codex_parent_gets_daemon_cache_anchor(tmp_path, monkeypat
     agent.service._key_resolver = lambda provider: "token"
     agent.service._api_key = "token"
     agent.service.api_key = "token"
-    agent.service._provider_defaults = {
-        "codex": {
-            "max_rpm": 7,
-            "codex_session_anchor": str((agent._working_dir / "init.json").resolve()),
-        }
+    codex_defaults = {
+        "max_rpm": 7,
+        "codex_session_anchor": str((agent._working_dir / "init.json").resolve()),
     }
+    if provider_defaults_extra:
+        codex_defaults.update(provider_defaults_extra)
+    agent.service._provider_defaults = {"codex": codex_defaults}
 
     captured = {}
 
@@ -700,7 +701,10 @@ def test_run_emanation_codex_parent_gets_daemon_cache_anchor(tmp_path, monkeypat
                 thinking_tokens=0,
                 cached_tokens=0,
             )
-            mock_session.send = MagicMock(return_value=mock_response)
+            if send_side_effect is not None:
+                mock_session.send = MagicMock(side_effect=send_side_effect)
+            else:
+                mock_session.send = MagicMock(return_value=mock_response)
             return mock_session
 
     import lingtai.llm.service as service_mod
@@ -717,7 +721,21 @@ def test_run_emanation_codex_parent_gets_daemon_cache_anchor(tmp_path, monkeypat
         "run_dir": run_dir,
     }
 
-    result = mgr._run_emanation(em_id, run_dir, schemas, dispatch, "x", cancel)
+    try:
+        result = mgr._run_emanation(em_id, run_dir, schemas, dispatch, "x", cancel)
+    except Exception as exc:
+        if send_side_effect is None:
+            raise
+        captured["exception"] = exc
+        result = None
+    return agent, run_dir, captured, result
+
+
+def test_run_emanation_codex_parent_defaults_to_fresh_daemon_anchor(tmp_path, monkeypatch):
+    """Builtin Codex daemon runs default to an isolated per-daemon anchor."""
+    agent, run_dir, captured, result = _run_builtin_codex_daemon_and_capture(
+        tmp_path, monkeypatch
+    )
 
     assert result == "daemon done"
     agent.service.create_session.assert_not_called()
@@ -727,7 +745,63 @@ def test_run_emanation_codex_parent_gets_daemon_cache_anchor(tmp_path, monkeypat
     assert captured["init"]["context_window"] == 123456
     defaults = captured["init"]["provider_defaults"]
     assert defaults["codex"]["max_rpm"] == 7
-    assert defaults["codex"]["codex_session_anchor"] == str((run_dir.path / "daemon.json").resolve())
+    assert defaults["codex"]["codex_session_anchor"] == str(run_dir.daemon_json_path.resolve())
+    assert "codex_daemon_session_mode" not in defaults["codex"]
+    state = json.loads(run_dir.daemon_json_path.read_text(encoding="utf-8"))
+    assert state["session"]["session_mode"] == "fresh"
+    assert state["session"]["codex_session_anchor_source"] == "daemon"
+
+
+def test_run_emanation_codex_quota_error_records_auth_path_on_real_failure(tmp_path, monkeypatch):
+    """The real emanation failure path persists auth-lane labels on 429s."""
+
+    class FakeQuotaError(Exception):
+        status_code = 429
+        body = {
+            "error": {
+                "type": "usage_limit_reached",
+                "message": "The usage limit has been reached",
+                "plan_type": "pro",
+                "resets_at": int(time.time()) + 120,
+            }
+        }
+
+    agent, run_dir, captured, _result = _run_builtin_codex_daemon_and_capture(
+        tmp_path,
+        monkeypatch,
+        provider_defaults_extra={
+            "codex_auth_path": "~/.lingtai-tui/codex-auth/codex.json"
+        },
+        send_side_effect=FakeQuotaError("quota"),
+    )
+
+    assert isinstance(captured["exception"], FakeQuotaError)
+    state = json.loads(run_dir.daemon_json_path.read_text(encoding="utf-8"))
+    quota = state["error"]["quota"]
+    assert quota["codex_auth_path_source"] == "explicit"
+    assert quota["codex_auth_path_label"] == "~/.lingtai-tui/codex-auth/codex.json"
+    backoff = agent.get_capability("daemon")._active_daemon_provider_quota_backoff("codex")
+    assert backoff["codex_auth_path_label"] == "~/.lingtai-tui/codex-auth/codex.json"
+
+
+
+def test_run_emanation_codex_parent_affinity_requires_feature_flag(tmp_path, monkeypatch):
+    """Parent affinity is opt-in for A/B experiments, not the default."""
+    agent, run_dir, captured, result = _run_builtin_codex_daemon_and_capture(
+        tmp_path,
+        monkeypatch,
+        provider_defaults_extra={"codex_daemon_session_mode": "parent_affinity"},
+    )
+
+    assert result == "daemon done"
+    agent.service.create_session.assert_not_called()
+    defaults = captured["init"]["provider_defaults"]
+    assert defaults["codex"]["max_rpm"] == 7
+    assert defaults["codex"]["codex_session_anchor"] == str((agent._working_dir / "init.json").resolve())
+    assert "codex_daemon_session_mode" not in defaults["codex"]
+    state = json.loads(run_dir.daemon_json_path.read_text(encoding="utf-8"))
+    assert state["session"]["session_mode"] == "parent_affinity"
+    assert state["session"]["codex_session_anchor_source"] == "parent"
 
 
 def test_run_emanation_non_codex_parent_builds_fresh_daemon_service(tmp_path, monkeypatch):
@@ -2999,6 +3073,63 @@ def test_daemon_provider_defaults_preserves_codex_auth_path(tmp_path):
     assert out["codex"]["codex_session_anchor"] == str(
         (run_dir.path / "daemon.json").resolve()
     )
+
+
+def test_daemon_provider_defaults_records_codex_auth_path_metadata(tmp_path):
+    """Codex daemon session diagnostics identify the auth lane without tokens."""
+    from lingtai.core.daemon import DaemonManager
+
+    class FakeRunDir:
+        def __init__(self, path):
+            self.path = path
+            self.metadata = {}
+
+        def set_session_metadata(self, **fields):
+            self.metadata.update(fields)
+
+    run_dir = FakeRunDir(tmp_path / "run")
+    mgr = DaemonManager.__new__(DaemonManager)
+
+    out = DaemonManager._daemon_provider_defaults(
+        mgr,
+        "codex",
+        {
+            "codex_auth_path": "~/.lingtai-tui/codex-auth/codex.json",
+            "codex_session_anchor": "/agents/alice/init.json",
+        },
+        run_dir,
+    )
+
+    assert out["codex"]["codex_auth_path"] == "~/.lingtai-tui/codex-auth/codex.json"
+    assert run_dir.metadata["codex_auth_path_source"] == "explicit"
+    assert run_dir.metadata["codex_auth_path_label"] == "~/.lingtai-tui/codex-auth/codex.json"
+
+
+def test_daemon_provider_defaults_records_implicit_codex_auth_path_metadata(tmp_path):
+    """Absence of codex_auth_path is diagnosable as the implicit REST lane."""
+    from lingtai.core.daemon import DaemonManager
+
+    class FakeRunDir:
+        def __init__(self, path):
+            self.path = path
+            self.metadata = {}
+
+        def set_session_metadata(self, **fields):
+            self.metadata.update(fields)
+
+    run_dir = FakeRunDir(tmp_path / "run")
+    mgr = DaemonManager.__new__(DaemonManager)
+
+    out = DaemonManager._daemon_provider_defaults(
+        mgr,
+        "codex",
+        {"codex_session_anchor": "/agents/alice/init.json"},
+        run_dir,
+    )
+
+    assert "codex_auth_path" not in out["codex"]
+    assert run_dir.metadata["codex_auth_path_source"] == "implicit_default"
+    assert run_dir.metadata["codex_auth_path_label"] == "~/.lingtai-tui/codex-auth.json"
 
 
 def _assert_codex_pool_daemon_defaults(provider, tmp_path):

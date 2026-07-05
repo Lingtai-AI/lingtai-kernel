@@ -306,6 +306,7 @@ def build_summary_error(
     error: str,
     summary_input_chars: int = 0,
     summary_input_truncated: bool = False,
+    error_extra: dict | None = None,
 ) -> dict:
     """Build the error dict when the summarizer call fails.
 
@@ -320,7 +321,7 @@ def build_summary_error(
     paths); they default to ``0``/``False`` for paths where no LLM call was made
     (e.g. no summarizer wired).
     """
-    return {
+    payload = {
         "artifact": APRIORI_SUMMARY_MARKER,
         "summary_kind": "apriori_error",
         "status": "summary_unavailable",
@@ -340,6 +341,40 @@ def build_summary_error(
         ),
         "retrieval_hint": _retrieval_hint(tool_call_id),
     }
+    if isinstance(error_extra, dict):
+        payload.update(error_extra)
+    return payload
+
+
+def build_quota_backoff_refusal(
+    *,
+    tool_name: str,
+    tool_call_id: str | None,
+    original_visible_chars: int,
+    error_extra: dict,
+) -> dict:
+    """Build the refusal dict when an internal summary provider is in backoff."""
+    return {
+        "artifact": APRIORI_SUMMARY_MARKER,
+        "summary_kind": "apriori_quota_backoff_refused",
+        "status": "summary_unavailable",
+        "tool_call_id": tool_call_id,
+        "tool_name": tool_name,
+        "canonical": False,
+        "raw_preserved": True,
+        "original_visible_chars": original_visible_chars,
+        "summary_input_chars": 0,
+        "summary_input_truncated": False,
+        "raw_locator": _raw_locator(tool_call_id),
+        "message": (
+            "summary=true was requested, but an internal summary provider quota "
+            "backoff is active, so the summary was NOT generated and the raw "
+            "result was deliberately NOT placed into your context. The full "
+            "original is preserved."
+        ),
+        "retrieval_hint": _retrieval_hint(tool_call_id),
+        **error_extra,
+    }
 
 
 def maybe_summarize_result(
@@ -350,6 +385,8 @@ def maybe_summarize_result(
     tool_call_id: str | None,
     summarizer_fn: Callable[[str, str, str, str | None], str] | None,
     logger_fn: Callable[..., None] | None = None,
+    quota_error_extra_fn: Callable[[BaseException], dict | None] | None = None,
+    quota_backoff_fn: Callable[[], dict | None] | None = None,
 ) -> Any:
     """Return a summary replacement for *result* when ``summary=true``, else *result*.
 
@@ -393,6 +430,24 @@ def maybe_summarize_result(
             except Exception:
                 pass
 
+    def _quota_error_extra(exc: BaseException) -> dict | None:
+        if quota_error_extra_fn is None:
+            return None
+        try:
+            extra = quota_error_extra_fn(exc)
+            return extra if isinstance(extra, dict) else None
+        except Exception:
+            return None
+
+    def _quota_backoff() -> dict | None:
+        if quota_backoff_fn is None:
+            return None
+        try:
+            extra = quota_backoff_fn()
+            return extra if isinstance(extra, dict) else None
+        except Exception:
+            return None
+
     # Fail closed when no summarizer is available. ``summary=true`` is a request
     # NOT to place the raw result into context; if we cannot summarize, we must
     # not silently fall back to dumping the raw payload. The raw is already
@@ -425,6 +480,19 @@ def maybe_summarize_result(
             original_visible_chars=original_visible_chars,
         )
 
+    quota_backoff = _quota_backoff()
+    if quota_backoff:
+        _log(
+            "apriori_summary_quota_backoff_refused",
+            original_visible_chars=original_visible_chars,
+        )
+        return build_quota_backoff_refusal(
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            original_visible_chars=original_visible_chars,
+            error_extra=quota_backoff,
+        )
+
     reason = ""
     if isinstance(args, dict):
         reason = args.get("_reasoning") or ""
@@ -454,6 +522,7 @@ def maybe_summarize_result(
             error=f"{type(exc).__name__}: {exc}",
             summary_input_chars=summary_input_chars,
             summary_input_truncated=summary_input_truncated,
+            error_extra=_quota_error_extra(exc),
         )
 
     if not isinstance(summary_text, str) or not summary_text.strip():

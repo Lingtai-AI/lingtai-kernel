@@ -24,7 +24,15 @@ from lingtai_kernel.tool_result_summary import (
 )
 
 
-def _make_executor(*, dispatch_fn, summarizer_fn, events, tmp_path):
+def _make_executor(
+    *,
+    dispatch_fn,
+    summarizer_fn,
+    events,
+    tmp_path,
+    summary_quota_error_extra_fn=None,
+    summary_quota_backoff_fn=None,
+):
     """Construct a ToolExecutor that records durable log events into *events*."""
 
     def logger_fn(event_type, **fields):
@@ -43,6 +51,8 @@ def _make_executor(*, dispatch_fn, summarizer_fn, events, tmp_path):
         logger_fn=logger_fn,
         working_dir=tmp_path,
         summarizer_fn=summarizer_fn,
+        summary_quota_error_extra_fn=summary_quota_error_extra_fn,
+        summary_quota_backoff_fn=summary_quota_backoff_fn,
     )
 
 
@@ -287,6 +297,142 @@ class _AgentStub:
 
     def _log(self, *a, **k):
         pass
+
+
+class _ProviderQuotaError(Exception):
+    status_code = 429
+    body = {
+        "error": {
+            "type": "usage_limit_reached",
+            "message": "The usage limit has been reached",
+            "plan_type": "pro",
+            "resets_at": 1783393160,
+            "resets_in_seconds": 1,
+        }
+    }
+
+
+def test_summary_true_provider_429_carries_quota_and_codex_auth_lane(tmp_path):
+    """Internal a-priori summary provider 429s expose non-secret diagnostics."""
+    raw = {"stdout": "RAWMARKER-" + "x" * 100}
+    events = []
+    service = _SessionService()
+    service._provider_defaults = {"codex": {}}
+    agent = _AgentStub(service, provider="codex")
+
+    def summarizer(system_prompt, user_prompt, tool_name, tool_call_id):
+        raise _ProviderQuotaError("quota")
+
+    ex = _make_executor(
+        dispatch_fn=lambda tc: raw,
+        summarizer_fn=summarizer,
+        events=events,
+        tmp_path=tmp_path,
+        summary_quota_error_extra_fn=turn._build_apriori_quota_error_extra_fn(agent),
+    )
+    results, _, _ = ex.execute(
+        [ToolCall(name="bash", args={"command": "x", "summary": True}, id="t429")]
+    )
+
+    content = _wire_content(results[0])
+    assert isinstance(content, dict)
+    assert content["artifact"] == APRIORI_SUMMARY_MARKER
+    assert content["status"] == "summary_unavailable"
+    assert "RAWMARKER" not in str(content)
+
+    quota = content["quota"]
+    assert quota["provider"] == "codex"
+    assert quota["error_type"] == "usage_limit_reached"
+    assert quota["status_code"] == 429
+    assert quota["plan_type"] == "pro"
+    assert quota["resets_at"] == 1783393160
+    assert quota["resets_at_iso"].endswith("+00:00")
+    assert quota["retry_after_seconds"] == 1
+    assert quota["codex_auth_path_source"] == "implicit_default"
+    assert quota["codex_auth_path_label"] == "~/.lingtai-tui/codex-auth.json"
+    assert agent._apriori_summary_provider_quota_backoff["codex"]["resets_at"] == 1783393160
+
+
+def test_summary_true_provider_429_carries_explicit_codex_auth_lane(tmp_path):
+    """Explicit Codex auth paths are labeled but never expanded to secrets."""
+    raw = {"stdout": "RAWMARKER-" + "x" * 100}
+    events = []
+    service = _SessionService()
+    service._provider_defaults = {
+        "codex": {"codex_auth_path": "~/.lingtai-tui/codex-auth/codex.json"}
+    }
+    agent = _AgentStub(service, provider="codex")
+
+    def summarizer(system_prompt, user_prompt, tool_name, tool_call_id):
+        raise _ProviderQuotaError("quota")
+
+    ex = _make_executor(
+        dispatch_fn=lambda tc: raw,
+        summarizer_fn=summarizer,
+        events=events,
+        tmp_path=tmp_path,
+        summary_quota_error_extra_fn=turn._build_apriori_quota_error_extra_fn(agent),
+    )
+    results, _, _ = ex.execute(
+        [ToolCall(name="bash", args={"command": "x", "summary": True}, id="texplicit")]
+    )
+
+    content = _wire_content(results[0])
+    assert "RAWMARKER" not in str(content)
+    quota = content["quota"]
+    assert quota["codex_auth_path_source"] == "explicit"
+    assert quota["codex_auth_path_label"] == "~/.lingtai-tui/codex-auth/codex.json"
+
+
+def test_summary_true_active_quota_backoff_skips_internal_summary_call(tmp_path):
+    raw = {"stdout": "RAWMARKER-" + "x" * 100}
+    events = []
+    service = _SessionService()
+    service._provider_defaults = {"codex": {}}
+    agent = _AgentStub(service, provider="codex")
+    agent._apriori_summary_provider_quota_backoff = {
+        "codex": {
+            "provider": "codex",
+            "error_type": "usage_limit_reached",
+            "status_code": 429,
+            "plan_type": "pro",
+            "resets_at": 1783393160,
+            "resets_at_iso": "2026-07-07T02:59:20+00:00",
+            "codex_auth_path_source": "implicit_default",
+            "codex_auth_path_label": "~/.lingtai-tui/codex-auth.json",
+            "backoff_until": 1783393160,
+        }
+    }
+    called = {"n": 0}
+
+    def summarizer(system_prompt, user_prompt, tool_name, tool_call_id):
+        called["n"] += 1
+        return "should not run"
+
+    ex = _make_executor(
+        dispatch_fn=lambda tc: raw,
+        summarizer_fn=summarizer,
+        events=events,
+        tmp_path=tmp_path,
+        summary_quota_backoff_fn=lambda: turn._active_apriori_summary_quota_backoff(agent),
+    )
+    results, _, _ = ex.execute(
+        [ToolCall(name="bash", args={"command": "x", "summary": True}, id="tbackoff")]
+    )
+
+    content = _wire_content(results[0])
+    assert called["n"] == 0
+    assert content["artifact"] == APRIORI_SUMMARY_MARKER
+    assert content["summary_kind"] == "apriori_quota_backoff_refused"
+    assert content["status"] == "summary_unavailable"
+    assert "RAWMARKER" not in str(content)
+    quota = content["quota"]
+    assert quota["provider"] == "codex"
+    assert quota["plan_type"] == "pro"
+    assert quota["resets_at"] == 1783393160
+    assert quota["resets_at_iso"].endswith("+00:00")
+    assert quota["codex_auth_path_source"] == "implicit_default"
+    assert quota["codex_auth_path_label"] == "~/.lingtai-tui/codex-auth.json"
 
 
 def test_summarizer_factory_none_without_session_gateway():

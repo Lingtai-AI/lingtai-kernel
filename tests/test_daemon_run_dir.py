@@ -507,6 +507,27 @@ def test_mark_failed_logs_event(tmp_path):
     assert last["exception"] == "ValueError"
 
 
+def test_mark_failed_records_structured_error_extra(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    rd.mark_failed(
+        RuntimeError("quota hit"),
+        error_extra={
+            "quota": {
+                "provider": "codex",
+                "error_type": "usage_limit_reached",
+                "resets_at": 1783393160,
+            }
+        },
+    )
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["error"]["type"] == "RuntimeError"
+    assert data["error"]["message"] == "quota hit"
+    assert data["error"]["quota"]["provider"] == "codex"
+    assert data["error"]["quota"]["resets_at"] == 1783393160
+    last = json.loads(rd.events_path.read_text().splitlines()[-1])
+    assert last["error_extra"]["quota"]["error_type"] == "usage_limit_reached"
+
+
 def test_mark_cancelled_writes_state(tmp_path):
     rd = _make_run_dir(tmp_path)
     rd.mark_cancelled()

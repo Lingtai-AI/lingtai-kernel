@@ -17,6 +17,7 @@ from ..safety_limits import (
 )
 from ..tool_executor import ToolExecutor
 from ..tool_result_artifacts import CompactionStats, compact_oversized_history
+from ..provider_quota import codex_auth_path_diagnostic, quota_error_extra
 from ..meta_block import (
     attach_active_notifications,
     attach_active_runtime,
@@ -1283,7 +1284,111 @@ def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
         ),
         reconstruction_event_fn=lambda: build_reconstruction_tool_meta(agent),
         summarizer_fn=_build_apriori_summarizer_fn(agent),
+        summary_quota_error_extra_fn=_build_apriori_quota_error_extra_fn(agent),
+        summary_quota_backoff_fn=lambda: _active_apriori_summary_quota_backoff(agent),
     )
+
+
+def _apriori_summary_quota_key(provider: str | None) -> str:
+    return str(provider or "").lower() or "default"
+
+
+def _active_apriori_summary_quota_backoff(agent) -> dict | None:
+    service = getattr(agent, "service", None)
+    config = getattr(agent, "_config", None)
+    provider = getattr(config, "provider", None) or getattr(service, "provider", None)
+    key = _apriori_summary_quota_key(provider)
+    backoffs = getattr(agent, "_apriori_summary_provider_quota_backoff", None)
+    if not isinstance(backoffs, dict):
+        return None
+    info = backoffs.get(key)
+    if not isinstance(info, dict):
+        return None
+    until = info.get("backoff_until")
+    if isinstance(until, (int, float)) and until > time.time():
+        quota = {k: v for k, v in info.items() if k != "backoff_until"}
+        if quota.get("retry_after_seconds") is None:
+            quota["retry_after_seconds"] = max(int(until - time.time()), 0)
+        return {"quota": quota}
+    backoffs.pop(key, None)
+    return None
+
+
+def _remember_apriori_summary_quota_backoff(
+    agent, provider: str | None, error_extra: dict | None
+) -> None:
+    quota = (error_extra or {}).get("quota")
+    if not isinstance(quota, dict):
+        return
+    resets_at = quota.get("resets_at")
+    until = None
+    if isinstance(resets_at, (int, float)):
+        until = float(resets_at)
+    retry_after = quota.get("retry_after_seconds") or quota.get("resets_in_seconds")
+    if until is None and isinstance(retry_after, (int, float)):
+        until = time.time() + max(float(retry_after), 0.0)
+    if until is None:
+        return
+
+    key = _apriori_summary_quota_key(provider)
+    backoffs = getattr(agent, "_apriori_summary_provider_quota_backoff", None)
+    if not isinstance(backoffs, dict):
+        backoffs = {}
+        setattr(agent, "_apriori_summary_provider_quota_backoff", backoffs)
+
+    info = {
+        k: v
+        for k, v in quota.items()
+        if k
+        in {
+            "provider",
+            "error_type",
+            "status_code",
+            "plan_type",
+            "resets_at",
+            "resets_at_iso",
+            "resets_in_seconds",
+            "retry_after_seconds",
+            "codex_auth_path_source",
+            "codex_auth_path_label",
+            "limit_reason",
+        }
+    }
+    info["provider"] = provider
+    info["backoff_until"] = until
+    existing = backoffs.get(key)
+    if not isinstance(existing, dict) or until >= float(existing.get("backoff_until", 0)):
+        backoffs[key] = info
+
+
+def _build_apriori_quota_error_extra_fn(agent):
+    """Build quota diagnostics for internal a-priori one-shot provider errors."""
+    service = getattr(agent, "service", None)
+    config = getattr(agent, "_config", None)
+    provider = getattr(config, "provider", None) or getattr(service, "provider", None)
+    defaults = None
+    try:
+        all_defaults = getattr(service, "_provider_defaults", None)
+        if isinstance(all_defaults, dict) and provider is not None:
+            defaults = all_defaults.get(str(provider).lower())
+    except Exception:
+        defaults = None
+
+    session_metadata = None
+    if str(provider or "").lower() in {"codex", "codex-pool", "codex_pool"}:
+        session_metadata = codex_auth_path_diagnostic(defaults)
+
+    def _quota_error_extra(exc: BaseException) -> dict | None:
+        extra = quota_error_extra(
+            exc,
+            provider=provider,
+            service=service,
+            session_metadata=session_metadata,
+        )
+        _remember_apriori_summary_quota_backoff(agent, provider, extra)
+        return extra
+
+    return _quota_error_extra
 
 
 def _record_apriori_summary_usage(agent, response, tool_name, tool_call_id) -> None:

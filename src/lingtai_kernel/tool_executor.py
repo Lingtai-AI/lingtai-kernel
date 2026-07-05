@@ -90,6 +90,8 @@ class ToolExecutor:
         summarize_notification_threshold: int | None = None,
         reconstruction_event_fn: Callable[[], dict | None] | None = None,
         summarizer_fn: Callable[[str, str, str, str | None], str] | None = None,
+        summary_quota_error_extra_fn: Callable[[BaseException], dict | None] | None = None,
+        summary_quota_backoff_fn: Callable[[], dict | None] | None = None,
     ) -> None:
         self._dispatch_fn = dispatch_fn
         self._make_tool_result_fn = make_tool_result_fn
@@ -119,6 +121,8 @@ class ToolExecutor:
         # ``summary=true`` fails closed to a summary-layer error (the raw is
         # never dumped into context); see ``maybe_summarize_result``.
         self._summarizer_fn = summarizer_fn
+        self._summary_quota_error_extra_fn = summary_quota_error_extra_fn
+        self._summary_quota_backoff_fn = summary_quota_backoff_fn
         # Dedup memory for the current sustained-pressure molt EMISSION EVENT.
         # The reminder text is permanent (restamped on every tool result while
         # active), so the ``context_pressure_current_molt_reminder_emitted`` event
@@ -772,6 +776,8 @@ class ToolExecutor:
             tool_call_id=tool_call_id,
             summarizer_fn=self._summarizer_fn,
             logger_fn=self._log,
+            quota_error_extra_fn=self._summary_quota_error_extra_fn,
+            quota_backoff_fn=self._summary_quota_backoff_fn,
         )
 
     def _build_result_message(

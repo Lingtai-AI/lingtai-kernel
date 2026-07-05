@@ -36,6 +36,7 @@ from lingtai_kernel._fsutil import atomic_write_json
 from lingtai_kernel.llm.base import FunctionSchema
 from lingtai_kernel.loop_guard import LoopGuard
 from lingtai_kernel.meta_block import build_meta
+import lingtai_kernel.provider_quota as _provider_quota
 from lingtai_kernel.tool_executor import ToolExecutor
 from .run_dir import DaemonRunDir
 from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
@@ -58,6 +59,17 @@ _DAEMON_COMPLETION_FILE = "daemon_completion.json"
 _DAEMON_CLAUDE_MCP_CONFIG_FILE = "claude-mcp-config.json"
 _DAEMON_COMPLETION_STATUSES = {"done", "failed", "incomplete"}
 _SOURCE_ROOT = Path(__file__).resolve().parents[3]
+
+# Compatibility aliases: tests and existing callers import these private daemon
+# helpers directly. Keep the names stable while the implementation lives in the
+# shared provider_quota module.
+_daemon_codex_auth_path_diagnostic = _provider_quota.codex_auth_path_diagnostic
+_daemon_exception_headers = _provider_quota.exception_headers
+_daemon_exception_payload = _provider_quota.exception_payload
+_daemon_parse_retry_after_seconds = _provider_quota.parse_retry_after_seconds
+_daemon_path_label = _provider_quota.path_label
+_daemon_quota_error_extra = _provider_quota.quota_error_extra
+_daemon_status_code = _provider_quota.status_code
 
 
 # Tools emanations can never use (no recursion, no spawning, no identity mutation)
@@ -881,6 +893,17 @@ class DaemonManager:
             max_workers=max(1, max_emanations),
             thread_name_prefix="daemon-cli-ask",
         )
+        # Provider-level daemon quota backoff. Populated when a LingTai daemon
+        # fails before/at the first provider call with a structured quota error,
+        # then consulted by later LingTai daemon dispatches so we do not keep
+        # launching short-lived runs that are guaranteed to hit the same window.
+        self._daemon_provider_quota_backoff: dict[str, dict] = {}
+        self._daemon_provider_quota_lock = threading.Lock()
+        # Serializes daemon runs that intentionally share the parent Codex
+        # cache-affinity/session identity. This avoids concurrent writes through
+        # one upstream session/thread id while still letting non-Codex and fresh
+        # Codex daemons run in parallel.
+        self._codex_parent_affinity_lock = threading.Lock()
         self._reap_dead_parent_daemon_records()
 
     def _reap_dead_parent_daemon_records(self) -> None:
@@ -1146,6 +1169,70 @@ class DaemonManager:
             "registrations. Secret env/header values are redacted in this prompt.\n"
             f"{body}"
         )
+
+    @staticmethod
+    def _provider_key(provider: str | None) -> str:
+        return str(provider or "").strip().lower()
+
+    def _daemon_task_provider_key(self, resolved: dict | None) -> str:
+        if resolved is not None:
+            return self._provider_key(resolved.get("llm", {}).get("provider"))
+        service = getattr(self._agent, "service", None)
+        return self._provider_key(getattr(service, "provider", None))
+
+    def _active_daemon_provider_quota_backoff(self, provider: str | None) -> dict | None:
+        key = self._provider_key(provider)
+        if not key:
+            return None
+        now = time.time()
+        with self._daemon_provider_quota_lock:
+            info = self._daemon_provider_quota_backoff.get(key)
+            if not info:
+                return None
+            until = info.get("backoff_until")
+            if isinstance(until, (int, float)) and until > now:
+                out = dict(info)
+                out["retry_after_seconds"] = max(int(until - now), 0)
+                return out
+            self._daemon_provider_quota_backoff.pop(key, None)
+        return None
+
+    def _remember_daemon_provider_quota_backoff(
+        self, provider: str | None, error_extra: dict | None
+    ) -> None:
+        key = self._provider_key(provider)
+        quota = (error_extra or {}).get("quota")
+        if not key or not isinstance(quota, dict):
+            return
+        now = time.time()
+        until: float | None = None
+        resets_at = quota.get("resets_at")
+        if isinstance(resets_at, (int, float)):
+            until = float(resets_at)
+        retry_after = quota.get("retry_after_seconds") or quota.get("resets_in_seconds")
+        if isinstance(retry_after, (int, float)):
+            until = max(until or 0.0, now + float(retry_after))
+        if until is None or until <= now:
+            # Short safety valve for generic 429s without reset metadata.
+            until = now + 60.0
+
+        info = {
+            "provider": key,
+            "backoff_until": until,
+            "error_type": quota.get("error_type"),
+            "plan_type": quota.get("plan_type"),
+        }
+        if isinstance(resets_at, (int, float)):
+            info["resets_at"] = int(resets_at)
+        if quota.get("resets_at_iso"):
+            info["resets_at_iso"] = quota.get("resets_at_iso")
+        for field in ("codex_auth_path_source", "codex_auth_path_label"):
+            if quota.get(field):
+                info[field] = quota.get(field)
+        with self._daemon_provider_quota_lock:
+            existing = self._daemon_provider_quota_backoff.get(key)
+            if not existing or float(existing.get("backoff_until", 0)) < until:
+                self._daemon_provider_quota_backoff[key] = info
 
     @staticmethod
     def _completion_file(run_dir: DaemonRunDir) -> Path:
@@ -1462,25 +1549,57 @@ class DaemonManager:
         provider: str,
         base_defaults: dict | None,
         run_dir,
+        *,
+        codex_session_mode: str = "fresh",
     ) -> dict | None:
         """Return provider defaults for a daemon-scoped LLM service.
 
         Daemon-scoped services preserve the parent/preset provider defaults for
         every provider, so a non-Codex daemon keeps the same adapter behavior as
-        its parent. Codex is the one exception: the normal Codex agent path uses
-        the agent's resolved ``init.json`` path as its cache-affinity anchor, but
-        a LingTai daemon is a disposable run, so Codex daemon calls need a per-run
-        anchor rather than the parent agent's anchor; otherwise parent and child
-        traffic collide in one REST cache slot.
+        its parent. Codex needs an explicit daemon session policy:
+
+        * ``fresh`` keeps the historical per-run daemon anchor, isolating parent
+          and child cache/session affinity.
+        * ``parent_affinity`` preserves the parent Codex anchor when available,
+          so a daemon that uses the same provider/model/account can continue
+          through the already-warm parent session identity instead of opening a
+          brand-new Codex session/thread id.
+
+        The chosen policy is recorded in daemon.json.session for diagnostics.
         """
         provider_key = str(provider).lower()
         bucket = dict(base_defaults or {})
+        # Internal feature flag consumed by daemon construction, not forwarded to
+        # provider adapters. Without it, Codex daemon runs keep historical fresh
+        # per-daemon affinity even when the parent has an anchor.
+        bucket.pop("codex_daemon_session_mode", None)
         if provider_key in ("codex", "codex-pool", "codex_pool"):
-            # Daemon traffic must use the daemon run identity so it gets its own
-            # cache slot, not the parent agent's anchor. ``codex-pool`` reuses the
-            # Codex adapter and also seeds its sticky auth-pool choice off this
-            # anchor, so a daemon run selects independently of its parent.
-            bucket["codex_session_anchor"] = self._daemon_codex_session_anchor(run_dir)
+            requested_mode = str(codex_session_mode or "fresh").lower()
+            parent_anchor = bucket.get("codex_session_anchor")
+            if requested_mode in {"parent_affinity", "fork_parent", "share_parent_affinity"} and parent_anchor:
+                anchor = str(parent_anchor)
+                source = "parent"
+                mode = "parent_affinity"
+                bucket["codex_session_anchor"] = anchor
+            else:
+                anchor = self._daemon_codex_session_anchor(run_dir)
+                source = "daemon"
+                mode = "fresh"
+                # Historical behavior: daemon traffic gets its own cache/session
+                # identity, seeded from daemon.json.
+                bucket["codex_session_anchor"] = anchor
+            try:
+                run_dir.set_session_metadata(
+                    provider=provider_key,
+                    session_mode=mode,
+                    codex_session_anchor_source=source,
+                    codex_session_anchor=anchor,
+                    **_daemon_codex_auth_path_diagnostic(bucket),
+                )
+            except Exception:
+                # Session metadata is diagnostic only; never let it break run
+                # construction before the real provider call.
+                pass
         if not bucket:
             return None
         return {provider_key: bucket}
@@ -1493,6 +1612,7 @@ class DaemonManager:
             "base_url",
             "codex_auth_path",
             "codex_auth_pool_path",
+            "codex_daemon_session_mode",
             "codex_session_anchor",
             "codex_thread_salt",
             "compact_threshold",
@@ -1870,12 +1990,46 @@ class DaemonManager:
         )
         # Base provider defaults: the implicit preset carries the parent bucket
         # verbatim; an explicit preset derives them from its manifest.llm fields.
-        # Codex daemons additionally get a per-run cache anchor (set inside
-        # _daemon_provider_defaults) so they don't collide with the parent slot.
+        # Codex daemons default to a per-run cache/session anchor for isolation.
+        # A deliberate codex_daemon_session_mode=parent_affinity feature flag can
+        # opt into sharing the parent anchor for A/B experiments when the daemon
+        # uses the same Codex provider/model/account as the live parent.
         if "_provider_defaults" in effective_preset_llm:
             base_defaults = effective_preset_llm["_provider_defaults"]
         else:
             base_defaults = self._llm_defaults_from_manifest(effective_preset_llm)
+
+        base_defaults = dict(base_defaults or {})
+        raw_codex_session_mode = base_defaults.pop(
+            "codex_daemon_session_mode",
+            effective_preset_llm.get("codex_daemon_session_mode", "fresh"),
+        )
+        codex_session_mode = str(raw_codex_session_mode or "fresh").lower()
+        parent_affinity_modes = {"parent_affinity", "fork_parent", "share_parent_affinity"}
+        provider_key = self._provider_key(provider)
+        if provider_key in ("codex", "codex-pool", "codex_pool"):
+            parent_service = getattr(self._agent, "service", None)
+            parent_provider = self._provider_key(getattr(parent_service, "provider", None))
+            parent_model = getattr(parent_service, "model", None)
+            parent_api_key = getattr(parent_service, "api_key", None) or getattr(parent_service, "_api_key", None)
+            same_parent_identity = (
+                parent_provider == provider_key
+                and parent_model == effective_model
+                and parent_api_key == api_key
+            )
+            parent_defaults = getattr(parent_service, "_provider_defaults", {}) or {}
+            parent_bucket = dict(parent_defaults.get(provider_key) or {})
+            parent_anchor = parent_bucket.get("codex_session_anchor")
+            if codex_session_mode not in parent_affinity_modes:
+                codex_session_mode = "fresh"
+            elif same_parent_identity and parent_anchor:
+                codex_session_mode = "parent_affinity"
+                base_defaults.setdefault("codex_session_anchor", parent_anchor)
+                if parent_bucket.get("codex_thread_salt") and "codex_thread_salt" not in base_defaults:
+                    base_defaults["codex_thread_salt"] = parent_bucket["codex_thread_salt"]
+            else:
+                codex_session_mode = "fresh"
+
         service_kwargs = {
             "provider": provider,
             "model": effective_model,
@@ -1883,6 +2037,7 @@ class DaemonManager:
             "base_url": effective_preset_llm.get("base_url"),
             "provider_defaults": self._daemon_provider_defaults(
                 provider, base_defaults, run_dir,
+                codex_session_mode=codex_session_mode,
             ),
         }
         # Implicit-preset-only pass-throughs that mirror the parent service:
@@ -1903,6 +2058,11 @@ class DaemonManager:
         )
 
         endpoint = getattr(service, "_base_url", None)
+
+        parent_affinity_locked = False
+        if codex_session_mode == "parent_affinity":
+            self._codex_parent_affinity_lock.acquire()
+            parent_affinity_locked = True
 
         intrinsic_tool_names = set(self._daemon_intrinsic_surface()[1])
 
@@ -2019,9 +2179,16 @@ class DaemonManager:
             run_dir.mark_done(text)
             return text
         except Exception as e:
-            run_dir.mark_failed(e)
+            session_metadata = (run_dir.state_snapshot().get("session") or {})
+            error_extra = _daemon_quota_error_extra(
+                e, provider=provider, service=service, session_metadata=session_metadata
+            )
+            self._remember_daemon_provider_quota_backoff(provider, error_extra)
+            run_dir.mark_failed(e, error_extra=error_extra)
             raise
         finally:
+            if parent_affinity_locked:
+                self._codex_parent_affinity_lock.release()
             self._close_task_mcp_clients(mcp_clients)
 
     def _find_claude_session_id(self, em_id: str) -> str | None:
@@ -2792,6 +2959,22 @@ class DaemonManager:
                 "preset_schemas": preset_schemas,
                 "preset_handlers": preset_handlers,
             })
+
+        for resolved in resolved_presets:
+            provider_key = self._daemon_task_provider_key(resolved)
+            backoff = self._active_daemon_provider_quota_backoff(provider_key)
+            if backoff:
+                retry_after = backoff.get("retry_after_seconds")
+                reset = backoff.get("resets_at_iso") or backoff.get("resets_at")
+                message = (
+                    f"provider {provider_key!r} daemon quota backoff is active"
+                )
+                if reset:
+                    message += f" until {reset}"
+                if retry_after is not None:
+                    message += f" (retry after ~{retry_after}s)"
+                message += "; choose another preset/backend or wait before retrying"
+                return {"status": "error", "message": message, "quota": backoff}
 
         cancel_event = threading.Event()
         # Separate event so the watchdog can distinguish timeout from manual

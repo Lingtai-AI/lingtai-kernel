@@ -123,6 +123,7 @@ class DaemonRunDir:
             "preset_provider": preset_provider,
             "preset_model": preset_model,
             "backend": backend,
+            "session": None,
             "claude_session_id": None,
         }
 
@@ -188,6 +189,23 @@ class DaemonRunDir:
     def state_snapshot(self) -> dict:
         """Return a shallow copy of the current daemon.json state."""
         return dict(self._state)
+
+    def set_session_metadata(self, **fields) -> None:
+        """Persist bounded daemon LLM session metadata under daemon.json.session."""
+        clean = {key: value for key, value in fields.items() if value is not None}
+        if not clean:
+            return
+
+        def _write():
+            session = dict(self._state.get("session") or {})
+            session.update(clean)
+            self._state["session"] = session
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            event = {"event": "daemon_session", "ts": self._now_iso()}
+            event.update(clean)
+            self._append_jsonl(self.events_path, event)
+
+        self._safe("set_session_metadata", _write)
 
     def set_session_id(self, key: str, value: str, *, overwrite: bool = True) -> bool:
         """Persist a backend resume id into daemon.json under *key*.
@@ -799,8 +817,15 @@ class DaemonRunDir:
         # failure can't undo the terminal transition above.
         self.write_manifest()
 
-    def mark_failed(self, exc: BaseException) -> None:
-        """Exception in run loop. Sets state=failed, error.{type, message}.
+    def mark_failed(
+        self, exc: BaseException, *, error_extra: dict | None = None
+    ) -> None:
+        """Exception in run loop. Sets state=failed and error metadata.
+
+        The stable fields remain ``error.{type,message}``. Callers that can
+        classify a backend failure may pass ``error_extra`` to persist bounded,
+        structured diagnostics (for example provider quota reset metadata) in
+        both daemon.json and the terminal daemon_error event.
 
         Defensive: a user-defined exception's `__str__` may itself raise
         (TypeError, AttributeError, ...). _safe only catches OSError, so we
@@ -810,27 +835,31 @@ class DaemonRunDir:
             msg = str(exc)
         except Exception:
             msg = f"<unrenderable {type(exc).__name__}>"
+        extra = dict(error_extra or {})
 
         def _write():
             self._state["state"] = "failed"
             self._state["finished_at"] = self._now_iso()
             self._state["elapsed_s"] = self._now_secs()
             self._state["current_tool"] = None
-            self._state["error"] = {
+            error = {
                 "type": type(exc).__name__,
                 "message": msg,
             }
+            if extra:
+                error.update(extra)
+            self._state["error"] = error
             self._atomic_write_json(self.daemon_json_path, self._state)
-            self._append_jsonl(
-                self.events_path,
-                {
-                    "event": "daemon_error",
-                    "exception": type(exc).__name__,
-                    "message": msg,
-                    "elapsed_s": self._state["elapsed_s"],
-                    "ts": self._now_iso(),
-                },
-            )
+            event = {
+                "event": "daemon_error",
+                "exception": type(exc).__name__,
+                "message": msg,
+                "elapsed_s": self._state["elapsed_s"],
+                "ts": self._now_iso(),
+            }
+            if extra:
+                event["error_extra"] = extra
+            self._append_jsonl(self.events_path, event)
         self._safe("mark_failed", _write)
         self.write_manifest()
 
