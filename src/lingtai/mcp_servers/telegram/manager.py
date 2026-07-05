@@ -54,7 +54,8 @@ _NOTIFICATION_HEADER_TEMPLATE = _load_notification_header_template()
 _NOTIFICATION_CHANNEL = "mcp.telegram"
 _COMPOUND_ID_RE = re.compile(r"#([^\s:#]+:-?\d+:\d+)\b")
 _CONVERSATION_PREVIEW_MESSAGES = 20
-_STRUCTURED_MESSAGE_TEXT_CAP = 1200
+# Keep 20 structured Telegram messages below the MCP inbox structured metadata cap.
+_STRUCTURED_MESSAGE_TEXT_CAP = 500
 
 
 def _looks_like_compound_id(value: str) -> bool:
