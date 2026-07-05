@@ -142,6 +142,24 @@ def test_load_pool_accepts_whole_float_weight(tui_dir):
     assert codex_pool.load_codex_auth_pool(pool) == [{"path": "a.json", "weight": 2}]
 
 
+def test_load_pool_missing_weight_defaults_to_one(tui_dir):
+    """A hand-edited account with a path but no ``weight`` is kept at weight 1.
+
+    The TUI always writes an explicit weight, but the parser must not drop a
+    path-only account — a missing weight defaults to 1 (GLM review C1).
+    """
+    pool = _write_pool(tui_dir, [{"path": "only-path.json"}])
+    assert codex_pool.load_codex_auth_pool(pool) == [{"path": "only-path.json", "weight": 1}]
+
+
+def test_missing_weight_account_is_selectable(tui_dir, tmp_path):
+    """A sole path-only (weight-defaulted) account is actually selected."""
+    _write_pool(tui_dir, [{"path": "only-path.json"}])
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    chosen = codex_pool.select_codex_pool_auth_path({"codex_session_anchor": anchor})
+    assert chosen == str(tui_dir / "only-path.json")
+
+
 # --------------------------------------------------------------------------
 # Weighted selection + path resolution
 # --------------------------------------------------------------------------

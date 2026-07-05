@@ -97,7 +97,9 @@ def load_codex_auth_pool(pool_path: Path) -> list[dict]:
     account is dropped when:
       * ``enabled`` is explicitly ``False``;
       * ``path`` is missing / not a non-blank string;
-      * ``weight`` is missing, non-numeric, or not strictly positive.
+      * ``weight`` is present but non-numeric or not strictly positive. A
+        missing ``weight`` defaults to ``1`` (a hand-edited pool file may omit
+        it; the TUI always writes an explicit weight).
 
     A missing file, unreadable file, malformed JSON, or a non-dict / non-list
     structure yields ``[]`` (no exception) so the caller falls back cleanly.
