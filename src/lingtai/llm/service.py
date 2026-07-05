@@ -96,6 +96,11 @@ _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     "codex_session_anchor",
     "codex_thread_salt",
     "codex_auth_path",
+    # Optional Codex AUTH pool (provider ``codex-pool``). Points at the non-secret
+    # pool file that lists token paths + weights; the ``codex-pool`` factory picks
+    # one token file stickily per agent session. Absent -> legacy default token
+    # path. Never read by provider ``codex``.
+    "codex_auth_pool_path",
     # Optional Codex endpoint pool (molt-boundary shuffle). A manifest ``llm``
     # block may carry ``codex_base_urls`` (list/tuple or comma/newline string);
     # the adapter chooses one endpoint at request time without changing
@@ -103,6 +108,13 @@ _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     "codex_base_urls",
 )
 _PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS = ("compact_threshold",)
+
+# Providers that get the automatic per-agent ``codex_session_anchor`` (the
+# resolved ``init.json`` path). ``codex-pool`` reuses the Codex adapter and needs
+# the same anchor both for cache-affinity headers and as the sticky auth-pool
+# selection seed. Both spellings of the pool provider are included since
+# LLMService does no dash/underscore normalization.
+_CODEX_ANCHOR_PROVIDERS = ("codex", "codex-pool", "codex_pool")
 
 
 def build_provider_defaults_from_manifest_llm(
@@ -153,7 +165,7 @@ def build_provider_defaults_from_manifest_llm(
     # value shared by session_id, thread_id, and prompt_cache_key. A
     # manifest-supplied ``codex_session_anchor`` (handled above) takes precedence;
     # we only fill the gap. No token ledger / molt time is consulted.
-    if provider_key == "codex" and working_dir is not None:
+    if provider_key in _CODEX_ANCHOR_PROVIDERS and working_dir is not None:
         per_provider.setdefault(
             "codex_session_anchor",
             str((working_dir / "init.json").resolve()),

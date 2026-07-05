@@ -158,6 +158,26 @@ def register_all_adapters() -> None:
 
     LLMService.register_adapter("codex", _codex)
 
+    def _codex_pool(*, model=None, defaults=None, **kw):
+        # ``codex-pool``: same request/adapter/refresh logic as ``codex`` — we
+        # only pick WHICH Codex OAuth token file to read and inject it as the
+        # ordinary ``codex_auth_path``, then delegate to ``_codex``. The choice is
+        # sticky per agent session (weighted across the non-secret pool file); a
+        # missing/empty/invalid pool returns None here, so defaults pass through
+        # unchanged and ``CodexTokenManager`` uses its legacy default token path.
+        # Provider ``codex`` is never affected — it does not read the pool file.
+        from lingtai.auth.codex_pool import select_codex_pool_auth_path
+        selected = select_codex_pool_auth_path(defaults)
+        if selected:
+            defaults = dict(defaults or {})
+            defaults["codex_auth_path"] = selected
+        return _codex(model=model, defaults=defaults, **kw)
+
+    # Register both spellings: LLMService does no dash/underscore normalization,
+    # and a saved ``codex_pool`` preset must build the same provider.
+    for name in ("codex-pool", "codex_pool"):
+        LLMService.register_adapter(name, _codex_pool)
+
     def _claude_code(*, model=None, defaults=None, **kw):
         # Drive the local `claude` CLI as the agent brain on a Claude
         # subscription. The CLI owns auth (stored OAuth / CLAUDE_CODE_OAUTH_TOKEN),
