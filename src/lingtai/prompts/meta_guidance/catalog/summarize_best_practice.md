@@ -10,8 +10,8 @@ why: >
   keeps the current session efficient without losing recoverability, and it tells agents when molt
   supersedes summarize.
 related_files:
-  - "src/lingtai/prompts/principle.md"
-  - "src/lingtai/prompts/guidance/INDEX.md"
+  - "src/lingtai/prompts/principle/principle.md"
+  - "src/lingtai/prompts/meta_guidance/catalog/INDEX.md"
 maintenance: >
   When editing this file, treat related_files as maintained inner links for the prompt/guidance
   source graph. Before changing behavior or prose, crawl the listed files, update any affected

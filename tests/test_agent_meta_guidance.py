@@ -162,7 +162,7 @@ def test_init_substrate_override_is_not_honored(tmp_path):
     from importlib.resources import files
     from lingtai_kernel._frontmatter import strip_frontmatter
 
-    packaged = files("lingtai.prompts").joinpath("substrate.md").read_text(encoding="utf-8")
+    packaged = files("lingtai.prompts").joinpath("substrate/substrate.md").read_text(encoding="utf-8")
 
     agent = _agent_with_static_comment(tmp_path)
     agent._reload_prompt_sections({"substrate": "OPERATOR-SUBSTRATE-OVERRIDE"})

@@ -1,0 +1,66 @@
+kind: prompt-section-definition
+section: procedures
+name_definition: >
+  "procedures" is the kernel-owned resident action playbook. It is named for the
+  operational procedures it carries: triggers, checklists, routing steps, reporting
+  discipline, and concrete tool-use rules — how to act.
+purpose: >
+  Exists as the concise resident how-to layer that routes the agent to the canonical
+  rule. It carries the compact playbook (tool choice, communication discipline,
+  deliverables, skill routing, summarization/molt boundaries) and points to the
+  reference manuals for why, boundaries, and troubleshooting.
+scope:
+  owns:
+    - Operational triggers and checklists.
+    - Tool routing and concrete tool-use rules.
+    - Communication discipline and deliverable/reporting rules.
+    - Skill-routing steps and summarization/molt boundaries at the action level.
+  does_not_own:
+    - The stable world model of bodies/lifecycle/memory (owned by substrate).
+    - Runtime-signal interpretation for `_meta`/notification/token state (owned by meta_guidance).
+    - The root map and operating principle (owned by principle).
+    - The operator/recipe constitution content (owned by covenant).
+injection_contract:
+  defined_by: kernel
+  injected_by: kernel_prompt_builder
+  content_source: src/lingtai/prompts/procedures/procedures.md
+  mirror_path: system/procedures.md
+  override_policy: not_user_overridable
+  notes: >
+    Kernel-owned. Legacy init.json `procedures`/`procedures_file` are legacy-migrated
+    and ignored; the packaged body wins on every boot/refresh. The on-disk mirror is a
+    debug artifact; rendered section is body-only.
+related_files:
+  - path: src/lingtai/prompts/ANATOMY.md
+    why: >
+      The owning prompt-source anatomy: it maps where procedures sits and how the
+      action layer routes to manuals. Read it before changing the procedures boundary.
+  - path: src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md
+    why: >
+      Owns the expanded action guidance this resident section only summarizes:
+      progressive disclosure, external side-effect authorization, choosing bash vs
+      daemon vs avatar vs MCP, depositing work into pad/knowledge/skills/character, the
+      molt checklist, skill routing, and deliverable/reporting discipline. Crawl here
+      (via the system-manual router) for the why/boundaries — keep them out of the body.
+  - path: src/lingtai/prompts/principle/principle.yaml
+    why: >
+      principle's map routes the action playbook to procedures; edit together so root
+      principle prose does not absorb procedures and the map stays accurate.
+  - path: src/lingtai/prompts/covenant/covenant.yaml
+    why: >
+      covenant norms become operational triggers/checklists here; keep them together
+      so a constitution value is not restated as a bare procedure and its authorization
+      boundary stays intact.
+  - path: src/lingtai/prompts/substrate/substrate.yaml
+    why: >
+      substrate is "how it works", procedures is "what to do"; edit together so a
+      stable-model fact is not duplicated as a procedure.
+  - path: src/lingtai/prompts/meta_guidance/meta_guidance.yaml
+    why: >
+      procedures is the general playbook; meta_guidance is the runtime-signal-tied
+      subset. Keep them together so runtime-signal handling is not duplicated as a
+      standalone procedure.
+maintenance:
+  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk, plus canonical implementation/navigation files when a section's construction rules live in code. procedures is a packaged body rendered as-is, so its crawl graph is peer YAMLs, this anatomy, and the procedures-manual reference that owns the expanded action guidance; each link explains what rule or boundary its target owns. Do not list tests merely because they validate behavior.
+  - Never point related_files at a concrete prompt `.md` body; the procedures.md body relation lives in injection_contract.content_source. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules (here the procedures-manual), never a prompt body or a test.
+  - Keep procedures compact and route the why/boundaries/examples to reference manuals, not into this section.

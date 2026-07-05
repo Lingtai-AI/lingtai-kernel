@@ -1,0 +1,65 @@
+kind: prompt-section-definition
+section: principle
+name_definition: >
+  "principle" is the opening, kernel-owned system-prompt section. It is named for
+  the LingTai operating principle it carries and for its job of stating the root
+  contract before any territory: the map of every resident section, the operating
+  principle, and the progressive-disclosure and token-efficiency boundaries.
+purpose: >
+  Exists as the first resident prompt layer so the agent sees the map before the
+  territory — which section owns what, why the layers exist, and how to route to a
+  compact resident section or a manual instead of duplicating long procedures. It is
+  the single source of truth for kernel-owned root principle guidance so that rule
+  does not drift across files.
+scope:
+  owns:
+    - The system-prompt map: the one-line purpose of every resident section.
+    - The LingTai operating principle (act on need, master tools, together, keep the grain, channel-bound, authorized side effects).
+    - The progressive-disclosure discipline: each resident layer has one job and points to the next.
+    - The token-efficiency boundary: summarize consumed context, molt on cost thresholds not reflexes.
+  does_not_own:
+    - Concrete action procedures (owned by procedures).
+    - The stable world model of bodies/lifecycle/memory (owned by substrate).
+    - Runtime `_meta`/notification/token-signal interpretation (owned by meta_guidance).
+    - The operator/recipe constitution content (owned by covenant).
+injection_contract:
+  defined_by: kernel
+  injected_by: kernel_prompt_builder
+  content_source: src/lingtai/prompts/principle/principle.md
+  mirror_path: system/principle.md
+  override_policy: not_user_overridable
+  notes: >
+    Kernel-owned. init.json `principle`/`principle_file` are legacy-migrated and
+    ignored; the packaged body wins on every boot/refresh. The on-disk mirror keeps
+    developer-facing frontmatter but the rendered prompt section is body-only
+    (frontmatter stripped on read).
+related_files:
+  - path: src/lingtai/prompts/ANATOMY.md
+    why: >
+      The owning prompt-source anatomy: it maps the per-section directories vs
+      guidance/, render ownership, and definition-vs-injection. Start here to see
+      where principle sits before editing any section boundary.
+  - path: src/lingtai/prompts/covenant/covenant.yaml
+    why: >
+      principle names covenant as the constitution; edit these together so the root
+      operating principle does not duplicate or contradict covenant's operator-owned
+      constitution rules.
+  - path: src/lingtai/prompts/substrate/substrate.yaml
+    why: >
+      principle routes the how-LingTai-works model to substrate; keep the map's
+      one-line substrate purpose aligned with substrate's own scope so the boundary
+      between "the map" and "the working model" stays clean.
+  - path: src/lingtai/prompts/procedures/procedures.yaml
+    why: >
+      principle routes the concrete action playbook to procedures; edit together so
+      root principle prose does not absorb step-by-step procedures that belong in
+      procedures.
+  - path: src/lingtai/prompts/meta_guidance/meta_guidance.yaml
+    why: >
+      principle defines progressive disclosure and token efficiency; meta_guidance is
+      the runtime-signal hook for those rules. Keep them together so the static
+      principle and the runtime interpretation do not drift apart.
+maintenance:
+  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk, plus canonical implementation/navigation files when a section's construction rules live in code. principle is a packaged body rendered as-is (the root map), so its crawl graph is peer YAMLs and this anatomy; each link explains what boundary its target owns. Do not list tests merely because they validate behavior.
+  - Never point related_files at a concrete prompt `.md` body; the body relation lives in injection_contract.content_source. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules, never a prompt body or a test.
+  - When a resident section is added, removed, or renamed, update the map in principle.md and this definition's scope in the same commit.

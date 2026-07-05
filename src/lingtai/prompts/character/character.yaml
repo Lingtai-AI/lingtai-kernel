@@ -1,0 +1,54 @@
+kind: prompt-section-definition
+section: character
+name_definition: >
+  "character" is the self-authored LingTai/灵台 section (named `character` in prompt
+  order). It is named for the character the agent authors for itself: specialties,
+  working style, standing relationships, accomplishments, and hard-won rules. Its
+  content is the persistent agent character, injected from system/lingtai.md.
+purpose: >
+  Exists so the agent's self-authored identity persists across molt in a fixed slot,
+  distinct from the mechanical runtime facts (identity) and the operator constitution
+  (covenant).
+scope:
+  owns:
+    - The self-authored identity: specialties, working style, standing relationships, accomplishments, hard-won rules.
+  does_not_own:
+    - Mechanical runtime facts (owned by identity).
+    - Current working state (owned by pad).
+    - The operator/recipe constitution (owned by covenant).
+injection_contract:
+  defined_by: kernel_section_contract
+  injected_by: persistent_agent_character_surface
+  content_source: system_lingtai_md
+  mirror_path: system/lingtai.md
+  override_policy: self_authored_agent_may_supply_content
+  notes: >
+    Injected from the persistent agent character store (system/lingtai.md, seeded by the
+    required init `lingtai`/`lingtai_file` field, self-authored thereafter). No kernel
+    body. Distinct from identity (mechanical) and covenant (operator contract).
+related_files:
+  - path: src/lingtai/prompts/ANATOMY.md
+    why: >
+      The owning prompt-source anatomy: it records character as the self-authored,
+      injected identity. Read it before confusing character with mechanical identity.
+  - path: src/lingtai_kernel/intrinsics/psyche/_lingtai.py
+    why: >
+      Owns the concrete character-section injection rule: it reads system/lingtai.md and
+      writes the `character` section (deleting it when the file is empty/missing). Crawl
+      here for the exact self-authored source and empty-content behavior.
+  - path: src/lingtai/prompts/identity/identity.yaml
+    why: >
+      character is self-authored identity and identity is mechanical facts; edit
+      together so the self-authored self and runtime facts do not blur.
+  - path: src/lingtai/prompts/pad/pad.yaml
+    why: >
+      character is durable self and pad is current work; edit together so identity-
+      shaping content and transient task state stay separate.
+  - path: src/lingtai/prompts/covenant/covenant.yaml
+    why: >
+      character is self-authored self and covenant is the operator contract; keep them
+      together so self-authored identity is not mistaken for constitutional authority.
+maintenance:
+  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical builder/navigation files that own the concrete injection rules (here psyche/_lingtai.py). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
+  - character is externally/self-authored, not a kernel body; do not add one. The body relation lives in injection_contract.content_source, so do not point related_files at a concrete prompt `.md` body. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules, never a prompt body or a test.
+  - Keep the character (self-authored) vs identity (mechanical) vs pad (current work) boundary explicit.

@@ -70,11 +70,20 @@ lingtai = [
     "capabilities/*/*.json",
     "capabilities/*/manual/**/*",
     "intrinsic_skills/*/**/*",
-    # Resident prompt sections — skill-style YAML+Markdown (frontmatter + body).
+    # Prompt-source anatomy at the prompts/ root.
     "prompts/*.md",
-    # Runtime-guidance catalog — INDEX.md + one <id>.md per guidance section
-    # (replaces the legacy prompts/guidance.json packaged resource).
-    "prompts/guidance/*.md",
+    # One directory per prompt section under prompts/ (parallel to guidance/):
+    # `<section>/<section>.md` bodies (principle/substrate/procedures) and
+    # `<section>/<section>.yaml` semantic definitions (including YAML-only
+    # definitions for generated/injected sections such as
+    # covenant/meta_guidance/comment/tools/... that have no body).
+    "prompts/*/*.md",
+    "prompts/*/*.yaml",
+    # Runtime-guidance catalog — INDEX.md + one <id>.md per guidance section,
+    # now nested under the meta_guidance section it generates (one level deeper
+    # than the `prompts/*/*.md` glob above, so it needs its own entry).
+    # Replaces the legacy prompts/guidance.json packaged resource.
+    "prompts/meta_guidance/catalog/*.md",
     # Rust sidecar binary bundled at build time by setup.py — present in
     # platform-specific wheels, absent in pure-Python sdist fallback
     # builds. The glob is non-strict, so missing files don't fail builds.

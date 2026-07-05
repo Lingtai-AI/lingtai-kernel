@@ -5,7 +5,7 @@ surface to exactly ``base_prompt``, ``covenant``, and ``comment``. Two prompt
 sections that used to accept init.json overrides are retired here:
 
 - ``substrate`` — kernel-owned architecture model. The packaged
-  ``lingtai/prompts/substrate.md`` is now the sole source.
+  ``lingtai/prompts/substrate/substrate.md`` is now the sole source.
 - ``brief`` — secretary-written life context. Now sourced solely from
   ``system/brief.md`` on disk, not init.json.
 

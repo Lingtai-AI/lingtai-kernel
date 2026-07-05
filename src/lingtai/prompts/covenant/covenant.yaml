@@ -1,0 +1,61 @@
+kind: prompt-section-definition
+section: covenant
+name_definition: >
+  "covenant" is the protected operator/recipe/init constitution section. It is named
+  for the shared LingTai covenant it carries: the constitution that operators or
+  recipes supply for a given network. The kernel owns the section name, its protected
+  status, and its render position; it does not own a canonical covenant body.
+purpose: >
+  Exists so a network's constitution — act on need, cultivate capability in order to
+  help, collaborate with peers, keep durable grain — has a fixed, protected home in
+  render order, defined by the kernel but authored outside it.
+scope:
+  owns:
+    - The section name `covenant`, its protected status, and its render position.
+    - The injection contract that lets init/recipe/operator supply the body.
+  does_not_own:
+    - A kernel-packaged covenant body (there is intentionally no covenant/covenant.md).
+    - The root operating principle (owned by principle).
+    - The concrete action playbook that covenant norms may trigger (owned by procedures).
+injection_contract:
+  defined_by: kernel_section_contract
+  injected_by: init_recipe_or_operator_surface
+  content_source: operator_recipe_or_init_covenant_mirror
+  mirror_path: system/covenant.md
+  override_policy: operator_recipe_may_supply_content
+  notes: >
+    Content source is external: the covenant body comes from init/recipe/operator and
+    is mirrored to system/covenant.md, NOT from a packaged src/lingtai/prompts/covenant/covenant.md
+    (no such body exists in this contract). The kernel defines the section name,
+    protected status, and render position only; operator/recipe content is allowed and
+    expected.
+related_files:
+  - path: src/lingtai/prompts/ANATOMY.md
+    why: >
+      The owning prompt-source anatomy: it records that covenant is a YAML-only,
+      externally-sourced section with no packaged body. Read it before treating
+      covenant as kernel-owned content.
+  - path: src/lingtai/agent.py
+    why: >
+      Owns the concrete injection rule: _reload_prompt_sections() resolves the covenant
+      body from init/recipe/operator, mirrors it to system/covenant.md, and writes the
+      protected `covenant` section. Crawl here for where the external body actually comes
+      from and how it is mirrored.
+  - path: src/lingtai/prompts/principle/principle.yaml
+    why: >
+      principle names covenant as the constitution; edit together so root operating
+      principles and the covenant constitution do not duplicate or contradict each
+      other.
+  - path: src/lingtai/prompts/procedures/procedures.yaml
+    why: >
+      covenant norms become operational triggers/checklists in procedures; keep them
+      together so a constitution value is not restated as a bare procedure and its
+      authorization boundary is preserved.
+  - path: src/lingtai/prompts/rules/rules.yaml
+    why: >
+      network/avatar rules constrain behavior the same way covenant does; edit
+      together so a rule does not silently override or duplicate a covenant value.
+maintenance:
+  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical injection file that owns the concrete construction rules (here the boot loader agent.py). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
+  - Do not add a covenant/covenant.md body or list one in related_files; the body source is external (operator/recipe/init) and recorded in injection_contract.content_source. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules, never a prompt body or a test.
+  - If covenant body ownership ever migrates into the kernel, that is a separate product decision — update injection_contract deliberately, do not drift.

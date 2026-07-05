@@ -181,7 +181,7 @@ def test_base_prompt_renders_first_when_no_principle_without_dynamic_fallback():
 
 def test_packaged_principle_owns_static_progressive_and_token_efficiency_rules():
     mgr = SystemPromptManager()
-    principle = Path("src/lingtai/prompts/principle.md").read_text()
+    principle = Path("src/lingtai/prompts/principle/principle.md").read_text()
     mgr.write_section("principle", principle, protected=True)
     prompt = build_system_prompt(mgr, language="en", activeness="quiet")
 
@@ -206,9 +206,9 @@ def test_task_boundary_molt_guidance_is_cost_thresholded():
     # Skill-style section/manual files carry developer-facing YAML frontmatter;
     # strip it so the corpus is the rendered body only (not metadata text).
     md_paths = [
-        Path("src/lingtai/prompts/principle.md"),
-        Path("src/lingtai/prompts/procedures.md"),
-        Path("src/lingtai/prompts/substrate.md"),
+        Path("src/lingtai/prompts/principle/principle.md"),
+        Path("src/lingtai/prompts/procedures/procedures.md"),
+        Path("src/lingtai/prompts/substrate/substrate.md"),
         Path("src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md"),
         Path("src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md"),
         Path("src/lingtai/intrinsic_skills/system-manual/reference/summarize-manual/SKILL.md"),

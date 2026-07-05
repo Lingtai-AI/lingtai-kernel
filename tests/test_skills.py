@@ -833,13 +833,13 @@ def test_skills_does_not_create_git_repo(tmp_path):
 def test_resident_prompts_route_to_system_manual_nested_references():
     root = Path(__file__).resolve().parents[1]
 
-    substrate = (root / "src" / "lingtai" / "prompts" / "substrate.md").read_text(
+    substrate = (root / "src" / "lingtai" / "prompts" / "substrate" / "substrate.md").read_text(
         encoding="utf-8"
     )
     assert "expanded runtime/substrate\nrouter is `system-manual`" in substrate
     assert "reference/substrate-manual/SKILL.md" in substrate
 
-    procedures = (root / "src" / "lingtai" / "prompts" / "procedures.md").read_text(
+    procedures = (root / "src" / "lingtai" / "prompts" / "procedures" / "procedures.md").read_text(
         encoding="utf-8"
     )
     assert "unified runtime/procedure router is\n`system-manual`" in procedures

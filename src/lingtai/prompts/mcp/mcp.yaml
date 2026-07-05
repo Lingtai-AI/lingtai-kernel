@@ -1,0 +1,52 @@
+kind: prompt-section-definition
+section: mcp
+name_definition: >
+  "mcp" is the generated external-integration catalog section. It is named for the MCP
+  (Model Context Protocol) services it renders: registered external integrations and
+  their ownership/configuration boundaries. It is generated from registered MCP state,
+  not a kernel body, and renders only when integrations are present.
+purpose: >
+  Exists so the agent sees which external MCP services are registered now and their
+  ownership/configuration boundaries, generated from live MCP registration state.
+scope:
+  owns:
+    - The rendered catalog of registered MCP services and their configuration/ownership boundaries.
+  does_not_own:
+    - The native tool surfaces (owned by tools).
+    - The routing/use discipline for external tools (owned by procedures).
+    - The stable model of tool/body concepts (owned by substrate).
+injection_contract:
+  defined_by: kernel
+  injected_by: kernel_prompt_builder
+  content_source: registered_mcp_state
+  override_policy: not_user_overridable
+  notes: >
+    Generated from registered MCP state; no static mcp.md body. Content changes as MCP
+    registrations change. MCPs are external tools/integrations exposed through the
+    runtime/tool model.
+related_files:
+  - path: src/lingtai/prompts/ANATOMY.md
+    why: >
+      The owning prompt-source anatomy: it records mcp as a generated, optional section.
+      Read it before looking for an mcp.md body.
+  - path: src/lingtai/core/mcp/__init__.py
+    why: >
+      Owns the concrete mcp-section build rule: _reconcile() reads the MCP registry and
+      _build_registry_xml() renders it, then update_system_prompt("mcp", ...) injects the
+      XML catalog. Crawl here for the exact registry-read and XML-render mechanics.
+  - path: src/lingtai/prompts/tools/tools.yaml
+    why: >
+      mcp is external tools layered on the native tool model; edit together so
+      MCP-exposed tools and native tools have a clear ownership boundary.
+  - path: src/lingtai/prompts/procedures/procedures.yaml
+    why: >
+      procedures owns tool routing including MCP tools; keep them together so MCP usage
+      rules are not duplicated into the generated catalog.
+  - path: src/lingtai/prompts/substrate/substrate.yaml
+    why: >
+      substrate explains tool/integration concepts; mcp lists concrete integrations.
+      Edit together so the conceptual model and the generated catalog do not overlap.
+maintenance:
+  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical builder/navigation files that own the concrete construction rules (here core/mcp). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
+  - mcp is generated; do not add an mcp.md body. The body relation lives in injection_contract.content_source, so do not point related_files at a concrete prompt `.md` body. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules, never a prompt body or a test.
+  - Keep native-tool vs MCP-integration ownership explicit against tools.yaml.

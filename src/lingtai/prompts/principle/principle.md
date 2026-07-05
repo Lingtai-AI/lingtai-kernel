@@ -11,14 +11,14 @@ why: >
   section owns what, why the layers exist, and how to route to compact resident sections or
   manuals without duplicating long procedures.
 related_files:
-  - "src/lingtai/prompts/substrate.md"
-  - "src/lingtai/prompts/procedures.md"
-  - "src/lingtai/prompts/guidance/INDEX.md"
-  - "src/lingtai/prompts/guidance/summarize_best_practice.md"
-  - "src/lingtai/prompts/guidance/summarize_reconstruction_threshold.md"
-  - "src/lingtai/prompts/guidance/token_efficiency.md"
-  - "src/lingtai/prompts/guidance/review_delegation_instruction_check.md"
-  - "src/lingtai/prompts/guidance/notification_handling.md"
+  - "src/lingtai/prompts/substrate/substrate.md"
+  - "src/lingtai/prompts/procedures/procedures.md"
+  - "src/lingtai/prompts/meta_guidance/catalog/INDEX.md"
+  - "src/lingtai/prompts/meta_guidance/catalog/summarize_best_practice.md"
+  - "src/lingtai/prompts/meta_guidance/catalog/summarize_reconstruction_threshold.md"
+  - "src/lingtai/prompts/meta_guidance/catalog/token_efficiency.md"
+  - "src/lingtai/prompts/meta_guidance/catalog/review_delegation_instruction_check.md"
+  - "src/lingtai/prompts/meta_guidance/catalog/notification_handling.md"
 maintenance: >
   When editing this file, treat related_files as maintained inner links for the prompt/guidance
   source graph. Before changing behavior or prose, crawl the listed files, update any affected

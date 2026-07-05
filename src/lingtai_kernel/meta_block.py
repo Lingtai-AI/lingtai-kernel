@@ -862,7 +862,7 @@ def build_runtime_guidance() -> dict:
     """Load, validate, and return the runtime guidance payload.
 
     Sourced from the skill-style Markdown catalog under
-    ``lingtai/prompts/guidance/`` (``INDEX.md`` + one ``<id>.md`` per section),
+    ``lingtai/prompts/meta_guidance/catalog/`` (``INDEX.md`` + one ``<id>.md`` per section),
     assembled by :func:`lingtai_kernel.prompt_catalog.load_guidance_catalog` into
     the same dict shape the kernel has always consumed (``schema_version`` int,
     ordered ``sections`` with stable ``id``/``title``/``body``). The return type

@@ -1,0 +1,51 @@
+kind: prompt-section-definition
+section: skills
+name_definition: >
+  "skills" is the generated progressive-disclosure skill-catalog section. It is named
+  for the skills it lists: reusable procedures the agent can load on demand. It is
+  generated from the skills registry/catalog, not a kernel body.
+purpose: >
+  Exists as a progressive-disclosure catalog so the agent knows which reusable
+  procedures are available and loads the relevant skill only when the task needs it,
+  keeping the always-on prompt small.
+scope:
+  owns:
+    - The rendered progressive-disclosure catalog of available skills.
+  does_not_own:
+    - The general action playbook that says when to load/write a skill (owned by procedures).
+    - The stable model of memory/knowledge layers (owned by substrate).
+    - Private durable facts (owned by knowledge).
+injection_contract:
+  defined_by: kernel
+  injected_by: kernel_prompt_builder
+  content_source: skills_registry_catalog
+  override_policy: not_user_overridable
+  notes: >
+    Generated from the skills registry/catalog; no static skills.md body. Skills are
+    reusable procedures; the decision to load or author one is a procedure.
+related_files:
+  - path: src/lingtai/prompts/ANATOMY.md
+    why: >
+      The owning prompt-source anatomy: it records skills as a generated catalog. Read
+      it before looking for a skills.md body.
+  - path: src/lingtai/core/skills/__init__.py
+    why: >
+      Owns the concrete skills-section build rule: it scans the skill catalog and calls
+      build_catalog_yaml(), then update_system_prompt("skills", ...) to inject the
+      progressive-disclosure catalog. Crawl here for the exact scan/render mechanics.
+  - path: src/lingtai/prompts/procedures/procedures.yaml
+    why: >
+      procedures tells when to load or author a skill; edit together so skill-routing
+      rules are not duplicated into the generated catalog.
+  - path: src/lingtai/prompts/substrate/substrate.yaml
+    why: >
+      substrate is the stable model of the memory/skill/knowledge layers; keep it with
+      skills so the concept and the concrete catalog do not overlap.
+  - path: src/lingtai/prompts/knowledge/knowledge.yaml
+    why: >
+      skills are reusable procedures and knowledge is private durable facts; edit
+      together so a reusable procedure is not stored as a fact and vice versa.
+maintenance:
+  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical builder/navigation files that own the concrete construction rules (here core/skills). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
+  - skills is generated; do not add a skills.md body. The body relation lives in injection_contract.content_source, so do not point related_files at a concrete prompt `.md` body. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules, never a prompt body or a test.
+  - Keep the skills (reusable procedures) vs knowledge (durable facts) boundary explicit.
