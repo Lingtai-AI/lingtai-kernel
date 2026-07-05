@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from lingtai_kernel.config import THINKING_LEVELS
+from lingtai_kernel.config import THINKING_LEVELS, THINKING_PROVIDERS
 
 log = logging.getLogger(__name__)
 
@@ -334,10 +334,11 @@ def validate_init(data: dict) -> list[str]:
                 "manifest.llm.compact_threshold: expected positive int or null"
             )
     if "thinking" in llm:
-        if llm["provider"].lower() != "codex":
+        if llm["provider"].lower() not in THINKING_PROVIDERS:
             raise ValueError(
                 "manifest.llm.thinking is currently supported only for "
-                "the Codex provider (provider='codex')"
+                "the Codex providers "
+                f"({', '.join(THINKING_PROVIDERS)})"
             )
         thinking = llm["thinking"]
         if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:

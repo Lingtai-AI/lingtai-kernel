@@ -380,6 +380,25 @@ def test_load_preset_rejects_thinking_for_non_codex_provider(tmp_path, value):
         load_preset(str(f))
 
 
+@pytest.mark.parametrize("provider", ["codex-pool", "codex_pool"])
+def test_load_preset_accepts_thinking_for_codex_pool(tmp_path, provider):
+    """A saved/builtin-style codex-pool preset may carry thinking."""
+    p = {
+        "name": "pool",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": provider, "model": "gpt-5.5", "thinking": "xhigh"},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "pool.json"
+    f.write_text(json.dumps(p))
+
+    loaded = load_preset(str(f))
+
+    assert loaded["manifest"]["llm"]["thinking"] == "xhigh"
+
+
 def test_preset_context_limit_reads_from_llm_block():
     manifest = {
         "llm": {"provider": "x", "model": "y", "context_limit": 16384},

@@ -6,6 +6,12 @@ from dataclasses import dataclass, field
 
 THINKING_LEVELS = ("low", "medium", "high", "xhigh")
 
+# Providers that accept manifest.llm.thinking. ``codex-pool`` reuses the Codex
+# adapter (both dash/underscore spellings), so it is thinking-compatible; every
+# other provider rejects the field. Kept here next to THINKING_LEVELS so the
+# preset validator and init-schema validator share one source of truth.
+THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
+
 # Molt context-pressure thresholds are kernel-fixed runtime constants — NOT
 # agent-configurable. An agent must not be able to raise its own molt
 # thresholds (or defeat them entirely) to avoid molting under pressure, so the
