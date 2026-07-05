@@ -2035,15 +2035,24 @@ def test_inject_notification_pair_adds_telegram_persistent_and_strips_ephemeral(
         "is_first_block": True,
     }
 
-    preview = meta["notifications"]["mcp.telegram"]["data"]["previews"][0]
-    for key in ("recent_messages", "latest_incoming", "preview", "preview_truncated"):
-        assert key not in preview
-    assert preview["conversation_ref"] == "main:123"
-    assert preview["message_ref"] == "main:123:21"
-    assert preview["platform"] == "telegram"
-    assert meta["notifications"]["mcp.telegram"]["data"]["count"] == 1
-    assert meta["notifications"]["mcp.telegram"]["data"]["source"] == "telegram"
-    assert meta["notifications"]["mcp.telegram"]["data"]["has_human_messages"] is True
+    assert telegram["events"] == [
+        {
+            "from": "Jason",
+            "subject": "telegram message",
+            "conversation_ref": "main:123",
+            "message_ref": "main:123:21",
+            "platform": "telegram",
+        }
+    ]
+    transient = meta["notifications"]["mcp.telegram"]
+    assert transient["data"] == {
+        "content_moved_to": "_meta.notification_persistent.mcp.telegram",
+        "count": 1,
+        "has_human_messages": True,
+    }
+    assert "previews" not in transient["data"]
+    assert "source" not in transient["data"]
+    assert "telegram message" not in transient["instructions"]
 
 
 def test_inject_notification_pair_strips_tool_meta_context_transit_keys(
