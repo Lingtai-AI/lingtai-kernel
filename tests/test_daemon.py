@@ -3001,6 +3001,46 @@ def test_daemon_provider_defaults_preserves_codex_auth_path(tmp_path):
     )
 
 
+def _assert_codex_pool_daemon_defaults(provider, tmp_path):
+    """codex-pool daemon defaults keep the pool path, re-anchor to daemon.json.
+
+    ``codex-pool`` reuses the Codex adapter and also seeds its sticky auth-pool
+    choice off the anchor, so a daemon run must keep the non-secret
+    ``codex_auth_pool_path`` while getting its own per-run anchor (its own cache
+    slot and an independent pool selection from the parent).
+    """
+    from types import SimpleNamespace
+
+    from lingtai.core.daemon import DaemonManager
+
+    run_dir = SimpleNamespace(path=tmp_path / "run")
+    mgr = DaemonManager.__new__(DaemonManager)
+    out = DaemonManager._daemon_provider_defaults(
+        mgr,
+        provider,
+        {
+            "codex_auth_pool_path": "/home/alice/.lingtai-tui/codex-auth-pool.json",
+            "codex_session_anchor": "/agents/alice/init.json",
+        },
+        run_dir,
+    )
+    assert out[provider]["codex_auth_pool_path"] == (
+        "/home/alice/.lingtai-tui/codex-auth-pool.json"
+    )
+    # The per-run daemon anchor replaces the parent agent's anchor.
+    assert out[provider]["codex_session_anchor"] == str(
+        (run_dir.path / "daemon.json").resolve()
+    )
+
+
+def test_daemon_provider_defaults_codex_pool_dash(tmp_path):
+    _assert_codex_pool_daemon_defaults("codex-pool", tmp_path)
+
+
+def test_daemon_provider_defaults_codex_pool_underscore(tmp_path):
+    _assert_codex_pool_daemon_defaults("codex_pool", tmp_path)
+
+
 def _capturing_fake_service(captured, text="daemon done"):
     """Build a FakeService class that records its init kwargs into *captured*."""
     class FakeService:

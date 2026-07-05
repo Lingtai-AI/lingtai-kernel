@@ -38,7 +38,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from .config import THINKING_LEVELS
+from .config import THINKING_LEVELS, THINKING_PROVIDERS
 
 log = logging.getLogger(__name__)
 
@@ -310,10 +310,11 @@ def load_preset(
         )
     if "thinking" in llm:
         provider = llm.get("provider")
-        if not isinstance(provider, str) or provider.lower() != "codex":
+        if not isinstance(provider, str) or provider.lower() not in THINKING_PROVIDERS:
             raise ValueError(
                 f"preset {name!r} ({p}): manifest.llm.thinking is currently "
-                "supported only for the Codex provider (provider='codex')"
+                "supported only for the Codex providers "
+                f"({', '.join(THINKING_PROVIDERS)})"
             )
         thinking = llm["thinking"]
         if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:

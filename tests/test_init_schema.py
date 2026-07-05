@@ -212,6 +212,15 @@ def test_llm_thinking_rejected_for_non_codex_provider(value):
         validate_init(data)
 
 
+@pytest.mark.parametrize("provider", ["codex-pool", "codex_pool"])
+def test_llm_thinking_accepted_for_codex_pool(provider):
+    """codex-pool reuses the Codex adapter, so thinking is Codex-compatible."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["thinking"] = "xhigh"
+    validate_init(data)
+
+
 # --- addons (list of curated MCP names; mcp capability handles the rest) ---
 
 
