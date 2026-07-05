@@ -1892,6 +1892,49 @@ def _write_email_notif(tmp_path):
     )
 
 
+def _telegram_message(message_id: int, *, text: str | None = None) -> dict:
+    return {
+        "id": f"main:123:{message_id}",
+        "direction": "incoming",
+        "sender": "Jason",
+        "date": f"2026-07-05T09:00:{message_id % 60:02d}Z",
+        "relative_time": "just now",
+        "text": text or f"message {message_id}",
+        "text_truncated": False,
+    }
+
+
+def _write_telegram_notif(tmp_path, messages: list[dict]) -> None:
+    notif_dir = tmp_path / ".notification"
+    notif_dir.mkdir(parents=True, exist_ok=True)
+    latest = dict(messages[-1])
+    latest["is_current"] = True
+    payload = {
+        "header": "1 new event from MCP 'telegram'",
+        "icon": "💬",
+        "priority": "high",
+        "data": {
+            "count": 1,
+            "source": "telegram",
+            "has_human_messages": True,
+            "previews": [
+                {
+                    "from": "Jason",
+                    "subject": "telegram message from Jason via main",
+                    "preview": latest["text"],
+                    "preview_truncated": False,
+                    "platform": "telegram",
+                    "conversation_ref": "main:123",
+                    "message_ref": latest["id"],
+                    "recent_messages": messages,
+                    "latest_incoming": latest,
+                }
+            ],
+        },
+    }
+    (notif_dir / "mcp.telegram.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
 def test_attach_active_notifications_first_payload_attaches(tmp_path):
     from lingtai_kernel.notifications import notification_fingerprint
 
@@ -2094,6 +2137,64 @@ def test_attach_active_notifications_empty_resets_signature_for_reappearance(tmp
     new_holder = attach_active_notifications(agent, [third], prior_holder=None)
     assert new_holder is third.content
     assert "notifications" in third.content["_meta"]
+
+
+def test_attach_active_notifications_adds_telegram_persistent_snapshot(tmp_path):
+    messages = [_telegram_message(i) for i in range(1, 22)]
+    _write_telegram_notif(tmp_path, messages)
+    agent = _notif_agent(tmp_path)
+
+    block = ToolResultBlock(
+        id="t1",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+    )
+    holder = attach_active_notifications(agent, [block], prior_holder=None)
+
+    assert holder is block.content
+    telegram = block.content["_meta"]["notification_persistent"]["telegram"]
+    assert list(telegram.keys()) == ["messages"]
+    assert len(telegram["messages"]) == 20
+    assert telegram["messages"][0]["id"] == "main:123:2"
+    assert telegram["messages"][-1]["id"] == "main:123:21"
+    assert agent._notification_persistent_telegram_message_ids[-1] == "main:123:21"
+    assert agent._notification_persistent_telegram_last_tool_id == "call-first"
+
+
+def test_attach_active_notifications_adds_telegram_persistent_delta_with_comment(tmp_path):
+    first_messages = [_telegram_message(i) for i in range(1, 21)]
+    _write_telegram_notif(tmp_path, first_messages)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(
+        id="t1",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+    )
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert first.content["_meta"]["notification_persistent"]["telegram"]["messages"][-1]["id"] == "main:123:20"
+
+    second_messages = [_telegram_message(i) for i in range(2, 22)]
+    _write_telegram_notif(tmp_path, second_messages)
+    second = ToolResultBlock(
+        id="t2",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-second"}}},
+    )
+    new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
+
+    assert new_holder is second.content
+    # The previous holder keeps its persistent context even though the moving
+    # _meta.notifications payload was skeletonized away.
+    assert "notifications" not in first.content.get("_meta", {})
+    assert first.content["_meta"]["notification_persistent"]["telegram"]["messages"]
+    telegram = second.content["_meta"]["notification_persistent"]["telegram"]
+    assert [message["id"] for message in telegram["messages"]] == ["main:123:21"]
+    assert telegram["comment"] == (
+        "For more Telegram context, see tool result call-first "
+        "at _meta.notification_persistent.telegram."
+    )
+    assert agent._notification_persistent_telegram_last_tool_id == "call-second"
 
 
 def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):

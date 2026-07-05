@@ -389,6 +389,10 @@ def _context_molt(agent, args: dict) -> dict:
         agent._notification_block_id = None
     if hasattr(agent, "_notification_live_holder"):
         agent._notification_live_holder = None
+    if hasattr(agent, "_notification_persistent_telegram_message_ids"):
+        agent._notification_persistent_telegram_message_ids = []
+    if hasattr(agent, "_notification_persistent_telegram_last_tool_id"):
+        agent._notification_persistent_telegram_last_tool_id = None
 
     # Post-molt hooks — reload character/pad into prompt manager BEFORE new session
     for cb in getattr(agent, "_post_molt_hooks", []):
@@ -623,6 +627,10 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
         agent._notification_block_id = None
     if hasattr(agent, "_notification_live_holder"):
         agent._notification_live_holder = None
+    if hasattr(agent, "_notification_persistent_telegram_message_ids"):
+        agent._notification_persistent_telegram_message_ids = []
+    if hasattr(agent, "_notification_persistent_telegram_last_tool_id"):
+        agent._notification_persistent_telegram_last_tool_id = None
 
     for cb in getattr(agent, "_post_molt_hooks", []):
         try:

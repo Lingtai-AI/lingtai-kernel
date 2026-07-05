@@ -38,8 +38,10 @@ from ..meta_block import (
     TOOL_META_CONTEXT_PENDING_KEY,
     build_meta,
     build_notification_payload,
+    build_notification_persistent_payload,
     formal_tool_result_preview,
     formal_tool_result_visible_len,
+    record_notification_persistent_delivery,
 )
 from ..session import SessionManager
 from ..tc_inbox import TCInbox
@@ -535,6 +537,13 @@ class BaseAgent:
         # until the first active payload, and reset to ``None`` whenever
         # notifications go empty so a later reappearance attaches afresh.
         self._notification_payload_signature: str | None = None
+        # Telegram-only persistent communication-context lane.  These IDs track
+        # which Telegram messages have already been emitted in
+        # `_meta.notification_persistent.telegram.messages` for the current
+        # provider-visible context, so later deliveries can be deltas with a
+        # comment pointing back to the previous block.  Reset on context molt.
+        self._notification_persistent_telegram_message_ids: list[str] = []
+        self._notification_persistent_telegram_last_tool_id: str | None = None
 
         # Provider-visible tool result currently carrying the live `_meta.agent_meta`
         # / `_meta.guidance` blocks (kernel runtime state + guidance ref).
@@ -1509,9 +1518,15 @@ class BaseAgent:
         # envelope so the synthesized pair presents notifications the same way
         # an ACTIVE tool result does (``_meta.notifications`` +
         # ``_meta.notification_guidance``).
+        notification_persistent_payload = build_notification_persistent_payload(
+            self, notifications_with_guidance
+        )
+        body_meta = dict(notifications_with_guidance)
+        if notification_persistent_payload:
+            body_meta.update(notification_persistent_payload)
         body = {
             "_synthesized": True,
-            "_meta": dict(notifications_with_guidance),
+            "_meta": body_meta,
         }
         # Flatten the remaining safe build_meta fields into body top-level —
         # these are the synthesized pair's own freshness/uniqueness fields
@@ -1600,6 +1615,12 @@ class BaseAgent:
         # purposes; it is no longer used for remove_pair_by_call_id.
         self._notification_live_holder = content_dict
         self._notification_block_id = call_id
+        if notification_persistent_payload:
+            record_notification_persistent_delivery(
+                self,
+                notification_persistent_payload,
+                tool_call_id=call_id,
+            )
 
         self._save_chat_history(ledger_source="notification_sync")
         self._log(
@@ -1620,6 +1641,8 @@ class BaseAgent:
             notifications_with_guidance,
             call_id=call_id,
         )
+        if notification_persistent_payload:
+            synthetic_envelope.update(notification_persistent_payload)
         self._log_notification_block_injected(
             synthetic_envelope,
             mode="synthetic_notification_pair",

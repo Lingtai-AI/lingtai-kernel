@@ -85,6 +85,10 @@ AGENT_META_KEY = "agent_meta"
 GUIDANCE_KEY = "guidance"
 NOTIFICATIONS_KEY = "notifications"
 NOTIFICATION_GUIDANCE_KEY = "notification_guidance"
+NOTIFICATION_PERSISTENT_KEY = "notification_persistent"
+NOTIFICATION_PERSISTENT_TELEGRAM_CHANNEL = "telegram"
+NOTIFICATION_PERSISTENT_TELEGRAM_MIN_CONTEXT = 20
+NOTIFICATION_PERSISTENT_TELEGRAM_SEEN_LIMIT = 200
 
 # Per-result machine-generated guidance nested under ``tool_meta``.  ``comment``
 # is a small map of topic-keyed hints; today the only topic is ``overflow`` — a
@@ -628,6 +632,15 @@ def build_meta_readme() -> dict:
             "as the current channel state. "
             "Not part of the formal tool-result payload; do not summarize "
             "notification contents as the result body."
+        ),
+        NOTIFICATION_PERSISTENT_KEY: (
+            "Sparse communication-context lane, currently Telegram-only. Carries "
+            "structured recent/new Telegram messages under "
+            "_meta.notification_persistent.telegram.messages plus an optional "
+            "comment pointing to the previous block for more context. It is not a "
+            "notification/action/dismiss channel and is not part of the formal "
+            "tool-result payload; older blocks intentionally remain in history so "
+            "later deltas can refer to them."
         ),
     }
 
@@ -1670,6 +1683,138 @@ def build_notification_payload(notifications: dict) -> dict:
     }
 
 
+
+
+def _telegram_persistent_messages_from_notifications(notification_payload: dict) -> list[dict]:
+    """Extract ordered Telegram message objects from notification preview metadata."""
+    notifications = notification_payload.get(NOTIFICATIONS_KEY)
+    if not isinstance(notifications, dict):
+        return []
+    telegram = notifications.get("mcp.telegram")
+    if not isinstance(telegram, dict):
+        return []
+    data = telegram.get("data")
+    if not isinstance(data, dict):
+        return []
+    previews = data.get("previews")
+    if not isinstance(previews, list):
+        return []
+
+    by_id: dict[str, dict] = {}
+    order: list[str] = []
+    for preview in previews:
+        if not isinstance(preview, dict):
+            continue
+        candidates: list[object] = []
+        recent = preview.get("recent_messages")
+        if isinstance(recent, list):
+            candidates.extend(recent)
+        latest = preview.get("latest_incoming")
+        if isinstance(latest, dict):
+            candidates.append(latest)
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            msg_id = candidate.get("id")
+            if not isinstance(msg_id, str) or not msg_id:
+                continue
+            if msg_id not in by_id:
+                order.append(msg_id)
+            by_id[msg_id] = dict(candidate)
+    return [by_id[msg_id] for msg_id in order if msg_id in by_id]
+
+
+def build_notification_persistent_payload(agent, notification_payload: dict) -> dict | None:
+    """Build the minimal `_meta.notification_persistent` payload for Telegram.
+
+    First delivery after startup/molt (or when fewer than the minimum number of
+    Telegram messages has been delivered into the current provider context)
+    carries the recent context snapshot. Later material notification updates only
+    carry messages whose Telegram compound IDs have not been delivered yet, plus
+    a short comment pointing to the previous persistent block.
+    """
+    candidates = _telegram_persistent_messages_from_notifications(notification_payload)
+    if not candidates:
+        return None
+
+    delivered = getattr(agent, "_notification_persistent_telegram_message_ids", [])
+    if not isinstance(delivered, (list, tuple, set)):
+        delivered = []
+    delivered_ids = {msg_id for msg_id in delivered if isinstance(msg_id, str)}
+    has_recent_context = len(delivered_ids) >= NOTIFICATION_PERSISTENT_TELEGRAM_MIN_CONTEXT
+
+    if has_recent_context:
+        messages = [
+            message
+            for message in candidates
+            if isinstance(message.get("id"), str) and message["id"] not in delivered_ids
+        ]
+        if not messages:
+            return None
+    else:
+        messages = candidates[-NOTIFICATION_PERSISTENT_TELEGRAM_MIN_CONTEXT:]
+
+    telegram_payload: dict = {"messages": messages}
+    previous_tool_id = getattr(agent, "_notification_persistent_telegram_last_tool_id", None)
+    if has_recent_context and previous_tool_id:
+        telegram_payload["comment"] = (
+            "For more Telegram context, see tool result "
+            f"{previous_tool_id} at _meta.notification_persistent.telegram."
+        )
+    return {NOTIFICATION_PERSISTENT_KEY: {NOTIFICATION_PERSISTENT_TELEGRAM_CHANNEL: telegram_payload}}
+
+
+def record_notification_persistent_delivery(
+    agent,
+    notification_persistent_payload: dict | None,
+    *,
+    tool_call_id: str | None,
+) -> None:
+    """Record which Telegram messages have been delivered to provider context."""
+    if not notification_persistent_payload:
+        return
+    persistent = notification_persistent_payload.get(NOTIFICATION_PERSISTENT_KEY)
+    if not isinstance(persistent, dict):
+        return
+    telegram = persistent.get(NOTIFICATION_PERSISTENT_TELEGRAM_CHANNEL)
+    if not isinstance(telegram, dict):
+        return
+    messages = telegram.get("messages")
+    if not isinstance(messages, list):
+        return
+
+    existing = getattr(agent, "_notification_persistent_telegram_message_ids", [])
+    if not isinstance(existing, list):
+        existing = list(existing) if isinstance(existing, (tuple, set)) else []
+    seen = set(existing)
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        msg_id = message.get("id")
+        if isinstance(msg_id, str) and msg_id and msg_id not in seen:
+            existing.append(msg_id)
+            seen.add(msg_id)
+    if len(existing) > NOTIFICATION_PERSISTENT_TELEGRAM_SEEN_LIMIT:
+        existing = existing[-NOTIFICATION_PERSISTENT_TELEGRAM_SEEN_LIMIT:]
+    try:
+        agent._notification_persistent_telegram_message_ids = existing
+        if tool_call_id:
+            agent._notification_persistent_telegram_last_tool_id = tool_call_id
+    except Exception:
+        pass
+
+
+def _result_tool_call_id(result: dict) -> str | None:
+    meta = result.get("_meta")
+    if not isinstance(meta, dict):
+        return None
+    tool_meta = meta.get(TOOL_META_KEY)
+    if not isinstance(tool_meta, dict):
+        return None
+    call_id = tool_meta.get("id")
+    return call_id if isinstance(call_id, str) and call_id else None
+
+
 def build_synthetic_tool_meta(
     call_id: str,
     *,
@@ -2027,7 +2172,16 @@ def attach_active_notifications(
 
     # Nest the canonical notification payload under the result's _meta
     # envelope (alongside any tool_meta/agent_meta/guidance blocks).
-    _meta_block(target).update(payload)
+    persistent_payload = build_notification_persistent_payload(agent, payload)
+    meta_block = _meta_block(target)
+    meta_block.update(payload)
+    if persistent_payload:
+        meta_block.update(persistent_payload)
+        record_notification_persistent_delivery(
+            agent,
+            persistent_payload,
+            tool_call_id=_result_tool_call_id(target),
+        )
     # Register this dict as the new live holder.
     agent._notification_live_holder = target
 

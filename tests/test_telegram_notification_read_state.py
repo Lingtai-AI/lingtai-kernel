@@ -121,6 +121,49 @@ def test_incoming_event_populates_generic_notification_refs(tmp_path: Path) -> N
     assert metadata["platform"] == "telegram"
     assert metadata["conversation_ref"] == "main:123"
     assert metadata["message_ref"] == "main:123:53"
+    assert metadata["recent_messages"] == [metadata["latest_incoming"]]
+    assert metadata["latest_incoming"]["id"] == "main:123:53"
+    assert metadata["latest_incoming"]["direction"] == "incoming"
+    assert metadata["latest_incoming"]["sender"] == "alice"
+    assert metadata["latest_incoming"]["text"] == "hello"
+    assert metadata["latest_incoming"]["text_truncated"] is False
+    assert metadata["latest_incoming"]["is_current"] is True
+    assert "[NEW][incoming]" in inbound_events[0]["body"]
+    assert "Conversation — last 1 messages" in inbound_events[0]["body"]
+
+
+def test_incoming_event_structures_last_20_messages(tmp_path: Path) -> None:
+    workdir = tmp_path / "agent"
+    inbound_events: list[dict[str, Any]] = []
+    manager = TelegramManager(
+        _FakeService(),
+        working_dir=workdir,
+        on_inbound=inbound_events.append,
+    )
+
+    for idx in range(1, 26):
+        manager.on_incoming(
+            "main",
+            {
+                "message": {
+                    "message_id": idx,
+                    "date": 1781600000 + idx,
+                    "from": {"id": 1, "username": "alice"},
+                    "chat": {"id": 123, "type": "private"},
+                    "text": f"msg {idx}",
+                }
+            },
+        )
+
+    metadata = inbound_events[-1]["metadata"]
+    recent = metadata["recent_messages"]
+    assert len(recent) == 20
+    assert recent[0]["id"] == "main:123:6"
+    assert recent[-1]["id"] == "main:123:25"
+    assert metadata["latest_incoming"]["id"] == "main:123:25"
+    assert metadata["latest_incoming"]["is_current"] is True
+    assert "Conversation — last 20 messages" in inbound_events[-1]["body"]
+    assert "[NEW][incoming]" in inbound_events[-1]["body"]
 
 
 def test_callback_query_incoming_does_not_publish_non_unique_message_ref(tmp_path: Path) -> None:

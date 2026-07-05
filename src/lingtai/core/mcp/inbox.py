@@ -84,6 +84,16 @@ _PREVIEW_FIELD_CAP = 10000  # chars of body to inline as the snippet (raised for
 # stuffs a kilobyte into `conversation_ref` won't bloat the notification.
 _PREVIEW_META_FIELDS = ("conversation_ref", "message_ref", "platform")
 _PREVIEW_META_FIELD_CAP = 200
+
+# Optional structured metadata that curated IM producers can attach under
+# event["metadata"]. These fields are copied into data.previews[*] after a
+# JSON-serializability and size check, so agents get stable structure without
+# letting arbitrary external MCP payloads bloat notification state.
+_PREVIEW_STRUCTURED_META_FIELDS = {
+    "latest_incoming": dict,
+    "recent_messages": list,
+}
+_PREVIEW_STRUCTURED_META_JSON_CAP = 20_000
 _TELEMETRY_ROUND_DIGITS = 3
 
 
@@ -151,28 +161,52 @@ def _format_notification_summary(mcp_name: str, count: int, has_human_messages: 
     )
 
 
+def _copy_structured_preview_meta(value: object) -> object | None:
+    """Return a JSON-safe structured preview field, or None if unsafe/too large."""
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None
+    if len(encoded) > _PREVIEW_STRUCTURED_META_JSON_CAP:
+        return None
+    try:
+        return json.loads(encoded)
+    except json.JSONDecodeError:
+        return None
+
+
 def _extract_preview_meta(event: dict) -> dict:
     """Pull optional IM/chat metadata fields off a LICC event for the preview.
 
-    Returns a dict containing only the supported keys
+    Returns a dict containing supported scalar routing keys
     (``conversation_ref``, ``message_ref``, ``platform``) whose values are
-    non-empty strings, each truncated to ``_PREVIEW_META_FIELD_CAP``.
+    non-empty strings, each truncated to ``_PREVIEW_META_FIELD_CAP``. Curated
+    IM producers may also attach bounded JSON-safe structured fields such as
+    ``latest_incoming`` and ``recent_messages`` so agents do not need to parse
+    a Markdown conversation transcript to find the actionable message.
 
     Strictly additive: events without ``metadata`` or with non-dict /
-    non-string / empty values yield an empty dict and behave exactly as
-    they did before this field existed. No validation errors raised — a
-    malformed metadata payload just produces no extra preview fields.
+    non-string / wrong-type / oversized values yield only the supported safe
+    subset. No validation errors raised — a malformed metadata payload just
+    produces no extra preview fields.
     """
     meta = event.get("metadata")
     if not isinstance(meta, dict):
         return {}
+
     out: dict = {}
     for key in _PREVIEW_META_FIELDS:
         val = meta.get(key)
         if isinstance(val, str) and val:
             out[key] = val[:_PREVIEW_META_FIELD_CAP]
-    return out
 
+    for key, expected_type in _PREVIEW_STRUCTURED_META_FIELDS.items():
+        val = meta.get(key)
+        if isinstance(val, expected_type):
+            safe_val = _copy_structured_preview_meta(val)
+            if safe_val is not None:
+                out[key] = safe_val
+    return out
 
 def _bounded_elapsed_s(start_ts: float, end_ts: float) -> float:
     """Return a rounded nonnegative elapsed duration in seconds."""
@@ -267,10 +301,12 @@ def _consume_event(
             consumed_at_ts=consumed_at,
         ),
     )
+    preview_text = body[:_PREVIEW_FIELD_CAP]
     preview = {
         "from": sender,
         "subject": subject,
-        "preview": body[:_PREVIEW_FIELD_CAP],
+        "preview": preview_text,
+        "preview_truncated": len(body) > _PREVIEW_FIELD_CAP,
     }
     preview.update(_extract_preview_meta(event))
     return wake, preview
@@ -311,10 +347,14 @@ def _dispatch_summary(
 
     instructions_lines = [
         f"Call the MCP '{mcp_name}' read/check action to fetch "
-        f"the {count} new event{plural}. Structured previews are available "
-        f"in data.previews with sender, subject, optional routing metadata, "
-        f"and up to {_PREVIEW_FIELD_CAP} chars of body text; the full content "
-        f"stays behind the read action."
+        f"the {count} new event{plural} when the structured preview is "
+        f"truncated, ambiguous, media/callback-heavy, or exact anchoring is "
+        f"needed. If data.previews clearly identifies the latest actionable "
+        f"incoming message and preview_truncated is false, the agent may reply "
+        f"directly from the preview without an extra read. Structured previews "
+        f"are available in data.previews with sender, subject, "
+        f"preview_truncated, optional routing metadata, optional IM context, "
+        f"and up to {_PREVIEW_FIELD_CAP} chars of body text."
     ]
     if previews:
         instructions_lines.append("")
@@ -322,6 +362,12 @@ def _dispatch_summary(
         for i, p in enumerate(previews, start=1):
             instructions_lines.append(f"  {i}. {p['from']} — {p['subject']}")
             meta_bits = [f"{k}={p[k]}" for k in _PREVIEW_META_FIELDS if k in p]
+            if p.get("preview_truncated"):
+                meta_bits.append("preview_truncated=true")
+            if "latest_incoming" in p:
+                meta_bits.append("latest_incoming=structured")
+            if "recent_messages" in p:
+                meta_bits.append("recent_messages=structured")
             if meta_bits:
                 instructions_lines.append(f"     [{', '.join(meta_bits)}]")
 
