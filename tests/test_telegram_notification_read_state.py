@@ -123,6 +123,28 @@ def test_incoming_event_populates_generic_notification_refs(tmp_path: Path) -> N
     assert metadata["message_ref"] == "main:123:53"
 
 
+def test_incoming_reply_persists_reply_to_message_id(tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+
+    manager.on_incoming("main", {
+        "message": {
+            "message_id": 54,
+            "date": 1781600000,
+            "from": {"id": 1, "username": "alice"},
+            "chat": {"id": 123, "type": "private"},
+            "text": "reply from human",
+            "reply_to_message": {"message_id": 53},
+        }
+    })
+
+    read_result = manager._read({"account": "main", "chat_id": 123, "limit": 1})
+    assert read_result["status"] == "ok"
+    assert read_result["messages"][0]["id"] == "main:123:54"
+    assert read_result["messages"][0]["reply_to_message_id"] == 53
+    assert read_result["messages"][0]["_direction"] == "incoming"
+
+
+
 def test_callback_query_incoming_does_not_publish_non_unique_message_ref(tmp_path: Path) -> None:
     workdir = tmp_path / "agent"
     inbound_events: list[dict[str, Any]] = []
