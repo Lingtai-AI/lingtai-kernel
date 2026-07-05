@@ -1367,6 +1367,7 @@ class TelegramManager:
             "text": text,
             "media": media,
             "reply_markup": reply_markup,
+            "reply_to_message_id": reply_to,
             "parse_mode": self._normalize_parse_mode(args.get("parse_mode")),
             "entities": args.get("entities"),
             "caption_entities": args.get("caption_entities"),
