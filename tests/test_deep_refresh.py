@@ -106,7 +106,7 @@ def _packaged_procedures_file() -> str:
     This is what the `system/procedures.md` mirror keeps on disk."""
     from importlib.resources import files
 
-    return files("lingtai.prompts").joinpath("procedures.md").read_text(
+    return files("lingtai.prompts").joinpath("procedures/procedures.md").read_text(
         encoding="utf-8"
     )
 
@@ -122,7 +122,7 @@ def _packaged_guidance() -> dict:
     """Assembled runtime-guidance dict from the skill-style Markdown catalog.
 
     The kernel no longer ships guidance.json; runtime guidance is authored as
-    `lingtai/prompts/guidance/INDEX.md` + `<id>.md` and assembled into this dict
+    `lingtai/prompts/meta_guidance/catalog/INDEX.md` + `<id>.md` and assembled into this dict
     shape. The derived `system/guidance.json` mirror is serialized from it."""
     from lingtai_kernel.prompt_catalog import load_guidance_catalog
 
@@ -432,7 +432,7 @@ def _packaged_substrate_file() -> str:
     """Full packaged substrate source, including skill-style frontmatter."""
     from importlib.resources import files
 
-    return files("lingtai.prompts").joinpath("substrate.md").read_text(encoding="utf-8")
+    return files("lingtai.prompts").joinpath("substrate/substrate.md").read_text(encoding="utf-8")
 
 
 def _packaged_substrate() -> str:

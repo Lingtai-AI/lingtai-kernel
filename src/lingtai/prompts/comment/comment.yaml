@@ -1,0 +1,52 @@
+kind: prompt-section-definition
+section: comment
+name_definition: >
+  "comment" is the operator/recipe/project behavior-adaptation section. It is named for
+  the operator's comment on the general kernel: the behavior layer that adapts the
+  shared kernel to this network's current mode. It has no kernel-packaged body.
+purpose: >
+  Exists as an injection point so an operator, recipe, or application can adapt the
+  general kernel's behavior for the current network/mode without editing kernel-owned
+  sections. It is one of the externally changeable prompt surfaces.
+scope:
+  owns:
+    - Operator/recipe/project-specific behavior adaptation for the current mode.
+  does_not_own:
+    - The root operating contract (owned by principle).
+    - The general action playbook (owned by procedures).
+    - The network/avatar rules layer (owned by rules).
+injection_contract:
+  defined_by: kernel_section_contract
+  injected_by: init_recipe_or_operator_surface
+  content_source: operator_recipe_or_project_injection
+  override_policy: operator_recipe_may_supply_content
+  notes: >
+    Content is injected by recipe/app/project, not a kernel body. `comment` is part of
+    the externally changeable prompt surface (base_prompt/covenant/comment). It adapts
+    behavior but must not override the kernel-owned root contract.
+related_files:
+  - path: src/lingtai/prompts/ANATOMY.md
+    why: >
+      The owning prompt-source anatomy: it records comment as a YAML-only, externally
+      injected behavior layer. Read it before treating comment as kernel content.
+  - path: src/lingtai/agent.py
+    why: >
+      Owns the concrete injection rule: _reload_prompt_sections() resolves the comment
+      body from the recipe/app/project surface and writes the `comment` section. Crawl
+      here for where the injected behavior layer actually comes from.
+  - path: src/lingtai/prompts/principle/principle.yaml
+    why: >
+      comment adapts behavior but must not override the root operating contract; edit
+      together so an operator adaptation does not silently contradict principle.
+  - path: src/lingtai/prompts/procedures/procedures.yaml
+    why: >
+      comment must not duplicate the general procedures; keep them together so a
+      mode-specific adaptation does not restate or fork the kernel playbook.
+  - path: src/lingtai/prompts/brief/brief.yaml
+    why: >
+      brief supplies project context and comment supplies behavior adaptation for the
+      same project; edit together so project context and behavior tuning stay distinct.
+maintenance:
+  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical injection file that owns the concrete construction rules (here the boot loader agent.py). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
+  - comment has no kernel body; do not add one. The body relation lives in injection_contract.content_source, so do not point related_files at a concrete prompt `.md` body. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules, never a prompt body or a test.
+  - Keep comment scoped to behavior adaptation; escalate to a kernel-section change if an operator needs to alter the root contract.

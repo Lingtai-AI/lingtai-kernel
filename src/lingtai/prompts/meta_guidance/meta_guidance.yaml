@@ -1,0 +1,81 @@
+kind: prompt-section-definition
+section: meta_guidance
+name_definition: >
+  "meta_guidance" is the kernel-generated resident runtime-signal guidance layer. It is
+  named for the guidance it carries about the dynamic runtime `_meta` blocks: the
+  static rules for interpreting `_meta`, notifications, token/context economy, and the
+  active adapter's static guidance. It has no single body Markdown file.
+purpose: >
+  Exists as a resident, protected hook so the agent has a stable interpretation of
+  dynamic runtime signals without those rules riding on every tail `_meta` payload. The
+  tail now carries only a lightweight ref back to this section.
+scope:
+  owns:
+    - Static rules for reading dynamic `_meta` blocks and notifications.
+    - Interpretation of token/context state and cache economy signals.
+    - Surfacing of the active adapter's static runtime rules.
+  does_not_own:
+    - General action playbook not tied to runtime signals (owned by procedures).
+    - The stable model of bodies/lifecycle/memory (owned by substrate).
+    - The root map and operating principle (owned by principle).
+    - Guidance section order, which stays code-owned in GUIDANCE_SECTION_ORDER.
+injection_contract:
+  defined_by: kernel
+  injected_by: meta_guidance_builder
+  content_source: src/lingtai/prompts/meta_guidance/catalog/
+  derived_mirror: system/guidance.json
+  override_policy: not_user_overridable
+  notes: >
+    The rendered body is GENERATED from the guidance Markdown catalog under
+    src/lingtai/prompts/meta_guidance/catalog/ (INDEX.md + one <id>.md per section), plus
+    the generated `_meta` readme and the active adapter's static rules. There is no single
+    meta_guidance.md body file. Section order is code-owned in GUIDANCE_SECTION_ORDER,
+    not frontmatter. A derived system/guidance.json is emitted for TUI/Portal consumers.
+    This YAML is a contract, not the build manual: for the exact catalog-assembly,
+    ordering, and splice rules crawl the related implementation files below.
+related_files:
+  - path: src/lingtai/prompts/ANATOMY.md
+    why: >
+      The owning prompt-source anatomy: it records that meta_guidance is generated from
+      meta_guidance/catalog/, not a single body. Read it before looking for a
+      meta_guidance.md.
+  - path: src/lingtai_kernel/prompt_catalog.py
+    why: >
+      Owns the concrete catalog-assembly rule: load_guidance_catalog() reads
+      meta_guidance/catalog/ (INDEX.md + <id>.md) and the code-owned GUIDANCE_SECTION_ORDER.
+      Crawl here for the exact loading/ordering mechanics this contract only summarizes.
+  - path: src/lingtai_kernel/meta_block.py
+    why: >
+      Owns how the meta_guidance section body is built and spliced: build_meta_guidance()
+      renders the loaded catalog alongside the `_meta` readme and adapter static rules.
+      Crawl here for the concrete render/splice rules, not this contract.
+  - path: src/lingtai/intrinsic_skills/system-manual/reference/summarize-manual/SKILL.md
+    why: >
+      Owns the expanded token/context-economy semantics the resident guidance only
+      summarizes: the summarize/molt compression modes, when to summarize vs molt, and
+      how to recover an original tool result. Crawl here for the deep rules behind the
+      token/context-state guidance in this section.
+  - path: src/lingtai/intrinsic_skills/system-manual/reference/notification-manual/SKILL.md
+    why: >
+      Owns the expanded notification/read/dismiss semantics the resident guidance only
+      summarizes. Crawl here for the deep rules behind this section's notification-handling
+      guidance.
+  - path: src/lingtai/prompts/principle/principle.yaml
+    why: >
+      principle defines progressive disclosure and token efficiency; meta_guidance is
+      the runtime hook for those rules. Edit together so the static principle and the
+      runtime interpretation do not drift apart.
+  - path: src/lingtai/prompts/substrate/substrate.yaml
+    why: >
+      substrate is the stable model of memory/lifecycle; meta_guidance interprets the
+      runtime signals for those same concepts. Keep them together so model-level context
+      and concrete runtime signals do not overlap.
+  - path: src/lingtai/prompts/procedures/procedures.yaml
+    why: >
+      procedures is the general playbook; meta_guidance is its runtime-signal-tied
+      subset. Edit together so runtime-signal handling is not duplicated as a standalone
+      procedure.
+maintenance:
+  - related_files is a progressive-disclosure crawl graph: peer section YAMLs for boundary/overlap risk, plus the canonical implementation files that own the concrete build rules (prompt_catalog.py, meta_block.py). Each link explains what rule or boundary its target owns.
+  - The body relation is a generated catalog, recorded in injection_contract.content_source; do not list the catalog `.md` files (or a concrete prompt body `.md`) in related_files. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules (here the summarize/notification manuals), never a prompt body or a test.
+  - Guidance section order is behavior and stays code-owned in GUIDANCE_SECTION_ORDER; never move it into this definition or frontmatter.

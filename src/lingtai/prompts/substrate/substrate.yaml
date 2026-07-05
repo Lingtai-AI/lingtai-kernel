@@ -1,0 +1,63 @@
+kind: prompt-section-definition
+section: substrate
+name_definition: >
+  "substrate" is the kernel-owned, cross-app-stable operating model rendered right
+  after `## tools`. It is named for the substrate it describes: the agent's own
+  architecture — bodies, lifecycle states, communication channels, memory layers,
+  idle/soul, and system operations — the operational wisdom that spans multiple tools.
+purpose: >
+  Exists as a compact resident layer so the agent carries a stable model of how
+  LingTai works for it, while the tool schemas above it carry mechanical reference and
+  the `system-manual` skill carries expanded detail. It answers "how do I work" without
+  restating "what do I do next".
+scope:
+  owns:
+    - The stable model of bodies, tool tiers, and data-flow topology.
+    - Life states / lifecycle, channel discipline, and the attention model.
+    - Memory layers and idle/soul behavior at the model level.
+    - System-operations concepts, routing expanded detail to the system-manual skill.
+  does_not_own:
+    - Step-by-step action playbooks (owned by procedures).
+    - Narrow runtime-signal interpretation for `_meta`/notification/token state (owned by meta_guidance).
+    - The root map and operating principle (owned by principle).
+injection_contract:
+  defined_by: kernel
+  injected_by: kernel_prompt_builder
+  content_source: src/lingtai/prompts/substrate/substrate.md
+  mirror_path: system/substrate.md
+  override_policy: not_user_overridable
+  notes: >
+    Kernel-owned. Legacy init.json `substrate`/`substrate_file` were retired and
+    archived by the init-prompt-contract migration; the packaged body overwrites the
+    on-disk mirror on every boot/refresh. Mirror keeps frontmatter; rendered section is
+    body-only.
+related_files:
+  - path: src/lingtai/prompts/ANATOMY.md
+    why: >
+      The owning prompt-source anatomy: it shows where substrate sits in render order
+      and how per-section bodies relate to definitions. Read it before adjusting the
+      substrate boundary.
+  - path: src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md
+    why: >
+      Owns the expanded stable-model semantics this resident section only summarizes:
+      body/extensions, bash vs daemon vs avatar vs MCP, lifecycle states, the system
+      tool, communication channels, memory layers, molt model, and idle/soul behavior.
+      Crawl here (via the system-manual router) when the compact substrate section is
+      not enough — keep expanded detail here, not in the resident body.
+  - path: src/lingtai/prompts/principle/principle.yaml
+    why: >
+      principle's map gives substrate its one-line purpose; edit together so the map's
+      description and substrate's actual scope stay in sync.
+  - path: src/lingtai/prompts/procedures/procedures.yaml
+    why: >
+      substrate is "how it works", procedures is "what to do"; keep them together so a
+      stable model fact is not restated as a procedure and vice versa.
+  - path: src/lingtai/prompts/meta_guidance/meta_guidance.yaml
+    why: >
+      substrate is the stable model of memory/lifecycle; meta_guidance is the runtime
+      signal interpretation for those same concepts. Edit together so model-level
+      context and concrete runtime signals do not overlap.
+maintenance:
+  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk, plus canonical implementation/navigation files when a section's construction rules live in code. substrate is a packaged body rendered as-is, so its crawl graph is peer YAMLs, this anatomy, and the substrate-manual reference that owns the expanded model; each link explains what rule or boundary its target owns. Do not list tests merely because they validate behavior.
+  - Never point related_files at a concrete prompt `.md` body; the substrate.md body relation lives in injection_contract.content_source. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules (here the substrate-manual), never a prompt body or a test.
+  - Keep the substrate body compact and route expanded detail to the system-manual skill, not into this section.

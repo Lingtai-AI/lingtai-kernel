@@ -11,8 +11,8 @@ why: >
   stable interpretation hook without repeating the full token-efficiency procedure in each tool
   result.
 related_files:
-  - "src/lingtai/prompts/principle.md"
-  - "src/lingtai/prompts/guidance/INDEX.md"
+  - "src/lingtai/prompts/principle/principle.md"
+  - "src/lingtai/prompts/meta_guidance/catalog/INDEX.md"
 maintenance: >
   When editing this file, treat related_files as maintained inner links for the prompt/guidance
   source graph. Before changing behavior or prose, crawl the listed files, update any affected

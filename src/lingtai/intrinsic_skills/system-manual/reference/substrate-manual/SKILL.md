@@ -169,7 +169,7 @@ Treat guidance as a system-prompt-like appendix placed at the end of context: it
 is an ordered `sections[]` structure, not a loose metadata bag.  The kernel's
 `meta_readme` explanation of the `_meta` envelope is therefore one guidance
 section inside `sections[]`, alongside the packaged sections assembled from the
-skill-style Markdown guidance catalog under `src/lingtai/prompts/guidance/`
+skill-style Markdown guidance catalog under `src/lingtai/prompts/meta_guidance/catalog/`
 (`INDEX.md` + one `<id>.md` per section); follow that latest guidance first when
 it appears.
 

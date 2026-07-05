@@ -2,7 +2,7 @@
 
 LingTai's resident runtime guidance (the static, rule-like material rendered
 into the resident ``meta_guidance`` system-prompt section) is authored as a
-skill-style Markdown catalog under ``lingtai/prompts/guidance/``:
+skill-style Markdown catalog under ``lingtai/prompts/meta_guidance/catalog/``:
 
   * ``INDEX.md`` — frontmatter-only manifest carrying the top-level payload
     fields (``schema_version``, ``guidance_version``, ``priority``,
@@ -30,7 +30,7 @@ from importlib import resources as _resources
 
 from ._frontmatter import split_frontmatter
 
-GUIDANCE_PACKAGE = "lingtai.prompts.guidance"
+GUIDANCE_PACKAGE = "lingtai.prompts.meta_guidance.catalog"
 GUIDANCE_INDEX_FILENAME = "INDEX.md"
 
 # Runtime guidance order is behavior, not authoring metadata. Keep it code-owned

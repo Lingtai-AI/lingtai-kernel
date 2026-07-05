@@ -16,7 +16,7 @@ companion to the schemas above it: tool schemas carry mechanical
 reference (parameter names, types, one-line action descriptions),
 substrate carries the operational wisdom (tool tiers, data-flow
 topology, life states, channel discipline, attention model — patterns
-that span multiple tools). The kernel ships `lingtai/prompts/substrate.md`
+that span multiple tools). The kernel ships `lingtai/prompts/substrate/substrate.md`
 as the packaged default (v1); the `Agent` subclass copies it to
 `system/substrate.md` on first boot, where the agent (or human) can
 edit it freely.
@@ -181,7 +181,7 @@ def build_system_prompt(
 
     The builder no longer injects any principle text at runtime. Kernel-owned
     principle text must arrive through the raw ``principle`` prompt section
-    (normally mirrored from ``lingtai/prompts/principle.md``). ``language`` and
+    (normally mirrored from ``lingtai/prompts/principle/principle.md``). ``language`` and
     ``activeness`` remain accepted for API compatibility, but they do not
     synthesize prompt text here.
 

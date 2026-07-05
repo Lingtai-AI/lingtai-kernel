@@ -1,0 +1,51 @@
+kind: prompt-section-definition
+section: knowledge
+name_definition: >
+  "knowledge" is the generated private-knowledge catalog section. It is named for the
+  private durable memory it indexes: project facts, decisions, journals, and local
+  context that survive molt. It is generated from the agent's knowledge index, not a
+  kernel body.
+purpose: >
+  Exists as a catalog of the agent's private durable facts so it can find and reload
+  what survives molt, distinct from reusable procedures (skills) and current work (pad).
+scope:
+  owns:
+    - The rendered index of private durable knowledge (facts, decisions, journals, local context).
+  does_not_own:
+    - Reusable procedures (owned by skills).
+    - The general action playbook for when to write/read knowledge (owned by procedures).
+    - The stable model of memory layers (owned by substrate).
+injection_contract:
+  defined_by: kernel
+  injected_by: kernel_prompt_builder
+  content_source: agent_knowledge_index
+  override_policy: not_user_overridable
+  notes: >
+    Generated from the agent's knowledge index; no static knowledge.md body. Knowledge
+    is private durable facts; the decision to write or read it is a procedure.
+related_files:
+  - path: src/lingtai/prompts/ANATOMY.md
+    why: >
+      The owning prompt-source anatomy: it records knowledge as a generated index. Read
+      it before looking for a knowledge.md body.
+  - path: src/lingtai/core/knowledge/__init__.py
+    why: >
+      Owns the concrete knowledge-section build rule: it scans the KNOWLEDGE.md catalog
+      and calls build_catalog_yaml(), then update_system_prompt("knowledge", ...) to
+      inject the compact index. Crawl here for the exact scan/render mechanics.
+  - path: src/lingtai/prompts/procedures/procedures.yaml
+    why: >
+      procedures tells when to write or read knowledge; edit together so knowledge-write
+      rules are not duplicated into the generated index.
+  - path: src/lingtai/prompts/substrate/substrate.yaml
+    why: >
+      substrate is the stable model of the memory layers; keep it with knowledge so the
+      concept and the concrete index do not overlap.
+  - path: src/lingtai/prompts/skills/skills.yaml
+    why: >
+      knowledge is private durable facts and skills are reusable procedures; edit
+      together so a fact is not stored as a procedure and vice versa.
+maintenance:
+  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical builder/navigation files that own the concrete construction rules (here core/knowledge). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
+  - knowledge is generated; do not add a knowledge.md body. The body relation lives in injection_contract.content_source, so do not point related_files at a concrete prompt `.md` body. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules, never a prompt body or a test.
+  - Keep the knowledge (durable facts) vs skills (reusable procedures) vs pad (current work) boundary explicit.

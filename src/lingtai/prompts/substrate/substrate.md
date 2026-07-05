@@ -11,8 +11,8 @@ why: >
   substrate carries the patterns that span tools. This frontmatter is developer-facing metadata
   only — stripped before the body is rendered into the LLM prompt or system.md.
 related_files:
-  - "src/lingtai/prompts/principle.md"
-  - "src/lingtai/prompts/procedures.md"
+  - "src/lingtai/prompts/principle/principle.md"
+  - "src/lingtai/prompts/procedures/procedures.md"
   - "reference/substrate-manual/SKILL.md"
   - "reference/notification-manual/SKILL.md"
 maintenance: >

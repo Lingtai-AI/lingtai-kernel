@@ -11,8 +11,8 @@ why: >
   to the canonical rule. This frontmatter is developer-facing metadata only — stripped before the
   body is rendered into the LLM prompt or system.md.
 related_files:
-  - "src/lingtai/prompts/principle.md"
-  - "src/lingtai/prompts/substrate.md"
+  - "src/lingtai/prompts/principle/principle.md"
+  - "src/lingtai/prompts/substrate/substrate.md"
   - "reference/procedures-manual/SKILL.md"
   - "knowledge/session-journal/<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md"
   - "reference/substrate-manual/SKILL.md"

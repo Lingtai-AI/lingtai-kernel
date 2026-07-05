@@ -1,0 +1,59 @@
+kind: prompt-section-definition
+section: brief
+deprecated: true
+deprecation_note: >
+  Deprecated compatibility slot retained only for existing surrounding-application
+  system/brief.md injections. Do not add new prompt-section semantics here without
+  an explicit design decision.
+name_definition: >
+  "brief" is the deprecated optional life/project briefing section. It is named for
+  the brief it carries: the life or project context supplied by the surrounding
+  application when present. It is disk-sourced (secretary-maintained), not a kernel
+  body, and renders only when present.
+purpose: >
+  Exists as a deprecated compatibility slot so the surrounding application can give the
+  agent durable life/project context through a fixed, kernel-defined slot, distinct
+  from behavior adaptation (comment) and current working state (pad).
+scope:
+  owns:
+    - Optional life/project briefing context supplied by the application.
+  does_not_own:
+    - Behavior adaptation for the current mode (owned by comment).
+    - The general action playbook (owned by procedures).
+    - Current working state / active tasks (owned by pad).
+injection_contract:
+  defined_by: kernel_section_contract
+  injected_by: surrounding_application_surface
+  content_source: system_brief_md_if_present
+  mirror_path: system/brief.md
+  override_policy: not_user_overridable
+  notes: >
+    Under the init-prompt contract, brief is no longer an init.json override; it is
+    sourced solely from system/brief.md on disk (secretary-maintained) and rendered only
+    when present. Not a kernel-packaged body.
+related_files:
+  - path: src/lingtai/prompts/ANATOMY.md
+    why: >
+      The owning prompt-source anatomy: it records brief as an optional, disk-sourced
+      section. Read it before treating brief as an init override or kernel body.
+  - path: src/lingtai/agent.py
+    why: >
+      Owns the concrete injection rule: _reload_prompt_sections() sources brief solely
+      from system/brief.md on disk (no longer an init.json override), writing the section
+      only when present. Crawl here for where the injected briefing actually comes from.
+  - path: src/lingtai/prompts/comment/comment.yaml
+    why: >
+      brief gives project context and comment gives behavior adaptation for the same
+      project; edit together so context and behavior tuning stay distinct.
+  - path: src/lingtai/prompts/procedures/procedures.yaml
+    why: >
+      brief context may inform action; keep it with procedures so project context does
+      not get restated as a standalone procedure.
+  - path: src/lingtai/prompts/pad/pad.yaml
+    why: >
+      brief is durable project context and pad is current working state; edit together
+      so durable briefing and transient task state do not blur.
+maintenance:
+  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical injection file that owns the concrete construction rules (here the boot loader agent.py). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
+  - brief is disk-sourced, optional, and has no kernel body; do not add one. The body relation lives in injection_contract.content_source, so do not point related_files at a concrete prompt `.md` body. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules, never a prompt body or a test.
+  - Keep the brief (deprecated durable-context compatibility slot) vs pad (current work) vs comment (behavior) boundary explicit.

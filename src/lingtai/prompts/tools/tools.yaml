@@ -1,0 +1,60 @@
+kind: prompt-section-definition
+section: tools
+name_definition: >
+  "tools" is the generated concrete tool-surface section. It is named for the tool
+  schemas it renders: the tool surfaces available now, plus the mandatory
+  manual-loading rules for tools that need progressive disclosure. It is generated
+  from the active tool registry, not a static body.
+purpose: >
+  Exists so the agent sees the exact tools available in the current runtime with their
+  schemas, generated from the active tool catalog. It is mechanical capability
+  reference; the patterns that span tools live in substrate and the routing lives in
+  procedures.
+scope:
+  owns:
+    - The rendered catalog of currently-active tool surfaces and their schemas.
+    - Mandatory manual-loading rules for progressive-disclosure tools.
+  does_not_own:
+    - The stable model that explains tool/body concepts (owned by substrate).
+    - The routing/use discipline for tools (owned by procedures).
+    - External-integration catalog beyond native tools (owned by mcp).
+injection_contract:
+  defined_by: kernel
+  injected_by: kernel_prompt_builder
+  content_source: active_tool_schema_catalog
+  override_policy: not_user_overridable
+  notes: >
+    Generated from the active tool schema/catalog by the kernel/tool registry; there is
+    no static tools.md body. Content changes as the active tool set changes.
+related_files:
+  - path: src/lingtai/prompts/ANATOMY.md
+    why: >
+      The owning prompt-source anatomy: it records tools as a generated section with no
+      body. Read it before looking for a tools.md.
+  - path: src/lingtai_kernel/base_agent/tools.py
+    why: >
+      Owns the concrete tools-section build rule: _refresh_tool_inventory_section()
+      renders the section from ALL_INTRINSICS descriptions plus the active tool schemas.
+      Crawl here for the exact per-tool rendering this contract only summarizes.
+  - path: src/lingtai/agent.py
+    why: >
+      The lingtai wrapper overrides _refresh_tool_inventory_section() to also fold in MCP
+      tool schemas before the kernel renders the section. Crawl here to see how the
+      concrete tool surface differs from the bare-kernel build.
+  - path: src/lingtai/prompts/procedures/procedures.yaml
+    why: >
+      tools renders concrete capabilities; procedures owns when/how to route them. Edit
+      together so tool-use rules are not duplicated into the generated tool catalog.
+  - path: src/lingtai/prompts/substrate/substrate.yaml
+    why: >
+      substrate explains tool/body concepts; tools lists the concrete surfaces. Keep
+      them together so the conceptual model and the generated catalog do not overlap.
+  - path: src/lingtai/prompts/mcp/mcp.yaml
+    why: >
+      mcp is the external-integration catalog layered on top of the native tool model;
+      edit together so MCP-exposed tools and native tools have a clear ownership
+      boundary.
+maintenance:
+  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical builder/navigation files that own the concrete construction rules (here tools.py and the wrapper agent.py). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
+  - tools is generated; do not add a tools.md body. The body relation lives in injection_contract.content_source, so do not point related_files at a concrete prompt `.md` body. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules, never a prompt body or a test.
+  - Keep tool-use routing in procedures and tool concepts in substrate; this definition only fixes what the generated section owns.

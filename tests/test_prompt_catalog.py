@@ -35,12 +35,18 @@ _FILE_PATH_IN_BACKTICKS = re.compile(r"`([^`\n]+)`")
 _RELATED_FILE_ITEM = re.compile(r"-\s*[\"\']?([^\"\']+?)[\"\']?(?=\s+-|$)")
 
 _PROMPT_SOURCE = "src/lingtai/prompts"
-_PRINCIPLE_SOURCE = f"{_PROMPT_SOURCE}/principle.md"
-_SUBSTRATE_SOURCE = f"{_PROMPT_SOURCE}/substrate.md"
-_PROCEDURES_SOURCE = f"{_PROMPT_SOURCE}/procedures.md"
-_GUIDANCE_INDEX_SOURCE = f"{_PROMPT_SOURCE}/guidance/INDEX.md"
+# Each section is a first-class directory under prompts/ holding its own
+# body/definition, e.g. prompts/principle/principle.md — parallel to guidance/.
+_PRINCIPLE_SOURCE = f"{_PROMPT_SOURCE}/principle/principle.md"
+_SUBSTRATE_SOURCE = f"{_PROMPT_SOURCE}/substrate/substrate.md"
+_PROCEDURES_SOURCE = f"{_PROMPT_SOURCE}/procedures/procedures.md"
+# The runtime-guidance catalog now lives under the meta_guidance section it
+# generates: prompts/meta_guidance/catalog/ (was root-parallel prompts/guidance/).
+_GUIDANCE_CATALOG_DIR = f"{_PROMPT_SOURCE}/meta_guidance/catalog"
+_GUIDANCE_CATALOG_PACKAGE = "lingtai.prompts.meta_guidance.catalog"
+_GUIDANCE_INDEX_SOURCE = f"{_GUIDANCE_CATALOG_DIR}/INDEX.md"
 _GUIDANCE_SECTION_SOURCES = [
-    f"{_PROMPT_SOURCE}/guidance/{sid}.md" for sid in GUIDANCE_SECTION_ORDER
+    f"{_GUIDANCE_CATALOG_DIR}/{sid}.md" for sid in GUIDANCE_SECTION_ORDER
 ]
 _PROMPT_SOURCE_GRAPH = {
     _PRINCIPLE_SOURCE,
@@ -107,11 +113,11 @@ def _assert_related_files_are_maintained_inner_links(
 
 
 def _prompt_source_path_for_section(name: str) -> str:
-    return f"{_PROMPT_SOURCE}/{name}"
+    return f"{_PROMPT_SOURCE}/{name.removesuffix('.md')}/{name}"
 
 
 def _prompt_source_path_for_guidance(filename: str) -> str:
-    return f"{_PROMPT_SOURCE}/guidance/{filename}"
+    return f"{_GUIDANCE_CATALOG_DIR}/{filename}"
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +162,7 @@ _SECTION_FILES = ["principle.md", "substrate.md", "procedures.md"]
 
 @pytest.mark.parametrize("name", _SECTION_FILES)
 def test_packaged_section_sources_carry_frontmatter(name):
-    text = files("lingtai.prompts").joinpath(name).read_text(encoding="utf-8")
+    text = files("lingtai.prompts").joinpath(f"{name.removesuffix('.md')}/{name}").read_text(encoding="utf-8")
     assert text.startswith("---"), f"{name} should carry skill-style frontmatter"
     meta, body = split_frontmatter(text)
     assert meta.get("name") == name.removesuffix(".md")
@@ -171,7 +177,7 @@ def test_packaged_section_sources_carry_frontmatter(name):
 
 
 def test_principle_body_starts_with_system_prompt_map_and_lingtai_principles():
-    text = files("lingtai.prompts").joinpath("principle.md").read_text(encoding="utf-8")
+    text = files("lingtai.prompts").joinpath("principle/principle.md").read_text(encoding="utf-8")
     _meta, body = split_frontmatter(text)
     assert body.startswith("# LingTai System Prompt Map")
     for section in (
@@ -231,7 +237,7 @@ def test_guidance_catalog_preserves_code_owned_section_order():
 
 
 def test_guidance_index_frontmatter_related_files_are_inner_links():
-    root = files("lingtai.prompts.guidance")
+    root = files(_GUIDANCE_CATALOG_PACKAGE)
     meta, body = split_frontmatter(root.joinpath("INDEX.md").read_text(encoding="utf-8"))
     assert meta.get("kind") == "meta-guidance-catalog"
     assert "audience" not in meta
@@ -241,7 +247,7 @@ def test_guidance_index_frontmatter_related_files_are_inner_links():
 
 def test_guidance_section_frontmatter_is_documentary_not_behavior_config():
     """Guidance section frontmatter explains purpose but does not own ordering."""
-    root = files("lingtai.prompts.guidance")
+    root = files(_GUIDANCE_CATALOG_PACKAGE)
     forbidden = {"order", "batch", "raw", "protected"}
     for sid in GUIDANCE_SECTION_ORDER:
         meta, body = split_frontmatter(root.joinpath(f"{sid}.md").read_text(encoding="utf-8"))
@@ -262,11 +268,11 @@ def test_prompt_related_files_form_bidirectional_inner_link_graph():
     mapping: dict[str, list[str]] = {}
     for name in _SECTION_FILES:
         meta, _body = split_frontmatter(
-            files("lingtai.prompts").joinpath(name).read_text(encoding="utf-8")
+            files("lingtai.prompts").joinpath(f"{name.removesuffix('.md')}/{name}").read_text(encoding="utf-8")
         )
         mapping[_prompt_source_path_for_section(name)] = _related_files(meta)
 
-    root = files("lingtai.prompts.guidance")
+    root = files(_GUIDANCE_CATALOG_PACKAGE)
     meta, _body = split_frontmatter(root.joinpath("INDEX.md").read_text(encoding="utf-8"))
     mapping[_GUIDANCE_INDEX_SOURCE] = _related_files(meta)
     for sid in GUIDANCE_SECTION_ORDER:
@@ -302,8 +308,12 @@ def test_guidance_ids_referenced_by_runtime_code_exist():
     for py in kernel_root.rglob("*.py"):
         referenced.update(re.findall(r"meta_guidance\.([a-z_]+)", py.read_text(encoding="utf-8")))
 
-    # Drop refs that name the section itself, not a guidance id.
+    # Drop tokens that are not guidance ids: `ref` names the section itself, and
+    # `catalog` is the trailing segment of the catalog subpackage dotted path
+    # (`lingtai.prompts.meta_guidance.catalog` in prompt_catalog.py), not a
+    # `_meta` guidance pointer.
     referenced.discard("ref")
+    referenced.discard("catalog")
     assert {"token_efficiency", "notification_handling"} <= referenced
     missing = referenced - catalog_ids
     assert not missing, f"dangling meta_guidance.<id> refs: {sorted(missing)}"
@@ -335,7 +345,7 @@ def test_load_guidance_catalog_rejects_missing_package():
 
 
 def test_guidance_catalog_files_are_resources():
-    root = files("lingtai.prompts.guidance")
+    root = files(_GUIDANCE_CATALOG_PACKAGE)
     names = {p.name for p in root.iterdir() if p.name.endswith(".md")}
     assert "INDEX.md" in names
     for sid in GUIDANCE_SECTION_ORDER:
@@ -351,8 +361,12 @@ def test_prompt_resource_packaging_metadata_stays_connected():
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     package_data = pyproject["tool"]["setuptools"]["package-data"]["lingtai"]
     assert "prompts/*.md" in package_data
-    assert "prompts/guidance/*.md" in package_data
+    # Per-section directories (prompts/<section>/<section>.{md,yaml}).
+    assert "prompts/*/*.md" in package_data
+    assert "prompts/*/*.yaml" in package_data
+    assert "prompts/meta_guidance/catalog/*.md" in package_data
     assert "prompts/*.json" not in package_data
 
     manifest = Path("MANIFEST.in").read_text(encoding="utf-8")
     assert "recursive-include src/lingtai/prompts *.md" in manifest
+    assert "recursive-include src/lingtai/prompts *.yaml" in manifest

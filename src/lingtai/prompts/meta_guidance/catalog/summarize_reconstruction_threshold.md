@@ -9,8 +9,8 @@ why: >
   This fragment exists so agents do not waste calls trying to force summarize reconstruction, do
   not assume raw blocks vanished too early, and know when to molt instead.
 related_files:
-  - "src/lingtai/prompts/principle.md"
-  - "src/lingtai/prompts/guidance/INDEX.md"
+  - "src/lingtai/prompts/principle/principle.md"
+  - "src/lingtai/prompts/meta_guidance/catalog/INDEX.md"
   - "reference/summarize-manual/SKILL.md"
 maintenance: >
   When editing this file, treat related_files as maintained inner links for the prompt/guidance

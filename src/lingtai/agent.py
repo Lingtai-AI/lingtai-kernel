@@ -1511,7 +1511,7 @@ class Agent(BaseAgent):
         # packaged default wins on every boot/refresh.
         #
         # Resolution order:
-        #   1. packaged prompts/substrate.md — kernel default, refreshed on boot
+        #   1. packaged prompts/substrate/substrate.md — kernel default, refreshed on boot
         #   2. system/substrate.md           — fallback only if package missing
         #
         # The packaged default overwrites the on-disk file on every boot so
@@ -1527,7 +1527,7 @@ class Agent(BaseAgent):
         substrate_file = system_dir / "substrate.md"
         try:
             from importlib.resources import files
-            packaged = files("lingtai.prompts").joinpath("substrate.md").read_text(encoding="utf-8")
+            packaged = files("lingtai.prompts").joinpath("substrate/substrate.md").read_text(encoding="utf-8")
             substrate_file.write_text(packaged)
             substrate = _strip_frontmatter(packaged)
         except (FileNotFoundError, ModuleNotFoundError, OSError):
@@ -1566,7 +1566,7 @@ class Agent(BaseAgent):
         # `principle` / `principle_file` values are intentionally ignored here.
         #
         # Resolution order:
-        #   1. packaged prompts/principle.md — kernel default, refreshed on boot
+        #   1. packaged prompts/principle/principle.md — kernel default, refreshed on boot
         #   2. system/principle.md          — fallback only if package missing
         #
         # The packaged default owns the raison d'être of the resident prompt
@@ -1578,7 +1578,7 @@ class Agent(BaseAgent):
         principle_file = system_dir / "principle.md"
         try:
             from importlib.resources import files
-            packaged = files("lingtai.prompts").joinpath("principle.md").read_text(encoding="utf-8")
+            packaged = files("lingtai.prompts").joinpath("principle/principle.md").read_text(encoding="utf-8")
             principle_file.write_text(packaged)
             principle = _strip_frontmatter(packaged)
         except (FileNotFoundError, ModuleNotFoundError, OSError):
@@ -1601,7 +1601,7 @@ class Agent(BaseAgent):
         procedures_file = system_dir / "procedures.md"
         try:
             from importlib.resources import files
-            packaged = files("lingtai.prompts").joinpath("procedures.md").read_text(encoding="utf-8")
+            packaged = files("lingtai.prompts").joinpath("procedures/procedures.md").read_text(encoding="utf-8")
             procedures_file.write_text(packaged)
             procedures = _strip_frontmatter(packaged)
         except (FileNotFoundError, ModuleNotFoundError, OSError):
@@ -1617,7 +1617,7 @@ class Agent(BaseAgent):
         # --- Runtime guidance mirror ---
         # `_meta.guidance` is latest-only tool-result metadata, but the TUI
         # also needs a filesystem-visible copy. Runtime guidance is now authored
-        # as a skill-style Markdown catalog (lingtai/prompts/guidance/INDEX.md +
+        # as a skill-style Markdown catalog (lingtai/prompts/meta_guidance/catalog/INDEX.md +
         # <id>.md sections); the kernel assembles it into the same dict shape and
         # we serialize a *derived* `system/guidance.json` here for back-compat
         # with TUI/Portal consumers (schema_version is an int; ids are stable).

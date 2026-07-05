@@ -1,0 +1,59 @@
+kind: prompt-section-definition
+section: pad
+name_definition: >
+  "pad" is the current-working-state section. It is named for the working pad it
+  carries: active tasks, plans, handoffs, and pinned references that should reload
+  across molts. Its content is injected from the persistent pad (pad.md plus pinned
+  pad_append references).
+purpose: >
+  Exists so the agent's current work survives molt in a fixed slot, distinct from
+  durable self (character), mechanical facts (identity), and durable project context
+  (brief).
+scope:
+  owns:
+    - Current working state: active tasks, plans, handoffs, pinned references that reload across molts.
+  does_not_own:
+    - The self-authored identity (owned by character).
+    - Mechanical runtime facts (owned by identity).
+    - Durable life/project briefing (owned by brief).
+    - The operator/recipe constitution (owned by covenant).
+injection_contract:
+  defined_by: kernel_section_contract
+  injected_by: persistent_pad_surface
+  content_source: system_pad_md_plus_pinned_pad_append
+  mirror_path: system/pad.md
+  override_policy: self_authored_agent_may_supply_content
+  notes: >
+    Injected from the persistent pad: system/pad.md plus pinned pad_append.json
+    references, composed by the pad loader. No kernel body. Transient current work, not
+    durable self or mechanical facts.
+related_files:
+  - path: src/lingtai/prompts/ANATOMY.md
+    why: >
+      The owning prompt-source anatomy: it records pad as the persistent current-work
+      section. Read it before confusing pad with durable identity or briefing.
+  - path: src/lingtai_kernel/intrinsics/psyche/_pad.py
+    why: >
+      Owns the concrete pad-section injection rule: it reads system/pad.md and layers
+      pinned pad_append references onto it, writing the composed `pad` section. Crawl
+      here for the exact load/compose behavior this contract only summarizes.
+  - path: src/lingtai/prompts/identity/identity.yaml
+    why: >
+      pad is current work and identity is durable mechanical facts; edit together so
+      task state and identity facts stay separate.
+  - path: src/lingtai/prompts/character/character.yaml
+    why: >
+      pad is current work and character is durable self; edit together so transient task
+      state does not leak into identity-shaping content.
+  - path: src/lingtai/prompts/brief/brief.yaml
+    why: >
+      pad is current work and brief is durable project context; edit together so
+      transient tasks and durable briefing do not blur.
+  - path: src/lingtai/prompts/procedures/procedures.yaml
+    why: >
+      procedures tells when to write to pad; edit together so pad-write discipline is
+      not restated as pad content.
+maintenance:
+  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical builder/navigation files that own the concrete injection rules (here psyche/_pad.py). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
+  - pad is injected from persistent state, not a kernel body; do not add one. The body relation lives in injection_contract.content_source, so do not point related_files at a concrete prompt `.md` body. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules, never a prompt body or a test.
+  - Keep the pad (current work) vs character (self) vs identity (facts) vs brief (context) boundary explicit.
