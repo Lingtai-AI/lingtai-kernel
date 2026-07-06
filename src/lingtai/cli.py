@@ -19,6 +19,46 @@ from lingtai_kernel.process_match import match_agent_run
 from lingtai_kernel.services.mail import FilesystemMailService
 
 
+def _persist_venv_path(init_path: Path, venv_dir: Path) -> None:
+    """Patch only ``venv_path`` onto the raw on-disk init.json (best-effort).
+
+    Re-reads the user-owned init.json from disk and writes back exactly one
+    added key. It must NOT reuse the in-memory dict from ``load_init``: that
+    dict has been through ``materialize_active_preset`` and ``resolve_paths``,
+    so dumping it would persist the resolved preset and absolutized paths into
+    the user-owned input (issue #728). init.json stays user-owned; the resolved
+    view is a separate derived artifact (system/manifest.resolved.json, #259).
+    """
+    from lingtai_kernel._fsutil import atomic_write_text
+
+    try:
+        raw = json.loads(init_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, ValueError):
+        return  # never clobber a file we cannot re-read
+    if not isinstance(raw, dict):
+        return
+
+    current = raw.get("venv_path")
+    if isinstance(current, str) and current:
+        # Compare resolved forms so a ~-prefixed value that already points at
+        # venv_dir does not get rewritten (and re-diffed) on every boot.
+        try:
+            if Path(current).expanduser() == venv_dir:
+                return
+        except (OSError, ValueError):
+            pass
+
+    raw["venv_path"] = str(venv_dir)
+    try:
+        atomic_write_text(
+            init_path,
+            json.dumps(raw, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass  # best-effort self-sufficiency cache; not fatal to boot
+
+
 def load_init(working_dir: Path) -> dict:
     """Read and validate init.json from working_dir. Exits on error.
 
@@ -46,14 +86,13 @@ def load_init(working_dir: Path) -> dict:
         print(f"error: failed to read {init_path}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    try:
-        materialize_active_preset(data, working_dir, core_defaults=CORE_DEFAULTS)
-    except (KeyError, ValueError) as e:
-        print(f"error: failed to materialize active preset: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Strip deprecated fields before validation so they don't trigger
-    # warnings or interfere with the refresh path.
+    # Strip deprecated/hidden runtime fields from the raw user-owned init
+    # BEFORE preset materialization. The cleanup may write init.json back, but
+    # it must serialize the raw user-owned dict — never resolved preset contents
+    # such as the materialized llm/capabilities or absolutized paths. init.json
+    # stays user-owned input; the resolved view is published separately by
+    # Agent._read_init as system/manifest.resolved.json (issue #259, #728).
+    # This mirrors the ordering in Agent._read_init (agent.py).
     from lingtai.init_schema import strip_deprecated
     stripped = strip_deprecated(data)
     if stripped:
@@ -62,6 +101,14 @@ def load_init(working_dir: Path) -> dict:
             json.dumps(data, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+
+    # Materialize the active preset into the in-memory dict only, so downstream
+    # code and the schema check see a fully-resolved manifest. Never persisted.
+    try:
+        materialize_active_preset(data, working_dir, core_defaults=CORE_DEFAULTS)
+    except (KeyError, ValueError) as e:
+        print(f"error: failed to materialize active preset: {e}", file=sys.stderr)
+        sys.exit(1)
 
     try:
         warnings = validate_init(data)
@@ -218,11 +265,13 @@ def run(working_dir: Path) -> None:
     # Resolve venv and store on agent for CPR/avatar to use
     from lingtai.venv_resolve import resolve_venv
     venv_dir = resolve_venv(data)
-    # Write back to init.json if not already set (self-sufficient)
+    # Cache venv_path in init.json if not already set (self-sufficient). Patch
+    # only that key onto the raw on-disk file — never dump the resolved in-memory
+    # `data` (materialized preset + absolutized paths) back over the user-owned
+    # input (issue #728).
     if not data.get("venv_path") or data["venv_path"] != str(venv_dir):
-        data["venv_path"] = str(venv_dir)
-        init_path = working_dir / "init.json"
-        init_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        data["venv_path"] = str(venv_dir)  # keep in-memory copy consistent
+        _persist_venv_path(working_dir / "init.json", venv_dir)
 
     agent = build_agent(data, working_dir)
     agent._venv_path = str(venv_dir)

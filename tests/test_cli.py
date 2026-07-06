@@ -555,3 +555,153 @@ def test_check_duplicate_process_excludes_own_pid(tmp_path):
     ps_out = _ps_line(os.getpid(), codex.resolve()) + "\n"
     with patch("subprocess.check_output", return_value=ps_out):
         _check_duplicate_process(codex)
+
+
+# --- issue #728: cli.py must not persist materialized preset / resolved paths ---
+# back into the user-owned init.json ----------------------------------------
+
+
+def _write_preset(dir_path: Path, name: str, *, llm: dict, capabilities: dict) -> Path:
+    """Write a preset file and return its path."""
+    dir_path.mkdir(parents=True, exist_ok=True)
+    p = dir_path / f"{name}.json"
+    p.write_text(json.dumps({
+        "name": name,
+        "description": {"summary": name},
+        "manifest": {"llm": llm, "capabilities": capabilities},
+    }), encoding="utf-8")
+    return p
+
+
+def _write_preset_init(tmp_path: Path, preset_path: Path, *,
+                       extra_top: dict | None = None,
+                       extra_manifest: dict | None = None) -> Path:
+    """Write an init.json whose manifest names an active preset and does NOT
+    spell out llm/capabilities literally (the user-owned input shape)."""
+    manifest = {
+        "agent_name": "preset-agent",
+        "language": "en",
+        "preset": {
+            "active": str(preset_path),
+            "default": str(preset_path),
+            "allowed": [str(preset_path)],
+        },
+        "capabilities": {},
+    }
+    if extra_manifest:
+        manifest.update(extra_manifest)
+    init = {
+        "manifest": manifest,
+        "covenant": "Be helpful.",
+        "pad": "",
+        "lingtai": "",
+    }
+    if extra_top:
+        init.update(extra_top)
+    (tmp_path / "init.json").write_text(json.dumps(init, indent=2), encoding="utf-8")
+    return tmp_path / "init.json"
+
+
+def test_load_init_cleanup_write_does_not_persist_materialized_preset(tmp_path):
+    """Regression for #728: the deprecated-field cleanup write must operate on
+    the raw user-owned init.json, never on the preset-materialized dict.
+
+    Pre-fix, load_init materialized the preset BEFORE strip_deprecated, so the
+    cleanup write triggered by the deprecated `soul` field serialized the
+    preset's llm/capabilities into the user-owned file.
+    """
+    from lingtai.cli import load_init
+
+    preset = _write_preset(
+        tmp_path / "presets", "codexy",
+        llm={"provider": "codex", "model": "gpt-5.5"},
+        capabilities={"web_search": {}},
+    )
+    # Deprecated top-level `soul` forces the cleanup write.
+    _write_preset_init(tmp_path, preset, extra_top={"soul": "legacy voice"})
+
+    load_init(tmp_path)
+
+    on_disk = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
+    # Cleanup happened...
+    assert "soul" not in on_disk
+    # ...but the preset's materialized content must NOT be persisted into the
+    # user-owned init.json. init.json stays a preset reference.
+    assert "llm" not in on_disk["manifest"], on_disk["manifest"]
+    assert "web_search" not in on_disk["manifest"].get("capabilities", {})
+    assert on_disk["manifest"]["preset"]["active"] == str(preset)
+
+
+def test_load_init_no_stripped_fields_leaves_file_unchanged(tmp_path):
+    """Regression for #728: with nothing to strip, load_init must not rewrite
+    the user-owned init.json at all (no materialized preset, no path churn)."""
+    from lingtai.cli import load_init
+
+    preset = _write_preset(
+        tmp_path / "presets", "codexy",
+        llm={"provider": "codex", "model": "gpt-5.5"},
+        capabilities={"web_search": {}},
+    )
+    _write_preset_init(tmp_path, preset)
+    before = (tmp_path / "init.json").read_text(encoding="utf-8")
+
+    load_init(tmp_path)
+
+    after = (tmp_path / "init.json").read_text(encoding="utf-8")
+    assert after == before
+
+
+def test_persist_venv_path_patches_only_venv_path(tmp_path):
+    """Regression for #728: the venv write-back must patch exactly venv_path
+    onto the raw on-disk init.json, leaving preset refs and relative/`~` paths
+    untouched (no materialized preset, no absolutized paths)."""
+    from lingtai.cli import _persist_venv_path
+
+    preset = _write_preset(
+        tmp_path / "presets", "codexy",
+        llm={"provider": "codex", "model": "gpt-5.5"},
+        capabilities={"web_search": {}},
+    )
+    _write_preset_init(
+        tmp_path, preset,
+        extra_top={"env_file": ".env", "covenant_file": "~/cov.md"},
+    )
+
+    venv_dir = tmp_path / "runtime" / "venv"
+    _persist_venv_path(tmp_path / "init.json", venv_dir)
+
+    on_disk = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
+    assert on_disk["venv_path"] == str(venv_dir)
+    # Nothing else was resolved/materialized.
+    assert "llm" not in on_disk["manifest"]
+    assert on_disk["env_file"] == ".env"           # still relative
+    assert on_disk["covenant_file"] == "~/cov.md"  # still ~-prefixed
+    assert on_disk["manifest"]["preset"]["active"] == str(preset)
+    # Trailing newline preserved (matches other init.json writers).
+    assert (tmp_path / "init.json").read_text(encoding="utf-8").endswith("}\n")
+
+
+def test_persist_venv_path_idempotent_for_equivalent_forms(tmp_path):
+    """A `~`-form venv_path already pointing at the target dir must not be
+    rewritten every boot (avoids spurious diffs / churn)."""
+    from lingtai.cli import _persist_venv_path
+
+    venv_dir = Path.home() / ".some-lingtai-test-venv"
+    init = {"manifest": {"agent_name": "a"}, "venv_path": "~/.some-lingtai-test-venv"}
+    (tmp_path / "init.json").write_text(json.dumps(init, indent=2) + "\n", encoding="utf-8")
+    before = (tmp_path / "init.json").read_text(encoding="utf-8")
+
+    _persist_venv_path(tmp_path / "init.json", venv_dir)
+
+    assert (tmp_path / "init.json").read_text(encoding="utf-8") == before
+
+
+def test_persist_venv_path_survives_unreadable_file(tmp_path):
+    """A corrupt init.json must never be clobbered by the venv write-back."""
+    from lingtai.cli import _persist_venv_path
+
+    (tmp_path / "init.json").write_text("{not valid json", encoding="utf-8")
+
+    _persist_venv_path(tmp_path / "init.json", tmp_path / "venv")
+
+    assert (tmp_path / "init.json").read_text(encoding="utf-8") == "{not valid json"
