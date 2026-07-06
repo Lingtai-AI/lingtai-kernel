@@ -156,6 +156,34 @@ The transient and persistent lanes have different jobs:
 | `_meta.notification_persistent...` | Context lane for conversation content, routing hooks, and continuity comments that should survive sparse notification movement. | A dismiss/action channel or producer source of truth. |
 | Producer tool/store | Exact read/reply/dismiss state and external side effects. | A passive mirror inferred from `_meta`. |
 
+### New human-message LICC channel acceptance gate
+
+A new human-message LICC channel is not complete until its PR defines both
+model-visible surfaces and the producer authority boundary:
+
+1. **Transient attention hook** (`_meta.notifications.mcp.<channel>`): wakes the
+   agent and carries only identity needed to correlate, reply, read, or dismiss
+   (for IM channels, `data.message_ids` or an equivalent stable event-id list,
+   plus generic scaffolding such as `header`, `priority`, and `published_at`). It
+   must not carry message bodies, summaries, sender/subject, conversation refs,
+   platform/routing refs, counts, or `content_moved_to` breadcrumbs once a
+   conventional persistent path exists.
+2. **Persistent context lane** (`_meta.notification_persistent...`): carries
+   bounded conversation/mail context, events/routing hooks, continuity comments,
+   and producer-safe metadata. Delta lanes should include `previous_block`;
+   snapshot lanes must explicitly document why they have no `previous_block` or
+   delivery tracker. This lane is replay context, not an action channel or source
+   of truth.
+3. **Producer authority**: exact read/reply/dismiss state and external side
+   effects remain on the producer tool/store.
+4. **Tests**: the PR must add or update shape tests proving the transient hook is
+   identity-only and that content/context lands in the persistent lane; snapshot
+   lanes should also lock the no-`previous_block` / no-delivery-tracker behavior.
+
+If a producer cannot yet provide persistent context, bounded previews may remain
+only as transitional generic LICC triage, and the PR must state why the two-lane
+contract is not active yet.
+
 ## Contract rules
 
 ### 1. Stable event identity is required

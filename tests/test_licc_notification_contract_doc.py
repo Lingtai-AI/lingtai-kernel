@@ -58,3 +58,20 @@ def test_licc_notification_contract_is_linked_from_relevant_anatomies():
         assert DOC_REL in meta.get("related_files", []), rel
         body = path.read_text(encoding="utf-8")
         assert "LICC_NOTIFICATION_CONTRACT.md" in body, rel
+
+
+def test_licc_notification_contract_locks_new_channel_two_lane_gate():
+    text = " ".join(DOC.read_text(encoding="utf-8").split())
+    required_phrases = [
+        "New human-message LICC channel acceptance gate",
+        "_meta.notifications.mcp.<channel>",
+        "_meta.notification_persistent",
+        "data.message_ids",
+        "transient hook is identity-only",
+        "content/context lands in the persistent lane",
+        "producer tool/store",
+        "bounded previews may remain",
+        "two-lane contract is not active yet",
+    ]
+    for phrase in required_phrases:
+        assert phrase in text
