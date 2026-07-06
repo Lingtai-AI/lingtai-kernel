@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from lingtai.services.mcp import MCPClient
+from lingtai.services.mcp import HTTPMCPClient, MCPClient
 
 
 # ---------------------------------------------------------------------------
@@ -45,8 +45,12 @@ class _FakeFuture:
         return self._value
 
 
-def _install_fake_loop(client: MCPClient):
-    """Make the client look connected without a real subprocess/event loop."""
+def _install_fake_loop(client):
+    """Make the client look connected without a real subprocess/event loop.
+
+    Works for both MCPClient and HTTPMCPClient — they share the
+    ``_session`` / ``_loop`` / ``_closed`` triple that ``is_connected()`` reads.
+    """
     client._session = object()
 
     class _Loop:
@@ -238,3 +242,144 @@ def test_call_tool_success_passes_through_unchanged(monkeypatch):
 
     assert result == {"status": "success", "text": "ok"}
     assert restarts["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# HTTPMCPClient parity — regression for Lingtai-AI/lingtai-kernel#740
+#
+# The HTTP sibling shipped without the #104 recovery: a dropped remote
+# HTTP/SSE stream raised a raw (often blank) ClosedResourceError, poisoned the
+# long-lived client permanently (is_connected() still True), and left no trace
+# in the activity log. These mirror the stdio tests above for HTTPMCPClient.
+# ---------------------------------------------------------------------------
+
+def _http_client() -> HTTPMCPClient:
+    return HTTPMCPClient(url="https://example.invalid/mcp")
+
+
+def test_http_restart_resets_startup_state_so_start_cannot_lie(monkeypatch):
+    """HTTPMCPClient.restart() must clear all latched startup/session fields,
+    including the HTTP-specific _transport_cm/_read_stream/_write_stream, so the
+    next start() actually reconnects instead of early-returning or re-raising."""
+    client = _http_client()
+
+    client._ready.set()
+    client._error = "old connect error"
+    client._closed = True
+    client._session = object()
+    client._read_stream = object()
+    client._write_stream = object()
+    client._transport_cm = object()
+    client._session_cm = object()
+
+    closed = {"n": 0}
+    started = {"n": 0}
+    monkeypatch.setattr(client, "close", lambda: closed.__setitem__("n", closed["n"] + 1))
+    monkeypatch.setattr(client, "start", lambda: started.__setitem__("n", started["n"] + 1))
+
+    client.restart()
+
+    assert closed["n"] == 1
+    assert started["n"] == 1
+    assert not client._ready.is_set()
+    assert client._error is None
+    assert client._closed is False
+    assert client._session is None
+    assert client._read_stream is None
+    assert client._write_stream is None
+    assert client._transport_cm is None
+    assert client._session_cm is None
+
+
+def test_http_call_tool_restarts_and_retries_once_on_stale_error(monkeypatch):
+    """First attempt raises a stale ClosedResourceError → the HTTP client
+    restarts exactly once and the successful retry result is returned."""
+    client = _http_client()
+    _install_fake_loop(client)
+
+    attempts = {"n": 0}
+    restarts = {"n": 0}
+
+    def fake_run(coro, loop):
+        coro.close()
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return _FakeFuture(exc=ClosedResourceError())
+        return _FakeFuture(value={"status": "success", "text": "pong"})
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+
+    def fake_restart():
+        restarts["n"] += 1
+        _install_fake_loop(client)
+
+    monkeypatch.setattr(client, "restart", fake_restart)
+
+    result = client.call_tool("web_search_prime", {"search_query": "hi"})
+
+    assert attempts["n"] == 2          # original + one retry
+    assert restarts["n"] == 1          # restarted exactly once
+    assert result == {"status": "success", "text": "pong"}
+
+
+def test_http_call_tool_empty_message_error_surfaces_class_name(monkeypatch):
+    """A blank-str() stale error must surface the class name (the #104 blank-
+    error regression, now guarded for the HTTP client) and never propagate."""
+    client = _http_client()
+    _install_fake_loop(client)
+
+    def fake_run(coro, loop):
+        coro.close()
+        return _FakeFuture(exc=ClosedResourceError())  # always stale, empty str()
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(client, "restart", lambda: _install_fake_loop(client))
+
+    result = client.call_tool("web_search_prime", {"search_query": "hi"})
+
+    assert result["status"] == "error"
+    assert result["message"]                       # not blank
+    assert "ClosedResourceError" in result["message"]
+    assert "retry" in result["message"].lower()
+
+
+def test_http_call_tool_non_stale_error_returns_formatted_dict_not_raise(monkeypatch):
+    """A non-stale ValueError returns a formatted error dict (never raised) and
+    does NOT restart the connection."""
+    client = _http_client()
+    _install_fake_loop(client)
+
+    restarts = {"n": 0}
+
+    def fake_run(coro, loop):
+        coro.close()
+        return _FakeFuture(exc=ValueError("boom"))
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(
+        client, "restart", lambda: restarts.__setitem__("n", restarts["n"] + 1))
+
+    result = client.call_tool("web_search_prime", {"search_query": "hi"})
+
+    assert result == {"status": "error", "message": "ValueError: boom"}
+    assert restarts["n"] == 0           # non-stale → no restart
+
+
+def test_http_call_tool_failure_recorded_in_activity_log(monkeypatch):
+    """A failed HTTP call must be converted to an error dict BEFORE the activity
+    log append, so get_activity_log() records it (the observability fix)."""
+    client = _http_client()
+    _install_fake_loop(client)
+
+    def fake_run(coro, loop):
+        coro.close()
+        return _FakeFuture(exc=ValueError("boom"))
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+
+    client.call_tool("web_search_prime", {"search_query": "hi"})
+
+    log = client.get_activity_log()
+    assert len(log) == 1
+    assert log[0]["tool"] == "web_search_prime"
+    assert log[0]["result"]["status"] == "error"

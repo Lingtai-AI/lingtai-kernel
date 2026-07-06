@@ -4,7 +4,10 @@ MCPClient: stdio subprocess servers (e.g., uvx minimax-coding-plan-mcp).
 HTTPMCPClient: remote HTTP/SSE servers (e.g., api.z.ai/api/mcp/...).
 
 Both provide the same synchronous call_tool() interface. A background daemon
-thread runs the async event loop; the public API is thread-safe.
+thread runs the async event loop; the public API is thread-safe. Both convert
+transport failures into a non-blank {"status": "error", ...} dict and recover
+from a stale/closed transport via restart()+one retry (issues #104 stdio, #740
+HTTP).
 """
 from __future__ import annotations
 
@@ -371,6 +374,8 @@ class HTTPMCPClient:
         self._headers = headers or {}
 
         self._session: Any = None
+        self._read_stream: Any = None
+        self._write_stream: Any = None
         self._loop: Any = None
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
@@ -401,6 +406,31 @@ class HTTPMCPClient:
         if self._thread:
             self._thread.join(timeout=5)
 
+    def restart(self) -> None:
+        """Tear down a (possibly stale) session and reconnect from scratch.
+
+        Mirror of ``MCPClient.restart`` for the HTTP/SSE transport: a dropped
+        remote stream leaves the event loop running and ``_session`` set, so
+        ``is_connected()`` keeps returning ``True`` and the lazy ``start()`` in
+        ``call_tool`` never fires. This resets all startup/session fields —
+        including the HTTP-specific ``_transport_cm`` / ``_read_stream`` /
+        ``_write_stream`` — so the subsequent ``start()`` is a real reconnect
+        rather than an early-return lie. Used by ``call_tool`` to recover from a
+        closed HTTP resource (issue #740, the HTTP sibling of #104).
+        """
+        self.close()
+        self._ready.clear()
+        self._error = None
+        self._closed = False
+        self._session = None
+        self._read_stream = None
+        self._write_stream = None
+        self._loop = None
+        self._thread = None
+        self._transport_cm = None
+        self._session_cm = None
+        self.start()
+
     def is_connected(self) -> bool:
         return (
             self._session is not None
@@ -410,7 +440,13 @@ class HTTPMCPClient:
         )
 
     def call_tool(self, name: str, args: dict, timeout: float = 120) -> dict:
-        """Call an MCP tool synchronously. Same interface as MCPClient."""
+        """Call an MCP tool synchronously.
+
+        Same contract as ``MCPClient.call_tool``: transport failures are
+        converted to a non-blank ``{"status": "error", "message": ...}`` dict
+        (never raised, never blank), and a stale/closed HTTP stream triggers a
+        ``restart()`` plus exactly one retry before giving up (issue #740).
+        """
         import asyncio
 
         if self._closed:
@@ -420,28 +456,68 @@ class HTTPMCPClient:
         if self._session is None or self._loop is None:
             raise RuntimeError("HTTP MCP client not connected")
 
-        async def _call():
-            result = await self._session.call_tool(
-                name=name,
-                arguments=args,
-                read_timeout_seconds=timedelta(seconds=timeout),
-            )
-            if result.isError:
-                error_text = (
-                    result.content[0].text if result.content else "Unknown MCP error"
+        def _attempt() -> dict:
+            async def _call():
+                result = await self._session.call_tool(
+                    name=name,
+                    arguments=args,
+                    read_timeout_seconds=timedelta(seconds=timeout),
                 )
-                return {"status": "error", "message": error_text}
-            if result.content:
-                for block in result.content:
-                    if hasattr(block, "text"):
-                        try:
-                            return json.loads(block.text)
-                        except (json.JSONDecodeError, TypeError):
-                            return {"status": "success", "text": block.text}
-            return {"status": "success", "text": ""}
+                if result.isError:
+                    error_text = (
+                        result.content[0].text
+                        if result.content
+                        else "Unknown MCP error"
+                    )
+                    return {"status": "error", "message": error_text}
+                if result.content:
+                    for block in result.content:
+                        if hasattr(block, "text"):
+                            try:
+                                return json.loads(block.text)
+                            except (json.JSONDecodeError, TypeError):
+                                return {"status": "success", "text": block.text}
+                return {"status": "success", "text": ""}
 
-        future = asyncio.run_coroutine_threadsafe(_call(), self._loop)
-        result = future.result(timeout=timeout)
+            future = asyncio.run_coroutine_threadsafe(_call(), self._loop)
+            return future.result(timeout=timeout)
+
+        try:
+            result = _attempt()
+        except Exception as exc:
+            formatted = MCPClient._format_exception(exc)
+            if not MCPClient._is_stale_resource_error(exc):
+                # Non-stale failure: surface the class name so the error is
+                # never blank (issue #104), but don't churn the connection.
+                result = {"status": "error", "message": formatted}
+            else:
+                # Stale/closed HTTP stream: tear down and reconnect, retry once.
+                logger.warning(
+                    "HTTP MCP tool %s hit stale resource (%s); restarting and "
+                    "retrying once", name, formatted,
+                )
+                try:
+                    self.restart()
+                except Exception as restart_exc:
+                    result = {
+                        "status": "error",
+                        "message": (
+                            f"{formatted}: HTTP MCP session closed; restart "
+                            f"failed: {MCPClient._format_exception(restart_exc)}"
+                        ),
+                    }
+                else:
+                    try:
+                        result = _attempt()
+                    except Exception as retry_exc:
+                        result = {
+                            "status": "error",
+                            "message": (
+                                f"{MCPClient._format_exception(retry_exc)}: HTTP "
+                                "MCP session closed; restarted once but retry "
+                                "failed"
+                            ),
+                        }
 
         with self._activity_lock:
             self._activity_log.append({
@@ -480,6 +556,11 @@ class HTTPMCPClient:
 
         future = asyncio.run_coroutine_threadsafe(_list(), self._loop)
         return future.result(timeout=timeout)
+
+    def get_activity_log(self) -> list[dict[str, Any]]:
+        """Get recent MCP tool calls for debugging (includes failed calls)."""
+        with self._activity_lock:
+            return list(self._activity_log)
 
     def _run_loop(self) -> None:
         import asyncio
