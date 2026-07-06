@@ -437,6 +437,39 @@ def test_scan_preserves_structured_telegram_context_metadata(tmp_path):
     assert "latest_incoming=structured" in notif["instructions"]
 
 
+def test_scan_preserves_referenced_messages_metadata(tmp_path):
+    """Full referenced reply-target messages pass through the preview seam."""
+    import json as _json
+
+    agent, workdir = _mk_agent(tmp_path)
+    referenced = [
+        {
+            "id": "main:123:1",
+            "direction": "incoming",
+            "sender": "alice",
+            "text": "the original message being replied to",
+            "text_truncated": False,
+            "source": "reply_target",
+        }
+    ]
+    _write_event(workdir, "telegram", "ev1", {
+        "from": "alice",
+        "subject": "hi",
+        "body": "answering your first message",
+        "metadata": {
+            "conversation_ref": "main:123",
+            "message_ref": "main:123:53",
+            "platform": "telegram",
+            "referenced_messages": referenced,
+        },
+    })
+
+    _scan_once(agent, workdir / INBOX_DIRNAME)
+    notif = _json.loads((workdir / ".notification" / "mcp.telegram.json").read_text(encoding="utf-8"))
+    p = notif["data"]["previews"][0]
+    assert p["referenced_messages"] == referenced
+
+
 def test_scan_ignores_non_string_or_empty_metadata_values(tmp_path):
     """Non-string, empty, or unknown-key metadata values are silently
     dropped — a misbehaving MCP cannot inject arbitrary structures into

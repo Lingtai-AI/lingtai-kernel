@@ -786,6 +786,76 @@ class TelegramManager:
         messages.sort(key=lambda m: m.get("date") or "")
         return messages[-max_messages:]
 
+    def _find_message_by_compound_id(
+        self, account_alias: str, compound_id: str,
+    ) -> dict | None:
+        """Load a full stored Telegram message (inbox or sent) by compound ID.
+
+        Returns the raw message dict with ``_folder`` set so it can be rendered
+        as a structured message, or ``None`` if no local copy exists.
+        """
+        acct_dir = self._account_dir(account_alias)
+        for folder in ("inbox", "sent"):
+            folder_dir = acct_dir / folder
+            if not folder_dir.is_dir():
+                continue
+            for msg_dir in folder_dir.iterdir():
+                msg_file = msg_dir / "message.json"
+                if not (msg_dir.is_dir() and msg_file.is_file()):
+                    continue
+                try:
+                    data = json.loads(msg_file.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if data.get("id") == compound_id:
+                    data["_folder"] = folder
+                    return data
+        return None
+
+    def _referenced_messages_for_current(
+        self,
+        account_alias: str,
+        current_compound_id: str,
+        structured: list[dict],
+        *,
+        now: datetime | None = None,
+    ) -> list[dict]:
+        """Return full referenced Telegram messages missing from *structured*.
+
+        If the current/new message replies to a Telegram message whose compound
+        ID is not already present in the structured last-20 window, load the full
+        referenced message from local inbox/sent storage and return it as a
+        structured message so the persistent block can carry the full referenced
+        message (not a snippet). Returns an empty list when there is no reply, no
+        target compound ID, the target is already present, or no local copy
+        exists.
+        """
+        if not current_compound_id:
+            return []
+        current = next(
+            (item for item in structured if item.get("id") == current_compound_id),
+            None,
+        )
+        if current is None:
+            return []
+        reply_target = current.get("reply_to")
+        if not isinstance(reply_target, str) or not reply_target:
+            return []
+        present_ids = {item.get("id") for item in structured}
+        if reply_target in present_ids:
+            return []
+        stored = self._find_message_by_compound_id(account_alias, reply_target)
+        if stored is None:
+            return []
+        item = self._structured_message(
+            stored,
+            current_compound_id=current_compound_id,
+            now=now,
+            truncate_text=False,
+        )
+        item["source"] = "reply_target"
+        return [item]
+
     @staticmethod
     def _relative_time(date_str: str, *, now: datetime | None = None) -> str:
         now = now or datetime.now(timezone.utc)
@@ -822,10 +892,14 @@ class TelegramManager:
         return str(text).replace("\n", " ")
 
     @staticmethod
-    def _truncate_structured_text(text: str) -> tuple[str, bool]:
-        if len(text) <= _STRUCTURED_MESSAGE_TEXT_CAP:
+    def _truncate_structured_text(
+        text: str,
+        *,
+        cap: int | None = _STRUCTURED_MESSAGE_TEXT_CAP,
+    ) -> tuple[str, bool]:
+        if cap is None or len(text) <= cap:
             return text, False
-        return text[: _STRUCTURED_MESSAGE_TEXT_CAP - 1] + "…", True
+        return text[: cap - 1] + "…", True
 
     def _structured_message(
         self,
@@ -833,9 +907,13 @@ class TelegramManager:
         *,
         current_compound_id: str | None = None,
         now: datetime | None = None,
+        truncate_text: bool = True,
     ) -> dict[str, Any]:
         cid = str(message.get("id", ""))
-        text, text_truncated = self._truncate_structured_text(self._message_text(message))
+        text, text_truncated = self._truncate_structured_text(
+            self._message_text(message),
+            cap=_STRUCTURED_MESSAGE_TEXT_CAP if truncate_text else None,
+        )
         direction = "outgoing" if message.get("_folder") == "sent" else "incoming"
         item: dict[str, Any] = {
             "id": cid,
@@ -953,6 +1031,11 @@ class TelegramManager:
         metadata: dict[str, Any] = {"recent_messages": structured}
         if latest_incoming is not None:
             metadata["latest_incoming"] = latest_incoming
+        referenced = self._referenced_messages_for_current(
+            account_alias, current_compound_id, structured, now=now,
+        )
+        if referenced:
+            metadata["referenced_messages"] = referenced
         return preview, metadata
 
     def _build_conversation_preview(
