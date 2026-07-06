@@ -7,8 +7,8 @@ description: |
   check/read/search, media attachments, contacts/accounts/status basics, and
   external-delivery side-effect caveats. Pulled on demand via action='manual'; you
   do not need to call it before every send.
-version: 1.0.0
-last_changed_at: "2026-06-26T14:33:19-07:00"
+version: 1.1.0
+last_changed_at: "2026-07-06T00:00:00-07:00"
 ---
 
 # WhatsApp MCP — usage manual (progressive disclosure)
@@ -49,6 +49,18 @@ bridge).
 - `read`: read messages from one conversation (`wa_id`; optional `limit`,
   `mark_read`).
 - `search`: regex search over message text (`query`).
+
+## WAKE / REPLAY / DUPLICATE-REPLY DISCIPLINE
+
+- Reply once per inbound `message_id` (the compound `account:wa_id:wamid`).
+  Before sending after a refresh, molt, or recovery, use `read` to reconcile the
+  merged inbox+sent view and avoid duplicate replies.
+- Meta's webhook delivery is at-least-once: it re-delivers the same payload
+  (same upstream `wamid`) whenever it does not get a timely HTTP 200. The MCP
+  deduplicates these by the stable `wamid` and suppresses the duplicate inbox
+  landing and wake, so a single user message is not counted twice. If you are
+  investigating inflated unread counts, confirm the runtime version/state before
+  assuming the MCP lost or doubled a message.
 
 ## CONTACTS / ACCOUNTS / STATUS
 
