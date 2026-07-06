@@ -1970,7 +1970,16 @@ def build_notification_persistent_payload(agent, notification_payload: dict) -> 
     if not isinstance(delivered, (list, tuple, set)):
         delivered = []
     delivered_ids = {msg_id for msg_id in delivered if isinstance(msg_id, str)}
-    has_recent_context = len(delivered_ids) >= NOTIFICATION_PERSISTENT_TELEGRAM_MIN_CONTEXT
+    previous_tool_id = getattr(agent, "_notification_persistent_telegram_last_tool_id", None)
+    has_previous_block = isinstance(previous_tool_id, str)
+    # Provider context can be fresh after molt/restart even when an in-memory
+    # delivered-id cache survived.  Only treat delivered_ids as enough recent
+    # context when the current provider context also has a previous persistent
+    # Telegram block to link to.
+    has_recent_context = (
+        has_previous_block
+        and len(delivered_ids) >= NOTIFICATION_PERSISTENT_TELEGRAM_MIN_CONTEXT
+    )
 
     is_seed_block = False
     if candidates and has_recent_context:
@@ -2052,11 +2061,10 @@ def build_notification_persistent_payload(agent, notification_payload: dict) -> 
     # Telegram block (Jason #6148). The first block after startup/molt has no
     # predecessor: it is marked `is_first_block: true` with `tool_result_id: null`.
     # Later blocks point `tool_result_id` at the prior tool result id.
-    previous_tool_id = getattr(agent, "_notification_persistent_telegram_last_tool_id", None)
-    is_first_block = previous_tool_id is None
+    is_first_block = not has_previous_block
     previous_block: dict = {
         "path": NOTIFICATION_PERSISTENT_TELEGRAM_PATH,
-        "tool_result_id": previous_tool_id if isinstance(previous_tool_id, str) else None,
+        "tool_result_id": previous_tool_id if has_previous_block else None,
     }
     if is_first_block:
         previous_block["is_first_block"] = True

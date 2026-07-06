@@ -2188,6 +2188,40 @@ def test_attach_active_notifications_adds_telegram_persistent_snapshot(tmp_path)
     assert agent._notification_persistent_telegram_message_ids[-1] == "main:123:21"
     assert agent._notification_persistent_telegram_last_tool_id == "call-first"
 
+
+def test_attach_active_notifications_first_block_reseeds_with_retained_ids(tmp_path):
+    messages = [_telegram_message(i) for i in range(101, 122)]
+    _write_telegram_notif(tmp_path, messages)
+    agent = _notif_agent(tmp_path)
+    # Simulate a fresh provider context after molt/restart where the previous
+    # block hook was reset, but the delivered-id cache retained enough old ids
+    # that the old code incorrectly treated the first block as a delta.
+    agent._notification_persistent_telegram_message_ids = [
+        f"main:123:{i}" for i in range(1, 25)
+    ]
+
+    block = ToolResultBlock(
+        id="t1",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-reseed"}}},
+    )
+    attach_active_notifications(agent, [block], prior_holder=None)
+
+    telegram = block.content["_meta"]["notification_persistent"]["mcp"]["telegram"]
+    assert len(telegram["messages"]) == 20
+    assert telegram["messages"][0]["id"] == "main:123:102"
+    assert telegram["messages"][-1]["id"] == "main:123:121"
+    assert telegram["context_comment"] == (
+        "Messages 102–120 are historical context from the recent Telegram "
+        "conversation. The current/new message is 121."
+    )
+    assert telegram["previous_block"] == {
+        "path": "_meta.notification_persistent.mcp.telegram",
+        "tool_result_id": None,
+        "is_first_block": True,
+    }
+    assert "burst_comment" not in telegram
+
     # Move (not duplicate): the ephemeral notifications.mcp.telegram lane is now
     # only a generic pointer shell.  Even routing hooks live in persistent.
     ephemeral = block.content["_meta"]["notifications"]["mcp.telegram"]
