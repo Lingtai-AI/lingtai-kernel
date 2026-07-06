@@ -9,34 +9,47 @@ from pathlib import Path
 
 # Module-level: pre-compiled regex for JSONC string literals (matches "..."
 # with escape sequences). Used by load_jsonc to skip over string contents
-# when stripping // comments.
+# when stripping // comments and trailing commas.
 _JSONC_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _clean_jsonc_chunk(chunk: str) -> str:
+    """Strip // comments and trailing commas from a non-string JSONC span.
+
+    Comments are stripped first so a trailing comma followed by a comment
+    (``,  // note`` then ``]`` on the next line) still collapses: the comma
+    regex's ``\\s*`` spans the newline left behind by comment removal.
+    """
+    chunk = re.sub(r'//[^\n]*', '', chunk)
+    return re.sub(r',\s*([}\]])', r'\1', chunk)
 
 
 def load_jsonc(path: str | Path) -> dict:
     """Load a JSON or JSONC file (strips // comments and trailing commas).
 
-    Comment stripping is string-aware: // inside a quoted JSON string value
-    is never treated as a comment (preserving URLs like "https://host/...").
+    Both normalisations are string-aware: // inside a quoted JSON string
+    value is never treated as a comment (preserving URLs like
+    "https://host/..."), and a ", ]" or ", }" inside a string value is never
+    mistaken for a trailing comma. String literals pass through verbatim.
     """
     text = Path(path).read_text(encoding="utf-8")
-    # Strip // comments only when not inside a JSON string.
+    # Apply JSONC cleanup only when not inside a JSON string.
     # Strategy: tokenise by alternating between string spans and non-string
-    # spans; within non-string spans, replace //...EOL with nothing.
+    # spans; clean only the non-string spans. A genuine trailing comma and
+    # its closing bracket can never be separated by a string literal (that
+    # would make the comma a normal separator), so per-chunk substitution is
+    # equivalent to a whole-text pass for all well-formed inputs.
     parts: list[str] = []
     pos = 0
     for m in _JSONC_STRING_RE.finditer(text):
-        # Non-string chunk before this string: strip comments
-        chunk = re.sub(r'//[^\n]*', '', text[pos:m.start()])
-        parts.append(chunk)
+        # Non-string chunk before this string: strip comments and commas
+        parts.append(_clean_jsonc_chunk(text[pos:m.start()]))
         # String literal: preserve verbatim
         parts.append(m.group())
         pos = m.end()
     # Trailing non-string chunk after last string
-    parts.append(re.sub(r'//[^\n]*', '', text[pos:]))
-    text = ''.join(parts)
-    text = re.sub(r',\s*([}\]])', r'\1', text)
-    return json.loads(text)
+    parts.append(_clean_jsonc_chunk(text[pos:]))
+    return json.loads(''.join(parts))
 
 
 def resolve_env(value: str | None, env_name: str | None) -> str | None:
