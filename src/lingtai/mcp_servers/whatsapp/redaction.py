@@ -41,6 +41,12 @@ def redact_account(account: dict[str, Any]) -> dict[str, Any]:
                 out["templates"] = _redact_templates(value)
             else:
                 out[key] = value
+    # wa_ids are personal phone-number identifiers, so `allowed_wa_ids` is
+    # deliberately NOT in _SAFE_FIELDS (it would be dropped by the fail-closed
+    # projection). Emit only a count for parity with account_details and the
+    # Telegram/WeChat `allowed_users_count`, never the list itself (#727).
+    if "allowed_wa_ids" in (account or {}):
+        out["allowed_wa_ids_count"] = len((account or {}).get("allowed_wa_ids") or [])
     for secret in ("access_token", "app_secret", "verify_token"):
         out.setdefault(f"{secret}_present", bool((account or {}).get(secret)))
     return out

@@ -7,8 +7,8 @@ description: |
   check/read/search, media attachments, contacts/accounts/status basics, and
   external-delivery side-effect caveats. Pulled on demand via action='manual'; you
   do not need to call it before every send.
-version: 1.0.0
-last_changed_at: "2026-06-26T14:33:19-07:00"
+version: 1.1.0
+last_changed_at: "2026-07-06T00:00:00-07:00"
 ---
 
 # WhatsApp MCP — usage manual (progressive disclosure)
@@ -53,8 +53,22 @@ bridge).
 ## CONTACTS / ACCOUNTS / STATUS
 
 - `contacts`: list saved contacts. `add_contact`/`remove_contact` manage aliases.
+  These are convenience aliases only; they do NOT grant inbound permission.
 - `accounts`: list configured WhatsApp accounts (redacted).
-- `status`: connection/health status for an account.
+- `status`: connection/health status for an account. `allowed_wa_ids_count` (when
+  present) means inbound sender filtering is active on that account.
+
+## INBOUND SENDER FILTER
+
+- Inbound is optionally restricted by the operator-configured
+  `accounts[].allowed_wa_ids` allow-list. A business number is publicly
+  reachable, so the Meta signature only proves Meta delivered the event, not that
+  the sender is trusted. When the list is set, messages from non-listed wa_ids are
+  dropped before storage/notification/wake; when absent, all senders are accepted.
+- The allow-list lives in operator-controlled config, not `contacts`. Do not tell
+  a human to use `add_contact` to let someone reach the agent — that only saves an
+  alias; add the wa_id to `allowed_wa_ids` in config and refresh/restart the MCP.
+  This mirrors Telegram's `allowed_users` and WeChat's `allowed_users`.
 
 ## SIDE EFFECTS & ERROR SURFACING
 

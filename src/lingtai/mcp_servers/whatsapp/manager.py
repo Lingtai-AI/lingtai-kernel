@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from datetime import datetime, timezone
@@ -67,8 +68,22 @@ SCHEMA: dict[str, Any] = {
 }
 
 
+log = logging.getLogger(__name__)
+
+
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_wa_id(value: Any) -> str:
+    """Canonicalize a wa_id for allow-list comparison.
+
+    Meta delivers inbound `from` wa_ids as bare E.164 digit strings (no `+`),
+    but an operator hand-editing config may write `+1 (555) 123-0001` or an int.
+    Reduce both sides to digits only so a well-intentioned but formatted entry
+    does not silently lock the operator out of their own inbox (#727).
+    """
+    return re.sub(r"\D", "", str(value))
 
 
 class WhatsAppManager:
@@ -76,6 +91,18 @@ class WhatsAppManager:
         self.accounts = {a.get("alias") or "default": dict(a) for a in accounts_config}
         if not self.accounts:
             raise ValueError("config must contain at least one WhatsApp account")
+        # Per-account inbound sender allow-list. A WhatsApp business number is
+        # publicly reachable, so the Meta HMAC only proves the *platform*
+        # delivered the event, not that the *sender* is trusted. Mirror the
+        # Telegram (`allowed_users`) and WeChat (`allowed_users`) trust layer:
+        # `None` (key absent / null / empty list) means "no filtering — allow
+        # all", identical to `set(allowed_users) if allowed_users else None`
+        # there. When present, non-listed senders are dropped before storage,
+        # notification, and wake in `ingest_webhook` (#727).
+        self._allowed_wa_ids: dict[str, set[str] | None] = {}
+        for alias, account in self.accounts.items():
+            raw = account.get("allowed_wa_ids")
+            self._allowed_wa_ids[alias] = {_normalize_wa_id(v) for v in raw} if raw else None
         self.working_dir = Path(working_dir)
         self.root = self.working_dir / "whatsapp"
         self.root.mkdir(parents=True, exist_ok=True)
@@ -108,6 +135,18 @@ class WhatsAppManager:
             if str(account.get("phone_number_id") or "") == str(phone_number_id):
                 return alias
         return None
+
+    def _is_allowed_sender(self, alias: str, wa_id: str | None) -> bool:
+        """True if `wa_id` may reach the agent on this account.
+
+        `None` allow-list = allow all (unfiltered, back-compat). Otherwise the
+        inbound wa_id must appear in the operator-configured list after both
+        sides are normalized identically. Trust layer parity with Telegram /
+        WeChat (#727)."""
+        allowed = self._allowed_wa_ids.get(alias)
+        if allowed is None:
+            return True
+        return _normalize_wa_id(wa_id or "") in allowed
 
     def _account_dir(self, alias: str) -> Path:
         d = self.root / alias
@@ -352,6 +391,12 @@ class WhatsAppManager:
                 "template_count": len(account.get("templates") or []),
                 "contact_count": len(contacts),
             }
+            # Non-secret signal of whether inbound sender filtering is active,
+            # mirroring `allowed_users_count` on Telegram/WeChat. Emit the count
+            # (never the wa_ids — they are personal phone identifiers) only when
+            # filtering is on; `None` is stripped below for unfiltered accounts.
+            allowed = self._allowed_wa_ids.get(alias)
+            item["allowed_wa_ids_count"] = len(allowed) if allowed is not None else None
             if self.config_source:
                 item["config_source"] = self.config_source
             details.append({k: v for k, v in item.items() if v is not None})
@@ -376,6 +421,17 @@ class WhatsAppManager:
         events = extract_events(payload)
         for ev in events:
             if ev.get("kind") == "message":
+                # Drop inbound from non-allowed senders before storage,
+                # notification, and wake — a stranger who messages a public
+                # business number must not be able to wake the agent or inject
+                # text into its inbox. Status/delivery events carry
+                # `recipient_id` (not a sender) and are never forwarded, so they
+                # are deliberately not filtered here (#727). Annotating
+                # `filtered` keeps the webhook server's event count accurate.
+                if not self._is_allowed_sender(alias, ev.get("wa_id")):
+                    ev["filtered"] = True
+                    log.info("whatsapp: dropped inbound from non-allowed wa_id on account %s", alias)
+                    continue
                 wa_id = ev.get("wa_id") or "unknown"
                 wamid = ev.get("message_id") or f"local-{uuid4()}"
                 msg = {"id": self._compound(alias, wa_id, wamid), "wa_id": wa_id, "message_id": wamid, "text": ev.get("text"), "type": ev.get("type"), "direction": "incoming", "metadata": ev.get("metadata"), "timestamp": ev.get("timestamp"), "stored_at": _utcnow()}
