@@ -157,6 +157,25 @@ def _is_transient_provider_error(exc: Exception) -> bool:
     return any(fragment in msg for fragment in _TRANSIENT_MSG_FRAGMENTS)
 
 
+def _exception_event_fields(
+    exc: Exception,
+    err_desc: str,
+    *,
+    error_limit: int | None = 300,
+) -> dict:
+    """Return AED event fields, including optional provider diagnostics.
+
+    Codex quota diagnostics are attached by the Codex adapter to the raised
+    exception.  The run loop is the bridge into ``events.jsonl``; keep this
+    additive and inert for exceptions without the namespaced attribute.
+    """
+    fields = {"error": err_desc if error_limit is None else err_desc[:error_limit]}
+    diagnostics = getattr(exc, "_codex_quota_diagnostics", None)
+    if isinstance(diagnostics, dict):
+        fields["codex_quota_diagnostics"] = diagnostics
+    return fields
+
+
 def _tool_call_summary(tool_calls) -> dict:
     calls = list(tool_calls or [])
     return {
@@ -704,11 +723,9 @@ def _run_loop(agent) -> None:
                     # _handle_message — see TODO below.
                     over_window = _is_over_window_error(e)
                     if over_window:
-                        agent._log(
-                            "aed_over_window_detected",
-                            error=err_desc[:300],
-                            exception=type(e).__name__,
-                        )
+                        over_window_fields = _exception_event_fields(e, err_desc)
+                        over_window_fields["exception"] = type(e).__name__
+                        agent._log("aed_over_window_detected", **over_window_fields)
 
                     if not over_window and _is_transient_provider_error(e):
                         if transient_attempts < _TRANSIENT_AED_RETRY_LIMIT:
@@ -728,7 +745,7 @@ def _run_loop(agent) -> None:
                                 attempt=transient_attempts,
                                 max_attempts=_TRANSIENT_AED_RETRY_LIMIT,
                                 backoff_s=backoff_s,
-                                error=err_desc[:300],
+                                **_exception_event_fields(e, err_desc),
                             )
                             logger.warning(
                                 f"[{agent.agent_name}] AED transient retry "
@@ -741,7 +758,7 @@ def _run_loop(agent) -> None:
                         agent._log(
                             "aed_transient_exhausted",
                             attempts=transient_attempts,
-                            error=err_desc[:300],
+                            **_exception_event_fields(e, err_desc),
                         )
                     # TODO(issue #144 follow-up): add a hard pre-send gate
                     # in _handle_message that runs retroactive compaction
@@ -764,7 +781,11 @@ def _run_loop(agent) -> None:
                         )
 
                     agent._set_state(AgentState.STUCK, reason=f"AED attempt {aed_attempts}: {err_desc}")
-                    agent._log("aed_attempt", attempt=aed_attempts, error=err_desc)
+                    agent._log(
+                        "aed_attempt",
+                        attempt=aed_attempts,
+                        **_exception_event_fields(e, err_desc, error_limit=None),
+                    )
                     logger.warning(
                         f"[{agent.agent_name}] AED attempt {aed_attempts}/{agent._config.max_aed_attempts}: {err_desc}",
                     )
@@ -784,7 +805,11 @@ def _run_loop(agent) -> None:
                                 agent._perform_refresh()
                                 return
 
-                        agent._log("aed_exhausted", attempts=aed_attempts, error=err_desc)
+                        agent._log(
+                            "aed_exhausted",
+                            attempts=aed_attempts,
+                            **_exception_event_fields(e, err_desc, error_limit=None),
+                        )
                         sleep_state = AgentState.ASLEEP
                         agent._asleep.set()
                         break

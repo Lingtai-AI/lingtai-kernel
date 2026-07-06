@@ -3164,6 +3164,116 @@ class CodexResponsesSession(OpenAIResponsesSession):
         per_full = incremental_count / full_count
         return f"1:{per_full:.1f}".replace(".0", "")
 
+    # -- Codex quota / usage-limit diagnostics --------------------------------
+
+    # Rate-limit response headers the Codex backend may include.  Values are
+    # safe to log (they are numeric durations/tokens, never secrets).
+    _RATE_LIMIT_HEADER_KEYS = (
+        "x-ratelimit-limit-requests",
+        "x-ratelimit-limit-tokens",
+        "x-ratelimit-remaining-requests",
+        "x-ratelimit-remaining-tokens",
+        "x-ratelimit-reset-requests",
+        "x-ratelimit-reset-tokens",
+        "retry-after",
+    )
+
+    # Message fragments that identify a quota / usage-limit condition in the
+    # Codex (ChatGPT-OAuth) error body.  Only the match is recorded, not the
+    # full message.
+    _QUOTA_MESSAGE_FRAGMENTS = (
+        "usage limit",
+        "quota",
+        "rate limit",
+        "too many requests",
+        "too many tokens",
+        "token limit",
+        "exceeded",
+        "exhausted",
+        "insufficient",
+    )
+
+    @staticmethod
+    def _codex_quota_diagnostics(exc: BaseException) -> dict[str, Any]:
+        """Extract safe, non-secret diagnostic metadata from a Codex API error.
+
+        Returns a small dict of **scalars only** — status codes, error codes,
+        header counts, boolean flags, truncated message fragments.  No prompt,
+        token, header value, OAuth secret, or response-body content is
+        included.  Designed to be safe for ``events.jsonl`` / ``logger`` /
+        ``UsageMetadata.extra`` / exception attribute attachment.
+
+        The caller attaches the returned dict to
+        ``exc._codex_quota_diagnostics`` so downstream logging (``turn.py``
+        AED) can include it in ``agent._log()`` events without the kernel
+        needing to understand Codex-specific exception shapes.
+        """
+        diag: dict[str, Any] = {
+            "error_type": type(exc).__name__,
+        }
+
+        # HTTP status code (openai SDK attaches it to all API errors).
+        status = getattr(exc, "status_code", None)
+        if isinstance(status, int):
+            diag["status_code"] = status
+
+        # Error code from the body's ``error.code`` field (openai SDK exposes
+        # ``body`` as a dict on API errors).
+        try:
+            body = getattr(exc, "body", None)
+            if isinstance(body, dict):
+                err = body.get("error")
+                if isinstance(err, dict):
+                    code = err.get("code")
+                    if isinstance(code, str) and code:
+                        diag["error_code"] = code[:80]
+                    err_type = err.get("type")
+                    if isinstance(err_type, str) and err_type:
+                        diag["error_body_type"] = err_type[:80]
+        except Exception:
+            pass
+
+        # Rate-limit headers (safe: numeric values, not secrets).
+        try:
+            response = getattr(exc, "response", None)
+            if response is not None:
+                headers = getattr(response, "headers", None)
+                if headers is not None:
+                    rl: dict[str, str] = {}
+                    for key in CodexResponsesSession._RATE_LIMIT_HEADER_KEYS:
+                        val = headers.get(key)
+                        if val is not None:
+                            rl[key] = str(val)[:80]
+                    if rl:
+                        diag["rate_limit_headers"] = rl
+        except Exception:
+            pass
+
+        # Quota / usage-limit message match (fragment only, not the full text).
+        msg = (str(exc) or "").lower()
+        matched = [
+            frag
+            for frag in CodexResponsesSession._QUOTA_MESSAGE_FRAGMENTS
+            if frag in msg
+        ]
+        if matched:
+            diag["quota_message_fragments"] = matched
+
+        # Whether this looks like a quota / usage-limit error.
+        diag["is_quota"] = bool(
+            isinstance(exc, openai.RateLimitError)
+            or matched
+            or (isinstance(status, int) and status == 429)
+        )
+
+        # Whether this looks like an auth-lane failure.
+        diag["is_auth_error"] = bool(
+            isinstance(exc, (openai.AuthenticationError, openai.PermissionDeniedError))
+            or (isinstance(status, int) and status in (401, 403))
+        )
+
+        return diag
+
     @staticmethod
     def _ws_maintenance_hint(
         *,
@@ -3769,11 +3879,30 @@ class CodexResponsesSession(OpenAIResponsesSession):
                                 ws_diag=(self._ws_last_diag if self._continuation_enabled else None),
                             ),
                         )
-        except Exception:
+        except Exception as exc:
             # Revert the trailing user entry we just added so the next retry
             # doesn't double-record it. Mirrors OpenAIChatSession.send's
             # error path. ToolResultBlock entries also revert — the executor
             # will re-supply them when AED rebuilds the loop.
+            #
+            # Codex quota / usage-limit diagnostics: extract safe metadata
+            # from the error and attach it to the exception so downstream
+            # logging (turn.py AED → agent._log → events.jsonl) can include
+            # it without understanding Codex-specific exception shapes.
+            try:
+                diag = self._codex_quota_diagnostics(exc)
+                if diag.get("is_quota") or diag.get("is_auth_error"):
+                    logger.warning(
+                        "Codex quota/auth diagnostics: %s",
+                        json.dumps(diag, ensure_ascii=False, default=str),
+                    )
+                # Attach to the exception for downstream structured logging.
+                # turn.py can read ``exc._codex_quota_diagnostics`` and
+                # include it in ``agent._log()`` calls.  No-attribute access
+                # is harmless — the kernel already handles missing attributes.
+                exc._codex_quota_diagnostics = diag  # type: ignore[attr-defined]
+            except Exception:
+                pass  # diagnostics must never mask the real error
             self._interface.drop_trailing(lambda e: e.role == "user")
             raise
 
@@ -4147,3 +4276,19 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             base_url=self.base_url,
             api_key=self._client_kwargs.get("api_key"),
         )
+
+    def is_quota_error(self, exc: Exception) -> bool:
+        """Check if the exception is a Codex quota / rate-limit / usage-limit error.
+
+        Extends the parent ``openai.RateLimitError`` check to also match
+        Codex-specific usage-limit messages that may arrive as 403 or other
+        status codes.  Uses the same ``_codex_quota_diagnostics`` helper the
+        session error path uses, so the detection logic is in one place.
+        """
+        if super().is_quota_error(exc):
+            return True
+        try:
+            diag = CodexResponsesSession._codex_quota_diagnostics(exc)
+            return bool(diag.get("is_quota"))
+        except Exception:
+            return False

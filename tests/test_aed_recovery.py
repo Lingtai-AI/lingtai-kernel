@@ -272,6 +272,58 @@ def test_structural_error_skips_transient_retry(tmp_path, monkeypatch):
     assert any(name == "aed_attempt" and fields["attempt"] == 1 for name, fields in agent._logs)
 
 
+def test_aed_events_propagate_codex_quota_diagnostics(tmp_path, monkeypatch):
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 1
+    diagnostics = {
+        "provider": "codex",
+        "status_code": 429,
+        "error_code": "rate_limit_exceeded",
+        "matched_fragments": ["usage limit"],
+    }
+
+    class QuotaError(Exception):
+        status_code = 429
+
+    quota_error = QuotaError("usage limit reached")
+    quota_error._codex_quota_diagnostics = diagnostics
+
+    def fake_handle(_agent, _msg):
+        raise quota_error
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    aed_attempt = next(fields for name, fields in agent._logs if name == "aed_attempt")
+    aed_exhausted = next(fields for name, fields in agent._logs if name == "aed_exhausted")
+    assert aed_attempt["error"] == "usage limit reached"
+    assert aed_attempt["codex_quota_diagnostics"] == diagnostics
+    assert aed_exhausted["codex_quota_diagnostics"] == diagnostics
+
+
+def test_aed_events_omit_codex_quota_diagnostics_without_attribute(tmp_path, monkeypatch):
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 1
+
+    def fake_handle(_agent, _msg):
+        raise ValueError("bad schema")
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    for name, fields in agent._logs:
+        if name in {"aed_attempt", "aed_exhausted"}:
+            assert "codex_quota_diagnostics" not in fields
+
+
 def test_empty_llm_response_is_classified_transient():
     err = turn.EmptyLLMResponseError(ledger_source="main", in_tool_loop=False)
     assert turn._is_transient_provider_error(err) is True
