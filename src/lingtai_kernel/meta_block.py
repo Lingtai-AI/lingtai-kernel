@@ -101,6 +101,25 @@ NOTIFICATION_PERSISTENT_TELEGRAM_PATH = (
 NOTIFICATION_PERSISTENT_TELEGRAM_MIN_CONTEXT = 20
 NOTIFICATION_PERSISTENT_TELEGRAM_SEEN_LIMIT = 200
 
+# Concise English comments attached to the Telegram persistent block so the
+# agent can read the block without re-deriving structure. Kept as module-level
+# constants so tests and docs can assert the exact wording.
+NOTIFICATION_PERSISTENT_TELEGRAM_BURST_COMMENT = (
+    "Multiple new Telegram messages arrived together; treat them as one burst "
+    "and answer the combined intent."
+)
+NOTIFICATION_PERSISTENT_TELEGRAM_SELF_OUTGOING_COMMENT = (
+    "This is the agent's own recent outgoing message, included for continuity."
+)
+NOTIFICATION_PERSISTENT_TELEGRAM_TRUNCATED_COMMENT = (
+    "This message is truncated; call telegram.read for the exact full producer "
+    "state."
+)
+NOTIFICATION_PERSISTENT_TELEGRAM_REFERENCED_COMMENT = (
+    "This is the full Telegram message referenced by the current reply; "
+    "included because it is not present in messages."
+)
+
 # Per-result machine-generated guidance nested under ``tool_meta``.  ``comment``
 # is a small map of topic-keyed hints; today the only topic is ``overflow`` — a
 # hint stamped on capped/large visible tool results pointing the agent at the
@@ -650,7 +669,16 @@ def build_meta_readme() -> dict:
             f"{NOTIFICATION_PERSISTENT_TELEGRAM_PATH}.messages, Telegram "
             "event/routing hooks under `.events`, and a previous_block hook "
             "pointing to the prior Telegram block (and an optional "
-            "human-readable comment). This is the durable source of truth for "
+            "human-readable comment). It also carries concise English machine "
+            "comments: `.context_comment` (a seed block's historical id range "
+            "plus the current/new message id), `.burst_comment` (multiple new "
+            "incoming messages arrived together — one burst), "
+            "`.referenced_messages` (the full reply target with a per-item "
+            "`comment` when the current reply points at a message absent from "
+            "`.messages`), and per-message `comment`s marking the agent's own "
+            "outgoing continuity messages and truncated messages (which point "
+            "to telegram.read for exact full producer state). This is the "
+            "durable source of truth for "
             "Telegram conversation context and Telegram routing details — the "
             "ephemeral _meta.notifications.mcp.telegram lane is only a generic "
             "pointer shell to this persistent path, not a holder for message "
@@ -1773,6 +1801,21 @@ def _telegram_persistent_events_from_notifications(notification_payload: dict) -
     return events
 
 
+def _telegram_notification_event_count(notification_payload: dict) -> int:
+    """Return the Telegram notification event count when the producer reports it."""
+    notifications = notification_payload.get(NOTIFICATIONS_KEY)
+    if not isinstance(notifications, dict):
+        return 0
+    telegram = notifications.get("mcp.telegram")
+    if not isinstance(telegram, dict):
+        return 0
+    data = telegram.get("data")
+    if not isinstance(data, dict):
+        return 0
+    count = data.get("count")
+    return count if isinstance(count, int) and count > 0 else 0
+
+
 def _telegram_persistent_messages_from_notifications(notification_payload: dict) -> list[dict]:
     """Extract ordered Telegram message objects from notification preview metadata.
 
@@ -1810,6 +1853,105 @@ def _telegram_persistent_messages_from_notifications(notification_payload: dict)
     return [by_id[msg_id] for msg_id in order if msg_id in by_id]
 
 
+def _telegram_referenced_messages_from_notifications(
+    notification_payload: dict,
+) -> list[dict]:
+    """Extract full referenced Telegram messages (reply targets) from previews.
+
+    Curated Telegram producers attach the full referenced message under
+    ``referenced_messages`` when the current reply targets a message outside the
+    last-20 window. De-duplicate by compound ID, preserving first-seen order.
+    """
+    by_id: dict[str, dict] = {}
+    order: list[str] = []
+    for preview in _telegram_preview_list(notification_payload):
+        referenced = preview.get("referenced_messages")
+        if not isinstance(referenced, list):
+            continue
+        for candidate in referenced:
+            if not isinstance(candidate, dict):
+                continue
+            msg_id = candidate.get("id")
+            if not isinstance(msg_id, str) or not msg_id:
+                continue
+            if msg_id not in by_id:
+                order.append(msg_id)
+            by_id[msg_id] = dict(candidate)
+    return [by_id[msg_id] for msg_id in order if msg_id in by_id]
+
+
+def _telegram_display_message_number(compound_id: object) -> str:
+    """Return a robust human-facing Telegram message number from a compound ID.
+
+    Compound IDs are ``account:chat:message``; the trailing segment is the
+    Telegram message id.  Falls back to the raw value when the shape is
+    unexpected so the range comment never crashes on a degraded/fallback id.
+    """
+    if not isinstance(compound_id, str) or not compound_id:
+        return "?"
+    parts = compound_id.split(":")
+    if len(parts) == 3 and parts[2]:
+        return parts[2]
+    return compound_id
+
+
+def _telegram_range_context_comment(messages: list[dict]) -> str | None:
+    """Build the English historical-range comment for a seeded context block.
+
+    Identifies the current/new message (``is_current`` when present, else the
+    last incoming message) and describes the remaining messages as historical
+    context using robust ids drawn from the compound ids.  Returns ``None`` when
+    there is no historical range to describe (e.g. a single-message block).
+    """
+    if len(messages) < 2:
+        return None
+    current = next((m for m in messages if m.get("is_current")), None)
+    if current is None:
+        current = next(
+            (m for m in reversed(messages) if m.get("direction") == "incoming"),
+            None,
+        )
+    if current is None:
+        current = messages[-1]
+    current_id = current.get("id")
+    historical = [m for m in messages if m.get("id") != current_id]
+    if not historical:
+        return None
+    first_num = _telegram_display_message_number(historical[0].get("id"))
+    last_num = _telegram_display_message_number(historical[-1].get("id"))
+    current_num = _telegram_display_message_number(current_id)
+    if first_num == last_num:
+        span = f"Message {first_num} is historical context"
+    else:
+        span = f"Messages {first_num}–{last_num} are historical context"
+    return (
+        f"{span} from the recent Telegram conversation. "
+        f"The current/new message is {current_num}."
+    )
+
+
+def _annotate_telegram_message(message: dict) -> dict:
+    """Return a copy of *message* with per-message continuity/truncation hints.
+
+    Adds the self-outgoing continuity comment to the agent's own outgoing
+    messages and the truncation comment to truncated messages. When both apply,
+    the comments are joined so no signal is dropped. Media metadata already on
+    the message is preserved untouched.
+    """
+    annotated = dict(message)
+    hints: list[str] = []
+    if annotated.get("direction") == "outgoing":
+        hints.append(NOTIFICATION_PERSISTENT_TELEGRAM_SELF_OUTGOING_COMMENT)
+    if annotated.get("text_truncated"):
+        hints.append(NOTIFICATION_PERSISTENT_TELEGRAM_TRUNCATED_COMMENT)
+    if hints:
+        existing = annotated.get("comment")
+        if isinstance(existing, str) and existing:
+            hints = [existing, *hints]
+        annotated["comment"] = " ".join(hints)
+    return annotated
+
+
 def build_notification_persistent_payload(agent, notification_payload: dict) -> dict | None:
     """Build the minimal `_meta.notification_persistent` payload for Telegram.
 
@@ -1828,8 +1970,18 @@ def build_notification_persistent_payload(agent, notification_payload: dict) -> 
     if not isinstance(delivered, (list, tuple, set)):
         delivered = []
     delivered_ids = {msg_id for msg_id in delivered if isinstance(msg_id, str)}
-    has_recent_context = len(delivered_ids) >= NOTIFICATION_PERSISTENT_TELEGRAM_MIN_CONTEXT
+    previous_tool_id = getattr(agent, "_notification_persistent_telegram_last_tool_id", None)
+    has_previous_block = isinstance(previous_tool_id, str)
+    # Provider context can be fresh after molt/restart even when an in-memory
+    # delivered-id cache survived.  Only treat delivered_ids as enough recent
+    # context when the current provider context also has a previous persistent
+    # Telegram block to link to.
+    has_recent_context = (
+        has_previous_block
+        and len(delivered_ids) >= NOTIFICATION_PERSISTENT_TELEGRAM_MIN_CONTEXT
+    )
 
+    is_seed_block = False
     if candidates and has_recent_context:
         messages = [
             message
@@ -1838,13 +1990,70 @@ def build_notification_persistent_payload(agent, notification_payload: dict) -> 
         ]
     elif candidates:
         messages = candidates[-NOTIFICATION_PERSISTENT_TELEGRAM_MIN_CONTEXT:]
+        is_seed_block = True
     else:
         messages = []
 
     if not messages and not events:
         return None
 
+    # Newly-arrived (not previously delivered) incoming messages drive the burst
+    # hint; annotate per-message continuity/truncation comments before the count.
+    new_incoming = 0
+    annotated_messages: list[dict] = []
+    for message in messages:
+        annotated_messages.append(_annotate_telegram_message(message))
+        msg_id = message.get("id")
+        if (
+            message.get("direction") == "incoming"
+            and isinstance(msg_id, str)
+            and msg_id not in delivered_ids
+        ):
+            new_incoming += 1
+    messages = annotated_messages
+
     telegram_payload: dict = {"messages": messages}
+
+    # Seed blocks describe the historical range and the current/new message so
+    # the agent does not have to re-derive which id is new from the raw list.
+    if is_seed_block:
+        range_comment = _telegram_range_context_comment(messages)
+        if range_comment:
+            telegram_payload["context_comment"] = range_comment
+
+    # Burst: multiple genuinely new incoming messages arrived together.  Seed
+    # blocks carry historical last-20 context, so do not count those historical
+    # messages as a burst unless the producer's notification count says multiple
+    # new Telegram events triggered this block.
+    event_count = _telegram_notification_event_count(notification_payload)
+    if (not is_seed_block and new_incoming >= 2) or event_count >= 2:
+        telegram_payload["burst_comment"] = (
+            NOTIFICATION_PERSISTENT_TELEGRAM_BURST_COMMENT
+        )
+
+    # Full referenced reply target(s) missing from the messages list.
+    referenced = _telegram_referenced_messages_from_notifications(notification_payload)
+    present_ids = {
+        message.get("id")
+        for message in messages
+        if isinstance(message.get("id"), str)
+    }
+    referenced_out: list[dict] = []
+    for ref in referenced:
+        if ref.get("id") in present_ids:
+            continue
+        annotated = _annotate_telegram_message(ref)
+        existing = annotated.get("comment")
+        if isinstance(existing, str) and existing:
+            annotated["comment"] = (
+                f"{NOTIFICATION_PERSISTENT_TELEGRAM_REFERENCED_COMMENT} {existing}"
+            )
+        else:
+            annotated["comment"] = NOTIFICATION_PERSISTENT_TELEGRAM_REFERENCED_COMMENT
+        referenced_out.append(annotated)
+    if referenced_out:
+        telegram_payload["referenced_messages"] = referenced_out
+
     if events:
         telegram_payload["events"] = events
 
@@ -1852,11 +2061,10 @@ def build_notification_persistent_payload(agent, notification_payload: dict) -> 
     # Telegram block (Jason #6148). The first block after startup/molt has no
     # predecessor: it is marked `is_first_block: true` with `tool_result_id: null`.
     # Later blocks point `tool_result_id` at the prior tool result id.
-    previous_tool_id = getattr(agent, "_notification_persistent_telegram_last_tool_id", None)
-    is_first_block = previous_tool_id is None
+    is_first_block = not has_previous_block
     previous_block: dict = {
         "path": NOTIFICATION_PERSISTENT_TELEGRAM_PATH,
-        "tool_result_id": previous_tool_id if isinstance(previous_tool_id, str) else None,
+        "tool_result_id": previous_tool_id if has_previous_block else None,
     }
     if is_first_block:
         previous_block["is_first_block"] = True

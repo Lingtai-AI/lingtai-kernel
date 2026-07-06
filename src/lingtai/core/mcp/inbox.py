@@ -92,6 +92,11 @@ _PREVIEW_META_FIELD_CAP = 200
 _PREVIEW_STRUCTURED_META_FIELDS = {
     "latest_incoming": dict,
     "recent_messages": list,
+    # Full referenced Telegram messages (e.g. a reply target older than the
+    # last-20 window) that the persistent lane should carry in full rather than
+    # snippet. Copied under the same JSON-safe size cap as the other structured
+    # IM fields.
+    "referenced_messages": list,
 }
 _PREVIEW_STRUCTURED_META_JSON_CAP = 20_000
 _TELEMETRY_ROUND_DIGITS = 3

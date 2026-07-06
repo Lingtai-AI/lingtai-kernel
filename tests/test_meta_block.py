@@ -2154,10 +2154,22 @@ def test_attach_active_notifications_adds_telegram_persistent_snapshot(tmp_path)
     assert holder is block.content
     # Required path is _meta.notification_persistent.mcp.telegram (Jason #6148).
     telegram = block.content["_meta"]["notification_persistent"]["mcp"]["telegram"]
-    assert set(telegram.keys()) == {"messages", "events", "previous_block"}
+    # Seed block carries the English range comment; historical last-20 context
+    # must not be mistaken for a burst of multiple new incoming messages.
+    assert set(telegram.keys()) == {
+        "messages",
+        "events",
+        "previous_block",
+        "context_comment",
+    }
     assert len(telegram["messages"]) == 20
     assert telegram["messages"][0]["id"] == "main:123:2"
     assert telegram["messages"][-1]["id"] == "main:123:21"
+    assert telegram["context_comment"] == (
+        "Messages 2–20 are historical context from the recent Telegram "
+        "conversation. The current/new message is 21."
+    )
+    assert "burst_comment" not in telegram
     # First block: explicit hook with no predecessor.
     assert telegram["previous_block"] == {
         "path": "_meta.notification_persistent.mcp.telegram",
@@ -2175,6 +2187,40 @@ def test_attach_active_notifications_adds_telegram_persistent_snapshot(tmp_path)
     ]
     assert agent._notification_persistent_telegram_message_ids[-1] == "main:123:21"
     assert agent._notification_persistent_telegram_last_tool_id == "call-first"
+
+
+def test_attach_active_notifications_first_block_reseeds_with_retained_ids(tmp_path):
+    messages = [_telegram_message(i) for i in range(101, 122)]
+    _write_telegram_notif(tmp_path, messages)
+    agent = _notif_agent(tmp_path)
+    # Simulate a fresh provider context after molt/restart where the previous
+    # block hook was reset, but the delivered-id cache retained enough old ids
+    # that the old code incorrectly treated the first block as a delta.
+    agent._notification_persistent_telegram_message_ids = [
+        f"main:123:{i}" for i in range(1, 25)
+    ]
+
+    block = ToolResultBlock(
+        id="t1",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-reseed"}}},
+    )
+    attach_active_notifications(agent, [block], prior_holder=None)
+
+    telegram = block.content["_meta"]["notification_persistent"]["mcp"]["telegram"]
+    assert len(telegram["messages"]) == 20
+    assert telegram["messages"][0]["id"] == "main:123:102"
+    assert telegram["messages"][-1]["id"] == "main:123:121"
+    assert telegram["context_comment"] == (
+        "Messages 102–120 are historical context from the recent Telegram "
+        "conversation. The current/new message is 121."
+    )
+    assert telegram["previous_block"] == {
+        "path": "_meta.notification_persistent.mcp.telegram",
+        "tool_result_id": None,
+        "is_first_block": True,
+    }
+    assert "burst_comment" not in telegram
 
     # Move (not duplicate): the ephemeral notifications.mcp.telegram lane is now
     # only a generic pointer shell.  Even routing hooks live in persistent.
@@ -2350,6 +2396,213 @@ def test_build_notification_persistent_payload_boundary_19_vs_20_delivered():
         "main:123:25",
     ]
     assert twenty_tg["previous_block"]["tool_result_id"] == "call-prev"
+    # Five new incoming messages arrived at once -> burst comment.
+    assert twenty_tg["burst_comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_TELEGRAM_BURST_COMMENT
+    )
+    # Delta blocks (already have >=20 context) do not repeat the seed range
+    # comment.
+    assert "context_comment" not in twenty_tg
+
+
+def test_build_notification_persistent_payload_seed_uses_notification_count_for_burst():
+    messages = [_telegram_message(i) for i in range(1, 21)]
+    messages[-1]["is_current"] = True
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {
+                "data": {
+                    "count": 2,
+                    "previews": [{"recent_messages": messages, "latest_incoming": messages[-1]}],
+                }
+            }
+        }
+    }
+    agent = SimpleNamespace(
+        _notification_persistent_telegram_message_ids=[],
+        _notification_persistent_telegram_last_tool_id=None,
+    )
+    payload = meta_block.build_notification_persistent_payload(agent, notification_payload)
+    telegram = payload["notification_persistent"]["mcp"]["telegram"]
+    assert telegram["context_comment"] == (
+        "Messages 1–19 are historical context from the recent Telegram "
+        "conversation. The current/new message is 20."
+    )
+    assert telegram["burst_comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_TELEGRAM_BURST_COMMENT
+    )
+
+
+def test_build_notification_persistent_payload_range_comment_uses_is_current():
+    # When the producer flags is_current, the range comment identifies that id
+    # as the new message and describes the rest as historical context.
+    messages = [_telegram_message(i) for i in range(1, 21)]
+    messages[-1]["is_current"] = True
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {"data": {"previews": [{"recent_messages": messages}]}}
+        }
+    }
+    agent = SimpleNamespace(
+        _notification_persistent_telegram_message_ids=[],
+        _notification_persistent_telegram_last_tool_id=None,
+    )
+    payload = meta_block.build_notification_persistent_payload(agent, notification_payload)
+    telegram = payload["notification_persistent"]["mcp"]["telegram"]
+    assert telegram["context_comment"] == (
+        "Messages 1–19 are historical context from the recent Telegram "
+        "conversation. The current/new message is 20."
+    )
+
+
+def test_build_notification_persistent_payload_single_new_message_no_burst():
+    # A single new incoming message must not be flagged as a burst.
+    messages = [_telegram_message(i) for i in range(1, 26)]
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {"data": {"previews": [{"recent_messages": messages}]}}
+        }
+    }
+    agent = SimpleNamespace(
+        _notification_persistent_telegram_message_ids=[f"main:123:{i}" for i in range(1, 25)],
+        _notification_persistent_telegram_last_tool_id="call-prev",
+    )
+    payload = meta_block.build_notification_persistent_payload(agent, notification_payload)
+    telegram = payload["notification_persistent"]["mcp"]["telegram"]
+    assert [m["id"] for m in telegram["messages"]] == ["main:123:25"]
+    assert "burst_comment" not in telegram
+
+
+def test_build_notification_persistent_payload_self_outgoing_comment():
+    # The agent's own outgoing message carries the continuity comment.
+    incoming = _telegram_message(1)
+    outgoing = _telegram_message(2)
+    outgoing["direction"] = "outgoing"
+    outgoing["sender"] = "me"
+    messages = [incoming, outgoing]
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {"data": {"previews": [{"recent_messages": messages}]}}
+        }
+    }
+    agent = SimpleNamespace(
+        _notification_persistent_telegram_message_ids=[],
+        _notification_persistent_telegram_last_tool_id=None,
+    )
+    payload = meta_block.build_notification_persistent_payload(agent, notification_payload)
+    telegram = payload["notification_persistent"]["mcp"]["telegram"]
+    out_msg = next(m for m in telegram["messages"] if m["direction"] == "outgoing")
+    assert out_msg["comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_TELEGRAM_SELF_OUTGOING_COMMENT
+    )
+    in_msg = next(m for m in telegram["messages"] if m["direction"] == "incoming")
+    assert "comment" not in in_msg
+
+
+def test_build_notification_persistent_payload_truncated_comment():
+    # A truncated message directs the agent to telegram.read for full state.
+    truncated = _telegram_message(1)
+    truncated["text_truncated"] = True
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {"data": {"previews": [{"recent_messages": [truncated]}]}}
+        }
+    }
+    agent = SimpleNamespace(
+        _notification_persistent_telegram_message_ids=[],
+        _notification_persistent_telegram_last_tool_id=None,
+    )
+    payload = meta_block.build_notification_persistent_payload(agent, notification_payload)
+    telegram = payload["notification_persistent"]["mcp"]["telegram"]
+    assert telegram["messages"][0]["comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_TELEGRAM_TRUNCATED_COMMENT
+    )
+
+
+def test_build_notification_persistent_payload_truncated_outgoing_combines_comments():
+    # A truncated outgoing message carries both hints joined, dropping neither.
+    msg = _telegram_message(1)
+    msg["direction"] = "outgoing"
+    msg["text_truncated"] = True
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {"data": {"previews": [{"recent_messages": [msg]}]}}
+        }
+    }
+    agent = SimpleNamespace(
+        _notification_persistent_telegram_message_ids=[],
+        _notification_persistent_telegram_last_tool_id=None,
+    )
+    payload = meta_block.build_notification_persistent_payload(agent, notification_payload)
+    telegram = payload["notification_persistent"]["mcp"]["telegram"]
+    comment = telegram["messages"][0]["comment"]
+    assert meta_block.NOTIFICATION_PERSISTENT_TELEGRAM_SELF_OUTGOING_COMMENT in comment
+    assert meta_block.NOTIFICATION_PERSISTENT_TELEGRAM_TRUNCATED_COMMENT in comment
+
+
+def test_build_notification_persistent_payload_referenced_messages():
+    # The full reply target, absent from messages, is carried under
+    # referenced_messages with the English referenced comment.
+    current = _telegram_message(25)
+    current["is_current"] = True
+    current["reply_to"] = "main:123:3"
+    referenced = _telegram_message(3, text="the referenced original")
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {
+                "data": {
+                    "previews": [
+                        {
+                            "recent_messages": [current],
+                            "referenced_messages": [referenced],
+                        }
+                    ]
+                }
+            }
+        }
+    }
+    agent = SimpleNamespace(
+        _notification_persistent_telegram_message_ids=[],
+        _notification_persistent_telegram_last_tool_id=None,
+    )
+    payload = meta_block.build_notification_persistent_payload(agent, notification_payload)
+    telegram = payload["notification_persistent"]["mcp"]["telegram"]
+    assert "referenced_messages" in telegram
+    ref = telegram["referenced_messages"][0]
+    assert ref["id"] == "main:123:3"
+    assert ref["text"] == "the referenced original"
+    assert ref["comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_TELEGRAM_REFERENCED_COMMENT
+    )
+
+
+def test_build_notification_persistent_payload_referenced_skipped_when_present():
+    # If the reply target is already in messages, it is not duplicated into
+    # referenced_messages.
+    target = _telegram_message(3)
+    current = _telegram_message(4)
+    current["reply_to"] = "main:123:3"
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {
+                "data": {
+                    "previews": [
+                        {
+                            "recent_messages": [target, current],
+                            "referenced_messages": [target],
+                        }
+                    ]
+                }
+            }
+        }
+    }
+    agent = SimpleNamespace(
+        _notification_persistent_telegram_message_ids=[],
+        _notification_persistent_telegram_last_tool_id=None,
+    )
+    payload = meta_block.build_notification_persistent_payload(agent, notification_payload)
+    telegram = payload["notification_persistent"]["mcp"]["telegram"]
+    assert "referenced_messages" not in telegram
 
 
 def test_sanitize_telegram_notification_after_persistent_strips_durable_text():

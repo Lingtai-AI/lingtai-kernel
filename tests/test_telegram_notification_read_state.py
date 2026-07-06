@@ -225,6 +225,107 @@ def test_incoming_event_structured_last_20_survives_mcp_metadata_cap(
     assert inbox._copy_structured_preview_meta(metadata["latest_incoming"]) is not None
 
 
+def test_incoming_reply_to_old_target_carries_full_referenced_message(
+    tmp_path: Path,
+) -> None:
+    workdir = tmp_path / "agent"
+    inbound_events: list[dict[str, Any]] = []
+    manager = TelegramManager(
+        _FakeService(),
+        working_dir=workdir,
+        on_inbound=inbound_events.append,
+    )
+
+    # Message 1 is the old target; it scrolls out of the last-20 window once
+    # 25+ later messages arrive. Make it longer than the normal 500-char
+    # structured-message cap so the regression proves referenced targets are
+    # inserted in full, not as last-20 snippets.
+    full_target_text = "the very first original message " + "x" * 700
+    for idx in range(1, 26):
+        manager.on_incoming(
+            "main",
+            {
+                "message": {
+                    "message_id": idx,
+                    "date": 1781600000 + idx,
+                    "from": {"id": 1, "username": "alice"},
+                    "chat": {"id": 123, "type": "private"},
+                    "text": (full_target_text if idx == 1 else f"msg {idx}"),
+                }
+            },
+        )
+
+    # A new message replies to the now-out-of-window target (message 1).
+    manager.on_incoming(
+        "main",
+        {
+            "message": {
+                "message_id": 26,
+                "date": 1781600100,
+                "from": {"id": 1, "username": "alice"},
+                "chat": {"id": 123, "type": "private"},
+                "text": "answering your first message",
+                "reply_to_message": {"message_id": 1},
+            }
+        },
+    )
+
+    metadata = inbound_events[-1]["metadata"]
+    recent_ids = {m["id"] for m in metadata["recent_messages"]}
+    assert "main:123:1" not in recent_ids  # target is out of the window
+    referenced = metadata["referenced_messages"]
+    assert len(referenced) == 1
+    assert referenced[0]["id"] == "main:123:1"
+    # Full referenced message, not a snippet capped at the last-20 structured
+    # metadata limit.
+    assert referenced[0]["text"] == full_target_text
+    assert len(referenced[0]["text"]) > 500
+    assert referenced[0]["text_truncated"] is False
+    assert inbox._copy_structured_preview_meta(referenced) is not None
+
+
+def test_incoming_reply_to_in_window_target_has_no_referenced_message(
+    tmp_path: Path,
+) -> None:
+    workdir = tmp_path / "agent"
+    inbound_events: list[dict[str, Any]] = []
+    manager = TelegramManager(
+        _FakeService(),
+        working_dir=workdir,
+        on_inbound=inbound_events.append,
+    )
+
+    manager.on_incoming(
+        "main",
+        {
+            "message": {
+                "message_id": 1,
+                "date": 1781600000,
+                "from": {"id": 1, "username": "alice"},
+                "chat": {"id": 123, "type": "private"},
+                "text": "original in window",
+            }
+        },
+    )
+    manager.on_incoming(
+        "main",
+        {
+            "message": {
+                "message_id": 2,
+                "date": 1781600001,
+                "from": {"id": 1, "username": "alice"},
+                "chat": {"id": 123, "type": "private"},
+                "text": "reply to in-window target",
+                "reply_to_message": {"message_id": 1},
+            }
+        },
+    )
+
+    metadata = inbound_events[-1]["metadata"]
+    # Target is already in recent_messages, so no separate referenced copy.
+    assert "referenced_messages" not in metadata
+
+
 def test_callback_query_incoming_does_not_publish_non_unique_message_ref(tmp_path: Path) -> None:
     workdir = tmp_path / "agent"
     inbound_events: list[dict[str, Any]] = []
