@@ -91,9 +91,9 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "max_turns": int,
     "max_rpm": int,
     # Soft per-molt/session cache-miss token budget. Positive int; default
-    # 1_000_000 lives in AgentConfig.cache_miss_budget. The range check
-    # (reject bool and <= 0) is enforced explicitly in validate_init below —
-    # the (int) type here only rejects non-int types like str/float/None.
+    # 1_000_000 lives in AgentConfig.cache_miss_budget. The (int) type here makes
+    # _check_type reject non-int types (str/float/None) AND bool (an int subclass);
+    # the > 0 range check is enforced in validate_init below.
     "cache_miss_budget": int,
     "admin": dict,
     "streaming": bool,
@@ -283,10 +283,7 @@ def validate_init(data: dict) -> list[str]:
 
     if "summarize_notification_threshold" in manifest:
         summarize_threshold = manifest["summarize_notification_threshold"]
-        if isinstance(summarize_threshold, bool):
-            raise ValueError(
-                "manifest.summarize_notification_threshold: expected non-negative int, got bool"
-            )
+        # _check_type already rejected bool (int subclass) via MANIFEST_OPTIONAL.
         if summarize_threshold < 0:
             raise ValueError(
                 "manifest.summarize_notification_threshold: expected non-negative int"
@@ -294,12 +291,8 @@ def validate_init(data: dict) -> list[str]:
 
     if "cache_miss_budget" in manifest:
         cache_miss_budget = manifest["cache_miss_budget"]
-        # bool is an int subclass — reject it explicitly, then require > 0.
-        # (_optional_keys already rejected non-int types like str/float/None.)
-        if isinstance(cache_miss_budget, bool):
-            raise ValueError(
-                "manifest.cache_miss_budget: expected positive int, got bool"
-            )
+        # _check_type already rejected bool (int subclass) and non-int types
+        # (str/float/None) via MANIFEST_OPTIONAL; only the > 0 range remains.
         if cache_miss_budget <= 0:
             raise ValueError(
                 "manifest.cache_miss_budget: expected positive int (> 0)"
@@ -327,8 +320,8 @@ def validate_init(data: dict) -> list[str]:
     }, prefix="manifest.llm")
     if "compact_threshold" in llm:
         compact_threshold = llm["compact_threshold"]
-        if isinstance(compact_threshold, bool):
-            raise ValueError("manifest.llm.compact_threshold: expected int | null, got bool")
+        # _check_type already rejected bool (int subclass) via the (int, None)
+        # spec in _optional_keys above; only the > 0 range remains.
         if isinstance(compact_threshold, int) and compact_threshold <= 0:
             raise ValueError(
                 "manifest.llm.compact_threshold: expected positive int or null"
@@ -423,8 +416,15 @@ def _check_type(
     path: str,
 ) -> None:
     """Validate a single value's type."""
-    # bool is a subclass of int in Python — reject bools for numeric fields
-    if isinstance(value, bool) and expected_type in (int, (int, float)):
+    # bool is a subclass of int in Python, so `isinstance(True, int)` is True and
+    # a bool would silently satisfy any int-accepting spec below. Reject bools
+    # whenever `int` is among the accepted types (including tuple specs like
+    # `(int, type(None))` — e.g. manifest.context_limit / manifest.llm.compact_threshold),
+    # unless `bool` is explicitly listed as an accepted type. Asking the general
+    # question "is int accepted?" instead of enumerating specific specs closes the
+    # class of bug where a new int-bearing tuple field forgets a hand-rolled guard.
+    expected = expected_type if isinstance(expected_type, tuple) else (expected_type,)
+    if isinstance(value, bool) and int in expected and bool not in expected:
         raise ValueError(f"{path}: expected number, got bool")
 
     if not isinstance(value, expected_type):

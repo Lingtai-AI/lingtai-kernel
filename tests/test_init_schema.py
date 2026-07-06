@@ -1,6 +1,6 @@
 import json
 import pytest
-from lingtai.init_schema import validate_init
+from lingtai.init_schema import validate_init, _check_type
 
 
 def _valid_init() -> dict:
@@ -132,6 +132,61 @@ def test_cache_miss_budget_rejects_bool():
     data["manifest"]["cache_miss_budget"] = True
     with pytest.raises(ValueError, match="manifest.cache_miss_budget"):
         validate_init(data)
+
+
+# --- Regression tests for issue #737 -----------------------------------------
+# manifest.context_limit is typed (int, type(None)). Because bool subclasses int,
+# a bool value silently satisfied isinstance(value, (int, type(None))) and passed
+# validation; downstream, `context_limit or ...` treated True as a 1-token window.
+# _check_type now rejects bool whenever int is an accepted type.
+
+
+@pytest.mark.parametrize("bad", [True, False])
+def test_context_limit_rejects_bool(bad):
+    data = _valid_init()
+    data["manifest"]["context_limit"] = bad
+    with pytest.raises(ValueError, match=r"manifest\.context_limit.*bool"):
+        validate_init(data)
+
+
+def test_context_limit_accepts_int_and_null():
+    # Regression guard for the (int, type(None)) happy path — the bool fix must
+    # not reject legitimate int or null values.
+    for good in (200_000, None):
+        data = _valid_init()
+        data["manifest"]["context_limit"] = good
+        validate_init(data)  # should not raise
+
+
+def test_compact_threshold_rejects_bool_via_check_type():
+    # compact_threshold is also (int, type(None)); its hand-rolled bool guard was
+    # removed in favor of the general _check_type rule. Bools must still be rejected.
+    data = _valid_init()
+    data["manifest"]["llm"]["compact_threshold"] = True
+    with pytest.raises(ValueError, match=r"manifest\.llm\.compact_threshold.*bool"):
+        validate_init(data)
+
+
+def test_compact_threshold_accepts_positive_int_and_null():
+    for good in (150_000, None):
+        data = _valid_init()
+        data["manifest"]["llm"]["compact_threshold"] = good
+        validate_init(data)  # should not raise
+
+
+def test_check_type_rejects_bool_for_tuple_int_field():
+    # Direct unit test of the general rule: bool is refused for any spec that
+    # accepts int, including tuple specs beyond the two previously enumerated.
+    with pytest.raises(ValueError, match=r"x: expected number, got bool"):
+        _check_type(True, (int, type(None)), "x")
+    with pytest.raises(ValueError, match=r"x: expected number, got bool"):
+        _check_type(True, int, "x")
+
+
+def test_check_type_bool_allowed_when_explicitly_listed():
+    # Escape hatch: a future field that legitimately accepts bool | int keeps
+    # working — bool is only rejected when it is NOT an accepted type.
+    _check_type(True, (int, bool), "x")  # should not raise
 
 
 def test_wrong_type_capabilities():
