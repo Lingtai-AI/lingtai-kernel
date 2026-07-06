@@ -16,6 +16,8 @@ import json
 from pathlib import Path
 
 _DIR = Path(__file__).parent
+# Invariant: an entry for `lang` means the shipped `<lang>.json` (if any)
+# has already been merged in. All writes must go through _load().
 _CACHE: dict[str, dict[str, str]] = {}
 
 
@@ -35,9 +37,12 @@ def register_strings(lang: str, strings: dict[str, str]) -> None:
 
     Called by lingtai to inject non-English translations into the
     kernel's cache so that kernel-level t() calls resolve correctly.
-    Merges into any existing entries for the language.
+    Loads the kernel-shipped table for `lang` first (if any) so that
+    registration merges into it rather than masking it, regardless of
+    whether register_strings() or t() runs first. Registered strings
+    override shipped ones on key collision.
     """
-    table = _CACHE.setdefault(lang, {})
+    table = _load(lang)
     table.update(strings)
 
 

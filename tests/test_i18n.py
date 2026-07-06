@@ -1,5 +1,8 @@
 """Tests for lingtai_kernel.i18n."""
-from lingtai_kernel.i18n import t
+import pytest
+
+import lingtai_kernel.i18n
+from lingtai_kernel.i18n import register_strings, t
 
 
 class TestT:
@@ -105,3 +108,44 @@ class TestFallbackToEnglish:
     def test_wen_falls_back_for_tool_reasoning_schema(self):
         result = t("wen", "tool.reasoning_description")
         assert result == t("en", "tool.reasoning_description")
+
+
+class TestRegisterStrings:
+    """register_strings() must merge into the shipped table, not mask it."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        """Reset both i18n caches so ordering can be controlled per test."""
+        import lingtai.i18n
+
+        lingtai_kernel.i18n._CACHE.clear()
+        lingtai.i18n._CACHE.clear()
+        yield
+        lingtai_kernel.i18n._CACHE.clear()
+        lingtai.i18n._CACHE.clear()
+
+    def test_register_strings_before_t_keeps_shipped_translations(self):
+        register_strings("zh", {"custom.key": "自定义"})
+        assert t("zh", "system.context_unknown") == "未知"
+        assert t("zh", "custom.key") == "自定义"
+
+    def test_register_strings_overrides_shipped_key(self):
+        register_strings("zh", {"system.context_unknown": "OVERRIDE"})
+        assert t("zh", "system.context_unknown") == "OVERRIDE"
+
+    def test_register_strings_for_unshipped_language(self):
+        register_strings("xx", {"system.context_unknown": "XX"})
+        assert t("xx", "system.context_unknown") == "XX"
+        # Unregistered keys still fall back to English.
+        assert t("xx", "system.stuck_revive", ts="T", err_desc="E") == t(
+            "en", "system.stuck_revive", ts="T", err_desc="E"
+        )
+
+    @pytest.mark.parametrize("lang", ["zh", "wen"])
+    def test_lingtai_t_first_does_not_mask_kernel_translations(self, lang):
+        """lingtai.i18n.t() first (via _sync_to_kernel) must not mask
+        the kernel-shipped table for that language."""
+        import lingtai.i18n
+
+        lingtai.i18n.t(lang, "read.description")
+        assert t(lang, "system.context_unknown") == "未知"
