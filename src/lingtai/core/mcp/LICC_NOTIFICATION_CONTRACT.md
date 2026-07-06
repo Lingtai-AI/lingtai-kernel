@@ -11,6 +11,7 @@ related_files:
   - src/lingtai/core/mcp/inbox.py
   - src/lingtai/core/mcp/licc.py
   - src/lingtai/mcp_servers/ANATOMY.md
+  - src/lingtai/mcp_servers/feishu/manager.py
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai_kernel/ANATOMY.md
   - src/lingtai_kernel/base_agent/ANATOMY.md
@@ -21,6 +22,7 @@ related_files:
   - src/lingtai_kernel/intrinsics/notification/__init__.py
   - src/lingtai_kernel/meta_block.py
   - src/lingtai_kernel/notifications.py
+  - tests/test_feishu_notification_metadata.py
   - tests/test_licc_notification_contract_doc.py
   - tests/test_mcp_inbox.py
   - tests/test_meta_block.py
@@ -71,7 +73,7 @@ Scope:
 - Coalesced `.notification/mcp.<server>.json` files produced from LICC events.
 - The `_meta.notifications` high-attention hook visible to the agent.
 - The `_meta.notification_persistent` communication-context lane when a producer
-  has one (currently Telegram and built-in email).
+  has one (currently Telegram, Feishu, and built-in email).
 - Producer-owned read/reply/dismiss state that remains the source of truth.
 
 Non-scope: the low-level Telegram Bot API, IMAP protocol semantics, frontend UI
@@ -100,15 +102,30 @@ where they share the `.notification/` filesystem protocol.
 4. **Model-visible transient hook.** `_meta.notifications` is sparse and
    update-driven. `attach_active_notifications` attaches or moves the canonical
    payload only on first appearance, material change, or deliberate
-   `notification(action="check")` (`src/lingtai_kernel/meta_block.py:2453-2584`).
-   For Telegram, `sanitize_telegram_notification_after_persistent` reduces
-   `_meta.notifications.mcp.telegram.data` to stable `message_ids` only; content,
-   sender/subject, routing details, counts, and summaries must not remain in the
-   transient lane (`src/lingtai_kernel/meta_block.py:2163-2192`).
-5. **Model-visible persistent communication context.** When structured Telegram metadata is available, `build_notification_persistent_payload` emits `_meta.notification_persistent.mcp.telegram` with `messages`, `events`, `previous_block`, comments, and full out-of-window reply targets. For built-in email it emits `_meta.notification_persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate)
-   (`src/lingtai_kernel/meta_block.py:1956-2085`). The Telegram MCP supplies the
+   `notification(action="check")` (`src/lingtai_kernel/meta_block.py:2724-2866`).
+   For the IM channels, the spec-driven
+   `_sanitize_im_notification_after_persistent` (public wrappers
+   `sanitize_telegram_notification_after_persistent` /
+   `sanitize_feishu_notification_after_persistent`) reduces
+   `_meta.notifications.mcp.<channel>.data` to stable `message_ids` only;
+   content, sender/subject, routing details, counts, and summaries must not
+   remain in the transient lane
+   (`src/lingtai_kernel/meta_block.py:2386-2440`).
+5. **Model-visible persistent communication context.** When structured IM
+   metadata is available, `build_notification_persistent_payload` emits
+   `_meta.notification_persistent.mcp.<channel>` (currently `telegram` and
+   `feishu`, wired through `_IM_PERSISTENT_CHANNEL_SPECS`) with `messages`,
+   `events`, `previous_block`, comments, and full out-of-window reply targets.
+   For built-in email it emits `_meta.notification_persistent.email` with
+   `email_ids` plus full unread email bodies for the current unread snapshot
+   (ordinary sends are capped at 50,000 characters so the notification layer
+   does not truncate)
+   (`src/lingtai_kernel/meta_block.py:2114-2306`). The Telegram MCP supplies the
    structured `recent_messages`, `latest_incoming`, and `referenced_messages`
-   metadata (`src/lingtai/mcp_servers/telegram/manager.py:904-1040`).
+   metadata (`src/lingtai/mcp_servers/telegram/manager.py:904-1040`); the Feishu
+   MCP supplies `recent_messages` and `latest_incoming` plus the generic
+   `platform`/`conversation_ref`/`message_ref` routing keys
+   (`src/lingtai/mcp_servers/feishu/manager.py:861-1009`).
 6. **Producer source of truth.** Notification files are mirrors/hooks, not the
    authoritative mailbox/chat store. Producer tools own real state changes and
    side effects. Email is the built-in mirror example: unread mail state is rendered into `.notification/email.json`, model-visible content is projected into `_meta.notification_persistent.email`, and read/dismiss/reply actions live on the email tool (`src/lingtai_kernel/base_agent/messaging.py:60-130`).
@@ -142,9 +159,9 @@ The transient and persistent lanes have different jobs:
 ### 1. Stable event identity is required
 
 Human-message producers MUST expose stable IDs for the actionable event. Telegram
-uses compound message IDs; after PR #705 the transient hook carries them as
-`data.message_ids` and nothing else. Email migration should use the analogous
-`data.email_ids` shape when email content moves to a persistent lane.
+and Feishu use compound `account:chat:message` IDs; after PR #705 (Telegram) and
+the Feishu migration the transient hook carries them as `data.message_ids` and
+nothing else. Email uses the analogous `data.email_ids` shape.
 
 ### 2. Content has one model-visible home
 
@@ -230,8 +247,11 @@ In-memory state involved in this contract:
 
 - `agent._notification_live_holder` and `_notification_payload_signature` control
   sparse movement of the transient notification payload.
-- `agent._notification_persistent_telegram_message_ids` and
-  `_notification_persistent_telegram_last_tool_id` track Telegram delivery into the current provider context.
+- `agent._notification_persistent_telegram_message_ids` /
+  `_notification_persistent_telegram_last_tool_id` and
+  `agent._notification_persistent_feishu_message_ids` /
+  `_notification_persistent_feishu_last_tool_id` track per-channel IM delivery
+  into the current provider context (reset on molt).
 
 ## Review triggers
 
@@ -257,6 +277,12 @@ Re-check this contract whenever a change touches any of these areas:
 - **Telegram:** compliant with the content split. Transient
   `_meta.notifications.mcp.telegram` is an identity-only high-attention hook;
   content/context lives in `_meta.notification_persistent.mcp.telegram`.
+- **Feishu:** compliant with the same content split via the shared
+  `_IM_PERSISTENT_CHANNEL_SPECS` machinery. Transient
+  `_meta.notifications.mcp.feishu` is an identity-only high-attention hook;
+  content/context (structured `recent_messages`/`latest_incoming` from the
+  Feishu MCP, or preview-only fallbacks for legacy events) lives in
+  `_meta.notification_persistent.mcp.feishu` with a 10-message seed window.
 - **Generic LICC/MCP:** still publishes bounded previews into the raw
   `.notification/mcp.<name>.json` mirror. That is allowed until the producer has
   a persistent context lane.

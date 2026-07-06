@@ -2727,6 +2727,366 @@ def test_sanitize_telegram_notification_after_persistent_is_noop_without_telegra
     meta_block.sanitize_telegram_notification_after_persistent({})
 
 
+def _feishu_message(message_id: int, *, text: str | None = None) -> dict:
+    return {
+        "id": f"main:oc_chat:om_{message_id}",
+        "direction": "incoming",
+        "sender": "Jason",
+        "date": f"2026-07-06T09:00:{message_id % 60:02d}Z",
+        "relative_time": "just now",
+        "text": text or f"feishu message {message_id}",
+        "text_truncated": False,
+    }
+
+
+def _write_feishu_notif(tmp_path, messages: list[dict]) -> None:
+    notif_dir = tmp_path / ".notification"
+    notif_dir.mkdir(parents=True, exist_ok=True)
+    latest = dict(messages[-1])
+    latest["is_current"] = True
+    payload = {
+        "header": "1 new event from MCP 'feishu'",
+        "icon": "💬",
+        "priority": "high",
+        "data": {
+            "count": 1,
+            "source": "feishu",
+            "has_human_messages": True,
+            "previews": [
+                {
+                    "from": "Jason",
+                    "subject": "feishu message from Jason via main",
+                    "preview": latest["text"],
+                    "preview_truncated": False,
+                    "platform": "feishu",
+                    "conversation_ref": "main:oc_chat",
+                    "message_ref": latest["id"],
+                    "recent_messages": messages,
+                    "latest_incoming": latest,
+                }
+            ],
+        },
+    }
+    (notif_dir / "mcp.feishu.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_attach_active_notifications_adds_feishu_persistent_snapshot(tmp_path):
+    messages = [_feishu_message(i) for i in range(1, 12)]
+    _write_feishu_notif(tmp_path, messages)
+    agent = _notif_agent(tmp_path)
+
+    block = ToolResultBlock(
+        id="t1",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+    )
+    holder = attach_active_notifications(agent, [block], prior_holder=None)
+
+    assert holder is block.content
+    # Feishu mirrors Telegram: the required path is
+    # _meta.notification_persistent.mcp.feishu.
+    feishu = block.content["_meta"]["notification_persistent"]["mcp"]["feishu"]
+    assert set(feishu.keys()) == {
+        "messages",
+        "events",
+        "previous_block",
+        "context_comment",
+    }
+    # Seed block carries the last-10 recent context (Feishu's preview window).
+    assert len(feishu["messages"]) == 10
+    assert feishu["messages"][0]["id"] == "main:oc_chat:om_2"
+    assert feishu["messages"][-1]["id"] == "main:oc_chat:om_11"
+    assert feishu["context_comment"] == (
+        "Messages om_2–om_10 are historical context from the recent Feishu "
+        "conversation. The current/new message is om_11."
+    )
+    assert "burst_comment" not in feishu
+    assert feishu["previous_block"] == {
+        "path": "_meta.notification_persistent.mcp.feishu",
+        "tool_result_id": None,
+        "is_first_block": True,
+    }
+    assert feishu["events"] == [
+        {
+            "from": "Jason",
+            "subject": "feishu message from Jason via main",
+            "conversation_ref": "main:oc_chat",
+            "message_ref": "main:oc_chat:om_11",
+            "platform": "feishu",
+        }
+    ]
+    assert agent._notification_persistent_feishu_message_ids[-1] == "main:oc_chat:om_11"
+    assert agent._notification_persistent_feishu_last_tool_id == "call-first"
+
+    # Move (not duplicate): the ephemeral notifications.mcp.feishu lane is only
+    # a short high-attention identity hook.
+    ephemeral = block.content["_meta"]["notifications"]["mcp.feishu"]
+    assert ephemeral["header"] == "Feishu event"
+    assert ephemeral["data"] == {"message_ids": ["main:oc_chat:om_11"]}
+    assert "previews" not in ephemeral["data"]
+    assert "count" not in ephemeral["data"]
+    assert "has_human_messages" not in ephemeral["data"]
+    assert "feishu message from Jason" not in ephemeral["instructions"]
+
+
+def test_attach_active_notifications_adds_feishu_persistent_delta_with_comment(tmp_path):
+    first_messages = [_feishu_message(i) for i in range(1, 11)]
+    _write_feishu_notif(tmp_path, first_messages)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(
+        id="t1",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+    )
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    first_fs = first.content["_meta"]["notification_persistent"]["mcp"]["feishu"]
+    assert first_fs["messages"][-1]["id"] == "main:oc_chat:om_10"
+    assert first_fs["previous_block"]["is_first_block"] is True
+
+    second_messages = [_feishu_message(i) for i in range(2, 12)]
+    _write_feishu_notif(tmp_path, second_messages)
+    second = ToolResultBlock(
+        id="t2",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-second"}}},
+    )
+    new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
+
+    assert new_holder is second.content
+    # The previous holder keeps its persistent context even though the moving
+    # _meta.notifications payload was skeletonized away.
+    assert "notifications" not in first.content.get("_meta", {})
+    assert first.content["_meta"]["notification_persistent"]["mcp"]["feishu"]["messages"]
+    feishu = second.content["_meta"]["notification_persistent"]["mcp"]["feishu"]
+    assert [message["id"] for message in feishu["messages"]] == ["main:oc_chat:om_11"]
+    previous_block = feishu["previous_block"]
+    assert previous_block["path"] == "_meta.notification_persistent.mcp.feishu"
+    assert previous_block["tool_result_id"] == "call-first"
+    assert "is_first_block" not in previous_block
+    assert previous_block["comment"] == (
+        "For earlier Feishu context, see tool result call-first "
+        "at _meta.notification_persistent.mcp.feishu."
+    )
+    assert agent._notification_persistent_feishu_last_tool_id == "call-second"
+
+
+def test_build_notification_persistent_payload_lands_at_mcp_feishu_path():
+    agent = SimpleNamespace(
+        _notification_persistent_feishu_message_ids=[],
+        _notification_persistent_feishu_last_tool_id=None,
+    )
+    messages = [_feishu_message(i) for i in range(1, 4)]
+    notification_payload = {
+        "notifications": {
+            "mcp.feishu": {
+                "data": {"previews": [{"recent_messages": messages, "latest_incoming": messages[-1]}]}
+            }
+        }
+    }
+    persistent = meta_block.build_notification_persistent_payload(agent, notification_payload)
+
+    # Path is notification_persistent.mcp.feishu, NOT notification_persistent.feishu.
+    assert "feishu" not in persistent["notification_persistent"]
+    feishu = persistent["notification_persistent"]["mcp"]["feishu"]
+    assert [m["id"] for m in feishu["messages"]] == [
+        "main:oc_chat:om_1",
+        "main:oc_chat:om_2",
+        "main:oc_chat:om_3",
+    ]
+    assert feishu["previous_block"] == {
+        "path": "_meta.notification_persistent.mcp.feishu",
+        "tool_result_id": None,
+        "is_first_block": True,
+    }
+
+
+def test_build_notification_persistent_payload_feishu_boundary_9_vs_10_delivered():
+    messages = [_feishu_message(i) for i in range(1, 16)]
+    notification_payload = {
+        "notifications": {
+            "mcp.feishu": {"data": {"previews": [{"recent_messages": messages}]}}
+        }
+    }
+
+    nine = SimpleNamespace(
+        _notification_persistent_feishu_message_ids=[
+            f"main:oc_chat:om_{i}" for i in range(1, 10)
+        ],
+        _notification_persistent_feishu_last_tool_id="call-prev",
+    )
+    nine_payload = meta_block.build_notification_persistent_payload(
+        nine, notification_payload
+    )
+    nine_fs = nine_payload["notification_persistent"]["mcp"]["feishu"]
+    # With fewer than 10 in-context messages, seed with the last 10 messages.
+    assert len(nine_fs["messages"]) == 10
+    assert nine_fs["messages"][0]["id"] == "main:oc_chat:om_6"
+    assert nine_fs["messages"][-1]["id"] == "main:oc_chat:om_15"
+
+    ten = SimpleNamespace(
+        _notification_persistent_feishu_message_ids=[
+            f"main:oc_chat:om_{i}" for i in range(1, 11)
+        ],
+        _notification_persistent_feishu_last_tool_id="call-prev",
+    )
+    ten_payload = meta_block.build_notification_persistent_payload(
+        ten, notification_payload
+    )
+    ten_fs = ten_payload["notification_persistent"]["mcp"]["feishu"]
+    # At 10 delivered messages, switch to delta-only delivery.
+    assert [m["id"] for m in ten_fs["messages"]] == [
+        f"main:oc_chat:om_{i}" for i in range(11, 16)
+    ]
+    assert ten_fs["previous_block"]["tool_result_id"] == "call-prev"
+    # Five new incoming messages arrived at once -> burst comment.
+    assert ten_fs["burst_comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_FEISHU_BURST_COMMENT
+    )
+    assert "context_comment" not in ten_fs
+
+
+def test_build_notification_persistent_payload_feishu_truncated_comment():
+    truncated = _feishu_message(1)
+    truncated["text_truncated"] = True
+    notification_payload = {
+        "notifications": {
+            "mcp.feishu": {"data": {"previews": [{"recent_messages": [truncated]}]}}
+        }
+    }
+    agent = SimpleNamespace(
+        _notification_persistent_feishu_message_ids=[],
+        _notification_persistent_feishu_last_tool_id=None,
+    )
+    payload = meta_block.build_notification_persistent_payload(agent, notification_payload)
+    feishu = payload["notification_persistent"]["mcp"]["feishu"]
+    # Truncated messages point at feishu.read (not telegram.read) for the
+    # exact full producer state.
+    assert feishu["messages"][0]["comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_FEISHU_TRUNCATED_COMMENT
+    )
+    assert "feishu.read" in feishu["messages"][0]["comment"]
+
+
+def test_build_notification_persistent_payload_telegram_and_feishu_coexist():
+    agent = SimpleNamespace(
+        _notification_persistent_telegram_message_ids=[],
+        _notification_persistent_telegram_last_tool_id=None,
+        _notification_persistent_feishu_message_ids=[],
+        _notification_persistent_feishu_last_tool_id=None,
+    )
+    telegram_messages = [_telegram_message(i) for i in range(1, 3)]
+    feishu_messages = [_feishu_message(i) for i in range(1, 3)]
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {
+                "data": {"previews": [{"recent_messages": telegram_messages}]}
+            },
+            "mcp.feishu": {
+                "data": {"previews": [{"recent_messages": feishu_messages}]}
+            },
+        }
+    }
+    persistent = meta_block.build_notification_persistent_payload(
+        agent, notification_payload
+    )
+    mcp = persistent["notification_persistent"]["mcp"]
+    assert [m["id"] for m in mcp["telegram"]["messages"]] == [
+        "main:123:1",
+        "main:123:2",
+    ]
+    assert [m["id"] for m in mcp["feishu"]["messages"]] == [
+        "main:oc_chat:om_1",
+        "main:oc_chat:om_2",
+    ]
+
+
+def test_sanitize_feishu_notification_after_persistent_strips_durable_text():
+    messages = [_feishu_message(i) for i in range(1, 4)]
+    notification_payload = {
+        "notifications": {
+            "mcp.feishu": {
+                "data": {
+                    "count": 3,
+                    "source": "feishu",
+                    "has_human_messages": True,
+                    "previews": [
+                        {
+                            "from": "Jason",
+                            "subject": "feishu message",
+                            "preview": "the last-10 conversation transcript body",
+                            "preview_truncated": False,
+                            "platform": "feishu",
+                            "conversation_ref": "main:oc_chat",
+                            "message_ref": "main:oc_chat:om_3",
+                            "recent_messages": messages,
+                            "latest_incoming": messages[-1],
+                        }
+                    ],
+                }
+            }
+        }
+    }
+
+    meta_block.sanitize_feishu_notification_after_persistent(notification_payload)
+
+    feishu = notification_payload["notifications"]["mcp.feishu"]
+    data = feishu["data"]
+    assert data == {"message_ids": ["main:oc_chat:om_3"]}
+    assert "previews" not in data
+    assert "source" not in data
+    assert "count" not in data
+    assert "has_human_messages" not in data
+    assert feishu["header"] == "Feishu event"
+    assert "feishu message" not in feishu["instructions"]
+
+
+def test_sanitize_feishu_notification_after_persistent_is_noop_without_feishu():
+    # No feishu notification → safe no-op, does not raise; other channels
+    # (including telegram) are untouched.
+    payload = {
+        "notifications": {
+            "mcp.telegram": {"data": {"previews": [{"preview": "x"}]}}
+        }
+    }
+    meta_block.sanitize_feishu_notification_after_persistent(payload)
+    assert (
+        payload["notifications"]["mcp.telegram"]["data"]["previews"][0]["preview"]
+        == "x"
+    )
+    meta_block.sanitize_feishu_notification_after_persistent({})
+
+
+def test_attach_active_notifications_feishu_preview_only_fallback(tmp_path):
+    # Legacy preview-only Feishu payloads (no structured recent_messages /
+    # latest_incoming) are preserved as persistent fallback messages rather
+    # than staying in the transient notification lane.
+    notif_dir = tmp_path / ".notification"
+    notif_dir.mkdir(parents=True, exist_ok=True)
+    (notif_dir / "mcp.feishu.json").write_text(
+        '{"header": "1 new event", "icon": "💬", "priority": "high", '
+        '"data": {"previews": ['
+        '{"from": "Jason", "subject": "feishu message", "preview": "hello", '
+        '"platform": "feishu", "conversation_ref": "main:oc_chat", '
+        '"message_ref": "main:oc_chat:om_1"}'
+        ']}}',
+        encoding="utf-8",
+    )
+    agent = _notif_agent(tmp_path)
+    block = ToolResultBlock(id="t1", name="x", content={"ok": True})
+
+    attach_active_notifications(agent, [block], prior_holder=None)
+
+    meta = block.content["_meta"]
+    feishu = meta["notification_persistent"]["mcp"]["feishu"]
+    assert [message["text"] for message in feishu["messages"]] == ["hello"]
+    assert feishu["messages"][0]["id"] == "main:oc_chat:om_1"
+    assert feishu["messages"][0]["source"] == "notification_preview"
+    ephemeral = meta["notifications"]["mcp.feishu"]
+    assert ephemeral["data"] == {"message_ids": ["main:oc_chat:om_1"]}
+    assert "previews" not in ephemeral["data"]
+
+
 def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):
     notif_dir = tmp_path / ".notification"
     notif_dir.mkdir(parents=True, exist_ok=True)
