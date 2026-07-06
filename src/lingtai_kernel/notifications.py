@@ -818,6 +818,17 @@ def dismiss_channel(
             "cleared": existed,
             "forced": bool(force),
         }
+        if not existed:
+            # A whole-channel dismiss that cleared nothing is not a failure: the
+            # notification file was already absent. Say so explicitly so the
+            # agent can distinguish "nothing to do" from a genuine failure
+            # instead of burning turns re-dismissing (including with force=true,
+            # which reaches here identically once its file is gone).
+            result["cause"] = "already_empty"
+            result["hint"] = (
+                f"Channel '{channel}' had no notification to clear; nothing to "
+                "do. No re-dismiss needed."
+            )
         if ack_reason:
             result["reason"] = ack_reason
         return result
@@ -915,6 +926,17 @@ def dismiss_channel(
                 "remaining": len(kept),
                 "forced": bool(force),
             }
+            # A targeted event_id/ref_id dismiss that matched nothing is not a
+            # failure: the referenced event is already gone (or never existed in
+            # the current system.json). Distinguish "already gone" from a "still
+            # present" surface so the agent knows whether re-reading is worth it.
+            result["cause"] = "ref_not_found"
+            result["hint"] = (
+                "No matching event in the current system channel"
+                + (f" ({len(kept)} other event(s) remain; re-read to see them)"
+                   if kept else "; nothing to do")
+                + "."
+            )
             if event_id:
                 result["event_id"] = event_id
             if ref_id:

@@ -92,6 +92,33 @@ def test_dismiss_channel_is_idempotent_when_absent(tmp_path: Path) -> None:
     assert res["channel"] == "soul"
 
 
+def test_dismiss_channel_absent_reports_already_empty_cause(tmp_path: Path) -> None:
+    # Regression for #716: a whole-channel dismiss that clears nothing must say
+    # WHY (already_empty) instead of an opaque cleared:false so the agent does
+    # not burn turns re-dismissing.
+    agent = _StubAgent(tmp_path)
+
+    res = _dismiss_channel(agent, "soul")
+
+    assert res["status"] == "ok"
+    assert res["cleared"] is False
+    assert res["cause"] == "already_empty"
+    assert "hint" in res and res["hint"]
+
+
+def test_forced_dismiss_absent_reports_already_empty_cause(tmp_path: Path) -> None:
+    # Regression for #716: force=true reaching an already-empty channel must not
+    # return an opaque cleared:false; it explains the no-op like the plain path.
+    agent = _StubAgent(tmp_path)
+
+    res = _dismiss_channel(agent, "mcp.telegram", force=True)
+
+    assert res["status"] == "ok"
+    assert res["cleared"] is False
+    assert res["forced"] is True
+    assert res["cause"] == "already_empty"
+
+
 def test_dismiss_mcp_dotted_channel(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
     publish(tmp_path, "mcp.telegram", {"header": "telegram event"})
@@ -388,6 +415,35 @@ def test_system_event_dismiss_by_event_id_preserves_other_events(tmp_path: Path)
         {"event_id": "evt_a", "source": "daemon", "ref_id": "a", "body": "A"}
     ]
     assert getattr(agent, "_goal_reminder_last_dismissed_at", 0) > 0
+
+
+def test_system_event_dismiss_no_match_reports_ref_not_found_cause(tmp_path: Path) -> None:
+    # Regression for #716: a targeted event dismiss that matches nothing must
+    # report cause=ref_not_found (and whether other events remain) instead of an
+    # opaque cleared:false/removed:0.
+    agent = _StubAgent(tmp_path)
+    publish(
+        tmp_path,
+        "system",
+        {
+            "header": "1 system notification",
+            "data": {
+                "events": [
+                    {"event_id": "evt_a", "source": "daemon", "ref_id": "a", "body": "A"},
+                ]
+            },
+        },
+    )
+    agent._notification_fp = notification_fingerprint(tmp_path)
+
+    result = _dismiss_event(agent, event_id="evt_missing")
+
+    assert result["status"] == "ok"
+    assert result["cleared"] is False
+    assert result["removed"] == 0
+    assert result["remaining"] == 1
+    assert result["cause"] == "ref_not_found"
+    assert "hint" in result and result["hint"]
 
 
 def test_system_event_dismiss_by_ref_id_clears_file_when_last_event(tmp_path: Path) -> None:
