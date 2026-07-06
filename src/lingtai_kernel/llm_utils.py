@@ -63,6 +63,18 @@ def _send(
         try:
             return future.result(timeout=wait)
         except TimeoutError:
+            # On Python >= 3.11 (this repo's floor) concurrent.futures.TimeoutError,
+            # socket.timeout and asyncio.TimeoutError are all the builtin
+            # TimeoutError, so this clause fires for BOTH "result() gave up
+            # waiting" and "the worker itself raised a TimeoutError". Ask the
+            # future which one it was (#738): a done future never blocks, so if
+            # the worker settled we surface its real outcome immediately instead
+            # of busy-looping "not responding" and later escalating to a false
+            # WorkerStillRunningError. future.result(timeout=0) re-raises the
+            # worker's exception (common case) or returns the value (benign race
+            # where the future settled just after our wait expired).
+            if future.done():
+                return future.result(timeout=0)
             elapsed = time.monotonic() - t0
             if elapsed >= retry_timeout:
                 _wait_for_worker_settle(future, elapsed, agent_name)
@@ -84,10 +96,21 @@ def _wait_for_worker_settle(future: Future, elapsed: float, agent_name: str) -> 
     If the worker is still running after the grace period, raise a distinct
     WorkerStillRunningError. AED must not treat this as an ordinary timeout
     because the provider worker may still mutate the shared ChatInterface.
+
+    Note: ``except TimeoutError`` alone is ambiguous on Python >= 3.11 — the
+    worker may have *settled* by raising its own TimeoutError (socket.timeout,
+    asyncio.TimeoutError, or a hand-raised builtin), which is not the same as
+    result() giving up. ``future.done()`` is the discriminator (#738).
     """
     try:
         future.result(timeout=_WORKER_SETTLE_GRACE)
     except TimeoutError:
+        if future.done():
+            # The worker settled with its own TimeoutError, not result()
+            # giving up. Its except-block already ran drop_trailing, so this
+            # is safe — treat it exactly like the except Exception branch
+            # below and let the caller raise its ordinary watchdog TimeoutError.
+            return
         _logger.error(
             "[%s] LLM worker thread still running after %.0fs + %.0fs grace — "
             "interface state may be inconsistent. Refusing AED retry.",

@@ -231,3 +231,66 @@ def test_send_with_timeout_raises_worker_still_running_when_worker_never_settles
     finally:
         blocker.set()
         pool.shutdown(wait=True)
+
+
+# --- Regression tests for #738: worker-raised TimeoutError must not be
+# misread as "future not settled". On Python >= 3.11 (this repo's floor)
+# concurrent.futures.TimeoutError, socket.timeout and asyncio.TimeoutError are
+# all aliases of the builtin TimeoutError, so `except TimeoutError` alone cannot
+# tell "Future.result gave up waiting" apart from "the worker raised a
+# TimeoutError". The discriminator is future.done().
+
+
+def test_wait_for_worker_settle_returns_when_worker_raised_timeout():
+    """A future that settled with the worker's own TimeoutError (e.g. a raw
+    socket.timeout bubbling out of the HTTP layer) is DONE — its except-block
+    already ran drop_trailing. _wait_for_worker_settle must treat it like any
+    other settled worker error (return, let the caller raise its ordinary
+    watchdog TimeoutError), NOT escalate to WorkerStillRunningError. See #738.
+    """
+    future: Future = Future()
+    # socket.timeout / asyncio.TimeoutError are the builtin TimeoutError on >=3.11.
+    future.set_exception(TimeoutError("worker socket timeout"))
+
+    # Must return None and must NOT raise WorkerStillRunningError.
+    assert _wait_for_worker_settle(future, elapsed=10.0, agent_name="t") is None
+
+
+def test_send_surfaces_worker_timeout_immediately_without_spam(caplog):
+    """When the worker settles with a builtin TimeoutError early in the
+    retry_timeout budget, _send must surface it promptly as a plain
+    TimeoutError (not WorkerStillRunningError) instead of busy-looping and
+    spamming "not responding" warnings for the rest of the budget. See #738.
+    """
+    import logging
+    import threading
+    import time as _time
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    blocker = threading.Event()
+    # Worker sleeps a beat, then raises a builtin TimeoutError (socket.timeout).
+    chat = _FakeChat(blocker, raises=TimeoutError("worker HTTP timeout"))
+    blocker.set()  # let the worker settle immediately
+
+    t_start = _time.monotonic()
+    with caplog.at_level(logging.WARNING):
+        try:
+            with pytest.raises(TimeoutError) as exc:
+                # Generous retry_timeout: a busy-loop would take ~this long and
+                # spam warnings; the fix must return well before it.
+                send_with_timeout(
+                    chat=chat, message="hi",
+                    timeout_pool=pool, retry_timeout=30.0,
+                    agent_name="test", logger=None,
+                )
+        finally:
+            pool.shutdown(wait=True)
+    elapsed = _time.monotonic() - t_start
+
+    # Surfaced as an ordinary worker exception, NOT the poison signal.
+    assert not isinstance(exc.value, WorkerStillRunningError)
+    # Promptly — proving the hot loop is gone (nowhere near the 30s budget).
+    assert elapsed < 5.0, f"_send busy-looped for {elapsed:.1f}s"
+    # No warning spam for a worker that already finished.
+    spam = [r for r in caplog.records if "not responding" in r.getMessage()]
+    assert len(spam) <= 1, f"expected no warning spam, got {len(spam)}"
