@@ -70,7 +70,10 @@ def _rerender_unread_digest(agent) -> str | None:
     ``.notification/`` is the contract.
     """
     from ..intrinsics.system import publish_notification, clear_notification
-    from ..intrinsics.email.primitives import _render_unread_digest
+    from ..intrinsics.email.primitives import (
+        _render_unread_digest,
+        _unread_notification_context,
+    )
 
     body, count, newest_ts = _render_unread_digest(agent)
 
@@ -78,6 +81,8 @@ def _rerender_unread_digest(agent) -> str | None:
         clear_notification(agent._working_dir, "email")
         agent._log("email_notification_cleared")
         return None
+
+    email_items, email_ids = _unread_notification_context(agent)
 
     publish_notification(
         agent._working_dir, "email",
@@ -118,6 +123,8 @@ def _rerender_unread_digest(agent) -> str | None:
         data={
             "count": count,
             "newest_received_at": newest_ts,
+            "email_ids": email_ids,
+            "emails": email_items,
             "digest": body,
         },
     )

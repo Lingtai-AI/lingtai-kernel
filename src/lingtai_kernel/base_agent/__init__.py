@@ -42,6 +42,7 @@ from ..meta_block import (
     formal_tool_result_preview,
     formal_tool_result_visible_len,
     record_notification_persistent_delivery,
+    sanitize_email_notification_after_persistent,
     sanitize_telegram_notification_after_persistent,
 )
 from ..session import SessionManager
@@ -1515,6 +1516,28 @@ class BaseAgent:
         meta["injection_seq"] = self._notification_inject_seq
 
         notifications_with_guidance = build_notification_payload(notifications)
+        # Keep log-only source counts from the raw canonical payload before the
+        # transient lanes are sanitized for model visibility.  For example,
+        # email's model-visible hook drops count and keeps only email_ids, but
+        # the operational injection log should still say "1 email".
+        notification_summary_counts: dict[str, object] = {}
+        raw_notifications = notifications_with_guidance.get("notifications")
+        if isinstance(raw_notifications, dict):
+            for raw_source, raw_payload in raw_notifications.items():
+                raw_count = None
+                if isinstance(raw_payload, dict):
+                    raw_data = raw_payload.get("data") or {}
+                    if isinstance(raw_data, dict):
+                        raw_count = raw_data.get("count")
+                        if raw_count is None and isinstance(
+                            raw_data.get("events"), list
+                        ):
+                            raw_count = len(raw_data["events"])
+                        if raw_count is None and isinstance(
+                            raw_data.get("voices"), list
+                        ):
+                            raw_count = len(raw_data["voices"])
+                notification_summary_counts[raw_source] = raw_count
 
         # Nest the canonical notification payload under the unified ``_meta``
         # envelope so the synthesized pair presents notifications the same way
@@ -1532,6 +1555,7 @@ class BaseAgent:
         # `notifications_with_guidance` is freshly built for this delivery cycle,
         # so in-place trimming cannot mutate producer-owned state.
         sanitize_telegram_notification_after_persistent(notifications_with_guidance)
+        sanitize_email_notification_after_persistent(notifications_with_guidance)
         body_meta = dict(notifications_with_guidance)
         if notification_persistent_payload:
             body_meta.update(notification_persistent_payload)
@@ -1564,6 +1588,22 @@ class BaseAgent:
                         count = len(data["events"])
                     if count is None and isinstance(data.get("voices"), list):
                         count = len(data["voices"])
+            if count is None:
+                raw_count = notification_summary_counts.get(source)
+                if isinstance(raw_count, int):
+                    count = raw_count
+            if count is None and source == "email" and isinstance(
+                notification_persistent_payload, dict
+            ):
+                persistent = notification_persistent_payload.get(
+                    "notification_persistent"
+                )
+                if isinstance(persistent, dict):
+                    email_context = persistent.get("email")
+                    if isinstance(email_context, dict):
+                        persistent_count = email_context.get("count")
+                        if isinstance(persistent_count, int):
+                            count = persistent_count
             summary_parts.append(f"{count if count is not None else '?'} {source}")
         guidance_text = (
             "Notice: this is kernel-synchronized state from notification channels, "

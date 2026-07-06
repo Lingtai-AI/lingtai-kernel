@@ -337,6 +337,44 @@ def _email_time(e: dict) -> str:
 # Unread digest rendering
 # ---------------------------------------------------------------------------
 
+def _unread_notification_context(agent, *, max_entries: int = 10, preview_chars: int = 500) -> tuple[list[dict], list[str]]:
+    """Return structured unread email summaries for notification persistence.
+
+    The prose digest stays useful for humans, but the model-visible transient
+    notification is now an identity-only hook.  This structured list is the
+    bounded context lane consumed by ``_meta.notification_persistent.email``.
+    Exact bodies still belong to the producer tool via ``email.read``.
+    """
+    read_ids = _read_ids(agent)
+    inbox = _list_inbox(agent)  # already newest-first per existing semantics
+    unread = [m for m in inbox if m.get("_mailbox_id") not in read_ids]
+    shown = unread[:max_entries]
+    recipient_id = getattr(agent, "_agent_id", "")
+    emails: list[dict] = []
+    email_ids: list[str] = []
+    for msg in shown:
+        summary = _message_summary(
+            msg, read_ids, truncate=preview_chars,
+            recipient_agent_id=recipient_id,
+        )
+        msg_id = summary.get("id")
+        if isinstance(msg_id, str) and msg_id:
+            email_ids.append(msg_id)
+        body = msg.get("message", "")
+        if not isinstance(body, str):
+            body = ""
+        summary["received_at"] = msg.get("received_at") or ""
+        summary["sent_at"] = msg.get("sent_at") or ""
+        summary["preview_truncated"] = preview_chars > 0 and len(body) > preview_chars
+        if summary["preview_truncated"]:
+            summary["comment"] = (
+                "This email preview is truncated; call email.read with this "
+                "email id for the full producer state."
+            )
+        emails.append(summary)
+    return emails, email_ids
+
+
 def _render_unread_digest(agent, *, max_entries: int = 10, preview_chars: int = 200) -> tuple[str, int, str | None]:
     """Compute and render the current unread mail digest.
 
