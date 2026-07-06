@@ -4,11 +4,12 @@ description: |
   Progressive-disclosure usage manual for the Feishu (Lark) MCP tool. Read this
   when you need detail beyond the one-line action descriptions: receive_id vs
   receive_id_type (open_id/chat_id), send vs reply, check/read/search, placeholder
-  + edit for long responses, contacts/accounts basics, and side-effect caveats.
+  + edit for long responses, contacts/accounts basics, the notification
+  transient-hook vs persistent-context split, and side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.0.0
-last_changed_at: "2026-06-26T14:33:19-07:00"
+version: 1.1.0
+last_changed_at: "2026-07-06T00:00:00-07:00"
 ---
 
 # Feishu (Lark) MCP — usage manual (progressive disclosure)
@@ -60,6 +61,25 @@ descriptions; you do not need to call it before every send.
 - `message_id` is the compound id returned by read/check
   (`{alias}:{chat_id}:{feishu_message_id}`); pass it back verbatim to
   `reply`/`edit`/`delete`.
+
+## NOTIFICATIONS: TRANSIENT HOOK vs PERSISTENT CONTEXT
+
+- Inbound Feishu messages surface to the agent in two `_meta` lanes:
+  - `_meta.notifications.mcp.feishu` is a compact high-attention hook only —
+    `data.message_ids` (compound `{alias}:{chat_id}:{feishu_message_id}` ids)
+    and dismiss guidance, never message text or routing context.
+  - `_meta.notification_persistent.mcp.feishu` carries durable context:
+    recent conversation messages (bounded text, both directions), sender/chat
+    routing hooks, reply refs when present, and per-message comments for the
+    agent's own outgoing messages or truncated text.
+- The feishu tool remains the source of truth. Neither lane marks anything
+  read; use `read`/`check` for exact producer state, especially when a
+  persistent message is truncated.
+- Reply in Feishu when the message arrived through Feishu (`reply` with the
+  compound message id, or `send` to the chat/open_id).
+- After handling, dismiss the transient hook via
+  `notification.dismiss_channel("mcp.feishu")`; the persistent block is
+  context history, not unread state.
 
 ## SIDE EFFECTS & ERROR SURFACING
 

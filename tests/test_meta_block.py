@@ -2754,6 +2754,49 @@ def _wechat_message(
     }
 
 
+def _feishu_message(
+    n: int,
+    *,
+    direction: str = "incoming",
+    truncated: bool = False,
+    current: bool = False,
+) -> dict:
+    msg = {
+        "id": f"main:oc_chat:om_{n}",
+        "direction": direction,
+        "sender": "Jason" if direction == "incoming" else "me",
+        "date": f"2026-07-06T09:00:{n:02d}Z",
+        "text": f"feishu message {n}",
+        "text_truncated": truncated,
+    }
+    if current:
+        msg["is_current"] = True
+    return msg
+
+
+def _whatsapp_message(
+    n: int,
+    *,
+    direction: str = "incoming",
+    truncated: bool = False,
+    message_type: str = "text",
+    text: str | None = None,
+    current: bool = False,
+) -> dict:
+    msg = {
+        "id": f"default:15551234567:wamid.{n}",
+        "direction": direction,
+        "wa_id": "15551234567",
+        "type": message_type,
+        "text": f"whatsapp message {n}" if text is None else text,
+        "text_truncated": truncated,
+        "stored_at": f"2026-07-06T09:00:{n:02d}+00:00",
+    }
+    if current:
+        msg["is_current"] = True
+    return msg
+
+
 def _write_wechat_notif(tmp_path, messages: list[dict]) -> None:
     notif_dir = tmp_path / ".notification"
     notif_dir.mkdir(parents=True, exist_ok=True)
@@ -3026,6 +3069,233 @@ def test_sanitize_wechat_notification_after_persistent_is_noop_without_wechat():
     previews = payload["notifications"]["mcp.telegram"]["data"]["previews"]
     assert previews[0]["preview"] == "x"
     meta_block.sanitize_wechat_notification_after_persistent({})
+
+
+def test_build_notification_persistent_payload_feishu_delta_lane():
+    agent = SimpleNamespace(
+        _notification_persistent_feishu_message_ids=[],
+        _notification_persistent_feishu_last_tool_id=None,
+    )
+    messages = [_feishu_message(i) for i in range(1, 4)]
+    messages[-1]["is_current"] = True
+    notification_payload = {
+        "notifications": {
+            "mcp.feishu": {
+                "data": {
+                    "count": 2,
+                    "previews": [
+                        {
+                            "from": "Jason",
+                            "subject": "feishu message",
+                            "platform": "feishu",
+                            "conversation_ref": "main:oc_chat",
+                            "message_ref": messages[-1]["id"],
+                            "recent_messages": messages,
+                            "latest_incoming": messages[-1],
+                        }
+                    ],
+                }
+            }
+        }
+    }
+
+    persistent = meta_block.build_notification_persistent_payload(
+        agent, notification_payload
+    )
+    feishu = persistent["notification_persistent"]["mcp"]["feishu"]
+
+    assert [m["id"] for m in feishu["messages"]] == [
+        "main:oc_chat:om_1",
+        "main:oc_chat:om_2",
+        "main:oc_chat:om_3",
+    ]
+    assert feishu["previous_block"] == {
+        "path": "_meta.notification_persistent.mcp.feishu",
+        "tool_result_id": None,
+        "is_first_block": True,
+    }
+    assert feishu["burst_comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_FEISHU_BURST_COMMENT
+    )
+    assert feishu["events"] == [
+        {
+            "from": "Jason",
+            "subject": "feishu message",
+            "conversation_ref": "main:oc_chat",
+            "message_ref": "main:oc_chat:om_3",
+            "platform": "feishu",
+        }
+    ]
+
+    meta_block.record_notification_persistent_delivery(
+        agent, persistent, tool_call_id="call-feishu"
+    )
+    assert agent._notification_persistent_feishu_message_ids[-1] == (
+        "main:oc_chat:om_3"
+    )
+    assert agent._notification_persistent_feishu_last_tool_id == "call-feishu"
+
+
+def test_sanitize_feishu_notification_after_persistent_strips_durable_text():
+    messages = [_feishu_message(i) for i in range(1, 3)]
+    notification_payload = {
+        "notifications": {
+            "mcp.feishu": {
+                "data": {
+                    "count": 2,
+                    "previews": [
+                        {
+                            "from": "Jason",
+                            "subject": "feishu message",
+                            "preview": "conversation preview",
+                            "platform": "feishu",
+                            "conversation_ref": "main:oc_chat",
+                            "message_ref": messages[-1]["id"],
+                            "recent_messages": messages,
+                            "latest_incoming": messages[-1],
+                        }
+                    ],
+                }
+            }
+        }
+    }
+
+    meta_block.sanitize_feishu_notification_after_persistent(notification_payload)
+
+    feishu = notification_payload["notifications"]["mcp.feishu"]
+    assert feishu["data"] == {"message_ids": ["main:oc_chat:om_2"]}
+    assert feishu["header"] == "Feishu event"
+    assert "conversation preview" not in feishu["instructions"]
+
+
+def test_build_notification_persistent_payload_whatsapp_snapshot_lane():
+    agent = SimpleNamespace()
+    current = _whatsapp_message(3, current=True)
+    notification_payload = {
+        "notifications": {
+            "mcp.whatsapp": {
+                "data": {
+                    "count": 1,
+                    "previews": [
+                        {
+                            "from": "WhatsApp +15551234567",
+                            "subject": "whatsapp message",
+                            "platform": "whatsapp",
+                            "conversation_ref": "default:15551234567",
+                            "message_ref": current["id"],
+                            "recent_messages": [
+                                _whatsapp_message(1),
+                                _whatsapp_message(2, direction="outgoing"),
+                                current,
+                            ],
+                            "latest_incoming": current,
+                        }
+                    ],
+                }
+            }
+        }
+    }
+
+    persistent = meta_block.build_notification_persistent_payload(
+        agent, notification_payload
+    )
+    whatsapp = persistent["notification_persistent"]["mcp"]["whatsapp"]
+
+    assert whatsapp["context_comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_WHATSAPP_CONTEXT_COMMENT
+    )
+    assert [m["id"] for m in whatsapp["messages"]] == [
+        "default:15551234567:wamid.1",
+        "default:15551234567:wamid.2",
+        "default:15551234567:wamid.3",
+    ]
+    assert "previous_block" not in whatsapp
+    assert "burst_comment" not in whatsapp
+    assert whatsapp["messages"][1]["comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_WHATSAPP_SELF_OUTGOING_COMMENT
+    )
+    assert whatsapp["events"] == [
+        {
+            "from": "WhatsApp +15551234567",
+            "subject": "whatsapp message",
+            "conversation_ref": "default:15551234567",
+            "message_ref": "default:15551234567:wamid.3",
+            "platform": "whatsapp",
+        }
+    ]
+
+    meta_block.record_notification_persistent_delivery(
+        agent, persistent, tool_call_id="call-whatsapp"
+    )
+    assert not hasattr(agent, "_notification_persistent_whatsapp_message_ids")
+    assert not hasattr(agent, "_notification_persistent_whatsapp_last_tool_id")
+
+
+def test_whatsapp_snapshot_message_comments_cover_truncated_and_media():
+    agent = SimpleNamespace()
+    media_message = _whatsapp_message(2, message_type="image")
+    media_message["text"] = None
+    notification_payload = {
+        "notifications": {
+            "mcp.whatsapp": {
+                "data": {
+                    "previews": [
+                        {
+                            "message_ref": "default:15551234567:wamid.2",
+                            "recent_messages": [
+                                _whatsapp_message(1, truncated=True),
+                                media_message,
+                            ],
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+    persistent = meta_block.build_notification_persistent_payload(
+        agent, notification_payload
+    )
+    messages = persistent["notification_persistent"]["mcp"]["whatsapp"]["messages"]
+
+    assert messages[0]["comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_WHATSAPP_TRUNCATED_COMMENT
+    )
+    assert messages[1]["comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_WHATSAPP_MEDIA_COMMENT
+    )
+
+
+def test_sanitize_whatsapp_notification_after_persistent_strips_durable_text():
+    current = _whatsapp_message(1)
+    notification_payload = {
+        "notifications": {
+            "mcp.whatsapp": {
+                "data": {
+                    "count": 1,
+                    "previews": [
+                        {
+                            "from": "WhatsApp +15551234567",
+                            "subject": "whatsapp message",
+                            "preview": "conversation preview",
+                            "platform": "whatsapp",
+                            "conversation_ref": "default:15551234567",
+                            "message_ref": current["id"],
+                            "recent_messages": [current],
+                            "latest_incoming": current,
+                        }
+                    ],
+                }
+            }
+        }
+    }
+
+    meta_block.sanitize_whatsapp_notification_after_persistent(notification_payload)
+
+    whatsapp = notification_payload["notifications"]["mcp.whatsapp"]
+    assert whatsapp["data"] == {"message_ids": ["default:15551234567:wamid.1"]}
+    assert whatsapp["header"] == "WhatsApp event"
+    assert "conversation preview" not in whatsapp["instructions"]
 
 
 def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):

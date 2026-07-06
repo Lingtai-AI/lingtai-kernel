@@ -51,6 +51,19 @@ _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(__package__)
 REACTION_SEEN = "OK"        # Message received — "got it"
 REACTION_DONE = "THUMBSUP"  # Response sent — "done"
 
+# Conversation-context window for LICC notification previews/metadata: how many
+# recent messages (inbox + sent, one chat) ride along with an incoming-message
+# event.  The same window feeds both the markdown preview body and the
+# structured `recent_messages` metadata, and it matches the kernel's
+# NOTIFICATION_PERSISTENT_FEISHU_MIN_CONTEXT seed/delta boundary.
+_CONVERSATION_PREVIEW_MESSAGES = 10
+# Per-message text cap inside structured `recent_messages` items.  Structured
+# metadata must stay within the kernel inbox's 20k-JSON structured-field cap
+# (inbox._PREVIEW_STRUCTURED_META_JSON_CAP) or it is silently dropped; capped
+# messages carry text_truncated=true so the agent knows to feishu.read for the
+# exact producer state.
+_STRUCTURED_MESSAGE_TEXT_CAP = 500
+
 
 class TypingIndicatorManager:
     """Manages automatic typing feedback for Feishu chats.
@@ -693,17 +706,20 @@ class FeishuManager:
         # Forward to host via LICC. Body is a conversation preview showing
         # the last 10 rounds with a guidance header; agent uses
         # feishu(action="check"|"read") for the full conversation. Metadata
-        # carries routing keys.
+        # carries routing keys plus the structured recent_messages /
+        # latest_incoming context the kernel moves into the persistent
+        # notification lane.
         display_name = self._get_contact_name(account_alias, open_id) or open_id
         try:
-            preview = self._build_conversation_preview(
+            preview, preview_metadata = self._build_conversation_preview_and_metadata(
                 account_alias, chat_id, compound_id,
             )
         except Exception as exc:
-            log.warning("_build_conversation_preview failed: %s", exc)
+            log.warning("_build_conversation_preview_and_metadata failed: %s", exc)
             preview = text[:300].replace("\n", " ") if text else ""
             if len(text or "") > 300:
                 preview += "..."
+            preview_metadata = {}
 
         log.info(
             "feishu_received account=%s sender=%r id=%s",
@@ -726,6 +742,14 @@ class FeishuManager:
                     "chat_id": chat_id,
                     "chat_type": chat_type,
                     "from_open_id": open_id,
+                    # Generic LICC preview metadata copied into
+                    # .notification/mcp.feishu.json.  Keep both the legacy
+                    # Feishu-specific keys above and the generic chat keys
+                    # below so the kernel's persistent notification lane gets
+                    # stable routing hooks without re-reading Feishu state.
+                    "platform": "feishu",
+                    "conversation_ref": f"{account_alias}:{chat_id}",
+                    "message_ref": compound_id,
                     "preview_truncated": len(text or "") > 300,
                     "full_length": len(text or ""),
                     "has_media": payload.get("media") is not None,
@@ -735,6 +759,7 @@ class FeishuManager:
                         if payload.get("voice_transcript") else None
                     ),
                     "message_type": msg_type,
+                    **preview_metadata,
                 },
                 "wake": True,
             })
@@ -766,40 +791,37 @@ class FeishuManager:
         messages.sort(key=lambda m: m.get("date") or m.get("sent_at") or "", reverse=True)
         return messages
 
-    def _build_conversation_preview(
+    @staticmethod
+    def _relative_time(date_str: str, *, now: datetime) -> str:
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc
+            )
+        except (ValueError, TypeError):
+            return date_str or "?"
+        delta = (now - dt).total_seconds()
+        if delta < 60:
+            return "just now"
+        if delta < 3600:
+            return f"{int(delta // 60)} min ago"
+        if delta < 86400:
+            return f"{int(delta // 3600)} hr ago"
+        if delta < 172800:
+            return "yesterday"
+        return dt.strftime("%Y-%m-%d")
+
+    def _conversation_messages(
         self,
         account_alias: str,
         chat_id: str,
-        current_compound_id: str,
-        max_messages: int = 10,
-    ) -> str:
-        """Build a markdown conversation preview of the last *max_messages* rounds.
+        max_messages: int = _CONVERSATION_PREVIEW_MESSAGES,
+    ) -> list[dict]:
+        """Load the last *max_messages* messages of one chat, date ascending.
 
-        Scans inbox/ and sent/ dirs for messages matching *chat_id*, sorts by
-        date ascending, takes the tail, and prepends a guidance header that
-        tells the receiving agent how to interpret the preview. Reply lines
-        are quoted beneath their parent (truncated to 50 chars).
+        Scans inbox/ and sent/ dirs for messages matching *chat_id*; each
+        message dict gains a transient ``_folder`` marker used for direction
+        and sender rendering.
         """
-        now = datetime.now(timezone.utc)
-
-        def _rel_time(date_str: str) -> str:
-            try:
-                dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ").replace(
-                    tzinfo=timezone.utc
-                )
-            except (ValueError, TypeError):
-                return date_str or "?"
-            delta = (now - dt).total_seconds()
-            if delta < 60:
-                return "just now"
-            if delta < 3600:
-                return f"{int(delta // 60)} min ago"
-            if delta < 86400:
-                return f"{int(delta // 3600)} hr ago"
-            if delta < 172800:
-                return "yesterday"
-            return dt.strftime("%Y-%m-%d")
-
         acct_dir = self._account_dir(account_alias)
         messages: list[dict] = []
         for folder in ("inbox", "sent"):
@@ -820,26 +842,95 @@ class FeishuManager:
                 messages.append(data)
 
         messages.sort(key=lambda m: m.get("date") or m.get("sent_at") or "")
-        messages = messages[-max_messages:]
+        return messages[-max_messages:]
 
+    def _conversation_sender_name(self, account_alias: str, message: dict) -> str:
+        if message.get("_folder") == "sent":
+            return "me"
+        open_id = message.get("from_open_id", "") or ""
+        return self._get_contact_name(account_alias, open_id) or open_id or "unknown"
+
+    @staticmethod
+    def _message_display_text(message: dict) -> str:
+        text = message.get("text", "") or ""
+        if message.get("media") and not text:
+            media_type = message["media"].get("type", "media")
+            text = f"[{media_type}]"
+        return text
+
+    def _structured_message(
+        self,
+        account_alias: str,
+        message: dict,
+        *,
+        current_compound_id: str | None = None,
+        now: datetime | None = None,
+    ) -> dict:
+        """Render one persisted message as a structured LICC metadata item.
+
+        Mirrors the Telegram producer's structured-message shape (id,
+        direction, sender, date, relative_time, bounded text + text_truncated,
+        is_current, media subset, reply refs) so the kernel's persistent
+        notification lane treats both IM channels uniformly.
+        """
+        now = now or datetime.now(timezone.utc)
+        cid = str(message.get("id", ""))
+        text = self._message_display_text(message)
+        text_truncated = len(text) > _STRUCTURED_MESSAGE_TEXT_CAP
+        if text_truncated:
+            text = text[: _STRUCTURED_MESSAGE_TEXT_CAP - 1] + "…"
+        direction = "outgoing" if message.get("_folder") == "sent" else "incoming"
+        date_str = message.get("date") or message.get("sent_at") or ""
+        item: dict = {
+            "id": cid,
+            "direction": direction,
+            "sender": self._conversation_sender_name(account_alias, message),
+            "date": date_str,
+            "relative_time": self._relative_time(date_str, now=now),
+            "text": text,
+            "text_truncated": text_truncated,
+        }
+        if current_compound_id and cid == current_compound_id:
+            item["is_current"] = True
+        if message.get("media"):
+            media = message["media"] or {}
+            item["media"] = {
+                key: media[key]
+                for key in ("type", "filename", "size", "duration", "mime_type")
+                if key in media and media[key] is not None
+            }
+        parent_id = message.get("parent_id")
+        if parent_id:
+            item["parent_id"] = parent_id
+            id_parts = cid.split(":", 2)
+            if len(id_parts) == 3:
+                item["reply_to"] = f"{id_parts[0]}:{id_parts[1]}:{parent_id}"
+        if message.get("voice_transcript"):
+            item["is_voice_transcript"] = True
+        return item
+
+    def _render_conversation_preview(
+        self,
+        account_alias: str,
+        messages: list[dict],
+        *,
+        chat_id: str,
+        now: datetime,
+    ) -> str:
+        """Render the markdown conversation preview for the LICC body.
+
+        Prepends a guidance header that tells the receiving agent how to
+        interpret the preview. Reply lines are quoted beneath their parent
+        (truncated to 50 chars).
+        """
         by_id: dict[str, dict] = {m.get("id", ""): m for m in messages}
-
-        def _sender_name(m: dict) -> str:
-            if m.get("_folder") == "sent":
-                return "me"
-            open_id = m.get("from_open_id", "") or ""
-            return self._get_contact_name(account_alias, open_id) or open_id or "unknown"
 
         lines: list[str] = []
         for m in messages:
             cid = m.get("id", "")
-            rel = _rel_time(m.get("date") or m.get("sent_at") or "")
-            sender = _sender_name(m)
-            text = m.get("text", "") or ""
-            if m.get("media"):
-                media_type = m["media"].get("type", "media")
-                text = text or f"[{media_type}]"
-            text_display = text.replace("\n", " ")
+            rel = self._relative_time(m.get("date") or m.get("sent_at") or "", now=now)
+            sender = self._conversation_sender_name(account_alias, m)
+            text_display = self._message_display_text(m).replace("\n", " ")
 
             line = f"[{rel}] #{cid} {sender}: {text_display}"
             lines.append(line)
@@ -851,7 +942,7 @@ class FeishuManager:
                     parent_compound = f"{id_parts[0]}:{id_parts[1]}:{parent_id}"
                     orig = by_id.get(parent_compound)
                     if orig:
-                        orig_rel = _rel_time(orig.get("date", ""))
+                        orig_rel = self._relative_time(orig.get("date", ""), now=now)
                         orig_text = orig.get("text", "") or ""
                         orig_snippet = orig_text[:50]
                         if len(orig_text) > 50:
@@ -873,6 +964,62 @@ class FeishuManager:
             else:
                 body = body[:9997] + "…"
         return body
+
+    def _build_conversation_preview_and_metadata(
+        self,
+        account_alias: str,
+        chat_id: str,
+        current_compound_id: str,
+        max_messages: int = _CONVERSATION_PREVIEW_MESSAGES,
+    ) -> tuple[str, dict]:
+        """Build the markdown preview plus structured Feishu context metadata.
+
+        The metadata carries the curated structured fields the kernel inbox
+        allowlists for IM producers (``recent_messages`` + ``latest_incoming``)
+        so the agent-facing persistent notification lane
+        (``_meta.notification_persistent.mcp.feishu``) gets structured message
+        objects instead of having to parse the markdown transcript.
+        """
+        messages = self._conversation_messages(account_alias, chat_id, max_messages)
+        now = datetime.now(timezone.utc)
+        preview = self._render_conversation_preview(
+            account_alias, messages, chat_id=chat_id, now=now,
+        )
+        structured = [
+            self._structured_message(
+                account_alias, m, current_compound_id=current_compound_id, now=now,
+            )
+            for m in messages
+        ]
+        latest_incoming = next(
+            (
+                item
+                for item in reversed(structured)
+                if item.get("direction") == "incoming"
+                and (item.get("id") == current_compound_id or not current_compound_id)
+            ),
+            None,
+        ) or next(
+            (item for item in reversed(structured) if item.get("direction") == "incoming"),
+            None,
+        )
+        metadata: dict = {"recent_messages": structured}
+        if latest_incoming is not None:
+            metadata["latest_incoming"] = latest_incoming
+        return preview, metadata
+
+    def _build_conversation_preview(
+        self,
+        account_alias: str,
+        chat_id: str,
+        current_compound_id: str,
+        max_messages: int = _CONVERSATION_PREVIEW_MESSAGES,
+    ) -> str:
+        """Markdown-preview-only compatibility wrapper."""
+        preview, _metadata = self._build_conversation_preview_and_metadata(
+            account_alias, chat_id, current_compound_id, max_messages,
+        )
+        return preview
 
     def _read_ids(self, account: str) -> set[str]:
         path = self._account_dir(account) / "read.json"

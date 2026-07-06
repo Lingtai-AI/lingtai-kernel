@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from datetime import datetime, timezone
@@ -14,6 +15,8 @@ from .client import WhatsAppClient
 from .redaction import redact_account
 from .webhook import extract_events
 from .. import _identity, _skill
+
+log = logging.getLogger(__name__)
 
 
 def _load_notification_header_template() -> str:
@@ -33,6 +36,13 @@ _CS_WINDOW_NOTE = (
     "24-hour customer-service window. Outside that window use an approved "
     "message template."
 )
+
+# Bounds for the structured conversation context attached to LICC event
+# metadata (kernel projects it into _meta.notification_persistent.mcp.whatsapp).
+# The MCP inbox drops structured metadata above a 20k JSON cap, so keep the
+# per-message text and message count comfortably under it.
+_CONVERSATION_CONTEXT_MESSAGES = 10
+_STRUCTURED_MESSAGE_TEXT_CAP = 500
 
 ACTIONS = [
     "send", "check", "read", "reply", "search", "react", "contacts", "add_contact",
@@ -372,6 +382,75 @@ class WhatsAppManager:
             self.identity_path(), self.identity_payload()
         )
 
+    def _structured_message(self, message: dict[str, Any], *, current_compound_id: str | None = None) -> dict[str, Any]:
+        """Build a bounded, secret-free structured view of a stored message.
+
+        Only stable identity/content fields are copied — never the raw Cloud
+        API ``payload``/``response``/webhook ``metadata`` objects. Text is
+        capped so the LICC structured-metadata JSON stays bounded; non-text
+        messages carry only their ``type`` (the local store keeps no media
+        payload) and the producer remains the source of truth.
+        """
+        text = message.get("text")
+        text_truncated = False
+        if isinstance(text, str) and len(text) > _STRUCTURED_MESSAGE_TEXT_CAP:
+            text = text[:_STRUCTURED_MESSAGE_TEXT_CAP]
+            text_truncated = True
+        direction = message.get("direction") or (
+            "outgoing" if message.get("_folder") == "sent" else "incoming"
+        )
+        message_type = message.get("type") or (
+            (message.get("payload") or {}).get("type") if isinstance(message.get("payload"), dict) else None
+        )
+        item: dict[str, Any] = {
+            "id": message.get("id"),
+            "direction": direction,
+            "wa_id": message.get("wa_id"),
+            "type": message_type,
+            "text": text,
+            "text_truncated": text_truncated,
+        }
+        for key in ("timestamp", "stored_at"):
+            value = message.get(key)
+            if value:
+                item[key] = value
+        reply_to = message.get("reply_to")
+        if reply_to:
+            item["reply_to"] = reply_to
+        if current_compound_id and item["id"] == current_compound_id:
+            item["is_current"] = True
+        return item
+
+    def _conversation_context(
+        self, alias: str, wa_id: str, current_compound_id: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        """Return (recent_messages, latest_incoming) structured context for *wa_id*.
+
+        ``recent_messages`` is the last ``_CONVERSATION_CONTEXT_MESSAGES``
+        stored messages with this contact (both directions, oldest first);
+        ``latest_incoming`` is the current/new incoming message.
+        """
+        conversation = [
+            m for m in self._iter_messages(alias) if m.get("wa_id") == wa_id
+        ][:_CONVERSATION_CONTEXT_MESSAGES]
+        conversation.reverse()  # _iter_messages is newest-first; context reads oldest-first
+        structured = [
+            self._structured_message(m, current_compound_id=current_compound_id)
+            for m in conversation
+        ]
+        latest_incoming = next(
+            (
+                item
+                for item in reversed(structured)
+                if item.get("direction") == "incoming" and item.get("is_current")
+            ),
+            None,
+        ) or next(
+            (item for item in reversed(structured) if item.get("direction") == "incoming"),
+            None,
+        )
+        return structured, latest_incoming
+
     def ingest_webhook(self, alias: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
         events = extract_events(payload)
         for ev in events:
@@ -384,5 +463,28 @@ class WhatsAppManager:
                     header = _NOTIFICATION_HEADER_TEMPLATE.format(channel="WhatsApp").rstrip("\n")
                     message_body = ev.get("text") or f"[{ev.get('type')}]"
                     body = f"{header}\n\n**Newest WhatsApp message**\n{message_body}"
-                    self.on_inbound({"from": f"whatsapp:{wa_id}", "subject": "WhatsApp message", "body": body, "metadata": {"mcp": "whatsapp", "account": alias, "wa_id": wa_id, "message_id": msg["id"]}, "wake": True})
+                    # Routing keys plus structured recent-message context ride on
+                    # LICC metadata; the kernel projects them into the durable
+                    # _meta.notification_persistent.mcp.whatsapp lane and keeps
+                    # the transient notification as an identity-only hook.
+                    event_metadata: dict[str, Any] = {
+                        "mcp": "whatsapp",
+                        "account": alias,
+                        "wa_id": wa_id,
+                        "message_id": msg["id"],
+                        "platform": "whatsapp",
+                        "conversation_ref": f"{alias}:{wa_id}",
+                        "message_ref": msg["id"],
+                    }
+                    try:
+                        recent_messages, latest_incoming = self._conversation_context(
+                            alias, wa_id, msg["id"],
+                        )
+                        if recent_messages:
+                            event_metadata["recent_messages"] = recent_messages
+                        if latest_incoming is not None:
+                            event_metadata["latest_incoming"] = latest_incoming
+                    except Exception as exc:
+                        log.warning("whatsapp conversation context failed: %s", exc)
+                    self.on_inbound({"from": f"whatsapp:{wa_id}", "subject": "WhatsApp message", "body": body, "metadata": event_metadata, "wake": True})
         return events

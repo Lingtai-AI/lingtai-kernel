@@ -119,6 +119,30 @@ NOTIFICATION_PERSISTENT_WECHAT_PATH = (
 NOTIFICATION_PERSISTENT_WECHAT_MIN_CONTEXT = 10
 NOTIFICATION_PERSISTENT_WECHAT_SEEN_LIMIT = 200
 
+# Feishu mirrors the Telegram/WeChat persistent lane at
+# `_meta.notification_persistent.mcp.feishu`. The Feishu producer's structured
+# preview carries the last 10 conversation messages
+# (FeishuManager._build_conversation_preview_and_metadata), so the seed/delta
+# boundary matches that window rather than Telegram's 20.
+NOTIFICATION_PERSISTENT_FEISHU_CHANNEL = "feishu"
+NOTIFICATION_PERSISTENT_FEISHU_PATH = (
+    f"_meta.{NOTIFICATION_PERSISTENT_KEY}."
+    f"{NOTIFICATION_PERSISTENT_MCP_KEY}.{NOTIFICATION_PERSISTENT_FEISHU_CHANNEL}"
+)
+NOTIFICATION_PERSISTENT_FEISHU_MIN_CONTEXT = 10
+NOTIFICATION_PERSISTENT_FEISHU_SEEN_LIMIT = 200
+
+# WhatsApp lives at `_meta.notification_persistent.mcp.whatsapp` but runs the
+# shared IM lane in snapshot mode (email-style): every block carries the
+# producer's current bounded context in full, with no delivered-id delta
+# tracking and no previous_block hook, so it has no min-context/seen-limit
+# tuning knobs.
+NOTIFICATION_PERSISTENT_WHATSAPP_CHANNEL = "whatsapp"
+NOTIFICATION_PERSISTENT_WHATSAPP_PATH = (
+    f"_meta.{NOTIFICATION_PERSISTENT_KEY}."
+    f"{NOTIFICATION_PERSISTENT_MCP_KEY}.{NOTIFICATION_PERSISTENT_WHATSAPP_CHANNEL}"
+)
+
 # Concise English comments attached to the Telegram persistent block so the
 # agent can read the block without re-deriving structure. Kept as module-level
 # constants so tests and docs can assert the exact wording.
@@ -151,6 +175,47 @@ NOTIFICATION_PERSISTENT_WECHAT_SELF_OUTGOING_COMMENT = (
 NOTIFICATION_PERSISTENT_WECHAT_TRUNCATED_COMMENT = (
     "This message is truncated; call wechat.read for the exact full producer "
     "state."
+)
+
+# Feishu mirrors the Telegram comment set with channel-appropriate wording.
+# The truncation comment points at feishu.read because the Feishu producer's
+# local store is the exact source-of-truth state.
+NOTIFICATION_PERSISTENT_FEISHU_BURST_COMMENT = (
+    "Multiple new Feishu messages arrived together; treat them as one burst "
+    "and answer the combined intent."
+)
+NOTIFICATION_PERSISTENT_FEISHU_SELF_OUTGOING_COMMENT = (
+    "This is the agent's own recent outgoing message, included for continuity."
+)
+NOTIFICATION_PERSISTENT_FEISHU_TRUNCATED_COMMENT = (
+    "This message is truncated; call feishu.read for the exact full producer "
+    "state."
+)
+
+# Concise English comments attached to the WhatsApp persistent block. The
+# WhatsApp lane runs in snapshot mode (email-style): each block carries the
+# producer's current structured context in full, with no delivered-id delta
+# tracking, so the comments focus on producer authority and the Cloud API
+# reply rules rather than block-to-block continuity.
+NOTIFICATION_PERSISTENT_WHATSAPP_CONTEXT_COMMENT = (
+    "Durable WhatsApp context moved here from _meta.notifications.mcp.whatsapp. "
+    "The whatsapp tool remains the source of truth: building this block marks "
+    "nothing read — use whatsapp.read/check for exact producer state. Reply on "
+    "WhatsApp when the message arrived through WhatsApp (whatsapp.reply with "
+    "the compound message id, or whatsapp.send); free-form business replies "
+    "are allowed only inside the 24-hour customer-service window — outside it "
+    "use an approved WhatsApp message template."
+)
+NOTIFICATION_PERSISTENT_WHATSAPP_SELF_OUTGOING_COMMENT = (
+    "This is the agent's own recent outgoing message, included for continuity."
+)
+NOTIFICATION_PERSISTENT_WHATSAPP_TRUNCATED_COMMENT = (
+    "This message is truncated; call whatsapp.read with the compound message "
+    "id for the exact full producer state."
+)
+NOTIFICATION_PERSISTENT_WHATSAPP_MEDIA_COMMENT = (
+    "Non-text WhatsApp message; only type/id metadata is stored locally — use "
+    "whatsapp.read for the exact stored producer state."
 )
 
 NOTIFICATION_PERSISTENT_EMAIL_CONTEXT_COMMENT = (
@@ -709,24 +774,32 @@ def build_meta_readme() -> dict:
             "notification contents as the result body."
         ),
         NOTIFICATION_PERSISTENT_KEY: (
-            "Sparse communication-context lane, currently Telegram, WeChat, and "
-            "built-in email. IM channels carry "
+            "Sparse communication-context lane, currently the curated IM "
+            "producers (Telegram, WeChat, Feishu, WhatsApp) and built-in email. "
+            "All IM channels share one typed lane primitive and carry "
             "structured recent/new messages under "
             f"{NOTIFICATION_PERSISTENT_TELEGRAM_PATH}.messages / "
-            f"{NOTIFICATION_PERSISTENT_WECHAT_PATH}.messages, "
-            "event/routing hooks under `.events`, and a previous_block hook "
+            f"{NOTIFICATION_PERSISTENT_WECHAT_PATH}.messages / "
+            f"{NOTIFICATION_PERSISTENT_FEISHU_PATH}.messages / "
+            f"{NOTIFICATION_PERSISTENT_WHATSAPP_PATH}.messages, "
+            "event/routing hooks under `.events`, and concise English machine "
+            "comments. Delta lanes (Telegram, WeChat, Feishu) additionally "
+            "carry a previous_block hook "
             "pointing to the prior block for the same channel (and an optional "
-            "human-readable comment). It also carries concise English machine "
-            "comments: `.context_comment` (a seed block's historical id range "
-            "plus the current/new message id), `.burst_comment` (multiple new "
-            "incoming messages arrived together — one burst), "
-            "`.referenced_messages` (Telegram only: the full reply target with "
-            "a per-item `comment` when the current reply points at a message "
-            "absent from `.messages`), and per-message `comment`s marking the "
-            "agent's own outgoing continuity messages and truncated messages "
-            "(which point to the producer read tool — telegram.read / "
-            "wechat.read — for exact full producer state). This is the "
-            "durable source of truth for "
+            "human-readable comment), plus `.context_comment` (a seed block's "
+            "historical id range plus the current/new message id) and "
+            "`.burst_comment` (multiple new incoming messages arrived together "
+            "— one burst), and `.referenced_messages` (Telegram only: the "
+            "full reply target with a per-item `comment` when the current reply "
+            "points at a message absent from `.messages`). The snapshot lane "
+            "(WhatsApp, email-style) carries a standing `.context_comment` "
+            "(producer authority + reply rules) on every block with no "
+            "previous_block hook and no delivered-id delta tracking. "
+            "Per-message `comment`s mark the agent's own outgoing continuity "
+            "messages, truncated messages, and (WhatsApp) non-text/media "
+            "messages — all of which point to the producer read tool "
+            "(telegram.read / wechat.read / feishu.read / whatsapp.read) for "
+            "exact full producer state. This is the durable source of truth for "
             "IM conversation context and routing details — the "
             "ephemeral _meta.notifications.mcp.<channel> lane is only a short "
             "high-attention hook carrying message_ids, not a holder for message "
@@ -734,8 +807,9 @@ def build_meta_readme() -> dict:
             "pointers. Unread email content lives under "
             f"{NOTIFICATION_PERSISTENT_EMAIL_PATH}. It is not a "
             "notification/action/dismiss channel and is not part of the formal "
-            "tool-result payload; older blocks intentionally remain in history "
-            "so later deltas can refer to them via their previous_block hook."
+            "tool-result payload; older delta-lane blocks intentionally remain "
+            "in history so later deltas can refer to them via their "
+            "previous_block hook (snapshot lanes re-emit the current window)."
         ),
     }
 
@@ -1783,26 +1857,46 @@ def build_notification_payload(notifications: dict) -> dict:
 class _ImPersistentLane(NamedTuple):
     """Per-channel parameters for the shared IM persistent-notification lane.
 
-    The seed/delta/burst/annotate/previous_block machinery is identical across
+    The preview/fallback/annotate/sanitize machinery is identical across
     curated IM producers; only the channel identity, the producer preview
-    window, the agent-side delivery-tracking attributes, and the English
-    comment wording differ.  Telegram is the reference instance; WeChat mirrors
-    it.  ``referenced_comment`` is ``None`` for producers that never attach
+    window, the agent-side delivery-tracking attributes, the English comment
+    wording, and the delivery ``mode`` differ.  Telegram is the reference
+    instance; WeChat and Feishu mirror it.
+
+    ``mode`` selects one of two delivery shapes:
+
+    - ``"delta"`` — seed/delta blocks with in-memory delivered-id tracking and
+      a ``previous_block`` hook to the prior block (Telegram, WeChat, Feishu).
+    - ``"snapshot"`` — email-style: every block carries the producer's current
+      bounded context in full under a standing ``snapshot_context_comment``;
+      no delivered-id state, no ``previous_block``, no burst/seed comments
+      (WhatsApp, whose producer re-sends the last-10 window per event and
+      whose replies are gated by the Cloud API 24-hour window).
+
+    ``referenced_comment`` is ``None`` for producers that never attach
     ``referenced_messages`` (reply targets outside the preview window).
+    ``media_comment`` is set for producers whose local store keeps only
+    type/id metadata for non-text messages.
     """
 
     channel: str            # e.g. "telegram" — key under notification_persistent.mcp
     source_key: str         # e.g. "mcp.telegram" — key under _meta.notifications
     path: str               # full dotted persistent path, for hooks/comments
     display_name: str       # e.g. "Telegram" — English comment wording
-    min_context: int        # seed/delta boundary == producer preview window
-    seen_limit: int         # delivered-id cache cap
-    delivered_ids_attr: str  # agent attr: delivered message-id list
-    last_tool_id_attr: str   # agent attr: previous persistent block's tool id
-    burst_comment: str
+    mode: str               # "delta" or "snapshot" (see class docstring)
     self_outgoing_comment: str
     truncated_comment: str
-    referenced_comment: str | None
+    # Delta-mode fields (unused for snapshot lanes).
+    min_context: int = 0     # seed/delta boundary == producer preview window
+    seen_limit: int = 0      # delivered-id cache cap
+    delivered_ids_attr: str | None = None  # agent attr: delivered message-id list
+    last_tool_id_attr: str | None = None   # agent attr: prior block's tool id
+    burst_comment: str | None = None
+    referenced_comment: str | None = None
+    # Snapshot-mode field: standing context comment on every block.
+    snapshot_context_comment: str | None = None
+    # Optional per-message hint for non-text messages (any mode).
+    media_comment: str | None = None
 
 
 _TELEGRAM_PERSISTENT_LANE = _ImPersistentLane(
@@ -1810,6 +1904,7 @@ _TELEGRAM_PERSISTENT_LANE = _ImPersistentLane(
     source_key="mcp.telegram",
     path=NOTIFICATION_PERSISTENT_TELEGRAM_PATH,
     display_name="Telegram",
+    mode="delta",
     min_context=NOTIFICATION_PERSISTENT_TELEGRAM_MIN_CONTEXT,
     seen_limit=NOTIFICATION_PERSISTENT_TELEGRAM_SEEN_LIMIT,
     delivered_ids_attr="_notification_persistent_telegram_message_ids",
@@ -1825,6 +1920,7 @@ _WECHAT_PERSISTENT_LANE = _ImPersistentLane(
     source_key="mcp.wechat",
     path=NOTIFICATION_PERSISTENT_WECHAT_PATH,
     display_name="WeChat",
+    mode="delta",
     min_context=NOTIFICATION_PERSISTENT_WECHAT_MIN_CONTEXT,
     seen_limit=NOTIFICATION_PERSISTENT_WECHAT_SEEN_LIMIT,
     delivered_ids_attr="_notification_persistent_wechat_message_ids",
@@ -1837,8 +1933,48 @@ _WECHAT_PERSISTENT_LANE = _ImPersistentLane(
     referenced_comment=None,
 )
 
+_FEISHU_PERSISTENT_LANE = _ImPersistentLane(
+    channel=NOTIFICATION_PERSISTENT_FEISHU_CHANNEL,
+    source_key="mcp.feishu",
+    path=NOTIFICATION_PERSISTENT_FEISHU_PATH,
+    display_name="Feishu",
+    mode="delta",
+    min_context=NOTIFICATION_PERSISTENT_FEISHU_MIN_CONTEXT,
+    seen_limit=NOTIFICATION_PERSISTENT_FEISHU_SEEN_LIMIT,
+    delivered_ids_attr="_notification_persistent_feishu_message_ids",
+    last_tool_id_attr="_notification_persistent_feishu_last_tool_id",
+    burst_comment=NOTIFICATION_PERSISTENT_FEISHU_BURST_COMMENT,
+    self_outgoing_comment=NOTIFICATION_PERSISTENT_FEISHU_SELF_OUTGOING_COMMENT,
+    truncated_comment=NOTIFICATION_PERSISTENT_FEISHU_TRUNCATED_COMMENT,
+    # The Feishu producer threads replies via per-message `reply_to` refs and
+    # never attaches out-of-window `referenced_messages`; the referenced pass
+    # is skipped for this lane.
+    referenced_comment=None,
+)
+
+_WHATSAPP_PERSISTENT_LANE = _ImPersistentLane(
+    channel=NOTIFICATION_PERSISTENT_WHATSAPP_CHANNEL,
+    source_key="mcp.whatsapp",
+    path=NOTIFICATION_PERSISTENT_WHATSAPP_PATH,
+    display_name="WhatsApp",
+    # Snapshot lane (email-style): full bounded context per block, no
+    # delivered-id delta state, no previous_block hook — see the class
+    # docstring for why WhatsApp deliberately differs from the delta lanes.
+    mode="snapshot",
+    self_outgoing_comment=NOTIFICATION_PERSISTENT_WHATSAPP_SELF_OUTGOING_COMMENT,
+    truncated_comment=NOTIFICATION_PERSISTENT_WHATSAPP_TRUNCATED_COMMENT,
+    snapshot_context_comment=NOTIFICATION_PERSISTENT_WHATSAPP_CONTEXT_COMMENT,
+    # The WhatsApp local store keeps only type/id metadata for media messages.
+    media_comment=NOTIFICATION_PERSISTENT_WHATSAPP_MEDIA_COMMENT,
+)
+
 # Ordered registry of IM channels sharing the persistent lane machinery.
-_IM_PERSISTENT_LANES = (_TELEGRAM_PERSISTENT_LANE, _WECHAT_PERSISTENT_LANE)
+_IM_PERSISTENT_LANES = (
+    _TELEGRAM_PERSISTENT_LANE,
+    _WECHAT_PERSISTENT_LANE,
+    _FEISHU_PERSISTENT_LANE,
+    _WHATSAPP_PERSISTENT_LANE,
+)
 
 
 def _im_preview_list(notification_payload: dict, source_key: str) -> list[dict]:
@@ -2051,9 +2187,10 @@ def _annotate_im_message(message: dict, lane: _ImPersistentLane) -> dict:
     """Return a copy of *message* with per-message continuity/truncation hints.
 
     Adds the self-outgoing continuity comment to the agent's own outgoing
-    messages and the truncation comment to truncated messages. When both apply,
-    the comments are joined so no signal is dropped. Media metadata already on
-    the message is preserved untouched.
+    messages, the truncation comment to truncated messages, and (for lanes whose
+    local store keeps only type/id metadata) the media comment to non-text
+    messages. When several apply, the comments are joined so no signal is
+    dropped. Media metadata already on the message is preserved untouched.
     """
     annotated = dict(message)
     hints: list[str] = []
@@ -2061,6 +2198,14 @@ def _annotate_im_message(message: dict, lane: _ImPersistentLane) -> dict:
         hints.append(lane.self_outgoing_comment)
     if annotated.get("text_truncated"):
         hints.append(lane.truncated_comment)
+    if lane.media_comment is not None:
+        message_type = annotated.get("type")
+        if (
+            isinstance(message_type, str)
+            and message_type not in ("", "text")
+            and not annotated.get("text")
+        ):
+            hints.append(lane.media_comment)
     if hints:
         existing = annotated.get("comment")
         if isinstance(existing, str) and existing:
@@ -2147,16 +2292,51 @@ def _build_email_notification_persistent_payload(agent, notification_payload: di
     return payload
 
 
+def _build_snapshot_im_persistent_payload(
+    notification_payload: dict,
+    lane: _ImPersistentLane,
+    candidates: list[dict],
+    events: list[dict],
+) -> dict:
+    """Build a snapshot (email-style) persistent payload for one IM lane.
+
+    Every block carries the producer's current bounded conversation context in
+    full under a standing ``context_comment``.  There is no delivered-id delta
+    tracking, no ``previous_block`` hook, and no burst/seed comments: the
+    snapshot lane re-emits the producer's current window each material update
+    and the producer tool remains the source of truth (building this block marks
+    nothing read).  Per-message continuity/truncation/media comments are applied
+    via the shared ``_annotate_im_message`` helper.
+    """
+    annotated = [_annotate_im_message(message, lane) for message in candidates]
+    payload: dict = {
+        "context_comment": lane.snapshot_context_comment,
+        "messages": annotated,
+    }
+    count = _im_notification_event_count(notification_payload, lane.source_key)
+    if count:
+        payload["count"] = count
+    if events:
+        payload["events"] = events
+    return payload
+
+
 def _build_im_notification_persistent_payload(
     agent, notification_payload: dict, lane: _ImPersistentLane
 ) -> dict | None:
-    """Build the minimal `_meta.notification_persistent` payload for one IM lane.
+    """Build the `_meta.notification_persistent` payload for one IM lane.
 
-    First delivery after startup/molt (or when fewer than the minimum number of
-    messages has been delivered into the current provider context) carries the
-    recent context snapshot. Later material notification updates only carry
-    messages whose producer message IDs have not been delivered yet, plus a
-    short comment pointing to the previous persistent block.
+    ``mode == "delta"`` lanes (Telegram, WeChat, Feishu) use the seed/delta
+    shape: the first delivery after startup/molt (or when fewer than the minimum
+    number of messages has been delivered into the current provider context)
+    carries the recent context snapshot, and later material notification updates
+    only carry messages whose producer message IDs have not been delivered yet,
+    plus a ``previous_block`` hook pointing at the prior block for this lane.
+
+    ``mode == "snapshot"`` lanes (WhatsApp, email-style) re-emit the producer's
+    current bounded context in full on every material update, with no
+    delivered-id state and no ``previous_block`` hook; see
+    ``_build_snapshot_im_persistent_payload``.
     """
     candidates = _im_persistent_messages_from_notifications(
         notification_payload, lane.source_key
@@ -2166,6 +2346,11 @@ def _build_im_notification_persistent_payload(
     )
     if not candidates and not events:
         return None
+
+    if lane.mode == "snapshot":
+        return _build_snapshot_im_persistent_payload(
+            notification_payload, lane, candidates, events
+        )
 
     delivered = getattr(agent, lane.delivered_ids_attr, [])
     if not isinstance(delivered, (list, tuple, set)):
@@ -2309,7 +2494,13 @@ def _record_im_persistent_delivery(
     *,
     tool_call_id: str | None,
 ) -> None:
-    """Record one IM lane's delivered message ids and previous-block hook."""
+    """Record one IM lane's delivered message ids and previous-block hook.
+
+    Snapshot lanes (``delivered_ids_attr`` / ``last_tool_id_attr`` is ``None``)
+    keep no in-memory delivery state and are skipped.
+    """
+    if lane.delivered_ids_attr is None or lane.last_tool_id_attr is None:
+        return
     messages = lane_payload.get("messages")
     if not isinstance(messages, list):
         return
@@ -2445,6 +2636,20 @@ def sanitize_wechat_notification_after_persistent(notification_payload: dict) ->
     """Reduce WeChat's ephemeral lane to a minimal event identity hook."""
     _sanitize_im_notification_after_persistent(
         notification_payload, _WECHAT_PERSISTENT_LANE
+    )
+
+
+def sanitize_feishu_notification_after_persistent(notification_payload: dict) -> None:
+    """Reduce Feishu's ephemeral lane to a minimal event identity hook."""
+    _sanitize_im_notification_after_persistent(
+        notification_payload, _FEISHU_PERSISTENT_LANE
+    )
+
+
+def sanitize_whatsapp_notification_after_persistent(notification_payload: dict) -> None:
+    """Reduce WhatsApp's ephemeral lane to a minimal event identity hook."""
+    _sanitize_im_notification_after_persistent(
+        notification_payload, _WHATSAPP_PERSISTENT_LANE
     )
 
 
@@ -2842,13 +3047,15 @@ def attach_active_notifications(
     # Nest the canonical notification payload under the result's _meta
     # envelope (alongside any tool_meta/agent_meta/guidance blocks).
     persistent_payload = build_notification_persistent_payload(agent, payload)
-    # Move (not duplicate): Telegram/WeChat durable fields are always stripped
+    # Move (not duplicate): curated durable IM fields are always stripped
     # from the model-visible ephemeral lane, even when every message id was
     # already delivered and no new persistent block is emitted this round.
     # `payload` is freshly materialized for this delivery cycle, so in-place
     # preview trimming cannot mutate producer-owned on-disk notification state.
     sanitize_telegram_notification_after_persistent(payload)
     sanitize_wechat_notification_after_persistent(payload)
+    sanitize_feishu_notification_after_persistent(payload)
+    sanitize_whatsapp_notification_after_persistent(payload)
     sanitize_email_notification_after_persistent(payload)
     meta_block = _meta_block(target)
     meta_block.update(payload)

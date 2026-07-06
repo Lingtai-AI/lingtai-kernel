@@ -22,6 +22,9 @@ REQUIRED_TRIGGERS = [
     "src/lingtai_kernel/base_agent/turn.py",
     "src/lingtai_kernel/base_agent/messaging.py",
     "src/lingtai/mcp_servers/telegram/manager.py",
+    "src/lingtai/mcp_servers/feishu/manager.py",
+    "src/lingtai/mcp_servers/wechat/manager.py",
+    "src/lingtai/mcp_servers/whatsapp/manager.py",
     "src/lingtai_kernel/intrinsics/email/",
     "src/lingtai_kernel/intrinsics/notification/",
 ]
