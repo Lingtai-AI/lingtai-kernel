@@ -4,11 +4,12 @@ description: |
   Progressive-disclosure usage manual for the WhatsApp Cloud API MCP tool. Read
   this when you need detail beyond the one-line action descriptions: the 24-hour
   customer-service window and approved templates, send vs reply vs react,
-  check/read/search, media attachments, contacts/accounts/status basics, and
+  check/read/search, media attachments, contacts/accounts/status basics, the
+  notification transient-hook vs persistent-context split, and
   external-delivery side-effect caveats. Pulled on demand via action='manual'; you
   do not need to call it before every send.
-version: 1.0.0
-last_changed_at: "2026-06-26T14:33:19-07:00"
+version: 1.1.0
+last_changed_at: "2026-07-06T00:00:00-07:00"
 ---
 
 # WhatsApp MCP — usage manual (progressive disclosure)
@@ -55,6 +56,26 @@ bridge).
 - `contacts`: list saved contacts. `add_contact`/`remove_contact` manage aliases.
 - `accounts`: list configured WhatsApp accounts (redacted).
 - `status`: connection/health status for an account.
+
+## NOTIFICATIONS: TRANSIENT HOOK vs PERSISTENT CONTEXT
+
+- Inbound WhatsApp messages surface to the agent in two `_meta` lanes:
+  - `_meta.notifications.mcp.whatsapp` is a compact high-attention hook only —
+    `data.message_ids` (compound `account:wa_id:wamid` ids) and dismiss
+    guidance, never message text or routing context.
+  - `_meta.notification_persistent.mcp.whatsapp` carries the durable context:
+    recent conversation messages (bounded text, both directions), sender/chat
+    routing hooks, and per-message comments for the agent's own outgoing
+    messages, truncated text, and non-text/media messages.
+- The whatsapp tool remains the source of truth. Neither lane marks anything
+  read; use `read`/`check` for exact producer state, especially when a
+  persistent message is truncated or is a media placeholder.
+- Reply on WhatsApp when the message arrived through WhatsApp (`reply` with the
+  compound message id, or `send`), respecting the 24-hour window rule above.
+- After handling, dismiss the transient hook via
+  `notification.dismiss_channel("mcp.whatsapp")`; the persistent block is
+  context history, not unread state — do not treat its presence as a pending
+  event.
 
 ## SIDE EFFECTS & ERROR SURFACING
 

@@ -43,7 +43,10 @@ from ..meta_block import (
     formal_tool_result_visible_len,
     record_notification_persistent_delivery,
     sanitize_email_notification_after_persistent,
+    sanitize_feishu_notification_after_persistent,
     sanitize_telegram_notification_after_persistent,
+    sanitize_whatsapp_notification_after_persistent,
+    sanitize_wechat_notification_after_persistent,
 )
 from ..session import SessionManager
 from ..tc_inbox import TCInbox
@@ -539,14 +542,19 @@ class BaseAgent:
         # until the first active payload, and reset to ``None`` whenever
         # notifications go empty so a later reappearance attaches afresh.
         self._notification_payload_signature: str | None = None
-        # Telegram-only persistent communication-context lane.  These IDs track
-        # which Telegram messages have already been emitted in
-        # `_meta.notification_persistent.mcp.telegram.messages` for the current
-        # provider-visible context, so later deliveries can be deltas with a
-        # `previous_block` hook pointing back to the previous block.  Reset on
-        # context molt.
+        # Per-IM-channel persistent communication-context lane.  These IDs
+        # track which messages have already been emitted in
+        # `_meta.notification_persistent.mcp.<channel>.messages` for the
+        # current provider-visible context, so later deliveries can be deltas
+        # with a `previous_block` hook pointing back to the previous block.
+        # Reset on context molt. Snapshot-only IM lanes (currently WhatsApp) do
+        # not keep agent-side delivery state.
         self._notification_persistent_telegram_message_ids: list[str] = []
         self._notification_persistent_telegram_last_tool_id: str | None = None
+        self._notification_persistent_wechat_message_ids: list[str] = []
+        self._notification_persistent_wechat_last_tool_id: str | None = None
+        self._notification_persistent_feishu_message_ids: list[str] = []
+        self._notification_persistent_feishu_last_tool_id: str | None = None
 
         # Provider-visible tool result currently carrying the live `_meta.agent_meta`
         # / `_meta.guidance` blocks (kernel runtime state + guidance ref).
@@ -1546,8 +1554,8 @@ class BaseAgent:
         notification_persistent_payload = build_notification_persistent_payload(
             self, notifications_with_guidance
         )
-        # Move (not duplicate): the durable Telegram context now lives in the
-        # persistent lane, so strip it from the model-visible ephemeral lane
+        # Move (not duplicate): curated durable IM context now lives in
+        # persistent lanes, so strip it from the model-visible ephemeral lane
         # before it is nested into the synthesized pair's _meta (and the
         # summary/logging envelope built from the same payload below).  This runs
         # even when no new persistent block is emitted, because the transient lane
@@ -1555,6 +1563,9 @@ class BaseAgent:
         # `notifications_with_guidance` is freshly built for this delivery cycle,
         # so in-place trimming cannot mutate producer-owned state.
         sanitize_telegram_notification_after_persistent(notifications_with_guidance)
+        sanitize_wechat_notification_after_persistent(notifications_with_guidance)
+        sanitize_feishu_notification_after_persistent(notifications_with_guidance)
+        sanitize_whatsapp_notification_after_persistent(notifications_with_guidance)
         sanitize_email_notification_after_persistent(notifications_with_guidance)
         body_meta = dict(notifications_with_guidance)
         if notification_persistent_payload:
