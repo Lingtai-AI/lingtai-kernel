@@ -21,6 +21,11 @@ it does not document cross-process recovery/orphan-detection internals. For the
 broader runtime turn loop that daemon emanations mirror, use `lingtai-kernel-anatomy`
 and its runtime-loop reference.
 
+Maintainer note: the cross-backend daemon task/context/MCP/completion contract
+is `src/lingtai/core/daemon/DAEMON_CONTRACT.md`. Update or explicitly re-check
+that contract when changing daemon task fields, selected `skills`, one-run
+`mcp`, native MCP mounting, `daemon_common`, backend status, or run artifacts.
+
 Use the smallest reference that matches the problem. Do not kill or reclaim a
 daemon on a hunch; inspect first.
 
