@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/core/mcp/LICC_NOTIFICATION_CONTRACT.md
   - ANATOMY.md
   - MANIFEST.in
   - pyproject.toml
@@ -120,6 +121,8 @@ The kernel root holds the coordinator (`base_agent/`) plus a flat collection of 
 - The wrapper layer registers LLM adapters into `llm.service` at import time, registers capabilities into `Agent` (which subclasses `BaseAgent`), and provides MCP, FileIO, Vision, Search, and the CLI.
 
 ## Notifications — the `.notification/` filesystem-as-protocol
+
+> **Contract:** changes to LICC/MCP notification event identity, `.notification` envelopes, `_meta.notifications`, `_meta.notification_persistent`, or producer read/dismiss authority must check `src/lingtai/core/mcp/LICC_NOTIFICATION_CONTRACT.md` in the same change. The contract names the attention/context/authority split and its review-trigger paths.
 
 Out-of-band events — mail arrival, soul-flow firings, daemon emanations, MCP webhook events, kernel-internal alerts — surface as one **live notification payload holder** at a time. When the agent is IDLE/ASLEEP, the holder is a synthetic `(ToolCallBlock, ToolResultBlock)` pair of shape `notification(action="check")` whose result carries the canonical JSON union of all currently-active producer files. When the agent is ACTIVE and has just produced an ordinary dict-shaped tool result, the holder is the same canonical `notifications` + `notification_guidance` payload attached under `_meta` — but **sparsely / update-driven**, mirroring the `agent_meta` cadence: the payload attaches on first appearance and re-attaches to a newer ACTIVE result only when it **materially changes** (or on a deliberate `notification(action=check)` read). While the payload is unchanged it stays on its existing holder and is NOT chased onto every newest ordinary tool result (`meta_block.attach_active_notifications`, `base_agent/turn.py`). Older holders remain in history only as skeletons/placeholders once a newer holder takes over.
 

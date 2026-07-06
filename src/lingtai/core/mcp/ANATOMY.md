@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/core/mcp/LICC_NOTIFICATION_CONTRACT.md
   - src/lingtai/ANATOMY.md
   - src/lingtai/core/mcp/__init__.py
   - src/lingtai/core/mcp/inbox.py
@@ -25,6 +26,8 @@ via file operations from the agent (`write`, `edit`).
 Also includes the **LICC v1 (LingTai Inbox Callback Contract)** — a
 filesystem-based inbox that lets out-of-process MCP servers push events into
 the agent's inbox.
+
+The model-visible notification projection for LICC events is governed by `src/lingtai/core/mcp/LICC_NOTIFICATION_CONTRACT.md`; touching `inbox.py`, `licc.py`, or curated human-message producer metadata must re-check that contract.
 
 ## Components
 
@@ -145,6 +148,7 @@ mcp/licc.py  (client-side producer; mirrors inbox.py's consumer)
 - **LICC client is best-effort, path-safe, and receiver-validating:** `push_inbox_event` never raises into the calling MCP. Missing agent dir / mcp name (neither arg nor env var set), invalid MCP names, unsafe explicit event IDs, or payload fields rejected by `validate_event` → `False` no-op; filesystem/serialization errors → `False`. Failure logs are terse and never echo `body`/`subject`/`metadata` (which may carry user content or secrets). Producer and consumer share the contract constants and validation because `licc.py` imports them from `inbox.py` — they cannot drift.
 - **LICC dead-letter:** Invalid events (parse errors, missing fields, unknown version, dispatch failures) are moved to `.dead/` with a `.error.json` sidecar. Dead-letters are never auto-deleted.
 - **LICC bounded work:** `MAX_EVENTS_PER_CYCLE = 100` per MCP per sweep prevents pathological backlog from blocking the poller.
+- **LICC notification projection contract:** raw `.notification/mcp.<name>.json` previews are only the producer mirror; once a producer has a persistent context lane, model-visible `_meta.notifications` must be reduced to a minimal identity hook and content must move to `_meta.notification_persistent` (see `src/lingtai/core/mcp/LICC_NOTIFICATION_CONTRACT.md`).
 - **LICC notification shape (post-#37 + previews):** The coalesced notification carries the MCP name, event count, plus a `previews` list — one entry per consumed event with `{"from": <sender>, "subject": <subject>, "preview": <body[:_PREVIEW_FIELD_CAP]>}` and, **when the event opts in via `metadata`**, optional IM/chat scalars `conversation_ref`, `message_ref`, `platform` (each capped at `_PREVIEW_META_FIELD_CAP = 200` chars). Only well-formed non-empty string metadata values are copied; non-string/empty/unknown keys are silently ignored, so legacy events without metadata produce the identical preview shape as before. The body snippet is hard-truncated at `_PREVIEW_FIELD_CAP` (10000 chars); `from` and `subject` pass through uncapped (sender bounded by upstream construction; subject already validated `<= 200` chars by `validate_event`). Full message **bodies** are still NOT inlined — those stay behind the `<mcp>(action="check"/"read")` tool result. The original issue #37 invariant (no body duplication → no agent re-processing loop) is preserved; previews exist purely to let the agent triage which MCPs/messages deserve a read call. Multiple events from the same MCP in one sweep are coalesced into a single summary; `wake` is the OR of all per-event `wake` flags. Preview list length is naturally bounded by `MAX_EVENTS_PER_CYCLE` (100).
 - **LICC uses `.notification/` filesystem-as-protocol:** `_dispatch_summary` publishes via `notifications.submit` to `.notification/mcp.<mcp_name>.json` instead of posting to the legacy inbox queue. This unifies MCP events with all other notification producers (email, soul, system events) in the kernel's `_sync_notifications` wire injection path.
 - **Pure presentation:** The capability never writes to the registry file. It only reads and renders.
