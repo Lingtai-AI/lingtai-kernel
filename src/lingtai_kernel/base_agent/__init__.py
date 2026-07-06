@@ -539,7 +539,9 @@ class BaseAgent:
         # until the first active payload, and reset to ``None`` whenever
         # notifications go empty so a later reappearance attaches afresh.
         self._notification_payload_signature: str | None = None
-        # Telegram-only persistent communication-context lane.  These IDs track
+        # Telegram delivery state for the persistent communication-context
+        # lane (shared with email, which snapshots and needs no tracker;
+        # see meta_block.build_notification_persistent_payload).  These IDs track
         # which Telegram messages have already been emitted in
         # `_meta.notification_persistent.mcp.telegram.messages` for the current
         # provider-visible context, so later deliveries can be deltas with a

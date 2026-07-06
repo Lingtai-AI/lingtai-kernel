@@ -325,6 +325,20 @@ def test_build_meta_readme_documents_always_on_session_cache_miss_telemetry():
     assert "reconstruct" in lowered
 
 
+def test_build_meta_readme_notification_persistent_documents_both_channels():
+    """The resident notification_persistent readme must name both current
+    channels — Telegram and email — at their exact dotted paths. Locks the
+    post-#707 state: the lane is no longer Telegram-only, and each channel's
+    transient lane is described as a reduced identity hook."""
+    doc = build_meta_readme()[meta_block.NOTIFICATION_PERSISTENT_KEY]
+    assert meta_block.NOTIFICATION_PERSISTENT_TELEGRAM_PATH in doc
+    assert meta_block.NOTIFICATION_PERSISTENT_EMAIL_PATH in doc
+    assert "Telegram-only" not in doc
+    # Both transient lanes are described by their identity-hook field.
+    assert "message_ids" in doc
+    assert "email_ids" in doc
+
+
 def test_build_guidance_with_meta_readme_keeps_section_shape_without_packaged_guidance():
     guidance = build_guidance_with_meta_readme({})
 
@@ -2725,6 +2739,53 @@ def test_sanitize_telegram_notification_after_persistent_is_noop_without_telegra
     meta_block.sanitize_telegram_notification_after_persistent(payload)
     assert payload["notifications"]["email"]["data"]["previews"][0]["preview"] == "x"
     meta_block.sanitize_telegram_notification_after_persistent({})
+
+
+def test_sanitize_telegram_notification_locks_transient_hook_shape():
+    """Exact-shape lock for the transient Telegram hook (LICC contract).
+
+    After sanitize, the model-visible ephemeral entry must consist of the
+    canonical identity hook (header / data.message_ids / instructions) plus
+    the untouched generic notification scaffolding (icon / priority /
+    published_at) — nothing else. Any new content-bearing field in the hook
+    must show up here as a deliberate diff.
+    """
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {
+                "header": "1 new Telegram event",
+                "icon": "💬",
+                "priority": "normal",
+                "published_at": "2026-07-06T10:00:00Z",
+                "instructions": "producer-authored read-the-preview guidance",
+                "data": {
+                    "count": 1,
+                    "previews": [
+                        {
+                            "from": "Jason",
+                            "subject": "telegram message",
+                            "preview": "durable body text",
+                            "message_ref": "main:123:7",
+                        }
+                    ],
+                },
+            }
+        }
+    }
+
+    meta_block.sanitize_telegram_notification_after_persistent(notification_payload)
+
+    assert notification_payload["notifications"]["mcp.telegram"] == {
+        "icon": "💬",
+        "priority": "normal",
+        "published_at": "2026-07-06T10:00:00Z",
+        "header": "Telegram event",
+        "data": {"message_ids": ["main:123:7"]},
+        "instructions": (
+            "High-attention Telegram hook: use notification_persistent for "
+            "content/context; when handled, dismiss this notification."
+        ),
+    }
 
 
 def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):

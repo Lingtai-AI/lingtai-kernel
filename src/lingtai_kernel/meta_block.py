@@ -681,7 +681,9 @@ def build_meta_readme() -> dict:
             "notification contents as the result body."
         ),
         NOTIFICATION_PERSISTENT_KEY: (
-            "Sparse communication-context lane, currently Telegram-only. Carries "
+            "Sparse communication-context lane, currently carrying Telegram "
+            f"(under {NOTIFICATION_PERSISTENT_TELEGRAM_PATH}) and built-in "
+            f"email (under {NOTIFICATION_PERSISTENT_EMAIL_PATH}). For Telegram it carries "
             "structured recent/new Telegram messages under "
             f"{NOTIFICATION_PERSISTENT_TELEGRAM_PATH}.messages, Telegram "
             "event/routing hooks under `.events`, and a previous_block hook "
@@ -700,7 +702,11 @@ def build_meta_readme() -> dict:
             "ephemeral _meta.notifications.mcp.telegram lane is only a short "
             "high-attention hook carrying message_ids, not a holder for message "
             "text, sender/subject, routing refs, counts, or content-location "
-            "pointers. It is not a "
+            "pointers. For email it carries the current unread snapshot "
+            f"under {NOTIFICATION_PERSISTENT_EMAIL_PATH} (email_ids plus full "
+            "unread bodies), while the ephemeral _meta.notifications.email lane "
+            "is reduced to an email_ids identity hook; the email tool/store "
+            "remains the source of truth for mailbox actions. It is not a "
             "notification/action/dismiss channel and is not part of the formal "
             "tool-result payload; older blocks intentionally remain in history "
             "so later deltas can refer to them via their previous_block hook."
