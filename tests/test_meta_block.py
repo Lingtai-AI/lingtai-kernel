@@ -2223,15 +2223,14 @@ def test_attach_active_notifications_first_block_reseeds_with_retained_ids(tmp_p
     assert "burst_comment" not in telegram
 
     # Move (not duplicate): the ephemeral notifications.mcp.telegram lane is now
-    # only a generic pointer shell.  Even routing hooks live in persistent.
+    # only a short high-attention identity hook.  Content and routing hooks live
+    # in persistent.
     ephemeral = block.content["_meta"]["notifications"]["mcp.telegram"]
-    assert ephemeral["data"] == {
-        "content_moved_to": "_meta.notification_persistent.mcp.telegram",
-        "count": 1,
-        "has_human_messages": True,
-    }
+    assert ephemeral["data"] == {"message_ids": ["main:123:121"]}
     assert "previews" not in ephemeral["data"]
     assert "source" not in ephemeral["data"]
+    assert "count" not in ephemeral["data"]
+    assert "has_human_messages" not in ephemeral["data"]
     assert "telegram message from Jason" not in ephemeral["instructions"]
 
 
@@ -2320,12 +2319,10 @@ def test_attach_active_notifications_sanitizes_telegram_without_new_persistent_b
     ]
     assert telegram["previous_block"]["tool_result_id"] == "call-first"
     ephemeral = meta["notifications"]["mcp.telegram"]
-    assert ephemeral["data"] == {
-        "content_moved_to": "_meta.notification_persistent.mcp.telegram",
-        "count": 1,
-        "has_human_messages": True,
-    }
+    assert ephemeral["data"] == {"message_ids": ["main:123:20"]}
     assert "previews" not in ephemeral["data"]
+    assert "count" not in ephemeral["data"]
+    assert "has_human_messages" not in ephemeral["data"]
 
 
 def test_build_notification_persistent_payload_lands_at_mcp_telegram_path():
@@ -2636,14 +2633,13 @@ def test_sanitize_telegram_notification_after_persistent_strips_durable_text():
 
     telegram = notification_payload["notifications"]["mcp.telegram"]
     data = telegram["data"]
-    # Durable message text and routing hooks are gone from the ephemeral lane.
-    assert data == {
-        "content_moved_to": "_meta.notification_persistent.mcp.telegram",
-        "count": 3,
-        "has_human_messages": True,
-    }
+    # Durable message text, routing hooks, counts, and summaries are gone from the
+    # ephemeral lane; only the event identity remains.
+    assert data == {"message_ids": ["main:123:3"]}
     assert "previews" not in data
     assert "source" not in data
+    assert "count" not in data
+    assert "has_human_messages" not in data
     assert "telegram message" not in telegram["instructions"]
 
 
@@ -2673,9 +2669,7 @@ def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):
     meta = block.content["_meta"]
     payload = meta["notifications"]["mcp.telegram"]
     assert "_notifications" not in block.content
-    assert payload["data"] == {
-        "content_moved_to": "_meta.notification_persistent.mcp.telegram",
-    }
+    assert payload["data"] == {"message_ids": []}
     assert "previews" not in payload["data"]
     # Legacy preview-only Telegram payloads are preserved as persistent fallback
     # messages rather than staying in the transient notification lane.
