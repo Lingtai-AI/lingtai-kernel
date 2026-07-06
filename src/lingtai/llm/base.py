@@ -20,15 +20,36 @@ class _GatedSession:
     """Thin proxy that routes session.send / send_stream through the gate.
 
     Hoisted from the MiniMax adapter so every provider gets rate gating
-    by inheritance. Read-only attribute access falls through to the inner
-    session via __getattr__; attribute writes (e.g. ``chat.session_id =
-    ...`` from LLMService.create_session) land on the proxy itself, which
-    is fine because subsequent reads of those names hit the proxy first
-    and never reach __getattr__.
+    by inheritance. The proxy is transparent in *both* directions: reads
+    fall through to the inner session via ``__getattr__`` and writes
+    forward to the inner session via ``__setattr__`` (delete via
+    ``__delattr__``), except for the proxy's own two slots ``_inner`` and
+    ``_gate`` (``_PROXY_SLOTS``), which live on the proxy itself.
+
+    Write-forwarding is load-bearing, not cosmetic: the inner session
+    reads several attributes on its own ``self`` from *inside* its
+    methods, so a write that lands on the proxy would never be seen.
+    Concretely, ``LLMService.create_session`` assigns ``session_id`` /
+    ``_agent_type`` / ``_tracked`` (read back by ``ChatSession.get_state``
+    on the inner ``self``), and ``BaseAgent._install_pre_request_hook``
+    assigns ``pre_request_hook`` (fired as ``self.pre_request_hook`` from
+    inside every adapter's ``send`` / ``send_stream``). Before #724 the
+    proxy defined only ``__getattr__``, so those writes landed on the
+    proxy's ``__dict__`` and the inner session kept its class defaults —
+    ``get_state`` reported ``session_id=""`` / ``tracked=True`` for every
+    gated session and the installed hook never fired. Since the default
+    ``max_rpm`` is 60 (0 disables), essentially every production session
+    is gated, so the trap hit every default-configured process.
     """
 
+    # The proxy's own state; every other attribute forwards to the inner
+    # session. Shared by __init__/__setattr__/__delattr__ so there is one
+    # source of truth for "what belongs on the proxy".
+    _PROXY_SLOTS = frozenset({"_inner", "_gate"})
+
     def __init__(self, inner: ChatSession, gate: "APICallGate"):
-        # Use object.__setattr__ to avoid triggering any subclass __setattr__
+        # Use object.__setattr__ to avoid recursing through our own
+        # __setattr__ (which would forward to a not-yet-set self._inner)
         # and to land these on the proxy itself, not the inner.
         object.__setattr__(self, "_inner", inner)
         object.__setattr__(self, "_gate", gate)
@@ -75,6 +96,25 @@ class _GatedSession:
     def __getattr__(self, name):
         # Only fires when normal attribute lookup on the proxy fails.
         return getattr(self._inner, name)
+
+    def __setattr__(self, name, value):
+        # Forward writes to the inner session so attributes the inner
+        # reads on its own ``self`` (pre_request_hook, session_id,
+        # _agent_type, _tracked; see class docstring / #724) actually take
+        # effect. Only the proxy's own slots stay on the proxy.
+        if name in self._PROXY_SLOTS:
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._inner, name, value)
+
+    def __delattr__(self, name):
+        # Symmetric with __setattr__: ``del proxy.attr`` deletes from the
+        # inner session, so a delete does not silently diverge from a
+        # forwarded write.
+        if name in self._PROXY_SLOTS:
+            object.__delattr__(self, name)
+        else:
+            delattr(self._inner, name)
 
 
 class LLMAdapter(ABC):
