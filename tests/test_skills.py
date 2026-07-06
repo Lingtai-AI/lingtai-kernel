@@ -844,3 +844,31 @@ def test_resident_prompts_route_to_system_manual_nested_references():
     )
     assert "unified runtime/procedure router is\n`system-manual`" in procedures
     assert "reference/procedures-manual/SKILL.md" in procedures
+
+
+def test_skills_manual_documents_external_skill_intake_default():
+    manual = (
+        Path(__file__).resolve().parents[1]
+        / "src/lingtai/core/skills/manual/SKILL.md"
+    ).read_text(encoding="utf-8")
+    required = [
+        "## External skill intake (default flow)",
+        "<agent>/.library/custom/<skill-name>/",
+        "run the bundled validator",
+        "call `system({\"action\": \"refresh\"})`",
+        "the skill is only a file on disk",
+        "Each receiving agent clones/copies it into",
+        "Do not assume `.library_shared` is loaded by default",
+        "add `../.library_shared` to each participating",
+    ]
+    for phrase in required:
+        assert phrase in manual
+
+
+def test_psyche_manual_routes_skill_sharing_through_custom_by_default():
+    manual = (
+        Path(__file__).resolve().parents[1]
+        / "src/lingtai/intrinsic_skills/psyche-manual/SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "peers install it into their own `.library/custom/<name>/`" in manual
+    assert "explicit opt-in local-network shared root" in manual

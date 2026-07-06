@@ -9,9 +9,9 @@ description: >
     - You're authoring a new skill in `.library/custom/<name>/` and need
       the frontmatter schema, the bundled template, the validator, or the
       "do create a skill / do NOT create a skill" decision rules.
-    - You want to publish a custom skill to the network-shared library
-      (`.library_shared/`) and need the `cp -r` recipe plus the admin
-      stewardship norms.
+    - You received an external skill repository and need the intake flow:
+      install it into this agent's `.library/custom/<skill-name>/`, validate it,
+      then refresh so it enters the skills catalog.
     - A skill you expect to see isn't showing up in the catalog — the
       health-check workflow (`skills({"action": "info"})`) and the
       `intrinsic` vs `custom` directory split tell you what's wrong.
@@ -35,12 +35,12 @@ description: >
   SKILL.md files document them. This is meta — how the skills *system*
   works, not what's *inside* it.
 version: 1.1.0
-last_changed_at: "2026-06-29T08:11:47Z"
+last_changed_at: "2026-07-06T14:50:00-07:00"
 ---
 
 # The Skills Capability
 
-This is the skills capability's own manual. It documents how the skill catalog works from your side: the on-disk layout, the YAML catalog, and the authoring/publishing workflow. The skills capability scans `.library/` plus any extra paths declared in `init.json`, builds the YAML skill catalog, and injects it into your system prompt.
+This is the skills capability's own manual. It documents how the skill catalog works from your side: the on-disk layout, the YAML catalog, and the authoring/publishing workflow. The skills capability scans `.library/` plus any extra paths declared in `init.json`, builds the YAML skill catalog, and injects it into your system prompt. An external skill is not loaded merely because someone shared a URL; it must be installed into a scanned skill root and then loaded by refresh.
 
 ## On-disk layout
 
@@ -61,9 +61,37 @@ Your skill catalog lives at `<agent>/.library/`:
 - `intrinsic/addons/<addon>/` — manual for each loaded addon (e.g. `imap/`, `telegram/`, `feishu/`).
 - `custom/` — **your territory.** Authored skills live here. The CLI never touches this directory.
 
-Additional paths come from `init.json` at `manifest.capabilities.skills.paths` — typically `../.library_shared/` (the network-shared library) and `~/.lingtai-tui/utilities/` (operational utilities shipped by the TUI).
+Additional paths come from `init.json` at `manifest.capabilities.skills.paths` — typically `~/.lingtai-tui/utilities/` (operational utilities shipped by the TUI), plus any project-specific roots. `../.library_shared/` is an opt-in local-network sharing path, not a default path to add to every agent. For ordinary sharing, install the skill into each receiving agent's `custom/` directory instead.
 
 If the skills capability is NOT loaded, the files still exist on disk — you just don't get a catalog in your prompt. You can still reach the manuals via `read`, `grep`, `ls`.
+
+## External skill intake (default flow)
+
+When a human, peer, or repository URL shares an external skill, do **not** treat the
+URL or a temporary clone as "loaded." The default intake flow is local-first:
+
+1. **Clone or copy into this agent's custom root:**
+   `<agent>/.library/custom/<skill-name>/`. Keep the repository metadata when the
+   skill has an upstream so future syncs can use `git pull --ff-only`.
+2. **Validate structure before trusting it:** run the bundled validator against
+   the installed folder and inspect `SKILL.md` frontmatter (`name`,
+   `description`) plus any referenced `scripts/`, `assets/`, or `references/`.
+3. **Refresh this agent:** call `system({"action": "refresh"})` so the skills
+   catalog is rebuilt and the skill appears in the system prompt. Until refresh
+   succeeds, the skill is only a file on disk.
+4. **Load it by catalog entry:** after refresh, use the cataloged `location:` to
+   read the skill body (and follow any nested references). Record the commit or
+   source URL in your task notes when it matters.
+5. **Share by telling recipients to install into their own `custom/`:** if other
+   agents need the skill, send the URL plus this intake recipe. Each receiving
+   agent installs, validates, and refreshes itself. Do not make a network shared
+   folder the default distribution path.
+
+Use a temporary/quarantine clone only for pre-inspection when the source is
+untrusted; move or clone a reviewed copy into `.library/custom/<skill-name>/`
+before relying on the skill. Installing a skill does not authorize external side
+effects described by that skill; normal human authorization boundaries still
+apply.
 
 ## How the catalog works
 
@@ -155,7 +183,7 @@ cp .library/intrinsic/capabilities/skills/assets/skill-template.md \
 
 The template has placeholder slots (`[SKILL_NAME]`, `[ONE_LINE_DESCRIPTION]`, etc.) and a soft skeleton of headings (`When this applies` / `Procedure` / `What to expect` / `Constraints` / `Scripts` / `Assets`). It works for code/executable skills out of the box; for reference-style skills (manuals, cheatsheets, chronicles) delete the `Procedure` section and write prose instead — there is a note at the top of the template reminding you of this.
 
-### Validating before publishing
+### Validating before installing or publishing
 
 A bundled validator script catches the common failures before you ship:
 
@@ -164,7 +192,7 @@ python3 .library/intrinsic/capabilities/skills/scripts/validate.py \
    .library/custom/<skill-name>/
 ```
 
-It checks: required frontmatter (`name`, `description`), unfilled `[PLACEHOLDER]` slots from the template, broken internal references (paths under `scripts/`, `assets/`, `references/` mentioned in `SKILL.md` that don't exist on disk), and `chmod +x` on Python scripts under `scripts/`. Exits 1 on any FAIL, 0 on PASS (warnings allowed). Run it after authoring and before `cp -r`'ing into `.library_shared/`.
+It checks: required frontmatter (`name`, `description`), unfilled `[PLACEHOLDER]` slots from the template, broken internal references (paths under `scripts/`, `assets/`, `references/` mentioned in `SKILL.md` that don't exist on disk), and `chmod +x` on Python scripts under `scripts/`. Exits 1 on any FAIL, 0 on PASS (warnings allowed). Run it after authoring, after installing an external skill into `.library/custom/`, and before any broader distribution.
 
 For LingTai-maintained skill bundles, require the timestamp field too:
 
@@ -271,7 +299,7 @@ Use nested references when all of these are true:
 
 Do **not** use nested references for independent workflows that agents should
 find directly from the top-level catalog. Those should be normal skills under
-`.library/custom/<name>/`, `.library_shared/<name>/`, or an intrinsic skill root.
+`.library/custom/<name>/`, an opt-in shared root such as `.library_shared/<name>/`, or an intrinsic skill root.
 
 Nested child conventions:
 
@@ -316,23 +344,23 @@ Skills published as standalone repos need both files — they serve different au
 
 `SKILL.md` is the agent-facing routing hub (frontmatter + decision tree). `README.md` is the human-facing repo description (purpose, install, examples). They are NOT redundant — `README.md` carries information agents do not need (project status, license, contributor notes, screenshots), and `SKILL.md` carries fields humans do not parse (frontmatter `tags`, `version`, machine-readable description).
 
-If you only ship inside `.library_shared/` and never publish to GitHub, you can omit `README.md`.
+If you only ship through an opt-in local shared root such as `.library_shared/` and never publish to GitHub, you can omit `README.md`.
 
-## Publishing to the network-shared library
+## Sharing skills with other agents
 
-If a custom skill is worth sharing with every agent in the network:
+If a custom skill is worth sharing with other agents, the recommended path is
+simple skill sharing: send them the source URL (or an artifact path) plus the
+external-skill intake recipe above. Each receiving agent clones/copies it into
+its own `.library/custom/<name>/`, validates it, then refreshes itself. This
+keeps ownership, updates, and rollback local to the agent that will actually use
+the skill.
 
-```
-bash({"command": "cp -r .library/custom/<name> ../.library_shared/<name>"})
-```
-
-Then call `system({"action": "refresh"})`. Do **not** overwrite an existing entry in `.library_shared/` — if the name collides, rename your skill or consult the admin agent.
-
-## Admin curation of `.library_shared/`
-
-If you are the admin agent, you may edit, consolidate, rename, or remove entries in `.library_shared/` using `edit`/`write`/`rm` as needed.
-
-If you are not the admin agent, **do not modify** `.library_shared/` beyond adding new entries with `cp`. Editing or removing existing entries is admin's stewardship. This is a norm, not a mechanical lock.
+A local network can still choose a shared-root model, but it must be explicit:
+maintain `.library_shared/<name>/`, add `../.library_shared` to each participating
+agent's `init.json` under `manifest.capabilities.skills.paths`, and refresh those
+agents. Do not assume `.library_shared` is loaded by default; it is an opt-in
+coordination mechanism for agents that deliberately choose to share one on-disk
+copy and accept the stewardship/update burden.
 
 ## Adding a new skills path
 
@@ -345,10 +373,10 @@ To expand your skill catalog with another source directory:
 
 ## Name collision discipline
 
-Two skills with the same `name` in the catalog would collide. Before authoring a new skill in `custom/` or publishing to shared, grep the existing catalog:
+Two skills with the same `name` in the catalog would collide. Before authoring or installing a skill in `custom/`, grep the existing catalog:
 
 ```
-bash({"command": "grep -rh '^name:' .library/ ../.library_shared/ ~/.lingtai-tui/utilities/ 2>/dev/null"})
+bash({"command": "grep -rh '^name:' .library/ ~/.lingtai-tui/utilities/ 2>/dev/null"})
 ```
 
 If you hit a collision: rename, or adapt the existing skill instead of forking a second one.
@@ -402,11 +430,11 @@ Once published, agents elsewhere can install it with `git clone` into their `.li
 
 ## Cleanup / Footprint
 
-Skills live under `.library/intrinsic/`, `.library/custom/`, network shared
-skill paths, and any extra paths configured in `init.json`. Intrinsic skills are
-runtime-owned; do not delete them. Custom/shared skills are portable procedure
-memory: cleanup should usually mean validation, renaming, consolidation, or git
-removal through a reviewed PR, not ad-hoc `rm`.
+Skills live under `.library/intrinsic/`, `.library/custom/`, opt-in shared
+skill paths when configured, and any extra paths configured in `init.json`.
+Intrinsic skills are runtime-owned; do not delete them. Custom skills are
+portable procedure memory: cleanup should usually mean validation, renaming,
+consolidation, or git removal through a reviewed PR, not ad-hoc `rm`.
 
 Footprint check (read-only, records the audit):
 
