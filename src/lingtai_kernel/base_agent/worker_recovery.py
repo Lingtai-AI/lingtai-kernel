@@ -362,6 +362,70 @@ def _open_artifacts(agent) -> list[tuple[str, Path, dict]]:
     return sorted(out, key=lambda item: (item[0], item[1].name), reverse=True)
 
 
+def is_worker_hang_ref(ref_id: str | None) -> bool:
+    """Return True iff *ref_id* names a worker_still_running recovery event."""
+    return isinstance(ref_id, str) and ref_id.startswith("worker_still_running:")
+
+
+def resolve_worker_hang_artifact(agent, ref_id: str, *, reason: str = "") -> bool:
+    """Durably mark the recovery artifact behind *ref_id* as resolved.
+
+    Dismissing the ``worker_still_running:*`` system notification only removes
+    the transient event from ``.notification/system.json``; the durable artifact
+    under ``history/unfinished_turns/`` is what ``rehydrate_worker_hang_recovery``
+    re-surfaces after every refresh/molt/wake.  Unless the dismissal also flips
+    the artifact to ``resolved``, the same already-handled hint resurrects as a
+    fresh high-priority notification on the next lifecycle transition (#717).
+
+    Returns True iff an open artifact was found and flipped.  Idempotent: an
+    already-resolved or missing artifact returns False without error.
+    """
+    if not is_worker_hang_ref(ref_id):
+        return False
+    directory = agent._working_dir / "history" / "unfinished_turns"
+    if not directory.is_dir():
+        return False
+    for path in sorted(directory.glob(_ARTIFACT_GLOB)):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        artifact_ref = payload.get("recovery", {}).get("notification_ref_id") \
+            or _artifact_ref_id(path.name)
+        if artifact_ref != ref_id:
+            continue
+        if payload.get("status") != "open" or payload.get("resolved_at"):
+            return False
+        payload["status"] = "resolved"
+        payload["resolved_at"] = _now_iso()
+        payload["resolved_reason"] = (str(reason) or "dismissed")[:500]
+        try:
+            _write_json_atomic(path, payload)
+        except Exception as write_err:
+            try:
+                agent._log(
+                    "worker_hang_resolve_failed",
+                    ref_id=ref_id,
+                    error=(str(write_err) or repr(write_err))[:300],
+                )
+            except Exception:
+                pass
+            return False
+        try:
+            agent._log(
+                "worker_hang_artifact_resolved",
+                ref_id=ref_id,
+                artifact=path.name,
+                reason=payload["resolved_reason"],
+            )
+        except Exception:
+            pass
+        return True
+    return False
+
+
 def rehydrate_worker_hang_recovery(agent) -> int:
     """On startup, re-surface the newest open artifact as a notification.
 

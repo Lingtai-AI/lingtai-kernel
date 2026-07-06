@@ -945,6 +945,32 @@ def dismiss_channel(
         except Exception:
             pass
 
+        # Dismissing a worker_still_running system event must ALSO durably
+        # resolve the recovery artifact under history/unfinished_turns/;
+        # otherwise rehydrate_worker_hang_recovery re-surfaces the same
+        # already-handled hint as a fresh high-priority notification after the
+        # next refresh/molt/wake (#717). The transient event we just removed is
+        # not persistence — the artifact is.
+        resolved_worker_refs: list[str] = []
+        try:
+            from .base_agent.worker_recovery import (
+                is_worker_hang_ref,
+                resolve_worker_hang_artifact,
+            )
+
+            worker_refs = {
+                ev.get("ref_id")
+                for ev in removed_events
+                if isinstance(ev, dict) and is_worker_hang_ref(ev.get("ref_id"))
+            }
+            for worker_ref in sorted(r for r in worker_refs if r):
+                if resolve_worker_hang_artifact(
+                    agent, worker_ref, reason=ack_reason or "dismissed"
+                ):
+                    resolved_worker_refs.append(worker_ref)
+        except Exception:
+            pass
+
         try:
             agent._log(
                 "notification_event_dismiss",
@@ -982,6 +1008,8 @@ def dismiss_channel(
             result["ref_id"] = ref_id
         if ack_reason:
             result["reason"] = ack_reason
+        if resolved_worker_refs:
+            result["resolved_worker_hang_refs"] = resolved_worker_refs
         return result
 
     if channel == "system":

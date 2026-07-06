@@ -634,3 +634,165 @@ def test_refused_dismiss_does_not_signal_chat(tmp_path: Path) -> None:
     assert res["status"] == "error"
     assert res["reason"] == "guarded"
     assert agent._chat.dismiss_calls == []
+
+
+# ---------------------------------------------------------------------------
+# worker_still_running recovery-artifact resolution on dismiss (#717).
+#
+# Dismissing a `worker_still_running:*` system event only removes the transient
+# event from `.notification/system.json`. The durable artifact under
+# `history/unfinished_turns/` is what `rehydrate_worker_hang_recovery` re-surfaces
+# after every refresh/molt/wake. Unless dismiss also flips the artifact to
+# `resolved`, the same already-handled hint resurrects as a fresh high-priority
+# notification on the next lifecycle transition. These tests pin the drained
+# resurrection source.
+# ---------------------------------------------------------------------------
+
+
+def _write_worker_hang_artifact(tmp_path: Path, artifact_id: str) -> Path:
+    """Write an open worker_still_running recovery artifact, return its path."""
+    directory = tmp_path / "history" / "unfinished_turns"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{artifact_id}.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "type": "worker_still_running_recovery",
+                "status": "open",
+                "created_at": "2026-06-22T14:10:04Z",
+                "recovery": {
+                    "notification_ref_id": f"worker_still_running:{artifact_id}",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _publish_worker_hang_event(tmp_path: Path, artifact_id: str) -> None:
+    """Publish a system.json carrying one worker_still_running event."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    publish(
+        tmp_path,
+        "system",
+        {
+            "header": "1 new event",
+            "icon": "⚠️",
+            "priority": "high",
+            "published_at": "2026-06-22T14:10:05Z",
+            "data": {
+                "events": [
+                    {
+                        "event_id": "evt_wh",
+                        "source": "kernel.llm_worker_hang",
+                        "ref_id": f"worker_still_running:{artifact_id}",
+                        "priority": "high",
+                        "body": "Previous LLM worker exceeded timeout plus grace.",
+                    }
+                ]
+            },
+        },
+    )
+
+
+def test_dismiss_ref_resolves_worker_hang_artifact_no_resurrection(tmp_path: Path) -> None:
+    """dismiss_ref of a worker_still_running event flips the artifact to resolved,
+    so rehydrate no longer re-surfaces it (the #717 resurrection loop)."""
+    from lingtai_kernel.base_agent.worker_recovery import (
+        _open_artifacts,
+        rehydrate_worker_hang_recovery,
+    )
+
+    artifact_id = "worker_still_running_20260622T141004Z_e2373f"
+    ref_id = f"worker_still_running:{artifact_id}"
+    art_path = _write_worker_hang_artifact(tmp_path, artifact_id)
+    _publish_worker_hang_event(tmp_path, artifact_id)
+
+    agent = _StubAgent(tmp_path)
+    # Track any (unwanted) re-publish attempts.
+    published: list[dict] = []
+    agent._enqueue_system_notification = (  # type: ignore[attr-defined]
+        lambda **kw: (published.append(kw), "evt_new")[1]
+    )
+    _mark_delivered(agent)
+
+    # Pre-fix guard: the artifact is the live resurrection source.
+    assert len(_open_artifacts(agent)) == 1
+
+    res = _dismiss_ref(agent, ref_id=ref_id, reason="obsolete: already handled")
+
+    assert res["status"] == "ok"
+    assert res["cleared"] is True
+    assert res["resolved_worker_hang_refs"] == [ref_id]
+
+    # The durable artifact is now resolved, not open.
+    payload = json.loads(art_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "resolved"
+    assert payload["resolved_at"]
+    assert payload["resolved_reason"].startswith("obsolete")
+
+    # The resurrection source is drained ...
+    assert _open_artifacts(agent) == []
+    # ... so rehydrate on the next refresh/molt/wake publishes nothing.
+    assert rehydrate_worker_hang_recovery(agent) == 0
+    assert published == []
+    assert _events(agent, "worker_hang_artifact_resolved")
+
+
+def test_dismiss_event_id_resolves_worker_hang_artifact(tmp_path: Path) -> None:
+    """Targeted event_id dismiss of a worker_still_running event also resolves
+    the underlying artifact."""
+    from lingtai_kernel.base_agent.worker_recovery import _open_artifacts
+
+    artifact_id = "worker_still_running_20260627T235817Z_e5c91d"
+    _write_worker_hang_artifact(tmp_path, artifact_id)
+    _publish_worker_hang_event(tmp_path, artifact_id)
+
+    agent = _StubAgent(tmp_path)
+    _mark_delivered(agent)
+
+    res = _dismiss_event(agent, event_id="evt_wh")
+
+    assert res["status"] == "ok"
+    assert res["resolved_worker_hang_refs"] == [f"worker_still_running:{artifact_id}"]
+    assert _open_artifacts(agent) == []
+
+
+def test_dismiss_unrelated_system_event_leaves_worker_hang_artifact_open(tmp_path: Path) -> None:
+    """Dismissing a non-worker event must NOT resolve a coexisting worker artifact —
+    resolution is keyed strictly on the dismissed ref."""
+    from lingtai_kernel.base_agent.worker_recovery import _open_artifacts
+
+    artifact_id = "worker_still_running_20260630T110256Z_edaea9"
+    _write_worker_hang_artifact(tmp_path, artifact_id)
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    publish(
+        tmp_path,
+        "system",
+        {
+            "header": "2 events",
+            "data": {
+                "events": [
+                    {"event_id": "evt_d", "source": "daemon", "ref_id": "d", "body": "D"},
+                    {
+                        "event_id": "evt_wh",
+                        "source": "kernel.llm_worker_hang",
+                        "ref_id": f"worker_still_running:{artifact_id}",
+                        "body": "hang",
+                    },
+                ]
+            },
+        },
+    )
+    agent = _StubAgent(tmp_path)
+    _mark_delivered(agent)
+
+    res = _dismiss_event(agent, event_id="evt_d")
+
+    assert res["status"] == "ok"
+    assert res["removed"] == 1
+    assert "resolved_worker_hang_refs" not in res
+    # The worker artifact is untouched — still open.
+    assert len(_open_artifacts(agent)) == 1
