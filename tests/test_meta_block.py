@@ -2377,6 +2377,183 @@ def test_attach_active_notifications_sanitizes_telegram_without_new_persistent_b
     assert "has_human_messages" not in ephemeral["data"]
 
 
+def _whatsapp_message(
+    message_id: int,
+    *,
+    text: str | None = None,
+    direction: str = "incoming",
+    message_type: str = "text",
+    text_truncated: bool = False,
+) -> dict:
+    return {
+        "id": f"default:15551234567:wamid.{message_id}",
+        "direction": direction,
+        "wa_id": "15551234567",
+        "type": message_type,
+        "text": text if message_type == "text" else None,
+        "text_truncated": text_truncated,
+        "timestamp": f"17520000{message_id % 100:02d}",
+        "stored_at": f"2026-07-06T07:00:{message_id % 60:02d}+00:00",
+    }
+
+
+def _write_whatsapp_notif(tmp_path, messages: list[dict], *, structured: bool = True) -> None:
+    notif_dir = tmp_path / ".notification"
+    notif_dir.mkdir(parents=True, exist_ok=True)
+    latest = dict(messages[-1])
+    latest["is_current"] = True
+    preview = {
+        "from": "whatsapp:15551234567",
+        "subject": "WhatsApp message",
+        "preview": latest.get("text") or "[image]",
+        "preview_truncated": False,
+        "platform": "whatsapp",
+        "conversation_ref": "default:15551234567",
+        "message_ref": latest["id"],
+    }
+    if structured:
+        preview["recent_messages"] = messages
+        preview["latest_incoming"] = latest
+    payload = {
+        "header": "1 new event from MCP 'whatsapp'",
+        "icon": "💬",
+        "priority": "high",
+        "data": {
+            "count": 1,
+            "source": "whatsapp",
+            "has_human_messages": True,
+            "previews": [preview],
+        },
+    }
+    (notif_dir / "mcp.whatsapp.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_attach_active_notifications_adds_whatsapp_persistent_snapshot(tmp_path):
+    messages = [
+        _whatsapp_message(1, text="hello agent"),
+        _whatsapp_message(2, text="my reply", direction="outgoing"),
+        _whatsapp_message(3, message_type="image"),
+        _whatsapp_message(4, text="long question", text_truncated=True),
+    ]
+    _write_whatsapp_notif(tmp_path, messages)
+    agent = _notif_agent(tmp_path)
+
+    block = ToolResultBlock(
+        id="t1",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+    )
+    holder = attach_active_notifications(agent, [block], prior_holder=None)
+
+    assert holder is block.content
+    # Required path mirrors Telegram: _meta.notification_persistent.mcp.whatsapp.
+    whatsapp = block.content["_meta"]["notification_persistent"]["mcp"]["whatsapp"]
+    # Snapshot lane (email-style): no previous_block hook, no delta tracking.
+    assert set(whatsapp.keys()) == {"context_comment", "messages", "count", "events"}
+    assert whatsapp["context_comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_WHATSAPP_CONTEXT_COMMENT
+    )
+    assert "24-hour customer-service window" in whatsapp["context_comment"]
+    assert whatsapp["count"] == 1
+    assert [m["id"] for m in whatsapp["messages"]] == [m["id"] for m in messages]
+    # Per-message machine comments: self-outgoing continuity, media, truncation.
+    by_id = {m["id"]: m for m in whatsapp["messages"]}
+    assert "comment" not in by_id[messages[0]["id"]]
+    assert by_id[messages[1]["id"]]["comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_WHATSAPP_SELF_OUTGOING_COMMENT
+    )
+    assert by_id[messages[2]["id"]]["comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_WHATSAPP_MEDIA_COMMENT
+    )
+    assert by_id[messages[3]["id"]]["comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_WHATSAPP_TRUNCATED_COMMENT
+    )
+    assert whatsapp["events"] == [
+        {
+            "from": "whatsapp:15551234567",
+            "subject": "WhatsApp message",
+            "conversation_ref": "default:15551234567",
+            "message_ref": messages[-1]["id"],
+            "platform": "whatsapp",
+        }
+    ]
+    # No Telegram-style in-memory delivery state is created for WhatsApp.
+    assert not hasattr(agent, "_notification_persistent_whatsapp_message_ids")
+
+    # Move (not duplicate): the ephemeral notifications.mcp.whatsapp lane is now
+    # only a short high-attention identity hook.
+    ephemeral = block.content["_meta"]["notifications"]["mcp.whatsapp"]
+    assert ephemeral["header"] == "WhatsApp event"
+    assert ephemeral["data"] == {"message_ids": [messages[-1]["id"]]}
+    assert "previews" not in ephemeral["data"]
+    assert "count" not in ephemeral["data"]
+    assert "has_human_messages" not in ephemeral["data"]
+    assert ephemeral["instructions"] == (
+        "High-attention WhatsApp hook: use notification_persistent for "
+        "content/context; when handled, dismiss this notification."
+    )
+    assert "hello agent" not in json.dumps(ephemeral)
+    # Generic scaffolding survives sanitization.
+    assert ephemeral["icon"] == "💬"
+    assert ephemeral["priority"] == "high"
+
+
+def test_attach_active_notifications_whatsapp_fallback_preview_only(tmp_path):
+    # Degraded/legacy producer: previews without structured recent_messages /
+    # latest_incoming still move their content into the persistent lane.
+    messages = [_whatsapp_message(7, text="fallback body")]
+    _write_whatsapp_notif(tmp_path, messages, structured=False)
+    agent = _notif_agent(tmp_path)
+
+    block = ToolResultBlock(
+        id="t1",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+    )
+    attach_active_notifications(agent, [block], prior_holder=None)
+
+    whatsapp = block.content["_meta"]["notification_persistent"]["mcp"]["whatsapp"]
+    assert len(whatsapp["messages"]) == 1
+    fallback = whatsapp["messages"][0]
+    assert fallback["id"] == messages[0]["id"]
+    assert fallback["text"] == "fallback body"
+    assert fallback["source"] == "notification_preview"
+    ephemeral = block.content["_meta"]["notifications"]["mcp.whatsapp"]
+    assert ephemeral["data"] == {"message_ids": [messages[0]["id"]]}
+    assert "fallback body" not in json.dumps(ephemeral)
+
+
+def test_build_notification_persistent_payload_whatsapp_snapshot_has_no_delta():
+    # Unit-level lock on the snapshot semantics: identical consecutive payloads
+    # rebuild the full block; nothing is filtered by previously delivered ids.
+    agent = SimpleNamespace()
+    messages = [
+        {"id": f"default:1555:wamid.{i}", "direction": "incoming", "text": f"m{i}",
+         "text_truncated": False, "type": "text"}
+        for i in range(1, 4)
+    ]
+    notification_payload = {
+        "notifications": {
+            "mcp.whatsapp": {
+                "data": {
+                    "previews": [
+                        {"recent_messages": messages, "latest_incoming": messages[-1]}
+                    ]
+                }
+            }
+        }
+    }
+    first = meta_block.build_notification_persistent_payload(agent, notification_payload)
+    second = meta_block.build_notification_persistent_payload(agent, notification_payload)
+
+    # Path is notification_persistent.mcp.whatsapp, NOT notification_persistent.whatsapp.
+    assert "whatsapp" not in first["notification_persistent"]
+    whatsapp = first["notification_persistent"]["mcp"]["whatsapp"]
+    assert [m["id"] for m in whatsapp["messages"]] == [m["id"] for m in messages]
+    assert "previous_block" not in whatsapp
+    assert second == first
+
+
 def test_build_notification_persistent_payload_lands_at_mcp_telegram_path():
     # Unit-level lock on the exact required key path and hook shape (Jason #6148).
     agent = SimpleNamespace(

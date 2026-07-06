@@ -44,6 +44,7 @@ from ..meta_block import (
     record_notification_persistent_delivery,
     sanitize_email_notification_after_persistent,
     sanitize_telegram_notification_after_persistent,
+    sanitize_whatsapp_notification_after_persistent,
 )
 from ..session import SessionManager
 from ..tc_inbox import TCInbox
@@ -1546,8 +1547,8 @@ class BaseAgent:
         notification_persistent_payload = build_notification_persistent_payload(
             self, notifications_with_guidance
         )
-        # Move (not duplicate): the durable Telegram context now lives in the
-        # persistent lane, so strip it from the model-visible ephemeral lane
+        # Move (not duplicate): the durable Telegram/WhatsApp context now lives
+        # in the persistent lane, so strip it from the model-visible ephemeral lane
         # before it is nested into the synthesized pair's _meta (and the
         # summary/logging envelope built from the same payload below).  This runs
         # even when no new persistent block is emitted, because the transient lane
@@ -1555,6 +1556,7 @@ class BaseAgent:
         # `notifications_with_guidance` is freshly built for this delivery cycle,
         # so in-place trimming cannot mutate producer-owned state.
         sanitize_telegram_notification_after_persistent(notifications_with_guidance)
+        sanitize_whatsapp_notification_after_persistent(notifications_with_guidance)
         sanitize_email_notification_after_persistent(notifications_with_guidance)
         body_meta = dict(notifications_with_guidance)
         if notification_persistent_payload:

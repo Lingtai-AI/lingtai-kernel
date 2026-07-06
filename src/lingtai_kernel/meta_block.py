@@ -106,6 +106,12 @@ NOTIFICATION_PERSISTENT_EMAIL_PATH = (
     f"_meta.{NOTIFICATION_PERSISTENT_KEY}.{NOTIFICATION_PERSISTENT_EMAIL_CHANNEL}"
 )
 
+NOTIFICATION_PERSISTENT_WHATSAPP_CHANNEL = "whatsapp"
+NOTIFICATION_PERSISTENT_WHATSAPP_PATH = (
+    f"_meta.{NOTIFICATION_PERSISTENT_KEY}."
+    f"{NOTIFICATION_PERSISTENT_MCP_KEY}.{NOTIFICATION_PERSISTENT_WHATSAPP_CHANNEL}"
+)
+
 # Concise English comments attached to the Telegram persistent block so the
 # agent can read the block without re-deriving structure. Kept as module-level
 # constants so tests and docs can assert the exact wording.
@@ -135,6 +141,32 @@ NOTIFICATION_PERSISTENT_EMAIL_TRUNCATED_COMMENT = (
     "This legacy email body exceeded the current 50,000 character send-layer "
     "limit and was capped in the persistent notification lane. New oversize "
     "email sends are rejected."
+)
+
+# Concise English comments attached to the WhatsApp persistent block. The
+# WhatsApp lane is a snapshot lane (email-style): each block carries the
+# producer's current structured context in full, with no delivered-id delta
+# tracking, so the comments focus on producer authority and the Cloud API
+# reply rules rather than block-to-block continuity.
+NOTIFICATION_PERSISTENT_WHATSAPP_CONTEXT_COMMENT = (
+    "Durable WhatsApp context moved here from _meta.notifications.mcp.whatsapp. "
+    "The whatsapp tool remains the source of truth: building this block marks "
+    "nothing read — use whatsapp.read/check for exact producer state. Reply on "
+    "WhatsApp when the message arrived through WhatsApp (whatsapp.reply with "
+    "the compound message id, or whatsapp.send); free-form business replies "
+    "are allowed only inside the 24-hour customer-service window — outside it "
+    "use an approved WhatsApp message template."
+)
+NOTIFICATION_PERSISTENT_WHATSAPP_SELF_OUTGOING_COMMENT = (
+    "This is the agent's own recent outgoing message, included for continuity."
+)
+NOTIFICATION_PERSISTENT_WHATSAPP_TRUNCATED_COMMENT = (
+    "This message is truncated; call whatsapp.read with the compound message "
+    "id for the exact full producer state."
+)
+NOTIFICATION_PERSISTENT_WHATSAPP_MEDIA_COMMENT = (
+    "Non-text WhatsApp message; only type/id metadata is stored locally — use "
+    "whatsapp.read for the exact stored producer state."
 )
 
 # Per-result machine-generated guidance nested under ``tool_meta``.  ``comment``
@@ -1970,6 +2002,159 @@ def _annotate_telegram_message(message: dict) -> dict:
     return annotated
 
 
+def _whatsapp_preview_list(notification_payload: dict) -> list[dict]:
+    """Return WhatsApp notification preview entries from the canonical payload."""
+    notifications = notification_payload.get(NOTIFICATIONS_KEY)
+    if not isinstance(notifications, dict):
+        return []
+    whatsapp = notifications.get("mcp.whatsapp")
+    if not isinstance(whatsapp, dict):
+        return []
+    data = whatsapp.get("data")
+    if not isinstance(data, dict):
+        return []
+    previews = data.get("previews")
+    if not isinstance(previews, list):
+        return []
+    return [preview for preview in previews if isinstance(preview, dict)]
+
+
+def _whatsapp_fallback_message_from_preview(preview: dict) -> dict | None:
+    """Build a persistent message from a legacy WhatsApp preview-only event."""
+    preview_text = preview.get("preview")
+    if not isinstance(preview_text, str) or not preview_text:
+        return None
+
+    msg_id = preview.get("message_ref")
+    if not isinstance(msg_id, str) or not msg_id:
+        digest_src = "|".join(
+            str(preview.get(key, ""))
+            for key in ("conversation_ref", "from", "subject", "preview")
+        )
+        msg_id = "notification-preview:" + _hashlib.sha1(
+            digest_src.encode("utf-8", errors="replace")
+        ).hexdigest()[:16]
+
+    sender = preview.get("from")
+    item: dict = {
+        "id": msg_id,
+        "direction": "incoming",
+        "sender": sender if isinstance(sender, str) and sender else "unknown",
+        "text": preview_text,
+        "text_truncated": bool(preview.get("preview_truncated")),
+        "source": "notification_preview",
+    }
+    for key in ("subject", "conversation_ref", "platform"):
+        value = preview.get(key)
+        if isinstance(value, str) and value:
+            item[key] = value
+    return item
+
+
+def _whatsapp_persistent_event_from_preview(preview: dict) -> dict | None:
+    """Move WhatsApp event/routing hook metadata into the persistent lane."""
+    event: dict = {}
+    for key in ("from", "subject", "conversation_ref", "message_ref", "platform"):
+        value = preview.get(key)
+        if isinstance(value, str) and value:
+            event[key] = value
+    if not event:
+        return None
+    return event
+
+
+def _whatsapp_persistent_events_from_notifications(notification_payload: dict) -> list[dict]:
+    """Extract WhatsApp event/routing hooks from notification preview metadata."""
+    events: list[dict] = []
+    for preview in _whatsapp_preview_list(notification_payload):
+        event = _whatsapp_persistent_event_from_preview(preview)
+        if event is not None:
+            events.append(event)
+    return events
+
+
+def _whatsapp_notification_event_count(notification_payload: dict) -> int:
+    """Return the WhatsApp notification event count when the producer reports it."""
+    notifications = notification_payload.get(NOTIFICATIONS_KEY)
+    if not isinstance(notifications, dict):
+        return 0
+    whatsapp = notifications.get("mcp.whatsapp")
+    if not isinstance(whatsapp, dict):
+        return 0
+    data = whatsapp.get("data")
+    if not isinstance(data, dict):
+        return 0
+    count = data.get("count")
+    return count if isinstance(count, int) and count > 0 else 0
+
+
+def _whatsapp_persistent_messages_from_notifications(notification_payload: dict) -> list[dict]:
+    """Extract ordered WhatsApp message objects from notification preview metadata.
+
+    Prefer the curated structured ``recent_messages`` / ``latest_incoming``
+    fields.  If an older or degraded WhatsApp notification has only the bounded
+    body preview, move that preview into the persistent lane as a fallback
+    message so the transient notification never carries WhatsApp content.
+    """
+    by_id: dict[str, dict] = {}
+    order: list[str] = []
+    for preview in _whatsapp_preview_list(notification_payload):
+        candidates: list[object] = []
+        has_structured = False
+        recent = preview.get("recent_messages")
+        if isinstance(recent, list):
+            candidates.extend(recent)
+            has_structured = True
+        latest = preview.get("latest_incoming")
+        if isinstance(latest, dict):
+            candidates.append(latest)
+            has_structured = True
+        if not has_structured:
+            fallback = _whatsapp_fallback_message_from_preview(preview)
+            if fallback is not None:
+                candidates.append(fallback)
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            msg_id = candidate.get("id")
+            if not isinstance(msg_id, str) or not msg_id:
+                continue
+            if msg_id not in by_id:
+                order.append(msg_id)
+            by_id[msg_id] = dict(candidate)
+    return [by_id[msg_id] for msg_id in order if msg_id in by_id]
+
+
+def _annotate_whatsapp_message(message: dict) -> dict:
+    """Return a copy of *message* with per-message continuity/truncation hints.
+
+    Adds the self-outgoing continuity comment to the agent's own outgoing
+    messages, the truncation comment to truncated messages, and the media
+    comment to non-text messages (the local store keeps only type/id metadata
+    for media; the producer holds the exact state). When several apply, the
+    comments are joined so no signal is dropped.
+    """
+    annotated = dict(message)
+    hints: list[str] = []
+    if annotated.get("direction") == "outgoing":
+        hints.append(NOTIFICATION_PERSISTENT_WHATSAPP_SELF_OUTGOING_COMMENT)
+    if annotated.get("text_truncated"):
+        hints.append(NOTIFICATION_PERSISTENT_WHATSAPP_TRUNCATED_COMMENT)
+    message_type = annotated.get("type")
+    if (
+        isinstance(message_type, str)
+        and message_type not in ("", "text")
+        and not annotated.get("text")
+    ):
+        hints.append(NOTIFICATION_PERSISTENT_WHATSAPP_MEDIA_COMMENT)
+    if hints:
+        existing = annotated.get("comment")
+        if isinstance(existing, str) and existing:
+            hints = [existing, *hints]
+        annotated["comment"] = " ".join(hints)
+    return annotated
+
+
 def _email_notification_data(notification_payload: dict) -> dict:
     notifications = notification_payload.get(NOTIFICATIONS_KEY)
     if not isinstance(notifications, dict):
@@ -2174,6 +2359,31 @@ def _build_telegram_notification_persistent_payload(agent, notification_payload:
     return telegram_payload
 
 
+def _build_whatsapp_notification_persistent_payload(agent, notification_payload: dict) -> dict | None:
+    """Build the `_meta.notification_persistent` payload for WhatsApp.
+
+    Snapshot lane (email-style): every block carries the producer's current
+    structured conversation context in full, with no delivered-id delta
+    tracking and no previous-block hook (unlike Telegram). The whatsapp tool
+    remains the source of truth; building this block marks nothing read.
+    """
+    messages = _whatsapp_persistent_messages_from_notifications(notification_payload)
+    events = _whatsapp_persistent_events_from_notifications(notification_payload)
+    if not messages and not events:
+        return None
+
+    whatsapp_payload: dict = {
+        "context_comment": NOTIFICATION_PERSISTENT_WHATSAPP_CONTEXT_COMMENT,
+        "messages": [_annotate_whatsapp_message(message) for message in messages],
+    }
+    count = _whatsapp_notification_event_count(notification_payload)
+    if count:
+        whatsapp_payload["count"] = count
+    if events:
+        whatsapp_payload["events"] = events
+    return whatsapp_payload
+
+
 def build_notification_persistent_payload(agent, notification_payload: dict) -> dict | None:
     persistent: dict = {}
 
@@ -2190,6 +2400,14 @@ def build_notification_persistent_payload(agent, notification_payload: dict) -> 
         persistent.setdefault(NOTIFICATION_PERSISTENT_MCP_KEY, {})[
             NOTIFICATION_PERSISTENT_TELEGRAM_CHANNEL
         ] = telegram_payload
+
+    whatsapp_payload = _build_whatsapp_notification_persistent_payload(
+        agent, notification_payload
+    )
+    if whatsapp_payload is not None:
+        persistent.setdefault(NOTIFICATION_PERSISTENT_MCP_KEY, {})[
+            NOTIFICATION_PERSISTENT_WHATSAPP_CHANNEL
+        ] = whatsapp_payload
 
     if not persistent:
         return None
@@ -2300,6 +2518,65 @@ def sanitize_telegram_notification_after_persistent(notification_payload: dict) 
     telegram["data"] = minimal_data
     telegram["instructions"] = (
         "High-attention Telegram hook: use notification_persistent for "
+        "content/context; when handled, dismiss this notification."
+    )
+
+
+def _whatsapp_notification_message_ids(notification_payload: dict) -> list[str]:
+    """Return stable WhatsApp compound IDs for the transient high-attention hook."""
+    message_ids: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: object) -> None:
+        if isinstance(value, str) and value and value not in seen:
+            seen.add(value)
+            message_ids.append(value)
+
+    for event in _whatsapp_persistent_events_from_notifications(notification_payload):
+        if isinstance(event, dict):
+            add(event.get("message_ref"))
+
+    # Fallback for older/partial payloads that have structured messages but no
+    # event hook.  Keep only IDs; content and routing details stay persistent.
+    for preview in _whatsapp_preview_list(notification_payload):
+        add(preview.get("message_ref"))
+        latest = preview.get("latest_incoming")
+        if isinstance(latest, dict):
+            add(latest.get("id"))
+
+    return message_ids
+
+
+def sanitize_whatsapp_notification_after_persistent(notification_payload: dict) -> None:
+    """Reduce WhatsApp's ephemeral lane to a minimal event identity hook.
+
+    WhatsApp message text, structured context, routing hooks, sender/subject,
+    platform, counts, and summaries live under
+    ``_meta.notification_persistent.mcp.whatsapp``.  The transient
+    ``_meta.notifications.mcp.whatsapp`` block remains only a short
+    high-attention/progressive-disclosure hook that names the producer event IDs
+    requiring explicit handling through the producer tool.
+
+    No-op when there is no whatsapp notification. Safe to call unconditionally.
+    """
+    notifications = notification_payload.get(NOTIFICATIONS_KEY)
+    if not isinstance(notifications, dict):
+        return
+    whatsapp = notifications.get("mcp.whatsapp")
+    if not isinstance(whatsapp, dict):
+        return
+
+    minimal_data: dict = {
+        "message_ids": _whatsapp_notification_message_ids(notification_payload)
+    }
+
+    # Preserve generic notification scaffolding (icon / priority / published_at)
+    # but replace all WhatsApp content/summary fields with the standard LICC
+    # transient hook: event identity in data, content/context in persistent.
+    whatsapp["header"] = "WhatsApp event"
+    whatsapp["data"] = minimal_data
+    whatsapp["instructions"] = (
+        "High-attention WhatsApp hook: use notification_persistent for "
         "content/context; when handled, dismiss this notification."
     )
 
@@ -2698,12 +2975,13 @@ def attach_active_notifications(
     # Nest the canonical notification payload under the result's _meta
     # envelope (alongside any tool_meta/agent_meta/guidance blocks).
     persistent_payload = build_notification_persistent_payload(agent, payload)
-    # Move (not duplicate): Telegram durable fields are always stripped from the
-    # model-visible ephemeral lane, even when every message id was already
-    # delivered and no new persistent block is emitted this round.  `payload` is
+    # Move (not duplicate): Telegram/WhatsApp durable fields are always stripped
+    # from the model-visible ephemeral lane, even when every message id was
+    # already delivered and no new persistent block is emitted this round.  `payload` is
     # freshly materialized for this delivery cycle, so in-place preview trimming
     # cannot mutate producer-owned on-disk notification state.
     sanitize_telegram_notification_after_persistent(payload)
+    sanitize_whatsapp_notification_after_persistent(payload)
     sanitize_email_notification_after_persistent(payload)
     meta_block = _meta_block(target)
     meta_block.update(payload)

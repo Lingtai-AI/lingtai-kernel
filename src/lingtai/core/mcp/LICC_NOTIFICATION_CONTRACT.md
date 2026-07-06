@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/core/mcp/licc.py
   - src/lingtai/mcp_servers/ANATOMY.md
   - src/lingtai/mcp_servers/telegram/manager.py
+  - src/lingtai/mcp_servers/whatsapp/manager.py
   - src/lingtai_kernel/ANATOMY.md
   - src/lingtai_kernel/base_agent/ANATOMY.md
   - src/lingtai_kernel/base_agent/__init__.py
@@ -26,6 +27,7 @@ related_files:
   - tests/test_meta_block.py
   - tests/test_notification_sync.py
   - tests/test_telegram_notification_read_state.py
+  - tests/test_whatsapp_notification_metadata.py
 review_triggers:
   - src/lingtai/core/mcp/inbox.py
   - src/lingtai/core/mcp/licc.py
@@ -71,7 +73,7 @@ Scope:
 - Coalesced `.notification/mcp.<server>.json` files produced from LICC events.
 - The `_meta.notifications` high-attention hook visible to the agent.
 - The `_meta.notification_persistent` communication-context lane when a producer
-  has one (currently Telegram and built-in email).
+  has one (currently Telegram, WhatsApp, and built-in email).
 - Producer-owned read/reply/dismiss state that remains the source of truth.
 
 Non-scope: the low-level Telegram Bot API, IMAP protocol semantics, frontend UI
@@ -104,11 +106,24 @@ where they share the `.notification/` filesystem protocol.
    For Telegram, `sanitize_telegram_notification_after_persistent` reduces
    `_meta.notifications.mcp.telegram.data` to stable `message_ids` only; content,
    sender/subject, routing details, counts, and summaries must not remain in the
-   transient lane (`src/lingtai_kernel/meta_block.py:2163-2192`).
+   transient lane (`src/lingtai_kernel/meta_block.py:2163-2192`). WhatsApp has
+   the same identity-only transient hook via
+   `sanitize_whatsapp_notification_after_persistent` (compound
+   `account:wa_id:wamid` ids in `data.message_ids`).
 5. **Model-visible persistent communication context.** When structured Telegram metadata is available, `build_notification_persistent_payload` emits `_meta.notification_persistent.mcp.telegram` with `messages`, `events`, `previous_block`, comments, and full out-of-window reply targets. For built-in email it emits `_meta.notification_persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate)
    (`src/lingtai_kernel/meta_block.py:1956-2085`). The Telegram MCP supplies the
    structured `recent_messages`, `latest_incoming`, and `referenced_messages`
-   metadata (`src/lingtai/mcp_servers/telegram/manager.py:904-1040`).
+   metadata (`src/lingtai/mcp_servers/telegram/manager.py:904-1040`). For WhatsApp
+   it emits `_meta.notification_persistent.mcp.whatsapp` as a **snapshot lane**
+   (email-style): every block carries `context_comment` (producer authority +
+   the 24-hour customer-service window reply rule), annotated `messages`,
+   `events` routing hooks, and optional `count` — no `previous_block` hook and
+   no delivered-id delta tracking. The WhatsApp MCP supplies bounded structured
+   `recent_messages` / `latest_incoming` metadata (last 10 messages for the
+   contact, text capped at 500 chars, allowlisted fields only — never raw Cloud
+   API payload/response or webhook metadata)
+   (`src/lingtai/mcp_servers/whatsapp/manager.py` `_structured_message` /
+   `_conversation_context` / `ingest_webhook`).
 6. **Producer source of truth.** Notification files are mirrors/hooks, not the
    authoritative mailbox/chat store. Producer tools own real state changes and
    side effects. Email is the built-in mirror example: unread mail state is rendered into `.notification/email.json`, model-visible content is projected into `_meta.notification_persistent.email`, and read/dismiss/reply actions live on the email tool (`src/lingtai_kernel/base_agent/messaging.py:60-130`).
@@ -232,6 +247,7 @@ In-memory state involved in this contract:
   sparse movement of the transient notification payload.
 - `agent._notification_persistent_telegram_message_ids` and
   `_notification_persistent_telegram_last_tool_id` track Telegram delivery into the current provider context.
+  The WhatsApp snapshot lane deliberately keeps no such in-memory delivery state.
 
 ## Review triggers
 
@@ -257,6 +273,13 @@ Re-check this contract whenever a change touches any of these areas:
 - **Telegram:** compliant with the content split. Transient
   `_meta.notifications.mcp.telegram` is an identity-only high-attention hook;
   content/context lives in `_meta.notification_persistent.mcp.telegram`.
+- **WhatsApp:** compliant with the content split. Transient
+  `_meta.notifications.mcp.whatsapp` is an identity-only high-attention hook
+  carrying compound `message_ids`; content/context lives in
+  `_meta.notification_persistent.mcp.whatsapp` as a snapshot lane (no
+  block-to-block delta state). The whatsapp tool/store remains source of truth;
+  the persistent `context_comment` preserves the 24-hour customer-service
+  window reply rule.
 - **Generic LICC/MCP:** still publishes bounded previews into the raw
   `.notification/mcp.<name>.json` mirror. That is allowed until the producer has
   a persistent context lane.
