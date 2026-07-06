@@ -181,6 +181,106 @@ def test_check_many_empty_list_returns_empty():
 
 
 # ---------------------------------------------------------------------------
+# Schemeless / malformed base_url (issue #741)
+#
+# urlparse() has two surprising behaviors that made check_connectivity()
+# silently probe localhost instead of the configured endpoint:
+#   urlparse("api.openai.com") -> scheme='',      hostname=None
+#   urlparse("myhost:8080")    -> scheme='myhost', hostname=None, port=None
+# With hostname=None, socket.create_connection((None, 80)) resolves to
+# loopback — a false "ok" if anything local listens, or a misleading
+# "unreachable". These tests pin the corrected behavior.
+# ---------------------------------------------------------------------------
+
+
+def test_schemeless_base_url_probed_as_https(monkeypatch):
+    """A bare hostname base_url is probed as https on the real host, not localhost."""
+    monkeypatch.setenv("MOCK_KEY", "sk-test")
+    from lingtai_kernel import preset_connectivity
+    captured = {}
+    def fake_probe(host, port, timeout):
+        captured["host"] = host
+        captured["port"] = port
+        return 7
+    with patch.object(preset_connectivity, "_probe_host", side_effect=fake_probe):
+        result = preset_connectivity.check_connectivity(
+            provider=None,
+            base_url="api.openai.com",
+            api_key_env="MOCK_KEY",
+        )
+    assert captured["host"] == "api.openai.com"
+    assert captured["port"] == 443
+    assert result["status"] == "ok"
+
+
+def test_schemeless_host_port_base_url_keeps_port(monkeypatch):
+    """A schemeless host:port base_url probes that host and port (the
+    urlparse scheme-swallowing case), not localhost:80."""
+    monkeypatch.setenv("MOCK_KEY", "sk-test")
+    from lingtai_kernel import preset_connectivity
+    captured = {}
+    def fake_probe(host, port, timeout):
+        captured["host"] = host
+        captured["port"] = port
+        return 3
+    with patch.object(preset_connectivity, "_probe_host", side_effect=fake_probe):
+        result = preset_connectivity.check_connectivity(
+            provider=None,
+            base_url="myhost:8080",
+            api_key_env="MOCK_KEY",
+        )
+    assert captured["host"] == "myhost"
+    assert captured["port"] == 8080
+    assert result["status"] == "ok"
+
+
+@pytest.mark.parametrize("bad_url", ["https://", "http://host:notaport"])
+def test_invalid_base_url_reports_error_without_probing(monkeypatch, bad_url):
+    """A base_url with no extractable host fails loud with an
+    'invalid base_url' error and never probes (no silent localhost fallback)."""
+    monkeypatch.setenv("MOCK_KEY", "sk-test")
+    from lingtai_kernel import preset_connectivity
+    with patch.object(preset_connectivity, "_probe_host") as probe:
+        result = preset_connectivity.check_connectivity(
+            provider=None,
+            base_url=bad_url,
+            api_key_env="MOCK_KEY",
+        )
+        probe.assert_not_called()
+    assert result["status"] == "unreachable"
+    assert "invalid base_url" in (result.get("error") or "")
+
+
+def test_http_scheme_still_defaults_to_port_80(monkeypatch):
+    """Regression guard: explicit http:// with no port still probes port 80 —
+    the schemeless normalization must not disturb explicit-scheme handling."""
+    monkeypatch.setenv("MOCK_KEY", "sk-test")
+    from lingtai_kernel import preset_connectivity
+    captured = {}
+    def fake_probe(host, port, timeout):
+        captured["host"] = host
+        captured["port"] = port
+        return 1
+    with patch.object(preset_connectivity, "_probe_host", side_effect=fake_probe):
+        preset_connectivity.check_connectivity(
+            provider=None,
+            base_url="http://myhost",
+            api_key_env="MOCK_KEY",
+        )
+    assert captured["host"] == "myhost"
+    assert captured["port"] == 80
+
+
+def test_urlparse_schemeless_assumptions():
+    """stdlib canary: if urlparse's schemeless semantics change, surface it
+    here rather than as a silent regression in the probe target."""
+    from urllib.parse import urlparse
+    assert urlparse("api.openai.com").hostname is None
+    assert urlparse("myhost:8080").hostname is None
+    assert urlparse("myhost:8080").scheme == "myhost"
+
+
+# ---------------------------------------------------------------------------
 # Local CLI-login providers (e.g. claude-code)
 # ---------------------------------------------------------------------------
 

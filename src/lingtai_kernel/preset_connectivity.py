@@ -84,6 +84,39 @@ def _resolve_url(provider: str | None, base_url: str | None) -> str | None:
     return None
 
 
+def _parse_probe_target(url: str) -> tuple[str, int] | None:
+    """Parse ``url`` into a ``(host, port)`` tuple for a TCP probe.
+
+    Guards against two surprising ``urlparse`` behaviors that otherwise make
+    the probe silently resolve to localhost (``getaddrinfo(None, ...)``):
+
+    - ``urlparse("api.openai.com")`` -> ``scheme=''``, ``hostname=None`` (the
+      whole string lands in ``path``).
+    - ``urlparse("myhost:8080")`` -> ``scheme='myhost'``, ``hostname=None`` (the
+      host is swallowed as a scheme).
+
+    A schemeless URL is normalized to https before parsing — matching every
+    ``_PROVIDER_DEFAULT_URLS`` entry and the realistic intent of an API base
+    URL — so ``api.openai.com`` probes ``(api.openai.com, 443)`` and
+    ``myhost:8080`` probes ``(myhost, 8080)``. The scheme test must be
+    ``"://" not in url`` rather than ``parsed.scheme == ""`` precisely because
+    the ``myhost:8080`` case yields a non-empty bogus scheme.
+
+    Returns ``None`` (never a localhost fallback) when no hostname can be
+    extracted or the port is non-numeric, so the caller can fail loud.
+    """
+    if "://" not in url:
+        url = f"https://{url}"
+    parsed = urlparse(url)
+    if not parsed.hostname:
+        return None
+    try:
+        port = parsed.port  # raises ValueError on e.g. "host:notaport"
+    except ValueError:
+        return None
+    return parsed.hostname, port or (443 if parsed.scheme == "https" else 80)
+
+
 def check_connectivity(
     provider: str | None,
     base_url: str | None,
@@ -98,6 +131,11 @@ def check_connectivity(
          "checked_at": "<ISO timestamp>",
          "latency_ms": int (only on ok),
          "error": str | None}
+
+    A schemeless base_url (e.g. ``api.openai.com`` or ``myhost:8080``) is
+    probed as https on its real host — never silently against localhost. A
+    base_url with no extractable host yields ``"unreachable"`` with an
+    ``invalid base_url`` error rather than a misleading loopback probe.
     """
     # Local CLI-login providers (e.g. claude-code) have no network
     # endpoint and no API key — they authenticate through a local CLI/login
@@ -143,9 +181,15 @@ def check_connectivity(
             "error": f"no base_url and no default URL for provider {provider!r}",
         }
 
-    parsed = urlparse(url)
-    host = parsed.hostname
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    target = _parse_probe_target(url)
+    if target is None:
+        return {
+            "status": "unreachable",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "latency_ms": None,
+            "error": f"invalid base_url {url!r}: cannot determine host to probe",
+        }
+    host, port = target
 
     try:
         latency_ms = _probe_host(host, port, _PROBE_TIMEOUT_S)
