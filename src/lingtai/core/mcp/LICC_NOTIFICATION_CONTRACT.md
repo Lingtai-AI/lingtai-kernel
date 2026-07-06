@@ -38,6 +38,7 @@ review_triggers:
   - src/lingtai_kernel/base_agent/__init__.py
   - src/lingtai_kernel/base_agent/messaging.py
   - src/lingtai_kernel/base_agent/turn.py
+  - src/lingtai_kernel/intrinsics/email/ANATOMY.md
   - src/lingtai_kernel/intrinsics/email/
   - src/lingtai_kernel/intrinsics/notification/
   - src/lingtai_kernel/meta_block.py
@@ -70,7 +71,7 @@ Scope:
 - Coalesced `.notification/mcp.<server>.json` files produced from LICC events.
 - The `_meta.notifications` high-attention hook visible to the agent.
 - The `_meta.notification_persistent` communication-context lane when a producer
-  has one (currently Telegram).
+  has one (currently Telegram and built-in email).
 - Producer-owned read/reply/dismiss state that remains the source of truth.
 
 Non-scope: the low-level Telegram Bot API, IMAP protocol semantics, frontend UI
@@ -104,18 +105,13 @@ where they share the `.notification/` filesystem protocol.
    `_meta.notifications.mcp.telegram.data` to stable `message_ids` only; content,
    sender/subject, routing details, counts, and summaries must not remain in the
    transient lane (`src/lingtai_kernel/meta_block.py:2163-2192`).
-5. **Model-visible persistent communication context.** When structured Telegram
-   metadata is available, `build_notification_persistent_payload` emits
-   `_meta.notification_persistent.mcp.telegram` with `messages`, `events`,
-   `previous_block`, comments, and full out-of-window reply targets
+5. **Model-visible persistent communication context.** When structured Telegram metadata is available, `build_notification_persistent_payload` emits `_meta.notification_persistent.mcp.telegram` with `messages`, `events`, `previous_block`, comments, and full out-of-window reply targets. For built-in email it emits `_meta.notification_persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate)
    (`src/lingtai_kernel/meta_block.py:1956-2085`). The Telegram MCP supplies the
    structured `recent_messages`, `latest_incoming`, and `referenced_messages`
    metadata (`src/lingtai/mcp_servers/telegram/manager.py:904-1040`).
 6. **Producer source of truth.** Notification files are mirrors/hooks, not the
    authoritative mailbox/chat store. Producer tools own real state changes and
-   side effects. Email is the current built-in mirror example: unread mail state
-   is rendered into `.notification/email.json`, and read/dismiss/reply actions
-   live on the email tool (`src/lingtai_kernel/base_agent/messaging.py:60-130`).
+   side effects. Email is the built-in mirror example: unread mail state is rendered into `.notification/email.json`, model-visible content is projected into `_meta.notification_persistent.email`, and read/dismiss/reply actions live on the email tool (`src/lingtai_kernel/base_agent/messaging.py:60-130`).
 
 ## Connections
 
@@ -235,8 +231,7 @@ In-memory state involved in this contract:
 - `agent._notification_live_holder` and `_notification_payload_signature` control
   sparse movement of the transient notification payload.
 - `agent._notification_persistent_telegram_message_ids` and
-  `_notification_persistent_telegram_last_tool_id` track which Telegram messages
-  have already been delivered into the current provider context.
+  `_notification_persistent_telegram_last_tool_id` track Telegram delivery into the current provider context.
 
 ## Review triggers
 
@@ -265,9 +260,7 @@ Re-check this contract whenever a change touches any of these areas:
 - **Generic LICC/MCP:** still publishes bounded previews into the raw
   `.notification/mcp.<name>.json` mirror. That is allowed until the producer has
   a persistent context lane.
-- **Email:** not yet migrated to the identity-only/persistent split. It remains a
-  source-of-truth mirror over unread mail and should be the next producer checked
-  against this contract.
+- **Email:** migrated to the same attention/context split. Transient `_meta.notifications.email` is an identity-only high-attention hook carrying `email_ids`; unread context lives in `_meta.notification_persistent.email`; the email tool/store remains source of truth.
 
 ## Notes
 

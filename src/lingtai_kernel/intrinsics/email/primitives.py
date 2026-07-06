@@ -15,6 +15,12 @@ from pathlib import Path
 from ...i18n import t
 
 
+# Internal email bodies are injected in full into the persistent notification
+# lane.  Keep the sending boundary large but finite so notification rendering
+# never has to truncate ordinary unread mail.
+EMAIL_BODY_CHAR_LIMIT = 50_000
+
+
 # ---------------------------------------------------------------------------
 # Mailbox directory helpers
 # ---------------------------------------------------------------------------
@@ -336,6 +342,73 @@ def _email_time(e: dict) -> str:
 # ---------------------------------------------------------------------------
 # Unread digest rendering
 # ---------------------------------------------------------------------------
+
+def _unread_notification_context(agent, *, max_entries: int = 10, preview_chars: int = 500) -> tuple[list[dict], list[str]]:
+    """Return full unread email bodies for notification persistence.
+
+    Internal email is capped at send time (``EMAIL_BODY_CHAR_LIMIT``), so the
+    persistent notification lane can inject ordinary unread bodies in full.
+    ``preview_chars`` is accepted for backward compatibility with older callers
+    but is intentionally ignored here; preview/digest truncation no longer owns
+    the unread-mail content boundary.
+    """
+    read_ids = _read_ids(agent)
+    inbox = _list_inbox(agent)  # already newest-first per existing semantics
+    unread = [m for m in inbox if m.get("_mailbox_id") not in read_ids]
+    shown = unread[:max_entries]
+    recipient_id = getattr(agent, "_agent_id", "")
+    emails: list[dict] = []
+    email_ids: list[str] = []
+    for msg in shown:
+        msg_id = msg.get("_mailbox_id", "")
+        if isinstance(msg_id, str) and msg_id:
+            email_ids.append(msg_id)
+        body = msg.get("message", "")
+        if not isinstance(body, str):
+            body = "" if body is None else str(body)
+        message_truncated = len(body) > EMAIL_BODY_CHAR_LIMIT
+        visible_body = body[:EMAIL_BODY_CHAR_LIMIT] if message_truncated else body
+
+        identity = msg.get("identity") or {}
+        sender = msg.get("from", "")
+        if isinstance(identity, dict) and identity.get("agent_name"):
+            name = identity["agent_name"]
+            sender_id = identity.get("agent_id", "")
+            if (recipient_id and sender_id and sender_id != recipient_id):
+                name = f"{name} (agent:{sender_id})"
+            sender = f"{name} ({sender})"
+
+        email = {
+            "id": msg_id,
+            "from": sender,
+            "to": _summary_to_list(msg.get("to")),
+            "subject": msg.get("subject", ""),
+            "message": visible_body,
+            "message_chars": len(body),
+            "message_truncated": message_truncated,
+            "time": msg.get("received_at", ""),
+            "unread": msg_id not in read_ids,
+            "received_at": msg.get("received_at") or "",
+            "sent_at": msg.get("sent_at") or "",
+        }
+        if msg.get("cc"):
+            email["cc"] = _summary_to_list(msg.get("cc"))
+        if msg.get("attachments"):
+            email["attachments"] = msg.get("attachments")
+        if isinstance(identity, dict) and identity:
+            email["sender_name"] = identity.get("agent_name", "")
+            email["sender_nickname"] = identity.get("nickname", "")
+            email["sender_agent_id"] = identity.get("agent_id", "")
+            email["sender_language"] = identity.get("language", "")
+        if message_truncated:
+            email["comment"] = (
+                "Legacy email body exceeded the current 50,000 character send "
+                "limit and was capped in the persistent notification lane. "
+                "New email sends above the limit are rejected."
+            )
+        emails.append(email)
+    return emails, email_ids
+
 
 def _render_unread_digest(agent, *, max_entries: int = 10, preview_chars: int = 200) -> tuple[str, int, str | None]:
     """Compute and render the current unread mail digest.

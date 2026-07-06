@@ -1883,12 +1883,42 @@ def _notif_agent(working_dir):
     )
 
 
-def _write_email_notif(tmp_path):
+def _write_email_notif(
+    tmp_path,
+    *,
+    message: str = "Full email body",
+    email_id: str = "email-1",
+    subject: str = "Email subject",
+    count: int = 1,
+):
     notif_dir = tmp_path / ".notification"
     notif_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "header": f"{count} unread",
+        "icon": "📬",
+        "priority": "normal",
+        "data": {
+            "count": count,
+            "newest_received_at": "2026-07-06T07:00:00Z",
+            "email_ids": [email_id],
+            "emails": [
+                {
+                    "id": email_id,
+                    "from": "human",
+                    "to": ["mimo-1"],
+                    "subject": subject,
+                    "message": message,
+                    "message_chars": len(message),
+                    "message_truncated": False,
+                    "time": "2026-07-06T07:00:00Z",
+                    "unread": True,
+                    "received_at": "2026-07-06T07:00:00Z",
+                }
+            ],
+        },
+    }
     (notif_dir / "email.json").write_text(
-        '{"header": "1 unread", "icon": "📬", "priority": "normal", '
-        '"data": {"digest": "Email preview line"}}'
+        json.dumps(payload), encoding="utf-8"
     )
 
 
@@ -1952,12 +1982,24 @@ def test_attach_active_notifications_first_payload_attaches(tmp_path):
     assert "notifications" not in first.content  # not top-level anymore
     assert first.content["_meta"]["notifications"] == {
         "email": {
-            "header": "1 unread",
+            "header": "Email event",
             "icon": "📬",
             "priority": "normal",
-            "data": {"digest": "Email preview line"},
+            "data": {"email_ids": ["email-1"]},
+            "instructions": (
+                "High-attention email hook: full unread content lives in "
+                "notification_persistent.email. Prefer email.dismiss after handling; "
+                "use email.read/reply for source-of-truth mailbox actions. When "
+                "handled through the email tool, the producer mirror updates or "
+                "clears this notification."
+            ),
         }
     }
+    persistent_email = first.content["_meta"]["notification_persistent"]["email"]
+    assert persistent_email["email_ids"] == ["email-1"]
+    assert persistent_email["emails"][0]["subject"] == "Email subject"
+    assert "digest" not in persistent_email
+    assert persistent_email["emails"][0]["message"] == "Full email body"
     assert first.content["_meta"]["notification_guidance"] == {
         "ref": "meta_guidance.notification_handling",
         "sources": ["email"],
@@ -1994,7 +2036,7 @@ def test_attach_active_notifications_unchanged_payload_not_restamped(tmp_path):
     # Prior holder still carries it — it was NOT skeletonized.
     assert "notifications" in first.content["_meta"]
     assert first.content["_meta"]["notifications"]["email"]["data"] == {
-        "digest": "Email preview line"
+        "email_ids": ["email-1"]
     }
 
 
@@ -2012,9 +2054,12 @@ def test_attach_active_notifications_changed_payload_reattaches_and_strips_prior
     first_sig = agent._notification_payload_signature
 
     # Materially change the email channel payload.
-    (tmp_path / ".notification" / "email.json").write_text(
-        '{"header": "3 unread", "icon": "📬", "priority": "normal", '
-        '"data": {"digest": "Three new emails"}}'
+    _write_email_notif(
+        tmp_path,
+        message="Three new email body",
+        email_id="email-2",
+        subject="Changed email",
+        count=3,
     )
 
     second = ToolResultBlock(id="t2", name="x", content={"ok": False})
@@ -2026,8 +2071,12 @@ def test_attach_active_notifications_changed_payload_reattaches_and_strips_prior
     # First holder shed its notification keys (and its now-empty _meta envelope).
     assert "_meta" not in first.content or "notifications" not in first.content["_meta"]
     assert second.content["_meta"]["notifications"]["email"]["data"] == {
-        "digest": "Three new emails"
+        "email_ids": ["email-2"]
     }
+    persistent_email = second.content["_meta"]["notification_persistent"]["email"]
+    assert "digest" not in persistent_email
+    assert persistent_email["emails"][0]["message"] == "Three new email body"
+    assert persistent_email["emails"][0]["id"] == "email-2"
     assert agent._notification_fp == notification_fingerprint(tmp_path)
 
 
@@ -2043,11 +2092,14 @@ def test_attach_active_notifications_unchanged_commits_fp_to_avoid_retry(tmp_pat
     first = ToolResultBlock(id="t1", name="x", content={"ok": True})
     holder = attach_active_notifications(agent, [first], prior_holder=None)
 
-    # Rewrite the same material payload (fingerprint changes: mtime/size may
-    # differ), but the canonical payload signature is identical.
-    (tmp_path / ".notification" / "email.json").write_text(
-        '{"header": "1 unread", "icon": "📬", "priority": "normal", '
-        '"data": {"digest": "Email preview line"}}'
+    # Rewrite the same material payload with different JSON bytes.  The
+    # byte-content fingerprint changes, but the canonical payload signature is
+    # identical.
+    email_path = tmp_path / ".notification" / "email.json"
+    same_payload = json.loads(email_path.read_text(encoding="utf-8"))
+    email_path.write_text(
+        json.dumps(same_payload, indent=2, sort_keys=True),
+        encoding="utf-8",
     )
     agent._notification_fp = (("stale.json", 1, 1),)
 
@@ -2106,7 +2158,7 @@ def test_attach_active_notifications_check_read_receives_unchanged_payload(tmp_p
     assert new_holder is check_result.content
     assert "notifications" in check_result.content["_meta"]
     assert check_result.content["_meta"]["notifications"]["email"]["data"] == {
-        "digest": "Email preview line"
+        "email_ids": ["email-1"]
     }
     # The prior ordinary holder shed its payload when the check took over.
     assert "_meta" not in first.content or "notifications" not in first.content["_meta"]

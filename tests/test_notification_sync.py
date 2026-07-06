@@ -284,7 +284,7 @@ class _ProducerStubAgent:
 
 def test_email_publish_writes_file(tmp_path: Path, monkeypatch) -> None:
     """When the email producer has unread mail, it writes
-    `.notification/email.json` with count + digest."""
+    `.notification/email.json` with full persistent email context."""
     from lingtai_kernel.base_agent import messaging
 
     agent = _ProducerStubAgent(_working_dir=tmp_path)
@@ -292,9 +292,27 @@ def test_email_publish_writes_file(tmp_path: Path, monkeypatch) -> None:
     def fake_render(_agent, **_kw):
         return ("3 unread:\n- A\n- B\n- C\n", 3, "2026-05-05T00:00:00Z")
 
+    def fake_context(_agent, **_kw):
+        return ([{
+            "id": "email-1",
+            "from": "human",
+            "to": ["agent"],
+            "subject": "A",
+            "message": "Body A",
+            "message_chars": 6,
+            "message_truncated": False,
+            "time": "2026-05-05T00:00:00Z",
+            "unread": True,
+            "received_at": "2026-05-05T00:00:00Z",
+        }], ["email-1"])
+
     monkeypatch.setattr(
         "lingtai_kernel.intrinsics.email.primitives._render_unread_digest",
         fake_render,
+    )
+    monkeypatch.setattr(
+        "lingtai_kernel.intrinsics.email.primitives._unread_notification_context",
+        fake_context,
     )
 
     result = messaging._rerender_unread_digest(agent)
@@ -302,8 +320,12 @@ def test_email_publish_writes_file(tmp_path: Path, monkeypatch) -> None:
 
     out = collect_notifications(tmp_path)
     assert "email" in out
-    assert out["email"]["data"]["count"] == 3
-    assert out["email"]["data"]["digest"].startswith("3 unread")
+    data = out["email"]["data"]
+    assert data["count"] == 3
+    assert "digest" not in data
+    assert data["email_ids"] == ["email-1"]
+    assert data["emails"][0]["id"] == "email-1"
+    assert data["emails"][0]["message"] == "Body A"
     assert out["email"]["icon"] == "📧"
 
 

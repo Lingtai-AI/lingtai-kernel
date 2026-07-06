@@ -101,6 +101,11 @@ NOTIFICATION_PERSISTENT_TELEGRAM_PATH = (
 NOTIFICATION_PERSISTENT_TELEGRAM_MIN_CONTEXT = 20
 NOTIFICATION_PERSISTENT_TELEGRAM_SEEN_LIMIT = 200
 
+NOTIFICATION_PERSISTENT_EMAIL_CHANNEL = "email"
+NOTIFICATION_PERSISTENT_EMAIL_PATH = (
+    f"_meta.{NOTIFICATION_PERSISTENT_KEY}.{NOTIFICATION_PERSISTENT_EMAIL_CHANNEL}"
+)
+
 # Concise English comments attached to the Telegram persistent block so the
 # agent can read the block without re-deriving structure. Kept as module-level
 # constants so tests and docs can assert the exact wording.
@@ -118,6 +123,18 @@ NOTIFICATION_PERSISTENT_TELEGRAM_TRUNCATED_COMMENT = (
 NOTIFICATION_PERSISTENT_TELEGRAM_REFERENCED_COMMENT = (
     "This is the full Telegram message referenced by the current reply; "
     "included because it is not present in messages."
+)
+
+NOTIFICATION_PERSISTENT_EMAIL_CONTEXT_COMMENT = (
+    "Unread email content moved here from _meta.notifications.email. Bodies "
+    "are injected in full up to the 50,000 character send-layer limit; prefer "
+    "email.dismiss after handling content, and use email.read/reply for "
+    "source-of-truth actions."
+)
+NOTIFICATION_PERSISTENT_EMAIL_TRUNCATED_COMMENT = (
+    "This legacy email body exceeded the current 50,000 character send-layer "
+    "limit and was capped in the persistent notification lane. New oversize "
+    "email sends are rejected."
 )
 
 # Per-result machine-generated guidance nested under ``tool_meta``.  ``comment``
@@ -1953,7 +1970,85 @@ def _annotate_telegram_message(message: dict) -> dict:
     return annotated
 
 
-def build_notification_persistent_payload(agent, notification_payload: dict) -> dict | None:
+def _email_notification_data(notification_payload: dict) -> dict:
+    notifications = notification_payload.get(NOTIFICATIONS_KEY)
+    if not isinstance(notifications, dict):
+        return {}
+    email = notifications.get("email")
+    if not isinstance(email, dict):
+        return {}
+    data = email.get("data")
+    return data if isinstance(data, dict) else {}
+
+
+def _email_notification_email_ids(notification_payload: dict) -> list[str]:
+    data = _email_notification_data(notification_payload)
+    ids: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: object) -> None:
+        if isinstance(value, str) and value and value not in seen:
+            seen.add(value)
+            ids.append(value)
+
+    raw_ids = data.get("email_ids")
+    if isinstance(raw_ids, list):
+        for value in raw_ids:
+            add(value)
+    raw_emails = data.get("emails")
+    if isinstance(raw_emails, list):
+        for item in raw_emails:
+            if isinstance(item, dict):
+                add(item.get("id"))
+    return ids
+
+
+def _email_persistent_emails(notification_payload: dict) -> list[dict]:
+    data = _email_notification_data(notification_payload)
+    raw_emails = data.get("emails")
+    if not isinstance(raw_emails, list):
+        return []
+    emails: list[dict] = []
+    for item in raw_emails:
+        if not isinstance(item, dict):
+            continue
+        email = dict(item)
+        if (
+            email.get("message_truncated") or email.get("preview_truncated")
+        ) and not email.get("comment"):
+            email["comment"] = NOTIFICATION_PERSISTENT_EMAIL_TRUNCATED_COMMENT
+        emails.append(email)
+    return emails
+
+
+def _build_email_notification_persistent_payload(agent, notification_payload: dict) -> dict | None:
+    data = _email_notification_data(notification_payload)
+    if not data:
+        return None
+
+    email_ids = _email_notification_email_ids(notification_payload)
+    emails = _email_persistent_emails(notification_payload)
+    count = data.get("count")
+    newest_received_at = data.get("newest_received_at")
+    if not (email_ids or emails):
+        return None
+
+    payload: dict = {
+        "context_comment": NOTIFICATION_PERSISTENT_EMAIL_CONTEXT_COMMENT,
+    }
+    if email_ids:
+        payload["email_ids"] = email_ids
+    if isinstance(count, int):
+        payload["count"] = count
+    if isinstance(newest_received_at, str) and newest_received_at:
+        payload["newest_received_at"] = newest_received_at
+    if emails:
+        payload["emails"] = emails
+
+    return payload
+
+
+def _build_telegram_notification_persistent_payload(agent, notification_payload: dict) -> dict | None:
     """Build the minimal `_meta.notification_persistent` payload for Telegram.
 
     First delivery after startup/molt (or when fewer than the minimum number of
@@ -2076,13 +2171,29 @@ def build_notification_persistent_payload(agent, notification_payload: dict) -> 
         )
     telegram_payload["previous_block"] = previous_block
 
-    return {
-        NOTIFICATION_PERSISTENT_KEY: {
-            NOTIFICATION_PERSISTENT_MCP_KEY: {
-                NOTIFICATION_PERSISTENT_TELEGRAM_CHANNEL: telegram_payload
-            }
-        }
-    }
+    return telegram_payload
+
+
+def build_notification_persistent_payload(agent, notification_payload: dict) -> dict | None:
+    persistent: dict = {}
+
+    email_payload = _build_email_notification_persistent_payload(
+        agent, notification_payload
+    )
+    if email_payload is not None:
+        persistent[NOTIFICATION_PERSISTENT_EMAIL_CHANNEL] = email_payload
+
+    telegram_payload = _build_telegram_notification_persistent_payload(
+        agent, notification_payload
+    )
+    if telegram_payload is not None:
+        persistent.setdefault(NOTIFICATION_PERSISTENT_MCP_KEY, {})[
+            NOTIFICATION_PERSISTENT_TELEGRAM_CHANNEL
+        ] = telegram_payload
+
+    if not persistent:
+        return None
+    return {NOTIFICATION_PERSISTENT_KEY: persistent}
 
 
 def record_notification_persistent_delivery(
@@ -2091,12 +2202,13 @@ def record_notification_persistent_delivery(
     *,
     tool_call_id: str | None,
 ) -> None:
-    """Record which Telegram messages have been delivered to provider context."""
+    """Record persistent notification context delivered to provider context."""
     if not notification_persistent_payload:
         return
     persistent = notification_persistent_payload.get(NOTIFICATION_PERSISTENT_KEY)
     if not isinstance(persistent, dict):
         return
+
     mcp = persistent.get(NOTIFICATION_PERSISTENT_MCP_KEY)
     if not isinstance(mcp, dict):
         return
@@ -2391,6 +2503,31 @@ def clear_active_notification_holder(agent) -> None:
     skeletonize_notification_holder(agent)
 
 
+def sanitize_email_notification_after_persistent(notification_payload: dict) -> None:
+    notifications = notification_payload.get(NOTIFICATIONS_KEY)
+    if not isinstance(notifications, dict):
+        return
+    email = notifications.get("email")
+    if not isinstance(email, dict):
+        return
+    email_ids = _email_notification_email_ids(notification_payload)
+    sanitized = {
+        key: value
+        for key, value in email.items()
+        if key not in {"data", "header", "instructions"}
+    }
+    sanitized["header"] = "Email event"
+    sanitized["data"] = {"email_ids": email_ids}
+    sanitized["instructions"] = (
+        "High-attention email hook: full unread content lives in "
+        "notification_persistent.email. Prefer email.dismiss after handling; "
+        "use email.read/reply for source-of-truth mailbox actions. When "
+        "handled through the email tool, the producer mirror updates or "
+        "clears this notification."
+    )
+    notifications["email"] = sanitized
+
+
 def notification_payload_signature(payload: Mapping[str, Any] | None) -> str:
     """Return a stable signature of the *material* notification payload.
 
@@ -2567,6 +2704,7 @@ def attach_active_notifications(
     # freshly materialized for this delivery cycle, so in-place preview trimming
     # cannot mutate producer-owned on-disk notification state.
     sanitize_telegram_notification_after_persistent(payload)
+    sanitize_email_notification_after_persistent(payload)
     meta_block = _meta_block(target)
     meta_block.update(payload)
     if persistent_payload:
