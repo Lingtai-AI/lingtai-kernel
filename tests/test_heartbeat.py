@@ -243,6 +243,61 @@ class TestSuspendFile:
         assert agent._shutdown.is_set()
 
 
+class TestHeartbeatNeverBlocksOnNetwork:
+    """Issue #730: the daily PyPI probe must not stall the heartbeat tick past
+    the ``handshake.is_alive`` threshold. The heartbeat thread is the sole
+    writer of ``.agent.heartbeat`` and a slow-but-successful fetch used to block
+    it for the full 3s socket timeout — long enough to read as dead."""
+
+    def test_slow_kernel_version_fetch_does_not_stall_heartbeat(self, tmp_path, monkeypatch):
+        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai_kernel.handshake import is_alive
+        from lingtai_kernel.nudge import kernel_version as kv
+
+        # Force the daily remote check to be due, on a real (non-dev) runtime.
+        monkeypatch.setattr(
+            kv,
+            "_runtime_info",
+            lambda: kv._RuntimeInfo(
+                running_version="0.14.1",
+                installed_version="0.14.1",
+                dev_reason=None,
+            ),
+        )
+        monkeypatch.setattr(kv, "_remote_check_due", lambda *a, **k: True)
+
+        # A slow-but-successful fetch: 3s is longer than the 2.0s is_alive
+        # threshold. On the old synchronous path this blocked the tick.
+        def _slow_fetch():
+            time.sleep(3.0)
+            return "0.14.1"
+
+        monkeypatch.setattr(kv, "_fetch_latest_version", _slow_fetch)
+
+        agent = BaseAgent(
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=tmp_path / "test_agent",
+        )
+        hb_file = agent._working_dir / ".agent.heartbeat"
+        agent._start_heartbeat()
+        agent._set_state(AgentState.ACTIVE, reason="test")
+        try:
+            # Sample liveness across the window a slow fetch would have stalled.
+            deadline = time.monotonic() + 2.5
+            samples = []
+            while time.monotonic() < deadline:
+                samples.append(is_alive(agent._working_dir))
+                time.sleep(0.25)
+        finally:
+            agent._stop_heartbeat()
+
+        assert samples, "expected liveness samples"
+        assert all(samples), "heartbeat went stale during the slow fetch (#730)"
+        # And the fetch really did run off-thread — the ticks stayed fresh.
+        assert hb_file.exists() is False  # stopped -> file removed
+
+
 class TestSelfSleep:
 
     def test_self_sleep_no_karma_required(self, tmp_path):

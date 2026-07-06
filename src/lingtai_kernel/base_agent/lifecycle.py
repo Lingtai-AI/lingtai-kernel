@@ -517,7 +517,12 @@ def _heartbeat_loop(agent) -> None:
         # when something needs the agent's attention (e.g. a newer lingtai
         # wheel is installed on disk than the version this process imported).
         # Each check throttles itself; the dispatcher wraps individual calls
-        # so a misbehaving check cannot block the heartbeat loop. See
+        # in try/except so a check that *raises* cannot break the loop. That
+        # does NOT bound a check that is *slow*: this loop is the sole writer of
+        # `.agent.heartbeat`, and `handshake.is_alive` reads a tick older than
+        # 2.0s as dead. Invariant (#730): checks must never block on the
+        # network — long work is handed to a background thread and its result
+        # consumed on a later tick (see `nudge/kernel_version.py`). See
         # `nudge/ANATOMY.md`.
         try:
             from ..nudge import run_checks as _run_nudge_checks

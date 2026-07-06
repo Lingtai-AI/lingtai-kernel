@@ -16,21 +16,38 @@ Two related cases share one nudge ``kind``:
 
 Editable/source/dev installs are skipped for the package-update check: their
 source of truth is the checkout, not the package index.
+
+Cadence note (issue #730): ``check(agent)`` runs on the heartbeat thread — the
+sole writer of ``.agent.heartbeat``, whose freshness ``handshake.is_alive``
+gates network-wide (a tick older than 2.0s reads as *dead*). Nothing on that
+thread may block on the network. The daily PyPI probe therefore runs on a
+short-lived daemon worker thread: the due ``check()`` spawns the worker and
+returns immediately, and a *later* probe (past the 60s fast gate) consumes the
+result and emits/clears the nudge. Consequence: the package-update nudge
+surfaces up to one fast interval (~60s) after the fetch completes rather than in
+the same tick — acceptable for an at-most-daily advisory. All persistent-state
+reads/writes stay on the heartbeat thread; the worker only produces a value.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 _FAST_INTERVAL_SECONDS = 60.0
 _REMOTE_TIMEOUT_SECONDS = 3.0
+# Hard ceiling for how long a spawned fetch worker may stay in flight before a
+# later probe abandons its slot and records a timeout. Bounds the damage from a
+# wedged DNS lookup (urllib's socket timeout does not reliably cover
+# getaddrinfo), so a stuck worker can never pin the single-flight slot forever.
+_FETCH_DEADLINE_SECONDS = 30.0
 _PYPI_JSON_URL = "https://pypi.org/pypi/lingtai/json"
 _STATE_FILE = Path(".notification") / ".nudge_state.json"
 _KIND = "kernel_version"
@@ -148,23 +165,60 @@ def check(agent) -> None:
         _save_persistent_state(agent, persistent)
 
     today = _today_utc()
-    if not _remote_check_due(kernel_state, info.installed_version, today):
+    _handle_remote_check(agent, info, kernel_state, persistent, today)
+
+
+def _handle_remote_check(agent, info, kernel_state, persistent, today) -> None:
+    """Drive the async PyPI probe without ever blocking the heartbeat thread.
+
+    State machine over the process-local fetch slot (:func:`_fetch_slot`):
+
+    * no fetch in flight and a remote check is due -> spawn a worker and return
+      immediately (the heartbeat tick completes at once);
+    * a fetch in flight that has not finished -> return, unless it has exceeded
+      ``_FETCH_DEADLINE_SECONDS``, in which case abandon the slot and record a
+      timeout so the day is not retried in a tight loop;
+    * a finished fetch -> consume its result/error here, on the heartbeat
+      thread, and emit/clear the nudge exactly as the synchronous path did.
+    """
+
+    pending = _fetch_slot(agent)
+
+    if pending is None:
+        if _remote_check_due(kernel_state, info.installed_version, today):
+            _start_fetch(agent)
         return
 
-    try:
-        latest = _fetch_latest_version()
-    except Exception as e:
+    if not pending.done.is_set():
+        if time.time() - pending.started_ts > _FETCH_DEADLINE_SECONDS:
+            _clear_fetch_slot(agent)
+            kernel_state.update(
+                {
+                    "last_remote_check_date": today,
+                    "checked_installed_version": info.installed_version,
+                    "last_error": "fetch timed out",
+                }
+            )
+            _save_persistent_state(agent, persistent)
+            _log(agent, "kernel_version_update_check_error", error="fetch timed out")
+        return
+
+    # Worker finished — consume its result on the heartbeat thread.
+    _clear_fetch_slot(agent)
+
+    if pending.error is not None:
         kernel_state.update(
             {
                 "last_remote_check_date": today,
                 "checked_installed_version": info.installed_version,
-                "last_error": str(e)[:200],
+                "last_error": pending.error,
             }
         )
         _save_persistent_state(agent, persistent)
-        _log(agent, "kernel_version_update_check_error", error=str(e)[:200])
+        _log(agent, "kernel_version_update_check_error", error=pending.error)
         return
 
+    latest = pending.result or ""
     kernel_state.update(
         {
             "last_remote_check_date": today,
@@ -173,6 +227,8 @@ def check(agent) -> None:
             "last_error": None,
         }
     )
+
+    from . import remove, upsert
 
     if _is_newer(latest, info.installed_version):
         kernel_state["emitted_for_latest"] = latest
@@ -287,6 +343,56 @@ def _remote_check_due(kernel_state: dict[str, Any], installed_version: str, toda
         kernel_state.get("last_remote_check_date") != today
         or kernel_state.get("checked_installed_version") != installed_version
     )
+
+
+@dataclass
+class _PendingFetch:
+    """Process-local slot for one in-flight PyPI probe (issue #730).
+
+    Lives as ``agent._nudge_kernel_fetch``; never persisted. The worker thread
+    writes only ``result``/``error`` and sets ``done`` as the publication
+    barrier — it must not touch ``.nudge_state.json`` or the notification files,
+    preserving the heartbeat thread as the single writer of that state.
+    """
+
+    started_ts: float
+    thread: threading.Thread | None = None
+    result: str | None = None  # written only by the worker
+    error: str | None = None  # written only by the worker
+    done: threading.Event = field(default_factory=threading.Event)
+
+
+def _fetch_slot(agent) -> _PendingFetch | None:
+    return getattr(agent, "_nudge_kernel_fetch", None)
+
+
+def _clear_fetch_slot(agent) -> None:
+    agent._nudge_kernel_fetch = None
+
+
+def _start_fetch(agent) -> None:
+    """Spawn a daemon worker that fetches the latest version off-thread.
+
+    Single-flight: callers must ensure no slot exists first. An abandoned or
+    wedged worker is a daemon holding no locks/files beyond its socket, so it
+    dies on interpreter exit and never blocks shutdown.
+    """
+
+    pending = _PendingFetch(started_ts=time.time())
+
+    def _worker() -> None:
+        try:
+            pending.result = _fetch_latest_version()
+        except Exception as e:  # pragma: no cover - error path exercised via monkeypatch
+            pending.error = str(e)[:200]
+        finally:
+            pending.done.set()
+
+    pending.thread = threading.Thread(
+        target=_worker, name="nudge-kernel-version-fetch", daemon=True
+    )
+    agent._nudge_kernel_fetch = pending
+    pending.thread.start()
 
 
 def _fetch_latest_version() -> str:

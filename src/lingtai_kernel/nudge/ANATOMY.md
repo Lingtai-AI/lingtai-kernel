@@ -30,6 +30,16 @@ small additions (e.g. MCP version drift, addon updates).
 bad check never breaks the loop). It dispatches to each check's
 `check(agent) -> None` in order.
 
+**Invariant — checks must never block on the network (issue #730).** The
+heartbeat loop is the sole writer of `.agent.heartbeat`, and
+`handshake.is_alive` reads a tick older than 2.0s as *dead*. The try/except
+wrapper only protects against a check that *raises* — it does nothing for one
+that is *slow*, and latency inside any check is latency between heartbeat
+writes. A network probe on the heartbeat thread can therefore make a live agent
+read as dead (mail delivery, karma, cpr all gate on `is_alive`). Any check that
+needs the network must hand that work to a background daemon thread and consume
+the result on a later tick — see `kernel_version.py` for the pattern.
+
 ## File layout
 
 - `__init__.py` — dispatcher (`run_checks`), shared upsert/remove
@@ -43,7 +53,14 @@ bad check never breaks the loop). It dispatches to each check's
   package-index check for a newer kernel version and nudges the agent to read
   `system-manual -> reference/runtime-update-checks/SKILL.md` before asking the
   human whether to update. It stores daily throttle state in the hidden
-  `.notification/.nudge_state.json` helper file, which is not a channel.
+  `.notification/.nudge_state.json` helper file, which is not a channel. The
+  PyPI probe never runs on the heartbeat thread (see the invariant above): the
+  due `check()` spawns a daemon worker (`_start_fetch`) that writes only into a
+  process-local `_PendingFetch` slot, and a later probe (past the 60s fast gate)
+  consumes the result and emits/clears the nudge. All `.nudge_state.json` writes
+  stay on the heartbeat thread, keeping it the single writer; a wedged worker is
+  abandoned after `_FETCH_DEADLINE_SECONDS`. The nudge therefore surfaces up to
+  ~60s after the fetch completes rather than in the same tick.
 - `source_drift.py` — read-only process/source freshness check. It compares the
   startup runtime fingerprint with the current on-disk fingerprint and emits a
   low-priority refresh nudge only for non-dev/non-editable/non-source runtimes;
