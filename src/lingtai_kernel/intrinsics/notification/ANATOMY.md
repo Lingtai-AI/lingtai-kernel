@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/core/mcp/LICC_NOTIFICATION_CONTRACT.md
   - src/lingtai_kernel/intrinsics/ANATOMY.md
   - src/lingtai_kernel/intrinsics/notification/__init__.py
   - src/lingtai_kernel/intrinsics/notification/schema.py
@@ -55,6 +56,7 @@ it remains a `system` action (context hygiene, not a notification verb).
 
 ## Notes
 
+- **Contract link:** notification tool verbs clear the high-attention hook/mirror, not producer source-of-truth state. Changes to dismiss/read semantics must check `src/lingtai/core/mcp/LICC_NOTIFICATION_CONTRACT.md`.
 - **No `system` compatibility:** `system(action="notification"|"dismiss")` no longer exist. The notification tool is the sole agent-callable surface for these verbs. The kernel still *synthesizes* a notification delivery tool-call pair for IDLE/ASLEEP delivery — now shaped as `notification(action="check")` (`base_agent/__init__.py:1369-1382`), byte-shape-identical to a voluntary `check` so the LLM cannot tell a kernel-injected read from one it issued; the `_synthesized: true` body flag is the only marker. That synthesis is kernel plumbing, not an agent-callable operation.
 - **Atomic, not aggregate:** dismissal is split by target (`channel` / `event_id` / `ref_id`) so the API states exactly what is being cleared. `dismiss_channel` refuses `event_id`/`ref_id`; `dismiss_event`/`dismiss_ref` require their target id.
 - **Large-result escape hatch (legacy):** The kernel no longer produces `large_tool_result` reminders — large results are ranked under `_meta.agent_meta.current_tool_result_chars` and compacted via `system(action="summarize")`. Any `large_tool_result` event still present (persisted before this change, or pre-molt) can be discharged two ways: a successful `system(action="summarize")` of its `tool_call_id` clears it, or an atomic notification dismissal acknowledges and removes the reminder surface (including stale/pre-molt refs) without deleting or mutating the original tool result. Acknowledged refs persist in the ack store so they are not re-surfaced. Regression-anchored by `tests/test_notification_tool.py`, `tests/test_system_dismiss.py`, and `tests/test_large_result_rescan.py`.

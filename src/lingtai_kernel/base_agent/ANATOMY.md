@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/core/mcp/LICC_NOTIFICATION_CONTRACT.md
   - src/lingtai/agent.py
   - src/lingtai_kernel/ANATOMY.md
   - src/lingtai_kernel/base_agent/__init__.py
@@ -70,6 +71,7 @@ Generic agent kernel. Single class `BaseAgent` with methods distributed across 6
 
 ## Notes
 
+- **LICC notification contract:** changes to notification sync, live-holder movement, `_meta.notifications`, `_meta.notification_persistent`, Telegram persistent delivery state, or producer authority/dismissal boundaries must check `src/lingtai/core/mcp/LICC_NOTIFICATION_CONTRACT.md` in the same change.
 - **`__init__.py` is large.** This is intentional — the constructor, properties, state machine, hooks, cross-cutting infrastructure (`_save_chat_history`, `_log`, notification sync, legacy tc_inbox drain), and pass-through stubs all live here. The package is not "thin shell + 6 leaves"; the remaining code is genuinely cross-cutting or bound to the class definition.
 - **Pass-through pattern.** Each extracted method becomes a 2-line stub in `__init__.py` (lazy import + call). This preserves the `BaseAgent` class interface while the implementation lives in submodules. The `self` → `agent` conversion is mechanical but `_heartbeat_loop` (~264 lines, 15+ cross-cluster calls) deserves extra-careful review.
 - **Subclass overrides stay on `__init__.py`.** `_activate_preset`, `_activate_default_preset`, `_build_launch_cmd`, `_pre_request`, `_post_request`, `_on_tool_result_hook`, `_cpr_agent` are all overridden by the `Agent` subclass in the wrapper package. They must remain as methods on `BaseAgent`.
