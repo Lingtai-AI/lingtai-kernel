@@ -299,9 +299,14 @@ class LLMService(LLMServiceABC):
         # Fast path — no lock needed for reads of an already-cached adapter
         if cache_key in self._adapters:
             return self._adapters[cache_key]
-        # When no base_url specified, find any cached adapter for this provider
+        # When no base_url specified, find any cached adapter for this provider.
+        # This scan runs WITHOUT self._adapter_lock, while the slow path below
+        # inserts into self._adapters under that lock. Iterating the live dict
+        # here would raise "RuntimeError: dictionary changed size during
+        # iteration" if a concurrent insert lands mid-scan, so iterate over an
+        # atomic snapshot (list(...) materializes in one C-level step) instead.
         if base_url is None:
-            for (p, _url), adapter in self._adapters.items():
+            for (p, _url), adapter in list(self._adapters.items()):
                 if p == provider:
                     return adapter
 
