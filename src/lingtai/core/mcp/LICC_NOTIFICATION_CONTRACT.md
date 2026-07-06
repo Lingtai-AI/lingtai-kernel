@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/core/mcp/licc.py
   - src/lingtai/mcp_servers/ANATOMY.md
   - src/lingtai/mcp_servers/telegram/manager.py
+  - src/lingtai/mcp_servers/wechat/manager.py
   - src/lingtai_kernel/ANATOMY.md
   - src/lingtai_kernel/base_agent/ANATOMY.md
   - src/lingtai_kernel/base_agent/__init__.py
@@ -26,6 +27,7 @@ related_files:
   - tests/test_meta_block.py
   - tests/test_notification_sync.py
   - tests/test_telegram_notification_read_state.py
+  - tests/test_wechat_notification_metadata.py
 review_triggers:
   - src/lingtai/core/mcp/inbox.py
   - src/lingtai/core/mcp/licc.py
@@ -71,7 +73,7 @@ Scope:
 - Coalesced `.notification/mcp.<server>.json` files produced from LICC events.
 - The `_meta.notifications` high-attention hook visible to the agent.
 - The `_meta.notification_persistent` communication-context lane when a producer
-  has one (currently Telegram and built-in email).
+  has one (currently Telegram, WeChat, and built-in email).
 - Producer-owned read/reply/dismiss state that remains the source of truth.
 
 Non-scope: the low-level Telegram Bot API, IMAP protocol semantics, frontend UI
@@ -100,15 +102,22 @@ where they share the `.notification/` filesystem protocol.
 4. **Model-visible transient hook.** `_meta.notifications` is sparse and
    update-driven. `attach_active_notifications` attaches or moves the canonical
    payload only on first appearance, material change, or deliberate
-   `notification(action="check")` (`src/lingtai_kernel/meta_block.py:2453-2584`).
-   For Telegram, `sanitize_telegram_notification_after_persistent` reduces
-   `_meta.notifications.mcp.telegram.data` to stable `message_ids` only; content,
+   `notification(action="check")` (`src/lingtai_kernel/meta_block.py:2734`).
+   For IM channels with a persistent lane (Telegram, WeChat), the shared
+   `_sanitize_im_notification_after_persistent` (via the per-channel
+   `sanitize_telegram_notification_after_persistent` /
+   `sanitize_wechat_notification_after_persistent` wrappers) reduces
+   `_meta.notifications.mcp.<channel>.data` to stable `message_ids` only; content,
    sender/subject, routing details, counts, and summaries must not remain in the
-   transient lane (`src/lingtai_kernel/meta_block.py:2163-2192`).
-5. **Model-visible persistent communication context.** When structured Telegram metadata is available, `build_notification_persistent_payload` emits `_meta.notification_persistent.mcp.telegram` with `messages`, `events`, `previous_block`, comments, and full out-of-window reply targets. For built-in email it emits `_meta.notification_persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate)
-   (`src/lingtai_kernel/meta_block.py:1956-2085`). The Telegram MCP supplies the
+   transient lane (`src/lingtai_kernel/meta_block.py:2398-2450`).
+5. **Model-visible persistent communication context.** When structured IM metadata is available, `build_notification_persistent_payload` emits `_meta.notification_persistent.mcp.<channel>` with `messages`, `events`, `previous_block`, and comments through the shared `_ImPersistentLane` machinery (Telegram additionally carries full out-of-window reply targets under `referenced_messages`). For built-in email it emits `_meta.notification_persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate)
+   (`src/lingtai_kernel/meta_block.py:1783-2335`). The Telegram MCP supplies the
    structured `recent_messages`, `latest_incoming`, and `referenced_messages`
-   metadata (`src/lingtai/mcp_servers/telegram/manager.py:904-1040`).
+   metadata (`src/lingtai/mcp_servers/telegram/manager.py:904-1040`); the WeChat
+   MCP supplies `recent_messages` and `latest_incoming` built from its merged
+   inbox+sent preview window with per-message text bounded at 500 chars
+   (`src/lingtai/mcp_servers/wechat/manager.py:835-956`). Each lane's seed/delta
+   boundary matches its producer preview window (Telegram 20, WeChat 10).
 6. **Producer source of truth.** Notification files are mirrors/hooks, not the
    authoritative mailbox/chat store. Producer tools own real state changes and
    side effects. Email is the built-in mirror example: unread mail state is rendered into `.notification/email.json`, model-visible content is projected into `_meta.notification_persistent.email`, and read/dismiss/reply actions live on the email tool (`src/lingtai_kernel/base_agent/messaging.py:60-130`).
@@ -168,6 +177,10 @@ means:
   }
 }
 ```
+
+WeChat follows the same shape at `mcp.wechat`, with `data.message_ids` carrying
+the producer's landed local message ids and content/context living in
+`_meta.notification_persistent.mcp.wechat`.
 
 The transient hook may keep generic notification scaffolding (`header`, `icon`,
 `priority`, `published_at`) but not body text, previews, sender/subject,
@@ -230,8 +243,11 @@ In-memory state involved in this contract:
 
 - `agent._notification_live_holder` and `_notification_payload_signature` control
   sparse movement of the transient notification payload.
-- `agent._notification_persistent_telegram_message_ids` and
-  `_notification_persistent_telegram_last_tool_id` track Telegram delivery into the current provider context.
+- `agent._notification_persistent_telegram_message_ids` /
+  `_notification_persistent_telegram_last_tool_id` and the WeChat counterparts
+  `agent._notification_persistent_wechat_message_ids` /
+  `_notification_persistent_wechat_last_tool_id` track per-channel delivery into
+  the current provider context (reset on molt).
 
 ## Review triggers
 
@@ -249,14 +265,20 @@ Re-check this contract whenever a change touches any of these areas:
 - Built-in producers that create notification mirrors or human-message metadata:
   `src/lingtai_kernel/base_agent/messaging.py`, `src/lingtai_kernel/intrinsics/email/`,
   and curated messaging MCP managers under `src/lingtai/mcp_servers/`.
-- Tests that lock notification shape, Telegram persistent context, MCP inbox
-  delivery, or email notification behavior.
+- Tests that lock notification shape, Telegram/WeChat persistent context, MCP
+  inbox delivery, or email notification behavior.
 
 ## Current implementation status
 
 - **Telegram:** compliant with the content split. Transient
   `_meta.notifications.mcp.telegram` is an identity-only high-attention hook;
   content/context lives in `_meta.notification_persistent.mcp.telegram`.
+- **WeChat:** compliant with the content split. The producer attaches
+  structured `recent_messages`/`latest_incoming` plus generic routing keys to
+  its LICC events; transient `_meta.notifications.mcp.wechat` is an
+  identity-only high-attention hook; content/context lives in
+  `_meta.notification_persistent.mcp.wechat`. WeChat inbox/sent records and
+  `wechat.read` remain source of truth.
 - **Generic LICC/MCP:** still publishes bounded previews into the raw
   `.notification/mcp.<name>.json` mirror. That is allowed until the producer has
   a persistent context lane.

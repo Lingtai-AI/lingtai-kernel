@@ -50,6 +50,15 @@ _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(__package__)
 TEXT_CHUNK_LIMIT = 4000
 SESSION_EXPIRED_ERRCODE = -14
 
+# LICC notification preview window and structured-message text cap. The
+# markdown preview and the structured ``recent_messages`` metadata are built
+# from the same merged inbox+sent window so the persistent notification lane
+# (_meta.notification_persistent.mcp.wechat) sees exactly what the preview
+# shows. The per-message cap keeps structured metadata bounded regardless of
+# message size — wechat.read remains the source of truth for full text.
+_CONVERSATION_PREVIEW_MESSAGES = 10
+_STRUCTURED_MESSAGE_TEXT_CAP = 500
+
 # Max number of stable inbound signatures retained in the replay-guard
 # index (inbox_seen.json). Sized well above a single refresh backlog so the
 # guard never forgets a message inside the replay window, while keeping the
@@ -447,13 +456,22 @@ class WechatManager:
         # Forward to host via LICC. Body is a conversation preview with
         # guidance directing the agent to react only to the latest
         # unresponded incoming message — older lines are background only.
+        # Metadata carries generic routing keys (platform/conversation_ref/
+        # message_ref) plus structured recent_messages/latest_incoming so the
+        # kernel can build _meta.notification_persistent.mcp.wechat and keep
+        # the transient _meta.notifications lane a compact identity hook.
         try:
             contact = self._find_contact_by_user_id(from_user)
             display = contact.get("alias", from_user) if contact else from_user
+            preview_metadata: dict[str, Any] = {}
             try:
-                preview = self._build_conversation_preview(from_user, msg_id)
+                preview, preview_metadata = (
+                    self._build_conversation_preview_and_metadata(from_user, msg_id)
+                )
             except Exception as exc:
-                log.warning("_build_conversation_preview failed: %s", exc)
+                log.warning(
+                    "_build_conversation_preview_and_metadata failed: %s", exc
+                )
                 preview = body[:300].replace("\n", " ")
                 if len(body) > 300:
                     preview += "..."
@@ -467,6 +485,12 @@ class WechatManager:
                     "preview_truncated": len(body) > 300,
                     "full_length": len(body),
                     "item_types": msg_data["raw_item_types"],
+                    # Generic LICC chat routing keys, copied by the kernel
+                    # inbox into .notification/mcp.wechat.json previews.
+                    "platform": "wechat",
+                    "conversation_ref": from_user,
+                    "message_ref": msg_id,
+                    **preview_metadata,
                 },
                 "wake": True,
             })
@@ -779,42 +803,97 @@ class WechatManager:
 
     # ── Helpers ─────────────────────────────────────────────────
 
-    def _build_conversation_preview(
+    @staticmethod
+    def _relative_time(date_str: str, *, now: datetime) -> str:
+        try:
+            dt = datetime.fromisoformat(date_str)
+        except (ValueError, TypeError):
+            return date_str or "?"
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        delta = (now - dt).total_seconds()
+        if delta < 60:
+            return "just now"
+        if delta < 3600:
+            return f"{int(delta // 60)} min ago"
+        if delta < 86400:
+            return f"{int(delta // 3600)} hr ago"
+        if delta < 172800:
+            return "yesterday"
+        return dt.strftime("%Y-%m-%d")
+
+    @staticmethod
+    def _message_display_text(message: dict) -> str:
+        if message.get("_direction") == "outgoing":
+            text = message.get("text") or message.get("body") or ""
+            if not text and message.get("media_path"):
+                text = f"[media: {message['media_path']}]"
+        else:
+            text = message.get("body") or message.get("text") or ""
+        return str(text).replace("\n", " ")
+
+    def _structured_message(
+        self,
+        message: dict,
+        *,
+        peer_name: str,
+        current_message_id: str,
+        now: datetime,
+    ) -> dict[str, Any]:
+        """Build one bounded structured message for LICC preview metadata.
+
+        Text is capped at ``_STRUCTURED_MESSAGE_TEXT_CAP`` with a
+        ``text_truncated`` flag; media/file/voice items keep their inline
+        ``[Image: …]`` / ``[File: …]`` placeholders from the landed body, and
+        ``item_types`` preserves the raw upstream item kinds so the consumer
+        can see there is media without re-reading. No credentials or upstream
+        tokens are copied — only landed inbox/sent record fields.
+        """
+        mid = str(message.get("id", ""))
+        direction = (
+            "outgoing" if message.get("_direction") == "outgoing" else "incoming"
+        )
+        text = self._message_display_text(message)
+        text_truncated = len(text) > _STRUCTURED_MESSAGE_TEXT_CAP
+        if text_truncated:
+            text = text[: _STRUCTURED_MESSAGE_TEXT_CAP - 1] + "…"
+        item: dict[str, Any] = {
+            "id": mid,
+            "direction": direction,
+            "sender": "me" if direction == "outgoing" else peer_name,
+            "date": message.get("date") or "",
+            "relative_time": self._relative_time(message.get("date", ""), now=now),
+            "text": text,
+            "text_truncated": text_truncated,
+        }
+        if current_message_id and mid == current_message_id:
+            item["is_current"] = True
+        raw_item_types = message.get("raw_item_types")
+        if isinstance(raw_item_types, list) and raw_item_types:
+            item["item_types"] = [
+                int(t) for t in raw_item_types if isinstance(t, int)
+            ]
+        return item
+
+    def _build_conversation_preview_and_metadata(
         self,
         user_id: str,
         current_message_id: str,
-        max_messages: int = 10,
-    ) -> str:
-        """Build a guidance-prefixed conversation preview for a notification.
+        max_messages: int = _CONVERSATION_PREVIEW_MESSAGES,
+    ) -> tuple[str, dict[str, Any]]:
+        """Build the markdown preview plus structured WeChat context metadata.
 
-        Merges inbox + sent records filtered to *user_id*, takes the last
-        *max_messages* by date ascending, and formats each line as:
+        The preview merges inbox + sent records filtered to *user_id*, takes
+        the last *max_messages* by date ascending, and formats each line as
+        ``[relative_time] #id sender: text`` under a guidance header telling
+        the agent to react only to the latest unresponded incoming message.
 
-            [relative_time] #id sender: text
-
-        A header tells the agent to react only to the latest unresponded
-        incoming message — older lines (including past drafts or
-        conditionals) are background, not new approval.
+        The metadata dict carries the same window as bounded structured
+        ``recent_messages`` plus ``latest_incoming``, which the kernel inbox
+        copies into ``.notification/mcp.wechat.json`` previews to feed
+        ``_meta.notification_persistent.mcp.wechat``.
         """
         now = datetime.now(timezone.utc)
-
-        def _rel_time(date_str: str) -> str:
-            try:
-                dt = datetime.fromisoformat(date_str)
-            except (ValueError, TypeError):
-                return date_str or "?"
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            delta = (now - dt).total_seconds()
-            if delta < 60:
-                return "just now"
-            if delta < 3600:
-                return f"{int(delta // 60)} min ago"
-            if delta < 86400:
-                return f"{int(delta // 3600)} hr ago"
-            if delta < 172800:
-                return "yesterday"
-            return dt.strftime("%Y-%m-%d")
 
         inbox = [
             {**m, "_direction": "incoming"}
@@ -836,17 +915,9 @@ class WechatManager:
         lines: list[str] = []
         for m in messages:
             mid = m.get("id", "")
-            rel = _rel_time(m.get("date", ""))
-            if m.get("_direction") == "outgoing":
-                sender = "me"
-                text = m.get("text") or m.get("body") or ""
-                if not text and m.get("media_path"):
-                    text = f"[media: {m['media_path']}]"
-            else:
-                sender = peer_name
-                text = m.get("body") or m.get("text") or ""
-            text_display = text.replace("\n", " ")
-            lines.append(f"[{rel}] #{mid} {sender}: {text_display}")
+            rel = self._relative_time(m.get("date", ""), now=now)
+            sender = "me" if m.get("_direction") == "outgoing" else peer_name
+            lines.append(f"[{rel}] #{mid} {sender}: {self._message_display_text(m)}")
 
         header = _NOTIFICATION_HEADER_TEMPLATE.format(channel="WeChat").rstrip("\n")
         tail = f"**Conversation — last {len(messages)} messages (user {peer_name})**"
@@ -860,7 +931,29 @@ class WechatManager:
                 body = f"{prefix}\n{conversation}"
             else:
                 body = body[:9997] + "…"
-        return body
+
+        structured = [
+            self._structured_message(
+                m, peer_name=peer_name, current_message_id=current_message_id, now=now,
+            )
+            for m in messages
+        ]
+        latest_incoming = next(
+            (
+                item
+                for item in reversed(structured)
+                if item.get("direction") == "incoming"
+                and (item.get("id") == current_message_id or not current_message_id)
+            ),
+            None,
+        ) or next(
+            (item for item in reversed(structured) if item.get("direction") == "incoming"),
+            None,
+        )
+        metadata: dict[str, Any] = {"recent_messages": structured}
+        if latest_incoming is not None:
+            metadata["latest_incoming"] = latest_incoming
+        return body, metadata
 
     def _load_inbox_messages(self) -> list[dict]:
         """Load all inbox messages, sorted by date (newest first). Skips corrupt files."""

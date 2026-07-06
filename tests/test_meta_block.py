@@ -2727,6 +2727,307 @@ def test_sanitize_telegram_notification_after_persistent_is_noop_without_telegra
     meta_block.sanitize_telegram_notification_after_persistent({})
 
 
+# ---------------------------------------------------------------------------
+# WeChat persistent lane — mirrors the Telegram lane through the shared
+# parametrized IM machinery: seed/delta boundary at the producer's 10-message
+# preview window, `_meta.notification_persistent.mcp.wechat` path, WeChat
+# comment wording (wechat.read), and the transient `_meta.notifications
+# .mcp.wechat` lane reduced to a message_ids identity hook.
+# ---------------------------------------------------------------------------
+
+
+def _wechat_message(
+    n: int,
+    *,
+    text: str | None = None,
+    truncated: bool = False,
+    direction: str = "incoming",
+) -> dict:
+    return {
+        "id": f"wc-{n}",
+        "direction": direction,
+        "sender": "me" if direction == "outgoing" else "Jason",
+        "date": f"2026-07-06T02:00:{n % 60:02d}+00:00",
+        "relative_time": "just now",
+        "text": text or f"wechat message {n}",
+        "text_truncated": truncated,
+    }
+
+
+def _write_wechat_notif(tmp_path, messages: list[dict]) -> None:
+    notif_dir = tmp_path / ".notification"
+    notif_dir.mkdir(parents=True, exist_ok=True)
+    latest = dict(messages[-1])
+    latest["is_current"] = True
+    payload = {
+        "header": "1 new event from MCP 'wechat'",
+        "icon": "💬",
+        "priority": "high",
+        "data": {
+            "count": 1,
+            "source": "wechat",
+            "has_human_messages": True,
+            "previews": [
+                {
+                    "from": "Jason",
+                    "subject": "wechat message from Jason",
+                    "preview": latest["text"],
+                    "preview_truncated": False,
+                    "platform": "wechat",
+                    "conversation_ref": "wxid_jason",
+                    "message_ref": latest["id"],
+                    "recent_messages": messages,
+                    "latest_incoming": latest,
+                }
+            ],
+        },
+    }
+    (notif_dir / "mcp.wechat.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_attach_active_notifications_adds_wechat_persistent_snapshot(tmp_path):
+    messages = [_wechat_message(i) for i in range(1, 13)]
+    _write_wechat_notif(tmp_path, messages)
+    agent = _notif_agent(tmp_path)
+
+    block = ToolResultBlock(
+        id="t1",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+    )
+    holder = attach_active_notifications(agent, [block], prior_holder=None)
+
+    assert holder is block.content
+    # Required path mirrors Telegram: _meta.notification_persistent.mcp.wechat.
+    assert "wechat" not in block.content["_meta"]["notification_persistent"]
+    wechat = block.content["_meta"]["notification_persistent"]["mcp"]["wechat"]
+    assert set(wechat.keys()) == {
+        "messages",
+        "events",
+        "previous_block",
+        "context_comment",
+    }
+    # Seed block is bounded by the producer's 10-message preview window, not
+    # Telegram's 20.
+    assert len(wechat["messages"]) == 10
+    assert wechat["messages"][0]["id"] == "wc-3"
+    assert wechat["messages"][-1]["id"] == "wc-12"
+    # WeChat local ids have no compound account:chat:message shape, so the
+    # range comment falls back to the raw producer ids.
+    assert wechat["context_comment"] == (
+        "Messages wc-3–wc-11 are historical context from the recent WeChat "
+        "conversation. The current/new message is wc-12."
+    )
+    assert "burst_comment" not in wechat
+    assert wechat["previous_block"] == {
+        "path": "_meta.notification_persistent.mcp.wechat",
+        "tool_result_id": None,
+        "is_first_block": True,
+    }
+    assert wechat["events"] == [
+        {
+            "from": "Jason",
+            "subject": "wechat message from Jason",
+            "conversation_ref": "wxid_jason",
+            "message_ref": "wc-12",
+            "platform": "wechat",
+        }
+    ]
+    assert agent._notification_persistent_wechat_message_ids[-1] == "wc-12"
+    assert agent._notification_persistent_wechat_last_tool_id == "call-first"
+
+    # Move (not duplicate): the ephemeral notifications.mcp.wechat lane is now
+    # only a short high-attention identity hook.
+    ephemeral = block.content["_meta"]["notifications"]["mcp.wechat"]
+    assert ephemeral["data"] == {"message_ids": ["wc-12"]}
+    assert ephemeral["header"] == "WeChat event"
+    assert "previews" not in ephemeral["data"]
+    assert "count" not in ephemeral["data"]
+    assert "wechat message from Jason" not in ephemeral["instructions"]
+
+
+def test_attach_active_notifications_adds_wechat_persistent_delta_with_comment(tmp_path):
+    first_messages = [_wechat_message(i) for i in range(1, 11)]
+    _write_wechat_notif(tmp_path, first_messages)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(
+        id="t1",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+    )
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    first_wc = first.content["_meta"]["notification_persistent"]["mcp"]["wechat"]
+    assert first_wc["messages"][-1]["id"] == "wc-10"
+    assert first_wc["previous_block"]["is_first_block"] is True
+
+    second_messages = [_wechat_message(i) for i in range(2, 12)]
+    _write_wechat_notif(tmp_path, second_messages)
+    second = ToolResultBlock(
+        id="t2",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-second"}}},
+    )
+    new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
+
+    assert new_holder is second.content
+    # The previous holder keeps its persistent context even though the moving
+    # _meta.notifications payload was skeletonized away.
+    assert "notifications" not in first.content.get("_meta", {})
+    assert first.content["_meta"]["notification_persistent"]["mcp"]["wechat"]["messages"]
+    wechat = second.content["_meta"]["notification_persistent"]["mcp"]["wechat"]
+    assert [message["id"] for message in wechat["messages"]] == ["wc-11"]
+    previous_block = wechat["previous_block"]
+    assert previous_block["path"] == "_meta.notification_persistent.mcp.wechat"
+    assert previous_block["tool_result_id"] == "call-first"
+    assert "is_first_block" not in previous_block
+    assert previous_block["comment"] == (
+        "For earlier WeChat context, see tool result call-first "
+        "at _meta.notification_persistent.mcp.wechat."
+    )
+    assert agent._notification_persistent_wechat_last_tool_id == "call-second"
+
+
+def test_build_notification_persistent_payload_wechat_and_telegram_coexist():
+    agent = SimpleNamespace(
+        _notification_persistent_telegram_message_ids=[],
+        _notification_persistent_telegram_last_tool_id=None,
+        _notification_persistent_wechat_message_ids=[],
+        _notification_persistent_wechat_last_tool_id=None,
+    )
+    tg_messages = [_telegram_message(i) for i in range(1, 4)]
+    wc_messages = [_wechat_message(i) for i in range(1, 3)]
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {
+                "data": {
+                    "previews": [
+                        {
+                            "recent_messages": tg_messages,
+                            "latest_incoming": tg_messages[-1],
+                        }
+                    ]
+                }
+            },
+            "mcp.wechat": {
+                "data": {
+                    "previews": [
+                        {
+                            "recent_messages": wc_messages,
+                            "latest_incoming": wc_messages[-1],
+                        }
+                    ]
+                }
+            },
+        }
+    }
+    persistent = meta_block.build_notification_persistent_payload(
+        agent, notification_payload
+    )
+
+    mcp = persistent["notification_persistent"]["mcp"]
+    assert [m["id"] for m in mcp["telegram"]["messages"]] == [
+        "main:123:1", "main:123:2", "main:123:3",
+    ]
+    assert [m["id"] for m in mcp["wechat"]["messages"]] == ["wc-1", "wc-2"]
+    # Each lane hooks to its own previous block path.
+    assert mcp["telegram"]["previous_block"]["path"] == (
+        "_meta.notification_persistent.mcp.telegram"
+    )
+    assert mcp["wechat"]["previous_block"]["path"] == (
+        "_meta.notification_persistent.mcp.wechat"
+    )
+
+
+def test_wechat_persistent_message_comments_use_wechat_wording():
+    agent = SimpleNamespace(
+        _notification_persistent_wechat_message_ids=[],
+        _notification_persistent_wechat_last_tool_id=None,
+    )
+    outgoing = _wechat_message(1, direction="outgoing")
+    truncated = _wechat_message(2, truncated=True)
+    notification_payload = {
+        "notifications": {
+            "mcp.wechat": {
+                "data": {
+                    "previews": [
+                        {
+                            "recent_messages": [outgoing, truncated],
+                            "latest_incoming": truncated,
+                        }
+                    ]
+                }
+            }
+        }
+    }
+    persistent = meta_block.build_notification_persistent_payload(
+        agent, notification_payload
+    )
+
+    messages = persistent["notification_persistent"]["mcp"]["wechat"]["messages"]
+    assert messages[0]["comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_WECHAT_SELF_OUTGOING_COMMENT
+    )
+    assert messages[1]["comment"] == (
+        meta_block.NOTIFICATION_PERSISTENT_WECHAT_TRUNCATED_COMMENT
+    )
+    # The truncation hint must point at the WeChat producer read tool.
+    assert "wechat.read" in messages[1]["comment"]
+
+
+def test_sanitize_wechat_notification_after_persistent_strips_durable_text():
+    messages = [_wechat_message(i) for i in range(1, 4)]
+    notification_payload = {
+        "notifications": {
+            "mcp.wechat": {
+                "data": {
+                    "count": 3,
+                    "source": "wechat",
+                    "has_human_messages": True,
+                    "previews": [
+                        {
+                            "from": "Jason",
+                            "subject": "wechat message",
+                            "preview": "the last-10 conversation transcript body",
+                            "preview_truncated": False,
+                            "platform": "wechat",
+                            "conversation_ref": "wxid_jason",
+                            "message_ref": "wc-3",
+                            "recent_messages": messages,
+                            "latest_incoming": messages[-1],
+                        }
+                    ],
+                }
+            }
+        }
+    }
+
+    meta_block.sanitize_wechat_notification_after_persistent(notification_payload)
+
+    wechat = notification_payload["notifications"]["mcp.wechat"]
+    data = wechat["data"]
+    assert data == {"message_ids": ["wc-3"]}
+    assert "previews" not in data
+    assert "source" not in data
+    assert "count" not in data
+    assert "has_human_messages" not in data
+    assert wechat["header"] == "WeChat event"
+    assert "wechat message" not in wechat["instructions"]
+
+
+def test_sanitize_wechat_notification_after_persistent_is_noop_without_wechat():
+    # No wechat notification → safe no-op, does not raise; telegram untouched.
+    payload = {
+        "notifications": {
+            "mcp.telegram": {"data": {"previews": [{"preview": "x"}]}}
+        }
+    }
+    meta_block.sanitize_wechat_notification_after_persistent(payload)
+    previews = payload["notifications"]["mcp.telegram"]["data"]["previews"]
+    assert previews[0]["preview"] == "x"
+    meta_block.sanitize_wechat_notification_after_persistent({})
+
+
 def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):
     notif_dir = tmp_path / ".notification"
     notif_dir.mkdir(parents=True, exist_ok=True)
