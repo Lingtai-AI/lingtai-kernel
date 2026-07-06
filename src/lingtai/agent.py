@@ -42,7 +42,13 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
         # longer the authoritative tool-loop guard source. ACTIVE-turn
         # tool-call safety is kernel-owned in ``lingtai_kernel.safety_limits``.
         # Keep AgentConfig.max_turns at its default for API compatibility, but
-        # deliberately ignore stale init.json values here.
+        # deliberately ignore stale init.json values here (it lives in
+        # init_schema.MANIFEST_LEGACY_IGNORED, not MANIFEST_OPTIONAL).
+        #
+        # Every top-level manifest key read below must be typed in
+        # init_schema.MANIFEST_OPTIONAL (or MANIFEST_REQUIRED) — enforced by
+        # tests/test_init_schema.py::test_hydrator_manifest_keys_are_schema_known
+        # so the schema and hydrator views cannot silently drift (issue #736).
         language=manifest.get("language", defaults.language),
         activeness=manifest.get("activeness", defaults.activeness),
         context_limit=manifest.get("context_limit", defaults.context_limit),
