@@ -11,6 +11,13 @@ log = logging.getLogger(__name__)
 # (every optional field has a type, no known field is missing from the other).
 # When adding a new manifest field, update BOTH MANIFEST_OPTIONAL and
 # MANIFEST_KNOWN — test_init_schema.py enforces this.
+#
+# The schema tables are also the single source of truth for what
+# build_agent_config (lingtai/agent.py) may honor: every top-level manifest key
+# the hydrator reads must be typed here (in MANIFEST_OPTIONAL), and any key it
+# deliberately ignores lives in MANIFEST_LEGACY_IGNORED. The two views are
+# cross-checked by test_hydrator_manifest_keys_are_schema_known so they cannot
+# silently drift (issue #736).
 
 TOP_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "env_file": str,
@@ -88,8 +95,25 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     # molt thresholds are kernel-fixed runtime constants (see config.py
     # MOLT_*_THRESHOLD) and the context.molt message is now hardcoded in
     # meta_block.build_molt_context. See MANIFEST_LEGACY_IGNORED below.
-    "max_turns": int,
+    #
+    # NOTE: max_turns is NOT here. build_agent_config (lingtai/agent.py)
+    # deliberately ignores it — ACTIVE-turn tool-loop safety is kernel-owned in
+    # lingtai_kernel.safety_limits — so it is recognized-and-ignored via
+    # MANIFEST_LEGACY_IGNORED, not advertised as a live typed knob (issue #736).
     "max_rpm": int,
+    # Operational knobs honored by build_agent_config (lingtai/agent.py) and
+    # hydrated onto AgentConfig. Typed here so a malformed value fails at
+    # validation instead of detonating at runtime deep in the lifecycle loop
+    # (aed_timeout/snapshot_interval TypeError comparisons, max_aed_attempts
+    # __post_init__ clamp) — see issue #736. Positive-range checks are enforced
+    # explicitly in validate_init below; the types here reject wrong types
+    # (str/None) and bool. Keep in sync with the manifest.get(...) reads in
+    # build_agent_config — test_hydrator_manifest_keys_are_schema_known guards
+    # the two views against drift.
+    "activeness": (str, type(None)),          # AgentConfig.activeness: str | None
+    "snapshot_interval": (int, float, type(None)),  # seconds; None = off
+    "aed_timeout": (int, float),              # AgentConfig.aed_timeout: float
+    "max_aed_attempts": int,                  # clamped >= 1 in __post_init__
     # Soft per-molt/session cache-miss token budget. Positive int; default
     # 1_000_000 lives in AgentConfig.cache_miss_budget. The range check
     # (reject bool and <= 0) is enforced explicitly in validate_init below —
@@ -120,6 +144,13 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
 MANIFEST_LEGACY_IGNORED: set[str] = {
     "molt_notice", "molt_pressure", "molt_urgency", "molt_prompt",
     "stamina",
+    # max_turns: build_agent_config deliberately ignores stale init.json values
+    # (tool-loop safety is kernel-owned in lingtai_kernel.safety_limits). Kept
+    # here so old/restored init.json carrying it validates without an
+    # "unknown field" warning, but it is no longer advertised as a live typed
+    # knob in MANIFEST_OPTIONAL. Dropping the int type-check is acceptable
+    # because nothing reads the value. See issue #736.
+    "max_turns",
 }
 
 MANIFEST_KNOWN: set[str] = (
@@ -304,6 +335,45 @@ def validate_init(data: dict) -> list[str]:
             raise ValueError(
                 "manifest.cache_miss_budget: expected positive int (> 0)"
             )
+
+    # Operational knobs hydrated onto AgentConfig by build_agent_config. Types
+    # are checked above via _optional_keys(MANIFEST_OPTIONAL); the range checks
+    # here reject values that would clamp silently or blow up at runtime (see
+    # issue #736). bool is an int subclass, so reject it explicitly before the
+    # numeric comparison (True <= 0 would otherwise pass silently) — the
+    # (int, float, None) schema for snapshot_interval does not trigger
+    # _check_type's bool guard.
+    if "aed_timeout" in manifest:
+        # AgentConfig.aed_timeout is the STUCK→ASLEEP watchdog window (seconds),
+        # compared in lifecycle.py; a non-positive value makes the agent sleep
+        # immediately on entering STUCK.
+        aed_timeout = manifest["aed_timeout"]
+        if isinstance(aed_timeout, bool):
+            raise ValueError("manifest.aed_timeout: expected positive number, got bool")
+        if aed_timeout <= 0:
+            raise ValueError("manifest.aed_timeout: expected positive number (> 0)")
+
+    if "snapshot_interval" in manifest:
+        # None = snapshots off; otherwise the git-snapshot cadence in seconds.
+        snapshot_interval = manifest["snapshot_interval"]
+        if isinstance(snapshot_interval, bool):
+            raise ValueError(
+                "manifest.snapshot_interval: expected positive number or null, got bool"
+            )
+        if snapshot_interval is not None and snapshot_interval <= 0:
+            raise ValueError(
+                "manifest.snapshot_interval: expected positive number (> 0) or null"
+            )
+
+    if "max_aed_attempts" in manifest:
+        # AgentConfig.__post_init__ clamps < 1 to 1 (issue #654); reject it at
+        # validation time so an operator typo is a clear error, not a silent
+        # clamp.
+        max_aed_attempts = manifest["max_aed_attempts"]
+        if isinstance(max_aed_attempts, bool):
+            raise ValueError("manifest.max_aed_attempts: expected int, got bool")
+        if max_aed_attempts < 1:
+            raise ValueError("manifest.max_aed_attempts: expected int >= 1")
 
     soul = manifest.get("soul")
     if soul is not None:

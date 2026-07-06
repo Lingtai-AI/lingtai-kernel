@@ -406,6 +406,151 @@ def test_manifest_known_fields_all_typed():
     )
 
 
+def _hydrator_manifest_keys() -> set[str]:
+    """Extract the top-level manifest keys build_agent_config reads via
+    ``manifest.get(<const>, ...)``. Parses the function source so the schema
+    tables can be cross-checked against what the hydrator actually honors."""
+    import ast
+    import inspect
+    from lingtai.agent import build_agent_config
+
+    tree = ast.parse(inspect.getsource(build_agent_config))
+    keys: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "manifest"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            keys.add(node.args[0].value)
+    return keys
+
+
+def test_hydrator_manifest_keys_are_schema_known():
+    """Every top-level manifest key build_agent_config honors must be a
+    schema-known field, so validate_init can type-check it and so it does not
+    emit a spurious 'unknown field' warning. Guards against the schema/hydrator
+    drift documented in issue #736 (aed_timeout, max_aed_attempts,
+    snapshot_interval, activeness were honored but unknown to the schema)."""
+    from lingtai.init_schema import MANIFEST_KNOWN
+
+    keys = _hydrator_manifest_keys()
+    # Fail loud if the extraction matched nothing — a refactor away from
+    # ``manifest.get(...)`` must not silently disable this guard.
+    assert keys, (
+        "extracted no manifest.get(...) keys from build_agent_config — the "
+        "AST drift-guard is no longer matching; update _hydrator_manifest_keys"
+    )
+    # ``soul`` / ``llm`` are nested sub-object reads, not top-level manifest
+    # scalars; they are validated separately in validate_init.
+    top_level = keys - {"soul", "llm"}
+    unknown = top_level - MANIFEST_KNOWN
+    assert not unknown, (
+        f"build_agent_config honors manifest keys the schema does not know: "
+        f"{sorted(unknown)} — add them to MANIFEST_OPTIONAL (typed) so they "
+        f"are validated, not silently hydrated (issue #736)"
+    )
+
+
+def test_honored_hydrator_fields_are_typed_not_merely_legacy_ignored():
+    """The operational knobs the hydrator honors must be typed in
+    MANIFEST_OPTIONAL — not merely in MANIFEST_LEGACY_IGNORED — otherwise a
+    malformed value passes validation and detonates at runtime (issue #736)."""
+    from lingtai.init_schema import MANIFEST_OPTIONAL
+
+    for field in ("activeness", "snapshot_interval", "aed_timeout", "max_aed_attempts"):
+        assert field in MANIFEST_OPTIONAL, (
+            f"{field} is honored by build_agent_config but not typed in "
+            f"MANIFEST_OPTIONAL"
+        )
+
+
+def test_max_turns_is_legacy_ignored_not_advertised_as_live_knob():
+    """max_turns is deliberately ignored by build_agent_config (tool-loop
+    safety is kernel-owned in safety_limits), so it must not be advertised as a
+    live typed knob in MANIFEST_OPTIONAL. It stays warning-free on old
+    init.json via MANIFEST_LEGACY_IGNORED (issue #736)."""
+    from lingtai.init_schema import MANIFEST_OPTIONAL, MANIFEST_LEGACY_IGNORED
+
+    assert "max_turns" not in MANIFEST_OPTIONAL
+    assert "max_turns" in MANIFEST_LEGACY_IGNORED
+    # A stale init.json carrying max_turns must not warn.
+    data = _valid_init()
+    data["manifest"]["max_turns"] = 999
+    warnings = validate_init(data)
+    assert not any("max_turns" in w for w in warnings), (
+        f"max_turns should be silently tolerated, got warnings: {warnings}"
+    )
+
+
+def test_aed_timeout_type_and_range():
+    """aed_timeout accepts positive int/float; rejects wrong type, bool, and
+    non-positive values with a manifest.aed_timeout error (issue #736)."""
+    data = _valid_init()
+    data["manifest"]["aed_timeout"] = 600
+    assert not any("aed_timeout" in w for w in validate_init(data))
+    data["manifest"]["aed_timeout"] = 360.5
+    assert not any("aed_timeout" in w for w in validate_init(data))
+
+    for bad in ("600", None):
+        data["manifest"]["aed_timeout"] = bad
+        with pytest.raises(ValueError, match="aed_timeout"):
+            validate_init(data)
+    for bad in (True, 0, -5):
+        data["manifest"]["aed_timeout"] = bad
+        with pytest.raises(ValueError, match="aed_timeout"):
+            validate_init(data)
+
+
+def test_snapshot_interval_type_and_range():
+    """snapshot_interval accepts None (off) or a positive int/float; rejects
+    wrong type, bool, and non-positive values (issue #736)."""
+    data = _valid_init()
+    for ok in (None, 30, 2.5):
+        data["manifest"]["snapshot_interval"] = ok
+        assert not any("snapshot_interval" in w for w in validate_init(data))
+
+    for bad in ("30", True, 0, -5):
+        data["manifest"]["snapshot_interval"] = bad
+        with pytest.raises(ValueError, match="snapshot_interval"):
+            validate_init(data)
+
+
+def test_max_aed_attempts_type_and_range():
+    """max_aed_attempts accepts an int >= 1; rejects wrong type, bool, and
+    < 1 (matches the __post_init__ clamp but fails loud) (issue #736)."""
+    data = _valid_init()
+    for ok in (1, 5):
+        data["manifest"]["max_aed_attempts"] = ok
+        assert not any("max_aed_attempts" in w for w in validate_init(data))
+
+    for bad in ("3", 2.5, None):
+        data["manifest"]["max_aed_attempts"] = bad
+        with pytest.raises(ValueError, match="max_aed_attempts"):
+            validate_init(data)
+    for bad in (True, 0, -1):
+        data["manifest"]["max_aed_attempts"] = bad
+        with pytest.raises(ValueError, match="max_aed_attempts"):
+            validate_init(data)
+
+
+def test_activeness_type():
+    """activeness accepts a str or None; rejects other types (issue #736)."""
+    data = _valid_init()
+    for ok in ("balanced", None):
+        data["manifest"]["activeness"] = ok
+        assert not any("activeness" in w for w in validate_init(data))
+
+    data["manifest"]["activeness"] = 3
+    with pytest.raises(ValueError, match="activeness"):
+        validate_init(data)
+
+
 def test_legacy_molt_fields_tolerated_but_ignored():
     """Stale init.json molt_notice/molt_pressure/molt_urgency/molt_prompt fields
     must not break validation (no error, no 'unknown field' warning) — they are
