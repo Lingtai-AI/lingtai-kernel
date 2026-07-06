@@ -272,6 +272,51 @@ def test_structural_error_skips_transient_retry(tmp_path, monkeypatch):
     assert any(name == "aed_attempt" and fields["attempt"] == 1 for name, fields in agent._logs)
 
 
+def test_over_window_zero_progress_compaction_stops_retrying(tmp_path, monkeypatch):
+    """Issue #713: an over-window AED failure whose compaction frees zero
+    blocks is a provably doomed retry — the rebuilt session would replay the
+    identical oversized wire.  The loop must break loudly to ASLEEP after the
+    first zero-progress attempt instead of burning the whole ``max_aed_attempts``
+    budget on byte-identical guaranteed-to-fail sends (the 11-day retry storm).
+    """
+    from lingtai_kernel.tool_result_artifacts import CompactionStats
+
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 10
+
+    def fake_handle(_agent, _msg):
+        raise RuntimeError(
+            "Your input exceeds the context window of this model. "
+            "Please adjust your input and try again."
+        )
+
+    # Compaction always reports zero progress — mirrors the field logs
+    # (scanned_blocks=87, compacted_blocks=0) that repeated 1,489 times.
+    def zero_progress(_agent, *, source):
+        return CompactionStats(scanned_blocks=87, compacted_blocks=0)
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    monkeypatch.setattr(turn, "_compact_history_before_retry", zero_progress)
+    monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
+
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    # Exactly one AED attempt is spent, then the loop short-circuits — it does
+    # NOT climb to max_aed_attempts (10).
+    aed_attempt_events = [f for name, f in agent._logs if name == "aed_attempt"]
+    assert len(aed_attempt_events) == 1
+    assert any(name == "aed_zero_progress_over_window" for name, _ in agent._logs)
+    exhausted = [f for name, f in agent._logs if name == "aed_exhausted"]
+    assert exhausted and exhausted[0].get("reason") == "zero_progress_over_window"
+    assert exhausted[0]["attempts"] == 1
+    # Never rebuilt the doomed session for a further doomed send.
+    assert getattr(agent, "rebuilds", 0) == 0
+    assert agent._asleep.is_set()
+
+
 def test_empty_llm_response_is_classified_transient():
     err = turn.EmptyLLMResponseError(ledger_source="main", in_tool_loop=False)
     assert turn._is_transient_provider_error(err) is True
