@@ -228,7 +228,164 @@ class TestMailAttachments:
             )
             assert isinstance(result, str)
             assert "Attachment not found" in result
+            # Regression: a failed send must leave no orphan in the inbox.
+            inbox = receiver_dir / "mailbox" / "inbox"
+            assert not (inbox.is_dir() and any(inbox.iterdir()))
         finally:
+            stop.set()
+
+    def test_attachment_not_found_leaves_no_inbox_orphan(self, tmp_path):
+        """A missing attachment must not create any directory in the recipient's inbox."""
+        sender_dir = _setup_agent_dir(tmp_path / "sender")
+        receiver_dir = _setup_agent_dir(tmp_path / "receiver")
+        stop = threading.Event()
+        _keep_heartbeat_alive(receiver_dir, stop)
+
+        try:
+            sender = FilesystemMailService(working_dir=sender_dir)
+            result = sender.send(
+                str(receiver_dir),
+                {"from": "s", "to": "r", "message": "hi",
+                 "attachments": [str(tmp_path / "gone.png")]},
+            )
+            assert isinstance(result, str)
+            assert "Attachment not found" in result
+            inbox = receiver_dir / "mailbox" / "inbox"
+            assert not (inbox.is_dir() and any(inbox.iterdir()))
+        finally:
+            stop.set()
+
+    def test_partial_attachment_failure_leaves_no_inbox_orphan(self, tmp_path):
+        """When the first attachment exists but a later one does not, nothing is left behind."""
+        sender_dir = _setup_agent_dir(tmp_path / "sender")
+        receiver_dir = _setup_agent_dir(tmp_path / "receiver")
+        stop = threading.Event()
+        _keep_heartbeat_alive(receiver_dir, stop)
+
+        good = tmp_path / "good.txt"
+        good.write_text("payload")
+
+        try:
+            sender = FilesystemMailService(working_dir=sender_dir)
+            result = sender.send(
+                str(receiver_dir),
+                {"from": "s", "to": "r", "message": "hi",
+                 "attachments": [str(good), str(tmp_path / "missing.txt")]},
+            )
+            assert isinstance(result, str)
+            assert "Attachment not found" in result
+            inbox = receiver_dir / "mailbox" / "inbox"
+            assert not (inbox.is_dir() and any(inbox.iterdir()))
+            # The good file must not have been copied anywhere under the mailbox.
+            mailbox = receiver_dir / "mailbox"
+            leaked = list(mailbox.rglob("good.txt")) if mailbox.is_dir() else []
+            assert leaked == []
+        finally:
+            stop.set()
+
+    def test_attachment_copy_error_returns_error_not_raise(self, tmp_path, monkeypatch):
+        """A copy failure returns an error string (never raises) and leaves the inbox clean."""
+        import shutil as _shutil
+
+        sender_dir = _setup_agent_dir(tmp_path / "sender")
+        receiver_dir = _setup_agent_dir(tmp_path / "receiver")
+        stop = threading.Event()
+        _keep_heartbeat_alive(receiver_dir, stop)
+
+        good = tmp_path / "good.txt"
+        good.write_text("payload")
+
+        def boom(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(_shutil, "copy2", boom)
+
+        try:
+            sender = FilesystemMailService(working_dir=sender_dir)
+            result = sender.send(
+                str(receiver_dir),
+                {"from": "s", "to": "r", "message": "hi", "attachments": [str(good)]},
+            )
+            assert isinstance(result, str)
+            inbox = receiver_dir / "mailbox" / "inbox"
+            assert not (inbox.is_dir() and any(inbox.iterdir()))
+        finally:
+            stop.set()
+
+    def test_delivered_attachment_paths_point_at_final_location(self, tmp_path):
+        """A successful send records final inbox paths (not staging) and the file exists there."""
+        sender_dir = _setup_agent_dir(tmp_path / "sender")
+        receiver_dir = _setup_agent_dir(tmp_path / "receiver")
+
+        received = []
+        event = threading.Event()
+        stop = threading.Event()
+        _keep_heartbeat_alive(receiver_dir, stop)
+
+        def on_message(msg):
+            received.append(msg)
+            event.set()
+
+        att = tmp_path / "doc.pdf"
+        att.write_text("pdf-bytes")
+
+        listener = FilesystemMailService(working_dir=receiver_dir)
+        listener.listen(on_message)
+        try:
+            sender = FilesystemMailService(working_dir=sender_dir)
+            result = sender.send(
+                str(receiver_dir),
+                {"from": "s", "to": "r", "message": "hi", "attachments": [str(att)]},
+            )
+            assert result is None
+            assert event.wait(timeout=5.0)
+            paths = received[0]["attachments"]
+            assert len(paths) == 1
+            delivered = Path(paths[0])
+            assert delivered.parent.name == "attachments"
+            assert delivered.parent.parent.parent.name == "inbox"
+            assert ".staging" not in str(delivered)
+            assert delivered.is_file()
+            assert delivered.read_text() == "pdf-bytes"
+        finally:
+            listener.stop()
+            stop.set()
+
+    def test_listener_never_dispatches_partial_message(self, tmp_path):
+        """A failing send followed by a good one dispatches exactly one message."""
+        sender_dir = _setup_agent_dir(tmp_path / "sender")
+        receiver_dir = _setup_agent_dir(tmp_path / "receiver")
+
+        received = []
+        event = threading.Event()
+        stop = threading.Event()
+        _keep_heartbeat_alive(receiver_dir, stop)
+
+        def on_message(msg):
+            received.append(msg)
+            event.set()
+
+        listener = FilesystemMailService(working_dir=receiver_dir)
+        listener.listen(on_message)
+        try:
+            sender = FilesystemMailService(working_dir=sender_dir)
+            bad = sender.send(
+                str(receiver_dir),
+                {"from": "s", "to": "r", "message": "bad",
+                 "attachments": [str(tmp_path / "nope.png")]},
+            )
+            assert isinstance(bad, str)
+            good = sender.send(
+                str(receiver_dir),
+                {"from": "s", "to": "r", "message": "good"},
+            )
+            assert good is None
+            assert event.wait(timeout=5.0)
+            time.sleep(1.0)  # allow any spurious dispatch to surface
+            assert len(received) == 1
+            assert received[0]["message"] == "good"
+        finally:
+            listener.stop()
             stop.set()
 
     def test_mailbox_directory_structure(self, tmp_path):

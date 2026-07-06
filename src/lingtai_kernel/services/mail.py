@@ -141,8 +141,11 @@ class FilesystemMailService(MailService):
         1. ``{address}/.agent.json`` must exist.
         2. ``{address}/.agent.heartbeat`` must be fresh (< 2 s).
 
-        Then write ``message.json`` atomically into the recipient's inbox
-        and copy any attachment files.
+        Then validate all attachment paths, stage the whole message
+        (attachments + ``message.json``) in a hidden ``.<id>.staging``
+        sibling of the inbox, and publish it with a single atomic
+        ``os.replace``.  On any failure the staging directory is removed,
+        so the recipient never observes a partial inbox entry.
 
         Modes:
         - peer: resolve bare name against parent dir (default — sibling agents in same .lingtai/)
@@ -178,33 +181,49 @@ class FilesystemMailService(MailService):
             ),
         }
 
-        # Handle attachments
+        # Validate all attachment paths *before* touching the recipient's
+        # filesystem, so the most common failure (a stale/hallucinated path)
+        # is a zero-side-effect early return rather than an orphan directory.
         attachment_paths = message.get("attachments")
+        srcs: list[Path] = []
         if attachment_paths:
-            att_dir = msg_dir / "attachments"
-            att_dir.mkdir(parents=True, exist_ok=True)
-            local_copies: list[str] = []
             for fpath in attachment_paths:
                 src = Path(fpath)
                 if not src.is_file():
                     return f"Attachment not found: {fpath}"
-                dst = att_dir / src.name
-                shutil.copy2(src, dst)
-                local_copies.append(str(dst))
-            # Replace original paths with recipient-local paths
-            message = {**message, "attachments": local_copies}
-        else:
-            msg_dir.mkdir(parents=True, exist_ok=True)
+                srcs.append(src)
+            # Record recipient-local paths at the message's *final* location
+            # (not the staging path — staging is published away by rename).
+            message = {
+                **message,
+                "attachments": [
+                    str(msg_dir / "attachments" / src.name) for src in srcs
+                ],
+            }
 
-        # Atomic write: tmp → rename
-        tmp_path = msg_dir / "message.json.tmp"
-        final_path = msg_dir / "message.json"
+        # Stage the entire message (attachments + message.json) in a hidden
+        # sibling directory, then publish it into the inbox with one atomic
+        # rename. Staging inside the inbox keeps the rename same-filesystem
+        # (the only way os.replace is atomic); the dot prefix keeps it out of
+        # the listener's Phase-1 scan. Any failure only leaves — and cleans
+        # up — the sender-owned staging dir, never a partial inbox entry.
+        # Mirrors the claim/publish dance in _poll_pseudo_outbox().
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        staging_dir = inbox_dir / f".{msg_id}.staging"
         try:
-            tmp_path.write_text(
+            if srcs:
+                att_dir = staging_dir / "attachments"
+                att_dir.mkdir(parents=True, exist_ok=True)
+                for src in srcs:
+                    shutil.copy2(src, att_dir / src.name)
+            else:
+                staging_dir.mkdir(parents=True, exist_ok=True)
+            (staging_dir / "message.json").write_text(
                 json.dumps(message, indent=2, ensure_ascii=False, default=str)
             )
-            os.replace(str(tmp_path), str(final_path))
+            os.replace(str(staging_dir), str(msg_dir))
         except OSError as e:
+            _remove_tree_retry(staging_dir)
             return f"Failed to write message: {e}"
 
         return None
@@ -235,6 +254,11 @@ class FilesystemMailService(MailService):
                     if self._inbox_dir.is_dir():
                         for entry in self._inbox_dir.iterdir():
                             if not entry.is_dir():
+                                continue
+                            # Skip in-flight staging dirs (".<id>.staging") and
+                            # any other dot-prefixed sender bookkeeping so a
+                            # crashed send's leftover is cheap to skip.
+                            if entry.name.startswith("."):
                                 continue
                             if entry.name in self._seen:
                                 continue
