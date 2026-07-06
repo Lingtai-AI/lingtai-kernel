@@ -429,6 +429,34 @@ def test_maintenance_cleanup_human_cli_says_no_files_changed(tmp_path, capsys):
     assert "No files were changed" in out
 
 
+def test_maintenance_cleanup_human_cli_reports_footprints(tmp_path, capsys):
+    from lingtai.cli import main
+    import sys
+
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    (agent / ".agent.json").write_text(
+        json.dumps({"agent_name": "agent", "admin": {"karma": True}}),
+        encoding="utf-8",
+    )
+    events = agent / "logs" / "events.jsonl"
+    events.parent.mkdir()
+    events.write_text("{}\n", encoding="utf-8")
+
+    old_argv = sys.argv
+    try:
+        sys.argv = ["lingtai-agent", "maintenance", "cleanup", str(agent)]
+        main()
+    finally:
+        sys.argv = old_argv
+
+    out = capsys.readouterr().out
+    assert "footprints: 1" in out
+    assert "footprint agent_authoritative_events_log" in out
+    assert "risk=authoritative_do_not_delete" in out
+    assert "recommendation=Preserve as the authoritative recovery log" in out
+
+
 def test_maintenance_cleanup_rejects_invalid_days(tmp_path):
     from lingtai.cli import main
     import sys

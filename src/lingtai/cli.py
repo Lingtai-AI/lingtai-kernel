@@ -339,6 +339,8 @@ def _handle_maintenance_command(args) -> None:
     print(f"candidates: {totals['candidates']} "
           f"({totals['candidate_bytes']} bytes)")
     print(f"protected: {totals['protected']}; skipped: {totals['skipped']}")
+    print(f"footprints: {totals['footprints']} "
+          f"({totals['footprint_bytes']} bytes)")
     for name, info in data["classes"].items():
         if info["candidates"] or info["protected"] or info["skipped"]:
             print(
@@ -346,7 +348,16 @@ def _handle_maintenance_command(args) -> None:
                 f"{info['protected']} protected, {info['skipped']} skipped, "
                 f"{info['bytes']} bytes"
             )
-    print("No files were changed. Use --json for full candidate paths.")
+    for name, info in data["footprint_classes"].items():
+        if info["items"]:
+            sample = info["samples"][0]
+            print(
+                f"- footprint {name}: {info['items']} items, "
+                f"{info['count']} counted paths, {info['bytes']} bytes, "
+                f"risk={sample['risk']}, "
+                f"recommendation={sample['recommendation']}"
+            )
+    print("No files were changed. Use --json for full candidate paths and footprint details.")
 
 
 def main() -> None:

@@ -11,7 +11,10 @@ allowlist is narrow:
 
 Operational queues, unread/actionable inbox mail, authoritative JSONL logs,
 notification state, recovery logs, and lifecycle-protected agents are reported
-as protected instead of candidates.
+as protected instead of candidates. The report also includes high-footprint
+observations for portal replay, agent logs, and agent history. Those footprint
+items carry risk and recommendation fields, but they are never cleanup
+candidates.
 """
 
 from __future__ import annotations
@@ -32,6 +35,26 @@ CATEGORY_DAEMON = "terminal_daemon_run"
 CATEGORY_SENT = "sent_mail"
 CATEGORY_ARCHIVE = "archive_mail"
 CATEGORY_LOG_SQLITE = "rebuildable_log_index"
+
+FOOTPRINT_PORTAL_TOPOLOGY = "portal_topology_replay"
+FOOTPRINT_LOG_SQLITE = "agent_log_index"
+FOOTPRINT_EVENTS = "agent_authoritative_events_log"
+FOOTPRINT_TOKEN_LEDGER = "agent_authoritative_token_ledger"
+FOOTPRINT_SOUL_FLOW = "agent_authoritative_soul_flow"
+FOOTPRINT_REFRESH_RELAUNCH = "agent_refresh_relaunch_log"
+FOOTPRINT_HISTORY_ARCHIVE = "agent_history_archive"
+FOOTPRINT_HISTORY_SNAPSHOTS = "agent_history_snapshots"
+
+FOOTPRINT_CATEGORIES = (
+    FOOTPRINT_PORTAL_TOPOLOGY,
+    FOOTPRINT_LOG_SQLITE,
+    FOOTPRINT_EVENTS,
+    FOOTPRINT_TOKEN_LEDGER,
+    FOOTPRINT_SOUL_FLOW,
+    FOOTPRINT_REFRESH_RELAUNCH,
+    FOOTPRINT_HISTORY_ARCHIVE,
+    FOOTPRINT_HISTORY_SNAPSHOTS,
+)
 
 
 class TargetError(ValueError):
@@ -85,6 +108,21 @@ class SkippedItem:
 
 
 @dataclass
+class FootprintItem:
+    """One read-only high-space observation."""
+
+    agent: str | None
+    category: str
+    path: Path
+    bytes: int
+    risk: str
+    recommendation: str
+    count: int = 1
+    timestamp: str | None = None
+    detail: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class AgentReport:
     """Per-agent report section."""
 
@@ -97,6 +135,7 @@ class AgentReport:
     candidates: list[RetentionCandidate] = field(default_factory=list)
     protected: list[ProtectedItem] = field(default_factory=list)
     skipped: list[SkippedItem] = field(default_factory=list)
+    footprints: list[FootprintItem] = field(default_factory=list)
 
 
 @dataclass
@@ -109,6 +148,7 @@ class RetentionReport:
     cutoff_before: datetime
     options: RetentionOptions
     agents: list[AgentReport]
+    root_footprints: list[FootprintItem] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -132,6 +172,7 @@ def scan_retention(
     now = _now or datetime.now(timezone.utc)
     cutoff = now - timedelta(days=options.older_than_days)
     target_kind, root, agents = _resolve_target(Path(target))
+    root_footprints = _scan_root_footprints(root, target_kind)
     agent_reports = [
         _scan_agent(agent, root, options, cutoff, now) for agent in agents
     ]
@@ -150,6 +191,7 @@ def scan_retention(
         cutoff_before=cutoff,
         options=options,
         agents=agent_reports,
+        root_footprints=root_footprints,
         warnings=warnings,
     )
 
@@ -172,6 +214,12 @@ def report_to_dict(report: RetentionReport) -> dict[str, Any]:
         for agent in report.agents
         for s in agent.skipped
     ]
+    footprints = [_footprint_to_dict(f) for f in report.root_footprints]
+    footprints.extend(
+        _footprint_to_dict(f)
+        for agent in report.agents
+        for f in agent.footprints
+    )
 
     classes: dict[str, dict[str, Any]] = {}
     for category in (
@@ -191,7 +239,18 @@ def report_to_dict(report: RetentionReport) -> dict[str, Any]:
             "samples": class_candidates[:SAMPLE_LIMIT],
         }
 
+    footprint_classes: dict[str, dict[str, Any]] = {}
+    for category in FOOTPRINT_CATEGORIES:
+        class_footprints = [f for f in footprints if f["category"] == category]
+        footprint_classes[category] = {
+            "items": len(class_footprints),
+            "count": sum(int(f["count"]) for f in class_footprints),
+            "bytes": sum(int(f["bytes"]) for f in class_footprints),
+            "samples": class_footprints[:SAMPLE_LIMIT],
+        }
+
     total_bytes = sum(int(c["bytes"]) for c in candidates)
+    footprint_bytes = sum(int(f["bytes"]) for f in footprints)
     agents = []
     for agent in report.agents:
         agents.append(
@@ -206,6 +265,8 @@ def report_to_dict(report: RetentionReport) -> dict[str, Any]:
                 "protected": len(agent.protected),
                 "skipped": len(agent.skipped),
                 "candidate_bytes": sum(c.bytes for c in agent.candidates),
+                "footprints": len(agent.footprints),
+                "footprint_bytes": sum(f.bytes for f in agent.footprints),
             }
         )
 
@@ -224,9 +285,13 @@ def report_to_dict(report: RetentionReport) -> dict[str, Any]:
             "protected": len(protected),
             "skipped": len(skipped),
             "candidate_bytes": total_bytes,
+            "footprints": len(footprints),
+            "footprint_bytes": footprint_bytes,
         },
         "classes": classes,
+        "footprint_classes": footprint_classes,
         "candidates": candidates,
+        "footprints": footprints,
         "protected": protected[:SAMPLE_LIMIT * 2],
         "skipped": skipped[:SAMPLE_LIMIT * 2],
         "agents": agents,
@@ -263,6 +328,29 @@ def _resolve_target(target: Path) -> tuple[str, Path, list[Path]]:
     )
 
 
+def _scan_root_footprints(root: Path, target_kind: str) -> list[FootprintItem]:
+    if target_kind != "lingtai_root":
+        return []
+    topology = root / ".portal" / "topology.jsonl"
+    if not topology.is_file() or topology.is_symlink():
+        return []
+    if not _contained(topology, root):
+        return []
+    return [
+        _footprint(
+            None,
+            FOOTPRINT_PORTAL_TOPOLOGY,
+            topology,
+            _file_size(topology),
+            "rotation_or_compression_only",
+            "Rotate or compress the portal topology replay; do not delete it "
+            "without a replay-retention design.",
+            count=1,
+            detail={"owner": "portal", "format": "jsonl"},
+        )
+    ]
+
+
 def _scan_agent(
     agent_dir: Path,
     scan_root: Path,
@@ -286,6 +374,7 @@ def _scan_agent(
     )
 
     _add_always_protected(report, agent_dir)
+    _scan_agent_footprints(report, agent_dir, scan_root)
     if report.protected_agent:
         _add_protected_agent_classes(report, agent_dir, scan_root)
         return report
@@ -310,6 +399,105 @@ def _scan_agent(
             )
     _scan_log_sqlite(report, agent_dir, scan_root, cutoff, now)
     return report
+
+
+def _scan_agent_footprints(
+    report: AgentReport,
+    agent_dir: Path,
+    scan_root: Path,
+) -> None:
+    logs = agent_dir / "logs"
+    if logs.is_dir() and not logs.is_symlink():
+        for name, category, risk, recommendation in (
+            (
+                "log.sqlite",
+                FOOTPRINT_LOG_SQLITE,
+                "rebuildable_low_risk",
+                "Rebuild or compact this SQLite sidecar from authoritative logs; "
+                "stale copies remain governed by the existing cutoff candidate.",
+            ),
+            (
+                "events.jsonl",
+                FOOTPRINT_EVENTS,
+                "authoritative_do_not_delete",
+                "Preserve as the authoritative recovery log; consider compression "
+                "or indexed compaction design, not direct deletion.",
+            ),
+            (
+                "token_ledger.jsonl",
+                FOOTPRINT_TOKEN_LEDGER,
+                "authoritative_do_not_delete",
+                "Preserve token-accounting rows; consider compression or rollup "
+                "only with an accounting contract.",
+            ),
+            (
+                "soul_flow.jsonl",
+                FOOTPRINT_SOUL_FLOW,
+                "authoritative_do_not_delete",
+                "Preserve the soul-flow record; consider compression or archive "
+                "policy, not blind deletion.",
+            ),
+            (
+                "refresh_relaunch.log",
+                FOOTPRINT_REFRESH_RELAUNCH,
+                "diagnostic_review_before_truncate",
+                "Rotate or truncate only after a recovery window; keep enough "
+                "recent relaunch diagnostics.",
+            ),
+        ):
+            path = logs / name
+            if path.is_file() and not path.is_symlink() and _contained(path, scan_root):
+                report.footprints.append(
+                    _footprint(
+                        report.agent,
+                        category,
+                        path,
+                        _file_size(path),
+                        risk,
+                        recommendation,
+                        count=1,
+                    )
+                )
+
+    history = agent_dir / "history"
+    archive = history / "chat_history_archive.jsonl"
+    if archive.is_file() and not archive.is_symlink() and _contained(archive, scan_root):
+        report.footprints.append(
+            _footprint(
+                report.agent,
+                FOOTPRINT_HISTORY_ARCHIVE,
+                archive,
+                _file_size(archive),
+                "history_do_not_blind_delete",
+                "Compress or archive conversation history by policy; do not "
+                "blind delete it.",
+                count=1,
+                detail={"format": "jsonl"},
+            )
+        )
+
+    snapshots = history / "snapshots"
+    if snapshots.is_dir() and not snapshots.is_symlink() and _contained(snapshots, scan_root):
+        files = [
+            path
+            for path in sorted(snapshots.glob("*.json"), key=lambda p: p.name)
+            if path.is_file() and not path.is_symlink() and _contained(path, scan_root)
+        ]
+        if files:
+            report.footprints.append(
+                _footprint(
+                    report.agent,
+                    FOOTPRINT_HISTORY_SNAPSHOTS,
+                    snapshots,
+                    sum(_file_size(path) for path in files),
+                    "history_do_not_blind_delete",
+                    "Design keep-latest-N plus compression/archive for snapshots; "
+                    "do not blind delete them.",
+                    count=len(files),
+                    timestamp=_iso(_latest_mtime(files)),
+                    detail={"pattern": "*.json"},
+                )
+            )
 
 
 def _scan_daemons(
@@ -620,6 +808,31 @@ def _candidate(
     )
 
 
+def _footprint(
+    agent: str | None,
+    category: str,
+    path: Path,
+    size: int,
+    risk: str,
+    recommendation: str,
+    *,
+    count: int = 1,
+    timestamp: str | None = None,
+    detail: dict[str, Any] | None = None,
+) -> FootprintItem:
+    return FootprintItem(
+        agent=agent,
+        category=category,
+        path=path,
+        bytes=size,
+        risk=risk,
+        recommendation=recommendation,
+        count=count,
+        timestamp=timestamp if timestamp is not None else _iso(_mtime_dt(path)),
+        detail=detail or {},
+    )
+
+
 def _candidate_to_dict(candidate: RetentionCandidate) -> dict[str, Any]:
     return {
         "agent": candidate.agent,
@@ -632,6 +845,21 @@ def _candidate_to_dict(candidate: RetentionCandidate) -> dict[str, Any]:
         "age_source": candidate.age_source,
         "bytes": candidate.bytes,
         "detail": dict(candidate.detail),
+    }
+
+
+def _footprint_to_dict(item: FootprintItem) -> dict[str, Any]:
+    return {
+        "agent": item.agent,
+        "scope": "agent" if item.agent is not None else "lingtai_root",
+        "category": item.category,
+        "path": str(item.path),
+        "bytes": item.bytes,
+        "count": item.count,
+        "risk": item.risk,
+        "recommendation": item.recommendation,
+        "timestamp": item.timestamp,
+        "detail": dict(item.detail),
     }
 
 
@@ -781,6 +1009,11 @@ def _mtime_dt(path: Path) -> datetime | None:
         return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
     except OSError:
         return None
+
+
+def _latest_mtime(paths: list[Path]) -> datetime | None:
+    mtimes = [dt for path in paths if (dt := _mtime_dt(path)) is not None]
+    return max(mtimes) if mtimes else None
 
 
 def _dir_size(path: Path) -> int:

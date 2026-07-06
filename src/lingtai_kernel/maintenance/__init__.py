@@ -1,6 +1,7 @@
 """Kernel maintenance helpers."""
 
 from .retention import (
+    FootprintItem,
     RetentionCandidate,
     RetentionOptions,
     RetentionReport,
@@ -10,6 +11,7 @@ from .retention import (
 )
 
 __all__ = [
+    "FootprintItem",
     "RetentionCandidate",
     "RetentionOptions",
     "RetentionReport",
