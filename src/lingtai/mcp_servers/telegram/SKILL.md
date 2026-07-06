@@ -138,3 +138,11 @@ Important behavior notes:
   message was delivered.
 - A duplicate identical send returns `{'status': 'blocked'}`; treat that as
   'already sent', not as a transient error to retry.
+- If a call fails with `Telegram manager not initialized — server boot failed`,
+  the addon could not initialize at launch (most often a missing
+  `LINGTAI_TELEGRAM_CONFIG`, an unreadable config file, or an invalid bot
+  token). Call `telegram action=status`: it works even while the manager is
+  dead and returns the captured `boot_error` (the underlying exception) plus a
+  redacted config summary, so you can act on the real cause instead of a
+  restart. Fix the config, then `system(action="refresh")` to re-launch the
+  addon.

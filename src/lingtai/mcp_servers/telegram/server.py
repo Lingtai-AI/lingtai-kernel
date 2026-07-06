@@ -344,6 +344,15 @@ the allow-list is reloaded.
 def _troubleshooting_markdown() -> str:
     return """# lingtai-telegram troubleshooting
 
+## `Telegram manager not initialized — server boot failed`
+
+The addon failed to initialize at launch, so no message can be sent or received
+until it is fixed. Call `telegram action=status`: unlike the other actions it
+answers even while the manager is dead, and it returns the captured `boot_error`
+(the underlying exception, e.g. a missing config path or invalid token) plus a
+redacted config summary. Fix the reported cause, then `system(action="refresh")`
+to re-launch the addon. You do not need to read the server's stderr.
+
 ## `LINGTAI_TELEGRAM_CONFIG env var not set`
 
 Set `LINGTAI_TELEGRAM_CONFIG` to the config JSON path. Relative paths resolve
@@ -665,9 +674,56 @@ def build_manager() -> tuple[TelegramManager, Path]:
 # MCP server
 # ---------------------------------------------------------------------------
 
-def build_server(manager: TelegramManager | None) -> Server:
+async def _dispatch_tool_call(
+    manager: TelegramManager | None,
+    boot_error: str | None,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Route one ``telegram`` tool call to a result dict.
+
+    The ``status`` action is handled here rather than in TelegramManager
+    because it must answer even when eager boot failed and ``manager`` is
+    None — that is precisely the case an agent needs diagnosed. When boot
+    failed, the caught exception is surfaced inline as ``boot_error`` so the
+    agent can act on it (issue #711: the old message told the agent to "check
+    stderr", which an agent cannot read).
+    """
+    if arguments.get("action") == "status":
+        payload = _safe_status_payload(manager)
+        # The boot exception is the single most actionable field for a dead
+        # manager; carry it inline instead of stranding it on stderr.
+        payload["boot_error"] = boot_error
+        return payload
+    if manager is None:
+        detail = boot_error or (
+            "underlying exception was not captured (most often missing "
+            "LINGTAI_TELEGRAM_CONFIG or invalid bot token)"
+        )
+        return {
+            "status": "error",
+            "error": (
+                "Telegram manager not initialized — server boot failed: "
+                f"{detail}. Call telegram action=status for the full boot "
+                "diagnostic."
+            ),
+        }
+    try:
+        return await asyncio.to_thread(manager.handle, arguments)
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "error_type": type(e).__name__,
+        }
+
+
+def build_server(
+    manager: TelegramManager | None, boot_error: str | None = None,
+) -> Server:
     """Construct the MCP server. ``manager`` is None when eager start
-    failed; in that case every tool call returns an error explaining why."""
+    failed; in that case ``boot_error`` carries the captured exception so
+    ``telegram action=status`` can surface it, and every other tool call
+    returns an error pointing the agent at that status action."""
     server: Server = Server("lingtai-telegram", instructions=_SERVER_INSTRUCTIONS)
 
     @server.list_resources()
@@ -707,24 +763,7 @@ def build_server(manager: TelegramManager | None) -> Server:
     ) -> list[types.TextContent]:
         if name != "telegram":
             raise ValueError(f"unknown tool: {name!r}")
-        if manager is None:
-            result = {
-                "status": "error",
-                "error": (
-                    "Telegram manager not initialized — server boot failed. "
-                    "Check stderr for the underlying exception (most often "
-                    "missing LINGTAI_TELEGRAM_CONFIG or invalid bot token)."
-                ),
-            }
-        else:
-            try:
-                result = await asyncio.to_thread(manager.handle, arguments)
-            except Exception as e:
-                result = {
-                    "status": "error",
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                }
+        result = await _dispatch_tool_call(manager, boot_error, arguments)
         return [types.TextContent(
             type="text", text=json.dumps(result, ensure_ascii=False),
         )]
@@ -741,6 +780,7 @@ async def serve() -> None:
     so inbound messages flow before the host expects them."""
     manager: TelegramManager | None = None
     service_started = False
+    boot_error: str | None = None
     try:
         manager, _wd = build_manager()
         # The service starts the per-account poll threads.
@@ -752,8 +792,11 @@ async def serve() -> None:
             "eager start failed; tool calls will return errors until fixed: %s", e,
         )
         manager = None
+        # Capture the exception so telegram action=status can surface it
+        # inline (issue #711); the agent host cannot read our stderr.
+        boot_error = f"{type(e).__name__}: {e}"
 
-    server = build_server(manager)
+    server = build_server(manager, boot_error=boot_error)
     try:
         async with stdio_server() as (read_stream, write_stream):
             await server.run(

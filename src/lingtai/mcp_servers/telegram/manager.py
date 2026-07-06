@@ -196,7 +196,7 @@ SCHEMA = {
                 "send", "check", "read", "reply", "search",
                 "delete", "edit",
                 "contacts", "add_contact", "remove_contact",
-                "accounts", "manual",
+                "accounts", "status", "manual",
             ],
             "description": (
                 "send: send message to a chat (chat_id, text; optional media, reply_markup, placeholder, chat_action, parse_mode/entities). "
@@ -214,6 +214,9 @@ SCHEMA = {
                 "To receive messages from that user, their Telegram user ID must also be in allowed_users. "
                 "remove_contact: remove a contact (alias or chat_id). "
                 "accounts: list configured bot accounts. "
+                "status: report addon health (manager/service state, redacted "
+                "config summary) and, when boot failed, the inline boot_error "
+                "exception; safe to call even when the manager is dead. "
                 + _skill.manual_action_description(_SKILL_FRONTMATTER, _SKILL_NAME)
             ),
         },
@@ -329,6 +332,8 @@ DESCRIPTION = (
     "'delete'/'edit' to modify bot messages. "
     "'contacts' to manage saved contacts. "
     "'accounts' to list configured bot accounts. "
+    "'status' to check addon health and read the inline boot_error when the "
+    "manager failed to initialize (works even when the manager is dead). "
     "Voice messages are automatically transcribed using Whisper (local) and delivered as text. "
     "Rich feedback: automatic typing indicators, emoji reactions (👀 seen, ✅ done), "
     "and progress messages for long-running tasks."
