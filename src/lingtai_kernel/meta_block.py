@@ -680,9 +680,10 @@ def build_meta_readme() -> dict:
             "to telegram.read for exact full producer state). This is the "
             "durable source of truth for "
             "Telegram conversation context and Telegram routing details — the "
-            "ephemeral _meta.notifications.mcp.telegram lane is only a generic "
-            "pointer shell to this persistent path, not a holder for message "
-            "text, sender/subject, or routing refs. It is not a "
+            "ephemeral _meta.notifications.mcp.telegram lane is only a short "
+            "high-attention hook carrying message_ids, not a holder for message "
+            "text, sender/subject, routing refs, counts, or content-location "
+            "pointers. It is not a "
             "notification/action/dismiss channel and is not part of the formal "
             "tool-result payload; older blocks intentionally remain in history "
             "so later deltas can refer to them via their previous_block hook."
@@ -2127,15 +2128,47 @@ def record_notification_persistent_delivery(
         pass
 
 
-def sanitize_telegram_notification_after_persistent(notification_payload: dict) -> None:
-    """Remove all Telegram-specific content from the ephemeral lane in place.
+def _telegram_notification_message_ids(notification_payload: dict) -> list[str]:
+    """Return stable Telegram event IDs for the transient high-attention hook."""
+    message_ids: list[str] = []
+    seen: set[str] = set()
 
-    Telegram message text, structured context, and routing hooks now live under
+    def add(value: object) -> None:
+        if isinstance(value, str) and value and value not in seen:
+            seen.add(value)
+            message_ids.append(value)
+
+    for event in _telegram_persistent_events_from_notifications(notification_payload):
+        if isinstance(event, dict):
+            add(event.get("message_ref"))
+
+    notifications = notification_payload.get(NOTIFICATIONS_KEY)
+    telegram = notifications.get("mcp.telegram") if isinstance(notifications, dict) else None
+    data = telegram.get("data") if isinstance(telegram, dict) else None
+    if not isinstance(data, dict):
+        return message_ids
+
+    # Fallback for older/partial payloads that have structured messages but no
+    # event hook.  Keep only IDs; content and routing details stay persistent.
+    for preview in _telegram_preview_list(notification_payload):
+        if isinstance(preview, dict):
+            add(preview.get("message_ref"))
+            latest = preview.get("latest_incoming")
+            if isinstance(latest, dict):
+                add(latest.get("id"))
+
+    return message_ids
+
+
+def sanitize_telegram_notification_after_persistent(notification_payload: dict) -> None:
+    """Reduce Telegram's ephemeral lane to a minimal event identity hook.
+
+    Telegram message text, structured context, routing hooks, sender/subject,
+    platform, counts, and summaries live under
     ``_meta.notification_persistent.mcp.telegram``.  The transient
-    ``_meta.notifications.mcp.telegram`` block is only a generic wake/event shell
-    that tells the agent where the persistent Telegram payload lives; it must not
-    retain per-message text, sender/subject, conversation/message refs, platform,
-    or other Telegram-specific routing details.
+    ``_meta.notifications.mcp.telegram`` block remains only a short
+    high-attention/progressive-disclosure hook that names the producer event IDs
+    requiring explicit handling through the producer tool.
 
     No-op when there is no telegram notification. Safe to call unconditionally.
     """
@@ -2145,28 +2178,17 @@ def sanitize_telegram_notification_after_persistent(notification_payload: dict) 
     telegram = notifications.get("mcp.telegram")
     if not isinstance(telegram, dict):
         return
-    data = telegram.get("data")
-    if not isinstance(data, dict):
-        data = {}
 
-    minimal_data: dict = {
-        "content_moved_to": NOTIFICATION_PERSISTENT_TELEGRAM_PATH,
-    }
-    count = data.get("count")
-    if isinstance(count, int):
-        minimal_data["count"] = count
-    has_human_messages = data.get("has_human_messages")
-    if isinstance(has_human_messages, bool):
-        minimal_data["has_human_messages"] = has_human_messages
+    minimal_data: dict = {"message_ids": _telegram_notification_message_ids(notification_payload)}
 
     # Preserve generic notification scaffolding (icon / priority / published_at)
-    # but replace all Telegram-specific header, instructions, and preview fields.
-    telegram["header"] = "Telegram event content moved to notification_persistent"
+    # but replace all Telegram content/summary fields with the standard LICC
+    # transient hook: event identity in data, content/context in persistent.
+    telegram["header"] = "Telegram event"
     telegram["data"] = minimal_data
     telegram["instructions"] = (
-        "Telegram message content and routing metadata were moved to "
-        f"{NOTIFICATION_PERSISTENT_TELEGRAM_PATH}. Use telegram.read/reply when "
-        "exact anchoring or full producer state is needed."
+        "High-attention Telegram hook: use notification_persistent for "
+        "content/context; when handled, dismiss this notification."
     )
 
 

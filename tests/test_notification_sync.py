@@ -2045,13 +2045,11 @@ def test_inject_notification_pair_adds_telegram_persistent_and_strips_ephemeral(
         }
     ]
     transient = meta["notifications"]["mcp.telegram"]
-    assert transient["data"] == {
-        "content_moved_to": "_meta.notification_persistent.mcp.telegram",
-        "count": 1,
-        "has_human_messages": True,
-    }
+    assert transient["data"] == {"message_ids": ["main:123:21"]}
     assert "previews" not in transient["data"]
     assert "source" not in transient["data"]
+    assert "count" not in transient["data"]
+    assert "has_human_messages" not in transient["data"]
     assert "telegram message" not in transient["instructions"]
 
 
