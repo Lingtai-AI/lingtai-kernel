@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from lingtai_kernel.maintenance import RetentionOptions, TargetError, report_to_dict, scan_retention
+from lingtai_kernel.maintenance.retention import _parse_iso
 
 
 NOW = datetime(2026, 6, 27, 12, 0, 0, tzinfo=timezone.utc)
@@ -251,6 +253,67 @@ def test_symlink_candidate_is_skipped(tmp_path):
     assert data["classes"]["sent_mail"]["candidates"] == 0
     assert data["classes"]["sent_mail"]["skipped"] == 1
     assert data["skipped"][0]["reason"] == "symlink"
+
+
+@pytest.fixture
+def set_tz(monkeypatch):
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset is unavailable on this platform")
+
+    def _set(tz: str) -> None:
+        monkeypatch.setenv("TZ", tz)
+        time.tzset()
+
+    yield _set
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.parametrize("tz", ["UTC", "Asia/Shanghai", "America/Los_Angeles"])
+def test_parse_iso_z_suffix_is_utc_regardless_of_local_tz(set_tz, tz):
+    set_tz(tz)
+
+    assert _parse_iso("2026-06-05T12:00:00Z") == datetime(
+        2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc
+    )
+
+
+def test_parse_iso_explicit_offset_normalized_to_utc():
+    assert _parse_iso("2026-06-05T20:00:00+08:00") == datetime(
+        2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.parametrize("value", [None, 123, "garbage", "2026-06-05"])
+def test_parse_iso_rejects_non_conforming_values(value):
+    assert _parse_iso(value) is None
+
+
+@pytest.mark.parametrize("tz", ["Asia/Shanghai", "America/Los_Angeles"])
+def test_daemon_finished_at_near_cutoff_not_shifted_by_host_tz(tmp_path, set_tz, tz):
+    set_tz(tz)
+    agent = _agent(tmp_path)
+    _daemon(agent, finished_at=NOW - timedelta(days=30) + timedelta(hours=4))
+
+    data = _report(agent)
+
+    assert data["classes"]["terminal_daemon_run"]["candidates"] == 0
+    reasons = {item["reason"] for item in data["protected"]}
+    assert "newer_than_cutoff" in reasons
+
+
+def test_daemon_age_fields_match_finished_at(tmp_path, set_tz):
+    set_tz("Asia/Shanghai")
+    agent = _agent(tmp_path)
+    finished_at = NOW - timedelta(days=60)
+    _daemon(agent, finished_at=finished_at)
+
+    data = _report(agent)
+
+    candidate = data["candidates"][0]
+    assert candidate["age_source"] == "daemon_finished_at"
+    assert candidate["timestamp"] == finished_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert candidate["age_days"] == pytest.approx(60.0)
 
 
 def test_json_report_is_deterministic(tmp_path):

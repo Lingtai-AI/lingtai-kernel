@@ -770,9 +770,11 @@ def _parse_iso(value: object) -> datetime | None:
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%z"):
         try:
             parsed = datetime.strptime(value, fmt)
-            return parsed.astimezone(timezone.utc)
         except ValueError:
             continue
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
     return None
 
 
