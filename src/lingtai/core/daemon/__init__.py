@@ -173,7 +173,7 @@ def _toml_inline_table(values: dict[str, str]) -> str:
 def _codex_mcp_argv(registrations: list[dict]) -> list[str]:
     argv: list[str] = []
     for reg in registrations:
-        if reg.get("name") != _DAEMON_COMMON_MCP_NAME:
+        if reg.get("transport", reg.get("type", "stdio")) != "stdio":
             continue
         prefix = f"mcp_servers.{reg['name']}"
         argv.extend(["-c", f"{prefix}.command={_toml_string(reg['command'])}"])
@@ -186,7 +186,7 @@ def _codex_mcp_argv(registrations: list[dict]) -> list[str]:
 def _opencode_mcp_env(registrations: list[dict]) -> dict[str, str]:
     mcp: dict[str, dict] = {}
     for reg in registrations:
-        if reg.get("name") != _DAEMON_COMMON_MCP_NAME:
+        if reg.get("transport", reg.get("type", "stdio")) != "stdio":
             continue
         mcp[reg["name"]] = {
             "type": "local",
@@ -202,7 +202,7 @@ def _opencode_mcp_env(registrations: list[dict]) -> dict[str, str]:
 def _write_qwen_mcp_settings(run_dir: DaemonRunDir, registrations: list[dict]) -> Path:
     servers: dict[str, dict] = {}
     for reg in registrations:
-        if reg.get("name") != _DAEMON_COMMON_MCP_NAME:
+        if reg.get("transport", reg.get("type", "stdio")) != "stdio":
             continue
         servers[reg["name"]] = {
             "command": reg["command"],

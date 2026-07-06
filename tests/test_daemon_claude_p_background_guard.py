@@ -227,19 +227,58 @@ def test_cli_backend_receives_common_mcp_configuration(tmp_path, monkeypatch, ba
     result = mgr.handle({
         "action": "emanate",
         "backend": backend,
-        "tasks": [{"task": f"Run with {backend}.", "tools": []}],
+        "tasks": [{
+            "task": f"Run with {backend}.",
+            "tools": [],
+            "mcp": [
+                {
+                    "name": "parent-docs",
+                    "transport": "stdio",
+                    "command": "/bin/echo",
+                    "args": ["docs"],
+                    "env": {"DOC_TOKEN": "dummy"},
+                },
+                {
+                    "name": "parent_http",
+                    "transport": "http",
+                    "url": "https://mcp.example.test/sse",
+                    "headers": {"Authorization": "Bearer dummy"},
+                },
+            ],
+        }],
     })
     assert result["status"] == "dispatched"
     mgr._emanations[result["ids"][0]]["future"].result(timeout=5)
 
     assert captured["mcp"][0]["name"] == "daemon_common"
+    assert captured["mcp"][1] == {
+        "name": "parent-docs",
+        "transport": "stdio",
+        "command": "/bin/echo",
+        "args": ["docs"],
+        "env": {"DOC_TOKEN": "<redacted>"},
+    }
+    assert captured["mcp"][2] == {
+        "name": "parent_http",
+        "transport": "http",
+        "url": "https://mcp.example.test/sse",
+        "headers": {"Authorization": "<redacted>"},
+    }
     assert "call the MCP tool `finish`" in captured["task"]
+    assert "parent-docs" in captured["task"]
+    assert "parent_http" in captured["task"]
+    assert "Bearer dummy" not in captured["task"]
+    assert "DOC_TOKEN: <redacted>" in captured["task"]
     argv = captured["argv"]
     if backend == "codex":
         joined = "\n".join(argv)
         assert "mcp_servers.daemon_common.command" in joined
         assert "mcp_servers.daemon_common.args" in joined
         assert "mcp_servers.daemon_common.env" in joined
+        assert "mcp_servers.parent-docs.command" in joined
+        assert "mcp_servers.parent-docs.args" in joined
+        assert "mcp_servers.parent-docs.env" in joined
+        assert "mcp_servers.parent_http" not in joined
     elif backend == "opencode":
         idx = argv.index("__lingtai_opencode_config_content")
         config = json.loads(argv[idx + 1])
@@ -248,6 +287,14 @@ def test_cli_backend_receives_common_mcp_configuration(tmp_path, monkeypatch, ba
         assert common["environment"]["LINGTAI_DAEMON_COMPLETION_FILE"].endswith(
             "daemon_completion.json"
         )
+        docs = config["mcp"]["parent-docs"]
+        assert docs == {
+            "type": "local",
+            "command": ["/bin/echo", "docs"],
+            "enabled": True,
+            "environment": {"DOC_TOKEN": "dummy"},
+        }
+        assert "parent_http" not in config["mcp"]
     else:
         idx = argv.index("__lingtai_qwen_system_settings_path")
         settings_path = Path(argv[idx + 1])
@@ -257,3 +304,10 @@ def test_cli_backend_receives_common_mcp_configuration(tmp_path, monkeypatch, ba
         assert common["env"]["LINGTAI_DAEMON_COMPLETION_FILE"].endswith(
             "daemon_completion.json"
         )
+        docs = settings["mcpServers"]["parent-docs"]
+        assert docs == {
+            "command": "/bin/echo",
+            "args": ["docs"],
+            "env": {"DOC_TOKEN": "dummy"},
+        }
+        assert "parent_http" not in settings["mcpServers"]
