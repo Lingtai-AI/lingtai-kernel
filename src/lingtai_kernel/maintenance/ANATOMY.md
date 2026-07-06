@@ -38,7 +38,8 @@ This package owns no durable state. The retention reporter reads these existing 
 - `daemons/<run_id>/daemon.json` and `.heartbeat`
 - `mailbox/sent/`, `mailbox/archive/`
 - `mailbox/inbox/`, `mailbox/outbox/`, `mailbox/schedules/` as protected operational mail state
-- `logs/events.jsonl`, `logs/token_ledger.jsonl`, `logs/soul_flow.jsonl`, `logs/refresh_relaunch.log`, `logs/refresh_failed_permanent.json` as protected authoritative, diagnostic, or recovery logs
+- `logs/events.jsonl`, `logs/token_ledger.jsonl`, `logs/refresh_failed_permanent.json` as protected authoritative or recovery logs
+- `logs/soul_flow.jsonl` and `logs/refresh_relaunch.log` as read-only footprint observations only: never cleanup candidates, not protected-section entries
 - `logs/log.sqlite` as a rebuildable report candidate only
 - `history/chat_history_archive.jsonl` and `history/snapshots/*.json` as history footprints only
 - `tmp/tool-results/` as protected artifact state
@@ -50,7 +51,7 @@ This package owns no durable state. The retention reporter reads these existing 
 - Footprints are separate from candidates. Their `risk` and `recommendation` fields guide future design work; they never authorize cleanup.
 - `mailbox/outbox/` and `mailbox/schedules/` are pending-delivery/future-send queues and are never candidates.
 - Inbox mail is never a candidate, regardless of read state; read does not prove handled.
-- `logs/events.jsonl`, token ledgers, and `soul_flow.jsonl` are authoritative and protected. `logs/log.sqlite` is rebuildable and may be reported as a candidate when stale.
+- `logs/events.jsonl`, `logs/token_ledger.jsonl`, and `logs/refresh_failed_permanent.json` are protected authoritative or recovery logs. `logs/soul_flow.jsonl` and `logs/refresh_relaunch.log` are footprint-only observations and never candidates. `logs/log.sqlite` is rebuildable and may be reported as a candidate when stale.
 - Active agents, ASLEEP agents, SUSPENDED agents, held `.agent.lock`, and fresh `.agent.heartbeat` protect an agent's interior retention classes from becoming candidates; read-only footprint observations do not bypass that protection.
 - Daemon run dirs require terminal `daemon.json.state`, old age, and stale/missing daemon `.heartbeat`; mtime alone is not enough.
 
