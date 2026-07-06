@@ -498,7 +498,15 @@ class IMAPMailManager:
             attachments=attachments or None,
         )
 
-        # Track last sent message per recipient for duplicate detection
+        if err is not None:
+            # send_email returns an error string (it does not raise) on a failed
+            # delivery. A failed send must not count toward the duplicate block,
+            # or two transient SMTP failures would exhaust the free passes and
+            # lock out the retry that would have succeeded.
+            return {"status": "error", "error": err}
+
+        # Track last sent message per recipient for duplicate detection —
+        # only successful deliveries count.
         for addr in to_list:
             prev = self._last_sent.get(addr)
             if prev is not None and prev[0] == message_text:
@@ -508,10 +516,7 @@ class IMAPMailManager:
 
         log.info("imap_sent to=%s subject=%r", to_list, subject)
 
-        if err is None:
-            return {"status": "delivered", "to": to_list}
-        else:
-            return {"status": "error", "error": err}
+        return {"status": "delivered", "to": to_list}
 
     def _check(self, args: dict, account: "IMAPAccount") -> dict:
         # Empty/whitespace-only folder is treated like omitted → default INBOX.
@@ -627,16 +632,19 @@ class IMAPMailManager:
             references=references or None,
         )
 
-        # Mark as answered
+        if err is not None:
+            # The reply never went out; do not mark the original answered, or a
+            # filter/human client using \Answered to find mail still needing a
+            # response would treat this thread as handled (dropped correspondence).
+            return {"status": "error", "error": err}
+
+        # Mark the original message answered only after a successful send.
         target.store_flags(folder, uid, ["\\Answered"])
 
         log.info("imap_sent_reply to=%s subject=%r in_reply_to=%s",
                  reply_to, subject, email_id)
 
-        if err is None:
-            return {"status": "delivered", "to": [reply_to], "in_reply_to": email_id}
-        else:
-            return {"status": "error", "error": err}
+        return {"status": "delivered", "to": [reply_to], "in_reply_to": email_id}
 
     def _search(self, args: dict, account: "IMAPAccount") -> dict:
         query = args.get("query", "")
