@@ -2643,6 +2643,30 @@ def test_sanitize_telegram_notification_after_persistent_strips_durable_text():
     assert "telegram message" not in telegram["instructions"]
 
 
+def test_sanitize_telegram_notification_after_persistent_uses_latest_incoming_id_fallback():
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {
+                "data": {
+                    "previews": [
+                        {
+                            # Partial older structured payload: no event message_ref,
+                            # but latest_incoming still has a stable compound id.
+                            "latest_incoming": _telegram_message(9),
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+    meta_block.sanitize_telegram_notification_after_persistent(notification_payload)
+
+    telegram = notification_payload["notifications"]["mcp.telegram"]
+    assert telegram["data"] == {"message_ids": ["main:123:9"]}
+    assert "previews" not in telegram["data"]
+
+
 def test_sanitize_telegram_notification_after_persistent_is_noop_without_telegram():
     # No telegram notification → safe no-op, does not raise.
     payload = {"notifications": {"email": {"data": {"previews": [{"preview": "x"}]}}}}

@@ -2150,7 +2150,7 @@ def _telegram_notification_message_ids(notification_payload: dict) -> list[str]:
 
     # Fallback for older/partial payloads that have structured messages but no
     # event hook.  Keep only IDs; content and routing details stay persistent.
-    for preview in _telegram_preview_list(data):
+    for preview in _telegram_preview_list(notification_payload):
         if isinstance(preview, dict):
             add(preview.get("message_ref"))
             latest = preview.get("latest_incoming")
