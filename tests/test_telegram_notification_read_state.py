@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from lingtai.core.mcp import inbox
 from lingtai.mcp_servers.telegram.manager import TelegramManager
 from lingtai_kernel.notifications import submit
 
@@ -121,6 +122,107 @@ def test_incoming_event_populates_generic_notification_refs(tmp_path: Path) -> N
     assert metadata["platform"] == "telegram"
     assert metadata["conversation_ref"] == "main:123"
     assert metadata["message_ref"] == "main:123:53"
+    assert metadata["recent_messages"] == [metadata["latest_incoming"]]
+    assert metadata["latest_incoming"]["id"] == "main:123:53"
+    assert metadata["latest_incoming"]["direction"] == "incoming"
+    assert metadata["latest_incoming"]["sender"] == "alice"
+    assert metadata["latest_incoming"]["text"] == "hello"
+    assert metadata["latest_incoming"]["text_truncated"] is False
+    assert metadata["latest_incoming"]["is_current"] is True
+    assert "[NEW][incoming]" in inbound_events[0]["body"]
+    assert "Conversation — last 1 messages" in inbound_events[0]["body"]
+
+
+def test_incoming_reply_persists_reply_to_message_id(tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+
+    manager.on_incoming("main", {
+        "message": {
+            "message_id": 54,
+            "date": 1781600000,
+            "from": {"id": 1, "username": "alice"},
+            "chat": {"id": 123, "type": "private"},
+            "text": "reply from human",
+            "reply_to_message": {"message_id": 53},
+        }
+    })
+
+    read_result = manager._read({"account": "main", "chat_id": 123, "limit": 1})
+    assert read_result["status"] == "ok"
+    assert read_result["messages"][0]["id"] == "main:123:54"
+    assert read_result["messages"][0]["reply_to_message_id"] == 53
+    assert read_result["messages"][0]["_direction"] == "incoming"
+
+
+def test_incoming_event_structures_last_20_messages(tmp_path: Path) -> None:
+    workdir = tmp_path / "agent"
+    inbound_events: list[dict[str, Any]] = []
+    manager = TelegramManager(
+        _FakeService(),
+        working_dir=workdir,
+        on_inbound=inbound_events.append,
+    )
+
+    for idx in range(1, 26):
+        manager.on_incoming(
+            "main",
+            {
+                "message": {
+                    "message_id": idx,
+                    "date": 1781600000 + idx,
+                    "from": {"id": 1, "username": "alice"},
+                    "chat": {"id": 123, "type": "private"},
+                    "text": f"msg {idx}",
+                }
+            },
+        )
+
+    metadata = inbound_events[-1]["metadata"]
+    recent = metadata["recent_messages"]
+    assert len(recent) == 20
+    assert recent[0]["id"] == "main:123:6"
+    assert recent[-1]["id"] == "main:123:25"
+    assert metadata["latest_incoming"]["id"] == "main:123:25"
+    assert metadata["latest_incoming"]["is_current"] is True
+    assert "Conversation — last 20 messages" in inbound_events[-1]["body"]
+    assert "[NEW][incoming]" in inbound_events[-1]["body"]
+
+
+def test_incoming_event_structured_last_20_survives_mcp_metadata_cap(
+    tmp_path: Path,
+) -> None:
+    workdir = tmp_path / "agent"
+    inbound_events: list[dict[str, Any]] = []
+    manager = TelegramManager(
+        _FakeService(),
+        working_dir=workdir,
+        on_inbound=inbound_events.append,
+    )
+
+    long_text = "x" * 1400
+    for idx in range(1, 26):
+        manager.on_incoming(
+            "main",
+            {
+                "message": {
+                    "message_id": idx,
+                    "date": 1781600000 + idx,
+                    "from": {"id": 1, "username": "alice"},
+                    "chat": {"id": 123, "type": "private"},
+                    "text": f"{idx}:" + long_text,
+                }
+            },
+        )
+
+    metadata = inbound_events[-1]["metadata"]
+    recent = metadata["recent_messages"]
+    assert len(recent) == 20
+    assert recent[0]["id"] == "main:123:6"
+    assert recent[-1]["id"] == "main:123:25"
+    assert all(len(message["text"]) <= 500 for message in recent)
+    assert any(message["text_truncated"] for message in recent)
+    assert inbox._copy_structured_preview_meta(recent) is not None
+    assert inbox._copy_structured_preview_meta(metadata["latest_incoming"]) is not None
 
 
 def test_callback_query_incoming_does_not_publish_non_unique_message_ref(tmp_path: Path) -> None:

@@ -326,18 +326,17 @@ def test_scan_truncates_long_body_into_preview_snippet(tmp_path):
     notif_file = workdir / ".notification" / "mcp.telegram.json"
     notif = _json.loads(notif_file.read_text(encoding="utf-8"))
     preview = notif["data"]["previews"][0]
-    # Snippet hard-capped.
+    # Snippet hard-capped and explicitly marked truncated.
     assert len(preview["preview"]) == _PREVIEW_FIELD_CAP
     assert preview["preview"] == "B" * _PREVIEW_FIELD_CAP
+    assert preview["preview_truncated"] is True
     # from/subject pass through unchanged — no truncation at this layer.
     assert preview["from"] == "alice@example.com"
     assert preview["subject"] == "S" * 150
 
 
-def test_scan_legacy_event_without_metadata_yields_only_base_preview_fields(tmp_path):
-    """Phase-1 IM seam: events without metadata must produce the exact
-    pre-existing preview shape — {from, subject, preview} with no extras.
-    Behavioural baseline for the additive metadata change."""
+def test_scan_legacy_event_without_metadata_yields_base_preview_fields(tmp_path):
+    """Events without metadata keep base preview fields plus truncation state."""
     import json as _json
 
     agent, workdir = _mk_agent(tmp_path)
@@ -348,10 +347,11 @@ def test_scan_legacy_event_without_metadata_yields_only_base_preview_fields(tmp_
     _scan_once(agent, workdir / INBOX_DIRNAME)
     notif = _json.loads((workdir / ".notification" / "mcp.telegram.json").read_text(encoding="utf-8"))
     p = notif["data"]["previews"][0]
-    assert set(p.keys()) == {"from", "subject", "preview"}
+    assert set(p.keys()) == {"from", "subject", "preview", "preview_truncated"}
     assert p["from"] == "alice"
     assert p["subject"] == "hi"
     assert p["preview"] == "hello"
+    assert p["preview_truncated"] is False
 
 
 def test_scan_preserves_conversation_metadata_in_preview(tmp_path):
@@ -385,11 +385,56 @@ def test_scan_preserves_conversation_metadata_in_preview(tmp_path):
     assert p["conversation_ref"] == "tg:chat:42"
     assert p["message_ref"] == "tg:msg:9001"
     assert p["platform"] == "telegram"
+    assert p["preview_truncated"] is False
     # Instructions render routing metadata concisely, but not the body preview.
     assert "tg:chat:42" in notif["instructions"]
     assert "tg:msg:9001" in notif["instructions"]
     assert "hello" in p["preview"]
     assert "hello" not in notif["instructions"]
+
+
+def test_scan_preserves_structured_telegram_context_metadata(tmp_path):
+    """Curated IM producers may attach bounded structured recent-message context."""
+    import json as _json
+
+    agent, workdir = _mk_agent(tmp_path)
+    recent = [
+        {
+            "id": "main:123:52",
+            "direction": "incoming",
+            "sender": "alice",
+            "text": "previous",
+            "text_truncated": False,
+        },
+        {
+            "id": "main:123:53",
+            "direction": "incoming",
+            "sender": "alice",
+            "text": "hello",
+            "text_truncated": False,
+            "is_current": True,
+        },
+    ]
+    _write_event(workdir, "telegram", "ev1", {
+        "from": "alice",
+        "subject": "hi",
+        "body": "hello",
+        "metadata": {
+            "conversation_ref": "main:123",
+            "message_ref": "main:123:53",
+            "platform": "telegram",
+            "recent_messages": recent,
+            "latest_incoming": recent[-1],
+        },
+    })
+
+    _scan_once(agent, workdir / INBOX_DIRNAME)
+    notif = _json.loads((workdir / ".notification" / "mcp.telegram.json").read_text(encoding="utf-8"))
+    p = notif["data"]["previews"][0]
+    assert p["recent_messages"] == recent
+    assert p["latest_incoming"] == recent[-1]
+    assert "recent_messages=structured" in notif["instructions"]
+    assert "latest_incoming=structured" in notif["instructions"]
 
 
 def test_scan_ignores_non_string_or_empty_metadata_values(tmp_path):

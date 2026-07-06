@@ -1892,6 +1892,49 @@ def _write_email_notif(tmp_path):
     )
 
 
+def _telegram_message(message_id: int, *, text: str | None = None) -> dict:
+    return {
+        "id": f"main:123:{message_id}",
+        "direction": "incoming",
+        "sender": "Jason",
+        "date": f"2026-07-05T09:00:{message_id % 60:02d}Z",
+        "relative_time": "just now",
+        "text": text or f"message {message_id}",
+        "text_truncated": False,
+    }
+
+
+def _write_telegram_notif(tmp_path, messages: list[dict]) -> None:
+    notif_dir = tmp_path / ".notification"
+    notif_dir.mkdir(parents=True, exist_ok=True)
+    latest = dict(messages[-1])
+    latest["is_current"] = True
+    payload = {
+        "header": "1 new event from MCP 'telegram'",
+        "icon": "💬",
+        "priority": "high",
+        "data": {
+            "count": 1,
+            "source": "telegram",
+            "has_human_messages": True,
+            "previews": [
+                {
+                    "from": "Jason",
+                    "subject": "telegram message from Jason via main",
+                    "preview": latest["text"],
+                    "preview_truncated": False,
+                    "platform": "telegram",
+                    "conversation_ref": "main:123",
+                    "message_ref": latest["id"],
+                    "recent_messages": messages,
+                    "latest_incoming": latest,
+                }
+            ],
+        },
+    }
+    (notif_dir / "mcp.telegram.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
 def test_attach_active_notifications_first_payload_attaches(tmp_path):
     from lingtai_kernel.notifications import notification_fingerprint
 
@@ -2096,6 +2139,269 @@ def test_attach_active_notifications_empty_resets_signature_for_reappearance(tmp
     assert "notifications" in third.content["_meta"]
 
 
+def test_attach_active_notifications_adds_telegram_persistent_snapshot(tmp_path):
+    messages = [_telegram_message(i) for i in range(1, 22)]
+    _write_telegram_notif(tmp_path, messages)
+    agent = _notif_agent(tmp_path)
+
+    block = ToolResultBlock(
+        id="t1",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+    )
+    holder = attach_active_notifications(agent, [block], prior_holder=None)
+
+    assert holder is block.content
+    # Required path is _meta.notification_persistent.mcp.telegram (Jason #6148).
+    telegram = block.content["_meta"]["notification_persistent"]["mcp"]["telegram"]
+    assert set(telegram.keys()) == {"messages", "events", "previous_block"}
+    assert len(telegram["messages"]) == 20
+    assert telegram["messages"][0]["id"] == "main:123:2"
+    assert telegram["messages"][-1]["id"] == "main:123:21"
+    # First block: explicit hook with no predecessor.
+    assert telegram["previous_block"] == {
+        "path": "_meta.notification_persistent.mcp.telegram",
+        "tool_result_id": None,
+        "is_first_block": True,
+    }
+    assert telegram["events"] == [
+        {
+            "from": "Jason",
+            "subject": "telegram message from Jason via main",
+            "conversation_ref": "main:123",
+            "message_ref": "main:123:21",
+            "platform": "telegram",
+        }
+    ]
+    assert agent._notification_persistent_telegram_message_ids[-1] == "main:123:21"
+    assert agent._notification_persistent_telegram_last_tool_id == "call-first"
+
+    # Move (not duplicate): the ephemeral notifications.mcp.telegram lane is now
+    # only a generic pointer shell.  Even routing hooks live in persistent.
+    ephemeral = block.content["_meta"]["notifications"]["mcp.telegram"]
+    assert ephemeral["data"] == {
+        "content_moved_to": "_meta.notification_persistent.mcp.telegram",
+        "count": 1,
+        "has_human_messages": True,
+    }
+    assert "previews" not in ephemeral["data"]
+    assert "source" not in ephemeral["data"]
+    assert "telegram message from Jason" not in ephemeral["instructions"]
+
+
+def test_attach_active_notifications_adds_telegram_persistent_delta_with_comment(tmp_path):
+    first_messages = [_telegram_message(i) for i in range(1, 21)]
+    _write_telegram_notif(tmp_path, first_messages)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(
+        id="t1",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+    )
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    first_tg = first.content["_meta"]["notification_persistent"]["mcp"]["telegram"]
+    assert first_tg["messages"][-1]["id"] == "main:123:20"
+    # First block hook: no predecessor.
+    assert first_tg["previous_block"]["is_first_block"] is True
+    assert first_tg["previous_block"]["tool_result_id"] is None
+
+    second_messages = [_telegram_message(i) for i in range(2, 22)]
+    _write_telegram_notif(tmp_path, second_messages)
+    second = ToolResultBlock(
+        id="t2",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-second"}}},
+    )
+    new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
+
+    assert new_holder is second.content
+    # The previous holder keeps its persistent context even though the moving
+    # _meta.notifications payload was skeletonized away.
+    assert "notifications" not in first.content.get("_meta", {})
+    assert first.content["_meta"]["notification_persistent"]["mcp"]["telegram"]["messages"]
+    telegram = second.content["_meta"]["notification_persistent"]["mcp"]["telegram"]
+    assert [message["id"] for message in telegram["messages"]] == ["main:123:21"]
+    # Every non-first block hooks to the previous block via the prior tool id.
+    previous_block = telegram["previous_block"]
+    assert previous_block["path"] == "_meta.notification_persistent.mcp.telegram"
+    assert previous_block["tool_result_id"] == "call-first"
+    assert "is_first_block" not in previous_block
+    assert previous_block["comment"] == (
+        "For earlier Telegram context, see tool result call-first "
+        "at _meta.notification_persistent.mcp.telegram."
+    )
+    assert agent._notification_persistent_telegram_last_tool_id == "call-second"
+
+
+def test_attach_active_notifications_sanitizes_telegram_without_new_persistent_block(
+    tmp_path,
+):
+    """Deliberate checks with already-delivered ids still keep notifications thin."""
+    messages = [_telegram_message(i) for i in range(1, 21)]
+    _write_telegram_notif(tmp_path, messages)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(
+        id="t1",
+        name="x",
+        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+    )
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert "notification_persistent" in first.content["_meta"]
+
+    check_result = ToolResultBlock(
+        id="t2",
+        name="notification",
+        content={"_notification_placeholder": True, "message": "voluntary check"},
+    )
+    new_holder = attach_active_notifications(agent, [check_result], prior_holder=holder)
+
+    assert new_holder is check_result.content
+    meta = check_result.content["_meta"]
+    # No new message ids, but the routing event hook is Telegram content too, so
+    # it is emitted in persistent while the transient lane stays generic.
+    telegram = meta["notification_persistent"]["mcp"]["telegram"]
+    assert telegram["messages"] == []
+    assert telegram["events"] == [
+        {
+            "from": "Jason",
+            "subject": "telegram message from Jason via main",
+            "conversation_ref": "main:123",
+            "message_ref": "main:123:20",
+            "platform": "telegram",
+        }
+    ]
+    assert telegram["previous_block"]["tool_result_id"] == "call-first"
+    ephemeral = meta["notifications"]["mcp.telegram"]
+    assert ephemeral["data"] == {
+        "content_moved_to": "_meta.notification_persistent.mcp.telegram",
+        "count": 1,
+        "has_human_messages": True,
+    }
+    assert "previews" not in ephemeral["data"]
+
+
+def test_build_notification_persistent_payload_lands_at_mcp_telegram_path():
+    # Unit-level lock on the exact required key path and hook shape (Jason #6148).
+    agent = SimpleNamespace(
+        _notification_persistent_telegram_message_ids=[],
+        _notification_persistent_telegram_last_tool_id=None,
+    )
+    messages = [_telegram_message(i) for i in range(1, 4)]
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {
+                "data": {"previews": [{"recent_messages": messages, "latest_incoming": messages[-1]}]}
+            }
+        }
+    }
+    persistent = meta_block.build_notification_persistent_payload(agent, notification_payload)
+
+    # Path is notification_persistent.mcp.telegram, NOT notification_persistent.telegram.
+    assert "telegram" not in persistent["notification_persistent"]
+    telegram = persistent["notification_persistent"]["mcp"]["telegram"]
+    assert [m["id"] for m in telegram["messages"]] == ["main:123:1", "main:123:2", "main:123:3"]
+    # First block always carries an explicit hook, even with no predecessor.
+    assert telegram["previous_block"] == {
+        "path": "_meta.notification_persistent.mcp.telegram",
+        "tool_result_id": None,
+        "is_first_block": True,
+    }
+
+
+def test_build_notification_persistent_payload_boundary_19_vs_20_delivered():
+    messages = [_telegram_message(i) for i in range(1, 26)]
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {
+                "data": {"previews": [{"recent_messages": messages}]}
+            }
+        }
+    }
+
+    nineteen = SimpleNamespace(
+        _notification_persistent_telegram_message_ids=[f"main:123:{i}" for i in range(1, 20)],
+        _notification_persistent_telegram_last_tool_id="call-prev",
+    )
+    nineteen_payload = meta_block.build_notification_persistent_payload(
+        nineteen, notification_payload
+    )
+    nineteen_tg = nineteen_payload["notification_persistent"]["mcp"]["telegram"]
+    # With fewer than 20 in-context messages, seed with the last 20 messages.
+    assert len(nineteen_tg["messages"]) == 20
+    assert [m["id"] for m in nineteen_tg["messages"]][0] == "main:123:6"
+    assert [m["id"] for m in nineteen_tg["messages"]][-1] == "main:123:25"
+
+    twenty = SimpleNamespace(
+        _notification_persistent_telegram_message_ids=[f"main:123:{i}" for i in range(1, 21)],
+        _notification_persistent_telegram_last_tool_id="call-prev",
+    )
+    twenty_payload = meta_block.build_notification_persistent_payload(
+        twenty, notification_payload
+    )
+    twenty_tg = twenty_payload["notification_persistent"]["mcp"]["telegram"]
+    # At 20 delivered messages, switch to delta-only delivery.
+    assert [m["id"] for m in twenty_tg["messages"]] == [
+        "main:123:21",
+        "main:123:22",
+        "main:123:23",
+        "main:123:24",
+        "main:123:25",
+    ]
+    assert twenty_tg["previous_block"]["tool_result_id"] == "call-prev"
+
+
+def test_sanitize_telegram_notification_after_persistent_strips_durable_text():
+    messages = [_telegram_message(i) for i in range(1, 4)]
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {
+                "data": {
+                    "count": 3,
+                    "source": "telegram",
+                    "has_human_messages": True,
+                    "previews": [
+                        {
+                            "from": "Jason",
+                            "subject": "telegram message",
+                            "preview": "the last-20 conversation transcript body",
+                            "preview_truncated": False,
+                            "platform": "telegram",
+                            "conversation_ref": "main:123",
+                            "message_ref": "main:123:3",
+                            "recent_messages": messages,
+                            "latest_incoming": messages[-1],
+                        }
+                    ],
+                }
+            }
+        }
+    }
+
+    meta_block.sanitize_telegram_notification_after_persistent(notification_payload)
+
+    telegram = notification_payload["notifications"]["mcp.telegram"]
+    data = telegram["data"]
+    # Durable message text and routing hooks are gone from the ephemeral lane.
+    assert data == {
+        "content_moved_to": "_meta.notification_persistent.mcp.telegram",
+        "count": 3,
+        "has_human_messages": True,
+    }
+    assert "previews" not in data
+    assert "source" not in data
+    assert "telegram message" not in telegram["instructions"]
+
+
+def test_sanitize_telegram_notification_after_persistent_is_noop_without_telegram():
+    # No telegram notification → safe no-op, does not raise.
+    payload = {"notifications": {"email": {"data": {"previews": [{"preview": "x"}]}}}}
+    meta_block.sanitize_telegram_notification_after_persistent(payload)
+    assert payload["notifications"]["email"]["data"]["previews"][0]["preview"] == "x"
+    meta_block.sanitize_telegram_notification_after_persistent({})
+
+
 def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):
     notif_dir = tmp_path / ".notification"
     notif_dir.mkdir(parents=True, exist_ok=True)
@@ -2111,14 +2417,27 @@ def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):
 
     attach_active_notifications(agent, [block], prior_holder=None)
 
-    payload = block.content["_meta"]["notifications"]["mcp.telegram"]
+    meta = block.content["_meta"]
+    payload = meta["notifications"]["mcp.telegram"]
     assert "_notifications" not in block.content
-    assert payload["data"]["previews"] == [
-        {"from": "alice", "subject": "hello", "preview": "first body"},
-        {"from": "bob", "subject": "status", "preview": "second body"},
+    assert payload["data"] == {
+        "content_moved_to": "_meta.notification_persistent.mcp.telegram",
+    }
+    assert "previews" not in payload["data"]
+    # Legacy preview-only Telegram payloads are preserved as persistent fallback
+    # messages rather than staying in the transient notification lane.
+    telegram = meta["notification_persistent"]["mcp"]["telegram"]
+    assert [message["text"] for message in telegram["messages"]] == [
+        "first body",
+        "second body",
+    ]
+    assert all(message["source"] == "notification_preview" for message in telegram["messages"])
+    assert telegram["events"] == [
+        {"from": "alice", "subject": "hello"},
+        {"from": "bob", "subject": "status"},
     ]
     assert "notification_guidance" not in payload
-    assert block.content["_meta"]["notification_guidance"] == {
+    assert meta["notification_guidance"] == {
         "ref": "meta_guidance.notification_handling",
         "sources": ["mcp.telegram"],
     }

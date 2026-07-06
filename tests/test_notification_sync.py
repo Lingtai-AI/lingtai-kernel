@@ -1977,6 +1977,84 @@ def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> 
     assert "notification_guidance" not in notifs["email"]
 
 
+def test_inject_notification_pair_adds_telegram_persistent_and_strips_ephemeral(
+    tmp_path: Path,
+) -> None:
+    """IDLE/SYNTHETIC delivery moves Telegram text into notification_persistent."""
+    messages = [
+        {
+            "id": f"main:123:{i}",
+            "direction": "incoming",
+            "sender": "Jason",
+            "date": f"2026-07-05T22:{i:02d}:00Z",
+            "text": f"message {i}",
+            "is_current": i == 21,
+        }
+        for i in range(1, 22)
+    ]
+    publish(
+        tmp_path,
+        "mcp.telegram",
+        {
+            "header": "Telegram",
+            "data": {
+                "count": 1,
+                "source": "telegram",
+                "has_human_messages": True,
+                "previews": [
+                    {
+                        "from": "Jason",
+                        "subject": "telegram message",
+                        "preview": "the last-20 conversation transcript body",
+                        "preview_truncated": False,
+                        "platform": "telegram",
+                        "conversation_ref": "main:123",
+                        "message_ref": "main:123:21",
+                        "recent_messages": messages,
+                        "latest_incoming": messages[-1],
+                    }
+                ],
+            },
+        },
+    )
+
+    agent = _make_stub_agent_for_block_log(tmp_path)
+    agent._sync_notifications()
+
+    entries = agent._chat_stub.interface.entries
+    body = entries[1].content[0].content
+    assert isinstance(body, dict)
+    meta = body["_meta"]
+    telegram = meta["notification_persistent"]["mcp"]["telegram"]
+    assert len(telegram["messages"]) == 20
+    assert telegram["messages"][0]["id"] == "main:123:2"
+    assert telegram["messages"][-1]["id"] == "main:123:21"
+    assert telegram["previous_block"] == {
+        "path": "_meta.notification_persistent.mcp.telegram",
+        "tool_result_id": None,
+        "is_first_block": True,
+    }
+
+    assert telegram["events"] == [
+        {
+            "from": "Jason",
+            "subject": "telegram message",
+            "conversation_ref": "main:123",
+            "message_ref": "main:123:21",
+            "platform": "telegram",
+        }
+    ]
+    transient = meta["notifications"]["mcp.telegram"]
+    assert transient["data"] == {
+        "content_moved_to": "_meta.notification_persistent.mcp.telegram",
+        "count": 1,
+        "has_human_messages": True,
+    }
+    assert "previews" not in transient["data"]
+    assert "source" not in transient["data"]
+    assert "telegram message" not in transient["instructions"]
+
+
 def test_inject_notification_pair_strips_tool_meta_context_transit_keys(
     tmp_path: Path, monkeypatch
 ) -> None:

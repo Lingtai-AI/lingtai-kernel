@@ -53,6 +53,9 @@ _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(__package__)
 _NOTIFICATION_HEADER_TEMPLATE = _load_notification_header_template()
 _NOTIFICATION_CHANNEL = "mcp.telegram"
 _COMPOUND_ID_RE = re.compile(r"#([^\s:#]+:-?\d+:\d+)\b")
+_CONVERSATION_PREVIEW_MESSAGES = 20
+# Keep 20 structured Telegram messages below the MCP inbox structured metadata cap.
+_STRUCTURED_MESSAGE_TEXT_CAP = 500
 
 
 def _looks_like_compound_id(value: str) -> bool:
@@ -565,11 +568,13 @@ class TelegramManager:
             )
 
         # Forward to host via LICC. Body is a conversation preview showing the
-        # last 10 rounds. The agent uses telegram(action="check"|"read") to
-        # fetch the full conversation; metadata carries the routing keys.
+        # last 20 messages. The agent uses telegram(action="check"|"read") to
+        # fetch the full conversation; metadata carries routing keys plus a
+        # structured recent-message view for _meta.notification_persistent.
         text = payload.get("text", "") or payload.get("callback_query", "") or ""
+        preview_metadata: dict[str, Any] = {}
         try:
-            preview = self._build_conversation_preview(
+            preview, preview_metadata = self._build_conversation_preview_and_metadata(
                 account_alias,
                 payload.get("chat", {}).get("id"),
                 compound_id,
@@ -631,6 +636,7 @@ class TelegramManager:
                     "callback_data": payload.get("callback_query"),
                     "is_voice_transcript": payload.get("voice_transcript") is not None,
                     "voice_duration": payload.get("voice_transcript", {}).get("duration") if payload.get("voice_transcript") else None,
+                    **preview_metadata,
                 },
                 "wake": should_wake,
             })
@@ -735,46 +741,22 @@ class TelegramManager:
                     continue
         return None
 
-    def _build_conversation_preview(
+    def _conversation_messages(
         self,
         account_alias: str,
-        chat_id: int,
-        current_compound_id: str,
-        max_messages: int = 10,
-    ) -> str:
-        """Build a markdown conversation preview of the last *max_messages* rounds.
-
-        Scans inbox/ and sent/ dirs for messages matching *chat_id*, sorts by
-        date ascending, takes the tail, and formats each line as:
-
-            [relative_time] #compound_id sender_name: text
-
-        If a message has reply_to_message_id the quoted message is shown
-        indented beneath it (truncated to 50 chars).
-        """
-        now = datetime.now(timezone.utc)
-
-        def _rel_time(date_str: str) -> str:
-            try:
-                dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ").replace(
-                    tzinfo=timezone.utc
-                )
-            except (ValueError, TypeError):
-                return date_str or "?"
-            delta = (now - dt).total_seconds()
-            if delta < 60:
-                return "just now"
-            if delta < 3600:
-                return f"{int(delta // 60)} min ago"
-            if delta < 86400:
-                return f"{int(delta // 3600)} hr ago"
-            if delta < 172800:
-                return "yesterday"
-            return dt.strftime("%Y-%m-%d")
+        chat_id: int | None,
+        max_messages: int = _CONVERSATION_PREVIEW_MESSAGES,
+    ) -> list[dict]:
+        """Return recent Telegram messages for *chat_id* sorted oldest -> newest."""
+        if chat_id is None:
+            return []
+        try:
+            target_chat_id = int(chat_id)
+        except (TypeError, ValueError):
+            return []
 
         acct_dir = self._account_dir(account_alias)
         messages: list[dict] = []
-
         for folder in ("inbox", "sent"):
             folder_dir = acct_dir / folder
             if not folder_dir.is_dir():
@@ -796,56 +778,125 @@ class TelegramManager:
                             msg_chat_id = int(parts[1])
                         except ValueError:
                             pass
-                if msg_chat_id != chat_id:
+                if msg_chat_id != target_chat_id:
                     continue
                 data["_folder"] = folder
                 messages.append(data)
 
-        # Sort by date ascending
-        def _sort_key(m: dict) -> str:
-            return m.get("date") or ""
+        messages.sort(key=lambda m: m.get("date") or "")
+        return messages[-max_messages:]
 
-        messages.sort(key=_sort_key)
+    @staticmethod
+    def _relative_time(date_str: str, *, now: datetime | None = None) -> str:
+        now = now or datetime.now(timezone.utc)
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc
+            )
+        except (ValueError, TypeError):
+            return date_str or "?"
+        delta = (now - dt).total_seconds()
+        if delta < 60:
+            return "just now"
+        if delta < 3600:
+            return f"{int(delta // 60)} min ago"
+        if delta < 86400:
+            return f"{int(delta // 3600)} hr ago"
+        if delta < 172800:
+            return "yesterday"
+        return dt.strftime("%Y-%m-%d")
 
-        # Take last max_messages
-        messages = messages[-max_messages:]
+    @staticmethod
+    def _sender_name(message: dict) -> str:
+        if message.get("_folder") == "sent":
+            return "me"
+        frm = message.get("from") or {}
+        return frm.get("username") or frm.get("first_name") or "unknown"
 
-        # Build lookup by compound_id for reply quoting
+    @staticmethod
+    def _message_text(message: dict) -> str:
+        text = message.get("text", "") or message.get("callback_query", "") or ""
+        if message.get("media"):
+            media_type = message["media"].get("type", "media")
+            text = text or f"[{media_type}]"
+        return str(text).replace("\n", " ")
+
+    @staticmethod
+    def _truncate_structured_text(text: str) -> tuple[str, bool]:
+        if len(text) <= _STRUCTURED_MESSAGE_TEXT_CAP:
+            return text, False
+        return text[: _STRUCTURED_MESSAGE_TEXT_CAP - 1] + "…", True
+
+    def _structured_message(
+        self,
+        message: dict,
+        *,
+        current_compound_id: str | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        cid = str(message.get("id", ""))
+        text, text_truncated = self._truncate_structured_text(self._message_text(message))
+        direction = "outgoing" if message.get("_folder") == "sent" else "incoming"
+        item: dict[str, Any] = {
+            "id": cid,
+            "direction": direction,
+            "sender": self._sender_name(message),
+            "date": message.get("date") or "",
+            "relative_time": self._relative_time(message.get("date", ""), now=now),
+            "text": text,
+            "text_truncated": text_truncated,
+        }
+        if current_compound_id and cid == current_compound_id:
+            item["is_current"] = True
+        if message.get("media"):
+            media = message["media"] or {}
+            item["media"] = {
+                key: media[key]
+                for key in ("type", "filename", "size", "duration", "mime_type")
+                if key in media and media[key] is not None
+            }
+        reply_id_raw = message.get("reply_to_message_id")
+        if reply_id_raw:
+            item["reply_to_message_id"] = reply_id_raw
+            id_parts = cid.split(":")
+            if len(id_parts) == 3:
+                item["reply_to"] = f"{id_parts[0]}:{id_parts[1]}:{reply_id_raw}"
+        if message.get("callback_query"):
+            item["has_callback"] = True
+        return item
+
+    def _render_conversation_preview(
+        self,
+        messages: list[dict],
+        *,
+        chat_id: int | None,
+        current_compound_id: str,
+    ) -> str:
+        """Render a markdown conversation preview for notification previews."""
+        now = datetime.now(timezone.utc)
         by_id: dict[str, dict] = {m.get("id", ""): m for m in messages}
-
-        def _sender_name(m: dict) -> str:
-            if m.get("_folder") == "sent":
-                return "me"
-            frm = m.get("from") or {}
-            return frm.get("username") or frm.get("first_name") or "unknown"
-
         lines: list[str] = []
+
         for m in messages:
             cid = m.get("id", "")
-            rel = _rel_time(m.get("date", ""))
-            sender = _sender_name(m)
-            text = m.get("text", "") or m.get("callback_query", "") or ""
-            if m.get("media"):
-                media_type = m["media"].get("type", "media")
-                text = text or f"[{media_type}]"
-            text_display = text.replace("\n", " ")
+            rel = self._relative_time(m.get("date", ""), now=now)
+            sender = self._sender_name(m)
+            text_display = self._message_text(m)
+            direction = "outgoing" if m.get("_folder") == "sent" else "incoming"
+            marker = "[NEW]" if cid == current_compound_id else "[context]"
+            lines.append(
+                f"{marker}[{direction}][{rel}] #{cid} {sender}: {text_display}"
+            )
 
-            line = f"[{rel}] #{cid} {sender}: {text_display}"
-            lines.append(line)
-
-            # Reply quoting
             reply_id_raw = m.get("reply_to_message_id")
             if reply_id_raw:
-                # Reconstruct compound id for the reply target
                 id_parts = cid.split(":")
                 if len(id_parts) == 3:
                     reply_compound = f"{id_parts[0]}:{id_parts[1]}:{reply_id_raw}"
                     orig = by_id.get(reply_compound)
                     if orig:
-                        orig_rel = _rel_time(orig.get("date", ""))
-                        orig_text = (
-                            orig.get("text", "") or orig.get("callback_query", "") or ""
-                        )
+                        orig_rel = self._relative_time(orig.get("date", ""), now=now)
+                        orig_text = orig.get("text", "") or orig.get("callback_query", "") or ""
                         orig_snippet = orig_text[:50]
                         if len(orig_text) > 50:
                             orig_snippet += "…"
@@ -867,6 +918,67 @@ class TelegramManager:
             else:
                 body = body[:9997] + "…"
         return body
+
+    def _build_conversation_preview_and_metadata(
+        self,
+        account_alias: str,
+        chat_id: int | None,
+        current_compound_id: str,
+        max_messages: int = _CONVERSATION_PREVIEW_MESSAGES,
+    ) -> tuple[str, dict[str, Any]]:
+        """Build markdown preview plus structured Telegram context metadata."""
+        messages = self._conversation_messages(account_alias, chat_id, max_messages)
+        preview = self._render_conversation_preview(
+            messages,
+            chat_id=chat_id,
+            current_compound_id=current_compound_id,
+        )
+        now = datetime.now(timezone.utc)
+        structured = [
+            self._structured_message(m, current_compound_id=current_compound_id, now=now)
+            for m in messages
+        ]
+        latest_incoming = next(
+            (
+                item
+                for item in reversed(structured)
+                if item.get("direction") == "incoming"
+                and (item.get("id") == current_compound_id or not current_compound_id)
+            ),
+            None,
+        ) or next(
+            (item for item in reversed(structured) if item.get("direction") == "incoming"),
+            None,
+        )
+        metadata: dict[str, Any] = {"recent_messages": structured}
+        if latest_incoming is not None:
+            metadata["latest_incoming"] = latest_incoming
+        return preview, metadata
+
+    def _build_conversation_preview(
+        self,
+        account_alias: str,
+        chat_id: int | None,
+        current_compound_id: str,
+        max_messages: int = _CONVERSATION_PREVIEW_MESSAGES,
+    ) -> str:
+        """Build a markdown conversation preview of recent Telegram messages.
+
+        Scans inbox/ and sent/ dirs for messages matching *chat_id*, sorts by
+        date ascending, takes the tail, and formats each line as:
+
+            [NEW|context][direction][relative_time] #compound_id sender_name: text
+
+        If a message has reply_to_message_id the quoted message is shown
+        indented beneath it (truncated to 50 chars).
+        """
+        preview, _metadata = self._build_conversation_preview_and_metadata(
+            account_alias,
+            chat_id,
+            current_compound_id,
+            max_messages,
+        )
+        return preview
 
     def _read_ids(self, account: str) -> set[str]:
         path = self._account_dir(account) / "read.json"
@@ -1191,7 +1303,17 @@ class TelegramManager:
             }
 
         acct = self._service.get_account(account)
+        # Resolve the reply target from any of the accepted inputs: the private
+        # `_reply_to_message_id` (set by `_reply`), the public/raw
+        # `reply_to_message_id`, or a compound `message_id` (account:chat:msgid).
         reply_to = args.get("_reply_to_message_id")
+        if reply_to is None:
+            reply_to = args.get("reply_to_message_id")
+        if reply_to is None and args.get("message_id"):
+            try:
+                _account, _chat_id, reply_to = self._parse_compound_id(str(args["message_id"]))
+            except Exception:
+                reply_to = None
 
         # Placeholder mode: fire a typing action before sending so the user
         # sees "is typing…" alongside the placeholder text. Best-effort —
@@ -1256,6 +1378,7 @@ class TelegramManager:
             "text": text,
             "media": media,
             "reply_markup": reply_markup,
+            "reply_to_message_id": reply_to,
             "parse_mode": self._normalize_parse_mode(args.get("parse_mode")),
             "entities": args.get("entities"),
             "caption_entities": args.get("caption_entities"),
