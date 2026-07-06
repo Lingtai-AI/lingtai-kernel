@@ -3,7 +3,7 @@ name: psyche-manual
 description: |
   Router and operational guide for the psyche tool — molt, pad management, session journaling, and post-wipe recovery. Read this when: you are about to molt; you need to tend the four durable stores; you want guidance on writing a good summary or session journal; you wake up after a system-performed wipe with a system-authored summary; or you need to understand keep_tool_calls, keep_last, and pad.append. Routes consequential molt handoffs to assets/molt-template.md while keeping routine guidance compact.
 version: 1.1.0
-last_changed_at: "2026-06-28T02:02:37-07:00"
+last_changed_at: "2026-07-06T14:50:00-07:00"
 ---
 
 # Psyche Manual
@@ -36,7 +36,7 @@ Pad has a different rhythm — see §5 "Tending the Pad" below.
 - **lingtai** — `psyche(lingtai, update, content=<full identity>)`. Each update is a full rewrite, so include your whole identity, not just the delta. Carry forward who you have become.
 - **pad** — your living index of what you're working on. Edit it to reflect your current goal and the references that point at where the substance lives. See §5 for the full practice.
 - **knowledge** — write to `knowledge/<name>/KNOWLEDGE.md` for any long-term private context worth keeping. The filesystem is the API — use `write`/`edit` directly.
-- **skills** — write `.library/custom/<name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `version`) for any reusable procedure the next you (or a peer) might need, then call `system({"action": "refresh"})` to re-scan the catalog. Share via `../.library_shared/<name>/` if broadly useful.
+- **skills** — write `.library/custom/<name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `version`) for any reusable procedure the next you (or a peer) might need, then call `system({"action": "refresh"})` to re-scan the catalog. Share by sending the skill source/artifact so peers install it into their own `.library/custom/<name>/` and refresh; use `../.library_shared/<name>/` only as an explicit opt-in local-network shared root.
 - **session journal** — append a substantial sub-entry under `knowledge/session-journal/` describing what you did this session. See §4 for the full practice.
 
 All five happen *before* the molt call. They are not optional. Without them, the molt sheds everything.
