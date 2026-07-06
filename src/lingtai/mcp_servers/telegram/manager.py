@@ -1508,6 +1508,10 @@ class TelegramManager:
         # Group by chat_id for conversation view
         conversations: dict[int, dict] = {}
         for msg in messages:
+            # Sent records carry a ``to`` target; inbox records carry ``chat``.
+            # This is the same direction test ``_read`` uses via ``_direction``.
+            outgoing = isinstance(msg.get("to"), dict)
+
             # Extract chat_id from inbox-style or sent-style records
             chat = msg.get("chat")
             if isinstance(chat, dict):
@@ -1527,7 +1531,10 @@ class TelegramManager:
                     "unread": 0,
                 }
             conversations[cid]["total"] += 1
-            if msg.get("id") and msg["id"] not in read_ids:
+            # Unread counts incoming messages only — outgoing ones are things
+            # the agent already produced, so counting them would inflate the
+            # counter with the bot's own replies and it could never drain.
+            if not outgoing and msg.get("id") and msg["id"] not in read_ids:
                 conversations[cid]["unread"] += 1
 
         return {
