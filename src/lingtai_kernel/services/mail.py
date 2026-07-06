@@ -25,6 +25,12 @@ from ..handshake import is_agent, is_alive, manifest, resolve_address
 
 logger = logging.getLogger(__name__)
 
+# Bad inbox entries are moved here (a sibling of the poller's own inbox),
+# mirroring the MCP inbox poller's dead-letter convention
+# (src/lingtai/core/mcp/inbox.py). A dotted name so the poll loop's own
+# dot-directory skip keeps it from being re-scanned as a message.
+_DEAD_DIRNAME = ".dead"
+
 
 class MailService(ABC):
     """Abstract message transport service.
@@ -213,6 +219,48 @@ class FilesystemMailService(MailService):
     # listen / stop
     # ------------------------------------------------------------------
 
+    def _dead_letter_inbox_entry(self, entry: Path, error: str) -> None:
+        """Move a permanently-bad inbox entry into ``inbox/.dead/`` with a report.
+
+        Mail inbox entries are *directories* (``<uuid>/message.json`` + optional
+        ``attachments/``), so unlike the MCP inbox poller — which dead-letters
+        single event files — we move the whole directory. Called only for
+        genuinely unrecoverable entries (malformed ``message.json``): the sender
+        writes ``message.json`` atomically via ``tmp -> os.replace`` (see
+        ``send()``), so a parse error means the file is truly corrupt, not
+        half-written. Fails loud with a logged artifact instead of the previous
+        silent drop-into-``_seen`` (#732).
+        """
+        from datetime import datetime, timezone
+
+        dead_dir = self._inbox_dir / _DEAD_DIRNAME
+        try:
+            dead_dir.mkdir(parents=True, exist_ok=True)
+            target = dead_dir / entry.name
+            shutil.move(str(entry), str(target))
+            (target / "error.json").write_text(
+                json.dumps(
+                    {
+                        "error": error,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            logger.warning("mail inbox: dead-lettered %s: %s", target, error)
+        except OSError as e:
+            logger.error(
+                "mail inbox: failed to dead-letter %s: %s (original error: %s)",
+                entry,
+                e,
+                error,
+            )
+        # Either way, stop re-processing this entry: a corrupt file that also
+        # can't be moved must not become a hot retry loop.
+        self._seen.add(entry.name)
+
     def listen(self, on_message: Callable[[dict], None]) -> None:
         """Start polling the inbox for new messages.
 
@@ -220,10 +268,11 @@ class FilesystemMailService(MailService):
         re-delivered.  New directories that appear with a ``message.json``
         trigger *on_message*.
         """
-        # Snapshot existing inbox entries so we don't re-notify
+        # Snapshot existing inbox entries so we don't re-notify. Skip dotted
+        # dirs so the .dead/ dead-letter store is never treated as a message.
         if self._inbox_dir.is_dir():
             for entry in self._inbox_dir.iterdir():
-                if entry.is_dir():
+                if entry.is_dir() and not entry.name.startswith("."):
                     self._seen.add(entry.name)
 
         self._poll_stop.clear()
@@ -231,21 +280,55 @@ class FilesystemMailService(MailService):
         def _poll_loop() -> None:
             while not self._poll_stop.is_set():
                 try:
-                    # Phase 1 — own inbox.
+                    # Phase 1 — own inbox. Three distinct failure classes are
+                    # kept distinguishable rather than collapsed into a silent
+                    # drop (#732): a transient read error is retried next cycle,
+                    # a corrupt file is dead-lettered, and a consumer bug is
+                    # logged without being mistaken for lost mail.
                     if self._inbox_dir.is_dir():
                         for entry in self._inbox_dir.iterdir():
-                            if not entry.is_dir():
+                            # Skip files and the .dead/ dead-letter store.
+                            if not entry.is_dir() or entry.name.startswith("."):
                                 continue
                             if entry.name in self._seen:
                                 continue
                             msg_file = entry / "message.json"
-                            if msg_file.is_file():
-                                try:
-                                    payload = json.loads(msg_file.read_text(encoding="utf-8"))
-                                    on_message(payload)
-                                except (json.JSONDecodeError, OSError):
-                                    pass
-                                self._seen.add(entry.name)
+                            if not msg_file.is_file():
+                                continue  # sender's os.replace not landed yet
+
+                            try:
+                                raw = msg_file.read_text(encoding="utf-8")
+                            except OSError as e:
+                                # Transient (permissions blip, network-FS
+                                # hiccup): the file may still be intact. Do NOT
+                                # mark seen — retry on the next 0.5s cycle
+                                # instead of dropping it forever.
+                                logger.warning(
+                                    "mail inbox: read failed for %s, will retry: %s",
+                                    entry.name,
+                                    e,
+                                )
+                                continue
+
+                            try:
+                                payload = json.loads(raw)
+                            except json.JSONDecodeError as e:
+                                self._dead_letter_inbox_entry(
+                                    entry, f"invalid JSON: {e}"
+                                )
+                                continue
+
+                            # Mark seen BEFORE dispatch so a consumer that
+                            # raises does not cause redelivery: preserve the
+                            # existing at-most-once semantics.
+                            self._seen.add(entry.name)
+                            try:
+                                on_message(payload)
+                            except Exception:
+                                logger.exception(
+                                    "mail inbox: on_message handler failed for %s",
+                                    entry.name,
+                                )
 
                     # Phase 2 — subscribed pseudo-agent outboxes. Claim
                     # messages addressed to self via atomic rename outbox→sent.

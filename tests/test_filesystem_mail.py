@@ -261,6 +261,155 @@ class TestListen:
         messages = sorted(r["message"] for r in received)
         assert messages == ["msg-0", "msg-1", "msg-2"]
 
+    def test_listen_retries_transient_read_error_then_delivers(self, tmp_path, caplog):
+        """A transient OSError on message.json read must NOT drop the message.
+
+        Regression for #732: previously the read error was swallowed and the
+        entry unconditionally added to _seen, so an intact message on a
+        network filesystem that blipped once was lost forever. The entry must
+        instead be retried on the next poll cycle and eventually delivered.
+        """
+        import logging
+        from pathlib import Path
+
+        from lingtai_kernel.services import mail as mail_mod
+        from lingtai_kernel.services.mail import FilesystemMailService
+
+        agent_dir = _make_agent_dir(tmp_path, "agent01")
+        (agent_dir / "mailbox" / "inbox").mkdir(parents=True)
+
+        received = []
+        svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
+
+        # Fail read_text the first two times it is called for our message file,
+        # then fall through to the real implementation.
+        real_read_text = Path.read_text
+        target_name = "message.json"
+        state = {"fails": 2}
+
+        def flaky_read_text(self, *args, **kwargs):
+            if self.name == target_name and state["fails"] > 0:
+                state["fails"] -= 1
+                raise OSError("transient network filesystem hiccup")
+            return real_read_text(self, *args, **kwargs)
+
+        import unittest.mock as _mock
+
+        with caplog.at_level(logging.WARNING, logger=mail_mod.__name__):
+            with _mock.patch.object(Path, "read_text", flaky_read_text):
+                # Start listening first (empty inbox snapshot), then deliver so
+                # the entry appears as new and is subject to the flaky reads.
+                svc.listen(on_message=lambda p: received.append(p))
+                msg_dir = agent_dir / "mailbox" / "inbox" / "transient-uuid"
+                msg_dir.mkdir()
+                (msg_dir / "message.json").write_text(json.dumps({"message": "delayed"}))
+                time.sleep(2.0)  # >= 4 poll cycles: 2 fail, then a success
+            svc.stop()
+
+        assert len(received) == 1, "transiently-unreadable message must be retried, not dropped"
+        assert received[0]["message"] == "delayed"
+        # It must not have been dead-lettered.
+        assert not (agent_dir / "mailbox" / "inbox" / ".dead" / "transient-uuid").exists()
+        assert any("read failed" in r.getMessage() for r in caplog.records)
+
+    def test_listen_dead_letters_malformed_json_immediately(self, tmp_path, caplog):
+        """A corrupt message.json is dead-lettered with a report, not silently dropped.
+
+        Regression for #732: a JSONDecodeError used to be swallowed and the
+        entry added to _seen with zero trace. Because send() writes atomically,
+        a parse error means the file is genuinely corrupt, so it is moved to
+        inbox/.dead/ with an error.json and a logged warning.
+        """
+        import logging
+
+        from lingtai_kernel.services import mail as mail_mod
+        from lingtai_kernel.services.mail import FilesystemMailService
+
+        agent_dir = _make_agent_dir(tmp_path, "agent01")
+        inbox = agent_dir / "mailbox" / "inbox"
+        inbox.mkdir(parents=True)
+
+        received = []
+        svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
+
+        with caplog.at_level(logging.WARNING, logger=mail_mod.__name__):
+            svc.listen(on_message=lambda p: received.append(p))
+            bad = inbox / "corrupt-uuid"
+            bad.mkdir()
+            (bad / "message.json").write_text("{not valid json")
+            time.sleep(1.0)
+            svc.stop()
+
+        assert received == [], "corrupt message must not be dispatched"
+        dead = inbox / ".dead" / "corrupt-uuid"
+        assert dead.is_dir(), "corrupt entry must be moved to inbox/.dead/"
+        err = json.loads((dead / "error.json").read_text())
+        assert "invalid JSON" in err["error"]
+        assert any("dead-lettered" in r.getMessage() for r in caplog.records)
+
+    def test_listen_on_message_exception_is_logged_not_dropped_silently(self, tmp_path, caplog):
+        """A raising on_message handler must not kill the poller or hide the error.
+
+        Regression for #732: the handler ran inside the same try/except that
+        caught read/parse errors, so a handler OSError silently dropped the
+        message (and other exceptions could escape and stop the thread). The
+        handler is now dispatched outside the read try and its exceptions are
+        logged; the poll thread stays alive and delivers the next message.
+        """
+        import logging
+
+        from lingtai_kernel.services import mail as mail_mod
+        from lingtai_kernel.services.mail import FilesystemMailService
+
+        agent_dir = _make_agent_dir(tmp_path, "agent01")
+        inbox = agent_dir / "mailbox" / "inbox"
+        inbox.mkdir(parents=True)
+
+        delivered = []
+
+        def on_message(payload):
+            if payload.get("message") == "boom":
+                raise RuntimeError("consumer bug")
+            delivered.append(payload)
+
+        svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
+        with caplog.at_level(logging.ERROR, logger=mail_mod.__name__):
+            svc.listen(on_message=on_message)
+            first = inbox / "raises-uuid"
+            first.mkdir()
+            (first / "message.json").write_text(json.dumps({"message": "boom"}))
+            time.sleep(1.0)
+            # A later message must still be delivered — the thread survived.
+            second = inbox / "ok-uuid"
+            second.mkdir()
+            (second / "message.json").write_text(json.dumps({"message": "still alive"}))
+            time.sleep(1.0)
+            svc.stop()
+
+        assert [d["message"] for d in delivered] == ["still alive"]
+        # The raising entry is marked seen (no redelivery), not dead-lettered.
+        assert not (inbox / ".dead" / "raises-uuid").exists()
+        assert any("on_message handler failed" in r.getMessage() for r in caplog.records)
+
+    def test_listen_skips_dead_dir(self, tmp_path):
+        """A pre-existing inbox/.dead/ entry is never scanned as a live message."""
+        from lingtai_kernel.services.mail import FilesystemMailService
+
+        agent_dir = _make_agent_dir(tmp_path, "agent01")
+        inbox = agent_dir / "mailbox" / "inbox"
+        inbox.mkdir(parents=True)
+        dead_entry = inbox / ".dead" / "old-corrupt"
+        dead_entry.mkdir(parents=True)
+        (dead_entry / "message.json").write_text(json.dumps({"message": "ghost"}))
+
+        received = []
+        svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
+        svc.listen(on_message=lambda p: received.append(p))
+        time.sleep(1.0)
+        svc.stop()
+
+        assert received == [], "the .dead/ store must not be scanned for messages"
+
     def test_stop_is_idempotent(self, tmp_path):
         from lingtai_kernel.services.mail import FilesystemMailService
 
