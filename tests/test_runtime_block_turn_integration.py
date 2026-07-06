@@ -19,6 +19,7 @@ the wiring.
 """
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 
@@ -239,13 +240,40 @@ def test_material_change_reattaches_and_strips_prior(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _write_email_notif(tmp_path: Path, *, digest: str = "Email preview line") -> None:
+def _write_email_notif(
+    tmp_path: Path,
+    *,
+    email_id: str = "email-1",
+    message: str = "Email preview line",
+    subject: str = "Email subject",
+) -> None:
     notif_dir = tmp_path / ".notification"
     notif_dir.mkdir(parents=True, exist_ok=True)
-    (notif_dir / "email.json").write_text(
-        '{"header": "1 unread", "icon": "M", "priority": "normal", '
-        '"data": {"digest": "' + digest + '"}}'
-    )
+    payload = {
+        "header": "1 unread",
+        "icon": "M",
+        "priority": "normal",
+        "data": {
+            "count": 1,
+            "newest_received_at": "2026-07-06T07:00:00Z",
+            "email_ids": [email_id],
+            "emails": [
+                {
+                    "id": email_id,
+                    "from": "sender",
+                    "to": ["receiver"],
+                    "subject": subject,
+                    "message": message,
+                    "message_chars": len(message),
+                    "message_truncated": False,
+                    "time": "2026-07-06T07:00:00Z",
+                    "unread": True,
+                    "received_at": "2026-07-06T07:00:00Z",
+                }
+            ],
+        },
+    }
+    (notif_dir / "email.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_notification_unchanged_not_restamped_on_newer_result_at_boundary(tmp_path):
@@ -284,14 +312,18 @@ def test_notification_material_change_reattaches_at_boundary(tmp_path):
     assert "notifications" in first_holder["_meta"]
 
     # Materially change the notification payload before the second batch.
-    _write_email_notif(tmp_path, digest="Three new emails")
+    _write_email_notif(tmp_path, email_id="email-2", message="Three new emails")
 
     _second_batch(agent)
 
     new_holder = agent._notification_live_holder
     assert new_holder is not first_holder
     assert new_holder["_meta"]["notifications"]["email"]["data"] == {
-        "digest": "Three new emails"
+        "email_ids": ["email-2"]
     }
+    persistent_email = new_holder["_meta"]["notification_persistent"]["email"]
+    assert persistent_email["email_ids"] == ["email-2"]
+    assert persistent_email["emails"][0]["message"] == "Three new emails"
+    assert "digest" not in persistent_email
     # The previous holder sheds its notification payload.
     assert "_meta" not in first_holder or "notifications" not in first_holder["_meta"]

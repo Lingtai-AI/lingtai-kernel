@@ -183,13 +183,13 @@ def test_mail_to_bad_address(tmp_path):
 
 def test_mail_inbox_wiring(tmp_path):
     """_on_mail_received should publish ``.notification/email.json`` with
-    the current unread digest.  Under the .notification/ filesystem
+    the current unread email context.  Under the .notification/ filesystem
     redesign, mail arrival no longer enqueues on tc_inbox — the kernel's
     notification sync mechanism reads the file on its next heartbeat
-    tick and injects the wire pair.  The single-slot replace semantics
-    (``coalesce=True, replace_in_history=True`` under the old model)
-    are now embodied by the filesystem itself: overwriting the file IS
-    the coalesce + replace.
+    tick and injects the wire pair/persistent lane.  The single-slot
+    replace semantics (``coalesce=True, replace_in_history=True`` under
+    the old model) are now embodied by the filesystem itself: overwriting
+    the file IS the coalesce + replace.
     """
     from lingtai_kernel.notifications import collect_notifications
 
@@ -209,12 +209,19 @@ def test_mail_inbox_wiring(tmp_path):
     })
     # tc_inbox stays empty under the new path.
     assert len(agent._tc_inbox.drain()) == 0
-    # The notification file carries the current unread digest.
+    # The raw notification mirror carries the current unread message context.
     out = collect_notifications(agent.working_dir)
     assert "email" in out
-    assert out["email"]["data"]["count"] == 1
-    assert "newest_received_at" in out["email"]["data"]
-    assert "inbox test" in out["email"]["data"]["digest"]
+    data = out["email"]["data"]
+    assert data["count"] == 1
+    assert "newest_received_at" in data
+    assert "digest" not in data
+    assert data["email_ids"] == [msg_id]
+    email = data["emails"][0]
+    assert email["id"] == msg_id
+    assert email["subject"] == "test"
+    assert email["message"] == "inbox test"
+    assert email["message_truncated"] is False
 
 
 def test_mail_start_wires_listener(tmp_path):
@@ -276,13 +283,13 @@ def test_mail_read_no_ids_returns_error(tmp_path):
 
 
 def test_mail_received_full_content_in_notification(tmp_path):
-    """_on_mail_received should include the message body and subject in
-    the unread digest published to ``.notification/email.json``."""
+    """_on_mail_received should include the full message body and subject in
+    the unread email context published to ``.notification/email.json``."""
     from lingtai_kernel.notifications import collect_notifications
 
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     from lingtai_kernel.intrinsics.email.primitives import _persist_to_inbox
-    _persist_to_inbox(agent, {
+    email_id = _persist_to_inbox(agent, {
         "from": "sender",
         "subject": "test subject",
         "message": "full body content here",
@@ -294,9 +301,14 @@ def test_mail_received_full_content_in_notification(tmp_path):
     })
     out = collect_notifications(agent.working_dir)
     assert "email" in out
-    digest = out["email"]["data"]["digest"]
-    assert "full body content here" in digest
-    assert "test subject" in digest
+    data = out["email"]["data"]
+    assert "digest" not in data
+    assert data["email_ids"] == [email_id]
+    email = data["emails"][0]
+    assert email["id"] == email_id
+    assert email["subject"] == "test subject"
+    assert email["message"] == "full body content here"
+    assert email["message_truncated"] is False
 
 
 # ---------------------------------------------------------------------------
