@@ -39,7 +39,7 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
   - Action dispatch: `handle` (`manager.py:180-209`).
   - Schedules: `_handle_schedule` (`manager.py:214-224`), `_schedule_create` / `_cancel` / `_reactivate` / `_list` (`manager.py:226-363`), schedule helpers (`manager.py:368-442`), `_scheduler_loop` / `_scheduler_tick` (`manager.py:444-543`).
   - Send: `_send` (`manager.py:548-650`). Dispatches via `_mailman` daemon threads.
-  - CRUD: `_check` (`manager.py:657-699`), `_read`, `_dismiss`, `_reply`, `_reply_all`, `_search`, `_archive`, `_delete`. `_dismiss` is the lightweight cousin of `_read` — same effect on read state and notification but returns no email bodies; intended for the "I already saw it in the digest" path. All four read-state mutators (`_read`, `_dismiss`, `_archive`, `_delete`) call `EmailManager._rerender_unread_digest()` after the mutation so `.notification/email.json` mirrors the new state.
+  - CRUD: `_check` (`manager.py:657-699`), `_read`, `_dismiss`, `_reply`, `_reply_all`, `_search`, `_archive`, `_delete`. `_dismiss` is the lightweight cousin of `_read` — same effect on read state and notification but returns no email bodies; intended for the "I already saw it in `_meta.notification_persistent.email`" path. All four read-state mutators (`_read`, `_dismiss`, `_archive`, `_delete`) call `EmailManager._rerender_unread_digest()` after the mutation so `.notification/email.json` mirrors the new state.
   - Reply routing: `_resolve_reply_target` picks ``(address, mode)`` for `_reply` / `_reply_all`. Preference order is (1) inbound `_return_route` (embedded by abs sends), (2) absolute-path `from`, (3) bare `from` in peer mode. An ambiguity guard refuses to send when a peer-mode bare `from` would resolve to the responder's own workdir while the original message's `identity.agent_id` differs from the responder's own agent id — the live failure mode from issue #145 where two `.lingtai/` networks both host an agent with the same short name (e.g. both have "mimo-1").
   - Notification refresh: `_rerender_unread_digest` (method on `EmailManager`) — lazy-imports the kernel-side helper from `base_agent/messaging.py` and runs it. Centralised here so all read-state mutators share one call site.
   - Contacts: `_contacts_path` / `_load_contacts` / `_save_contacts` / `_contacts` / `_add_contact` / `_remove_contact` / `_edit_contact` (`manager.py:801-876`).
@@ -50,8 +50,8 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
 - **Inbound (cross-module):** `_new_mailbox_id` is imported by `base_agent/messaging.py:28` and `services/mail.py:165` for ID generation.
 - **Inbound (cross-module):** `EmailManager` is imported by `src/lingtai/__init__.py:19` for the wrapper re-export.
 - **Outbound:** Depends on `..i18n` (translations), `..message` (message construction), `..time_veil` (timestamp scrubbing), `..token_counter` (budget checks in `_check`).
-- **Outbound (unread-digest producer):** Mail arrival writes `.notification/email.json` via `publish_notification` (or deletes it via `clear_notification` when count hits 0). `base_agent/messaging.py:_on_normal_mail` calls `_rerender_unread_digest(agent)` (`base_agent/messaging.py:52`) which uses `primitives.py:_render_unread_digest` to build the digest prose, then `system.publish_notification(workdir, "email", header=…, icon="📧", data={count, newest_received_at, email_ids, emails, digest})`. The kernel's `_sync_notifications` poll picks up the fingerprint change on the next heartbeat tick and updates the wire's `notification(action="check")` block. See root `ANATOMY.md` "Notifications" for the full architecture.
-- **Outbound (bounce notification):** `primitives.py:_mailman` calls `agent._enqueue_system_notification(source="email.bounce", ref_id=msg_id, body=...)` (`primitives.py:280`). The system events producer in `base_agent/messaging.py` merges the bounce into the events list inside `.notification/system.json` (capped at 20 newest) under a per-agent `threading.Lock`. Bounces share `system.json` with daemon notices, MCP-bridged events, and any future kernel events — they are NOT aggregated into the unread digest at `email.json`.
+- **Outbound (unread-email producer):** Mail arrival writes `.notification/email.json` via `publish_notification` (or deletes it via `clear_notification` when count hits 0). `base_agent/messaging.py:_on_normal_mail` calls `_rerender_unread_digest(agent)` (`base_agent/messaging.py:52`) which uses `primitives.py:_render_unread_digest` for count/newest compatibility and `_unread_notification_context` for full-body entries, then `system.publish_notification(workdir, "email", header=…, icon="📧", data={count, newest_received_at, email_ids, emails})`. The kernel's `_sync_notifications` poll picks up the fingerprint change on the next heartbeat tick and updates the wire's `notification(action="check")` block. See root `ANATOMY.md` "Notifications" for the full architecture.
+- **Outbound (bounce notification):** `primitives.py:_mailman` calls `agent._enqueue_system_notification(source="email.bounce", ref_id=msg_id, body=...)` (`primitives.py:280`). The system events producer in `base_agent/messaging.py` merges the bounce into the events list inside `.notification/system.json` (capped at 20 newest) under a per-agent `threading.Lock`. Bounces share `system.json` with daemon notices, MCP-bridged events, and any future kernel events — they are NOT aggregated into the unread email notification at `email.json`.
 - **Data flow:** All state lives in the filesystem under `mailbox/` and `.notification/`. The `EmailManager` is stateless except for `_last_sent` (duplicate-send guard) and `_scheduler_thread` (background timer).
 
 ## Key invariants
@@ -60,17 +60,17 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
 - `_mailman` runs as a daemon thread per recipient. It waits until `deliver_at`, then dispatches. The outbox entry is written synchronously before the thread starts.
 - `_mailman` with `skip_sent=True` (used by `_send`) deletes the outbox entry instead of moving it to `sent/`, because `_send` writes the `sent/` entry itself.
 - Schedule status lifecycle: `active` → `inactive` (cancel) or `completed` (all sent). On startup, `_reconcile_schedules_on_startup` flips `active` → `inactive` so schedules don't fire until explicitly reactivated.
-- `.notification/email.json` is a **live mirror** of the current unread set. Any action that mutates the read state — `_read`, `_dismiss`, `_archive`, `_delete` — calls `_rerender_unread_digest(agent)` (lazy import from `base_agent/messaging.py`) so the wire's notification updates on the next heartbeat sync. The earlier "snapshot at last arrival" semantics led to the unread digest carrying mails the agent had already replied to indefinitely.
-- `_dismiss` is the lightweight "mark read without returning content" path — used when the agent already saw the body in the digest preview (≤200 chars renders inline) and just wants to clear the notification entry. Same effect on `read.json` and `.notification/email.json` as `_read`, but no email bodies in the response. Accepts a list (`email_id=[id1, id2, ...]`).
+- `.notification/email.json` is a **live mirror** of the current unread set. Any action that mutates the read state — `_read`, `_dismiss`, `_archive`, `_delete` — calls `_rerender_unread_digest(agent)` (lazy import from `base_agent/messaging.py`) so the wire's notification updates on the next heartbeat sync. The earlier "snapshot at last arrival" semantics led to the unread email notification carrying mails the agent had already replied to indefinitely.
+- `_dismiss` is the lightweight "mark read without returning content" path — used when the agent already saw the body in `_meta.notification_persistent.email` and just wants to clear the notification entry. Same effect on `read.json` and `.notification/email.json` as `_read`, but no email bodies in the response. Accepts a list (`email_id=[id1, id2, ...]`).
 - The unread-mail notification envelope carries an ``instructions`` field (set by `_rerender_unread_digest`) telling the agent to call `email(action="read", ...)` or `email(action="dismiss", ...)` after handling a mail; until the agent does, the notification keeps reminding them. This is the producer-side directive — generic frontend code does not have to know about email's dismissal contract.
-- Each digest entry exposes the mailbox ID directly (under "ID:" in en, "ID：" in zh, "编号：" in wen). The agent passes that ID verbatim to `email_id` when calling `read` or `dismiss`. Without this, the agent has to call `email(action="check")` first just to discover the IDs, defeating the point of the inline notification.
+- Each persistent email entry exposes the mailbox ID directly (under "ID:" in en, "ID：" in zh, "编号：" in wen). The agent passes that ID verbatim to `email_id` when calling `read` or `dismiss`. Without this, the agent has to call `email(action="check")` first just to discover the IDs, defeating the point of the inline notification.
 - **Contact** writes are atomic — temp-file + `os.replace` (`intrinsics/email/manager.py:815-819`) — to prevent corruption on crash. Note this is **not** uniform across all email persistence: message/inbox/outbox bodies are written with direct `Path.write_text(json.dumps(...))` (`intrinsics/email/primitives.py:205`, `:221`, `:242`), so a crash mid-write can leave a partial `message.json`. Unifying these on the shared atomic helper is tracked under the kernel persistence-helper work (issue #510).
 
 ## Notification format
 
 When mail arrives, `base_agent/messaging.py:_on_normal_mail` calls
-`_rerender_unread_digest(agent)` which builds a digest of all currently
-unread mail using `primitives.py:_render_unread_digest`, then submits
+`_rerender_unread_digest(agent)` which renders the current
+unread mail mirror using `_render_unread_digest` for count/newest and `_unread_notification_context` for full-body entries, then submits
 the result via `system.publish_notification` to `.notification/email.json`.
 The same path runs after `_read` / `_dismiss` / `_archive` / `_delete`
 mutate the read state (each of those calls `EmailManager._rerender_unread_digest()`):
@@ -81,13 +81,12 @@ mutate the read state (each of those calls `EmailManager._rerender_unread_digest
   "icon":         "📧",
   "priority":     "normal",
   "published_at": "2026-05-05T03:42:11Z",
-  "instructions": "Each entry above shows the sender, subject, and a preview of up to 200 characters. ... call email(action=\"read\", ...) or email(action=\"dismiss\", ...) ...",
+  "instructions": "Unread email bodies are injected in full into _meta.notification_persistent.email. Prefer email.dismiss after handling; use email.read/reply for source-of-truth actions ...",
   "data": {
     "count":               3,
     "newest_received_at":  "2026-05-05T03:42:09Z",
     "email_ids":           ["mailbox-id-1"],
-    "emails":              [{"id": "mailbox-id-1", "from": "human", "subject": "...", "preview": "...", "preview_truncated": false}],
-    "digest":              "[email] 3 unread message(s) — most recent ..."
+    "emails":              [{"id": "mailbox-id-1", "from": "human", "subject": "...", "message": "full body text", "message_chars": 14, "message_truncated": false}]
   }
 }
 ```
@@ -97,20 +96,21 @@ replaces the static-prompt approach: it travels with the payload, so
 each producer owns its own dismissal contract without the kernel
 having to know about it.
 
-The agent sees this through the kernel-injected `notification(action="check")` wire pair (see root `ANATOMY.md` "Notifications"). The raw `.notification/email.json` mirror still carries count/digest/structured summaries, but the model-visible `_meta.notifications.email` lane is sanitized to a high-attention hook carrying only `data.email_ids`; unread context moves to `_meta.notification_persistent.email`. There is no per-mail "notification pair" anymore — the file is the producer mirror and persistent meta is the context lane.
+The agent sees this through the kernel-injected `notification(action="check")` wire pair (see root `ANATOMY.md` "Notifications"). The raw `.notification/email.json` mirror carries count, email IDs, and structured full-body email entries, but the model-visible `_meta.notifications.email` lane is sanitized to a high-attention hook carrying only `data.email_ids`; unread context moves to `_meta.notification_persistent.email`. There is no per-mail "notification pair" anymore — the file is the producer mirror and persistent meta is the context lane.
 
-Digest prose format (en) is what lands in `data.digest`:
+Persistent email entries carry full message bodies:
+
+```json
+{
+  "id": "mailbox-id-1",
+  "from": "human",
+  "subject": "...",
+  "message": "full body text",
+  "message_chars": 123,
+  "message_truncated": false
+}
 ```
-[email] {count} unread message(s) — most recent {recency}.
 
-  1. From {name} ({address}) — {subject}
-     Sent at: {sent_at}
-     {preview}
-
-  2. ...
-(showing first {N_shown} of {N_total})    ← only if N_total > N_shown
-```
-
-- **Cap:** digest prose shows max 10 entries (newest-first), 200 chars preview each; persistent structured summaries also show max 10 entries with bounded previews. Call `email.read` for exact full bodies.
+- **Cap:** new sends whose body exceeds 50,000 characters are rejected at send time. Ordinary notification rendering should not truncate unread email bodies; legacy over-limit bodies may carry `message_truncated=true` defensively.
 - **`recency`:** veiled timestamp of newest unread (uses `time_veil.veil()`).
-- **Lifecycle:** `.notification/email.json` is rewritten on every arrival; deleted via `clear_notification` when count hits 0 (the kernel sync then strips the wire's notification block on the next tick). Reads/dismisses/archives/deletes also trigger rerender through `EmailManager._rerender_unread_digest()`, so the digest mirrors current unread state.
+- **Lifecycle:** `.notification/email.json` is rewritten on every arrival; deleted via `clear_notification` when count hits 0 (the kernel sync then strips the wire's notification block on the next tick). Reads/dismisses/archives/deletes also trigger rerender through `EmailManager._rerender_unread_digest()`, so the mirror and persistent lane reflect current unread state.

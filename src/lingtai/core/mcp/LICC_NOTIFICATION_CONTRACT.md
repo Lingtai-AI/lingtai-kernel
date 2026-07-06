@@ -105,7 +105,7 @@ where they share the `.notification/` filesystem protocol.
    `_meta.notifications.mcp.telegram.data` to stable `message_ids` only; content,
    sender/subject, routing details, counts, and summaries must not remain in the
    transient lane (`src/lingtai_kernel/meta_block.py:2163-2192`).
-5. **Model-visible persistent communication context.** When structured Telegram metadata is available, `build_notification_persistent_payload` emits `_meta.notification_persistent.mcp.telegram` with `messages`, `events`, `previous_block`, comments, and full out-of-window reply targets. For built-in email it emits `_meta.notification_persistent.email` with `email_ids`, bounded summaries/previews, and digest text for the current unread snapshot
+5. **Model-visible persistent communication context.** When structured Telegram metadata is available, `build_notification_persistent_payload` emits `_meta.notification_persistent.mcp.telegram` with `messages`, `events`, `previous_block`, comments, and full out-of-window reply targets. For built-in email it emits `_meta.notification_persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate)
    (`src/lingtai_kernel/meta_block.py:1956-2085`). The Telegram MCP supplies the
    structured `recent_messages`, `latest_incoming`, and `referenced_messages`
    metadata (`src/lingtai/mcp_servers/telegram/manager.py:904-1040`).

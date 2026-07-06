@@ -20,6 +20,7 @@ from ...time_veil import scrub_time_fields
 from ...token_counter import count_tokens
 
 from .primitives import (
+    EMAIL_BODY_CHAR_LIMIT,
     _coerce_address_list,
     _email_time,
     _is_self_send,
@@ -224,6 +225,20 @@ class EmailManager:
         raw_address = args.get("address", "")
         subject = args.get("subject", "")
         message_text = args.get("message", "")
+        if not isinstance(message_text, str):
+            message_text = "" if message_text is None else str(message_text)
+        message_chars = len(message_text)
+        if message_chars > EMAIL_BODY_CHAR_LIMIT:
+            return {
+                "error": (
+                    "Email body exceeds the 50,000 character internal email "
+                    "limit. Internal email bodies are injected in full into "
+                    "persistent notifications, so oversize sends are refused "
+                    "at send time instead of being truncated at read time."
+                ),
+                "limit_chars": EMAIL_BODY_CHAR_LIMIT,
+                "actual_chars": message_chars,
+            }
         mail_type = args.get("type", "normal")
         cc = args.get("cc") or []
         bcc = args.get("bcc") or []
@@ -454,7 +469,7 @@ class EmailManager:
             result["not_found"] = errors
             result["hint"] = ("not_found IDs were likely already read, dismissed, "
                               "or archived via another path — this is normal when "
-                              "using stale digest IDs. Call "
+                              "using stale notification IDs. Call "
                               "email(action=\"check\", unread_only=true) to see "
                               "current pending mail.")
 
@@ -466,14 +481,14 @@ class EmailManager:
         ``dismiss`` is the lightweight cousin of ``read``: same effect
         on the unread set and the notification, but no email bodies
         come back in the result.  Use it when the agent has already
-        seen the content (e.g. via the unread digest) and just wants
+        seen the content (e.g. via notification_persistent.email) and just wants
         to clear the notification entry for a list of IDs.
 
         Returns ``{"status": "ok", "dismissed": [...]}`` with the IDs
         actually marked read.  IDs for emails that exist but were
         already handled (read, archived, deleted) go into
         ``already_handled`` — this is normal when the notification
-        digest is stale.  IDs that never existed go into
+        notification mirror is stale.  IDs that never existed go into
         ``not_found``.
         """
         ids = args.get("email_id", [])
@@ -493,7 +508,7 @@ class EmailManager:
                 continue
             if data.get("_folder") != "inbox":
                 # Email exists but is no longer in inbox (archived, etc.)
-                # This is normal when the notification digest is stale.
+                # This is normal when the notification mirror is stale.
                 already_handled.append(eid)
                 continue
             if eid in _read_ids(self._agent):
@@ -514,7 +529,7 @@ class EmailManager:
             result["not_found"] = not_found
             result["hint"] = ("not_found IDs were likely already read, dismissed, "
                               "or archived via another path — this is normal when "
-                              "using stale digest IDs. Call "
+                              "using stale notification IDs. Call "
                               "email(action=\"check\", unread_only=true) to see "
                               "current pending mail.")
         return result
@@ -749,7 +764,7 @@ class EmailManager:
             result["not_found"] = not_found
             result["hint"] = ("not_found IDs were likely already read, dismissed, "
                               "or archived via another path — this is normal when "
-                              "using stale digest IDs.")
+                              "using stale notification IDs.")
         return result
 
     def _delete(self, args: dict) -> dict:
@@ -790,7 +805,7 @@ class EmailManager:
             result["not_found"] = not_found
             result["hint"] = ("not_found IDs were likely already read, dismissed, "
                               "or deleted via another path — this is normal when "
-                              "using stale digest IDs.")
+                              "using stale notification IDs.")
         return result
 
     # ------------------------------------------------------------------

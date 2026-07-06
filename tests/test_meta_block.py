@@ -1886,7 +1886,7 @@ def _notif_agent(working_dir):
 def _write_email_notif(
     tmp_path,
     *,
-    digest: str = "Email preview line",
+    message: str = "Full email body",
     email_id: str = "email-1",
     subject: str = "Email subject",
     count: int = 1,
@@ -1907,14 +1907,14 @@ def _write_email_notif(
                     "from": "human",
                     "to": ["mimo-1"],
                     "subject": subject,
-                    "preview": digest,
+                    "message": message,
+                    "message_chars": len(message),
+                    "message_truncated": False,
                     "time": "2026-07-06T07:00:00Z",
                     "unread": True,
                     "received_at": "2026-07-06T07:00:00Z",
-                    "preview_truncated": False,
                 }
             ],
-            "digest": digest,
         },
     }
     (notif_dir / "email.json").write_text(
@@ -1987,17 +1987,19 @@ def test_attach_active_notifications_first_payload_attaches(tmp_path):
             "priority": "normal",
             "data": {"email_ids": ["email-1"]},
             "instructions": (
-                "High-attention email hook: use notification_persistent.email "
-                "for unread context; use email.read/dismiss/reply for exact "
-                "source-of-truth actions. When handled through the email tool, "
-                "the producer mirror updates or clears this notification."
+                "High-attention email hook: full unread content lives in "
+                "notification_persistent.email. Prefer email.dismiss after handling; "
+                "use email.read/reply for source-of-truth mailbox actions. When "
+                "handled through the email tool, the producer mirror updates or "
+                "clears this notification."
             ),
         }
     }
     persistent_email = first.content["_meta"]["notification_persistent"]["email"]
     assert persistent_email["email_ids"] == ["email-1"]
     assert persistent_email["emails"][0]["subject"] == "Email subject"
-    assert persistent_email["digest"] == "Email preview line"
+    assert "digest" not in persistent_email
+    assert persistent_email["emails"][0]["message"] == "Full email body"
     assert first.content["_meta"]["notification_guidance"] == {
         "ref": "meta_guidance.notification_handling",
         "sources": ["email"],
@@ -2054,7 +2056,7 @@ def test_attach_active_notifications_changed_payload_reattaches_and_strips_prior
     # Materially change the email channel payload.
     _write_email_notif(
         tmp_path,
-        digest="Three new emails",
+        message="Three new email body",
         email_id="email-2",
         subject="Changed email",
         count=3,
@@ -2072,7 +2074,8 @@ def test_attach_active_notifications_changed_payload_reattaches_and_strips_prior
         "email_ids": ["email-2"]
     }
     persistent_email = second.content["_meta"]["notification_persistent"]["email"]
-    assert persistent_email["digest"] == "Three new emails"
+    assert "digest" not in persistent_email
+    assert persistent_email["emails"][0]["message"] == "Three new email body"
     assert persistent_email["emails"][0]["id"] == "email-2"
     assert agent._notification_fp == notification_fingerprint(tmp_path)
 

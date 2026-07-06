@@ -27,7 +27,7 @@ def _on_mail_received(agent, payload: dict) -> None:
 
 
 def _on_normal_mail(agent, payload: dict) -> None:
-    """Handle a normal mail — republish the unread digest to ``.notification/email.json``.
+    """Handle a normal mail — republish the unread email notification to ``.notification/email.json``.
 
     The message is already persisted to mailbox/inbox/ by MailService.
     Mail arrival triggers a fresh write of ``.notification/email.json``;
@@ -61,9 +61,10 @@ def _rerender_unread_digest(agent) -> str | None:
     """Publish (or clear) ``.notification/email.json`` per current unread state.
 
     Computes the unread set via ``_render_unread_digest``.  When count
-    is positive, submits the digest via ``system.publish_notification``;
-    when count drops to 0, clears the file so the kernel's sync strips
-    the wire's notification block.
+    is positive, submits the raw unread mirror via ``system.publish_notification``;
+    the model-visible persistent lane carries full unread email bodies. When
+    count drops to 0, clears the file so the kernel's sync strips the wire's
+    notification block.
 
     Returns ``"email"`` when published, ``None`` when cleared.  The
     caller doesn't typically use the return value — the side-effect on
@@ -89,43 +90,29 @@ def _rerender_unread_digest(agent) -> str | None:
         header=f"{count} unread email{'s' if count != 1 else ''}",
         icon="📧",
         instructions=(
-            "Each entry above shows its mail ID directly under the "
-            "subject — that's the value you pass to email_id when you "
-            "call read or dismiss. Each entry also shows a preview of "
-            "up to 200 characters. If a preview ends with "
-            "'... (N more chars)' the message is truncated and you "
-            "must call email(action=\"read\", email_id=[id1, id2, ...]) "
-            "to see the full body. If the preview is short and shows "
-            "the full content, you can skip the read fetch — but you "
-            "still need to clear the notification: call "
-            "email(action=\"dismiss\", email_id=[id1, id2, ...]) with "
-            "the IDs you have handled. Both 'read' and 'dismiss' accept "
-            "a list, so process multiple mails in one call. Until you "
-            "read or dismiss a mail, this notification will keep "
-            "reminding you about it. "
-            "If you are about to start long work (e.g. a slow bash, daemon, "
-            "web_search, or large file write) and a preview is truncated, first "
-            "call email(action=\"read\", email_id=[...]) as a normal tool so "
-            "you have the full body before acting. To acknowledge or answer the "
-            "sender, call email reply directly as a normal tool. "
-            "Coalesce: when safe, batch the read/reply/dismiss together with "
-            "other tool work you already need this turn rather than spending a "
-            "standalone call — but never delay a prompt human acknowledgment "
-            "just to save a call. "
-            "Note: this digest is a live mirror of current unread mail, "
-            "not a fixed arrival log. IDs can become stale if you "
-            "already read, dismissed, or archived a message through "
-            "another path (e.g. email.check → email.read). If read or "
-            "dismiss returns 'not_found', the mail was likely already "
-            "handled — call email(action=\"check\", unread_only=true) "
-            "to see what is still pending. See email-manual."
+            "Unread email bodies are injected in full into "
+            "_meta.notification_persistent.email. You do not need "
+            "email.read merely to see ordinary message content. After you "
+            "handle a mail, prefer email(action='dismiss', "
+            "email_id=[id1, id2, ...]) to mark it read and clear the "
+            "notification without re-fetching content. Use email.read when "
+            "you need to refresh source-of-truth mailbox state, inspect "
+            "attachments/metadata, or intentionally fetch the producer record; "
+            "use email.reply/reply_all to answer. Read and dismiss both accept "
+            "lists, so process multiple mails in one call. Sending refuses "
+            "bodies over 50,000 characters because unread bodies are injected "
+            "without notification-layer truncation. Until you read, dismiss, "
+            "archive, or delete a mail, this notification will keep reminding "
+            "you about it. IDs can become stale if already handled elsewhere; "
+            "if read/dismiss returns not_found, call email(action='check', "
+            "filter={'unread_only': true}) to see what is still pending. "
+            "See email-manual."
         ),
         data={
             "count": count,
             "newest_received_at": newest_ts,
             "email_ids": email_ids,
             "emails": email_items,
-            "digest": body,
         },
     )
 

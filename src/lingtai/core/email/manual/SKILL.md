@@ -7,8 +7,9 @@ description: >
   channel the message arrived on), addressing (bare paths like `human`,
   `mimo-1`), self-send for persistent notes that survive molt, time
   capsules (delayed self-send via `delay`; for recurring alarms use the
-  host scheduler — see `bash-manual` and `system-manual`), the unread digest
-  notification contract, and addon ownership. This is for INTERNAL email
+  host scheduler — see `bash-manual` and `system-manual`), the full-body
+  persistent notification contract, the 50,000-character send cap, and addon
+  ownership. This is for INTERNAL email
   only — for real internet email via IMAP/SMTP, see the `mcp-manual`
   skill (the lingtai-imap addon owns that surface).
 version: 1.0.0
@@ -99,10 +100,10 @@ The `email` tool dispatches by `action`. All actions take optional `mode` for ou
 
 | Action            | Purpose                                                            | Required args                                      |
 |-------------------|--------------------------------------------------------------------|----------------------------------------------------|
-| `send`            | Start a new thread to one or more recipients                       | `address`, `subject`, `message`                    |
+| `send`            | Start a new thread; body hard-capped at 50,000 characters          | `address`, `subject`, `message`                    |
 | `check`           | List inbox (newest-first), with optional `filter={...}` and `n=N`  | —                                                  |
-| `read`            | Fetch full body + attachments and mark read                        | `email_id` (list of IDs)                           |
-| `dismiss`         | Mark read **without** fetching body — for digest-preview-only mail | `email_id` (list of IDs)                           |
+| `read`            | Fetch source-of-truth record/attachments and mark read             | `email_id` (list of IDs)                           |
+| `dismiss`         | Mark read **without** re-fetching body — preferred after persistent content is handled | `email_id` (list of IDs)                           |
 | `reply`           | Reply to sender only; preserves thread linkage                     | `email_id`, `message`                              |
 | `reply_all`       | Reply to sender + all original recipients minus self               | `email_id`, `message`                              |
 | `search`          | Search across inbox/sent/archive by `query` + `filter`             | `query` (and/or `filter`)                          |
@@ -115,9 +116,13 @@ The `email` tool dispatches by `action`. All actions take optional `mode` for ou
 
 ### `read` vs `dismiss` — when to use which
 
-The unread digest in `.notification/email.json` already contains a preview of up to 200 characters per unread message. If that preview is enough to act on, call `dismiss` — same effect on read state, no body returned, no token cost. Only call `read` when you actually need the full body or attachments.
+Unread email bodies are injected in full into `_meta.notification_persistent.email` (up to the 50,000-character send-layer cap described below). You do **not** need `email.read` merely to see ordinary message text. After you have handled the visible content, prefer `dismiss`: same read-state effect, no body returned, and the unread notification clears once count reaches zero.
 
-The kernel removes the unread-mail notification once count hits 0, so failing to dismiss/read keeps the digest reminding you on every heartbeat.
+Use `read` when you need to refresh the source-of-truth mailbox record, inspect attachment/metadata details, or deliberately fetch the producer state before a reply/audit. Use `reply`/`reply_all` when answering. Failing to `dismiss`, `read`, `archive`, or `delete` a handled mail keeps the notification reminding you on every heartbeat.
+
+### 50,000-character send cap
+
+Internal email bodies are intentionally capped at 50,000 characters at **send time**. The reason is architectural: unread bodies are injected in full into the persistent notification stream, so the reading/notification layer should not guess, summarize, or truncate ordinary mail. If a message is too large for that guarantee, `send` refuses it with `limit_chars` and `actual_chars`; shorten the body, attach a file, or put bulky material somewhere else and mail a pointer.
 
 ### `check` filter
 
@@ -143,7 +148,7 @@ Use this aggressively. Pulling 100 messages with `check` and then post-filtering
 Mail sent to **your own address** lands in your own inbox. It is marked self-sent, but otherwise behaves like any other unread message — meaning:
 
 - It survives a molt (because it lives in `mailbox/inbox/`, not in chat history).
-- It surfaces in the unread digest until you `read` or `dismiss` it.
+- It surfaces in the persistent unread notification lane until you `dismiss`, `read`, `archive`, or `delete` it.
 - It can be `search`ed by the future you.
 
 Use this for: TODOs you want to remember after a memory rotation, breadcrumbs about decisions, "hand-off to self" notes during a long task.
@@ -179,7 +184,7 @@ notification behavior.
 
 The mailbox UUID (`email_id`) is **local to your working directory**. Never paste a raw mailbox ID into a message to another agent or to the human — it has no meaning outside your tree and reveals nothing useful. Refer to messages by `subject` + `from` + approximate time. If you must show the human exactly which mail you're acting on, use the **subject line and sender**.
 
-The exception: when you call `email(action="read"/"dismiss"/"reply", email_id=[...])`, you pass IDs you read out of *your own* digest. That's internal plumbing, fine.
+The exception: when you call `email(action="read"/"dismiss"/"reply", email_id=[...])`, you pass IDs you read out of *your own* persistent notification or mailbox listing. That's internal plumbing, fine.
 
 ## 10. Addon ownership — what this skill does NOT cover
 
@@ -202,14 +207,14 @@ Every `email` action accepts an optional `mode` (set by `mode_field`) controllin
 ## 12. Quick reference — common recipes
 
 ```python
-# Triaging unread without reading bodies
+# Handle content already injected into notification_persistent.email
+email(action="dismiss", email_id=["<id-from-persistent-email>"])
+
+# Need source-of-truth refresh / attachments / metadata
+email(action="read", email_id=["<id-from-persistent-email>"])
+
+# Optional mailbox listing / filters
 email(action="check", filter={"unread_only": True}, n=20)
-
-# Read one message in full
-email(action="read", email_id=["<id-from-digest>"])
-
-# Acknowledge a digest-preview-sufficient message
-email(action="dismiss", email_id=["<id>"])
 
 # Thread-preserving reply
 email(action="reply", email_id=["<id>"], message="ack, looking now")

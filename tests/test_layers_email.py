@@ -5,6 +5,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
+
+from lingtai_kernel.intrinsics.email.primitives import EMAIL_BODY_CHAR_LIMIT
 from uuid import uuid4
 
 from lingtai.agent import Agent
@@ -53,17 +55,17 @@ def test_email_intrinsic_registers_tool(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_email_receive_notification(tmp_path):
-    """Incoming mail should publish ``.notification/email.json`` with the
-    current unread digest.  Under the .notification/ filesystem redesign,
-    arrivals no longer enqueue on tc_inbox — the kernel's notification
-    sync mechanism reads the file on its next heartbeat tick and injects
-    the wire pair.
+    """Incoming mail publishes full unread context to `.notification/email.json`.
+
+    Under the .notification/ filesystem redesign, arrivals no longer enqueue
+    on tc_inbox — the kernel's notification sync mechanism reads the file on
+    its next heartbeat tick and injects the wire pair/persistent lane.
     """
     from lingtai_kernel.notifications import collect_notifications
 
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    # Mail must be on disk before the digest renderer runs.
-    _make_inbox_email(agent.working_dir, sender="sender", subject="hi", message="body")
+    # Mail must be on disk before the notification renderer runs.
+    email_id = _make_inbox_email(agent.working_dir, sender="sender", subject="hi", message="body")
     agent._on_mail_received({
         "_mailbox_id": "abc123",
         "from": "sender",
@@ -73,13 +75,19 @@ def test_email_receive_notification(tmp_path):
     })
     # tc_inbox should be empty under the new path.
     assert len(agent._tc_inbox.drain()) == 0
-    # The notification file carries the digest.
+    # The raw notification mirror carries full unread message context.
     out = collect_notifications(agent.working_dir)
     assert "email" in out
-    assert out["email"]["data"]["count"] == 1
-    digest = out["email"]["data"]["digest"]
-    assert "hi" in digest
-    assert "sender" in digest
+    data = out["email"]["data"]
+    assert data["count"] == 1
+    assert "digest" not in data
+    assert data["email_ids"] == [email_id]
+    email = data["emails"][0]
+    assert email["id"] == email_id
+    assert email["subject"] == "hi"
+    assert email["from"] == "sender"
+    assert email["message"] == "body"
+    assert email["message_truncated"] is False
 
 
 def test_email_receive_fallback_id(tmp_path):
@@ -96,11 +104,11 @@ def test_email_receive_fallback_id(tmp_path):
 
 def test_email_receive_via_agent(tmp_path):
     """After add_capability('email'), agent._on_mail_received publishes
-    the unread digest to ``.notification/email.json``."""
+    the unread email notification to ``.notification/email.json``."""
     from lingtai_kernel.notifications import collect_notifications
 
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    _make_inbox_email(agent.working_dir, sender="sender", subject="hi", message="body")
+    email_id = _make_inbox_email(agent.working_dir, sender="sender", subject="hi", message="body")
     agent._on_mail_received({
         "_mailbox_id": "xyz",
         "from": "sender",
@@ -294,6 +302,30 @@ def test_email_send_saves_bcc_in_sent(tmp_path):
     sent_dir = agent.working_dir / "mailbox" / "sent"
     msg = json.loads(list(sent_dir.iterdir())[0].joinpath("message.json").read_text())
     assert msg["bcc"] == ["hidden"]
+
+
+def test_email_send_rejects_body_over_hard_limit(tmp_path):
+    """Internal email refuses bodies too large for full persistent injection."""
+    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    mail_svc = MagicMock()
+    mail_svc.address = "127.0.0.1:9999"
+    mail_svc.send.return_value = None
+    agent._mail_service = mail_svc
+
+    result = agent._email_manager.handle({
+        "action": "send",
+        "address": "127.0.0.1:8888",
+        "subject": "too long",
+        "message": "x" * (EMAIL_BODY_CHAR_LIMIT + 1),
+    })
+
+    assert "error" in result
+    assert result["limit_chars"] == EMAIL_BODY_CHAR_LIMIT
+    assert result["actual_chars"] == EMAIL_BODY_CHAR_LIMIT + 1
+    assert "50,000" in result["error"]
+    mail_svc.send.assert_not_called()
+    sent_dir = agent.working_dir / "mailbox" / "sent"
+    assert not sent_dir.exists() or not any(sent_dir.iterdir())
 
 
 def test_email_blocks_identical_consecutive_send(tmp_path):
@@ -902,7 +934,7 @@ def test_email_send_plain_string_address_becomes_list(tmp_path):
 
 # ---------------------------------------------------------------------------
 # dismiss action — mark read without returning content; refreshes the
-# unread digest so .notification/email.json reflects the new state.
+# unread notification so .notification/email.json reflects the new state.
 # ---------------------------------------------------------------------------
 
 
@@ -994,10 +1026,11 @@ def test_email_dismiss_carries_instructions_in_envelope(tmp_path):
     text = payload["instructions"]
     assert "dismiss" in text
     assert "read" in text
-    assert "long work" in text
+    assert "notification_persistent.email" in text
+    assert "50,000" in text
     assert "secondary" not in text
-    assert "email(action=\"read\"" in text
-    assert "email reply directly" in text
+    assert "email(action='dismiss'" in text
+    assert "email.reply/reply_all" in text
 
 
 def test_email_read_rerenders_notification(tmp_path):

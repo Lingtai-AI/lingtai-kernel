@@ -126,13 +126,15 @@ NOTIFICATION_PERSISTENT_TELEGRAM_REFERENCED_COMMENT = (
 )
 
 NOTIFICATION_PERSISTENT_EMAIL_CONTEXT_COMMENT = (
-    "Unread email context moved here from _meta.notifications.email. Use "
-    "email.read for full bodies and email.read/dismiss/reply to update the "
-    "source-of-truth mailbox state."
+    "Unread email content moved here from _meta.notifications.email. Bodies "
+    "are injected in full up to the 50,000 character send-layer limit; prefer "
+    "email.dismiss after handling content, and use email.read/reply for "
+    "source-of-truth actions."
 )
 NOTIFICATION_PERSISTENT_EMAIL_TRUNCATED_COMMENT = (
-    "This email preview is truncated; call email.read with this email id for "
-    "the full producer state."
+    "This legacy email body exceeded the current 50,000 character send-layer "
+    "limit and was capped in the persistent notification lane. New oversize "
+    "email sends are rejected."
 )
 
 # Per-result machine-generated guidance nested under ``tool_meta``.  ``comment``
@@ -2011,7 +2013,9 @@ def _email_persistent_emails(notification_payload: dict) -> list[dict]:
         if not isinstance(item, dict):
             continue
         email = dict(item)
-        if email.get("preview_truncated") and not email.get("comment"):
+        if (
+            email.get("message_truncated") or email.get("preview_truncated")
+        ) and not email.get("comment"):
             email["comment"] = NOTIFICATION_PERSISTENT_EMAIL_TRUNCATED_COMMENT
         emails.append(email)
     return emails
@@ -2026,9 +2030,7 @@ def _build_email_notification_persistent_payload(agent, notification_payload: di
     emails = _email_persistent_emails(notification_payload)
     count = data.get("count")
     newest_received_at = data.get("newest_received_at")
-    digest = data.get("digest")
-
-    if not (email_ids or emails or (isinstance(digest, str) and digest)):
+    if not (email_ids or emails):
         return None
 
     payload: dict = {
@@ -2042,8 +2044,6 @@ def _build_email_notification_persistent_payload(agent, notification_payload: di
         payload["newest_received_at"] = newest_received_at
     if emails:
         payload["emails"] = emails
-    if isinstance(digest, str) and digest:
-        payload["digest"] = digest
 
     return payload
 
@@ -2519,10 +2519,11 @@ def sanitize_email_notification_after_persistent(notification_payload: dict) -> 
     sanitized["header"] = "Email event"
     sanitized["data"] = {"email_ids": email_ids}
     sanitized["instructions"] = (
-        "High-attention email hook: use notification_persistent.email for "
-        "unread context; use email.read/dismiss/reply for exact "
-        "source-of-truth actions. When handled through the email tool, "
-        "the producer mirror updates or clears this notification."
+        "High-attention email hook: full unread content lives in "
+        "notification_persistent.email. Prefer email.dismiss after handling; "
+        "use email.read/reply for source-of-truth mailbox actions. When "
+        "handled through the email tool, the producer mirror updates or "
+        "clears this notification."
     )
     notifications["email"] = sanitized
 

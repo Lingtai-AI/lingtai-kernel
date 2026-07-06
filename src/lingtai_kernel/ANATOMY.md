@@ -154,7 +154,7 @@ Producers write a JSON file per channel into `<workdir>/.notification/`:
 
 | File | Owner | Naming convention |
 |---|---|---|
-| `email.json` | `intrinsics/email` (unread digest, `_rerender_unread_digest`) | bare intrinsic name |
+| `email.json` | `intrinsics/email` (unread email notification, `_rerender_unread_digest`) | bare intrinsic name |
 | `soul.json` | `intrinsics/soul/flow.py` (consultation fire) | bare intrinsic name |
 | `system.json` | `base_agent/messaging.py:_enqueue_system_notification` (events list, max 20 newest; supports per-event dismiss by `event_id`/`ref_id`) | bare intrinsic name |
 | `goal.json` | active-goal source of truth (protected from generic dismiss) | bare intrinsic name |
@@ -184,7 +184,7 @@ publish_notification(
         "or email(action=\"dismiss\", email_id=[...]) to clear "
         "handled mails from this notification."
     ),
-    data={"count": n, "newest_received_at": ts, "digest": body},
+    data={"count": n, "newest_received_at": ts, "email_ids": ids, "emails": emails},
 )
 
 # When state empties:
