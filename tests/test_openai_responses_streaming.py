@@ -150,7 +150,7 @@ def _create_codex_session(events: list[Event], *, thinking: str = "high"):
     )
 
 
-@pytest.mark.parametrize("thinking", ["low", "medium", "high", "xhigh"])
+@pytest.mark.parametrize("thinking", ["none", "minimal", "low", "medium", "high", "xhigh"])
 def test_openai_responses_sends_exact_reasoning_effort(thinking):
     adapter = OpenAIAdapter(api_key="fake", use_responses=True)
     adapter._client = FakeClient([_completed()])
@@ -163,7 +163,7 @@ def test_openai_responses_sends_exact_reasoning_effort(thinking):
     assert "reasoning_effort" not in sent
 
 
-@pytest.mark.parametrize("thinking", ["low", "medium", "high", "xhigh"])
+@pytest.mark.parametrize("thinking", ["none", "minimal", "low", "medium", "high", "xhigh"])
 def test_codex_responses_sends_exact_reasoning_effort(thinking):
     session = _create_codex_session([_completed()], thinking=thinking)
 

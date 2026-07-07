@@ -186,7 +186,7 @@ def test_api_key_env_wrong_type():
         validate_init(data)
 
 
-@pytest.mark.parametrize("value", ["low", "medium", "high", "xhigh"])
+@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh"])
 def test_llm_thinking_valid_values(value):
     data = _valid_init()
     data["manifest"]["llm"]["provider"] = "codex"
