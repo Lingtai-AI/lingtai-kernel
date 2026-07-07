@@ -184,6 +184,59 @@ def test_refresh_preset_thinking_reaches_session_path(tmp_path):
     assert chat._extra_kwargs.get("reasoning") == {"effort": "xhigh"}
 
 
+def test_refresh_preset_omitted_thinking_defaults_to_xhigh(tmp_path, monkeypatch):
+    """A codex preset with NO thinking field still sends reasoning.effort xhigh.
+
+    Mirrors ``test_refresh_preset_thinking_reaches_session_path`` but omits
+    ``manifest.llm.thinking``: hydration keeps the "default" sentinel for
+    Codex-family providers and the Codex adapter maps it to explicit
+    ``reasoning.effort = "xhigh"``. Hermetic: the codex token manager reads a
+    fake auth file in a temp TUI dir (far-future expiry, so no refresh).
+    """
+    from unittest.mock import MagicMock
+    from lingtai.agent import Agent
+    from lingtai_kernel.config import AgentConfig
+
+    tui = tmp_path / "tui"
+    tui.mkdir()
+    (tui / "codex-auth.json").write_text(json.dumps({
+        "access_token": "fake-access",
+        "refresh_token": "fake-refresh",
+        "expires_at": 4102444800,  # 2100-01-01: never near expiry, no refresh
+    }))
+    monkeypatch.setenv("LINGTAI_TUI_DIR", str(tui))
+
+    plib = _make_preset_lib(tmp_path, {
+        "codex": {
+            "name": "codex",
+            "description": {"summary": "Codex"},
+            "manifest": {
+                "llm": {
+                    "provider": "codex",
+                    "model": "gpt-5.5",
+                },
+                "capabilities": {"file": {}},
+            },
+        },
+    })
+    wd = _make_workdir(tmp_path, active_preset=str(plib / "codex.json"))
+
+    svc = MagicMock()
+    svc.provider = "codex"
+    svc.model = "gpt-5.5"
+    svc._base_url = None
+    svc._provider_defaults = {"codex": {"max_rpm": 60}}
+    svc.create_session.return_value = MagicMock()
+    svc.make_tool_result = MagicMock()
+    agent = Agent(svc, working_dir=wd, config=AgentConfig())
+
+    agent._setup_from_init()
+    chat = agent._session.ensure_session()
+
+    assert agent._config.thinking == "default"
+    assert chat._extra_kwargs.get("reasoning") == {"effort": "xhigh"}
+
+
 def test_materialize_unknown_preset_returns_none_and_logs(tmp_path):
     """Active preset that doesn't exist → _read_init returns None and logs."""
     plib = _make_preset_lib(tmp_path, {})

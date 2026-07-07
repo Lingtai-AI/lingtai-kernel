@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from lingtai.agent import Agent, build_agent_config
 from lingtai_kernel.base_agent import BaseAgent
 from lingtai_kernel.config import (
@@ -169,6 +171,39 @@ def test_build_agent_config_overlays_explicit_values_and_ignores_stale_molt():
     assert cfg.molt_pressure == MOLT_PRESSURE_THRESHOLD
     assert cfg.molt_urgency == defaults.molt_urgency
     assert not hasattr(cfg, "molt_prompt")
+
+
+@pytest.mark.parametrize("provider", ["codex", "codex-pool", "codex_pool", "CODEX"])
+def test_build_agent_config_codex_omitted_thinking_stays_default_sentinel(provider):
+    """Codex-family omitted thinking hydrates to the "default" sentinel.
+
+    The Codex adapter owns the omitted-thinking default (it sends
+    ``reasoning.effort = "xhigh"``), so hydration must not promote an omitted
+    manifest value to the legacy cross-provider "high" for these providers.
+    """
+    manifest = _init_data({
+        "llm": {"provider": provider, "model": "gpt-5.5", "api_key": None},
+    })["manifest"]
+    cfg = build_agent_config(manifest, max_rpm=0)
+    assert cfg.thinking == "default"
+
+
+@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh"])
+def test_build_agent_config_codex_explicit_thinking_preserved(value):
+    """An explicit manifest thinking level — including "none" — is kept as-is."""
+    manifest = _init_data({
+        "llm": {"provider": "codex", "model": "gpt-5.5", "api_key": None,
+                "thinking": value},
+    })["manifest"]
+    cfg = build_agent_config(manifest, max_rpm=0)
+    assert cfg.thinking == value
+
+
+def test_build_agent_config_non_codex_omitted_thinking_keeps_legacy_high():
+    """Non-Codex providers keep the legacy "high" main-session default."""
+    manifest = _init_data()["manifest"]  # provider "openai", no thinking
+    cfg = build_agent_config(manifest, max_rpm=0)
+    assert cfg.thinking == "high"
 
 
 def test_cache_miss_budget_defaults_to_one_million():

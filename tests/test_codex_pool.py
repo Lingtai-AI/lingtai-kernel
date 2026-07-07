@@ -423,6 +423,32 @@ def test_codex_pool_factory_stamps_selection_on_adapter_and_chat(tui_dir, tmp_pa
         mgr.stop()
 
 
+def test_codex_pool_default_thinking_sends_xhigh(tui_dir, tmp_path):
+    """codex-pool reuses the Codex adapter, so omitted thinking maps to xhigh."""
+    _write_pool(tui_dir, [{"path": "work.json", "weight": 1}])
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    mgr, cls = _mock_mgr()
+    try:
+        adapter = _codex_pool_adapter("codex-pool", {"codex_session_anchor": anchor})
+        chat = adapter.create_chat("gpt-5.5", "system prompt")
+        assert chat._extra_kwargs.get("reasoning") == {"effort": "xhigh"}
+    finally:
+        mgr.stop()
+
+
+def test_codex_pool_explicit_thinking_passes_through(tui_dir, tmp_path):
+    """An explicit thinking level on codex-pool is sent as-is, not overridden."""
+    _write_pool(tui_dir, [{"path": "work.json", "weight": 1}])
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    mgr, cls = _mock_mgr()
+    try:
+        adapter = _codex_pool_adapter("codex-pool", {"codex_session_anchor": anchor})
+        chat = adapter.create_chat("gpt-5.5", "system prompt", thinking="low")
+        assert chat._extra_kwargs.get("reasoning") == {"effort": "low"}
+    finally:
+        mgr.stop()
+
+
 def test_codex_pool_factory_stamps_fallback_marker_without_pool(tui_dir, tmp_path):
     """No usable pool -> the breadcrumb says the legacy default token was used."""
     anchor = _anchor_with_started_at(tmp_path / "agent", "t0")

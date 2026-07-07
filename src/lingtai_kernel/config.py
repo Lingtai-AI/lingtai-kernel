@@ -4,7 +4,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-THINKING_LEVELS = ("low", "medium", "high", "xhigh")
+# Accepted manifest.llm.thinking values, mirroring the upstream Responses
+# ``reasoning.effort`` payload values in ascending effort order. Explicit
+# ``"none"`` is a real payload value (effort none), distinct from an *omitted*
+# field — omitted stays the internal ``"default"`` sentinel and the Codex
+# adapter maps it to ``"xhigh"``.
+THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
 
 # Providers that accept manifest.llm.thinking. ``codex-pool`` reuses the Codex
 # adapter (both dash/underscore spellings), so it is thinking-compatible; every

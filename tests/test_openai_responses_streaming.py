@@ -150,7 +150,7 @@ def _create_codex_session(events: list[Event], *, thinking: str = "high"):
     )
 
 
-@pytest.mark.parametrize("thinking", ["low", "medium", "high", "xhigh"])
+@pytest.mark.parametrize("thinking", ["none", "minimal", "low", "medium", "high", "xhigh"])
 def test_openai_responses_sends_exact_reasoning_effort(thinking):
     adapter = OpenAIAdapter(api_key="fake", use_responses=True)
     adapter._client = FakeClient([_completed()])
@@ -163,7 +163,7 @@ def test_openai_responses_sends_exact_reasoning_effort(thinking):
     assert "reasoning_effort" not in sent
 
 
-@pytest.mark.parametrize("thinking", ["low", "medium", "high", "xhigh"])
+@pytest.mark.parametrize("thinking", ["none", "minimal", "low", "medium", "high", "xhigh"])
 def test_codex_responses_sends_exact_reasoning_effort(thinking):
     session = _create_codex_session([_completed()], thinking=thinking)
 
@@ -172,6 +172,38 @@ def test_codex_responses_sends_exact_reasoning_effort(thinking):
     sent = session._client.responses.kwargs[-1]
     assert sent["reasoning"] == {"effort": thinking}
     assert "reasoning_effort" not in sent
+
+
+@pytest.mark.parametrize("thinking_kwargs", [{}, {"thinking": "default"}, {"thinking": None}])
+def test_codex_responses_default_thinking_sends_xhigh(thinking_kwargs):
+    """Codex maps an omitted/``default`` thinking level to explicit ``xhigh``."""
+    adapter = CodexOpenAIAdapter(
+        api_key="fake",
+        base_url="http://fake",
+        use_responses=True,
+        force_responses=True,
+    )
+    adapter._client = FakeClient([_completed()])
+    session = adapter.create_chat("gpt-5.5", "system prompt", **thinking_kwargs)
+
+    session.send_stream("hello")
+
+    sent = adapter._client.responses.kwargs[-1]
+    assert sent["reasoning"] == {"effort": "xhigh"}
+    assert "reasoning_effort" not in sent
+
+
+@pytest.mark.parametrize("thinking_kwargs", [{}, {"thinking": "default"}])
+def test_openai_responses_default_thinking_omits_reasoning(thinking_kwargs):
+    """Generic OpenAI keeps omit-on-default; the xhigh default is Codex-only."""
+    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+    adapter._client = FakeClient([_completed()])
+    session = adapter.create_chat("gpt-5.5", "system prompt", **thinking_kwargs)
+
+    session.send_stream("hello")
+
+    sent = adapter._client.responses.kwargs[-1]
+    assert "reasoning" not in sent
 
 
 @pytest.mark.parametrize("adapter_cls", [OpenAIAdapter, CodexOpenAIAdapter])
