@@ -3,6 +3,7 @@ related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/auth/__init__.py
   - src/lingtai/auth/codex.py
+  - src/lingtai/auth/codex_pool.py
   - src/lingtai/llm/_register.py
   - src/lingtai/llm/openai/ANATOMY.md
 maintenance: |
@@ -24,6 +25,10 @@ Codex OAuth token management — reads TUI-written tokens, checks expiry, auto-r
 |---|---|---|
 | `__init__.py` | 1 | Docstring-only package marker |
 | `codex.py` | 220 | `CodexTokenManager` — reads/refreshes OAuth tokens |
+| `codex_pool.py` | 274 | Provider `codex-pool` — sticky weighted choice of which token file to read |
+
+**Key functions** (`codex_pool.py`):
+- `select_codex_pool_auth()` (`codex_pool.py:219`) — picks one enabled account from the non-secret pool file (`codex-auth-pool.json`, `resolve_codex_pool_path`, `codex_pool.py:59`) by weighted hash of a sticky per-agent-session seed (`_selection_seed`, `codex_pool.py:153` — anchor + `.agent.json` `started_at`, molt-independent). Returns the resolved token path for injection as `codex_auth_path` plus a non-secret `selection` dict (`source_ref`/`source_index`/`pool_size`/`weight`/`auth_path_sha8`) that the `codex-pool` factory stamps on the adapter and its chats for `llm_call` event attribution. `select_codex_pool_auth_path()` (`codex_pool.py:262`) is the path-only view. Never reads token file contents; missing/empty/invalid pool → `None` (caller falls back to `legacy_codex_token_path()`, `codex_pool.py:76`).
 
 **Key classes** (`codex.py`):
 - `CodexTokenManager` (L62) — main API: `is_authenticated()` (L78), `get_access_token()` (L86), `get_account_id()` (L100). Reads a Codex OAuth token file, auto-refreshes when within 5 min of expiry (`REFRESH_BUFFER_SECONDS`, L21). The path defaults to `~/.lingtai-tui/codex-auth.json` (or `LINGTAI_TUI_DIR`), but a non-empty `token_path` constructor arg selects a different file — this is how a Codex preset/manifest's `llm.codex_auth_path` points one agent at its own token file (true multiple Codex accounts). The factory (`_register.py:_codex`) forwards `codex_auth_path` as `token_path` when set and non-blank.
@@ -35,11 +40,11 @@ Codex OAuth token management — reads TUI-written tokens, checks expiry, auto-r
 - **No intra-wrapper imports.** Self-contained — only stdlib, `httpx`, `filelock`.
 - **Reads disk token file** written by the TUI (`LINGTAI_TUI_DIR` env or `~/.lingtai-tui/`, L35-36).
 - **Calls** `https://auth.openai.com/oauth/token` (L17) for token refresh.
-- **Referenced by**: the Codex LLM adapter registry (`src/lingtai/llm/_register.py`), which uses ChatGPT OAuth tokens for the `codex` provider.
+- **Referenced by**: the Codex LLM adapter registry (`src/lingtai/llm/_register.py`), which uses ChatGPT OAuth tokens for the `codex` provider and calls `codex_pool.select_codex_pool_auth()` in its `codex-pool` factory.
 
 ## Composition
 
-Flat — single module, no sub-packages. `__init__.py` re-exports nothing (just docstring).
+Flat — two sibling modules (`codex.py`, `codex_pool.py`), no sub-packages. `__init__.py` re-exports nothing (just docstring). `codex_pool.py` computes only *which* token file to use; `codex.py` owns the token itself.
 
 ## State
 
