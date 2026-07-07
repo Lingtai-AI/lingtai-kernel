@@ -21,6 +21,11 @@ it does not document cross-process recovery/orphan-detection internals. For the
 broader runtime turn loop that daemon emanations mirror, use `lingtai-kernel-anatomy`
 and its runtime-loop reference.
 
+Maintainer note: the cross-backend daemon architecture capability contract is
+`src/lingtai/core/daemon/DAEMON_CONTRACT.md`. Update or explicitly re-check that
+contract when changing backend routing, selected `skills`, one-run `mcp`, native
+MCP mounting, `daemon_common`, backend support status, or run artifacts.
+
 Use the smallest reference that matches the problem. Do not kill or reclaim a
 daemon on a hunch; inspect first.
 
@@ -222,7 +227,7 @@ contract:
 ```
 
 The same pattern applies to non-email tools: `tools` grants a capability surface;
-`skills` grants a selected workflow catalog; `mcp` grants one-run MCP registrations (serialized for all backends and loaded as task tools by the LingTai backend); `system_prompt` tells the daemon how to
+`skills` grants a selected workflow catalog; `mcp` grants one-run MCP registrations (serialized for all backends and mounted only where the backend has a native MCP path); `system_prompt` tells the daemon how to
 exercise all of them in this one run.
 
 ## Maintenance
