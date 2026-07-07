@@ -18,7 +18,7 @@ description: >
       needed, inspect the shipped module docs/resources or the catalog homepage.
       Field names like `email_password`, `bot_token`, `app_id`/`app_secret`,
       and gewechat hosts are documented by the addon docs — do NOT guess.
-    - You want to know what MCPs you currently have. `mcp(action="show")`
+    - You want to know what MCPs you currently have. `mcp(action="info")`
       returns the registry plus health; this manual explains the output.
     - An MCP isn't behaving — registry validation, `problems` list,
       refresh-after-edit verification, common boot errors are here.
@@ -120,7 +120,7 @@ If neither path yields docs, fall back to the MCP's own runtime self-description
 
 ## Tool surface
 
-One action: `mcp(action="show")`. Returns this manual body, the current registry contents, and a runtime health snapshot (registry path, count, problems).
+One action: `mcp(action="info")`. Returns current registry contents and a runtime health snapshot (registry path, count, problems) without the manual body. Use `mcp(action="manual")` when you need this manual body.
 
 Each `registered` entry may also carry a non-secret **`identity`** block, so you can tell *which* configured account/bot/channel an MCP surface represents without reading private config:
 

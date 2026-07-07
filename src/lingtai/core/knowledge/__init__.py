@@ -263,6 +263,23 @@ def _reconcile(agent: "BaseAgent") -> dict:
 # Tool dispatch
 # ---------------------------------------------------------------------------
 
+def _knowledge_manual(agent: "BaseAgent") -> dict:
+    """Return the knowledge manual body without refreshing catalog health."""
+    manual_path = agent._working_dir / ".library" / "intrinsic" / "capabilities" / "knowledge" / "SKILL.md"
+    if not manual_path.is_file():
+        return {
+            "status": "degraded",
+            "knowledge_manual": "",
+            "manual_path": str(manual_path),
+            "error": "knowledge manual missing — initializer may have failed or capability not installed correctly",
+        }
+    return {
+        "status": "ok",
+        "knowledge_manual": manual_path.read_text(encoding="utf-8"),
+        "manual_path": str(manual_path),
+    }
+
+
 def get_description(lang: str = "en") -> str:
     return t(lang, "knowledge.description")
 
@@ -273,7 +290,7 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["info"],
+                "enum": ["info", "manual"],
                 "description": t(lang, "knowledge.action_info"),
             },
         },
@@ -298,10 +315,13 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
     def handle_knowledge(args: dict) -> dict:
         return dispatch_action(
             args,
-            {"info": lambda _args: _reconcile(agent)},
+            {
+                "info": lambda _args: _reconcile(agent),
+                "manual": lambda _args: _knowledge_manual(agent),
+            },
             unknown=lambda action: {
                 "status": "error",
-                "message": f"unknown action: {action!r}, only 'info' is supported",
+                "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",
             },
         )
 

@@ -20,9 +20,15 @@ def test_skills_and_knowledge_descriptions_are_explicit_signposts() -> None:
     assert "does not create, edit, search, or load knowledge entries" in en["knowledge.description"]
 
 
-def test_mcp_description_and_show_action_are_explicit_signposts() -> None:
+def test_mcp_description_and_actions_are_explicit_signposts() -> None:
     assert mcp_description().startswith("SIGNPOST ONLY:")
     assert "does not register, activate, configure, or troubleshoot MCP servers" in mcp_description()
-    action = mcp_schema()["properties"]["action"]["description"]
-    assert "signpost-only action" in action
-    assert "does not mutate MCP configuration" in action
+    assert "`info` only re-reads the registry" in mcp_description()
+    assert "`manual` returns the mcp-manual body" in mcp_description()
+    prop = mcp_schema()["properties"]["action"]
+    assert prop["enum"] == ["info", "manual"]
+    action = prop["description"]
+    assert "info: signpost-only action" in action
+    assert "without the manual body" in action
+    assert "manual: return only the mcp-manual skill body" in action
+    assert "Neither action mutates MCP configuration" in action

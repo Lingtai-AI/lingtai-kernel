@@ -480,21 +480,8 @@ def _reconcile(agent: "BaseAgent") -> dict:
     # Health: the umbrella manual must be present.
     intrinsic_dir = working_dir / ".library" / "intrinsic"
     manual_path = intrinsic_dir / "capabilities" / "mcp" / "SKILL.md"
-    status = "ok"
-    error: str | None = None
-    if not manual_path.is_file():
-        status = "degraded"
-        error = (
-            "mcp manual missing — initializer may have failed or "
-            "capability not installed correctly"
-        )
-        manual_body = ""
-    else:
-        manual_body = manual_path.read_text(encoding="utf-8")
-
     result = {
-        "status": status,
-        "mcp_manual": manual_body,
+        "status": "ok",
         "registry_path": str(_registry_path(working_dir)),
         "registered_count": len(records),
         "registered": [
@@ -503,9 +490,23 @@ def _reconcile(agent: "BaseAgent") -> dict:
         ],
         "problems": problems,
     }
-    if error:
-        result["error"] = error
     return result
+
+
+def _manual(agent: "BaseAgent") -> dict:
+    manual_path = agent._working_dir / ".library" / "intrinsic" / "capabilities" / "mcp" / "SKILL.md"
+    if not manual_path.is_file():
+        return {
+            "status": "degraded",
+            "mcp_manual": "",
+            "manual_path": str(manual_path),
+            "error": "mcp manual missing — initializer may have failed or capability not installed correctly",
+        }
+    return {
+        "status": "ok",
+        "mcp_manual": manual_path.read_text(encoding="utf-8"),
+        "manual_path": str(manual_path),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -514,14 +515,14 @@ def _reconcile(agent: "BaseAgent") -> dict:
 
 _DESCRIPTION = (
     "SIGNPOST ONLY: this tool does not register, activate, configure, or "
-    "troubleshoot MCP servers by itself; `show` only returns the mcp-manual "
-    "plus registry health. "
+    "troubleshoot MCP servers by itself. `info` only re-reads the registry and "
+    "returns registry health; `manual` returns the mcp-manual body. "
     "Your per-agent MCP server registry. The <registered_mcp> catalog in your "
     "system prompt lists every MCP server currently registered. Before using "
     "this tool (registering, deregistering, updating, or troubleshooting MCP "
-    "servers), read the `mcp-manual` skill — call `show` to fetch its body "
-    "(registration contract, file paths, schema) plus a runtime health "
-    "snapshot; no exceptions. To register, deregister, or update MCPs, edit "
+    "servers), read the `mcp-manual` skill — call `manual` to fetch its body "
+    "(registration contract, file paths, schema), and call `info` for the current "
+    "registry health snapshot; no exceptions. To register, deregister, or update MCPs, edit "
     "mcp_registry.jsonl directly with write/edit and call "
     "system(action=\"refresh\")."
 )
@@ -531,11 +532,12 @@ _SCHEMA = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["show"],
+            "enum": ["info", "manual"],
             "description": (
-                "show: signpost-only action; returns the mcp-manual skill body "
-                "plus a runtime health snapshot (registry contents, problems, "
-                "registry path). It does not mutate MCP configuration."
+                "info: signpost-only action; re-reads the registry and returns "
+                "a runtime health snapshot (registry contents, problems, registry path) "
+                "without the manual body. manual: return only the mcp-manual skill body. "
+                "Neither action mutates MCP configuration."
             ),
         },
     },
@@ -564,10 +566,13 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
     def handle_mcp(args: dict) -> dict:
         return dispatch_action(
             args,
-            {"show": lambda _args: _reconcile(agent)},
+            {
+                "info": lambda _args: _reconcile(agent),
+                "manual": lambda _args: _manual(agent),
+            },
             unknown=lambda action: {
                 "status": "error",
-                "message": f"unknown action: {action!r}, only 'show' is supported",
+                "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",
             },
         )
 

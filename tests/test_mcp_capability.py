@@ -285,11 +285,14 @@ def test_mcp_show_action_returns_health_snapshot(tmp_path):
     agent, workdir = _mk_agent(tmp_path, addons=["imap"])
     handler = agent._tool_handlers.get("mcp")
     assert handler is not None
-    result = handler({"action": "show"})
+    result = handler({"action": "info"})
     assert result["status"] == "ok"
     assert result["registered_count"] == 1
     assert result["registered"][0]["name"] == "imap"
-    assert "mcp_manual" in result and result["mcp_manual"]  # umbrella SKILL.md body
+    assert "mcp_manual" not in result
+    manual = handler({"action": "manual"})
+    assert manual["status"] == "ok"
+    assert "mcp_manual" in manual and manual["mcp_manual"]  # umbrella SKILL.md body
 
 
 def test_mcp_show_unknown_action_returns_error(tmp_path):
@@ -301,22 +304,22 @@ def test_mcp_show_unknown_action_returns_error(tmp_path):
     # (issue #513).
     assert result == {
         "status": "error",
-        "message": "unknown action: 'register', only 'show' is supported",
+        "message": "unknown action: 'register', only 'info' or 'manual' is supported",
     }
     # Missing action key renders the empty-string default, not None.
     assert handler({}) == {
         "status": "error",
-        "message": "unknown action: '', only 'show' is supported",
+        "message": "unknown action: '', only 'info' or 'manual' is supported",
     }
     # Invalid JSON can make `action` unhashable (issue #513 blocker): the router
     # must render the unknown-action envelope, not raise TypeError.
     assert handler({"action": []}) == {
         "status": "error",
-        "message": "unknown action: [], only 'show' is supported",
+        "message": "unknown action: [], only 'info' or 'manual' is supported",
     }
     assert handler({"action": {}}) == {
         "status": "error",
-        "message": "unknown action: {}, only 'show' is supported",
+        "message": "unknown action: {}, only 'info' or 'manual' is supported",
     }
 
 
