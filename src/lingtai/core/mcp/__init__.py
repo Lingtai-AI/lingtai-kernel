@@ -513,6 +513,9 @@ def _reconcile(agent: "BaseAgent") -> dict:
 # ---------------------------------------------------------------------------
 
 _DESCRIPTION = (
+    "SIGNPOST ONLY: this tool does not register, activate, configure, or "
+    "troubleshoot MCP servers by itself; `show` only returns the mcp-manual "
+    "plus registry health. "
     "Your per-agent MCP server registry. The <registered_mcp> catalog in your "
     "system prompt lists every MCP server currently registered. Before using "
     "this tool (registering, deregistering, updating, or troubleshooting MCP "
@@ -530,8 +533,9 @@ _SCHEMA = {
             "type": "string",
             "enum": ["show"],
             "description": (
-                "show: return the mcp-manual skill body plus a runtime health "
-                "snapshot (registry contents, problems, registry path)."
+                "show: signpost-only action; returns the mcp-manual skill body "
+                "plus a runtime health snapshot (registry contents, problems, "
+                "registry path). It does not mutate MCP configuration."
             ),
         },
     },
