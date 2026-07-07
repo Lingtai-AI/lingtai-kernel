@@ -1,11 +1,12 @@
 ---
-name: daemon-contract
+name: daemon-architecture-capability-contract
 description: >
-  Contract for daemon task delegation, selected skill context, one-run MCP
-  registration propagation, completion signaling, and run artifacts across
-  LingTai and CLI backends.
+  Architecture capability contract for daemon backends: selected skills
+  progressive-disclosure context, one-run MCP registration propagation,
+  daemon_common completion signaling, support-status honesty, and redacted run
+  artifacts across LingTai and CLI daemon architectures.
 status: active
-contract_version: 1
+contract_version: 2
 last_changed_at: "2026-07-06"
 related_files:
   - src/lingtai/core/daemon/ANATOMY.md
@@ -36,206 +37,172 @@ review_triggers:
 maintenance: |
   Keep this file in the same maintenance graph as the daemon ANATOMY.md and
   manual files listed under related_files. If any review_triggers path changes
-  daemon task input shape, selected skills catalog/path semantics, MCP
+  daemon backend routing, selected skills catalog/path semantics, MCP
   registration redaction or native mounting, daemon_common completion
-  enforcement, backend routing, or run artifact shape, re-read this contract in
-  the same change and either update it or explicitly state in the PR why the
-  daemon contract still holds.
+  enforcement, backend support status, or run artifact shape, re-read this
+  architecture capability contract in the same change and either update it or
+  explicitly state in the PR why the daemon capability contract still holds.
 ---
-# Daemon Contract
+# Daemon Architecture Capability Contract
 
 > **Maintenance trigger:** any change to a path listed in `review_triggers` must
 > re-check this contract in the same change. The PR should either update this
-> document or say why the daemon contract still holds.
+> document or say why the daemon architecture capability contract still holds.
 
 ## What this is
 
-This document is the cross-backend contract for daemon task delegation and the
-model/tool-visible runtime context that a daemon run receives. It is
-anatomy-style: it names the input shape, source-cites the code that owns the
-surface, separates prompt-visible catalog context from mounted tools, and gives
-reviewers an acceptance gate for daemon changes.
+This document is the architecture capability invariant for every daemon backend
+and backend family LingTai exposes. It is not primarily a per-task input
+contract. The durable requirement is that any daemon architecture preserves the
+same selected-skill discovery semantics, one-run MCP registration semantics,
+completion signaling, backend support honesty, and reviewable artifact boundary.
+
+The public daemon task object is still the carrier for `skills`, `mcp`,
+`system_prompt`, `tools`, `backend_options`, and backend routing
+(`src/lingtai/core/daemon/__init__.py:628-669`). This contract governs what
+each backend must do with those capabilities after routing.
 
 Scope:
 
-- `daemon(action="emanate")` task objects and backend/preset routing.
-- Parent-selected `skills` catalog/path context.
-- Parent-provided one-run `mcp` registrations, prompt redaction, and native MCP
-  config boundaries.
-- The built-in `daemon_common` MCP completion contract.
-- Prompt, `daemon.json`, native config, event, heartbeat, result, and error
-  artifacts.
+- Selected `skills` progressive-disclosure catalog and path semantics.
+- Parent-provided one-run MCP registrations: prompt catalog, redaction, and
+  native mounting where the backend has a source-proven run-scoped loader.
+- Built-in LingTai daemon MCP (`daemon_common`) availability for MCP-capable
+  daemon backends and its `finish(status, summary?, reason?, artifacts?)`
+  terminal signal.
+- Backend support matrix and acceptance expectations when adding or changing a
+  backend.
+- Prompt/native-config/artifact redaction boundary sufficient for review without
+  leaking secrets.
 
-Non-scope: adding new backend MCP support, changing MCP server protocols,
-changing daemon scheduling/timeout policy except where it affects this contract,
-or redefining individual third-party CLI behavior beyond LingTai's wrapper.
+Non-scope: claiming new backend MCP support before implementation, changing
+third-party MCP protocols, or broad daemon scheduling/timeout behavior except
+where those changes affect the capability invariants here.
 
-## Components
+## Capability Invariants
 
-1. **Task input object.** Each task carries `task`, `tools`, optional
-   `system_prompt`, `skills`, `mcp`, `backend_options`, and optional preset
-   routing inherited from the outer `daemon` call. The public schema exposes
-   these fields and backend choices (`src/lingtai/core/daemon/__init__.py:628-669`).
-   `system_prompt` is a one-run behavior contract, not a lifecycle override
-   (`src/lingtai/core/daemon/__init__.py:1418-1437`).
-2. **Selected skills catalog/path context.** `skills` is an array of skill
-   directory paths or direct `SKILL.md` paths. The runtime resolves each path,
-   parses only frontmatter, and renders a compact selected skills catalog with
-   `name`, `location`, and `description`; the SKILL.md body is not pasted
-   (`src/lingtai/core/daemon/__init__.py:1000-1058`,
-   `src/lingtai/core/daemon/__init__.py:1380-1397`). The backend obligation is
-   that the final prompt/context tells the daemon which skills exist and where
-   to read them.
-3. **One-run MCP registrations.** `mcp` is an array of full MCP registration
-   objects. Stdio registrations require `command`, optional `args`, and optional
-   string `env`; HTTP registrations require `url` and optional string
-   `headers`. The normalized prompt catalog redacts secret `env` and `headers`
-   values while leaving keys, names, transports, and non-secret shape visible
-   (`src/lingtai/core/daemon/__init__.py:1061-1148`).
-4. **Native MCP mounting.** The LingTai backend starts task MCP clients and
-   exposes their tools only for that run (`src/lingtai/core/daemon/__init__.py:1315-1367`).
-   CLI backends must mount MCP natively where the backend has a verified
-   run-scoped MCP config path; prompt catalog alone is not enough when native
-   support exists. Current native stdio helpers cover Claude print-mode config,
-   Codex `-c mcp_servers.*`, OpenCode `OPENCODE_CONFIG_CONTENT`, and Qwen
-   settings (`src/lingtai/core/daemon/__init__.py:173-218`,
-   `src/lingtai/core/daemon/__init__.py:1204-1222`,
-   `src/lingtai/core/daemon/__init__.py:3096-3117`). Native helpers skip HTTP
-   registrations today, so HTTP remains prompt catalog context until a
-   backend-specific HTTP config path is implemented.
-5. **daemon_common completion MCP.** MCP-capable backends receive the built-in
-   `daemon_common` registration before parent registrations
-   (`src/lingtai/core/daemon/__init__.py:1151-1202`). Its `finish` tool writes
-   `daemon_completion.json` with status `done`, `failed`, or `incomplete`
-   (`src/lingtai/mcp_servers/daemon_common/server.py:20-139`). A run with
-   `daemon_common` loaded may mark success only after validated
-   `finish(status="done")`; missing, invalid, failed, or incomplete completion
-   is a contract failure (`src/lingtai/core/daemon/__init__.py:1224-1313`).
-6. **Run artifacts.** `DaemonRunDir` creates the per-run folder, writes
-   `daemon.json`, `.prompt`, `.heartbeat`, `history/chat_history.jsonl`,
-   `logs/events.jsonl`, `logs/token_ledger.jsonl`, `result.txt`, and
-   `artifacts.json` through the daemon filesystem boundary
-   (`src/lingtai/core/daemon/run_dir.py:41-115`). `daemon.json.call_parameters`
-   records the visible task surface with redacted MCP registrations, while
-   native config files/env/argv/settings use full secret-bearing values only
-   inside backend-owned run-scoped launch plumbing
-   (`src/lingtai/core/daemon/__init__.py:3040-3134`).
+### 1. Selected skills are progressive-disclosure catalog entries
 
-## Connections
+Every daemon backend must preserve selected `skills` as discoverable workflow
+context, not as copied skill bodies. The runtime resolves each supplied skill
+directory or direct `SKILL.md` path, parses frontmatter, and renders only
+`name`, `location`, and `description` into the daemon context
+(`src/lingtai/core/daemon/__init__.py:998-1058`). The model reads the referenced
+`SKILL.md` only when relevant. A backend must not paste full SKILL bodies into
+the prompt or hide the path needed for progressive disclosure.
 
-The flow is:
+### 2. Parent-provided MCP registrations have two lanes
 
-```text
-parent daemon call
-  -> task validation and backend/preset routing
-  -> selected skills catalog/path + redacted MCP prompt catalog
-  -> final prompt/context (.prompt)
-  -> LingTai task MCP clients OR CLI native MCP config when supported
-  -> daemon_common finish signal when loaded
-  -> daemon.json / events / heartbeat / result / artifacts
-  -> terminal notification and daemon(check/list) inspection
-```
+The prompt lane is universal: parent-provided MCP registrations are normalized
+as one-run registration objects, rendered as a prompt-visible catalog, and
+redacted for `env` and `headers` values while preserving names, transports,
+keys, and non-secret shape (`src/lingtai/core/daemon/__init__.py:1061-1148`).
 
-The prompt-visible and tool-visible lanes have different jobs:
+The native lane is backend-specific: a backend may mount those MCP registrations
+as actual tools only when its daemon runner has a verified run-scoped native MCP
+config or client path. The LingTai backend starts task-scoped MCP clients directly
+(`src/lingtai/core/daemon/__init__.py:1315-1367`). CLI backends must not claim
+native MCP availability from the prompt catalog alone.
 
-| Lane | Job | Must not become |
-|---|---|---|
-| `.prompt` / final prompt/context | Model-visible task, selected skills catalog/path, redacted MCP registrations, and daemon_common instructions. | A place to paste SKILL.md bodies or secret values. |
-| `daemon.json.call_parameters` | Durable audit of user-visible inputs: task, tools, skills, redacted MCP, system prompt, backend options. | A secret-bearing native backend config. |
-| Native MCP config/env/argv/settings | Backend-specific mounting for MCP tools when the CLI has a verified run-scoped loader. | A claim of support for prompt-catalog-only unsupported backends. |
-| `daemon_common` completion file | Internal success gate written by the MCP `finish` tool. | A conversational final answer substitute. |
-| `events.jsonl` / heartbeat / result artifacts | Progress, forensic trace, and full result storage. | A second source of truth for task inputs. |
+### 3. daemon_common is the completion capability for MCP-capable backends
 
-## Contract rules
+MCP-capable daemon backends receive the built-in `daemon_common` MCP before any
+parent registrations (`src/lingtai/core/daemon/__init__.py:1155-1180`). The
+oneshot context tells the model to call `finish` exactly once with `done`,
+`failed`, or `incomplete` (`src/lingtai/core/daemon/__init__.py:1183-1202`).
+The MCP server writes `daemon_completion.json` with
+`status`, optional `summary`, optional `reason` (required by validation when
+`status` is `failed` or `incomplete`), and optional `artifacts`
+(`src/lingtai/mcp_servers/daemon_common/server.py:20-139`).
 
-### 1. Task fields stay distinct
+When `daemon_common` is loaded, a conversational final answer is not enough.
+Success requires a validated `finish(status="done")`; missing completion,
+invalid JSON, invalid status, run-id mismatch, `failed`, or `incomplete` must
+prevent terminal `done` (`src/lingtai/core/daemon/__init__.py:1224-1313`).
 
-`task` says what to do. `system_prompt` says how this daemon should behave for
-one run. `tools` is the LingTai backend technical surface; CLI backends ignore
-the LingTai tool list because the external CLI owns its own tool mode. `skills`
-is progressive-disclosure context. `mcp` is one-run tool registration context.
-`backend_options` is CLI-backend-only argv passthrough, validated before any run
-directory is created (`src/lingtai/core/daemon/__init__.py:2977-3009`).
+### 4. Artifacts separate review evidence from secret-bearing config
 
-### 2. Skills are catalog entries, not pasted manuals
+Run artifacts must make the daemon contract reviewable without leaking secrets.
+`DaemonRunDir` owns the run folder and persistent artifact set
+(`src/lingtai/core/daemon/run_dir.py`): its constructor creates the run
+folder/history/log directories and state object (`src/lingtai/core/daemon/run_dir.py:41-120`),
+while methods in the same module persist `daemon.json`, `.prompt`, `.heartbeat`,
+`history/chat_history.jsonl`, `logs/events.jsonl`, `logs/token_ledger.jsonl`,
+`result.txt`, and `artifacts.json`.
+`daemon.json.call_parameters` and `.prompt` may contain task surface,
+selected-skill catalog/path context, and redacted MCP registrations. Secret
+MCP values belong only in native run-scoped launch plumbing where a backend
+needs them to mount tools (`src/lingtai/core/daemon/__init__.py:3040-3134`).
 
-Daemon `skills` entries are selected skills catalog/path records: name,
-location, and description. The daemon must read the pointed `SKILL.md` itself
-when relevant. This is distinct from MCP because skills are prompt guidance and
-workflow discovery, while MCP tools need runtime mounting.
+### 5. Unsupported support status is an explicit capability state
 
-### 3. MCP registrations are redacted in prompts and mounted only when verified
+An unsupported backend or transport must stay honest: prompt-catalog-only is not
+native tool availability, and unsupported native MCP paths must be omitted or
+reported explicitly rather than malformed into a fake-success launch. HTTP MCP
+registrations are accepted for the prompt catalog today, but native HTTP
+mounting is not claimed for CLI backends until a backend-specific source-proven
+path is implemented and tested.
 
-Parent task MCP registrations are normalized and prompt-rendered with env/header
-redaction. The LingTai backend starts them as actual task-scoped MCP tools.
-CLI backends with verified native stdio support receive native MCP config for
-`daemon_common` plus parent stdio registrations. Backends without verified
-native mounting remain prompt-catalog-only unsupported backends and must not
-silently claim tool availability. HTTP MCP support is prompt-only today; follow-up support must be
-backend-specific, source-evidenced, and tested before the contract claims native
-HTTP mounting.
+## Backend Support Matrix
 
-### 4. daemon_common is the terminal-success gate where loaded
+Current source-backed status:
 
-CLI backends with native MCP support receive `daemon_common` so they can call
-`finish(status=...)`; the LingTai backend receives the same completion MCP as a
-task-scoped MCP. A normal final answer is not enough when `daemon_common` is
-present. Success requires `finish(status="done")` where enforced.
+| Backend / architecture | Selected skills catalog/path | Parent MCP native mounting | `daemon_common` native completion |
+|---|---|---|---|
+| `lingtai` | Yes, in the daemon prompt/context. | Yes, task-scoped stdio and HTTP MCP clients. | Yes, task-scoped MCP; `finish(done)` is enforced. |
+| `claude-p` / `claude-code` | Yes. | Yes for stdio via per-run `--mcp-config`; HTTP omitted. | Yes, same per-run config. |
+| `codex` | Yes. | Yes for stdio via `-c mcp_servers.*`; HTTP omitted. | Yes, same config override path. |
+| `opencode` | Yes. | Yes for stdio via `OPENCODE_CONFIG_CONTENT`; HTTP omitted. | Yes, same per-process config content. |
+| `qwen-code` / `qwen` | Yes. | Yes for stdio via per-run Qwen settings; HTTP omitted. | Yes, same settings file. |
+| `mimocode` / `mimo` | Yes. | Not wired in this slice; prompt catalog only. | Not wired; do not claim MCP-capable completion. |
+| `oh-my-pi` / `omp` | Yes. | Not verified; prompt catalog only. | Not wired; do not claim MCP-capable completion. |
+| `kimicode` / `kimi` | Yes. | Not verified; prompt catalog only. | Not wired; do not claim MCP-capable completion. |
+| `cursor` | Yes. | Not verified; prompt catalog only. | Not wired; do not claim MCP-capable completion. |
 
-### 5. Backend support status must be honest
-
-Current implementation status:
-
-- LingTai backend: parent MCP registrations are actual task MCP tools.
-- Claude print backends (`claude-p` / `claude-code`): native stdio MCP config
-  through a per-run `--mcp-config` file.
-- Codex: native stdio MCP behavior through `-c mcp_servers.<name>.*` overrides.
-- OpenCode: native stdio MCP behavior through `OPENCODE_CONFIG_CONTENT`
-  (MiMo Code is OpenCode-family but is not included in this wiring yet; see
-  below).
-- Qwen Code: native stdio MCP behavior through a per-run Qwen settings file.
-- MiMo Code: feasible native path via the OpenCode-family runner, but daemon
-  wiring is not implemented in this PR.
-- Kimi Code: only an `acp` entrypoint is documented locally; no verified
-  arbitrary-MCP-loading flag is wired, so it ships no-MCP for now.
-- Cursor: general MCP docs exist, but daemon-safe per-run CLI mounting needs an
-  unlocked CLI proof before implementation.
-- Oh-My-Pi: not verified as daemon-native MCP support.
-- HTTP registrations: prompt-only today; follow-up support must be
-  backend-specific and tested.
+The native stdio helper set is source-owned by `_codex_mcp_argv`,
+`_opencode_mcp_env`, `_write_qwen_mcp_settings`, `_write_claude_mcp_config`,
+and `_cli_backend_loads_common_mcp`
+(`src/lingtai/core/daemon/__init__.py:173-218`,
+`src/lingtai/core/daemon/__init__.py:1204-1222`,
+`src/lingtai/core/daemon/__init__.py:3096-3117`). If a backend is not in that
+loaded set, this contract treats it as prompt-catalog-only until code and tests
+prove otherwise.
 
 ## Acceptance Gate
 
-Any new daemon backend or contract-impacting daemon change must prove all
-applicable items:
+Any new daemon backend, backend-family reuse, or contract-impacting daemon
+change must prove all applicable items:
 
 1. Selected skills catalog/path context is visible in the final prompt/context
    without pasting SKILL.md bodies.
-2. MCP prompt catalog exists for parent registrations and prompt redaction keeps
-   secret env/header values out of prompts, `daemon.json`, and reports.
-3. Native MCP config includes parent MCPs when the backend supports run-scoped
-   native mounting; unsupported transports are omitted from native config
-   rather than malformed.
-4. Unsupported backends fail honestly or remain documented prompt-catalog-only
-   unsupported backends.
-5. `daemon_common` completion is available and enforced where expected.
+2. Parent MCP registrations appear in prompt context and durable call
+   parameters with `env` and `headers` values redacted.
+3. Native MCP config includes parent registrations only for transports and
+   backends with a verified run-scoped loader; unsupported transports are
+   omitted or reported honestly.
+4. `daemon_common` is available for MCP-capable daemon backends, and terminal
+   success is gated by valid `finish(status="done")`.
+5. Unsupported backends remain documented as prompt-catalog-only or fail
+   explicitly; they must not imply tool availability from prompt text alone.
 6. `.prompt`, `daemon.json`, native config files/env/argv/settings,
-   `result.txt`, `events.jsonl`, and heartbeat/artifact files remain inspectable
-   and bounded to the daemon run directory.
+   `result.txt`, `events.jsonl`, heartbeat, and artifact manifests remain
+   inspectable within the daemon run boundary while secret-bearing native config
+   is not copied into review artifacts.
 
 ## Review Triggers
 
 Re-check this contract when touching:
 
-- `src/lingtai/core/daemon/__init__.py` task validation, prompt assembly, MCP
-  registration handling, backend routing, native config writers, or completion
+- `src/lingtai/core/daemon/__init__.py` backend routing, selected-skill catalog
+  assembly, MCP registration handling, native config writers, or completion
   enforcement.
 - `src/lingtai/core/daemon/run_dir.py` artifact paths, `daemon.json`
   `call_parameters`, redaction-sensitive fields, terminal markers, or manifests.
 - `src/lingtai/core/daemon/manual/` daemon argument semantics, backend status,
-  or MCP/completion guidance.
+  MCP capability guidance, or completion guidance.
 - `src/lingtai/mcp_servers/daemon_common/` finish schema, payload file, or
   server behavior.
 - `tests/test_daemon*.py` coverage that proves backend options, CLI native MCP,
   daemon_common completion, OpenCode-family routing, Qwen settings, Claude print
-  MCP config, run-dir artifacts, or prompt redaction.
+  MCP config, run-dir artifacts, prompt redaction, or selected-skill catalog
+  preservation.

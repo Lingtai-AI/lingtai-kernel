@@ -21,13 +21,13 @@ maintenance: |
 Daemon capability (分神) — dispatch ephemeral subagents (分神) that operate
 in parallel on the agent's working directory. Each LingTai-backend emanation
 is a disposable `ChatSession` with a curated tool surface, not an agent; the
-parent may add a per-task oneshot `system_prompt` as the behavior contract for
+parent may add a per-task oneshot `system_prompt` as the behavior guidance for
 role, constraints, and tool-use policy; per-task `skills` paths render into a
-compact skill catalog; and per-task `mcp` supplies full one-run MCP
+compact progressive-disclosure skill catalog; and per-task `mcp` supplies full one-run MCP
 registrations serialized as YAML for all backends, loaded as task-scoped MCP
 tools by the LingTai backend, and mounted through native stdio MCP config for
-the Codex/OpenCode/Qwen CLI backends. The maintained cross-backend review
-contract lives in `DAEMON_CONTRACT.md`. MCP-capable backends also get the built-in
+the Claude print/Codex/OpenCode/Qwen CLI backends. The maintained cross-backend
+architecture capability contract lives in `DAEMON_CONTRACT.md`. MCP-capable backends also get the built-in
 `daemon_common` MCP (`src/lingtai/mcp_servers/daemon_common/server.py:1-151`);
 its `finish` tool writes `daemon_completion.json`, and only a validated
 `finish(status="done")` allows terminal `done`. Parent MCP tools are not
@@ -56,7 +56,7 @@ ends, without polling.
 - `daemon/claude_interactive.py` — interactive Claude Code daemon backend. **Hidden / not user-selectable:** `claude` / `claude-interactive` were removed from the `get_schema()` `backend` enum and description (`daemon/__init__.py:458-485`); the code path stays only so older callers and stored daemon entries with `backend="claude"` still resolve through `_normalize_backend`/dispatch. New work uses print-mode `claude-p`. `ClaudeInteractiveBridge` (`daemon/claude_interactive.py:103`) runs normal interactive `claude` under a PTY from a LingTai-managed workspace, writes the managed system prompt (`daemon/claude_interactive.py:80-96`), prepares empty or explicit-source detached worktrees (`daemon/claude_interactive.py:250-309`), answers terminal probes, injects `SessionStart`/`Stop` hooks via inline `--settings`, relays hook payloads through a FIFO, auto-selects workspace trust only inside the verified managed root (`daemon/claude_interactive.py:535-559`), and parses Claude transcript JSONL into daemon progress/result state.
 - `daemon/run_dir.py` — per-emanation filesystem run directory. `DaemonRunDir` owns every filesystem effect for one run: folder layout, `daemon.json` atomic writes, batch `group_id` metadata (`DaemonRunDir.new_group_id()`), JSONL appends, CLI progress events, heartbeat touches, `result.txt`, versioned `daemon.json` data (`data_version`), visible `call_parameters`, terminal state markers, and backend resume-id persistence (`DaemonRunDir.set_session_id(key, value, *, overwrite)` — empty/duplicate values are no-ops returning `False`; `overwrite=False` keeps the first id for OpenCode-family backends; write failures propagate). The `DaemonManager` calls into a `DaemonRunDir` at every lifecycle hook without itself touching the filesystem.
 - `daemon/runtime.py` — stateless daemon backend runtime primitives shared by the LingTai in-process loop and every CLI backend runner: `kill_process_group()` (SIGTERM→SIGKILL of the subprocess's own process group), `iter_stdout_with_deadline()` (queue-backed stdout reader so a silent CLI can't outlast the watchdog deadline), `mark_cancelled_or_timeout(run_dir, timeout_event)` (marks `timeout` vs `cancelled` and returns the `"[cancelled]"` sentinel), and `spawn_stderr_drainer()` → `StderrDrain` (background stderr drain that mirrors lines to `record_cli_output(stream="stderr")` and renders the trailing `tail()` for failure messages). Imported into `daemon/__init__.py` under the historical private names (`_kill_process_group`, `_iter_stdout_with_deadline`, `_mark_cancelled_or_timeout`, `_spawn_stderr_drainer`) so existing tests/monkeypatches keep resolving the module globals.
-- `daemon/DAEMON_CONTRACT.md` — maintained daemon contract for task input shape, selected skills catalog/path semantics, MCP registration redaction/native mounting, `daemon_common` completion enforcement, backend implementation status, run artifacts, review triggers, and the acceptance gate for new backend or contract-impacting changes.
+- `daemon/DAEMON_CONTRACT.md` — maintained daemon architecture capability contract for selected skills catalog/path semantics, MCP registration redaction/native mounting, `daemon_common` completion enforcement, backend implementation status, run artifacts, review triggers, and the acceptance gate for new backend or contract-impacting changes.
 
 ## Public API
 
@@ -175,5 +175,5 @@ daemon/runtime.py
 - **Parent:** `src/lingtai/core/` (capability package).
 - **Siblings:** `avatar/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog), `bash/`.
 - **Manual:** `daemon/manual/SKILL.md` — skill documentation for the LLM.
-- **Contract:** `daemon/DAEMON_CONTRACT.md` — cross-backend contract for daemon task context, selected skills, one-run MCP registrations, completion, artifacts, review triggers, and acceptance gates.
+- **Contract:** `daemon/DAEMON_CONTRACT.md` — cross-backend architecture capability contract for selected skills, one-run MCP registrations, completion, artifacts, backend support status, review triggers, and acceptance gates.
 - **Kernel hooks:** `setup()` is called during capability initialization; `DaemonManager.handle()` is registered as the `daemon` tool handler.

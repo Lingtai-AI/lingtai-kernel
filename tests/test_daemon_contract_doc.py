@@ -41,8 +41,9 @@ def _frontmatter(path: Path) -> dict:
 
 def test_daemon_contract_frontmatter_lists_related_files_and_triggers():
     meta = _frontmatter(DOC)
-    assert meta["name"] == "daemon-contract"
+    assert meta["name"] == "daemon-architecture-capability-contract"
     assert meta["status"] == "active"
+    assert meta["contract_version"] == 2
     related = set(meta["related_files"])
     triggers = set(meta["review_triggers"])
     for rel in REQUIRED_RELATED:
@@ -63,23 +64,36 @@ def test_daemon_contract_is_linked_from_anatomy_and_manual():
     manual = ROOT / "src/lingtai/core/daemon/manual/SKILL.md"
     manual_text = manual.read_text(encoding="utf-8")
     assert DOC_REL in manual_text
-    assert "cross-backend daemon task/context/MCP/completion contract" in manual_text
+    assert "cross-backend daemon architecture capability contract" in manual_text
 
 
-def test_daemon_contract_locks_context_mcp_and_completion_terms():
+def test_daemon_contract_locks_architecture_capability_terms():
     text = " ".join(DOC.read_text(encoding="utf-8").split())
     required_phrases = [
+        "Daemon Architecture Capability Contract",
+        "not primarily a per-task input contract",
+        "architecture capability invariant",
         "selected skills catalog/path",
-        "MCP registrations",
+        "progressive-disclosure catalog",
+        "Parent-provided MCP registrations",
         "daemon_common",
         "final prompt/context",
-        "prompt redaction",
+        "redacted for `env` and `headers`",
         "native MCP config",
-        "prompt-catalog-only unsupported backends",
+        "prompt-catalog-only",
         "finish(status=\"done\")",
-        "HTTP remains prompt catalog context",
+        "HTTP MCP registrations are accepted for the prompt catalog today",
+        "Backend Support Matrix",
         "Review Triggers",
         "Acceptance Gate",
     ]
     for phrase in required_phrases:
         assert phrase in text
+
+
+def test_daemon_contract_does_not_claim_unwired_native_mcp_support():
+    text = " ".join(DOC.read_text(encoding="utf-8").split())
+    assert "| `mimocode` / `mimo` | Yes. | Not wired in this slice; prompt catalog only." in text
+    assert "| `oh-my-pi` / `omp` | Yes. | Not verified; prompt catalog only." in text
+    assert "| `kimicode` / `kimi` | Yes. | Not verified; prompt catalog only." in text
+    assert "| `cursor` | Yes. | Not verified; prompt catalog only." in text
