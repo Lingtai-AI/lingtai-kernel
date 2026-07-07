@@ -741,6 +741,7 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "boolean",
                 "description": t(lang, "daemon.include_done"),
             },
+            "summary": {"type": "boolean", "description": t(lang, "tool.summary_option"), "default": False},
             "max_turns": {
                 "type": "integer",
                 "minimum": 1,

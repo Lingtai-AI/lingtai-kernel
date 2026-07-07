@@ -96,8 +96,8 @@ throughput, tier 1 for opportunistic/free use.
 **Three context-compression / continuation modes.** Context is finite; you have
 three deliberate ways to keep it lean, ordered from local to whole-conversation:
 
-1. **A priori — reasoning-guided.** Set `summary=true` on `bash`, `read`, or
-   `grep` when you expect a large result (>10k chars), do not need the exact raw
+1. **A priori — reasoning-guided.** Set `summary=true` on `bash`, `read`, `grep`, `daemon`, or
+   `glob` when you expect a large result (>10k chars), do not need the exact raw
    text, and already know the facts, counts, anchors, or conclusion to retain.
    This is preferred over a posteriori summarization in those cases because the
    raw bulk never spends context at all. The tool runs normally and the raw is

@@ -23,6 +23,7 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "pattern": {"type": "string", "description": t(lang, "glob.pattern")},
             "path": {"type": "string", "description": t(lang, "glob.path")},
+            "summary": {"type": "boolean", "description": t(lang, "tool.summary_option"), "default": False},
         },
         "required": ["pattern"],
     }

@@ -3,7 +3,7 @@ name: summarize-manual
 description: >-
   Detailed operational guide for tool-result summarization across LingTai's
   three context-compression / continuation modes: a-priori reasoning-guided
-  (summary=true on bash/read/grep), a-posteriori agent-guided
+  (summary=true on bash/read/grep/daemon/glob), a-posteriori agent-guided
   (system(action="summarize")), and molt. Covers what tool-result summarization
   is, why it implements progressive disclosure, when to summarize urgently versus
   during idle cleanup, how to write good summaries, how to recover the original
@@ -34,7 +34,7 @@ is canonical.
 
 | Mode | Trigger | When the raw is hidden | Authored by |
 |---|---|---|---|
-| **A priori** — reasoning-guided | `summary=true` on `bash`/`read`/`grep` | *before* the result ever enters context | the runtime LLM, driven by your `reasoning` |
+| **A priori** — reasoning-guided | `summary=true` on `bash`/`read`/`grep`/`daemon`/`glob` | *before* the result ever enters context | the runtime LLM, driven by your `reasoning` |
 | **A posteriori** — agent-guided | `system(action="summarize")` | *after* you have already seen and digested it | you |
 | **Molt** — context-pressure-triggered | `psyche(context, molt, ...)` | the whole conversation is continued/reset | you (briefing) |
 
@@ -46,9 +46,9 @@ is the strongest boundary when per-result summarization is not enough. Sections
 1–6 below are mostly about the a-posteriori `summarize` action; §1a covers the
 a-priori `summary=true` option; §6 contrasts both with molt.
 
-## 1a · A priori summary: `summary=true` on bash / read / grep
+## 1a · A priori summary: `summary=true` on bash / read / grep / daemon / glob
 
-`bash`, `read`, and `grep` accept an optional boolean `summary` (default
+`bash`, `read`, `grep`, `daemon`, and `glob` accept an optional boolean `summary` (default
 `false`). When `true`:
 
 - The tool runs **normally**. The raw result is written to the durable event log
