@@ -646,6 +646,12 @@ class InteractionsChatSession(ChatSession):
         - str → wrapped as ``[{"type": "text", "text": ...}]``
         - list of ToolResultBlock → converted to FunctionResultContentParam dicts
         - list of FunctionResultContentParam dicts → passed as-is
+
+        Tool results here are the current turn's batch — for any timely
+        transient ``_meta`` family they carry, they ARE the newest occurrence
+        by construction, so the shared stale-copy filter does not apply.
+        Full-history replay (the ``seed_turns`` resume path) serializes via
+        ``interface_converters.to_gemini``, which does filter stale copies.
         """
         if isinstance(message, str):
             return [{"type": "text", "text": message}]

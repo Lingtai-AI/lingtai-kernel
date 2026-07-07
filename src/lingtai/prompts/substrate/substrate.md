@@ -139,8 +139,10 @@ context is worth the cost; applied summaries flip to `status: done`. At context
 usage `1.0` (the full-context hard boundary) the runtime **forces** a
 provider-context rebuild / fresh replay on the next request **regardless of
 whether pending summaries exist**: pending markers are applied and marked done,
-and even with no pending summaries the rebuild still runs because it may release
-transient context (agent_meta, notifications, cleared surfaces). Every `1.0`
+and even with no pending summaries the fresh replay sheds stale timely
+transient `_meta` copies (agent_meta/guidance and notifications/notification_guidance)
+— model-facing serialization keeps only the newest copy per family, on every
+provider, without rewriting recorded history. Every `1.0`
 forced rebuild ALWAYS attaches a one-shot `reconstruction.warning`
 (before→after context, proactive-`0.75`-rebuild advice, and "if still above the
 `0.6` recovery target, molt"). Waiting until full context is not ideal — prefer

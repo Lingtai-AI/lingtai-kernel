@@ -1646,13 +1646,13 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         finally:
             guard.clear_progress_notice()
 
-        # Move the live notification payload from the previous holder (if
-        # any) to the latest tool-result dict from this batch.  The prior
-        # holder is skeletonized in-place before the new one is registered,
-        # maintaining the at-most-one-live-payload invariant.  If the prior
-        # holder was a synthesized pair, its content becomes a skeleton
-        # placeholder (kept in history); if it was a normal tool result,
-        # its canonical notification payload keys are removed.
+        # Attach the current notification payload to the latest tool-result
+        # dict from this batch when the material payload changes. The previous
+        # LIVE holder is released from tracking first: synthesized pairs become
+        # skeleton placeholders (kept in history because the pair exists only as
+        # a carrier), while normal tool results retain their old notification
+        # payload as historical timely state. Model-facing serialization filters
+        # old copies non-mutatingly instead of rewriting canonical history.
         if _batch_includes_context_molt(response.tool_calls):
             # ``psyche.molt`` publishes ``.notification/post-molt.json`` before
             # its own tool result returns.  Do not let that same result batch

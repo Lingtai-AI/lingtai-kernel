@@ -567,14 +567,14 @@ def _freeze_responses_outputs(
 ) -> list[dict[str, Any]]:
     """Stabilize ``function_call_output.output`` strings across WS replay turns.
 
-    The kernel carries resident-meta blocks with different cadences:
-    sparse/update-driven ``_meta.agent_meta`` / ``_meta.guidance`` (moved only
-    when their material snapshot changes by ``meta_block.attach_active_runtime``)
-    and latest-only ``_meta.notifications`` (moved by
-    ``attach_active_notifications``). Those moves rewrite an older
-    ``ToolResultBlock.content`` *in place*, so the same ``call_id``'s
-    ``function_call_output.output`` serializes differently on a later turn even
-    though, semantically, the model already saw that result.
+    The same ``call_id``'s ``function_call_output.output`` may serialize
+    differently on a later turn even though, semantically, the model already
+    saw that result: in-place canonical rewrites exist (summarize markers,
+    pending→done flips, placeholder overwrites, AED compaction,
+    synthesized-pair skeletons), and the shared converter
+    (``interface_converters.to_responses_input``) omits a result's timely
+    transient ``_meta`` copy once a newer holder appears
+    (``filter_stale_timely_transient``).
 
     For Codex's stateful WS delta path the next request's converted input must
     strict-prefix-match the prior baseline. A changed older
@@ -583,14 +583,18 @@ def _freeze_responses_outputs(
     ``prefix_mismatch``).
 
     This freezes each output by ``call_id`` at first send for the life of the
-    session: the first time a ``call_id`` is converted, its ``output`` is
+    epoch: the first time a ``call_id`` is converted, its ``output`` is
     recorded; every later conversion replays the recorded string. Replay is
-    therefore byte-identical regardless of in-place resident-meta movement.
+    therefore byte-identical regardless of canonical rewrites or converter
+    filtering.
 
     Fidelity is preserved, not lost: the model already saw the frozen version
     when it was first sent, and the freshest result is *first-seen on its own
     turn*, so it freezes WITH its live meta — live guidance / notifications still
-    reach the model on the result that is supposed to carry them.
+    reach the model on the result that is supposed to carry them. When an epoch
+    reset clears the freeze map, the fresh replay re-freezes from the shared
+    converter's serialization, which presents only the newest timely transient
+    copy per family — no adapter-private filter state is involved.
 
     Pure and content-free: returns a new list (shallow-copying only the rewritten
     items), never mutates the caller's items, and records nothing to diagnostics.
@@ -2323,13 +2327,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # a converter-stable delta baseline once the assistant turn is recorded.
         self._ws_pending_baseline_input: list[dict[str, Any]] | None = None
         # Per-session freeze of model-facing ``function_call_output.output`` strings
-        # keyed by ``call_id``. The kernel moves latest-only resident-meta blocks
-        # off older tool results onto the freshest one each turn, which rewrites an
-        # older ``ToolResultBlock.content`` in place and would change that result's
-        # converted ``output`` on replay — breaking the strict-prefix WS delta
-        # baseline. Freezing the first-seen output per call_id keeps replay
-        # byte-identical while the freshest result still carries live meta (it is
-        # first-seen on its own turn). See ``_freeze_responses_outputs``.
+        # keyed by ``call_id``. A result's converted ``output`` can change after
+        # it was first sent (summary markers, placeholder overwrites, AED spill
+        # manifests, and the shared converter omitting a stale timely transient
+        # ``_meta`` copy once a newer holder appears), which would break the
+        # strict-prefix WS delta baseline on replay. Freezing the first-seen
+        # output per call_id keeps ordinary replay byte-identical while the
+        # freshest result still carries live meta (it is first-seen on its own
+        # turn). See ``_freeze_responses_outputs``.
         self._ws_frozen_outputs: dict[str, str] = {}
         # Last websocket delta decision diagnostic (safe metadata only): why the
         # request went ``ws_incremental`` vs ``ws_full``. Surfaced in usage.extra.
@@ -2879,8 +2884,10 @@ class CodexResponsesSession(OpenAIResponsesSession):
             # rebuild=true path already marked its batch done in the intrinsic
             # (this is idempotent); the 1.0 hard forced rebuild has no other place
             # to do it, so this is that hook. When no pending markers exist the flip
-            # is a no-op — the forced rebuild still ran to release transient context.
-            # Kept tiny and defensive — never let bookkeeping abort the rebuild.
+            # is a no-op — the forced rebuild still rerenders the provider replay
+            # through the shared converter, shedding stale timely transient
+            # ``_meta`` copies. Kept tiny and defensive — never let bookkeeping
+            # abort the rebuild.
             try:
                 from lingtai_kernel.intrinsics.system.summarize import (
                     mark_pending_summaries_done,
@@ -2893,6 +2900,11 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._close_ws_transport()
         self._ws_session = _CodexWebsocketSession()
         self._ws_pending_baseline_input = None
+        # Clearing the freeze map is what makes the fresh replay effective: the
+        # next full request re-freezes from the shared converter's serialization
+        # (``to_responses_input``), which applies deliberate canonical rewrites
+        # and omits stale timely transient ``_meta`` copies (newest per family
+        # kept — ``filter_stale_timely_transient``).
         self._ws_frozen_outputs.clear()
         self._ws_turns_since_epoch_reset = 0
         self._ws_epoch_reset_reason_pending = reason
@@ -2973,9 +2985,12 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # force a fresh provider-context replay on the next request REGARDLESS of
         # whether pending summaries exist. If pending markers exist they are applied
         # and marked done (via _reset_ws_epoch's marking hook); if none exist the
-        # rebuild still runs because it may release transient context (agent_meta,
-        # notifications, cleared surfaces). This is why the pending-set guard that
-        # used to gate the pre-1.0 delayed release is gone.
+        # rebuild still runs so the fresh replay re-serializes through the shared
+        # converter, omitting stale timely transient _meta copies (agent_meta,
+        # guidance, notifications, notification_guidance — newest per family
+        # kept; interface_converters.filter_stale_timely_transient) and picking
+        # up other deliberate canonical rewrites. This is why the pending-set
+        # guard that used to gate the pre-1.0 delayed release is gone.
         ctx = self._summarize_delay_context()
         self._summarize_effect_delayed_last_context = ctx
         usage = ctx.get("current_context_usage")
@@ -3350,13 +3365,20 @@ class CodexResponsesSession(OpenAIResponsesSession):
 
         Routes every Codex WS conversion through ``_freeze_responses_outputs`` so
         the model-facing ``function_call_output.output`` for a given ``call_id``
-        stays byte-identical across turns, even after the kernel moves latest-only
-        resident-meta off an older result. All three WS conversion sites (full
-        replay, per-turn delta, baseline tail) share ``self._ws_frozen_outputs`` so
-        the baseline and the next full request remain strict-prefix comparable.
+        stays byte-identical across turns, even when canonical content was
+        rewritten in place (summarize markers, placeholder overwrites) or the
+        shared converter starts omitting a stale timely transient ``_meta``
+        copy. All three WS conversion sites (full replay, per-turn delta,
+        baseline tail) share ``self._ws_frozen_outputs`` so the baseline and the
+        next full request remain strict-prefix comparable. After an epoch reset
+        the cleared freeze map re-freezes from ``to_responses_input``'s shared
+        serialization, so the rebuilt replay omits old ``_meta.agent_meta`` /
+        ``guidance`` / ``notifications`` / ``notification_guidance`` copies
+        (newest per family kept) without mutating canonical history.
         """
         return _freeze_responses_outputs(
-            to_responses_input(iface), self._ws_frozen_outputs
+            to_responses_input(iface),
+            self._ws_frozen_outputs,
         )
 
     def _interface_entries_to_responses_input(self, entries: list[Any]) -> list[dict[str, Any]]:

@@ -732,6 +732,13 @@ def build_meta_readme() -> dict:
             "So the most recent agent_meta may sit on an EARLIER result than the "
             "newest one; scan backward for the last-emitted snapshot, and read "
             "each emitted agent_meta as the agent state at that update point. "
+            "agent_meta is a timely runtime/current-state hint: older emitted "
+            "snapshots stay in historical context and logs as historical traces "
+            "(they are not retroactively removed), and if several appear, only "
+            "the NEWEST one is current — older snapshots are past state, not "
+            "current state. Model-facing full-history serialization / a fresh "
+            "provider replay presents only the newest copy; old copies persist "
+            "only in recorded history and logs. "
             "agent_meta carries NO token diagnostics: all token/cache "
             "facts — both this call's own facts and the since-last-molt session "
             "aggregate — live "
@@ -770,6 +777,14 @@ def build_meta_readme() -> dict:
             "recent notifications may therefore sit on an EARLIER result than the "
             "newest one; scan backward for the last-emitted payload and read it "
             "as the current channel state. "
+            "Notification payloads are timely/current-state hints: older payloads "
+            "stay in historical context and logs as historical traces (they are "
+            "not retroactively removed), and if several appear, only the NEWEST "
+            "one is current — older payloads are not current instructions or "
+            "unhandled events; act on new messages through the producer channel "
+            "(telegram.read, email.read, ...). Model-facing full-history "
+            "serialization / a fresh provider replay presents only the newest "
+            "copy; old copies persist only in recorded history and logs. "
             "Not part of the formal tool-result payload; do not summarize "
             "notification contents as the result body."
         ),
@@ -1808,7 +1823,7 @@ def build_meta(agent) -> dict:
         meta["adapter_comment"] = slim_adapter_comment_for_tail(comment)
 
     # Notifications are deliberately NOT included here. Active-state
-    # notification payload is a moving single-slot block attached SPARSELY /
+    # notification payload is a moving live block attached SPARSELY /
     # update-driven — on first appearance and re-attached only on a material
     # change (or a deliberate notification(action=check) read) — by
     # ``attach_active_notifications`` at the tool-batch boundary.  Putting it in
@@ -2803,15 +2818,21 @@ _NOTIFICATION_SKELETON: dict = {
 
 
 def skeletonize_notification_holder(agent) -> None:
-    """Strip live notification payload from the current live holder and replace
-    it with a skeleton placeholder; drop the holder reference.
+    """Release the live notification holder; skeletonize only synthesized pairs.
 
     The live holder (``agent._notification_live_holder``) may point to:
-    * A normal tool-result content dict — strip the canonical notification
-      payload keys (``notifications`` and ``notification_guidance``) from the
-      ``_meta`` envelope, leaving the other ``_meta`` blocks intact.
+    * A normal tool-result content dict — its ``_meta.notifications`` /
+      ``_meta.notification_guidance`` payload is RETAINED as a historical
+      trace.  Notification payloads are timely transient state (Jason #4307):
+      canonical history is no longer retroactively stripped when the payload
+      moves or disappears; only the newest emitted payload is current, and
+      model-facing full-history serialization filters the old copies (newest
+      per family kept) without rewriting recorded history (see
+      ``lingtai.llm.interface_converters``).
     * A synthesized pair's content dict — replace ALL keys with the skeleton
-      so the pair stays in history but carries no live payload.
+      so the pair stays in history but carries no live payload.  The pair
+      exists only to carry the payload; its body is not a tool result the
+      agent produced, so the skeleton remains the honest historical record.
 
     Synthesized pairs are identified by the presence of ``_synthesized: True``
     in the holder dict.  Normal tool-result dicts never carry that key.
@@ -2821,23 +2842,13 @@ def skeletonize_notification_holder(agent) -> None:
     * The IDLE/ASLEEP inject path before stamping the new synthesized pair.
     * The ACTIVE path in ``attach_active_notifications`` when moving payload
       to a newer normal tool result (via ``prior_holder`` arg).
-    * The notifications-cleared path so no holder carries stale payload.
+    * The notifications-cleared path so no holder reference lingers.
     """
     holder = getattr(agent, "_notification_live_holder", None)
-    if isinstance(holder, dict):
-        if holder.get("_synthesized"):
-            # Synthesized pair — replace entire content with skeleton.
-            holder.clear()
-            holder.update(_NOTIFICATION_SKELETON)
-        else:
-            # Normal tool result dict — strip notification keys from _meta,
-            # preserving the other _meta blocks (tool_meta/agent_meta/guidance).
-            meta = holder.get(META_ENVELOPE_KEY)
-            if isinstance(meta, dict):
-                meta.pop(NOTIFICATIONS_KEY, None)
-                meta.pop(NOTIFICATION_GUIDANCE_KEY, None)
-                if not meta:
-                    holder.pop(META_ENVELOPE_KEY, None)
+    if isinstance(holder, dict) and holder.get("_synthesized"):
+        # Synthesized pair — replace entire content with skeleton.
+        holder.clear()
+        holder.update(_NOTIFICATION_SKELETON)
     agent._notification_live_holder = None
 
 
@@ -2958,7 +2969,9 @@ def attach_active_notifications(
     Contract:
         * When there are no active notifications, no stamping happens,
           ``_notification_fp`` is left untouched, ``prior_holder`` (if any) is
-          skeletonized, ``_notification_payload_signature`` is reset to ``None``
+          released (a synthesized pair is skeletonized; a normal tool result
+          RETAINS its payload as a historical trace),
+          ``_notification_payload_signature`` is reset to ``None``
           (so a later reappearance of the same payload attaches afresh as the
           first active payload), and ``None`` is returned.
         * When active notifications exist but this batch has no dict-shaped
@@ -2967,16 +2980,22 @@ def attach_active_notifications(
           returned — the state can still be delivered later.
         * When the payload's material signature is UNCHANGED and the target is
           an ordinary tool result, the payload is NOT moved/restamped and the
-          prior holder is NOT skeletonized; ``prior_holder`` is returned.  The
+          prior holder stays the live holder; ``prior_holder`` is returned.  The
           fingerprint is still committed so equivalent rewrites / same-material
           payloads do not retry forever against the IDLE synthesized pair.
         * When the payload materially CHANGED, or the target is a deliberate
           ``notification(action="check")`` placeholder (a read request that must
-          always receive the current payload), the prior holder is skeletonized,
-          the same ``notifications`` + ``notification_guidance`` payload shape
-          used by the synthesized notification pair is stamped under ``_meta`` on
-          the latest dict-shaped result, the fingerprint is committed, the new
-          signature is recorded, and that dict is returned as the new holder.
+          always receive the current payload), the prior holder is released (a
+          synthesized pair is skeletonized; a normal tool result RETAINS its old
+          payload as a historical trace — timely transient semantics, Jason
+          #4307), the same ``notifications`` + ``notification_guidance`` payload
+          shape used by the synthesized notification pair is stamped under
+          ``_meta`` on the latest dict-shaped result, the fingerprint is
+          committed, the new signature is recorded, and that dict is returned as
+          the new holder.  Only the newest emitted payload is current;
+          model-facing full-history serialization filters old copies (newest
+          per family kept) without rewriting recorded history (see
+          ``lingtai.llm.interface_converters``).
 
     ``post-molt`` is intentionally not special-cased here.  The dangerous race
     is narrower: the ``psyche.molt`` tool call writes ``post-molt.json`` before
@@ -2998,8 +3017,9 @@ def attach_active_notifications(
     """
     payload = _collect_active_notifications_payload(agent)
     if not payload:
-        # Underlying notification files are gone/empty. The prior holder is
-        # now stale, so skeletonize it and report that no live holder remains.
+        # Underlying notification files are gone/empty. Release the prior
+        # holder (synthesized pairs skeletonize; normal results keep their old
+        # payload as a historical trace) and report no live holder remains.
         # Reset the sparse signature so a later reappearance of the same payload
         # attaches again as the first active payload.
         if prior_holder is not None:
@@ -3038,8 +3058,9 @@ def attach_active_notifications(
         _commit_notification_fp(agent)
         return prior_holder
 
-    # Material change (or deliberate check read). Only now is it safe to
-    # strip/skeletonize the previous holder.
+    # Material change (or deliberate check read). Release the previous holder:
+    # a synthesized pair is skeletonized; a normal tool result keeps its old
+    # payload as a historical trace (only the newest emission is current).
     if prior_holder is not None:
         agent._notification_live_holder = prior_holder
         skeletonize_notification_holder(agent)
@@ -3243,20 +3264,6 @@ def agent_meta_signature(agent_meta: Mapping[str, Any]) -> str:
         return str(sorted(material.items()))
 
 
-def _strip_agent_meta_and_guidance(holder: dict) -> None:
-    """Strip sparse live ``agent_meta``/``guidance`` blocks from a holder.
-
-    Notification keys and the permanent ``tool_meta`` are left intact; the
-    ``_meta`` envelope is dropped entirely only if it becomes empty.
-    """
-    meta = holder.get(META_ENVELOPE_KEY)
-    if isinstance(meta, dict):
-        meta.pop(AGENT_META_KEY, None)
-        meta.pop(GUIDANCE_KEY, None)
-        if not meta:
-            holder.pop(META_ENVELOPE_KEY, None)
-
-
 def attach_active_runtime(
     agent,
     tool_results: list,
@@ -3282,11 +3289,14 @@ def attach_active_runtime(
         ``tool_meta.token_usage`` — plus ``elapsed_ms`` + ``active_turn_tool_calls``
         + ``current_tool_result_chars`` + a slimmed dynamic ``adapter_comment``.
       * Compute its material signature.  **Only when it differs** from
-        ``agent._agent_meta_signature`` do we: strip ``_meta.agent_meta`` /
-        ``_meta.guidance`` from ``prior_holder`` (so at most one *live* holder
-        carries them — older snapshots that were already historical are left in
-        place), promote ``agent_meta`` + the ``_meta.guidance`` ref onto the new
-        target, record the new signature, and return the new holder.
+        ``agent._agent_meta_signature`` do we: promote ``agent_meta`` + the
+        ``_meta.guidance`` ref onto the new target, record the new signature,
+        and return the new holder.  The prior holder RETAINS its snapshot as a
+        historical trace — ``agent_meta`` is timely transient state (Jason
+        #4307): canonical history is not retroactively stripped, only the
+        newest emitted snapshot is current, and model-facing full-history
+        serialization filters old copies (newest per family kept) without
+        rewriting recorded history (see ``lingtai.llm.interface_converters``).
       * When the signature is **unchanged**, nothing is attached or moved and
         ``prior_holder`` is returned unchanged — its ``agent_meta`` stays put.
       * The transient ``_runtime_pending`` scaffolding is stripped from *all*
@@ -3350,12 +3360,9 @@ def attach_active_runtime(
         # point; do not re-stamp the tail.
         return prior_holder
 
-    # Material change: the prior *live* holder sheds its sparse runtime blocks so
-    # at most one live holder carries them, then the new target receives
-    # agent_meta plus the lightweight guidance ref.
-    if prior_holder is not None:
-        _strip_agent_meta_and_guidance(prior_holder)
-
+    # Material change: the new target receives agent_meta plus the lightweight
+    # guidance ref.  The prior holder keeps its snapshot as a historical trace —
+    # only the newest emission is current (timely transient semantics).
     meta = _meta_block(target)
     meta[AGENT_META_KEY] = agent_meta
     meta[GUIDANCE_KEY] = build_meta_guidance_ref()
