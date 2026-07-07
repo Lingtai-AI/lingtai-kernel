@@ -303,8 +303,8 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
     """Set up the knowledge capability.
 
     Scans ``<agent>/knowledge/`` for ``<name>/KNOWLEDGE.md`` entries and
-    injects the catalog into the system prompt. Registers a single ``info``
-    action that re-scans and returns a runtime health snapshot.
+    injects the catalog into the system prompt. Registers ``info`` for
+    runtime health and ``manual`` for the progressive-disclosure manual body.
 
     Unknown kwargs (e.g. the historical ``knowledge_limit``) are accepted and
     ignored — the file-backed catalog has no fixed-size limit.

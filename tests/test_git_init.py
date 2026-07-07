@@ -37,8 +37,7 @@ def test_start_creates_git_repo(tmp_path):
 
 
 def test_start_creates_gitignore(tmp_path):
-    """agent.start() should create a .gitignore file (Time Machine tracks
-    everything by default — gitignore is intentionally empty)."""
+    """agent.start() should create a .gitignore protecting local secrets."""
     agent = BaseAgent(service=make_mock_service(), agent_name="test",
                        working_dir=tmp_path / "test",
                        config=_git_enabled_config())
@@ -46,10 +45,17 @@ def test_start_creates_gitignore(tmp_path):
     try:
         gitignore = agent.working_dir / ".gitignore"
         assert gitignore.is_file(), ".gitignore should exist after start()"
-        # Empty by design (commit b6b4e58 — track everything, no exceptions).
-        # Re-asserting empty pins the contract; if a future change adds
-        # selective exclusions, this test makes the change explicit.
-        assert gitignore.read_text() == ""
+        expected = (
+            "# Secrets — MCP addon credentials (bot tokens, API keys)\n"
+            ".secrets/\n"
+            "\n"
+            "# Transient lifecycle signal files\n"
+            ".sleep\n"
+            ".suspend\n"
+            ".agent.heartbeat\n"
+            ".timemachine.pid\n"
+        )
+        assert gitignore.read_text() == expected
     finally:
         agent.stop()
 

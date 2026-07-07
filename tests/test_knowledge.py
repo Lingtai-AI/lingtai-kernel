@@ -143,22 +143,22 @@ def test_unknown_action_returns_error(tmp_path):
         # migration (issue #513): wording, quoting, and key names verbatim.
         assert agent._tool_handlers["knowledge"]({"action": "submit"}) == {
             "status": "error",
-            "message": "unknown action: 'submit', only 'info' is supported",
+            "message": "unknown action: 'submit', only 'info' or 'manual' is supported",
         }
         # A missing action key renders the empty-string default, not None.
         assert agent._tool_handlers["knowledge"]({}) == {
             "status": "error",
-            "message": "unknown action: '', only 'info' is supported",
+            "message": "unknown action: '', only 'info' or 'manual' is supported",
         }
         # Invalid JSON can make `action` unhashable (issue #513 blocker): the
         # router must render the unknown-action envelope, not raise TypeError.
         assert agent._tool_handlers["knowledge"]({"action": []}) == {
             "status": "error",
-            "message": "unknown action: [], only 'info' is supported",
+            "message": "unknown action: [], only 'info' or 'manual' is supported",
         }
         assert agent._tool_handlers["knowledge"]({"action": {}}) == {
             "status": "error",
-            "message": "unknown action: {}, only 'info' is supported",
+            "message": "unknown action: {}, only 'info' or 'manual' is supported",
         }
     finally:
         agent.stop(timeout=1.0)
@@ -169,11 +169,11 @@ def test_unknown_action_returns_error(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_schema_has_only_info_action():
+def test_schema_has_info_and_manual_actions():
     from lingtai.core.knowledge import get_schema
     SCHEMA = get_schema("en")
     actions = SCHEMA["properties"]["action"]["enum"]
-    assert actions == ["info"]
+    assert actions == ["info", "manual"]
     # Old JSON-store properties are gone — these fields no longer have any code path.
     props = SCHEMA["properties"]
     for removed in ("title", "summary", "content", "supplementary", "ids", "include_supplementary"):
