@@ -4164,6 +4164,13 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 },
             }
 
+        # Codex-only default: an omitted/``default`` thinking level sends an
+        # explicit ``reasoning.effort = "xhigh"`` instead of omitting the field
+        # (omitting it would fall back to the Codex backend's own, lower
+        # default). Explicit levels pass through unchanged, and the generic
+        # OpenAI Responses path keeps its omit-on-default behavior.
+        if thinking in (None, "default"):
+            thinking = "xhigh"
         extra_kwargs.update(_responses_reasoning_kwargs(thinking))
 
         # Codex's backend doesn't accept context_management compaction —
