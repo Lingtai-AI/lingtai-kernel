@@ -97,16 +97,18 @@ throughput, tier 1 for opportunistic/free use.
 three deliberate ways to keep it lean, ordered from local to whole-conversation:
 
 1. **A priori — reasoning-guided.** Set `summary=true` on `bash`, `read`, or
-   `grep` when you expect a large result (>10k chars) and do not need the exact
-   raw text. The tool runs normally and the raw is preserved in durable logs;
-   before the result enters your context it is replaced by a generated summary
-   driven by your `reasoning` field, so make `reasoning` specific about what to
-   retain. Default is `false`; leave it false when you need exact
-   line/file/diff/stderr text. If the raw exceeds 500,000 chars no summary is
+   `grep` when you expect a large result (>10k chars), do not need the exact raw
+   text, and already know the facts, counts, anchors, or conclusion to retain.
+   This is preferred over a posteriori summarization in those cases because the
+   raw bulk never spends context at all. The tool runs normally and the raw is
+   preserved in durable logs; before the result enters your context it is
+   replaced by a generated summary driven by your `reasoning` field, so make
+   `reasoning` specific about what to retain. Default is `false`; leave it false
+   when you need exact line/file/diff/stderr text. If the raw exceeds 500,000 chars no summary is
    generated and you get a refusal pointing at the preserved raw — narrow and
    rerun, or rerun with `summary=false`. A priori is a **lossy**,
-   assumption-driven compression chosen *before* you inspect the result: use it
-   only when you already know the narrow facts to keep. It does **not** replace
+   assumption-driven compression chosen *before* you inspect the result: prefer it
+   when you already know the narrow facts to keep. It does **not** replace
    a-posteriori `summarize`, especially for high-information-density daemon
    outputs, reviews, long reports, or any result whose important facts you cannot
    name in advance. For those, leave `summary=false`, consume the result, then
