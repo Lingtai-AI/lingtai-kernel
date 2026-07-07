@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import threading
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -744,6 +745,7 @@ def test_kimicode_alias_and_canonical_dispatch_to_backend(tmp_path, backend):
         captured["backend"] = run_dir._state["backend"]
         captured["model"] = run_dir._state["model"]
         captured["backend_argv"] = list(backend_argv or [])
+        captured["call_parameters"] = dict(run_dir._state["call_parameters"])
         run_dir.mark_done("[fake done]")
         return "[fake done]"
 
@@ -761,6 +763,7 @@ def test_kimicode_alias_and_canonical_dispatch_to_backend(tmp_path, backend):
     assert captured["backend"] == "kimicode"
     assert captured["model"] == "kimicode"
     assert captured["backend_argv"] == ["--model", "kimi-for-coding"]
+    assert captured["call_parameters"]["mcp"][0]["name"] == "daemon_common"
 
 
 def test_kimicode_cmd_appends_backend_argv_before_owned_flags(tmp_path):
@@ -990,14 +993,122 @@ def test_kimicode_run_env_api_key_fallback_precedence(tmp_path, monkeypatch):
     assert env["KIMI_MODEL_API_KEY"] == "sk-kimicode-wins"
 
 
-def test_kimicode_not_in_common_mcp_loading_set():
-    """Regression guard: kimicode ships no-MCP, so it must stay out of the
-    daemon_common MCP-loading set. If a refactor accidentally added kimicode
-    here, Kimi runs would be expected to emit a ``finish`` completion signal
-    they cannot produce."""
-    assert _source_cli_backend_loads_common_mcp("kimicode") is False
-    # Sanity: the guard would actually fire — a backend that does load MCP.
+def test_kimicode_in_common_mcp_loading_set():
+    assert _source_cli_backend_loads_common_mcp("kimicode") is True
     assert _source_cli_backend_loads_common_mcp("qwen-code") is True
+
+
+def test_kimicode_writes_run_private_mcp_json_for_common_and_parent_mcp(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured: dict = {}
+
+    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
+        captured["task"] = task
+        captured["call_parameters"] = dict(run_dir._state["call_parameters"])
+        captured["harness_files"] = dict(run_dir._state["backend_harness_files"])
+        run_dir.mark_done("[fake done]")
+        return "[fake done]"
+
+    with patch.object(mgr, "_run_kimicode_emanation", side_effect=fake_run):
+        result = mgr.handle({
+            "action": "emanate",
+            "backend": "kimicode",
+            "tasks": [{
+                "task": "Use Kimi MCP.",
+                "tools": [],
+                "mcp": [
+                    {
+                        "name": "parent-docs",
+                        "transport": "stdio",
+                        "command": "/bin/echo",
+                        "args": ["docs"],
+                        "env": {"DOC_TOKEN": "dummy"},
+                    },
+                    {
+                        "name": "parent_http",
+                        "transport": "http",
+                        "url": "https://mcp.example.test/mcp",
+                        "headers": {"Authorization": "Bearer dummy"},
+                    },
+                ],
+            }],
+        })
+        assert result["status"] == "dispatched"
+        mgr._emanations[result["ids"][0]]["future"].result(timeout=5)
+
+    assert "call the MCP tool `finish`" in captured["task"]
+    assert "Bearer dummy" not in captured["task"]
+    assert "DOC_TOKEN: <redacted>" in captured["task"]
+    assert captured["call_parameters"]["mcp"][1]["env"] == {"DOC_TOKEN": "<redacted>"}
+    assert captured["call_parameters"]["mcp"][2]["headers"] == {
+        "Authorization": "<redacted>"
+    }
+
+    mcp_path = Path(captured["harness_files"]["kimicode_mcp_config"])
+    assert mcp_path.name == "mcp.json"
+    assert mcp_path.parent.name == "kimi-code-home"
+    config = json.loads(mcp_path.read_text(encoding="utf-8"))
+    common = config["mcpServers"]["daemon_common"]
+    assert common["transport"] == "stdio"
+    assert common["args"] == ["-m", "lingtai.mcp_servers.daemon_common"]
+    assert common["env"]["LINGTAI_DAEMON_COMPLETION_FILE"].endswith(
+        "daemon_completion.json"
+    )
+    docs = config["mcpServers"]["parent-docs"]
+    assert docs == {
+        "transport": "stdio",
+        "command": "/bin/echo",
+        "args": ["docs"],
+        "env": {"DOC_TOKEN": "dummy"},
+    }
+    parent_http = config["mcpServers"]["parent_http"]
+    assert parent_http == {
+        "transport": "http",
+        "url": "https://mcp.example.test/mcp",
+        "headers": {"Authorization": "Bearer dummy"},
+    }
+
+
+def test_kimicode_missing_completion_signal_prevents_done(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(
+        agent,
+        handle="em-kimi-completion",
+        task="dummy",
+        tools=[],
+        model="kimicode",
+        max_turns=10,
+        timeout_s=60,
+        parent_addr=agent._working_dir.name,
+        parent_pid=1,
+        system_prompt="[stub]",
+        backend="kimicode",
+    )
+    run_dir._state.setdefault("call_parameters", {})["mcp"] = [
+        {"name": "daemon_common", "transport": "stdio"}
+    ]
+    run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+
+    def fake_popen(cmd, *a, **kw):
+        return FiniteFakeProc(stdout_lines=["kimi says done\n"])
+
+    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+        with pytest.raises(RuntimeError, match="missing completion"):
+            mgr._run_kimicode_emanation(
+                "em-kimi-completion",
+                run_dir,
+                "Do it.",
+                threading.Event(),
+                threading.Event(),
+            )
+
+    data = json.loads(run_dir.daemon_json_path.read_text(encoding="utf-8"))
+    assert data["state"] == "failed"
+    assert "kimi says done" in (run_dir.path / "result.txt").read_text(
+        encoding="utf-8"
+    )
 
 
 @pytest.mark.parametrize("bad_flag", ["prompt", "output-format", "yolo", "session", "continue"])

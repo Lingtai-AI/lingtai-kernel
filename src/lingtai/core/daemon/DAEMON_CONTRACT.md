@@ -139,9 +139,10 @@ needs them to mount tools (`src/lingtai/core/daemon/__init__.py:3040-3134`).
 An unsupported backend or transport must stay honest: prompt-catalog-only is not
 native tool availability, and unsupported native MCP paths must be omitted or
 reported explicitly rather than malformed into a fake-success launch. HTTP MCP
-registrations are accepted for the prompt catalog today, but native HTTP
-mounting is not claimed for CLI backends until a backend-specific source-proven
-path is implemented and tested.
+registrations are accepted for the prompt catalog today, and native HTTP
+mounting is claimed only for backends whose source-proven config schema supports
+it. Other CLI backends keep HTTP prompt-only until a backend-specific path is
+implemented and tested.
 
 ## Backend Support Matrix
 
@@ -156,15 +157,15 @@ Current source-backed status:
 | `qwen-code` / `qwen` | Yes. | Yes for stdio via per-run Qwen settings; HTTP omitted. | Yes, same settings file. |
 | `mimocode` / `mimo` | Yes. | Not wired in this slice; prompt catalog only. | Not wired; do not claim MCP-capable completion. |
 | `oh-my-pi` / `omp` | Yes. | Not verified; prompt catalog only. | Not wired; do not claim MCP-capable completion. |
-| `kimicode` / `kimi` | Yes. | Not verified; prompt catalog only. | Not wired; do not claim MCP-capable completion. |
+| `kimicode` / `kimi` | Yes. | Yes for stdio and HTTP via run-private `$KIMI_CODE_HOME/mcp.json`. | Yes, same run-private config. |
 | `cursor` | Yes. | Not verified; prompt catalog only. | Not wired; do not claim MCP-capable completion. |
 
-The native stdio helper set is source-owned by `_codex_mcp_argv`,
-`_opencode_mcp_env`, `_write_qwen_mcp_settings`, `_write_claude_mcp_config`,
-and `_cli_backend_loads_common_mcp`
-(`src/lingtai/core/daemon/__init__.py:173-218`,
+The native stdio/helper set is source-owned by `_codex_mcp_argv`,
+`_opencode_mcp_env`, `_write_qwen_mcp_settings`, `_write_kimicode_mcp_config`,
+`_write_claude_mcp_config`, and `_cli_backend_loads_common_mcp`
+(`src/lingtai/core/daemon/__init__.py:173-260`,
 `src/lingtai/core/daemon/__init__.py:1204-1222`,
-`src/lingtai/core/daemon/__init__.py:3096-3117`). If a backend is not in that
+`src/lingtai/core/daemon/__init__.py:3111-3164`). If a backend is not in that
 loaded set, this contract treats it as prompt-catalog-only until code and tests
 prove otherwise.
 

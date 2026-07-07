@@ -116,11 +116,13 @@ files, not standalone top-level skills.
     stdio or `url`/`headers` for HTTP. The runtime serializes these registrations
     as YAML into every backend's oneshot context. The built-in LingTai backend
     also starts them as task-scoped MCP clients and exposes their tools for this
-    run. Claude, Codex, OpenCode, and Qwen CLI backends additionally receive
+    run. Claude, Codex, OpenCode, Qwen, and Kimi CLI backends additionally receive
     daemon-generated native MCP configuration for the built-in `daemon_common`;
     Claude, Codex, OpenCode, and Qwen also receive native config for
-    parent-provided stdio MCP registrations. HTTP MCP registrations remain prompt catalog
-    context until a backend-specific HTTP MCP config path is implemented.
+    parent-provided stdio MCP registrations. Kimi receives native config for
+    parent-provided stdio and HTTP MCP registrations through its run-private
+    `mcp.json`. HTTP MCP registrations remain prompt catalog context for other
+    CLI backends until a backend-specific HTTP MCP config path is implemented.
     LingTai automatically adds the built-in `daemon_common` MCP to MCP-capable
     daemon backends. Its `finish(status, summary?, reason?, artifacts?)` tool is
     the hard terminal-success contract: only `finish(status="done")` permits

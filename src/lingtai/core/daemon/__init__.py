@@ -214,8 +214,50 @@ def _write_qwen_mcp_settings(run_dir: DaemonRunDir, registrations: list[dict]) -
     return path
 
 
+def _kimicode_home_dir(run_dir: DaemonRunDir) -> Path:
+    return run_dir.path / "kimi-code-home"
+
+
+def _write_kimicode_mcp_config(
+    run_dir: DaemonRunDir,
+    registrations: list[dict],
+) -> Path:
+    servers: dict[str, dict] = {}
+    for reg in registrations:
+        transport = reg.get("transport", reg.get("type", "stdio"))
+        if transport == "stdio":
+            server = {
+                "transport": "stdio",
+                "command": reg["command"],
+                "args": list(reg.get("args") or []),
+            }
+            if reg.get("env"):
+                server["env"] = dict(reg["env"])
+            servers[reg["name"]] = server
+        elif transport == "http":
+            server = {
+                "transport": "http",
+                "url": reg["url"],
+            }
+            if reg.get("headers"):
+                server["headers"] = dict(reg["headers"])
+            servers[reg["name"]] = server
+    kimi_home = _kimicode_home_dir(run_dir)
+    kimi_home.mkdir(parents=True, exist_ok=True)
+    path = kimi_home / "mcp.json"
+    atomic_write_json(path, {"mcpServers": servers}, ensure_ascii=False, indent=2)
+    return path
+
+
 def _cli_backend_loads_common_mcp(backend: str) -> bool:
-    return backend in {"claude-p", "claude-code", "codex", "opencode", "qwen-code"}
+    return backend in {
+        "claude-p",
+        "claude-code",
+        "codex",
+        "opencode",
+        "qwen-code",
+        "kimicode",
+    }
 
 
 def _dev_pythonpath_with_source_root() -> str:
@@ -3114,6 +3156,11 @@ class DaemonManager:
                         "__lingtai_qwen_system_settings_path",
                         str(qwen_settings),
                     ]
+                elif backend == "kimicode" and _cli_backend_loads_common_mcp(backend):
+                    kimi_mcp_config = _write_kimicode_mcp_config(run_dir, mcp_regs)
+                    run_dir._state["backend_harness_files"] = {
+                        "kimicode_mcp_config": str(kimi_mcp_config)
+                    }
                 backend_argv = [*user_backend_argv, *backend_harness_argv]
             except Exception as e:
                 run_dir.mark_failed(e)
@@ -3126,7 +3173,11 @@ class DaemonManager:
                 run_dir._state["backend_argv"] = list(user_backend_argv)
             if backend_harness_argv:
                 run_dir._state["backend_harness_argv"] = list(backend_harness_argv)
-            if backend_options is not None or backend_harness_argv:
+            if (
+                backend_options is not None
+                or backend_harness_argv
+                or run_dir._state.get("backend_harness_files")
+            ):
                 run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
             self._log("daemon_backend_options",
                       em_id=em_id, backend=backend,
@@ -4655,7 +4706,7 @@ class DaemonManager:
           when absent, so an operator's explicit environment always wins.
         """
         env: dict[str, str] = {}
-        kimi_home = run_dir.path / "kimi-code-home"
+        kimi_home = _kimicode_home_dir(run_dir)
         try:
             kimi_home.mkdir(parents=True, exist_ok=True)
         except OSError:
