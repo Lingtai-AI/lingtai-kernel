@@ -203,7 +203,10 @@ SCHEMA = {
                 "For charts, reports, generated artifacts, and other files the user should open intact, prefer media.type='document'; use media.type='photo' only when an inline Telegram photo preview is desired, because photo previews may crop, compress, or display poorly for text-heavy graphics. "
                 "If chat_action is set and no text/media is provided, sends a typing "
                 "indicator (auto-expires after 5s) instead of a message. "
-                "check: list recent conversations with unread counts (optional account). "
+                "check: list recent conversations with unread counts (optional account); "
+                "when unread>0 each conversation also carries latest_unread_incoming "
+                "(the latest unread incoming message from the inbox folder), distinct "
+                "from last_from/last_text which may be the bot's own reply. "
                 "read: read messages from a chat (chat_id; optional limit). "
                 "reply: reply to a specific message (message_id from read results, text; optional parse_mode/entities). "
                 "search: search messages (query; optional account, chat_id). "
@@ -1499,8 +1502,16 @@ class TelegramManager:
 
     def _check(self, args: dict) -> dict:
         account = self._resolve_account(args)
+        # Tag folder provenance: an inbox record is an incoming (human) message,
+        # a sent record is the bot's own outgoing message. The merged list loses
+        # the folder, so remember it here to surface unread *incoming* messages
+        # below (see Lingtai-AI/lingtai#470).
         inbox = self._list_messages(account, "inbox")
+        for m in inbox:
+            m["_incoming"] = True
         sent = self._list_messages(account, "sent")
+        for m in sent:
+            m["_incoming"] = False
         messages = inbox + sent
         messages.sort(key=lambda m: m.get("date", ""), reverse=True)
         read_ids = self._read_ids(account)
@@ -1525,10 +1536,28 @@ class TelegramManager:
                     "last_date": msg.get("date", ""),
                     "total": 0,
                     "unread": 0,
+                    "latest_unread_incoming": None,
                 }
             conversations[cid]["total"] += 1
-            if msg.get("id") and msg["id"] not in read_ids:
+            is_unread = bool(msg.get("id")) and msg["id"] not in read_ids
+            if is_unread:
                 conversations[cid]["unread"] += 1
+                # messages iterate newest-first, so the first unread incoming
+                # message we see per chat is the latest unread incoming message
+                # from the inbox folder.
+                if msg.get("_incoming") and conversations[cid]["latest_unread_incoming"] is None:
+                    conversations[cid]["latest_unread_incoming"] = {
+                        "id": msg.get("id"),
+                        "from": msg.get("from"),
+                        "text": (msg.get("text") or "")[:100],
+                        "date": msg.get("date", ""),
+                    }
+
+        # Drop the placeholder key when there is nothing unread/incoming to show,
+        # so the preview only carries latest_unread_incoming when it is real.
+        for conv in conversations.values():
+            if conv["latest_unread_incoming"] is None:
+                conv.pop("latest_unread_incoming")
 
         return {
             "status": "ok",
