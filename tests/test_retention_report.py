@@ -88,6 +88,17 @@ def _sqlite(agent: Path, days_old: int) -> Path:
     return path
 
 
+def _file(path: Path, content: str | bytes, days_old: int = 0) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(content, bytes):
+        path.write_bytes(content)
+    else:
+        path.write_text(content, encoding="utf-8")
+    ts = (NOW - timedelta(days=days_old)).timestamp()
+    os.utime(path, (ts, ts))
+    return path
+
+
 def _report(agent: Path, **kwargs):
     options = RetentionOptions(**{"older_than_days": 30, **kwargs})
     return report_to_dict(scan_retention(agent, options, _now=NOW))
@@ -159,6 +170,69 @@ def test_protected_mail_and_authoritative_logs_are_never_candidates(tmp_path):
     assert ("outbox_mail", "outbox_mail_protected") in protected
     assert ("scheduled_mail", "scheduled_mail_protected") in protected
     assert ("authoritative_log", "authoritative_or_recovery_log_protected") in protected
+
+
+def test_footprint_reports_portal_logs_and_history_without_candidates(tmp_path):
+    root = tmp_path / ".lingtai"
+    root.mkdir()
+    (root / "meta.json").write_text("{}", encoding="utf-8")
+    topology = _file(root / ".portal" / "topology.jsonl", "topology\n", days_old=1)
+    agent = _agent(root, "codex")
+    log_sqlite = _file(agent / "logs" / "log.sqlite", b"index", days_old=2)
+    events = _file(agent / "logs" / "events.jsonl", "{}\n", days_old=2)
+    token_ledger = _file(agent / "logs" / "token_ledger.jsonl", "{}\n", days_old=2)
+    soul_flow = _file(agent / "logs" / "soul_flow.jsonl", "{}\n", days_old=2)
+    relaunch = _file(agent / "logs" / "refresh_relaunch.log", "restart\n", days_old=2)
+    archive = _file(agent / "history" / "chat_history_archive.jsonl", "{}\n", days_old=3)
+    snap_a = _file(agent / "history" / "snapshots" / "a.json", "{}", days_old=4)
+    snap_b = _file(agent / "history" / "snapshots" / "b.json", "{}", days_old=5)
+
+    data = _report(root)
+
+    assert data["totals"]["candidates"] == 0
+    assert data["totals"]["footprints"] == 8
+    assert data["totals"]["footprint_bytes"] == sum(
+        path.stat().st_size
+        for path in (
+            topology,
+            log_sqlite,
+            events,
+            token_ledger,
+            soul_flow,
+            relaunch,
+            archive,
+            snap_a,
+            snap_b,
+        )
+    )
+    assert data["footprint_classes"]["portal_topology_replay"]["items"] == 1
+    assert data["footprint_classes"]["agent_history_snapshots"]["count"] == 2
+
+    footprints = {item["category"]: item for item in data["footprints"]}
+    assert footprints["portal_topology_replay"]["bytes"] == topology.stat().st_size
+    assert footprints["portal_topology_replay"]["risk"] == "rotation_or_compression_only"
+    assert "compress" in footprints["portal_topology_replay"]["recommendation"]
+    assert footprints["agent_log_index"]["risk"] == "rebuildable_low_risk"
+    assert footprints["agent_authoritative_events_log"]["risk"] == "authoritative_do_not_delete"
+    assert footprints["agent_history_archive"]["risk"] == "history_do_not_blind_delete"
+    assert footprints["agent_history_snapshots"]["count"] == 2
+
+    candidate_paths = {Path(candidate["path"]) for candidate in data["candidates"]}
+    assert events not in candidate_paths
+    assert token_ledger not in candidate_paths
+    assert soul_flow not in candidate_paths
+
+
+def test_footprints_do_not_bypass_lifecycle_candidate_protection(tmp_path):
+    agent = _agent(tmp_path, status_state="active")
+    events = _file(agent / "logs" / "events.jsonl", "{}\n", days_old=60)
+    _mail(agent, "sent", 60)
+
+    data = _report(agent)
+
+    assert data["totals"]["candidates"] == 0
+    assert data["agents"][0]["protected_agent"] is True
+    assert any(Path(item["path"]) == events for item in data["footprints"])
 
 
 @pytest.mark.parametrize("state", ["active", "asleep", "suspended"])
