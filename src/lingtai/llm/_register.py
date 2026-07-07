@@ -166,12 +166,29 @@ def register_all_adapters() -> None:
         # missing/empty/invalid pool returns None here, so defaults pass through
         # unchanged and ``CodexTokenManager`` uses its legacy default token path.
         # Provider ``codex`` is never affected — it does not read the pool file.
-        from lingtai.auth.codex_pool import select_codex_pool_auth_path
-        selected = select_codex_pool_auth_path(defaults)
+        from lingtai.auth.codex_pool import select_codex_pool_auth
+        selected = select_codex_pool_auth(defaults)
         if selected:
             defaults = dict(defaults or {})
-            defaults["codex_auth_path"] = selected
-        return _codex(model=model, defaults=defaults, **kw)
+            defaults["codex_auth_path"] = selected["auth_path"]
+        adapter = _codex(model=model, defaults=defaults, **kw)
+        # Non-secret source-attribution breadcrumb (pool ref / index / size /
+        # weight + short hash of the resolved token path — never tokens, never
+        # auth-file contents): stamped on the adapter and on every chat it
+        # creates, so the kernel's ``llm_call`` events can record which pool
+        # source handled the call. Fallback runs carry an explicit marker
+        # instead of silently looking like an unpooled ``codex`` agent.
+        selection = (
+            selected["selection"] if selected else {"fallback": "legacy_default"}
+        )
+        adapter.codex_pool_selection = selection
+        _orig_pool_create_chat = adapter.create_chat
+        def _selection_stamping_create_chat(*a, **kwa):
+            chat = _orig_pool_create_chat(*a, **kwa)
+            chat.codex_pool_selection = selection
+            return chat
+        adapter.create_chat = _selection_stamping_create_chat
+        return adapter
 
     # Register both spellings: LLMService does no dash/underscore normalization,
     # and a saved ``codex_pool`` preset must build the same provider.

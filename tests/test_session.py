@@ -113,6 +113,44 @@ def test_send_tracks_usage():
     assert latest["api_call_id"].startswith("api_")
 
 
+def test_send_logs_codex_pool_selection_when_present():
+    """A codex-pool chat's non-secret selection breadcrumb lands on llm_call."""
+    events = []
+
+    def log_fn(event_type, **fields):
+        events.append((event_type, fields))
+
+    sm, _, mock_session = make_session_manager(logger_fn=log_fn)
+    selection = {
+        "source_ref": "codex-auth/work.json",
+        "source_index": 0,
+        "pool_size": 2,
+        "weight": 3,
+        "auth_path_sha8": "0abc1234",
+    }
+    mock_session.codex_pool_selection = selection
+    sm.send("hello")
+
+    llm_call = next(fields for event, fields in events if event == "llm_call")
+    assert llm_call["codex_pool"] == selection
+
+
+def test_send_llm_call_omits_codex_pool_for_other_providers():
+    """No dict breadcrumb on the chat -> no codex_pool field on llm_call."""
+    events = []
+
+    def log_fn(event_type, **fields):
+        events.append((event_type, fields))
+
+    # The default MagicMock chat auto-creates a codex_pool_selection attribute
+    # that is NOT a dict — the field must still be omitted (dict-only guard).
+    sm, _, _ = make_session_manager(logger_fn=log_fn)
+    sm.send("hello")
+
+    llm_call = next(fields for event, fields in events if event == "llm_call")
+    assert "codex_pool" not in llm_call
+
+
 def test_send_does_not_call_compaction():
     sm, svc, _ = make_session_manager()
     sm.send("hello")

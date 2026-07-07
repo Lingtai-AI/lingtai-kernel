@@ -22,6 +22,7 @@ all token/pool files are real temp files. No token contents are read or logged.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from unittest import mock
@@ -293,6 +294,60 @@ def test_all_invalid_accounts_returns_none(tui_dir, tmp_path):
 
 
 # --------------------------------------------------------------------------
+# Selection metadata (non-secret source attribution)
+# --------------------------------------------------------------------------
+
+
+def test_select_auth_returns_nonsecret_selection_metadata(tui_dir, tmp_path):
+    _write_pool(tui_dir, [
+        {"path": "codex-auth/a.json", "weight": 1},
+        {"path": "codex-auth/b.json", "weight": 3},
+    ])
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    defaults = {"codex_session_anchor": anchor}
+
+    sel = codex_pool.select_codex_pool_auth(defaults)
+    assert sel is not None
+    assert set(sel) == {"auth_path", "selection"}
+    # Same choice as the path-only helper (one selection, two views).
+    assert sel["auth_path"] == codex_pool.select_codex_pool_auth_path(defaults)
+
+    meta = sel["selection"]
+    assert set(meta) == {
+        "source_ref", "source_index", "pool_size", "weight", "auth_path_sha8",
+    }
+    refs = ["codex-auth/a.json", "codex-auth/b.json"]
+    assert meta["source_ref"] in refs
+    assert meta["source_index"] == refs.index(meta["source_ref"])
+    assert meta["pool_size"] == 2
+    assert meta["weight"] == (1 if meta["source_ref"] == refs[0] else 3)
+    expected_hash = hashlib.sha256(sel["auth_path"].encode("utf-8")).hexdigest()[:8]
+    assert meta["auth_path_sha8"] == expected_hash
+
+
+def test_select_auth_missing_pool_returns_none(tui_dir, tmp_path):
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    assert codex_pool.select_codex_pool_auth({"codex_session_anchor": anchor}) is None
+
+
+def test_selection_metadata_contains_no_secrets(tui_dir, tmp_path):
+    """The selection dict never carries token contents or resolved absolute paths."""
+    secret = "SECRET-token-value-do-not-log"
+    token = tui_dir / "work.json"
+    token.write_text(json.dumps({"access_token": secret}), encoding="utf-8")
+    _write_pool(tui_dir, [{"path": "work.json", "weight": 1}])
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+
+    sel = codex_pool.select_codex_pool_auth({"codex_session_anchor": anchor})
+    dumped = json.dumps(sel["selection"])
+    assert secret not in dumped
+    assert "access_token" not in dumped
+    # A relative pool ref stays relative in the metadata — the resolved
+    # absolute path lives only in ``auth_path`` (injected, not logged).
+    assert str(tui_dir) not in dumped
+
+
+# --------------------------------------------------------------------------
 # Factory integration: codex-pool injects codex_auth_path into the reused adapter
 # --------------------------------------------------------------------------
 
@@ -337,6 +392,56 @@ def test_codex_pool_missing_pool_falls_back_to_default_path(tui_dir, tmp_path):
         _codex_pool_adapter("codex-pool", {"codex_session_anchor": anchor})
         # No token_path kwarg -> CodexTokenManager() legacy default behavior.
         cls.assert_called_with()
+    finally:
+        mgr.stop()
+
+
+def test_codex_pool_factory_stamps_selection_on_adapter_and_chat(tui_dir, tmp_path):
+    """The factory stamps the non-secret selection on the adapter and each chat."""
+    _write_pool(tui_dir, [{"path": "work.json", "weight": 2}])
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    mgr, cls = _mock_mgr()
+    fake_chat = mock.MagicMock(name="chat")
+    try:
+        with mock.patch(
+            "lingtai.llm.openai.adapter.CodexOpenAIAdapter.create_chat",
+            return_value=fake_chat,
+        ):
+            adapter = _codex_pool_adapter("codex-pool", {"codex_session_anchor": anchor})
+            selection = adapter.codex_pool_selection
+            assert selection == {
+                "source_ref": "work.json",
+                "source_index": 0,
+                "pool_size": 1,
+                "weight": 2,
+                "auth_path_sha8": mock.ANY,
+            }
+            chat = adapter.create_chat(model="gpt-5.5", system_prompt="s")
+            assert chat is fake_chat
+            assert chat.codex_pool_selection == selection
+    finally:
+        mgr.stop()
+
+
+def test_codex_pool_factory_stamps_fallback_marker_without_pool(tui_dir, tmp_path):
+    """No usable pool -> the breadcrumb says the legacy default token was used."""
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    mgr, cls = _mock_mgr()
+    try:
+        adapter = _codex_pool_adapter("codex-pool", {"codex_session_anchor": anchor})
+        assert adapter.codex_pool_selection == {"fallback": "legacy_default"}
+    finally:
+        mgr.stop()
+
+
+def test_codex_factory_has_no_pool_selection_attr(tui_dir, tmp_path):
+    """Provider ``codex`` never grows the pool breadcrumb."""
+    _write_pool(tui_dir, [{"path": "work.json", "weight": 1}])
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    mgr, cls = _mock_mgr()
+    try:
+        adapter = _codex_pool_adapter("codex", {"codex_session_anchor": anchor})
+        assert not hasattr(adapter, "codex_pool_selection")
     finally:
         mgr.stop()
 

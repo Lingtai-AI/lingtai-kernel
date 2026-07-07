@@ -348,11 +348,19 @@ class SessionManager:
         self._health_check(message)
 
         api_call_id = f"api_{uuid.uuid4().hex[:12]}"
-        self._log(
-            "llm_call",
-            model=self._config.model or self._llm_service.model or "unknown",
-            api_call_id=api_call_id,
-        )
+        llm_call_fields: dict = {
+            "model": self._config.model or self._llm_service.model or "unknown",
+            "api_call_id": api_call_id,
+        }
+        # codex-pool source attribution: the codex-pool factory stamps a
+        # non-secret selection breadcrumb (pool ref/index/size/weight — no
+        # tokens, no auth-file contents) on each chat it creates. Surface it
+        # here so events.jsonl / log.sqlite can answer "which pool source
+        # handled this call". Every other provider's chats lack the attribute.
+        codex_pool_selection = getattr(self._chat, "codex_pool_selection", None)
+        if isinstance(codex_pool_selection, dict):
+            llm_call_fields["codex_pool"] = codex_pool_selection
+        self._log("llm_call", **llm_call_fields)
 
         retry_timeout = self._config.retry_timeout
 

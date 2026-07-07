@@ -24,7 +24,9 @@ Public helpers:
   * :func:`resolve_codex_tui_dir`      -> the ``~/.lingtai-tui`` base dir.
   * :func:`resolve_codex_pool_path`    -> the pool file path (override-aware).
   * :func:`load_codex_auth_pool`       -> validated list of enabled accounts.
-  * :func:`select_codex_pool_auth_path`-> chosen token path, or ``None``.
+  * :func:`select_codex_pool_auth`     -> chosen token path + non-secret
+                                          selection metadata, or ``None``.
+  * :func:`select_codex_pool_auth_path`-> chosen token path only, or ``None``.
 """
 
 from __future__ import annotations
@@ -194,23 +196,67 @@ def _read_started_at(anchor_str: str) -> str | None:
     return str(val)
 
 
-def _weighted_pick(accounts: list[dict], seed: str) -> dict:
+def _weighted_pick(accounts: list[dict], seed: str) -> tuple[int, dict]:
     """Deterministically pick one account by cumulative weight from ``seed``.
 
     Hashes ``seed`` into a stable integer and maps it into ``[0, total_weight)``
     via cumulative weights — no per-unit list expansion, so a huge weight stays
     O(len(accounts)). The same seed + same accounts always picks the same one.
+    Returns ``(index, account)`` — the index within the validated account list.
     """
     total = sum(a["weight"] for a in accounts)
     digest = hashlib.sha256(seed.encode("utf-8")).digest()
     point = int.from_bytes(digest[:8], "big") % total
     cumulative = 0
-    for acct in accounts:
+    for idx, acct in enumerate(accounts):
         cumulative += acct["weight"]
         if point < cumulative:
-            return acct
+            return idx, acct
     # Unreachable (point < total == final cumulative) — defensive fallback.
-    return accounts[-1]
+    return len(accounts) - 1, accounts[-1]
+
+
+def select_codex_pool_auth(defaults: dict | None = None) -> dict | None:
+    """Select the pool account and describe the choice for runtime logging.
+
+    Returns ``{"auth_path": <resolved token path str>, "selection": <dict>}``,
+    or ``None`` when the pool file is missing / has no valid enabled accounts —
+    in which case the caller falls back to the legacy default Codex token path.
+
+    ``selection`` is the NON-SECRET attribution breadcrumb an operator needs to
+    answer "which codex-pool source handled this call" from the event log:
+
+      * ``source_ref``     — the account ``path`` exactly as configured in the
+                             pool file (relative refs stay relative);
+      * ``source_index``   — index within the validated enabled-account list;
+      * ``pool_size``      — number of validated enabled accounts;
+      * ``weight``         — the chosen account's weight;
+      * ``auth_path_sha8`` — first 8 hex chars of SHA-256 of the resolved token
+                             path, a stable id that avoids logging the absolute
+                             path itself.
+
+    No token file is read and no token content, Authorization material, or raw
+    auth-file data appears in the returned metadata.
+    """
+    tui_dir = resolve_codex_tui_dir()
+    pool_path = resolve_codex_pool_path(defaults)
+    accounts = load_codex_auth_pool(pool_path)
+    if not accounts:
+        return None
+
+    seed = _selection_seed(defaults, tui_dir)
+    idx, chosen = _weighted_pick(accounts, seed)
+    auth_path = str(_resolve_relative_to_tui(chosen["path"], tui_dir))
+    return {
+        "auth_path": auth_path,
+        "selection": {
+            "source_ref": chosen["path"],
+            "source_index": idx,
+            "pool_size": len(accounts),
+            "weight": chosen["weight"],
+            "auth_path_sha8": hashlib.sha256(auth_path.encode("utf-8")).hexdigest()[:8],
+        },
+    }
 
 
 def select_codex_pool_auth_path(defaults: dict | None = None) -> str | None:
@@ -221,14 +267,8 @@ def select_codex_pool_auth_path(defaults: dict | None = None) -> str | None:
     is missing / has no valid enabled accounts — in which case the caller falls
     back to the legacy default Codex token path.
 
+    Path-only view of :func:`select_codex_pool_auth` (one selection, two views).
     Pure path computation: no token file is read and nothing secret is logged.
     """
-    tui_dir = resolve_codex_tui_dir()
-    pool_path = resolve_codex_pool_path(defaults)
-    accounts = load_codex_auth_pool(pool_path)
-    if not accounts:
-        return None
-
-    seed = _selection_seed(defaults, tui_dir)
-    chosen = _weighted_pick(accounts, seed)
-    return str(_resolve_relative_to_tui(chosen["path"], tui_dir))
+    selected = select_codex_pool_auth(defaults)
+    return selected["auth_path"] if selected else None
