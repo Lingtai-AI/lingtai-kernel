@@ -16,7 +16,7 @@ For any non-curated MCP — typically `npx`/`uvx`-launched servers from the broa
 3. Add an `init.json` `mcp.<name>` activation entry.
 4. Run `system(action="refresh")`.
 
-Benefits: gives you the `<homepage>` field (used by `SKILL.md` §Reading an MCP's README → fallback URL), allow-listing, and registry health diagnostics via `mcp(action="show")`.
+Benefits: gives you the `<homepage>` field (used by `SKILL.md` §Reading an MCP's README → fallback URL), allow-listing, and registry health diagnostics via `mcp(action="info")`.
 
 ## Legacy `mcp/servers.json` route
 

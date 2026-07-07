@@ -16,9 +16,10 @@ Knowledge is structurally isomorphic to skills but physically separate:
   private, agent-owned, and may reference agent-local paths, mail ids, and
   logs that skills must not depend on.
 
-Tool surface is a single ``info`` action that returns a runtime health
-snapshot (catalog size, problems). Bodies are read via the ``read`` tool, the
-same way the agent opens a ``SKILL.md``.
+Tool surface: ``info`` returns a runtime health snapshot (catalog size,
+problems) without the manual body; ``manual`` returns the knowledge-manual body
+on demand. Knowledge entry bodies are read via the ``read`` tool, the same way
+the agent opens a ``SKILL.md``.
 
 Usage: ``Agent(capabilities={"knowledge": {}})`` or via init.json.
 """

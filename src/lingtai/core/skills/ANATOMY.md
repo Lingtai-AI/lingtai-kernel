@@ -32,11 +32,12 @@ Skills capability — per-agent skill catalog and skill-manual surface. This is 
 
 ## Public API
 
-The `skills` tool exposes one action:
+The `skills` tool exposes two signpost actions:
 
 | Action | Description |
 |---|---|
-| `info` | Return the skills manual body plus a runtime health snapshot (catalog size, paths report, problems) |
+| `info` | Refresh/reconcile the skills catalog and return runtime health (catalog size, paths report, problems) without manual bodies |
+| `manual` | Return the skills manual body plus the library manual body on demand |
 
 ## State
 

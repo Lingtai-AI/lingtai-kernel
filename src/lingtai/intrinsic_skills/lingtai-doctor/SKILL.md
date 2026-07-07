@@ -98,6 +98,6 @@ Suggested recovery order:
 
 This intrinsic skill is the shared diagnostic foundation. TUI `/doctor` should
 become a thin caller of these scripts instead of maintaining a separate copy of
-logic. Kernel-level `mcp(action="show")` executable validation is also a natural
+logic. Kernel-level `mcp(action="info")` executable validation is also a natural
 follow-up, but the doctor script remains useful because it checks the whole
 agent footprint, not only MCP registry syntax.

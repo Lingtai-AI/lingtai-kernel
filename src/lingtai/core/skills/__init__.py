@@ -19,8 +19,8 @@ This capability is pure presentation: it scans whatever is on disk and builds
 the catalog. It never writes to ``.library/``. File installation is the
 initializer's job.
 
-Tool surface: a single ``info`` action that returns the skills manual body
-plus a runtime health snapshot.
+Tool surface: ``info`` refreshes/reconciles the catalog and returns runtime
+health without manual bodies; ``manual`` returns the skills manual body on demand.
 
 Usage: ``Agent(capabilities={"skills": {"paths": [...]}})`` or via init.json.
 """

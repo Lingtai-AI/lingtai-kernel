@@ -120,7 +120,7 @@ If neither path yields docs, fall back to the MCP's own runtime self-description
 
 ## Tool surface
 
-One action: `mcp(action="info")`. Returns current registry contents and a runtime health snapshot (registry path, count, problems) without the manual body. Use `mcp(action="manual")` when you need this manual body.
+Two actions: `mcp(action="info")` returns current registry contents and a runtime health snapshot (registry path, count, problems) without the manual body; `mcp(action="manual")` returns this manual body on demand.
 
 Each `registered` entry may also carry a non-secret **`identity`** block, so you can tell *which* configured account/bot/channel an MCP surface represents without reading private config:
 

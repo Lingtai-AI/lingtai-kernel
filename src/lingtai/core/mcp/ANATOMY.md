@@ -38,11 +38,12 @@ The model-visible notification projection for LICC events is governed by `src/li
 
 ## Public API
 
-The `mcp` tool exposes one action:
+The `mcp` tool exposes two signpost actions:
 
 | Action | Description |
 |--------|-------------|
-| `show` | Return the mcp-manual skill body plus a runtime health snapshot (registry contents, problems, registry path). Each `registered` entry may carry a non-secret `identity` block (account alias, provider username/id/display name, non-secret routing counts) read from `system/mcp_identities/<name>.json` when the addon has published one. |
+| `info` | Re-read the MCP registry and return runtime health (registry contents, problems, registry path) without the manual body. Each `registered` entry may carry a non-secret `identity` block (account alias, provider username/id/display name, non-secret routing counts) read from `system/mcp_identities/<name>.json` when the addon has published one. |
+| `manual` | Return the mcp-manual skill body on demand. |
 
 ### LICC v1 Inbox Protocol
 

@@ -11,11 +11,11 @@ Symmetric to the ``library`` capability:
   catalog (``lingtai/mcp_catalog.json``). Append-only, idempotent.
 - All registry mutations (register, deregister, update) happen via file
   operations from the agent (``write``, ``edit``). The capability provides
-  guidance via the umbrella SKILL.md and a single ``show`` action that
-  re-renders the prompt section.
+  guidance via the umbrella SKILL.md, with ``info`` re-rendering the
+  prompt section and reporting health while ``manual`` returns the manual body.
 
-Tool surface: a single ``show`` action that returns the umbrella manual body,
-the current registry, and a runtime health snapshot.
+Tool surface: ``info`` returns the current registry and a runtime health
+snapshot without the manual body; ``manual`` returns the umbrella manual body on demand.
 
 Usage: ``Agent(capabilities=["mcp"])`` or via init.json.
 """
@@ -205,7 +205,7 @@ def _append_record(working_dir: Path, record: dict) -> None:
 # tell *which* configured account/bot/channel a registered MCP surface
 # represents — without reading private config or making network calls. Before
 # this reader they were only reachable through each addon's own ``accounts``
-# action, invisible from the generic ``mcp(action="show")`` surface.
+# action, invisible from the generic ``mcp(action="info")`` surface.
 #
 # This reader is a strict projection, never a passthrough: it surfaces only an
 # explicit allowlist of non-secret keys. Even if an identity file on disk were
