@@ -4,11 +4,11 @@ The curated addon servers (telegram, feishu, wechat, whatsapp) each persist a
 non-secret identity document to ``system/mcp_identities/<name>.json`` using the
 shared ``lingtai.mcp.identity.v1`` schema. Before this change those documents
 were only reachable via each addon's own ``accounts`` action — invisible from
-the generic ``mcp(action="show")`` surface that agents use to discover which
+the generic ``mcp(action="info")`` surface that agents use to discover which
 MCP servers they have.
 
 These tests cover the generic reader (``read_identities``) and its surfacing
-through ``mcp(action="show")`` and the system-prompt registry XML, and — most
+through ``mcp(action="info")`` and the system-prompt registry XML, and — most
 importantly — prove that NO secret-shaped fields are ever propagated, even when
 a (hypothetical) malformed identity file on disk contains them.
 """
@@ -303,7 +303,7 @@ def test_unknown_account_fields_are_dropped_by_default(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# mcp(action="show") surfacing
+# mcp(action="info") surfacing
 # ---------------------------------------------------------------------------
 
 def test_show_action_includes_identity_when_present(tmp_path):
@@ -311,7 +311,7 @@ def test_show_action_includes_identity_when_present(tmp_path):
     _write_identity(workdir, "telegram", _telegram_identity())
 
     handler = agent._tool_handlers.get("mcp")
-    result = handler({"action": "show"})
+    result = handler({"action": "info"})
 
     registered = {r["name"]: r for r in result["registered"]}
     assert "telegram" in registered
@@ -320,8 +320,7 @@ def test_show_action_includes_identity_when_present(tmp_path):
     assert ident["account_count"] == 1
     assert ident["accounts"][0]["bot_username"] == "my_agent_bot"
     # No secret anywhere in the identity-bearing portion of the payload.
-    # (The `mcp_manual` field embeds SKILL.md docs that legitimately mention
-    # field names like "bot_token", so we scope the check to `registered`.)
+    # Scope the check to `registered`, the identity-bearing portion of the payload.
     assert "bot_token" not in json.dumps(result["registered"])
 
 
@@ -329,7 +328,7 @@ def test_show_action_omits_identity_when_absent(tmp_path):
     agent, workdir = _mk_agent(tmp_path, addons=["telegram"])
     # No identity file written.
     handler = agent._tool_handlers.get("mcp")
-    result = handler({"action": "show"})
+    result = handler({"action": "info"})
     registered = {r["name"]: r for r in result["registered"]}
     assert "identity" not in registered["telegram"]
 
@@ -340,7 +339,7 @@ def test_show_action_ignores_identity_without_registry_match(tmp_path):
     agent, workdir = _mk_agent(tmp_path, addons=["telegram"])
     _write_identity(workdir, "ghost", _telegram_identity())
     handler = agent._tool_handlers.get("mcp")
-    result = handler({"action": "show"})
+    result = handler({"action": "info"})
     names = {r["name"] for r in result["registered"]}
     assert "ghost" not in names
 
@@ -355,7 +354,7 @@ def test_identity_rendered_into_prompt_xml(tmp_path):
 
     # Re-render the registry now that the identity file exists.
     handler = agent._tool_handlers.get("mcp")
-    handler({"action": "show"})
+    handler({"action": "info"})
 
     section = agent._prompt_manager._sections.get("mcp")
     body = section.body if hasattr(section, "body") else str(section)
@@ -379,7 +378,7 @@ def test_prompt_xml_has_no_secret_even_with_poisoned_file(tmp_path):
         },
     )
     handler = agent._tool_handlers.get("mcp")
-    handler({"action": "show"})
+    handler({"action": "info"})
     section = agent._prompt_manager._sections.get("mcp")
     body = section.body if hasattr(section, "body") else str(section)
     assert "SECRET" not in body

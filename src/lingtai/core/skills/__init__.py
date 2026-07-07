@@ -19,8 +19,8 @@ This capability is pure presentation: it scans whatever is on disk and builds
 the catalog. It never writes to ``.library/``. File installation is the
 initializer's job.
 
-Tool surface: a single ``info`` action that returns the skills manual body
-plus a runtime health snapshot.
+Tool surface: ``info`` refreshes/reconciles the catalog and returns runtime
+health without manual bodies; ``manual`` returns the skills manual body on demand.
 
 Usage: ``Agent(capabilities={"skills": {"paths": [...]}})`` or via init.json.
 """
@@ -159,6 +159,34 @@ def _reconcile(
     return result
 
 
+def _skills_info(agent: "BaseAgent", paths: list[str]) -> dict:
+    """Refresh/reconcile the skills catalog and return health without the manual body."""
+    result = dict(_reconcile(agent, paths))
+    result.pop("skills_manual", None)
+    result.pop("library_manual", None)
+    return result
+
+
+def _skills_manual(agent: "BaseAgent") -> dict:
+    """Return the skills manual body without refreshing catalog health."""
+    manual_path = agent._working_dir / ".library" / "intrinsic" / "capabilities" / "skills" / "SKILL.md"
+    if not manual_path.is_file():
+        return {
+            "status": "degraded",
+            "skills_manual": "",
+            "library_manual": "",
+            "manual_path": str(manual_path),
+            "error": "skills manual missing — initializer may have failed or capability not installed correctly",
+        }
+    manual_body = manual_path.read_text(encoding="utf-8")
+    return {
+        "status": "ok",
+        "skills_manual": manual_body,
+        "library_manual": manual_body,
+        "manual_path": str(manual_path),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tool dispatch
 # ---------------------------------------------------------------------------
@@ -173,7 +201,7 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["info"],
+                "enum": ["info", "manual"],
                 "description": t(lang, "skills.action_info"),
             },
         },
@@ -200,14 +228,17 @@ def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> Non
     # This only READS from .library/ — the initializer has already written it.
     _reconcile(agent, path_list)
 
-    # Register the `info` action. `info` re-runs _reconcile to get a fresh snapshot.
+    # Register signpost actions. `info` refreshes health; `manual` returns the large manual body.
     def handle_skills(args: dict) -> dict:
         return dispatch_action(
             args,
-            {"info": lambda _args: _reconcile(agent, path_list)},
+            {
+                "info": lambda _args: _skills_info(agent, path_list),
+                "manual": lambda _args: _skills_manual(agent),
+            },
             unknown=lambda action: {
                 "status": "error",
-                "message": f"unknown action: {action!r}, only 'info' is supported",
+                "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",
             },
         )
 

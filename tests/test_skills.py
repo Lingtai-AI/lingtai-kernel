@@ -76,22 +76,22 @@ def test_unknown_action_returns_error(tmp_path):
         handler = agent._tool_handlers["skills"]
         assert handler({"action": "list"}) == {
             "status": "error",
-            "message": "unknown action: 'list', only 'info' is supported",
+            "message": "unknown action: 'list', only 'info' or 'manual' is supported",
         }
         # Missing action key renders the empty-string default, not None.
         assert handler({}) == {
             "status": "error",
-            "message": "unknown action: '', only 'info' is supported",
+            "message": "unknown action: '', only 'info' or 'manual' is supported",
         }
         # Invalid JSON can make `action` unhashable (issue #513 blocker): the
         # router must render the unknown-action envelope, not raise TypeError.
         assert handler({"action": []}) == {
             "status": "error",
-            "message": "unknown action: [], only 'info' is supported",
+            "message": "unknown action: [], only 'info' or 'manual' is supported",
         }
         assert handler({"action": {}}) == {
             "status": "error",
-            "message": "unknown action: {}, only 'info' is supported",
+            "message": "unknown action: {}, only 'info' or 'manual' is supported",
         }
     finally:
         agent.stop(timeout=1.0)
@@ -583,11 +583,22 @@ def test_skills_reports_missing_path_as_not_existing(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_info_returns_skills_manual_body(tmp_path):
+def test_info_omits_skills_manual_body(tmp_path):
     agent, _ = _mk_agent(tmp_path)
     try:
         result = agent._tool_handlers["skills"]({"action": "info"})
+        assert "skills_manual" not in result
+        assert "library_manual" not in result
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_manual_returns_skills_manual_body(tmp_path):
+    agent, _ = _mk_agent(tmp_path)
+    try:
+        result = agent._tool_handlers["skills"]({"action": "manual"})
         assert "skills_manual" in result
+        assert "library_manual" in result
         assert "name: skills-manual" in result["skills_manual"]
     finally:
         agent.stop(timeout=1.0)

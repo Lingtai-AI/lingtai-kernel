@@ -11,11 +11,11 @@ Symmetric to the ``library`` capability:
   catalog (``lingtai/mcp_catalog.json``). Append-only, idempotent.
 - All registry mutations (register, deregister, update) happen via file
   operations from the agent (``write``, ``edit``). The capability provides
-  guidance via the umbrella SKILL.md and a single ``show`` action that
-  re-renders the prompt section.
+  guidance via the umbrella SKILL.md, with ``info`` re-rendering the
+  prompt section and reporting health while ``manual`` returns the manual body.
 
-Tool surface: a single ``show`` action that returns the umbrella manual body,
-the current registry, and a runtime health snapshot.
+Tool surface: ``info`` returns the current registry and a runtime health
+snapshot without the manual body; ``manual`` returns the umbrella manual body on demand.
 
 Usage: ``Agent(capabilities=["mcp"])`` or via init.json.
 """
@@ -205,7 +205,7 @@ def _append_record(working_dir: Path, record: dict) -> None:
 # tell *which* configured account/bot/channel a registered MCP surface
 # represents — without reading private config or making network calls. Before
 # this reader they were only reachable through each addon's own ``accounts``
-# action, invisible from the generic ``mcp(action="show")`` surface.
+# action, invisible from the generic ``mcp(action="info")`` surface.
 #
 # This reader is a strict projection, never a passthrough: it surfaces only an
 # explicit allowlist of non-secret keys. Even if an identity file on disk were
@@ -480,21 +480,8 @@ def _reconcile(agent: "BaseAgent") -> dict:
     # Health: the umbrella manual must be present.
     intrinsic_dir = working_dir / ".library" / "intrinsic"
     manual_path = intrinsic_dir / "capabilities" / "mcp" / "SKILL.md"
-    status = "ok"
-    error: str | None = None
-    if not manual_path.is_file():
-        status = "degraded"
-        error = (
-            "mcp manual missing — initializer may have failed or "
-            "capability not installed correctly"
-        )
-        manual_body = ""
-    else:
-        manual_body = manual_path.read_text(encoding="utf-8")
-
     result = {
-        "status": status,
-        "mcp_manual": manual_body,
+        "status": "ok",
         "registry_path": str(_registry_path(working_dir)),
         "registered_count": len(records),
         "registered": [
@@ -503,9 +490,23 @@ def _reconcile(agent: "BaseAgent") -> dict:
         ],
         "problems": problems,
     }
-    if error:
-        result["error"] = error
     return result
+
+
+def _manual(agent: "BaseAgent") -> dict:
+    manual_path = agent._working_dir / ".library" / "intrinsic" / "capabilities" / "mcp" / "SKILL.md"
+    if not manual_path.is_file():
+        return {
+            "status": "degraded",
+            "mcp_manual": "",
+            "manual_path": str(manual_path),
+            "error": "mcp manual missing — initializer may have failed or capability not installed correctly",
+        }
+    return {
+        "status": "ok",
+        "mcp_manual": manual_path.read_text(encoding="utf-8"),
+        "manual_path": str(manual_path),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -513,12 +514,15 @@ def _reconcile(agent: "BaseAgent") -> dict:
 # ---------------------------------------------------------------------------
 
 _DESCRIPTION = (
+    "SIGNPOST ONLY: this tool does not register, activate, configure, or "
+    "troubleshoot MCP servers by itself. `info` only re-reads the registry and "
+    "returns registry health; `manual` returns the mcp-manual body. "
     "Your per-agent MCP server registry. The <registered_mcp> catalog in your "
     "system prompt lists every MCP server currently registered. Before using "
     "this tool (registering, deregistering, updating, or troubleshooting MCP "
-    "servers), read the `mcp-manual` skill — call `show` to fetch its body "
-    "(registration contract, file paths, schema) plus a runtime health "
-    "snapshot; no exceptions. To register, deregister, or update MCPs, edit "
+    "servers), read the `mcp-manual` skill — call `manual` to fetch its body "
+    "(registration contract, file paths, schema), and call `info` for the current "
+    "registry health snapshot; no exceptions. To register, deregister, or update MCPs, edit "
     "mcp_registry.jsonl directly with write/edit and call "
     "system(action=\"refresh\")."
 )
@@ -528,10 +532,12 @@ _SCHEMA = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["show"],
+            "enum": ["info", "manual"],
             "description": (
-                "show: return the mcp-manual skill body plus a runtime health "
-                "snapshot (registry contents, problems, registry path)."
+                "info: signpost-only action; re-reads the registry and returns "
+                "a runtime health snapshot (registry contents, problems, registry path) "
+                "without the manual body. manual: return only the mcp-manual skill body. "
+                "Neither action mutates MCP configuration."
             ),
         },
     },
@@ -560,10 +566,13 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
     def handle_mcp(args: dict) -> dict:
         return dispatch_action(
             args,
-            {"show": lambda _args: _reconcile(agent)},
+            {
+                "info": lambda _args: _reconcile(agent),
+                "manual": lambda _args: _manual(agent),
+            },
             unknown=lambda action: {
                 "status": "error",
-                "message": f"unknown action: {action!r}, only 'show' is supported",
+                "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",
             },
         )
 

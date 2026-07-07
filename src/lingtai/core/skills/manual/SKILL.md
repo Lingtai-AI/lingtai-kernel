@@ -383,7 +383,7 @@ If you hit a collision: rename, or adapt the existing skill instead of forking a
 
 ## Health check
 
-Call `skills({"action": "info"})` to verify your skill catalog is wired correctly. It returns this SKILL.md body plus a runtime snapshot: `library_dir`, `catalog_size`, resolved paths with exist/skill-count info, and any `problems` (invalid frontmatter, unreadable folders). If `status` is `"degraded"`, the error message tells you what needs fixing — typically a missing manual under `intrinsic/capabilities/skills/`, which means the initializer didn't install manuals correctly.
+Call `skills({"action": "info"})` to verify your skill catalog is wired correctly. It refreshes/reconciles the catalog and returns a runtime snapshot: `library_dir`, `catalog_size`, resolved paths with exist/skill-count info, and any `problems` (invalid frontmatter, unreadable folders), without returning the manual body. Use `skills({"action": "manual"})` when you need this SKILL.md body. If `status` is `"degraded"`, the error message tells you what needs fixing — typically a missing manual under `intrinsic/capabilities/skills/`, which means the initializer didn't install manuals correctly.
 
 ## When to create a skill
 
