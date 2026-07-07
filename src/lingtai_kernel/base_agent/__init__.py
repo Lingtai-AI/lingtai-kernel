@@ -1136,10 +1136,11 @@ class BaseAgent:
            * ASLEEP → wake to IDLE, splice the pair, post
              ``MSG_TC_WAKE``.
 
-        Invariant: at most one result block in history carries live
-        notification payload at any time.  Old synthesized pairs become
-        skeleton placeholders but are never deleted — the conversation
-        structure is preserved.
+        Invariant: at most one result block is tracked as the current LIVE
+        notification holder at any time. Old synthesized pairs become skeleton
+        placeholders but are never deleted; normal tool results keep old
+        payload copies as historical timely state. The conversation structure is
+        preserved, and provider rebuild replay filters old copies non-mutatingly.
 
         The fingerprint is committed only when injection succeeds (or
         when in a state that cannot inject — STUCK/SUSPENDED/empty).

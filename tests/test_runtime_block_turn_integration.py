@@ -207,10 +207,11 @@ def test_unchanged_snapshot_not_restamped_on_newer_result(tmp_path):
     assert "agent_meta" not in second_result.get("_meta", {})
 
 
-def test_material_change_reattaches_and_strips_prior(tmp_path):
+def test_material_change_reattaches_and_retains_prior(tmp_path):
     # First batch has no material agent_meta change; second batch surfaces a new
     # adapter_comment scalar — a material change. agent_meta re-attaches to the
-    # newer result and the older holder sheds its agent_meta/guidance.
+    # newer result; the older holder keeps its snapshot as a historical trace
+    # (timely transient semantics — no retroactive strip, Jason #4307).
     agent = _Agent(tmp_path, [_stamped("T1"), _stamped("T2", material="materially new")])
 
     _process_response(
@@ -227,16 +228,18 @@ def test_material_change_reattaches_and_strips_prior(tmp_path):
     assert second_holder is not first_holder
     assert second_holder["echo"] == "T2"
     assert second_holder["_meta"]["agent_meta"]["adapter_comment"] == {"note": "materially new"}
-    # The previous holder sheds its agent_meta/guidance now that a newer live
-    # holder carries the changed snapshot.
-    assert "_meta" not in first_holder or "agent_meta" not in first_holder["_meta"]
+    # The previous holder RETAINS its agent_meta/guidance as a historical
+    # update point; the newest emission is the current one.
+    assert "agent_meta" in first_holder["_meta"]
+    assert "adapter_comment" not in first_holder["_meta"]["agent_meta"]
 
 
 # ---------------------------------------------------------------------------
 # Sparse / update-driven notifications at the turn boundary.  Mirrors the
 # agent_meta sparse invariant above but for ``_meta.notifications``: an
 # unchanged notification payload is NOT chased onto every newest ordinary tool
-# result; a material change re-attaches it and strips the prior holder.
+# result; a material change re-attaches it while the prior holder keeps its
+# old payload as a historical trace (timely transient semantics).
 # ---------------------------------------------------------------------------
 
 
@@ -325,5 +328,8 @@ def test_notification_material_change_reattaches_at_boundary(tmp_path):
     assert persistent_email["email_ids"] == ["email-2"]
     assert persistent_email["emails"][0]["message"] == "Three new emails"
     assert "digest" not in persistent_email
-    # The previous holder sheds its notification payload.
-    assert "_meta" not in first_holder or "notifications" not in first_holder["_meta"]
+    # The previous holder RETAINS its old notification payload as a
+    # historical trace; only the newest emission is current.
+    assert first_holder["_meta"]["notifications"]["email"]["data"] == {
+        "email_ids": ["email-1"]
+    }

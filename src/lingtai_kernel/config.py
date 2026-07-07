@@ -40,9 +40,10 @@ MOLT_NOTICE_THRESHOLD = 0.60  # legacy name; now the molt RECOVERY TARGET (see b
 #     context usage reaches this inclusive threshold, the runtime forces a
 #     provider-context rebuild / fresh replay on the next model request
 #     REGARDLESS of whether pending summaries exist: if pending markers exist they
-#     are applied and marked done; if none exist the rebuild still runs because it
-#     may release transient context (agent_meta, notifications, cleared surfaces).
-#     A one-shot unified warning is ALWAYS emitted after this forced rebuild.
+#     are applied and marked done; even with no pending summaries the fresh replay
+#     may omit historical timely-transient `_meta` copies (agent_meta and
+#     notifications) via the adapter's non-mutating rebuild filter. A one-shot
+#     unified warning is ALWAYS emitted after this forced rebuild.
 #     (``CONTEXT_PRESSURE_RECONSTRUCTION_RATIO`` is a back-compat alias.)
 #   * CONTEXT_PRESSURE_WARN_AFTER_ROUNDS (3) — the resident ``context.molt``
 #     warning begins on the THIRD consecutive high round; earlier high rounds get

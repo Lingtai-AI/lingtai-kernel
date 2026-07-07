@@ -116,7 +116,16 @@ Flow:
 
 1. Record message into canonical `ChatInterface`.
 2. `_frozen_responses_input(interface)` — the full conversation as input items
-   (with per-`call_id` output freezing for stable replay).
+   (with per-`call_id` output freezing for stable replay). After an epoch reset
+   (`_reset_ws_epoch`), previously-sent outputs re-freeze through the
+   timely-transient filter (`_filter_timely_transient_output`): the fresh
+   replay omits old `_meta.agent_meta` / `_meta.guidance` /
+   `_meta.notifications` / `_meta.notification_guidance` copies from
+   HISTORICAL tool outputs (empty `_meta` envelopes are dropped) without
+   mutating canonical history; a result first seen on the rebuild send keeps
+   its live payload. Only these four timely transient keys are filtered —
+   summary markers, `notification_persistent`, `tool_meta`, and ordinary
+   payloads replay unchanged.
 3. Run the shared `_codex_plan_continuation` planner: first turn / prefix mismatch
    / epoch reset → **full**; strict additive continuation → **incremental**.
 4. Send via the selected transport:

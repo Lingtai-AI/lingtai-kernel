@@ -561,20 +561,101 @@ def _strip_synthesized_orphan_outputs(
     return [item for item in items if not _ws_is_synthesized_orphan_output(item)]
 
 
+# The four timely transient ``_meta`` blocks (kernel names, see
+# ``lingtai_kernel.meta_block``): sparse/update-driven current-state hints whose
+# old copies are historical traces, not current state. Canonical history keeps
+# them (no retroactive strip — Jason #4307); the provider-context rebuild's
+# fresh replay filters them from HISTORICAL tool outputs instead. The durable
+# ``notification_persistent`` lane is deliberately NOT listed.
+_TIMELY_TRANSIENT_AGENT_META_KEYS = ("agent_meta", "guidance")
+_TIMELY_TRANSIENT_NOTIFICATION_KEYS = ("notifications", "notification_guidance")
+_TIMELY_TRANSIENT_META_KEYS = (
+    *_TIMELY_TRANSIENT_AGENT_META_KEYS,
+    *_TIMELY_TRANSIENT_NOTIFICATION_KEYS,
+)
+
+
+def _timely_transient_families_in_output(output: Any) -> set[str]:
+    """Return timely transient families present in a serialized tool output."""
+
+    if not isinstance(output, str):
+        return set()
+    try:
+        parsed = json.loads(output)
+    except ValueError:
+        return set()
+    if not isinstance(parsed, dict):
+        return set()
+    meta = parsed.get("_meta")
+    if not isinstance(meta, dict):
+        return set()
+    families: set[str] = set()
+    if any(key in meta for key in _TIMELY_TRANSIENT_AGENT_META_KEYS):
+        families.add("agent_meta")
+    if any(key in meta for key in _TIMELY_TRANSIENT_NOTIFICATION_KEYS):
+        families.add("notifications")
+    return families
+
+
+def _filter_timely_transient_output(
+    output: Any, *, keep_keys: tuple[str, ...] = ()
+) -> Any:
+    """Return ``output`` with old timely transient ``_meta`` keys removed.
+
+    Non-mutating by construction: the string is parsed into a fresh object, so
+    canonical ``ToolResultBlock.content`` / ``ChatInterface`` entries / durable
+    history are never touched. When there is nothing to filter — non-string
+    output, non-JSON output, no dict ``_meta``, or no transient key to remove —
+    the ORIGINAL string object is returned unchanged so unaffected outputs stay
+    byte-identical (summary markers and ordinary tool payloads pass through).
+    ``keep_keys`` lets rebuild replay preserve the newest still-current
+    occurrence for each timely family while removing older copies. If ``_meta``
+    carried only removed transient keys, the empty envelope is omitted.
+    """
+    if not isinstance(output, str):
+        return output
+    try:
+        parsed = json.loads(output)
+    except ValueError:
+        return output
+    if not isinstance(parsed, dict):
+        return output
+    meta = parsed.get("_meta")
+    if not isinstance(meta, dict):
+        return output
+    keep = set(keep_keys)
+    remove_keys = [
+        key for key in _TIMELY_TRANSIENT_META_KEYS if key in meta and key not in keep
+    ]
+    if not remove_keys:
+        return output
+    for key in remove_keys:
+        meta.pop(key, None)
+    if not meta:
+        parsed.pop("_meta", None)
+    # Match ``to_responses_input``'s dump (default separators/escaping) so the
+    # filtered string is deterministic across re-serializations of the same
+    # canonical content.
+    return json.dumps(parsed, default=str)
+
+
 def _freeze_responses_outputs(
     items: list[dict[str, Any]],
     frozen: dict[str, str],
+    *,
+    transient_filter_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Stabilize ``function_call_output.output`` strings across WS replay turns.
 
     The kernel carries resident-meta blocks with different cadences:
     sparse/update-driven ``_meta.agent_meta`` / ``_meta.guidance`` (moved only
     when their material snapshot changes by ``meta_block.attach_active_runtime``)
-    and latest-only ``_meta.notifications`` (moved by
-    ``attach_active_notifications``). Those moves rewrite an older
-    ``ToolResultBlock.content`` *in place*, so the same ``call_id``'s
-    ``function_call_output.output`` serializes differently on a later turn even
-    though, semantically, the model already saw that result.
+    and sparse/update-driven ``_meta.notifications`` (moved by
+    ``attach_active_notifications``). In-place canonical rewrites still exist
+    (summarize markers, pending→done flips, placeholder overwrites, AED
+    compaction, synthesized-pair skeletons), so the same ``call_id``'s
+    ``function_call_output.output`` may serialize differently on a later turn
+    even though, semantically, the model already saw that result.
 
     For Codex's stateful WS delta path the next request's converted input must
     strict-prefix-match the prior baseline. A changed older
@@ -592,11 +673,35 @@ def _freeze_responses_outputs(
     turn*, so it freezes WITH its live meta — live guidance / notifications still
     reach the model on the result that is supposed to carry them.
 
+    ``transient_filter_ids`` is the rebuild-time timely-transient filter: when a
+    ``call_id`` in that set is (re)frozen — i.e. it was already sent to the
+    provider before an epoch reset cleared the freeze map — old copies of the
+    four timely transient ``_meta`` blocks are removed before freezing. The
+    newest occurrence for each timely family (agent_meta/guidance and
+    notifications/notification_guidance) is preserved, because only the latest
+    value represents current state. A first-seen output (not in the set) still
+    freezes with its live payload. Already-frozen ids replay their cached string
+    and are unaffected.
+
     Pure and content-free: returns a new list (shallow-copying only the rewritten
     items), never mutates the caller's items, and records nothing to diagnostics.
     Non-``function_call_output`` items and outputs missing a ``call_id`` pass
     through untouched.
     """
+    newest_family_call_id: dict[str, str] = {}
+    if transient_filter_ids:
+        for item in items:
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "function_call_output"
+                and isinstance(item.get("call_id"), str)
+                and not _ws_is_synthesized_orphan_output(item)
+            ):
+                for family in _timely_transient_families_in_output(
+                    item.get("output")
+                ):
+                    newest_family_call_id[family] = item["call_id"]
+
     out: list[dict[str, Any]] = []
     for item in items:
         if (
@@ -613,6 +718,18 @@ def _freeze_responses_outputs(
             call_id = item["call_id"]
             cached = frozen.get(call_id)
             if cached is None:
+                if transient_filter_ids and call_id in transient_filter_ids:
+                    keep_keys: tuple[str, ...] = ()
+                    if newest_family_call_id.get("agent_meta") == call_id:
+                        keep_keys += _TIMELY_TRANSIENT_AGENT_META_KEYS
+                    if newest_family_call_id.get("notifications") == call_id:
+                        keep_keys += _TIMELY_TRANSIENT_NOTIFICATION_KEYS
+                    filtered = _filter_timely_transient_output(
+                        item.get("output"), keep_keys=keep_keys
+                    )
+                    if filtered is not item.get("output"):
+                        item = dict(item)
+                        item["output"] = filtered
                 frozen[call_id] = item.get("output")
                 out.append(item)
             else:
@@ -2323,14 +2440,21 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # a converter-stable delta baseline once the assistant turn is recorded.
         self._ws_pending_baseline_input: list[dict[str, Any]] | None = None
         # Per-session freeze of model-facing ``function_call_output.output`` strings
-        # keyed by ``call_id``. The kernel moves latest-only resident-meta blocks
-        # off older tool results onto the freshest one each turn, which rewrites an
-        # older ``ToolResultBlock.content`` in place and would change that result's
-        # converted ``output`` on replay — breaking the strict-prefix WS delta
-        # baseline. Freezing the first-seen output per call_id keeps replay
-        # byte-identical while the freshest result still carries live meta (it is
-        # first-seen on its own turn). See ``_freeze_responses_outputs``.
+        # keyed by ``call_id``. Canonical history can still change after a tool
+        # result was first sent (summary markers, placeholder overwrites, AED
+        # spill manifests, and historical timely ``_meta`` retention/filtering),
+        # which would change that result's converted ``output`` on replay and
+        # break the strict-prefix WS delta baseline. Freezing the first-seen
+        # output per call_id keeps ordinary replay byte-identical while the
+        # freshest result still carries live meta (it is first-seen on its own
+        # turn). See ``_freeze_responses_outputs``.
         self._ws_frozen_outputs: dict[str, str] = {}
+        # call_ids whose outputs the provider already received before an epoch
+        # reset cleared the freeze map. On the fresh replay these HISTORICAL
+        # outputs shed the timely transient ``_meta`` blocks
+        # (``_filter_timely_transient_output``); never-sent outputs keep their
+        # live payload. Grows by union at each ``_reset_ws_epoch``.
+        self._ws_rebuild_transient_filter_ids: set[str] = set()
         # Last websocket delta decision diagnostic (safe metadata only): why the
         # request went ``ws_incremental`` vs ``ws_full``. Surfaced in usage.extra.
         self._ws_last_diag: dict[str, Any] = {}
@@ -2879,8 +3003,9 @@ class CodexResponsesSession(OpenAIResponsesSession):
             # rebuild=true path already marked its batch done in the intrinsic
             # (this is idempotent); the 1.0 hard forced rebuild has no other place
             # to do it, so this is that hook. When no pending markers exist the flip
-            # is a no-op — the forced rebuild still ran to release transient context.
-            # Kept tiny and defensive — never let bookkeeping abort the rebuild.
+            # is a no-op — the forced rebuild still rerenders the provider replay
+            # through the timely-transient filter. Kept tiny and defensive — never
+            # let bookkeeping abort the rebuild.
             try:
                 from lingtai_kernel.intrinsics.system.summarize import (
                     mark_pending_summaries_done,
@@ -2893,6 +3018,11 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._close_ws_transport()
         self._ws_session = _CodexWebsocketSession()
         self._ws_pending_baseline_input = None
+        # Everything currently frozen was already sent to the provider at least
+        # once — mark it historical so the fresh replay filters the timely
+        # transient ``_meta`` blocks from those outputs (union, not overwrite:
+        # back-to-back resets before a replay must not forget earlier epochs).
+        self._ws_rebuild_transient_filter_ids.update(self._ws_frozen_outputs)
         self._ws_frozen_outputs.clear()
         self._ws_turns_since_epoch_reset = 0
         self._ws_epoch_reset_reason_pending = reason
@@ -2973,9 +3103,11 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # force a fresh provider-context replay on the next request REGARDLESS of
         # whether pending summaries exist. If pending markers exist they are applied
         # and marked done (via _reset_ws_epoch's marking hook); if none exist the
-        # rebuild still runs because it may release transient context (agent_meta,
-        # notifications, cleared surfaces). This is why the pending-set guard that
-        # used to gate the pre-1.0 delayed release is gone.
+        # rebuild still runs so the fresh replay can filter old timely transient
+        # _meta copies (agent_meta, guidance, notifications, notification_guidance)
+        # from HISTORICAL tool outputs (_filter_timely_transient_output) and pick
+        # up other deliberate canonical rewrites. This is why the pending-set guard
+        # that used to gate the pre-1.0 delayed release is gone.
         ctx = self._summarize_delay_context()
         self._summarize_effect_delayed_last_context = ctx
         usage = ctx.get("current_context_usage")
@@ -3350,13 +3482,20 @@ class CodexResponsesSession(OpenAIResponsesSession):
 
         Routes every Codex WS conversion through ``_freeze_responses_outputs`` so
         the model-facing ``function_call_output.output`` for a given ``call_id``
-        stays byte-identical across turns, even after the kernel moves latest-only
-        resident-meta off an older result. All three WS conversion sites (full
-        replay, per-turn delta, baseline tail) share ``self._ws_frozen_outputs`` so
-        the baseline and the next full request remain strict-prefix comparable.
+        stays byte-identical across turns, even when canonical content was
+        rewritten in place (summarize markers, placeholder overwrites). All three
+        WS conversion sites (full replay, per-turn delta, baseline tail) share
+        ``self._ws_frozen_outputs`` so the baseline and the next full request
+        remain strict-prefix comparable. After an epoch reset the re-freeze runs
+        the historical outputs (``self._ws_rebuild_transient_filter_ids``)
+        through the timely-transient filter, so the rebuilt replay omits old
+        ``_meta.agent_meta`` / ``guidance`` / ``notifications`` /
+        ``notification_guidance`` copies without mutating canonical history.
         """
         return _freeze_responses_outputs(
-            to_responses_input(iface), self._ws_frozen_outputs
+            to_responses_input(iface),
+            self._ws_frozen_outputs,
+            transient_filter_ids=self._ws_rebuild_transient_filter_ids,
         )
 
     def _interface_entries_to_responses_input(self, entries: list[Any]) -> list[dict[str, Any]]:

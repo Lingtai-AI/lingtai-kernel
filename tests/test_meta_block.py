@@ -325,6 +325,21 @@ def test_build_meta_readme_documents_always_on_session_cache_miss_telemetry():
     assert "reconstruct" in lowered
 
 
+def test_build_meta_readme_documents_timely_latest_only_semantics():
+    """agent_meta and notifications are timely transient state: older payloads
+    may remain in historical context/logs as traces (canonical history is no
+    longer retroactively stripped), and only the NEWEST emission is current —
+    old payloads are not current instructions/state."""
+    readme = build_meta_readme()
+    for key in ("agent_meta", "notifications"):
+        doc = readme[key]
+        assert "timely" in doc.lower(), key
+        assert "only the NEWEST" in doc, key
+        assert "historical trace" in doc, key
+    # Old notification payloads must never read as new/unhandled instructions.
+    assert "not current instructions" in readme["notifications"]
+
+
 def test_build_guidance_with_meta_readme_keeps_section_shape_without_packaged_guidance():
     guidance = build_guidance_with_meta_readme({})
 
@@ -2040,9 +2055,12 @@ def test_attach_active_notifications_unchanged_payload_not_restamped(tmp_path):
     }
 
 
-def test_attach_active_notifications_changed_payload_reattaches_and_strips_prior(tmp_path):
+def test_attach_active_notifications_changed_payload_reattaches_and_retains_prior(tmp_path):
     # When the notification payload materially changes, it re-attaches to the
-    # newest result and the prior holder sheds its now-stale payload.
+    # newest result. The prior holder KEEPS its old payload as a historical
+    # trace — notification payloads are timely transient state, and canonical
+    # history is no longer retroactively stripped (Jason #4307); only the
+    # newest emitted payload is current.
     from lingtai_kernel.notifications import notification_fingerprint
 
     _write_email_notif(tmp_path)
@@ -2068,8 +2086,11 @@ def test_attach_active_notifications_changed_payload_reattaches_and_strips_prior
     assert new_holder is second.content
     # The signature advanced with the material change.
     assert agent._notification_payload_signature != first_sig
-    # First holder shed its notification keys (and its now-empty _meta envelope).
-    assert "_meta" not in first.content or "notifications" not in first.content["_meta"]
+    # First holder RETAINS its original payload as a historical trace.
+    assert first.content["_meta"]["notifications"]["email"]["data"] == {
+        "email_ids": ["email-1"]
+    }
+    assert "notification_guidance" in first.content["_meta"]
     assert second.content["_meta"]["notifications"]["email"]["data"] == {
         "email_ids": ["email-2"]
     }
@@ -2160,8 +2181,9 @@ def test_attach_active_notifications_check_read_receives_unchanged_payload(tmp_p
     assert check_result.content["_meta"]["notifications"]["email"]["data"] == {
         "email_ids": ["email-1"]
     }
-    # The prior ordinary holder shed its payload when the check took over.
-    assert "_meta" not in first.content or "notifications" not in first.content["_meta"]
+    # The prior ordinary holder RETAINS its payload as a historical trace; the
+    # check result is simply the newest (current) emission.
+    assert "notifications" in first.content["_meta"]
 
 
 def test_attach_active_notifications_empty_resets_signature_for_reappearance(tmp_path):
@@ -2180,8 +2202,9 @@ def test_attach_active_notifications_empty_resets_signature_for_reappearance(tmp
     result = attach_active_notifications(agent, [empty_batch], prior_holder=holder)
     assert result is None
     assert agent._notification_payload_signature is None
-    # Prior holder shed its payload.
-    assert "_meta" not in first.content or "notifications" not in first.content["_meta"]
+    # Prior holder RETAINS its payload as a historical trace (no retroactive
+    # strip); it is simply no longer the live holder.
+    assert "notifications" in first.content["_meta"]
 
     # Same payload reappears — must attach afresh (first-active semantics).
     _write_email_notif(tmp_path)
@@ -2313,9 +2336,9 @@ def test_attach_active_notifications_adds_telegram_persistent_delta_with_comment
     new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
 
     assert new_holder is second.content
-    # The previous holder keeps its persistent context even though the moving
-    # _meta.notifications payload was skeletonized away.
-    assert "notifications" not in first.content.get("_meta", {})
+    # The previous holder keeps its persistent context AND its old ephemeral
+    # _meta.notifications payload (historical trace — no retroactive strip).
+    assert "notifications" in first.content["_meta"]
     assert first.content["_meta"]["notification_persistent"]["mcp"]["telegram"]["messages"]
     telegram = second.content["_meta"]["notification_persistent"]["mcp"]["telegram"]
     assert [message["id"] for message in telegram["messages"]] == ["main:123:21"]
@@ -2914,9 +2937,9 @@ def test_attach_active_notifications_adds_wechat_persistent_delta_with_comment(t
     new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
 
     assert new_holder is second.content
-    # The previous holder keeps its persistent context even though the moving
-    # _meta.notifications payload was skeletonized away.
-    assert "notifications" not in first.content.get("_meta", {})
+    # The previous holder keeps its persistent context AND its old ephemeral
+    # _meta.notifications payload (historical trace — no retroactive strip).
+    assert "notifications" in first.content["_meta"]
     assert first.content["_meta"]["notification_persistent"]["mcp"]["wechat"]["messages"]
     wechat = second.content["_meta"]["notification_persistent"]["mcp"]["wechat"]
     assert [message["id"] for message in wechat["messages"]] == ["wc-11"]
@@ -3379,7 +3402,7 @@ def test_attach_active_notifications_uses_canonical_soul_payload(tmp_path):
     ]
 
 
-def test_attach_active_notifications_no_active_clears_prior(tmp_path):
+def test_attach_active_notifications_no_active_releases_prior_without_strip(tmp_path):
     # No `.notification/` directory at all → no active notifications.
     agent = _notif_agent(tmp_path)
     # Pre-existing fingerprint from a hypothetical earlier delivery; the
@@ -3395,8 +3418,10 @@ def test_attach_active_notifications_no_active_clears_prior(tmp_path):
         agent, [new_block], prior_holder=prior
     )
     assert result is None
-    # Prior shed its notification keys; the empty _meta envelope is dropped.
-    assert "_meta" not in prior or "notifications" not in prior["_meta"]
+    # The prior normal result RETAINS its old payload as a historical trace
+    # (no retroactive strip); it just stops being the live holder.
+    assert prior["_meta"]["notifications"] == {"email": {"header": "stale"}}
+    assert agent._notification_live_holder is None
     assert "_meta" not in new_block.content
     # Crucially: with no active notifications, we leave the fp alone so
     # the IDLE-path synthesized pair retains whatever guard state it had.
@@ -3450,16 +3475,18 @@ def test_attach_active_notifications_picks_latest_dict_in_batch(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# skeletonize_notification_holder / clear_active_notification_holder — strip
-# stale live notification payload while preserving history structure.  Old
-# synthesized notification pairs remain as placeholder skeletons; normal tool
-# results only lose notification-specific keys.
+# skeletonize_notification_holder / clear_active_notification_holder — release
+# the live-holder reference.  Old synthesized notification pairs are replaced
+# by placeholder skeletons (they exist only to carry the payload); a normal
+# tool result RETAINS its payload as a historical trace — notification
+# payloads are timely transient state and canonical history is no longer
+# retroactively stripped (Jason #4307).
 # ---------------------------------------------------------------------------
 
 
-def test_clear_active_notification_holder_strips_normal_live_holder():
-    # Notification keys live under _meta; stripping them leaves tool_meta and
-    # drops the envelope only if it becomes empty.
+def test_clear_active_notification_holder_retains_normal_live_holder_payload():
+    # A normal tool result keeps its notification keys as a historical trace;
+    # only the live-holder reference is dropped.
     stamped = {
         "ok": True,
         "_meta": {
@@ -3472,25 +3499,14 @@ def test_clear_active_notification_holder_strips_normal_live_holder():
 
     clear_active_notification_holder(agent)
 
-    # tool_meta survives; notification keys are gone.
-    assert stamped == {"ok": True, "_meta": {"tool_meta": {"id": "t1"}}}
-    assert agent._notification_live_holder is None
-
-
-def test_clear_active_notification_holder_drops_empty_meta_envelope():
-    # When _meta carried only notification keys, the whole envelope is removed.
-    stamped = {
+    assert stamped == {
         "ok": True,
         "_meta": {
+            "tool_meta": {"id": "t1"},
             "notifications": {"email": {"data": {}}},
             "notification_guidance": "live guidance",
         },
     }
-    agent = SimpleNamespace(_notification_live_holder=stamped)
-
-    clear_active_notification_holder(agent)
-
-    assert stamped == {"ok": True}
     assert agent._notification_live_holder is None
 
 
@@ -3715,7 +3731,7 @@ def test_attach_active_runtime_refreshes_adapter_comment_at_batch_boundary():
     assert "summary" not in tail
     assert "meta_guidance_ref" not in tail
 
-def test_attach_active_runtime_moves_to_latest_and_clears_prior():
+def test_attach_active_runtime_moves_to_latest_and_retains_prior():
     agent = _runtime_agent(total_calls=1)
 
     first_content = _stamped_result({"current_time": "T1"}, 5)
@@ -3723,16 +3739,19 @@ def test_attach_active_runtime_moves_to_latest_and_clears_prior():
     holder = attach_active_runtime(agent, [first], prior_holder=None)
     assert "agent_meta" in first.content["_meta"]
 
-    # Second batch: a new dict result takes over. The prior holder must shed
-    # its agent_meta/guidance; only the newest result carries them.
+    # Second batch: a new dict result takes over as the newest update point.
+    # The prior holder RETAINS its agent_meta/guidance as a historical trace —
+    # agent_meta is timely transient state and canonical history is no longer
+    # retroactively stripped (Jason #4307); only the newest emission is current.
     agent = _runtime_agent(total_calls=2)
     second_content = _stamped_result({"current_time": "T2"}, 6)
     second = ToolResultBlock(id="t2", name="x", content=second_content)
     new_holder = attach_active_runtime(agent, [second], prior_holder=holder)
 
     assert new_holder is second.content
-    # previous loses its agent_meta/guidance (envelope dropped when empty)
-    assert "_meta" not in first.content or "agent_meta" not in first.content["_meta"]
+    # Previous KEEPS its agent_meta/guidance (historical update point).
+    assert "agent_meta" in first.content["_meta"]
+    assert "guidance" in first.content["_meta"]
     assert "current_time" not in second.content["_meta"]["agent_meta"]
     assert second.content["_meta"]["agent_meta"]["active_turn_tool_calls"] == 2
 
@@ -3822,10 +3841,11 @@ def test_attach_active_runtime_unchanged_snapshot_not_restamped_on_latest():
 
 def test_attach_active_runtime_material_change_reattaches():
     # After an unchanged batch, a genuinely material change (here: a new
-    # adapter_comment scalar) re-attaches agent_meta to the newest result and
-    # strips the older holder.  (The sustained-pressure molt reminder is NO longer
-    # an agent_meta signal — it lives on permanent tool_meta.context.molt now — so
-    # a neutral agent_meta material field drives this mechanism test.)
+    # adapter_comment scalar) re-attaches agent_meta to the newest result; the
+    # older holder keeps its snapshot as a historical trace.  (The
+    # sustained-pressure molt reminder is NO longer an agent_meta signal — it
+    # lives on permanent tool_meta.context.molt now — so a neutral agent_meta
+    # material field drives this mechanism test.)
     agent = _runtime_agent(total_calls=1)
     first = ToolResultBlock(id="t1", name="x", content=_stamped_result({"current_time": "T1"}, 5))
     holder = attach_active_runtime(agent, [first], prior_holder=None)
@@ -3851,8 +3871,10 @@ def test_attach_active_runtime_material_change_reattaches():
     assert new_holder is third.content
     assert "agent_meta" in third.content["_meta"]
     assert third.content["_meta"]["agent_meta"]["adapter_comment"] == {"note": "materially new"}
-    # The older holder now sheds its agent_meta/guidance.
-    assert "_meta" not in first.content or "agent_meta" not in first.content["_meta"]
+    # The older holder RETAINS its earlier snapshot as a historical update
+    # point (no retroactive strip); the newest emission is the current one.
+    assert "agent_meta" in first.content["_meta"]
+    assert "adapter_comment" not in first.content["_meta"]["agent_meta"]
 
 
 def test_attach_active_runtime_new_large_result_is_material():
