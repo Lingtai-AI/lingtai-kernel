@@ -93,7 +93,7 @@ resolving.
 | `mimocode` / `mimo` | `mimo run --format json <prompt>` | `mimo run --session <mimocode_session_id> --format json ...` via `ask` (async) | MiMo Code CLI backend (npm package `@mimo-ai/cli`, binary `mimo`). `mimo` canonicalizes to `mimocode`. Per-run MCP injection is not wired here yet because no local binary/docs path in this workspace confirmed a MiMo-specific config override compatible with LingTai's wrapper. |
 | `qwen-code` / `qwen` | `QWEN_CODE_SYSTEM_SETTINGS_PATH=<run>/qwen-daemon-settings.json qwen --yolo -p <prompt>` | Not supported yet; `ask` returns an explicit unsupported-backend error | Qwen Code CLI backend (npm package `@qwen-code/qwen-code`, binary `qwen`). `qwen` canonicalizes to `qwen-code`. The per-run settings file contains `mcpServers.daemon_common`. |
 | `oh-my-pi` / `omp` | `omp --mode json --approval-mode yolo <prompt>` | `omp --mode json --approval-mode yolo --session <oh_my_pi_session_id> ...` via `ask` (async) | Oh-My-Pi pi-coding-agent CLI backend (npm package `@oh-my-pi/pi-coding-agent`, binary `omp`). `--mode json` is non-interactive JSON event-stream print mode; the first `type:session` header line carries the resumable session id. `omp` canonicalizes to `oh-my-pi`. Per-run MCP injection is not wired yet pending evidence of its accepted config/env path. |
-| `kimicode` / `kimi` | `kimi --prompt <prompt> --output-format text` (per-run env: run-private `KIMI_CODE_HOME`, telemetry/auto-update off, `KIMI_MODEL_API_KEY` mapped from `KIMICODE_API_KEY`/`KIMI_API_KEY`/`MOONSHOT_API_KEY` when unset, provider/base-url/model/context defaults only when absent) | Not supported yet; `ask` returns an explicit unsupported-backend error | MoonshotAI Kimi Code CLI backend (official `MoonshotAI/kimi-code`, binary `kimi`, observed v0.20.2). `kimi` canonicalizes to `kimicode`. LingTai owns `--prompt`/`--output-format` and forbids `--yolo` (the CLI refuses `--prompt` + `--yolo`); session/`--continue` flags are reserved because resume is not wired. Stable session-id output was not verified, so `ask`/resume is intentionally unsupported. Per-run MCP injection is not wired here yet (help shows `acp` but no clear `--mcp` server-loading path). Secret env values are never logged. |
+| `kimicode` / `kimi` | `KIMI_CODE_HOME=<run>/kimi-code-home kimi --prompt <prompt> --output-format text` (same per-run env: telemetry/auto-update off, `KIMI_MODEL_API_KEY` mapped from `KIMICODE_API_KEY`/`KIMI_API_KEY`/`MOONSHOT_API_KEY` when unset, provider/base-url/model/context defaults only when absent) | Not supported yet; `ask` returns an explicit unsupported-backend error | MoonshotAI Kimi Code CLI backend (official `MoonshotAI/kimi-code`, binary `kimi`, source-verified v0.22.3 for MCP config). `kimi` canonicalizes to `kimicode`. LingTai owns `--prompt`/`--output-format` and forbids `--yolo` (the CLI refuses `--prompt` + `--yolo`); session/`--continue` flags are reserved because resume is not wired. Stable session-id output was not verified, so `ask`/resume is intentionally unsupported. The daemon writes `<run>/kimi-code-home/mcp.json` with `daemon_common` plus parent stdio and HTTP MCP registrations; secret env/header values stay out of prompts/logs and live only in the native per-run config. |
 | `cursor` | `agent -p <prompt>` | `agent -p --resume <cursor_session_id> ...` via `ask` (async) | Cursor Agent CLI backend. Per-run MCP injection is not wired yet; local `agent --help` could not be inspected in this environment because the CLI attempted macOS keychain access and failed before printing help. |
 
 **Per-task system prompt.** Every task item may include `system_prompt`. Use it
@@ -122,11 +122,10 @@ added automatically and its `finish` tool is the hard terminal-success contract.
 Claude print backends receive a per-run `--mcp-config` file; Codex receives
 `-c mcp_servers.daemon_common.*` overrides; OpenCode receives
 `OPENCODE_CONFIG_CONTENT`; and Qwen receives a per-run settings file path.
-MiMo, Oh-My-Pi, Kimi Code, and Cursor are not declared unsupported: they have
-documented (or plausible) MCP entrypoints that still need daemon-native config
-wiring and tests. Kimi Code additionally has no verified arbitrary-MCP
-server-loading flag yet (its help exposes `acp` but no clear `--mcp`), so it
-ships no-MCP for now. Secret
+MiMo, Oh-My-Pi, and Cursor are not declared unsupported: they have documented
+(or plausible) MCP entrypoints that still need daemon-native config wiring and
+tests. Kimi Code is wired through its source-verified run-private `mcp.json`
+loader for stdio and HTTP registrations. Secret
 `env`/`headers` values are redacted in prompts. The daemon-eligible `email`
 intrinsic is available only
 when explicitly requested in the task `tools` list, so result-only/no-tool

@@ -82,7 +82,7 @@ def test_daemon_contract_locks_architecture_capability_terms():
         "native MCP config",
         "prompt-catalog-only",
         "finish(status=\"done\")",
-        "HTTP MCP registrations are accepted for the prompt catalog today",
+        "native HTTP mounting is claimed only for backends whose source-proven config schema supports it",
         "Backend Support Matrix",
         "Review Triggers",
         "Acceptance Gate",
@@ -95,5 +95,5 @@ def test_daemon_contract_does_not_claim_unwired_native_mcp_support():
     text = " ".join(DOC.read_text(encoding="utf-8").split())
     assert "| `mimocode` / `mimo` | Yes. | Not wired in this slice; prompt catalog only." in text
     assert "| `oh-my-pi` / `omp` | Yes. | Not verified; prompt catalog only." in text
-    assert "| `kimicode` / `kimi` | Yes. | Not verified; prompt catalog only." in text
+    assert "| `kimicode` / `kimi` | Yes. | Yes for stdio and HTTP via run-private `$KIMI_CODE_HOME/mcp.json`." in text
     assert "| `cursor` | Yes. | Not verified; prompt catalog only." in text

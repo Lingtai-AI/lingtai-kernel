@@ -17,8 +17,9 @@ session/resume caveats that keep `ask` unsupported in the daemon backend.
 ## Status
 
 Use for MoonshotAI Kimi Code subprocesses (official `MoonshotAI/kimi-code`
-single binary `kimi`, version observed 0.20.2). Keep provider/model credential
-discovery elsewhere; this page only owns shell execution hygiene.
+single binary `kimi`, version observed 0.22.3 for MCP config support). Keep
+provider/model credential discovery elsewhere; this page only owns shell
+execution hygiene.
 
 ## Command shape
 
@@ -48,6 +49,16 @@ The daemon backend sets per run (never logging secret values):
 - `KIMI_MODEL_NAME` / `KIMI_MODEL_PROVIDER_TYPE` / `KIMI_MODEL_BASE_URL` /
   `KIMI_MODEL_MAX_CONTEXT_SIZE` — provider defaults, applied only when absent.
 
+## MCP config evidence
+
+Kimi Code's installed 0.22.3 bundle lists MCP declaration targets at
+`$KIMI_CODE_HOME/mcp.json`, project-root `.mcp.json`, and cwd-local
+`.kimi-code/mcp.json`. Its MCP schema accepts `transport: "stdio"` with
+`command`/`args`/`env` and `transport: "http"` with `url`/`headers` (plus SSE,
+which LingTai daemon task registrations do not expose). The daemon uses only the
+run-private `$KIMI_CODE_HOME/mcp.json` path so each emanation gets isolated
+native MCP config.
+
 ## LingTai daemon notes
 
 - The daemon start command is deterministic and non-interactive (one-shot
@@ -56,8 +67,11 @@ The daemon backend sets per run (never logging secret values):
   exist, but a stable machine-readable session-id output was not verified, so a
   reliable resume contract could not be source-cited. `daemon(action='ask')`
   returns an explicit unsupported-backend error.
-- MCP arbitrary-server loading is not wired: help shows `acp` but no clear
-  `--mcp` server path, so the backend ships no-MCP for now.
+- MCP arbitrary-server loading is wired through run-private
+  `$KIMI_CODE_HOME/mcp.json`: `daemon_common` plus parent-provided stdio and HTTP
+  MCP registrations are native tools for this backend. Prompt and durable
+  `daemon.json` contexts still redact `env`/`headers` values; the unredacted
+  values live only in the native per-run config.
 
 ## Validation checklist
 
