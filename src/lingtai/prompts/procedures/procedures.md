@@ -40,7 +40,7 @@ guidance catalog as resident `meta_guidance`; reference/manual
 layers explain the rationale, edge cases, examples, and troubleshooting.
 
 **Summarize cadence.** Prefer a priori `summary=true` on `bash`, `read`,
-or `grep` when you can predict bulky output and already know the facts, counts,
+`grep`, `daemon`, or `glob` when you can predict bulky output and already know the facts, counts,
 anchors, or conclusion you need from the call; put that retention contract in
 `reasoning` so raw bulk never spends context. Leave it off when exact raw text or
 unknown high-information details may matter. After digesting a completed tool

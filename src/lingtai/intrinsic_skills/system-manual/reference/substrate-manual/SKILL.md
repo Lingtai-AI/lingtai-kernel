@@ -132,7 +132,7 @@ LingTai has three deliberate ways to keep context lean, from local to
 whole-conversation. All three preserve the raw original in durable logs; none is
 canonical.
 
-1. **A priori — reasoning-guided** (`summary=true` on `bash`/`read`/`grep`): the
+1. **A priori — reasoning-guided** (`summary=true` on `bash`/`read`/`grep`/`daemon`/`glob`): the
    tool runs normally and the raw is preserved, but the result is replaced by a
    generated summary *before* it ever enters your context. Prefer this over a
    posteriori summarization when you can predict bulk and already know the facts,
