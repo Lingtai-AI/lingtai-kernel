@@ -200,6 +200,7 @@ def test_principle_body_starts_with_system_prompt_map_and_lingtai_principles():
         assert f"| `{section}` |" in body
     assert "## LingTai operating principles" in body
     assert "Act on need" in body
+    assert "Adapt from evidence" in body
     assert "text output is diary/private scratch" in body
     assert "Always reply on the channel where the message arrived" in body
     assert "Mechanical runtime facts" in body

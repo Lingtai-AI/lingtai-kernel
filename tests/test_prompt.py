@@ -190,6 +190,7 @@ def test_packaged_principle_owns_static_progressive_and_token_efficiency_rules()
     assert "`procedures` is how to act" in prompt
     assert "`substrate` is the working model" in prompt
     assert "Reference manuals are why" in prompt
+    assert "Adapt from evidence" in prompt
     assert "Token efficiency principle:" in prompt
     assert "the current session's active context is carried into every provider request" in prompt
     assert "summarize consumed tool results" in prompt
