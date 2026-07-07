@@ -20,7 +20,7 @@ from pathlib import Path
 from lingtai_kernel.base_agent import BaseAgent
 from lingtai_kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai_kernel._frontmatter import strip_frontmatter as _strip_frontmatter
-from lingtai_kernel.config import AgentConfig
+from lingtai_kernel.config import AgentConfig, THINKING_PROVIDERS
 from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 from lingtai_kernel.prompt import build_system_prompt
 
@@ -51,7 +51,16 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
         cache_miss_budget=manifest.get(
             "cache_miss_budget", defaults.cache_miss_budget
         ),
-        thinking=llm.get("thinking", defaults.thinking),
+        # Codex-family providers own their omitted-thinking default at the
+        # adapter (omitted -> reasoning.effort "xhigh"), so an omitted manifest
+        # value stays the "default" sentinel for them instead of being promoted
+        # to the legacy cross-provider "high" main-session default.
+        thinking=llm.get(
+            "thinking",
+            "default"
+            if str(llm.get("provider") or "").lower() in THINKING_PROVIDERS
+            else defaults.thinking,
+        ),
         # Molt thresholds and the context.molt message are kernel-fixed runtime
         # constants and are NOT agent-configurable. Stale manifest
         # molt_notice/molt_pressure/molt_urgency/molt_prompt values are
