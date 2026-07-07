@@ -736,8 +736,9 @@ def build_meta_readme() -> dict:
             "snapshots stay in historical context and logs as historical traces "
             "(they are not retroactively removed), and if several appear, only "
             "the NEWEST one is current — older snapshots are past state, not "
-            "current state. A provider-context rebuild replays history without "
-            "the old copies. "
+            "current state. Model-facing full-history serialization / a fresh "
+            "provider replay presents only the newest copy; old copies persist "
+            "only in recorded history and logs. "
             "agent_meta carries NO token diagnostics: all token/cache "
             "facts — both this call's own facts and the since-last-molt session "
             "aggregate — live "
@@ -781,8 +782,9 @@ def build_meta_readme() -> dict:
             "not retroactively removed), and if several appear, only the NEWEST "
             "one is current — older payloads are not current instructions or "
             "unhandled events; act on new messages through the producer channel "
-            "(telegram.read, email.read, ...). A provider-context rebuild "
-            "replays history without the old copies. "
+            "(telegram.read, email.read, ...). Model-facing full-history "
+            "serialization / a fresh provider replay presents only the newest "
+            "copy; old copies persist only in recorded history and logs. "
             "Not part of the formal tool-result payload; do not summarize "
             "notification contents as the result body."
         ),
@@ -2823,9 +2825,10 @@ def skeletonize_notification_holder(agent) -> None:
       ``_meta.notification_guidance`` payload is RETAINED as a historical
       trace.  Notification payloads are timely transient state (Jason #4307):
       canonical history is no longer retroactively stripped when the payload
-      moves or disappears; only the newest emitted payload is current, and the
-      Codex provider-context rebuild filters the old copies from replay
-      serialization instead (see ``lingtai.llm.openai.adapter``).
+      moves or disappears; only the newest emitted payload is current, and
+      model-facing full-history serialization filters the old copies (newest
+      per family kept) without rewriting recorded history (see
+      ``lingtai.llm.interface_converters``).
     * A synthesized pair's content dict — replace ALL keys with the skeleton
       so the pair stays in history but carries no live payload.  The pair
       exists only to carry the payload; its body is not a tool result the
@@ -2989,9 +2992,10 @@ def attach_active_notifications(
           shape used by the synthesized notification pair is stamped under
           ``_meta`` on the latest dict-shaped result, the fingerprint is
           committed, the new signature is recorded, and that dict is returned as
-          the new holder.  Only the newest emitted payload is current; the Codex
-          provider-context rebuild filters old copies from replay serialization
-          (see ``lingtai.llm.openai.adapter``).
+          the new holder.  Only the newest emitted payload is current;
+          model-facing full-history serialization filters old copies (newest
+          per family kept) without rewriting recorded history (see
+          ``lingtai.llm.interface_converters``).
 
     ``post-molt`` is intentionally not special-cased here.  The dangerous race
     is narrower: the ``psyche.molt`` tool call writes ``post-molt.json`` before
@@ -3290,8 +3294,9 @@ def attach_active_runtime(
         and return the new holder.  The prior holder RETAINS its snapshot as a
         historical trace — ``agent_meta`` is timely transient state (Jason
         #4307): canonical history is not retroactively stripped, only the
-        newest emitted snapshot is current, and the Codex provider-context
-        rebuild filters old copies from replay serialization instead.
+        newest emitted snapshot is current, and model-facing full-history
+        serialization filters old copies (newest per family kept) without
+        rewriting recorded history (see ``lingtai.llm.interface_converters``).
       * When the signature is **unchanged**, nothing is attached or moved and
         ``prior_holder`` is returned unchanged — its ``agent_meta`` stays put.
       * The transient ``_runtime_pending`` scaffolding is stripped from *all*

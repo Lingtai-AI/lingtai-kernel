@@ -190,15 +190,6 @@ def _parse_response(raw) -> LLMResponse:
     )
 
 
-def _tool_result_to_dict(block: ToolResultBlock) -> dict:
-    """Convert a canonical ToolResultBlock to Anthropic tool_result dict."""
-    return {
-        "type": "tool_result",
-        "tool_use_id": block.id,
-        "content": block.content if isinstance(block.content, str) else json.dumps(block.content, default=str),
-    }
-
-
 def _ensure_alternation(messages: list[dict]) -> list[dict]:
     """Merge consecutive same-role messages to satisfy Anthropic's alternation rule.
 

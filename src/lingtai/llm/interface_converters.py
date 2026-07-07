@@ -22,6 +22,122 @@ from lingtai_kernel.llm.interface import (
 
 
 # ---------------------------------------------------------------------------
+# Timely transient ``_meta`` filtering (shared model-facing serialization)
+# ---------------------------------------------------------------------------
+
+
+# The four timely transient ``_meta`` blocks (kernel names, see
+# ``lingtai_kernel.meta_block``), grouped by the family that moves together:
+# sparse/update-driven current-state hints whose old copies are historical
+# traces, not current state. Canonical history keeps them (no retroactive
+# strip — Jason #4307); model-facing full-history serialization instead
+# presents only the NEWEST occurrence per family and omits the stale copies,
+# without rewriting recorded history. The durable ``notification_persistent``
+# lane is deliberately NOT listed.
+TIMELY_TRANSIENT_META_FAMILIES: dict[str, tuple[str, ...]] = {
+    "agent_meta": ("agent_meta", "guidance"),
+    "notifications": ("notifications", "notification_guidance"),
+}
+
+
+def _timely_transient_families(content: Any) -> tuple[str, ...]:
+    """Timely transient families present in a ``ToolResultBlock.content`` value.
+
+    Accepts the canonical content shapes — a dict or a JSON string; anything
+    else (unparseable JSON, non-dict JSON, no dict ``_meta``) carries no
+    families.
+    """
+    if isinstance(content, str):
+        if "_meta" not in content:
+            return ()
+        try:
+            content = json.loads(content)
+        except ValueError:
+            return ()
+    if not isinstance(content, dict):
+        return ()
+    meta = content.get("_meta")
+    if not isinstance(meta, dict):
+        return ()
+    return tuple(
+        family
+        for family, keys in TIMELY_TRANSIENT_META_FAMILIES.items()
+        if any(key in meta for key in keys)
+    )
+
+
+def timely_transient_newest_holders(
+    iface: ChatInterface,
+) -> dict[str, ToolResultBlock]:
+    """Newest canonical ``ToolResultBlock`` per timely transient family.
+
+    Walks ``iface.entries`` in order, so the LAST block carrying a family's
+    keys wins — that occurrence is current state; every earlier one is a
+    historical trace that model-facing serialization omits.
+    """
+    newest: dict[str, ToolResultBlock] = {}
+    for entry in iface.entries:
+        for block in entry.content or []:
+            if isinstance(block, ToolResultBlock):
+                for family in _timely_transient_families(block.content):
+                    newest[family] = block
+    return newest
+
+
+def filter_stale_timely_transient(
+    block: ToolResultBlock, newest: dict[str, ToolResultBlock]
+) -> Any:
+    """Return ``block.content`` with stale timely transient ``_meta`` keys removed.
+
+    ``newest`` is the map from :func:`timely_transient_newest_holders` computed
+    over the SAME full history the caller is serializing. A family's keys
+    survive only on that family's newest holder (compared by object identity);
+    every older copy is omitted. If ``_meta`` carried only removed keys, the
+    now-empty envelope is omitted too.
+
+    Non-mutating by construction: canonical ``ToolResultBlock.content`` /
+    ``ChatInterface`` entries / durable history are never touched — string
+    content is parsed into a fresh object, dict content is copied at the
+    rewritten levels. When there is nothing to remove the ORIGINAL content
+    object is returned unchanged, so unaffected results stay byte-identical
+    across re-serializations (summary markers, ``tool_meta``,
+    ``notification_persistent``, and ordinary payloads pass through).
+    """
+    content = block.content
+    stale_keys = tuple(
+        key
+        for family, keys in TIMELY_TRANSIENT_META_FAMILIES.items()
+        if newest.get(family) is not block
+        for key in keys
+    )
+    if not stale_keys:
+        return content
+    parsed = content
+    was_str = isinstance(content, str)
+    if was_str:
+        if "_meta" not in content:
+            return content
+        try:
+            parsed = json.loads(content)
+        except ValueError:
+            return content
+    if not isinstance(parsed, dict):
+        return content
+    meta = parsed.get("_meta")
+    if not isinstance(meta, dict):
+        return content
+    if not any(key in meta for key in stale_keys):
+        return content
+    new_meta = {key: value for key, value in meta.items() if key not in stale_keys}
+    filtered = dict(parsed)
+    if new_meta:
+        filtered["_meta"] = new_meta
+    else:
+        filtered.pop("_meta")
+    return json.dumps(filtered, default=str) if was_str else filtered
+
+
+# ---------------------------------------------------------------------------
 # Anthropic
 # ---------------------------------------------------------------------------
 
@@ -29,34 +145,38 @@ from lingtai_kernel.llm.interface import (
 def to_anthropic(iface: ChatInterface) -> list[dict]:
     """Convert canonical interface to Anthropic message list.
     System entries excluded (Anthropic passes system separately).
+    Stale timely transient ``_meta`` copies are omitted from tool results
+    (newest per family kept) — see ``filter_stale_timely_transient``.
     """
+    newest = timely_transient_newest_holders(iface)
     messages: list[dict] = []
     for entry in iface.entries:
         if entry.role == "system":
             continue
         if entry.role == "user":
             if entry.content and isinstance(entry.content[0], ToolResultBlock):
-                blocks = [_to_anthropic_block(b) for b in entry.content]
+                blocks = [_to_anthropic_block(b, newest) for b in entry.content]
                 messages.append({"role": "user", "content": blocks})
             elif len(entry.content) == 1 and isinstance(entry.content[0], TextBlock):
                 messages.append({"role": "user", "content": entry.content[0].text})
             else:
-                messages.append({"role": "user", "content": [_to_anthropic_block(b) for b in entry.content]})
+                messages.append({"role": "user", "content": [_to_anthropic_block(b, newest) for b in entry.content]})
         elif entry.role == "assistant":
-            messages.append({"role": "assistant", "content": [_to_anthropic_block(b) for b in entry.content]})
+            messages.append({"role": "assistant", "content": [_to_anthropic_block(b, newest) for b in entry.content]})
     return messages
 
 
-def _to_anthropic_block(block: ContentBlock) -> dict:
+def _to_anthropic_block(block: ContentBlock, newest: dict[str, ToolResultBlock]) -> dict:
     if isinstance(block, TextBlock):
         return {"type": "text", "text": block.text}
     elif isinstance(block, ToolCallBlock):
         return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.args}
     elif isinstance(block, ToolResultBlock):
+        content = filter_stale_timely_transient(block, newest)
         return {
             "type": "tool_result",
             "tool_use_id": block.id,
-            "content": block.content if isinstance(block.content, str) else json.dumps(block.content, default=str),
+            "content": content if isinstance(content, str) else json.dumps(content, default=str),
         }
     elif isinstance(block, ThinkingBlock):
         d: dict = {"type": "thinking", "thinking": block.text}
@@ -121,7 +241,10 @@ def _from_anthropic_block(b: dict) -> ContentBlock:
 def to_openai(iface: ChatInterface) -> list[dict]:
     """Convert canonical interface to OpenAI Chat Completions message list.
     System entries become role=system.  Tool results become separate role=tool messages.
+    Stale timely transient ``_meta`` copies are omitted from tool results
+    (newest per family kept) — see ``filter_stale_timely_transient``.
     """
+    newest = timely_transient_newest_holders(iface)
     messages: list[dict] = []
     for entry in iface.entries:
         if entry.role == "system":
@@ -130,10 +253,11 @@ def to_openai(iface: ChatInterface) -> list[dict]:
             if entry.content and isinstance(entry.content[0], ToolResultBlock):
                 for block in entry.content:
                     if isinstance(block, ToolResultBlock):
+                        content = filter_stale_timely_transient(block, newest)
                         messages.append({
                             "role": "tool",
                             "tool_call_id": block.id,
-                            "content": block.content if isinstance(block.content, str) else json.dumps(block.content, default=str),
+                            "content": content if isinstance(content, str) else json.dumps(content, default=str),
                         })
             elif len(entry.content) == 1 and isinstance(entry.content[0], TextBlock):
                 messages.append({"role": "user", "content": entry.content[0].text})
@@ -274,7 +398,16 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
     canonical history carries a tool_call whose result was lost — for
     example after a continuation send that failed AFTER local tool
     execution and was rolled back by the adapter (issue #170).
+
+    Stale timely transient ``_meta`` copies are omitted from tool results
+    (newest per family kept) — see ``filter_stale_timely_transient``. On the
+    Codex WS path the per-``call_id`` freeze
+    (``lingtai.llm.openai.adapter._freeze_responses_outputs``) keeps
+    already-sent outputs byte-identical within an epoch; a fresh replay after
+    an epoch reset re-serializes through this converter and so sheds the stale
+    copies.
     """
+    newest = timely_transient_newest_holders(iface)
     items: list[dict] = []
     for entry in iface.entries:
         if entry.role == "system":
@@ -283,10 +416,11 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
             if entry.content and isinstance(entry.content[0], ToolResultBlock):
                 for block in entry.content:
                     if isinstance(block, ToolResultBlock):
+                        content = filter_stale_timely_transient(block, newest)
                         output = (
-                            block.content
-                            if isinstance(block.content, str)
-                            else json.dumps(block.content, default=str)
+                            content
+                            if isinstance(content, str)
+                            else json.dumps(content, default=str)
                         )
                         items.append({
                             "type": "function_call_output",
@@ -362,26 +496,30 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
 def to_gemini(iface: ChatInterface) -> list[dict]:
     """Convert canonical interface to Gemini Interactions TurnParam list.
     System entries excluded (Gemini uses system_instruction parameter).
+    Stale timely transient ``_meta`` copies are omitted from tool results
+    (newest per family kept) — see ``filter_stale_timely_transient``.
     """
+    newest = timely_transient_newest_holders(iface)
     turns: list[dict] = []
     for entry in iface.entries:
         if entry.role == "system":
             continue
         role = "model" if entry.role == "assistant" else "user"
-        turns.append({"role": role, "content": [_to_gemini_block(b) for b in entry.content]})
+        turns.append({"role": role, "content": [_to_gemini_block(b, newest) for b in entry.content]})
     return turns
 
 
-def _to_gemini_block(block: ContentBlock) -> dict:
+def _to_gemini_block(block: ContentBlock, newest: dict[str, ToolResultBlock]) -> dict:
     if isinstance(block, TextBlock):
         return {"type": "text", "text": block.text}
     elif isinstance(block, ToolCallBlock):
         return {"type": "function_call", "id": block.id, "name": block.name, "arguments": block.args}
     elif isinstance(block, ToolResultBlock):
+        content = filter_stale_timely_transient(block, newest)
         return {
             "type": "function_result",
             "call_id": block.id,
-            "result": block.content if isinstance(block.content, str) else json.dumps(block.content, default=str),
+            "result": content if isinstance(content, str) else json.dumps(content, default=str),
             "name": block.name,
         }
     elif isinstance(block, ThinkingBlock):

@@ -238,9 +238,10 @@ summarize would discard cache benefit.
   **forces** a provider-context rebuild / fresh replay on the next request
   **regardless of whether pending summaries exist**. If pending summaries exist,
   they are applied and their markers marked done. If none exist, the fresh replay
-  may still omit historical timely transient `_meta` copies (agent_meta/guidance
-  and notifications/notification_guidance) from already-sent tool results without
-  rewriting recorded history. Every 1.0 forced rebuild ALWAYS carries a one-shot
+  still sheds stale timely transient `_meta` copies (agent_meta/guidance
+  and notifications/notification_guidance) — model-facing serialization keeps
+  only the newest copy per family, on every provider, without rewriting
+  recorded history. Every 1.0 forced rebuild ALWAYS carries a one-shot
   `_meta.tool_meta.reconstruction.warning`: it reports the before→after context
   change, advises that reaching the full boundary means waiting was not ideal (prefer
   a proactive 0.75 `rebuild=true`), and says that if the rebuilt context is still
@@ -250,8 +251,9 @@ summarize would discard cache benefit.
 
 Waiting for the 1.0 forced boundary is the emergency path — prefer the proactive
 0.75 rebuild. If no summary is pending, the forced rebuild has nothing to apply,
-though the fresh replay may still omit historical timely transient `_meta` copies
-from already-sent tool results without rewriting recorded history. `refresh`
+though the fresh replay still sheds stale timely transient `_meta` copies
+(model-facing serialization keeps only the newest copy per family, on every
+provider, without rewriting recorded history). `refresh`
 remains the emergency path for broken/stale context or explicit human direction,
 not the normal way to apply summarize. If summarize or a rebuild still cannot
 bring context below `0.6 * context_window` (the recovery target), tend durable

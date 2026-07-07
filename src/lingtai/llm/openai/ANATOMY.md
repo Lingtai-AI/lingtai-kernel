@@ -116,16 +116,20 @@ Flow:
 
 1. Record message into canonical `ChatInterface`.
 2. `_frozen_responses_input(interface)` — the full conversation as input items
-   (with per-`call_id` output freezing for stable replay). After an epoch reset
-   (`_reset_ws_epoch`), previously-sent outputs re-freeze through the
-   timely-transient filter (`_filter_timely_transient_output`): the fresh
-   replay omits old `_meta.agent_meta` / `_meta.guidance` /
-   `_meta.notifications` / `_meta.notification_guidance` copies from
-   HISTORICAL tool outputs (empty `_meta` envelopes are dropped) without
-   mutating canonical history; a result first seen on the rebuild send keeps
-   its live payload. Only these four timely transient keys are filtered —
-   summary markers, `notification_persistent`, `tool_meta`, and ordinary
-   payloads replay unchanged.
+   (with per-`call_id` output freezing for stable replay). Timely transient
+   `_meta` filtering is NOT Codex-specific: the shared converter
+   (`interface_converters.to_responses_input` via
+   `filter_stale_timely_transient`) omits stale `_meta.agent_meta` /
+   `_meta.guidance` / `_meta.notifications` / `_meta.notification_guidance`
+   copies from every model-facing full-history serialization, keeping the
+   newest occurrence per family (empty `_meta` envelopes are dropped) without
+   mutating canonical history. Within a WS epoch the per-`call_id` freeze keeps
+   already-sent outputs byte-identical (so a result the model saw keeps its
+   frozen payload); after an epoch reset (`_reset_ws_epoch`) the cleared freeze
+   map re-freezes from the converter's filtered serialization, so the fresh
+   replay sheds the stale copies. Only these four timely transient keys are
+   filtered — summary markers, `notification_persistent`, `tool_meta`, and
+   ordinary payloads replay unchanged.
 3. Run the shared `_codex_plan_continuation` planner: first turn / prefix mismatch
    / epoch reset → **full**; strict additive continuation → **incremental**.
 4. Send via the selected transport:

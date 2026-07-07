@@ -63,8 +63,9 @@ already-pending summaries); applied summaries flip to `status: done`. At context
 usage `1.0` (the full-context hard boundary) the runtime **forces** a rebuild on
 the next request **regardless of whether pending summaries exist** — pending
 markers are applied and marked done, and with no pending summaries the fresh
-replay may still omit historical timely transient `_meta` copies from already-sent
-tool results without rewriting recorded history. Every `1.0` forced rebuild ALWAYS attaches a
+replay still sheds stale timely transient `_meta` copies — model-facing
+serialization keeps only the newest copy per family, on every provider, without
+rewriting recorded history. Every `1.0` forced rebuild ALWAYS attaches a
 one-shot `reconstruction.warning` (before→after context, proactive-`0.75`-rebuild
 advice, and "if still above the `0.6` recovery target, molt"). Waiting until full
 context is not ideal — prefer the proactive `0.75` rebuild. If pending total is 0,
