@@ -148,6 +148,8 @@ def test_summary_true_under_cap_replaces_with_summary_and_preserves_raw(tmp_path
     assert "t3" in loc["query"]
     assert content["summary_input_chars"] == content["original_visible_chars"]
     assert content["summary_input_truncated"] is False
+    assert content["summary_effect"]["prev_chars"] == content["original_visible_chars"]
+    assert content["summary_effect"]["after_chars"] == len(content["generated_summary"])
     # The success lifecycle event records the actual model-visible summary text
     # (not just its char count) so event-log replay / TUI can render it. The raw
     # is NOT carried in this event.
@@ -155,6 +157,7 @@ def test_summary_true_under_cap_replaces_with_summary_and_preserves_raw(tmp_path
     assert gen is not None
     assert gen["generated_summary"] == "GENSUMMARY: command printed 200 ys"
     assert gen["summary_chars"] == len("GENSUMMARY: command printed 200 ys")
+    assert gen["summary_effect"] == content["summary_effect"]
     assert gen["tool_call_id"] == "t3"
     assert gen["tool_name"] == "bash"
     assert "RAWSECRET" not in str(gen)
