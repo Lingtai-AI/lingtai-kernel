@@ -39,11 +39,15 @@ High-attention tool-result summarization guidance lives in the runtime
 guidance catalog as resident `meta_guidance`; reference/manual
 layers explain the rationale, edge cases, examples, and troubleshooting.
 
-**Summarize cadence.** After digesting a completed tool result whose raw text no
-longer needs inspection, summarize it with enough key facts, evidence, paths,
-IDs, validation, risks, and next steps for future-you. Batch already-digested
-results when practical, and keep noisy/bulky work out of main context by using
-daemons before it lands here.
+**Summarize cadence.** Prefer a priori `summary=true` on `bash`, `read`,
+or `grep` when you can predict bulky output and already know the facts, counts,
+anchors, or conclusion you need from the call; put that retention contract in
+`reasoning` so raw bulk never spends context. Leave it off when exact raw text or
+unknown high-information details may matter. After digesting a completed tool
+result whose raw text no longer needs inspection, summarize it with enough key
+facts, evidence, paths, IDs, validation, risks, and next steps for future-you.
+Batch already-digested results when practical, and keep noisy/bulky work out of
+main context by using daemons before it lands here.
 
 **Forced context rebuild boundary.** Treat summarize as a two-step mechanism:
 summary bookkeeping now (recorded `status: pending`), provider-context rebuild

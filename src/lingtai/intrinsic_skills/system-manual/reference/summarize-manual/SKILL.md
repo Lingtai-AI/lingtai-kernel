@@ -38,8 +38,10 @@ is canonical.
 | **A posteriori** — agent-guided | `system(action="summarize")` | *after* you have already seen and digested it | you |
 | **Molt** — context-pressure-triggered | `psyche(context, molt, ...)` | the whole conversation is continued/reset | you (briefing) |
 
-A priori is the cheapest when you can predict bulk and do not need the raw text.
-A posteriori reclaims context after the fact for results you have consumed. Molt
+A priori is preferred when you can predict bulk, do not need the raw text, and
+already know what the call must retain, because the raw never enters context. A
+posteriori reclaims context after the fact for results you have consumed or whose
+important facts could not be named before inspection. Molt
 is the strongest boundary when per-result summarization is not enough. Sections
 1–6 below are mostly about the a-posteriori `summarize` action; §1a covers the
 a-priori `summary=true` option; §6 contrasts both with molt.
@@ -62,6 +64,8 @@ a-priori `summary=true` option; §6 contrasts both with molt.
 
 When to set `summary=true`:
 
+- Prefer it over a posteriori summarize whenever you can state before the call
+  what you need to know from the result.
 - The expected output is large (rule of thumb: >10k chars) **and** you do not
   need the exact raw text — you need a conclusion, a count, a list of anchors,
   or a yes/no.
@@ -71,13 +75,15 @@ When to leave it `false` (the default):
 - You need exact line/file/diff/stderr text — anything you will quote, diff,
   patch, or compare character-by-character. Leave `false` and read the raw.
 
-**A priori is lossy and does not replace a posteriori.** `summary=true` is an
-assumption-driven compression chosen *before* you inspect the result: the runtime
-discards everything outside what your `reasoning` named, with no chance for you to
-notice what mattered. Use it only when you already know the narrow facts to
-retain. It is **not** a substitute for a-posteriori `system(action="summarize")`,
-especially for high-information-density results — daemon outputs, code reviews,
-long reports, or anything whose important facts you cannot name in advance.
+**A priori is preferred but still lossy.** `summary=true` is an
+assumption-driven compression chosen *before* you inspect the result. Prefer it
+when you can state the narrow facts to retain before the call, because it avoids
+spending context on raw bulk at all. The runtime discards everything outside what
+your `reasoning` named, with no chance for you to notice what mattered, so it is
+**not** a substitute for a-posteriori `system(action="summarize")` when the
+important facts are unknowable before inspection, especially for
+high-information-density results — daemon outputs, code reviews, long reports,
+or anything whose important facts you cannot name in advance.
 Compressing those a priori silently drops the facts you did not know to ask for.
 For them, leave `summary=false`, consume the raw, then summarize a posteriori
 once you know what to keep — or molt when the whole conversation is the pressure.
