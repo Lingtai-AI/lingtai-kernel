@@ -81,6 +81,11 @@ def test_replacement_is_non_canonical_with_locator():
     assert repl["tool_name"] == "bash"
     assert repl["generated_summary"] == "exit code 0; build succeeded"
     assert repl["original_visible_chars"] == 12345
+    assert repl["summary_effect"] == {
+        "prev_chars": 12345,
+        "after_chars": len("exit code 0; build succeeded"),
+        "saved_chars": 12345 - len("exit code 0; build succeeded"),
+    }
     assert repl["canonical"] is False
     assert repl["raw_preserved"] is True
     blob = repl["retrieval_hint"].lower()
@@ -193,6 +198,23 @@ def test_replacement_records_summary_input_metadata():
     )
     assert repl["summary_input_chars"] == 1234
     assert repl["summary_input_truncated"] is False
+
+
+def test_replacement_records_summary_effect_metadata():
+    repl = build_summary_replacement(
+        tool_name="bash",
+        tool_call_id="t1",
+        summary_text="ok",
+        reason="r",
+        original_visible_chars=100,
+        summary_input_chars=100,
+        summary_input_truncated=False,
+    )
+    assert repl["summary_effect"] == {
+        "prev_chars": 100,
+        "after_chars": 2,
+        "saved_chars": 98,
+    }
 
 
 def test_cap_refusal_summary_input_metadata_is_zero_untruncated():
@@ -383,6 +405,8 @@ def test_generated_event_carries_summary_text_and_failures_do_not():
     assert len(gen) == 1
     assert gen[0]["generated_summary"] == "SUMMARY: 50 ys"
     assert gen[0]["summary_chars"] == len("SUMMARY: 50 ys")
+    assert gen[0]["summary_effect"]["prev_chars"] == out["original_visible_chars"]
+    assert gen[0]["summary_effect"]["after_chars"] == len("SUMMARY: 50 ys")
     assert gen[0]["tool_call_id"] == "t_ok"
     assert "RAWNEEDLE" not in str(gen[0])
 

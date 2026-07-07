@@ -329,6 +329,16 @@ def test_meta_guidance_assembly_matches_legacy_json_shape():
     assert "notification_handling" in ids
 
 
+def test_summarize_guidance_mentions_apriori_effect_metadata():
+    """Resident guidance tells agents to learn from a-priori summary effect metadata."""
+    guidance = build_guidance_with_meta_readme()
+    sections = {s["id"]: s["body"] for s in guidance["sections"]}
+    body = sections["summarize_best_practice"]
+    assert "summary_effect" in body
+    assert "prev_chars" in body and "after_chars" in body and "saved_chars" in body
+    assert "deposit the lesson" in body
+
+
 # ---------------------------------------------------------------------------
 # Catalog validation failures
 # ---------------------------------------------------------------------------

@@ -216,6 +216,15 @@ def _raw_locator(tool_call_id: str | None) -> dict:
     }
 
 
+def _summary_effect_metadata(*, before_chars: int, after_chars: int) -> dict:
+    """Return minimal before/after character metadata for a generated summary."""
+    return {
+        "prev_chars": before_chars,
+        "after_chars": after_chars,
+        "saved_chars": before_chars - after_chars,
+    }
+
+
 def build_summary_replacement(
     *,
     tool_name: str,
@@ -236,14 +245,20 @@ def build_summary_replacement(
     ``original_visible_chars`` and ``summary_input_truncated`` is ``False`` —
     these fields make that contract explicit and machine-checkable.
     """
+    summary_chars = len(summary_text)
+    summary_effect = _summary_effect_metadata(
+        before_chars=original_visible_chars,
+        after_chars=summary_chars,
+    )
     return {
         "artifact": APRIORI_SUMMARY_MARKER,
         "summary_kind": "apriori_generated",
         "tool_call_id": tool_call_id,
         "tool_name": tool_name,
         "generated_summary": summary_text,
-        "summary_chars": len(summary_text),
+        "summary_chars": summary_chars,
         "original_visible_chars": original_visible_chars,
+        "summary_effect": summary_effect,
         "summary_input_chars": summary_input_chars,
         "summary_input_truncated": summary_input_truncated,
         "summarized_at": _now_utc(),
@@ -470,10 +485,16 @@ def maybe_summarize_result(
             summary_input_truncated=summary_input_truncated,
         )
 
+    summary_chars = len(summary_text)
+    summary_effect = _summary_effect_metadata(
+        before_chars=original_visible_chars,
+        after_chars=summary_chars,
+    )
     _log(
         "apriori_summary_generated",
         original_visible_chars=original_visible_chars,
-        summary_chars=len(summary_text),
+        summary_chars=summary_chars,
+        summary_effect=summary_effect,
         # Record the actual model-visible summary text so event-log replay and
         # the TUI can render the summary itself, not just its char count. This
         # is the compact summary the model sees — recording it is safe (the raw
