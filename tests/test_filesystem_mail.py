@@ -368,6 +368,155 @@ def test_pseudo_agent_outbox_pickup(tmp_path):
     assert received[0]["message"] == "hello from human"
 
 
+def test_pseudo_agent_outbox_polled_before_blocking_inbox_scan(tmp_path):
+    """Pseudo-agent outbox delivery should not wait behind an own-inbox scan."""
+    import json
+    import threading
+    from lingtai_kernel.services.mail import FilesystemMailService
+
+    base = tmp_path
+    pseudo_dir = base / "human"
+    my_dir = base / "agent_a"
+    pseudo_dir.mkdir()
+    my_dir.mkdir()
+    real_inbox = my_dir / "mailbox" / "inbox"
+    real_inbox.mkdir(parents=True)
+
+    outbox_dir = pseudo_dir / "mailbox" / "outbox"
+    msg_dir = outbox_dir / "msg-priority"
+    msg_dir.mkdir(parents=True)
+    msg = {
+        "id": "msg-priority",
+        "_mailbox_id": "msg-priority",
+        "from": "human",
+        "to": ["agent_a"],
+        "subject": "wake",
+        "message": "wake from human",
+        "type": "normal",
+        "received_at": "2026-07-08T10:00:00.000Z",
+    }
+    (msg_dir / "message.json").write_text(json.dumps(msg))
+
+    own_scan_started = threading.Event()
+    release_own_scan = threading.Event()
+
+    class BlockingInboxDir:
+        def __init__(self, path):
+            self.path = path
+            self.iterdir_calls = 0
+
+        def is_dir(self):
+            return self.path.is_dir()
+
+        def iterdir(self):
+            self.iterdir_calls += 1
+            if self.iterdir_calls == 1:
+                return iter(())
+            own_scan_started.set()
+            release_own_scan.wait(timeout=5.0)
+            return self.path.iterdir()
+
+        def __truediv__(self, child):
+            return self.path / child
+
+    received: list[dict] = []
+    received_event = threading.Event()
+
+    def on_message(payload: dict) -> None:
+        received.append(payload)
+        received_event.set()
+
+    svc = FilesystemMailService(
+        working_dir=my_dir,
+        pseudo_agent_subscriptions=["../human"],
+    )
+    svc._inbox_dir = BlockingInboxDir(real_inbox)
+    svc.listen(on_message=on_message)
+    try:
+        assert own_scan_started.wait(timeout=3.0), "own-inbox scan never started"
+        assert received_event.is_set(), (
+            "pseudo-agent outbox message was not dispatched before the "
+            "own-inbox scan blocked"
+        )
+        assert (real_inbox / "msg-priority" / "message.json").is_file()
+        assert (pseudo_dir / "mailbox" / "sent" / "msg-priority").is_dir()
+        assert not msg_dir.exists()
+    finally:
+        release_own_scan.set()
+        svc.stop()
+
+    assert len(received) == 1
+    assert received[0]["message"] == "wake from human"
+
+
+def test_seen_inbox_entries_skip_stat_before_is_dir(tmp_path):
+    """Already-seen inbox names should not pay an is_dir/stat call each tick."""
+    import threading
+    from lingtai_kernel.services.mail import FilesystemMailService
+
+    agent_dir = _make_agent_dir(tmp_path, "agent_a")
+    real_inbox = agent_dir / "mailbox" / "inbox"
+    real_inbox.mkdir(parents=True)
+
+    stat_attempted = threading.Event()
+    scan_finished = threading.Event()
+
+    class SeenEntry:
+        name = "already-seen"
+
+        def is_dir(self):
+            stat_attempted.set()
+            return True
+
+    seen_entry = SeenEntry()
+
+    class SeenEntries:
+        def __init__(self):
+            self.yielded = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self.yielded:
+                scan_finished.set()
+                raise StopIteration
+            self.yielded = True
+            return seen_entry
+
+    class SeenInboxDir:
+        def __init__(self, path):
+            self.path = path
+            self.iterdir_calls = 0
+
+        def is_dir(self):
+            return self.path.is_dir()
+
+        def iterdir(self):
+            self.iterdir_calls += 1
+            if self.iterdir_calls == 1:
+                return iter(())
+            return SeenEntries()
+
+        def __truediv__(self, child):
+            return self.path / child
+
+    received: list[dict] = []
+    svc = FilesystemMailService(working_dir=agent_dir)
+    svc._seen.add("already-seen")
+    svc._inbox_dir = SeenInboxDir(real_inbox)
+    svc.listen(on_message=lambda p: received.append(p))
+    try:
+        assert scan_finished.wait(timeout=3.0), "own-inbox scan did not complete"
+        assert not stat_attempted.is_set(), (
+            "already-seen entries should be skipped before entry.is_dir()"
+        )
+    finally:
+        svc.stop()
+
+    assert received == []
+
+
 def test_runtime_probe_ack_from_pseudo_agent_outbox(tmp_path):
     """Explicit runtime probes get a structured ack from the real poller."""
     import json
