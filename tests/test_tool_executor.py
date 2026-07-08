@@ -559,6 +559,10 @@ def test_lifecycle_trace_events_cover_spilled_result(tmp_path):
     assert spill_event["tool_call_id"] == "spill-trace"
     model_event = logs[_log_index(logs, "tool_result_model_visible", trace_id="spill-trace")][1]
     assert model_event["spilled"] is True
+    assert model_event["payload_kind"] == "spill_manifest"
+    assert model_event["raw_char_count"] == manifest["original_char_count"]
+    assert isinstance(model_event["model_visible_char_count"], int)
+    assert model_event["model_visible_char_count"] > 0
     assert _log_index(logs, "tool_result_durable_log_visible", trace_id="spill-trace") < _log_index(
         logs, "tool_result_spilled", trace_id="spill-trace"
     )

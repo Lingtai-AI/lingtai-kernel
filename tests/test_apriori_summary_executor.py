@@ -205,6 +205,101 @@ def test_summary_true_over_cap_refuses_without_llm_and_hides_raw(tmp_path):
     assert "generated_summary" not in cap
 
 
+def test_model_visible_event_records_apriori_summary_metadata(tmp_path):
+    """`tool_result_model_visible` must record what the model actually saw:
+    payload kind, model-visible char count, and the a-priori summary metadata
+    (raw char count, generated summary chars, locator) — lengths and locators
+    only, never the raw payload or the reason text."""
+    raw = {"stdout": "RAWSECRET-" + "y" * 200}
+    events = []
+    ex = _make_executor(
+        dispatch_fn=lambda tc: raw,
+        summarizer_fn=lambda sp, up, tn, cid: "GENSUMMARY: 200 ys",
+        events=events,
+        tmp_path=tmp_path,
+    )
+    results, _, _ = ex.execute(
+        [ToolCall(
+            name="bash",
+            args={"command": "yes | head", "summary": True,
+                  "reasoning": "How many ys were printed?"},
+            id="t5",
+        )]
+    )
+    content = _wire_content(results[0])
+    mv = _event_fields(events, "tool_result_model_visible")
+    assert mv is not None
+    assert mv["payload_kind"] == "apriori_summary"
+    assert mv["summary_kind"] == "apriori_generated"
+    assert isinstance(mv["model_visible_char_count"], int)
+    assert mv["model_visible_char_count"] > 0
+    assert isinstance(mv["wrapper_chars"], int) and mv["wrapper_chars"] >= 0
+    # Relates the model-visible payload back to the raw durable record and the
+    # generated summary.
+    assert mv["raw_char_count"] == content["original_visible_chars"]
+    assert mv["generated_summary_chars"] == len(content["generated_summary"])
+    assert mv["summary_effect"] == content["summary_effect"]
+    assert mv["summary_input_truncated"] is False
+    assert mv["raw_locator"]["tool_call_id"] == "t5"
+    assert mv["raw_locator"]["log"] == "logs/events.jsonl"
+    # Redact-by-construction: only the reason LENGTH is recorded on the event.
+    assert mv["summary_reason_chars"] == len("How many ys were printed?")
+    assert "How many ys were printed?" not in str(mv)
+    # The raw payload never leaks into the model-visible event.
+    assert "RAWSECRET" not in str(mv)
+    # The raw durable tool_result event remains raw/preserved, unchanged.
+    assert _raw_logged(events, needle="RAWSECRET")
+
+
+def test_model_visible_event_records_cap_refusal_kind(tmp_path):
+    """Over-cap `summary=true`: the model saw a refusal, and the event must say
+    so (payload_kind reflects the refusal, raw char count still recorded)."""
+    raw = {"stdout": "BIGRAW-" + "z" * (APRIORI_SUMMARY_CAP + 100)}
+    events = []
+    ex = _make_executor(
+        dispatch_fn=lambda tc: raw,
+        summarizer_fn=lambda sp, up, tn, cid: "should not happen",
+        events=events,
+        tmp_path=tmp_path,
+    )
+    results, _, _ = ex.execute(
+        [ToolCall(name="read", args={"file_path": "/big", "summary": True,
+                                     "reasoning": "r"}, id="t6")]
+    )
+    content = _wire_content(results[0])
+    mv = _event_fields(events, "tool_result_model_visible")
+    assert mv is not None
+    assert mv["payload_kind"] == "apriori_cap_refused"
+    assert mv["summary_kind"] == "apriori_cap_refused"
+    assert mv["raw_char_count"] == content["original_visible_chars"]
+    assert mv["raw_char_count"] > APRIORI_SUMMARY_CAP
+    assert mv["model_visible_char_count"] < APRIORI_SUMMARY_CAP
+    assert mv["raw_locator"]["tool_call_id"] == "t6"
+    assert "BIGRAW" not in str(mv)
+
+
+def test_model_visible_event_raw_kind_when_no_summary(tmp_path):
+    """Without `summary=true` the event records the raw kind and char count,
+    and carries no summary metadata."""
+    raw = {"stdout": "PLAINRAW"}
+    events = []
+    ex = _make_executor(
+        dispatch_fn=lambda tc: raw,
+        summarizer_fn=lambda sp, up, tn, cid: "SHOULD NOT RUN",
+        events=events,
+        tmp_path=tmp_path,
+    )
+    ex.execute([ToolCall(name="grep", args={"pattern": "foo"}, id="t7")])
+    mv = _event_fields(events, "tool_result_model_visible")
+    assert mv is not None
+    assert mv["payload_kind"] == "raw"
+    assert isinstance(mv["model_visible_char_count"], int)
+    assert mv["model_visible_char_count"] > 0
+    assert "summary_kind" not in mv
+    assert "generated_summary_chars" not in mv
+    assert "raw_locator" not in mv
+
+
 # --- factory: degrades to None without a one-shot session gateway ------------
 
 class _Usage:
