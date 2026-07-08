@@ -34,7 +34,10 @@ from .tool_result_artifacts import (
     spill_oversized_result as _spill_oversized_result,
 )
 from .tool_call_guard import GuardDecision, ToolCallGuard, ToolProposal
-from .tool_result_summary import maybe_summarize_result as _maybe_summarize_result
+from .tool_result_summary import (
+    is_apriori_summary as _is_apriori_summary,
+    maybe_summarize_result as _maybe_summarize_result,
+)
 from .tool_timing import ToolTimer
 from .types import UnknownToolError
 
@@ -838,8 +841,89 @@ class ToolExecutor:
             status=status,
             spilled=spilled,
             result_type=type(capped).__name__,
+            **self._model_visible_descriptor(
+                capped, spilled=spilled, spilled_char_count=spilled_char_count
+            ),
         )
         return msg
+
+    def _model_visible_descriptor(
+        self,
+        payload: Any,
+        *,
+        spilled: bool,
+        spilled_char_count: int | None,
+    ) -> dict:
+        """Structured audit fields for the ``tool_result_model_visible`` event.
+
+        The durable ``tool_result`` event records the RAW result; this event
+        marks the wire boundary. These fields make the boundary auditable
+        without diffing the two events: what kind of payload the model saw
+        (``payload_kind``: ``raw``, ``apriori_summary``, ``apriori_cap_refused``,
+        ``apriori_error``, or ``spill_manifest``), its size, and — for a-priori
+        payloads — how it relates to the preserved raw and the generated
+        summary. Purely observational: computed from the final payload, never
+        mutating it. ``model_visible_char_count`` uses the same result-intrinsic
+        measure as ``_meta.tool_meta.char_count`` (kernel scaffolding excluded);
+        ``wrapper_chars`` is the serialized remainder (the ``_meta`` envelope
+        and transient scaffolding). A-priori metadata is copied from the
+        replacement dict as lengths and locators only — never the raw payload,
+        and only the LENGTH of ``summary_reason``, not its text.
+        """
+        import json as _json
+
+        def _serialized_len(value: Any) -> int:
+            if isinstance(value, str):
+                return len(value)
+            try:
+                return len(_json.dumps(value, ensure_ascii=False, default=str))
+            except (TypeError, ValueError):
+                return 0
+
+        if isinstance(payload, dict):
+            visible_chars = self._intrinsic_char_count(payload)
+            wrapper_chars = max(_serialized_len(payload) - visible_chars, 0)
+        else:
+            visible_chars = _serialized_len(payload)
+            wrapper_chars = 0
+
+        fields: dict = {
+            "payload_kind": "raw",
+            "model_visible_char_count": visible_chars,
+            "wrapper_chars": wrapper_chars,
+        }
+        if spilled:
+            fields["payload_kind"] = "spill_manifest"
+            if isinstance(spilled_char_count, int):
+                fields["raw_char_count"] = spilled_char_count
+            return fields
+        if _is_apriori_summary(payload):
+            summary_kind = payload.get("summary_kind")
+            fields["payload_kind"] = (
+                "apriori_summary"
+                if summary_kind == "apriori_generated"
+                else str(summary_kind or "apriori_summary")
+            )
+            if summary_kind is not None:
+                fields["summary_kind"] = summary_kind
+            raw_chars = payload.get("original_visible_chars")
+            if isinstance(raw_chars, int):
+                fields["raw_char_count"] = raw_chars
+            generated_chars = payload.get("summary_chars")
+            if isinstance(generated_chars, int):
+                fields["generated_summary_chars"] = generated_chars
+            effect = payload.get("summary_effect")
+            if isinstance(effect, dict):
+                fields["summary_effect"] = dict(effect)
+            if isinstance(payload.get("summary_input_truncated"), bool):
+                fields["summary_input_truncated"] = payload["summary_input_truncated"]
+            locator = payload.get("raw_locator")
+            if isinstance(locator, dict):
+                fields["raw_locator"] = dict(locator)
+            reason = payload.get("summary_reason")
+            if isinstance(reason, str):
+                fields["summary_reason_chars"] = len(reason)
+        return fields
 
     def _log_tool_result(
         self,
