@@ -26,25 +26,60 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .run_dir import DaemonRunDir
 
 
+def _supports_killpg() -> bool:
+    """True when the platform exposes POSIX process-group signalling.
+
+    ``os.killpg`` (and ``start_new_session``-backed process groups) only exist
+    on POSIX. Native Windows has neither, so callers fall back to terminating
+    just the direct child. Kept as a tiny predicate so tests can simulate a
+    Windows host without a real one.
+    """
+    return hasattr(os, "killpg")
+
+
 def kill_process_group(
     proc: subprocess.Popen,
     *,
     term_timeout: float = 5.0,
     kill_timeout: float = 3.0,
 ) -> None:
-    """Terminate the entire process group for *proc*, then force-kill if needed.
+    """Terminate *proc*, then force-kill if it does not exit in time.
 
-    Requires *proc* to have been started with ``start_new_session=True`` so
-    that its PGID equals its own PID.  Sends SIGTERM to the group, waits up
-    to ``term_timeout`` seconds, then escalates to SIGKILL for any survivors.
+    On POSIX (``start_new_session=True`` ⇒ PGID == PID) this terminates the
+    subprocess's whole process group: SIGTERM to the group, wait up to
+    ``term_timeout`` seconds, then escalate to SIGKILL for any survivors.
+    ``proc.pid`` is used directly as the PGID to avoid a ``getpgid`` round-trip
+    that could race with PID recycling.
 
-    Uses ``proc.pid`` directly as the PGID (since ``start_new_session=True``
-    guarantees PGID == PID) to avoid a ``getpgid`` round-trip that could
-    race with PID recycling.
+    On native Windows there is no ``os.killpg``, so this falls back to
+    terminating only the direct child (``proc.terminate()`` → wait →
+    ``proc.kill()``). That is NOT process-tree teardown: grandchildren spawned
+    by the CLI backend are not reaped. The CLI/PTY daemon backends are refused
+    up front on native Windows (see ``daemon/__init__.py``), so this fallback
+    exists only to keep the helper importable and callable there.
 
     Silently ignores ``ProcessLookupError`` (process already dead) and
-    ``OSError`` (permission denied on already-dead group).
+    ``OSError`` (permission denied on already-dead group/process).
     """
+    if not _supports_killpg():
+        # Native Windows: no process groups. Terminate the direct child only.
+        try:
+            proc.terminate()
+        except (ProcessLookupError, OSError):
+            pass
+        try:
+            proc.wait(timeout=term_timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                proc.wait(timeout=kill_timeout)
+            except subprocess.TimeoutExpired:
+                pass
+        return
+
     # start_new_session=True guarantees pgid == pid
     pgid = proc.pid
     try:

@@ -38,7 +38,6 @@ from lingtai_kernel.loop_guard import LoopGuard
 from lingtai_kernel.meta_block import build_meta
 from lingtai_kernel.tool_executor import ToolExecutor
 from .run_dir import DaemonRunDir
-from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
 from .runtime import (
     kill_process_group as _kill_process_group,
     iter_stdout_with_deadline as _iter_stdout_with_deadline,
@@ -120,6 +119,43 @@ def _claude_code_env() -> dict[str, str]:
     for key in _CLAUDE_CODE_STRIP_ENV:
         env.pop(key, None)
     return env
+
+
+def _lazy_claude_interactive():
+    """Import the interactive Claude backend module on demand.
+
+    ``.claude_interactive`` imports the POSIX-only ``pty`` module at its top
+    level, so importing it eagerly would make the whole daemon capability fail
+    to load on native Windows — even for ``backend="lingtai"``. It is only
+    needed on the legacy interactive Claude backend paths, so it is imported
+    the first time one of those runs. Returns ``(ClaudeInteractiveError,
+    run_claude_interactive)``.
+    """
+    from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
+    return ClaudeInteractiveError, run_claude_interactive
+
+
+def _native_windows() -> bool:
+    """True on native Windows (``os.name == "nt"``); False under WSL/POSIX.
+
+    Native Windows lacks the POSIX process-group / PTY assumptions the CLI and
+    interactive daemon backends rely on (``os.killpg``, ``pty``,
+    ``start_new_session``). Kept as a tiny predicate so the CLI guard can be
+    tested without a real Windows host.
+    """
+    return os.name == "nt"
+
+
+# CLI/PTY daemon backends refused on native Windows until a ConPTY/pywinpty +
+# Windows process-tree implementation exists. ``backend="lingtai"`` (in-process,
+# no subprocess PTY) stays available. We fail loud here rather than silently
+# falling back so the caller knows the real constraint and the workaround.
+_WINDOWS_CLI_BACKEND_UNSUPPORTED = (
+    "daemon backend {backend!r} is not supported on native Windows yet: the CLI/PTY "
+    "daemon backends require a ConPTY/pywinpty terminal and Windows process-tree "
+    "handling that are not implemented. Use backend='lingtai' (in-process) or run "
+    "LingTai under WSL."
+)
 
 
 def _normalize_claude_usage(usage: dict | None) -> dict | None:
@@ -2386,6 +2422,7 @@ class DaemonManager:
         if cancel_event.is_set():
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
+        _ClaudeInteractiveError, run_claude_interactive = _lazy_claude_interactive()
         try:
             result = run_claude_interactive(
                 em_id=em_id,
@@ -2398,7 +2435,7 @@ class DaemonManager:
                 env=_claude_code_env(),
                 log_callback=self._log,
             )
-        except ClaudeInteractiveError as e:
+        except _ClaudeInteractiveError as e:
             run_dir.mark_failed(e)
             raise
         except Exception as e:
@@ -2778,6 +2815,12 @@ class DaemonManager:
         # --- External CLI backends: skip preset resolution entirely ---
         backend_spec = _backend_spec(backend)
         if backend_spec is not None and backend_spec.is_cli:
+            if _native_windows():
+                # Fail loud: CLI/PTY backends need ConPTY/pywinpty + Windows
+                # process-tree handling that don't exist yet. lingtai backend
+                # (handled below) stays available.
+                return {"status": "error",
+                        "message": _WINDOWS_CLI_BACKEND_UNSUPPORTED.format(backend=backend)}
             return self._handle_emanate_cli(
                 tasks, backend=backend,
                 effective_max_turns=effective_max_turns,
@@ -3687,6 +3730,9 @@ class DaemonManager:
         backend = entry.get("backend")
         backend_spec = _backend_spec(backend)
         if backend_spec is not None and backend_spec.is_cli:
+            if _native_windows():
+                return {"status": "error", "id": em_id,
+                        "message": _WINDOWS_CLI_BACKEND_UNSUPPORTED.format(backend=backend)}
             if backend_spec.ask_handler_attr is None:
                 return {"status": "error", "id": em_id,
                         "message": backend_spec.ask_unsupported_msg}
@@ -3779,6 +3825,7 @@ class DaemonManager:
             name=f"daemon-claude-interactive-ask-cancel-{em_id}",
         )
         monitor.start()
+        _, run_claude_interactive = _lazy_claude_interactive()
         try:
             try:
                 result = run_claude_interactive(
