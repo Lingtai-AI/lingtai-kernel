@@ -35,7 +35,7 @@ Provider-agnostic LLM protocol layer. This folder defines the canonical chat log
   - `InterfaceEntry` is one role+content row with id, role, timestamp, provider metadata, model/provider, usage, and optional tool snapshot (`llm/interface.py:230-294`).
   - `ChatInterface` is the append-only source of truth for history (`llm/interface.py:296`). It appends system/user/assistant/tool-result entries (`llm/interface.py:522-660`), enforces/repairs tool-call pairing (`llm/interface.py:345-521`), removes strict synthetic pairs (`llm/interface.py:662-767`), prunes history (`llm/interface.py:857-930`), estimates tokens (`llm/interface.py:932-980`), and supports compaction summaries (`llm/interface.py:981-1057`).
 - `llm/service.py` — `LLMService` ABC: `model`, `provider`, `create_session()`, `generate()`, and `make_tool_result()` (`llm/service.py:16-70`).
-- `llm/streaming.py` — `StreamingAccumulator`, which gathers streaming text/thought/tool-call deltas and finalizes to `LLMResponse` (`llm/streaming.py:16-69`, `llm/streaming.py:145-170`). It supports sequential tool-call assembly (`llm/streaming.py:71-84`), index-keyed deltas (`llm/streaming.py:88-117`), atomic tool calls (`llm/streaming.py:121-126`), and `_finalize_tool()` (`llm/streaming.py:173-180`).
+- `llm/streaming.py` — `StreamingAccumulator`, which gathers streaming text/thought/tool-call deltas and finalizes to `LLMResponse` (`llm/streaming.py:19-69`, `llm/streaming.py:148-184`). It supports sequential tool-call assembly (`llm/streaming.py:72-87`), index-keyed deltas (`llm/streaming.py:89-120`), atomic tool calls (`llm/streaming.py:122-126`), and `_finalize_tool()` (`llm/streaming.py:187-201`).
 
 ## Connections
 
@@ -55,11 +55,11 @@ Provider-agnostic LLM protocol layer. This folder defines the canonical chat log
 ## State
 
 - **Ephemeral:** `ChatInterface._entries`, `_next_id`, current system/tools, and `_pending_system` live in memory for one session (`llm/interface.py:305-318`).
-- **Ephemeral:** `StreamingAccumulator` stores partial text, tool args, thoughts, and usage until `finalize()` (`llm/streaming.py:39-69`).
+- **Ephemeral:** `StreamingAccumulator` stores partial text, tool args, and thoughts until `finalize()` (`llm/streaming.py:42-52`, `llm/streaming.py:148-184`).
 - **Persistent writes:** none in this folder. `session.py` writes `history/chat_history.jsonl`; token/state persistence happens in sibling modules that consume these types.
 
 ## Notes
 
 - `add_system()` defers system/tool updates while the tail has unanswered tool calls so strict providers do not see a system entry between assistant tool calls and user tool results (`llm/interface.py:522-572`).
 - `close_pending_tool_calls()` closes unanswered tail tool calls by first accepting optional real recovered `ToolResultBlock`s from a recovery lookup and then synthesizing abort placeholders for any remaining misses (`llm/interface.py:445-521`, `llm/interface.py:99-186`).
-- `StreamingAccumulator` intentionally supports three provider styles in one place: sequential, index-keyed, and atomic tool calls (`llm/streaming.py:71-126`).
+- `StreamingAccumulator` intentionally supports three provider styles in one place: sequential, index-keyed, and atomic tool calls (`llm/streaming.py:72-126`).

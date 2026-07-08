@@ -64,15 +64,41 @@ def test_sequential_tool_empty_args():
     assert result.tool_calls[0].args == {}
 
 
+def test_finalize_auto_closes_pending_sequential_tool(caplog):
+    acc = StreamingAccumulator()
+    args_json = '{"path": "foo.py"}'
+    acc.start_tool(id="toolu_1", name="read_file")
+    acc.add_tool_args(args_json)
+
+    with caplog.at_level("WARNING", logger="lingtai_kernel.llm.streaming"):
+        result = acc.finalize()
+
+    assert len(result.tool_calls) == 1
+    tc = result.tool_calls[0]
+    assert tc.name == "read_file"
+    assert tc.args == {"path": "foo.py"}
+    assert tc.id == "toolu_1"
+    assert "pending sequential tool call" in caplog.text
+    assert "auto-finalizing" in caplog.text
+    assert "read_file" in caplog.text
+    assert "toolu_1" in caplog.text
+    assert f"args_len={len(args_json)}" in caplog.text
+
+
 def test_sequential_tool_malformed_json(caplog):
     acc = StreamingAccumulator()
+    args_json = "{not valid json"
     acc.start_tool(id="t1", name="broken")
-    acc.add_tool_args("{not valid json")
+    acc.add_tool_args(args_json)
     with caplog.at_level("WARNING", logger="lingtai_kernel.llm.streaming"):
         acc.finish_tool()
     result = acc.finalize()
     assert result.tool_calls[0].args == {}
-    assert "streamed tool-call args JSON parse failed; defaulting to {}" in caplog.text
+    assert "streamed tool-call args JSON parse failed" in caplog.text
+    assert "defaulting to args={}" in caplog.text
+    assert "broken" in caplog.text
+    assert "t1" in caplog.text
+    assert f"args_len={len(args_json)}" in caplog.text
 
 
 def test_finish_tool_noop_when_no_pending():
@@ -120,6 +146,15 @@ def test_index_keyed_late_id():
     acc.finish_all_tools()
     result = acc.finalize()
     assert result.tool_calls[0].id == "late_id"
+
+
+def test_finalize_does_not_auto_close_index_keyed_tools():
+    acc = StreamingAccumulator()
+    acc.add_tool_delta(0, id="call_1", name="search", args_delta='{"q": "hello"}')
+
+    result = acc.finalize()
+
+    assert result.tool_calls == []
 
 
 # -- Atomic tool calls (Gemini Interactions) --------------------------------
