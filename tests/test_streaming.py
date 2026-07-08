@@ -85,6 +85,66 @@ def test_finalize_auto_closes_pending_sequential_tool(caplog):
     assert f"args_len={len(args_json)}" in caplog.text
 
 
+def test_finalize_auto_closes_pending_sequential_tool_with_malformed_json(caplog):
+    acc = StreamingAccumulator()
+    args_json = '{"path":'
+    acc.start_tool(id="toolu_bad", name="read_file")
+    acc.add_tool_args(args_json)
+
+    with caplog.at_level("WARNING", logger="lingtai_kernel.llm.streaming"):
+        result = acc.finalize()
+
+    assert len(result.tool_calls) == 1
+    tc = result.tool_calls[0]
+    assert tc.name == "read_file"
+    assert tc.id == "toolu_bad"
+    assert tc.args == {}
+    assert "pending sequential tool call" in caplog.text
+    assert "auto-finalizing" in caplog.text
+    assert "streamed tool-call args JSON parse failed" in caplog.text
+    assert "defaulting to args={}" in caplog.text
+    assert "read_file" in caplog.text
+    assert "toolu_bad" in caplog.text
+    assert f"args_len={len(args_json)}" in caplog.text
+
+
+def test_finalize_after_finished_sequential_tool_emits_no_pending_warning(caplog):
+    acc = StreamingAccumulator()
+    acc.start_tool(id="toolu_1", name="read_file")
+    acc.add_tool_args('{"path": "foo.py"}')
+    acc.finish_tool()
+
+    with caplog.at_level("WARNING", logger="lingtai_kernel.llm.streaming"):
+        result = acc.finalize()
+
+    assert len(result.tool_calls) == 1
+    assert "pending sequential tool call" not in caplog.text
+
+
+def test_finalize_preserves_finished_then_pending_tool_order_and_is_idempotent(caplog):
+    acc = StreamingAccumulator()
+    acc.start_tool(id="toolu_1", name="read_file")
+    acc.add_tool_args('{"path": "foo.py"}')
+    acc.finish_tool()
+    acc.start_tool(id="toolu_2", name="write_file")
+    acc.add_tool_args('{"path": "bar.py"}')
+
+    with caplog.at_level("WARNING", logger="lingtai_kernel.llm.streaming"):
+        first_result = acc.finalize()
+
+    assert [tc.id for tc in first_result.tool_calls] == ["toolu_1", "toolu_2"]
+    assert [tc.name for tc in first_result.tool_calls] == ["read_file", "write_file"]
+    assert "pending sequential tool call" in caplog.text
+    assert "toolu_2" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="lingtai_kernel.llm.streaming"):
+        second_result = acc.finalize()
+
+    assert [tc.id for tc in second_result.tool_calls] == ["toolu_1", "toolu_2"]
+    assert "pending sequential tool call" not in caplog.text
+
+
 def test_sequential_tool_malformed_json(caplog):
     acc = StreamingAccumulator()
     args_json = "{not valid json"
