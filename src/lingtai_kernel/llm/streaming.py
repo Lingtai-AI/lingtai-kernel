@@ -152,12 +152,23 @@ class StreamingAccumulator:
     ) -> LLMResponse:
         """Build the final LLMResponse from all accumulated deltas.
 
-        Any pending thought block is automatically closed.
+        Any pending thought block is automatically closed. Any pending
+        sequential tool call is also auto-finalized.
         Index-keyed tools are NOT auto-finalized — call finish_all_tools()
         explicitly before finalize() if using the index-keyed style.
         """
         # Close any open thought block
         self.finish_thought()
+
+        if self._pending_tool is not None:
+            logger.warning(
+                "stream ended with pending sequential tool call; "
+                "auto-finalizing name=%r id=%r args_len=%d",
+                self._pending_tool["name"],
+                self._pending_tool["id"] or None,
+                len(self._pending_tool["args_json"]),
+            )
+            self.finish_tool()
 
         # Consolidate thoughts into a single entry if multiple deltas
         thoughts = self._thoughts
@@ -179,6 +190,12 @@ def _finalize_tool(pending: dict[str, str]) -> ToolCall:
     try:
         args = json.loads(args_json) if args_json else {}
     except json.JSONDecodeError:
-        logger.warning("streamed tool-call args JSON parse failed; defaulting to {}")
+        logger.warning(
+            "streamed tool-call args JSON parse failed; "
+            "name=%r id=%r args_len=%d; defaulting to args={}",
+            pending["name"],
+            pending["id"] or None,
+            len(args_json),
+        )
         args = {}
     return ToolCall(name=pending["name"], args=args, id=pending["id"] or None)
