@@ -18,7 +18,15 @@ def make_session_manager(**kw):
     mock_session.interface.current_system_prompt = "test prompt"
     mock_session.send.return_value = MagicMock(
         text="hello", tool_calls=[], thoughts=[], usage=MagicMock(
-            input_tokens=100, output_tokens=50, thinking_tokens=10, cached_tokens=20,
+            input_tokens=100,
+            output_tokens=50,
+            thinking_tokens=10,
+            cached_tokens=20,
+            extra={
+                "codex_account_id_sha8": "abc12345",
+                "codex_auth_path_sha8": "def67890",
+                "unsafe_provider_blob": "should-not-log",
+            },
         ),
     )
     svc.create_session.return_value = mock_session
@@ -209,6 +217,10 @@ def test_send_logs_llm_call_with_api_call_id():
     assert llm_response["thinking_tokens"] == 10
     assert llm_response["cached_tokens"] == 20
     assert llm_response["estimated"] is False
+    assert llm_response["usage_extra"] == {
+        "codex_account_id_sha8": "abc12345",
+        "codex_auth_path_sha8": "def67890",
+    }
     for field in (
         "prompt_build_ms",
         "tool_schema_build_ms",
