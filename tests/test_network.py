@@ -353,6 +353,64 @@ def test_mail_of(tmp_path):
     assert alice_mail[0].sender == alice_addr
 
 
+def test_mail_of_human_sender_and_recipient(tmp_path):
+    agent_addr = _write_manifest(tmp_path / "agent", "agent")
+    human_addr = "../human"
+    _write_mail(tmp_path / "agent", "inbox", [
+        {
+            "from": human_addr,
+            "to": [agent_addr],
+            "subject": "question",
+            "received_at": "2026-03-20T10:00:00Z",
+        },
+    ])
+    _write_mail(tmp_path / "agent", "sent", [
+        {
+            "from": agent_addr,
+            "to": [human_addr],
+            "subject": "answer",
+            "sent_at": "2026-03-20T11:00:00Z",
+        },
+    ])
+
+    net = build_network(tmp_path)
+
+    assert human_addr not in net.nodes
+    assert {(e.sender, e.recipient) for e in net.mail_of(human_addr)} == {
+        (human_addr, agent_addr),
+        (agent_addr, human_addr),
+    }
+
+
+def test_mail_of_external_non_node_correspondent(tmp_path):
+    agent_addr = _write_manifest(tmp_path / "agent", "agent")
+    external_addr = "dead@example.test"
+    _write_mail(tmp_path / "agent", "inbox", [
+        {
+            "from": external_addr,
+            "to": [agent_addr],
+            "subject": "old inbound",
+            "received_at": "2026-03-20T10:00:00Z",
+        },
+    ])
+    _write_mail(tmp_path / "agent", "sent", [
+        {
+            "from": agent_addr,
+            "to": [external_addr],
+            "subject": "old outbound",
+            "sent_at": "2026-03-20T11:00:00Z",
+        },
+    ])
+
+    net = build_network(tmp_path)
+
+    assert external_addr not in net.nodes
+    assert {(e.sender, e.recipient) for e in net.mail_of(external_addr)} == {
+        (external_addr, agent_addr),
+        (agent_addr, external_addr),
+    }
+
+
 def test_mail_of_unknown_agent(tmp_path):
     net = build_network(tmp_path)
     assert net.mail_of("unknown") == []
