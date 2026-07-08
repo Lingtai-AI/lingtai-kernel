@@ -2276,6 +2276,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
         session_id: str | None = None,
         thread_id: str | None = None,
         account_id: str | None = None,
+        codex_auth_path_sha8: str | None = None,
+        codex_auth_path_source: str | None = None,
         installation_id: str | None = None,
         metadata_sandbox: str = "lingtai",
         transport: str | None = None,
@@ -2380,6 +2382,16 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # It is a non-secret account identifier and is never copied into usage
         # metadata or logs.
         self._account_id = account_id if isinstance(account_id, str) and account_id else None
+        # Non-secret attribution for token/debug ledgers. The raw account id is
+        # already needed for the ChatGPT-Account-ID request header, but it must
+        # never be copied into UsageMetadata.extra / token_ledger / events.
+        # Store only caller-provided safe labels/hashes for later serialization.
+        self._codex_auth_path_sha8 = (
+            str(codex_auth_path_sha8) if codex_auth_path_sha8 else None
+        )
+        self._codex_auth_path_source = (
+            str(codex_auth_path_source) if codex_auth_path_source else None
+        )
         self._installation_id = installation_id
         self._metadata_sandbox = metadata_sandbox or "lingtai"
         # Codex REST cache-affinity identity: ONE stable per-agent value used
@@ -2481,8 +2493,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
             return "full"
         return None
 
-    @staticmethod
     def _usage_extra(
+        self,
         affinity_headers: dict[str, str],
         cache_key: str | None,
         *,
@@ -2514,6 +2526,28 @@ class CodexResponsesSession(OpenAIResponsesSession):
         tool-result, reasoning, token, header, or secret content is included.
         """
         extra: dict[str, str] = {}
+        if self._account_id:
+            extra["codex_account_id_sha8"] = hashlib.sha256(
+                self._account_id.encode("utf-8", "replace")
+            ).hexdigest()[:8]
+        if self._codex_auth_path_sha8:
+            extra["codex_auth_path_sha8"] = self._codex_auth_path_sha8[:64]
+        if self._codex_auth_path_source:
+            extra["codex_auth_path_source"] = self._codex_auth_path_source[:64]
+        pool_selection = getattr(self, "codex_pool_selection", None)
+        if isinstance(pool_selection, dict):
+            pool_fields = {
+                "fallback": "codex_pool_fallback",
+                "source_ref": "codex_pool_source_ref",
+                "source_index": "codex_pool_source_index",
+                "pool_size": "codex_pool_size",
+                "weight": "codex_pool_weight",
+                "auth_path_sha8": "codex_auth_path_sha8",
+            }
+            for source_key, ledger_key in pool_fields.items():
+                value = pool_selection.get(source_key)
+                if value is not None and ledger_key not in extra:
+                    extra[ledger_key] = str(value)[:240]
         if affinity_headers.get("session_id"):
             extra["codex_session_id"] = affinity_headers["session_id"]
         if affinity_headers.get("thread_id"):
@@ -3926,6 +3960,8 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         codex_session_anchor: str | None = None,
         codex_thread_salt: str | None = None,
         codex_account_id: str | None = None,
+        codex_auth_path_sha8: str | None = None,
+        codex_auth_path_source: str | None = None,
         codex_base_urls: object = None,
         codex_molt_count: int | None = None,
         **kwargs,
@@ -3966,6 +4002,12 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         # auth data changes it. ``None`` -> no ``ChatGPT-Account-ID`` header.
         self.codex_account_id: str | None = (
             str(codex_account_id) if codex_account_id else None
+        )
+        self.codex_auth_path_sha8: str | None = (
+            str(codex_auth_path_sha8) if codex_auth_path_sha8 else None
+        )
+        self.codex_auth_path_source: str | None = (
+            str(codex_auth_path_source) if codex_auth_path_source else None
         )
         # Optional Codex-only endpoint POOL (molt-boundary shuffle). When this
         # carries 2+ valid entries, ``create_chat`` chooses one at request time
@@ -4202,6 +4244,8 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             # The user's own ChatGPT account id (read fresh from the adapter so a
             # token refresh that changes it is reflected on newly built sessions).
             account_id=self.codex_account_id,
+            codex_auth_path_sha8=self.codex_auth_path_sha8,
+            codex_auth_path_source=self.codex_auth_path_source,
             installation_id=self._codex_installation_id,
             base_url=self.base_url,
             api_key=self._client_kwargs.get("api_key"),

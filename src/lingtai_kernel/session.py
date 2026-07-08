@@ -64,6 +64,50 @@ def _elapsed_ms(start: float) -> int:
     return max(0, int((time.monotonic() - start) * 1000))
 
 
+_SAFE_USAGE_EXTRA_EVENT_KEYS = {
+    "codex_account_id_sha8",
+    "codex_auth_path_sha8",
+    "codex_auth_path_source",
+    "codex_pool_fallback",
+    "codex_pool_source_ref",
+    "codex_pool_source_index",
+    "codex_pool_size",
+    "codex_pool_weight",
+    "codex_session_id",
+    "codex_thread_id",
+    "codex_prompt_cache_key",
+    "codex_transport",
+    "codex_request_mode",
+    "codex_transfer_mode",
+    "codex_previous_response_id",
+    "codex_store",
+    "codex_fallback_error_type",
+    "codex_fallback_error_message",
+}
+
+
+def _safe_usage_extra_for_event(extra: object) -> dict[str, str] | None:
+    """Return the safe provider metadata subset for ``llm_response`` events.
+
+    ``UsageMetadata.extra`` is already the provider adapter's explicit safe
+    token-ledger seam. Event logging is narrower than the raw dict: only the
+    allowlisted Codex diagnostics (plus ``codex_ws_*`` safe decision telemetry)
+    are copied, and values are stringified/truncated so secrets, prompts, tool
+    payloads, or arbitrary provider objects cannot leak into ``events.jsonl`` by
+    accident.
+    """
+    if not isinstance(extra, dict):
+        return None
+    safe: dict[str, str] = {}
+    for key, value in extra.items():
+        if value is None or not isinstance(key, str):
+            continue
+        if key not in _SAFE_USAGE_EXTRA_EVENT_KEYS and not key.startswith("codex_ws_"):
+            continue
+        safe[key] = str(value)[:512]
+    return safe or None
+
+
 def _ensure_spill_manifest_fields(messages: list) -> None:
     """Backfill ``artifact_lifetime`` and ``artifact_state`` on legacy spill manifests.
 
@@ -631,6 +675,9 @@ class SessionManager:
             usage_track_ms = _elapsed_ms(usage_start)
             telemetry_fields = dict(timing_fields or {})
             telemetry_fields["usage_track_ms"] = usage_track_ms
+            usage_extra_for_event = _safe_usage_extra_for_event(usage_extra)
+            if usage_extra_for_event:
+                telemetry_fields["usage_extra"] = usage_extra_for_event
             self._log(
                 "llm_response",
                 input_tokens=response.usage.input_tokens,

@@ -12,6 +12,7 @@ parameter``). These tests assert the wire kwargs the session sends:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -813,15 +814,50 @@ def test_codex_account_id_does_not_affect_cache_affinity():
 
 
 def test_codex_account_id_not_in_usage_metadata():
-    """The account id never leaks into usage metadata returned to the caller."""
+    """The raw account id never leaks into usage metadata returned to the caller."""
     session = _create_codex_session_cfg(
         [_completed()], codex_account_id=_TEST_ACCOUNT_ID
     )
 
     result = session.send("x")
 
-    # The streamed result/usage must not carry the account id anywhere.
+    # The streamed result/usage may carry a safe hash for token-ledger/debug
+    # attribution, but it must not carry the raw ChatGPT account id anywhere.
     assert _TEST_ACCOUNT_ID not in json.dumps(result, default=str)
+    assert result.usage.extra["codex_account_id_sha8"] == hashlib.sha256(
+        _TEST_ACCOUNT_ID.encode("utf-8")
+    ).hexdigest()[:8]
+
+
+def test_codex_usage_extra_carries_safe_auth_attribution():
+    session = _create_codex_session_cfg(
+        [_completed()],
+        codex_session_anchor="/agents/alice/init.json",
+        codex_account_id=_TEST_ACCOUNT_ID,
+        codex_auth_path_sha8="0123abcd",
+        codex_auth_path_source="configured",
+    )
+    session.codex_pool_selection = {
+        "source_ref": "pool.json",
+        "source_index": 2,
+        "pool_size": 5,
+        "weight": 3,
+        "auth_path_sha8": "poolabcd",
+    }
+
+    result = session.send("x")
+
+    extra = result.usage.extra
+    assert extra["codex_account_id_sha8"] == hashlib.sha256(
+        _TEST_ACCOUNT_ID.encode("utf-8")
+    ).hexdigest()[:8]
+    assert extra["codex_auth_path_sha8"] == "0123abcd"
+    assert extra["codex_auth_path_source"] == "configured"
+    assert extra["codex_pool_source_ref"] == "pool.json"
+    assert extra["codex_pool_source_index"] == "2"
+    assert extra["codex_pool_size"] == "5"
+    assert extra["codex_pool_weight"] == "3"
+    assert _TEST_ACCOUNT_ID not in json.dumps(extra, default=str)
 
 
 def test_codex_session_account_id_used_verbatim_on_direct_construction():

@@ -6,6 +6,8 @@ to the adapter's actual constructor signature.
 """
 from __future__ import annotations
 
+import hashlib
+
 # Official Codex REST endpoint. Used as the default ``base_url`` for the
 # ``codex`` provider when the manifest/provider-defaults do not configure one.
 # A configured ``base_url`` (the generic provider convention) overrides it so a
@@ -124,6 +126,13 @@ def register_all_adapters() -> None:
         if isinstance(auth_path, str) and auth_path.strip():
             mgr_kw["token_path"] = auth_path
         mgr = CodexTokenManager(**mgr_kw)
+        auth_path = getattr(mgr, "_path", None)
+        codex_auth_path_sha8 = (
+            hashlib.sha256(str(auth_path).encode("utf-8", "replace")).hexdigest()[:8]
+            if auth_path
+            else None
+        )
+        codex_auth_path_source = "configured" if mgr_kw.get("token_path") else "legacy_default"
         adapter = CodexOpenAIAdapter(
             api_key=mgr.get_access_token(),
             base_url=codex_base_url,
@@ -133,6 +142,8 @@ def register_all_adapters() -> None:
             # header when present). Read from their OAuth auth data; ``None`` when
             # unavailable. Does NOT impersonate the official Codex CLI.
             codex_account_id=mgr.get_account_id(),
+            codex_auth_path_sha8=codex_auth_path_sha8,
+            codex_auth_path_source=codex_auth_path_source,
             **codex_id_kw,
         )
         # Store the token manager so we can refresh before each API call.
