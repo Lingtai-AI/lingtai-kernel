@@ -126,6 +126,40 @@ MANIFEST_KNOWN: set[str] = (
     set(MANIFEST_REQUIRED) | set(MANIFEST_OPTIONAL) | MANIFEST_LEGACY_IGNORED
 )
 
+NoneType = type(None)
+
+SOUL_OPTIONAL: dict[str, type | tuple[type, ...]] = {
+    "delay": (int, float),
+    "consultation_past_count": int,
+    "voice": str,
+    "voice_prompt": str,
+}
+SOUL_KNOWN: set[str] = set(SOUL_OPTIONAL)
+
+LLM_REQUIRED: dict[str, type | tuple[type, ...]] = {
+    "provider": str,
+    "model": str,
+}
+LLM_OPTIONAL: dict[str, type | tuple[type, ...]] = {
+    "api_key": (str, NoneType),
+    "api_key_env": str,
+    "base_url": (str, NoneType),
+    "compact_threshold": (int, NoneType),
+}
+LLM_SPECIAL_KNOWN: set[str] = {"thinking"}
+LLM_PASS_THROUGH_KNOWN: set[str] = {
+    "api_compat",
+    "codex_session_anchor",
+    "codex_thread_salt",
+    "codex_auth_path",
+    "codex_auth_pool_path",
+    "codex_base_urls",
+    "default_headers",
+}
+LLM_KNOWN: set[str] = (
+    set(LLM_REQUIRED) | set(LLM_OPTIONAL) | LLM_SPECIAL_KNOWN | LLM_PASS_THROUGH_KNOWN
+)
+
 
 def strip_deprecated(data: dict) -> list[str]:
     """Remove deprecated top-level fields from *data* in-place.
@@ -307,24 +341,14 @@ def validate_init(data: dict) -> list[str]:
 
     soul = manifest.get("soul")
     if soul is not None:
-        _optional_keys(soul, {
-            "delay": (int, float),
-            "consultation_past_count": int,
-            "voice": str,
-            "voice_prompt": str,
-        }, prefix="manifest.soul")
+        _optional_keys(soul, SOUL_OPTIONAL, prefix="manifest.soul")
+        for key in soul:
+            if key not in SOUL_KNOWN:
+                warnings.append(f"unknown field in manifest.soul: {key}")
 
     llm = manifest["llm"]
-    _require_keys(llm, {
-        "provider": str,
-        "model": str,
-    }, prefix="manifest.llm")
-    _optional_keys(llm, {
-        "api_key": (str, type(None)),
-        "api_key_env": str,
-        "base_url": (str, type(None)),
-        "compact_threshold": (int, type(None)),
-    }, prefix="manifest.llm")
+    _require_keys(llm, LLM_REQUIRED, prefix="manifest.llm")
+    _optional_keys(llm, LLM_OPTIONAL, prefix="manifest.llm")
     if "compact_threshold" in llm:
         compact_threshold = llm["compact_threshold"]
         if isinstance(compact_threshold, bool):
@@ -346,6 +370,9 @@ def validate_init(data: dict) -> list[str]:
                 "manifest.llm.thinking: expected one of "
                 f"{', '.join(THINKING_LEVELS)}"
             )
+    for key in llm:
+        if key not in LLM_KNOWN:
+            warnings.append(f"unknown field in manifest.llm: {key}")
 
     # If api_key_env is set without api_key, env_file must be provided
     if llm.get("api_key_env") and not llm.get("api_key"):
