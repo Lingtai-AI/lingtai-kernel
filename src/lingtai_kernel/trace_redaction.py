@@ -40,7 +40,9 @@ _TOKEN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 _KEY_NAME = (
     r"api[_-]?key|secret|token|password|passwd|pwd|credential|credentials|"
     r"bot[_-]?token|email[_-]?password|app[_-]?secret|client[_-]?secret|"
-    r"access[_-]?token|refresh[_-]?token|auth[_-]?token"
+    r"access[_-]?token|refresh[_-]?token|auth[_-]?token|"
+    r"private[_-]?key|signing[_-]?key|pem|certificate|cert|"
+    r"connection[_-]?string|dsn|database[_-]?url"
 )
 _JSON_QUOTED_ASSIGNMENT_RE = re.compile(
     rf"(?i)(([\"'])\b(?:{_KEY_NAME})\b\2\s*:\s*)([\"'])([^\"']{{8,}})(\3)"
