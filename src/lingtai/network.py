@@ -94,9 +94,13 @@ class AgentNetwork:
         return [e for e in self.contact_edges if e.owner_address == address]
 
     def mail_of(self, address: str) -> list[MailEdge]:
-        """Return all mail edges where *address* is sender or recipient."""
-        if address not in self.nodes:
-            return []
+        """Return mail edges whose endpoints exactly equal *address*.
+
+        Accepts any address string, not just a discovered node. Matching uses
+        exact string equality against ``MailEdge.sender`` or
+        ``MailEdge.recipient``; useful values include node addresses,
+        ``../human``, and dead/external correspondents.
+        """
         return [e for e in self.mail_edges
                 if e.sender == address or e.recipient == address]
 

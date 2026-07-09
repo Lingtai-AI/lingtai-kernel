@@ -70,7 +70,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **`init_schema.py`**: `DEPRECATED_TOP_FIELDS` :41 (plain deprecated top-level fields stripped by `strip_deprecated`), `LEGACY_MIGRATED_TOP_FIELDS` :60 (legacy fields removed by version-controlled agent migrations and known only as inactive schema), `validate_init` :146, `TOP_OPTIONAL` :15, `MANIFEST_OPTIONAL` :79; `manifest.llm.compact_threshold` is validated as positive int or null in the LLM block, and `manifest.cache_miss_budget` (the soft cache-miss token budget) is validated as a positive int — bool and `<= 0` rejected — with a clear `manifest.cache_miss_budget` error path (:295-306).
 
-**`network.py`**: `build_network` :306 · `_discover_agents` :143 · `_build_avatar_edges` :168
+**`network.py`**: `build_network` :310 · `_discover_agents` :147 · `_build_avatar_edges` :172
 
 **`venv_resolve.py`**: `resolve_venv` :74 · `venv_python` :101 · `_is_default_runtime_dir` :108 · `_test_venv` :118 · `_env_marker_status` :298 · `_env_marker_status_detail` :303 · `_remove_mismatched_managed_venv` :353 · `_env_marker_main` :362
 
