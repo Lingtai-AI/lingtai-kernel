@@ -80,40 +80,88 @@ def test_native_windows_predicate_reads_os_name(monkeypatch):
     assert daemon._native_windows() is False
 
 
-def test_emanate_cli_backend_rejected_on_native_windows(tmp_path, monkeypatch):
+def test_emanate_interactive_claude_rejected_on_native_windows(tmp_path, monkeypatch):
+    # Only the interactive Claude PTY backend is refused on native Windows: it
+    # needs the ConPTY/pywinpty terminal + hook relay that aren't implemented.
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     monkeypatch.setattr(daemon, "_native_windows", lambda: True)
 
     result = mgr.handle({
         "action": "emanate",
-        "backend": "claude-p",
+        "backend": "claude",
         "tasks": [{"task": "should not spawn on windows", "tools": []}],
     })
 
     assert result["status"] == "error"
     msg = result["message"].lower()
     assert "windows" in msg
-    assert "wsl" in msg
+    assert "interactive" in msg
     # Names the missing runtime slice honestly rather than faking support.
     assert "conpty" in msg or "pywinpty" in msg
     # No emanation was scheduled.
     assert mgr._emanations == {}
 
 
-def test_ask_cli_backend_rejected_on_native_windows(tmp_path, monkeypatch):
+def test_emanate_headless_cli_backend_not_rejected_on_native_windows(tmp_path, monkeypatch):
+    # Headless print/JSON CLI backends (claude-p here) are enabled on native
+    # Windows: the interactive-only guard must not short-circuit them. Patch
+    # the runner so no real CLI/LLM is invoked — the point is that emanation is
+    # scheduled rather than rejected with the Windows message.
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     monkeypatch.setattr(daemon, "_native_windows", lambda: True)
-    mgr._emanations["em-win-cli"] = {"backend": "claude-p"}
 
-    result = mgr._handle_ask("em-win-cli", "hello from windows")
+    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
+        run_dir.mark_done("done")
+        return "done"
+
+    monkeypatch.setattr(mgr, "_run_claude_code_emanation", fake_run)
+
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "claude-p",
+        "tasks": [{"task": "headless cli on windows", "tools": []}],
+    })
+
+    assert result["status"] == "dispatched"
+    em_id = result["ids"][0]
+    mgr._emanations[em_id]["future"].result(timeout=5)
+
+
+def test_ask_interactive_claude_rejected_on_native_windows(tmp_path, monkeypatch):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    monkeypatch.setattr(daemon, "_native_windows", lambda: True)
+    mgr._emanations["em-win-interactive"] = {"backend": "claude"}
+
+    result = mgr._handle_ask("em-win-interactive", "hello from windows")
 
     assert result["status"] == "error"
-    assert result["id"] == "em-win-cli"
+    assert result["id"] == "em-win-interactive"
     msg = result["message"].lower()
     assert "windows" in msg
+    assert "interactive" in msg
     assert "conpty" in msg or "pywinpty" in msg
+
+
+def test_ask_headless_cli_backend_not_rejected_on_native_windows(tmp_path, monkeypatch):
+    # A headless CLI ask on native Windows routes to its ask handler rather than
+    # the interactive-only Windows rejection. Patch the ask handler so no real
+    # CLI is spawned — the point is the guard does not short-circuit it.
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    monkeypatch.setattr(daemon, "_native_windows", lambda: True)
+    mgr._emanations["em-win-headless"] = {"backend": "claude-p"}
+
+    def fake_ask(em_id, entry, message):
+        return {"status": "sent", "id": em_id}
+
+    monkeypatch.setattr(mgr, "_handle_ask_cli", fake_ask)
+
+    result = mgr._handle_ask("em-win-headless", "hello from windows")
+
+    assert result == {"status": "sent", "id": "em-win-headless"}
 
 
 
@@ -142,12 +190,10 @@ def test_emanate_lingtai_backend_not_rejected_by_windows_guard(tmp_path, monkeyp
         assert "windows" not in result["message"].lower()
 
 
-@pytest.mark.parametrize(
-    "backend",
-    ["claude", "claude-interactive", "claude-p", "claude-code", "codex",
-     "opencode", "mimo", "qwen", "omp", "kimi", "cursor"],
-)
-def test_all_cli_backends_and_aliases_reject_on_windows(tmp_path, monkeypatch, backend):
+@pytest.mark.parametrize("backend", ["claude", "claude-interactive"])
+def test_interactive_claude_backends_reject_on_windows(tmp_path, monkeypatch, backend):
+    # Both spellings of the interactive Claude PTY backend are refused on
+    # native Windows until the ConPTY/pywinpty + hook-relay slice lands.
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     monkeypatch.setattr(daemon, "_native_windows", lambda: True)
@@ -155,7 +201,7 @@ def test_all_cli_backends_and_aliases_reject_on_windows(tmp_path, monkeypatch, b
     result = mgr.handle({
         "action": "emanate",
         "backend": backend,
-        "tasks": [{"task": "no cli on native windows", "tools": []}],
+        "tasks": [{"task": "no interactive claude on native windows", "tools": []}],
     })
 
     assert result["status"] == "error"
@@ -163,11 +209,85 @@ def test_all_cli_backends_and_aliases_reject_on_windows(tmp_path, monkeypatch, b
     assert mgr._emanations == {}
 
 
-def test_kill_process_group_windows_fallback_uses_terminate(monkeypatch):
-    # On native Windows there is no os.killpg. The helper must fall back to
-    # proc.terminate() -> wait -> proc.kill() without raising AttributeError,
+@pytest.mark.parametrize(
+    "backend",
+    ["claude-p", "claude-code", "codex", "opencode", "mimo", "qwen", "omp",
+     "kimi", "cursor"],
+)
+def test_headless_cli_backends_not_rejected_by_windows_guard(tmp_path, monkeypatch, backend):
+    # Every headless CLI backend (and its aliases) is enabled on native
+    # Windows: the interactive-only guard must not produce the Windows
+    # rejection. Patch the CLI dispatch so no real CLI/LLM is invoked — we
+    # only assert the guard did not short-circuit with the Windows message.
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    monkeypatch.setattr(daemon, "_native_windows", lambda: True)
+
+    sentinel = {"status": "dispatched", "ids": ["fake-em"]}
+    monkeypatch.setattr(mgr, "_handle_emanate_cli", lambda *a, **k: sentinel)
+
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": backend,
+        "tasks": [{"task": "headless cli on native windows", "tools": []}],
+    })
+
+    # Reached the CLI dispatch rather than the interactive-Windows rejection.
+    assert result is sentinel
+
+
+def test_kill_process_group_windows_prefers_taskkill_tree(monkeypatch):
+    # On native Windows there is no os.killpg. The helper must prefer
+    # `taskkill /PID <pid> /T /F` for real process-tree teardown, then reap
+    # the child with a bounded wait — and must NOT fall back to the
+    # direct-child terminate path when taskkill succeeds.
+    monkeypatch.setattr(runtime, "_supports_killpg", lambda: False)
+    runs: list[list[str]] = []
+
+    class _Completed:
+        returncode = 0
+
+    def fake_run(cmd, **kwargs):
+        runs.append(cmd)
+        return _Completed()
+
+    monkeypatch.setattr(runtime.subprocess, "run", fake_run)
+
+    class _FakeProc:
+        pid = 4321
+
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def terminate(self):  # must not be reached on taskkill success
+            self.calls.append("terminate")
+
+        def kill(self):
+            self.calls.append("kill")
+
+        def wait(self, timeout):
+            self.calls.append(f"wait({timeout})")
+            return 0
+
+    proc = _FakeProc()
+    runtime.kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)
+
+    # taskkill invoked with the full process-tree, force flags.
+    assert runs == [["taskkill", "/PID", "4321", "/T", "/F"]]
+    # Child reaped with the kill_timeout wait; direct-child terminate NOT used.
+    assert proc.calls == ["wait(1.0)"]
+
+
+def test_kill_process_group_windows_falls_back_when_taskkill_missing(monkeypatch):
+    # If taskkill is unavailable (executable missing) or fails, the helper
+    # falls back to proc.terminate() -> wait -> proc.kill() without raising,
     # and must NOT claim process-tree teardown.
     monkeypatch.setattr(runtime, "_supports_killpg", lambda: False)
+
+    def fake_run(cmd, **kwargs):
+        raise FileNotFoundError("taskkill not found")
+
+    monkeypatch.setattr(runtime.subprocess, "run", fake_run)
 
     class _FakeProc:
         pid = 4321

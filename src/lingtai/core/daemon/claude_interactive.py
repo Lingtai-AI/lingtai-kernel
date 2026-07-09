@@ -23,7 +23,6 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
-import pty
 import queue
 import re
 import select
@@ -35,6 +34,19 @@ from typing import Callable
 
 from .run_dir import DaemonRunDir
 from .runtime import kill_process_group
+
+# POSIX-only stdlib ``pty`` is imported lazily inside ``run()`` (just before
+# ``pty.openpty()``) so this module stays importable on native Windows, where
+# the interactive backend fails loud instead (ConPTY/pywinpty + a Windows hook
+# relay are not implemented yet). Historically this module did ``import pty`` at
+# the top level, which made merely importing the daemon capability crash on
+# native Windows. No Windows terminal abstraction is introduced here on purpose:
+# there is no second terminal implementation to share a seam with yet.
+
+
+def _native_windows() -> bool:
+    """True on native Windows (``os.name == "nt"``); False under WSL/POSIX."""
+    return os.name == "nt"
 
 
 @dataclass(slots=True)
@@ -595,6 +607,16 @@ class ClaudeInteractiveBridge:
         return cmd
 
     def run(self) -> ClaudeInteractiveResult:
+        if _native_windows():
+            # Defense-in-depth: DaemonManager already refuses the interactive
+            # Claude backend on native Windows, but fail loud here too rather
+            # than importing POSIX ``pty`` (which does not exist) or pretending
+            # ConPTY/pywinpty + the Windows hook relay are wired up.
+            raise ClaudeInteractiveError(
+                "interactive Claude backend is not supported on native Windows: "
+                "pywinpty/ConPTY terminal and the Windows hook relay are not "
+                "implemented. Use a headless backend, backend='lingtai', or WSL."
+            )
         self._prepare_managed_workspace()
         settings_json = self._prepare_harness()
         hook_thread = threading.Thread(
@@ -614,6 +636,10 @@ class ClaudeInteractiveBridge:
             cwd=str(self.claude_cwd),
         )
         self._write_state(claude_interactive_command=cmd, claude_interactive_cwd=str(self.claude_cwd))
+
+        # Lazy POSIX-only import: this module must stay importable on native
+        # Windows (the Windows path fails loud above before reaching here).
+        import pty
 
         master_fd: int | None = None
         proc: subprocess.Popen | None = None

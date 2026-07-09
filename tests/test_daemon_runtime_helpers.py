@@ -70,6 +70,75 @@ def test_kill_process_group_uses_configured_timeouts(monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# spawn_cli_subprocess — platform-aware process-group isolation
+# --------------------------------------------------------------------------
+
+
+def _capture_popen(monkeypatch):
+    captured: dict = {}
+
+    class _FakeProc:
+        pid = 111
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return _FakeProc()
+
+    monkeypatch.setattr(runtime.subprocess, "Popen", fake_popen)
+    return captured
+
+
+def test_spawn_cli_subprocess_posix_uses_start_new_session(monkeypatch):
+    monkeypatch.setattr(runtime, "_supports_killpg", lambda: True)
+    captured = _capture_popen(monkeypatch)
+
+    runtime.spawn_cli_subprocess(["claude", "-p"], cwd="/work", env={"A": "B"})
+
+    kwargs = captured["kwargs"]
+    assert kwargs["start_new_session"] is True
+    assert "creationflags" not in kwargs
+    # Pipes/text/cwd/env preserved for the JSONL parsers.
+    assert kwargs["stdout"] is subprocess.PIPE
+    assert kwargs["stderr"] is subprocess.PIPE
+    assert kwargs["text"] is True
+    assert kwargs["cwd"] == "/work"
+    assert kwargs["env"] == {"A": "B"}
+
+
+def test_spawn_cli_subprocess_windows_uses_creationflags_not_session(monkeypatch):
+    monkeypatch.setattr(runtime, "_supports_killpg", lambda: False)
+    # Simulate a Windows Popen exposing CREATE_NEW_PROCESS_GROUP.
+    monkeypatch.setattr(runtime.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200,
+                        raising=False)
+    captured = _capture_popen(monkeypatch)
+
+    runtime.spawn_cli_subprocess(["codex", "exec"], cwd="C:/work")
+
+    kwargs = captured["kwargs"]
+    assert "start_new_session" not in kwargs
+    assert kwargs["creationflags"] == 0x200
+    # No env provided -> not forwarded (child inherits the parent environment).
+    assert "env" not in kwargs
+    assert kwargs["cwd"] == "C:/work"
+
+
+def test_spawn_cli_subprocess_windows_without_flag_spawns_plain(monkeypatch):
+    # A platform build lacking CREATE_NEW_PROCESS_GROUP must still spawn rather
+    # than crash; cleanup falls back to direct-child termination.
+    monkeypatch.setattr(runtime, "_supports_killpg", lambda: False)
+    monkeypatch.delattr(runtime.subprocess, "CREATE_NEW_PROCESS_GROUP",
+                        raising=False)
+    captured = _capture_popen(monkeypatch)
+
+    runtime.spawn_cli_subprocess(["opencode", "run"], cwd="C:/work")
+
+    kwargs = captured["kwargs"]
+    assert "start_new_session" not in kwargs
+    assert "creationflags" not in kwargs
+
+
+# --------------------------------------------------------------------------
 # mark_cancelled_or_timeout
 # --------------------------------------------------------------------------
 

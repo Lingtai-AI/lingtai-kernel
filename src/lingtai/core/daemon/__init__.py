@@ -42,6 +42,7 @@ from .runtime import (
     kill_process_group as _kill_process_group,
     iter_stdout_with_deadline as _iter_stdout_with_deadline,
     mark_cancelled_or_timeout as _mark_cancelled_or_timeout,
+    spawn_cli_subprocess as _spawn_cli_subprocess,
     spawn_stderr_drainer as _spawn_stderr_drainer,
 )
 
@@ -122,14 +123,14 @@ def _claude_code_env() -> dict[str, str]:
 
 
 def _lazy_claude_interactive():
-    """Import the interactive Claude backend module on demand.
+    """Import the legacy interactive Claude backend module on demand.
 
-    ``.claude_interactive`` imports the POSIX-only ``pty`` module at its top
-    level, so importing it eagerly would make the whole daemon capability fail
-    to load on native Windows — even for ``backend="lingtai"``. It is only
-    needed on the legacy interactive Claude backend paths, so it is imported
-    the first time one of those runs. Returns ``(ClaudeInteractiveError,
-    run_claude_interactive)``.
+    The interactive backend is hidden legacy surface area and is only needed
+    when stored/explicit entries use ``backend="claude"`` or
+    ``backend="claude-interactive"``. Keeping this import lazy prevents that
+    optional terminal bridge from affecting ordinary daemon imports and avoids
+    importing its POSIX ``pty`` path unless the interactive backend actually
+    runs on POSIX. Returns ``(ClaudeInteractiveError, run_claude_interactive)``.
     """
     from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
     return ClaudeInteractiveError, run_claude_interactive
@@ -138,23 +139,28 @@ def _lazy_claude_interactive():
 def _native_windows() -> bool:
     """True on native Windows (``os.name == "nt"``); False under WSL/POSIX.
 
-    Native Windows lacks the POSIX process-group / PTY assumptions the CLI and
-    interactive daemon backends rely on (``os.killpg``, ``pty``,
-    ``start_new_session``). Kept as a tiny predicate so the CLI guard can be
-    tested without a real Windows host.
+    Native Windows lacks the POSIX PTY assumptions required by the legacy
+    interactive Claude backend. Headless CLI backends use platform-aware spawn
+    and cleanup helpers instead of this predicate; the predicate remains small
+    so the interactive-backend guard can be tested without a real Windows host.
     """
     return os.name == "nt"
 
 
-# CLI/PTY daemon backends refused on native Windows until a ConPTY/pywinpty +
-# Windows process-tree implementation exists. ``backend="lingtai"`` (in-process,
-# no subprocess PTY) stays available. We fail loud here rather than silently
-# falling back so the caller knows the real constraint and the workaround.
-_WINDOWS_CLI_BACKEND_UNSUPPORTED = (
-    "daemon backend {backend!r} is not supported on native Windows yet: the CLI/PTY "
-    "daemon backends require a ConPTY/pywinpty terminal and Windows process-tree "
-    "handling that are not implemented. Use backend='lingtai' (in-process) or run "
-    "LingTai under WSL."
+# Only the legacy hidden interactive Claude backend (``claude`` /
+# ``claude-interactive``) is refused on native Windows: it drives a real
+# terminal, and the ConPTY/pywinpty terminal bridge plus its Windows hook relay
+# are not implemented yet. The headless print/JSON CLI backends are plain pipe
+# subprocesses and DO run on native Windows (platform-aware spawn + taskkill
+# process-tree cleanup), as does ``backend="lingtai"`` (in-process). We fail
+# loud here rather than silently falling back so the caller knows the real
+# constraint and the workaround.
+_WINDOWS_INTERACTIVE_BACKEND_UNSUPPORTED = (
+    "daemon backend {backend!r} (interactive Claude) is not supported on native "
+    "Windows yet: the interactive backend needs a ConPTY/pywinpty terminal and a "
+    "Windows hook relay that are not implemented. Use a headless backend "
+    "(backend='claude-p'/'claude-code'/'codex'/'opencode'/'cursor'/...), "
+    "backend='lingtai' (in-process), or run LingTai under WSL."
 )
 
 
@@ -473,6 +479,13 @@ class _BackendSpec:
     ask_handler_attr: str | None
     ask_unsupported_msg: str | None
     reserved_flags: frozenset[str]
+    # True only for the legacy hidden interactive Claude backend, which drives a
+    # real terminal (POSIX ``pty``; native-Windows ConPTY/pywinpty). The headless
+    # print/JSON CLI backends are plain pipe subprocesses and set this False, so
+    # the native-Windows guard can reject only the terminal backend rather than
+    # blanket-refusing every CLI backend. Defaults False so headless specs stay
+    # terse.
+    is_interactive_pty: bool = False
 
 
 @dataclass(frozen=True)
@@ -522,6 +535,7 @@ _BACKEND_SPECS: dict[str, _BackendSpec] = {
         ask_handler_attr="_handle_ask_claude_interactive",
         ask_unsupported_msg=None,
         reserved_flags=_CLAUDE_INTERACTIVE_RESERVED_FLAGS,
+        is_interactive_pty=True,
     ),
     "claude-interactive": _BackendSpec(
         id="claude-interactive",
@@ -530,6 +544,7 @@ _BACKEND_SPECS: dict[str, _BackendSpec] = {
         ask_handler_attr="_handle_ask_claude_interactive",
         ask_unsupported_msg=None,
         reserved_flags=_CLAUDE_INTERACTIVE_RESERVED_FLAGS,
+        is_interactive_pty=True,
     ),
     "claude-p": _BackendSpec(
         id="claude-p",
@@ -2195,14 +2210,10 @@ class DaemonManager:
                       stripped=[k for k in _CLAUDE_CODE_STRIP_ENV if k in os.environ])
 
         try:
-            proc = subprocess.Popen(
+            proc = _spawn_cli_subprocess(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
                 cwd=str(self._agent._working_dir),
                 env=spawn_env,
-                start_new_session=True,  # own process group for reliable cleanup
             )
         except FileNotFoundError:
             exc = RuntimeError("'claude' CLI not found on PATH")
@@ -2497,13 +2508,9 @@ class DaemonManager:
         self._log("daemon_codex_start", em_id=em_id, cmd=" ".join(cmd))
 
         try:
-            proc = subprocess.Popen(
+            proc = _spawn_cli_subprocess(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
                 cwd=str(self._agent._working_dir),
-                start_new_session=True,  # own process group for reliable cleanup
             )
         except FileNotFoundError:
             exc = RuntimeError("'codex' CLI not found on PATH")
@@ -2815,12 +2822,12 @@ class DaemonManager:
         # --- External CLI backends: skip preset resolution entirely ---
         backend_spec = _backend_spec(backend)
         if backend_spec is not None and backend_spec.is_cli:
-            if _native_windows():
-                # Fail loud: CLI/PTY backends need ConPTY/pywinpty + Windows
-                # process-tree handling that don't exist yet. lingtai backend
-                # (handled below) stays available.
+            if _native_windows() and backend_spec.is_interactive_pty:
+                # Fail loud: only the interactive Claude backend needs a
+                # ConPTY/pywinpty terminal + Windows hook relay that don't
+                # exist yet. Headless CLI backends fall through and run.
                 return {"status": "error",
-                        "message": _WINDOWS_CLI_BACKEND_UNSUPPORTED.format(backend=backend)}
+                        "message": _WINDOWS_INTERACTIVE_BACKEND_UNSUPPORTED.format(backend=backend)}
             return self._handle_emanate_cli(
                 tasks, backend=backend,
                 effective_max_turns=effective_max_turns,
@@ -3730,9 +3737,9 @@ class DaemonManager:
         backend = entry.get("backend")
         backend_spec = _backend_spec(backend)
         if backend_spec is not None and backend_spec.is_cli:
-            if _native_windows():
+            if _native_windows() and backend_spec.is_interactive_pty:
                 return {"status": "error", "id": em_id,
-                        "message": _WINDOWS_CLI_BACKEND_UNSUPPORTED.format(backend=backend)}
+                        "message": _WINDOWS_INTERACTIVE_BACKEND_UNSUPPORTED.format(backend=backend)}
             if backend_spec.ask_handler_attr is None:
                 return {"status": "error", "id": em_id,
                         "message": backend_spec.ask_unsupported_msg}
@@ -3911,14 +3918,10 @@ class DaemonManager:
                   session_id=session_id, message_length=len(message))
 
         try:
-            proc = subprocess.Popen(
+            proc = _spawn_cli_subprocess(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
                 cwd=str(self._agent._working_dir),
                 env=_claude_code_env(),
-                start_new_session=True,  # own process group for reliable cleanup
             )
         except FileNotFoundError:
             with entry["followup_lock"]:
@@ -4120,13 +4123,9 @@ class DaemonManager:
                   session_id=session_id, message_length=len(message))
 
         try:
-            proc = subprocess.Popen(
+            proc = _spawn_cli_subprocess(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
                 cwd=str(self._agent._working_dir),
-                start_new_session=True,  # own process group for reliable cleanup
             )
         except FileNotFoundError:
             with entry["followup_lock"]:
@@ -4433,14 +4432,10 @@ class DaemonManager:
             env = os.environ.copy()
             if env_extra:
                 env.update(env_extra)
-            proc = subprocess.Popen(
+            proc = _spawn_cli_subprocess(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
                 cwd=str(self._agent._working_dir),
                 env=env,
-                start_new_session=True,  # own process group for reliable cleanup
             )
         except FileNotFoundError:
             exc = RuntimeError(f"'{executable}' CLI not found on PATH")
@@ -4662,14 +4657,10 @@ class DaemonManager:
         try:
             env = os.environ.copy()
             env.update(qwen_env)
-            proc = subprocess.Popen(
+            proc = _spawn_cli_subprocess(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
                 cwd=str(self._agent._working_dir),
                 env=env,
-                start_new_session=True,
             )
         except FileNotFoundError:
             exc = RuntimeError("'qwen' CLI not found on PATH")
@@ -4831,14 +4822,10 @@ class DaemonManager:
         try:
             env = os.environ.copy()
             env.update(kimi_env)
-            proc = subprocess.Popen(
+            proc = _spawn_cli_subprocess(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
                 cwd=str(self._agent._working_dir),
                 env=env,
-                start_new_session=True,
             )
         except FileNotFoundError:
             exc = RuntimeError("'kimi' CLI not found on PATH")
@@ -4953,13 +4940,9 @@ class DaemonManager:
                   session_id=session_id, message_length=len(message))
 
         try:
-            proc = subprocess.Popen(
+            proc = _spawn_cli_subprocess(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
                 cwd=str(self._agent._working_dir),
-                start_new_session=True,  # own process group for reliable cleanup
             )
         except FileNotFoundError:
             with entry["followup_lock"]:
@@ -5185,13 +5168,9 @@ class DaemonManager:
         self._log("daemon_cursor_start", em_id=em_id, cmd_head=" ".join(cmd[:5]))
 
         try:
-            proc = subprocess.Popen(
+            proc = _spawn_cli_subprocess(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
                 cwd=str(self._agent._working_dir),
-                start_new_session=True,
             )
         except FileNotFoundError:
             exc = RuntimeError("'agent' Cursor CLI not found on PATH")
@@ -5342,13 +5321,9 @@ class DaemonManager:
                   session_id=session_id, message_length=len(message))
 
         try:
-            proc = subprocess.Popen(
+            proc = _spawn_cli_subprocess(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
                 cwd=str(self._agent._working_dir),
-                start_new_session=True,
             )
         except FileNotFoundError:
             with entry["followup_lock"]:

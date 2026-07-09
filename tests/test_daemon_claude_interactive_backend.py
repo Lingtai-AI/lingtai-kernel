@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 import textwrap
 import threading
@@ -516,3 +517,65 @@ subprocess.run(
     )
     events = run_dir.events_path.read_text(encoding="utf-8")
     assert "auto-selected workspace trust" in events
+
+
+def test_claude_interactive_import_safe_without_pty(tmp_path):
+    # The module must import even when the POSIX-only ``pty`` module is
+    # unavailable (native Windows), because it now imports ``pty`` lazily inside
+    # run(). Simulate the absence by blocking ``pty`` from sys.modules in a
+    # clean subprocess and confirm the import + symbol access still succeed.
+    import lingtai
+    src_dir = str(Path(lingtai.__file__).resolve().parents[1])
+    code = textwrap.dedent(
+        """
+        import sys
+        import builtins
+        real_import = builtins.__import__
+
+        def blocked_import(name, *args, **kwargs):
+            if name == "pty":
+                raise ModuleNotFoundError("No module named 'pty'")
+            return real_import(name, *args, **kwargs)
+
+        builtins.__import__ = blocked_import
+        # Belt-and-braces: also poison any cached entry.
+        sys.modules.pop("pty", None)
+
+        import lingtai.core.daemon.claude_interactive as ci
+        assert ci.ClaudeInteractiveError.__name__ == "ClaudeInteractiveError"
+        assert callable(ci.run_claude_interactive)
+        assert "pty" not in sys.modules
+        print("IMPORT_OK")
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": src_dir + os.pathsep + os.environ.get("PYTHONPATH", "")},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "IMPORT_OK", proc.stdout + proc.stderr
+
+
+def test_run_claude_interactive_fails_loud_on_native_windows(tmp_path, monkeypatch):
+    # On native Windows the interactive backend must fail loud with a clear
+    # pywinpty/hook-relay message rather than importing POSIX ``pty`` or
+    # pretending ConPTY support exists.
+    from lingtai.core.daemon import claude_interactive as ci
+
+    monkeypatch.setattr(ci, "_native_windows", lambda: True)
+
+    run_dir = _make_run_dir(tmp_path)
+    with pytest.raises(ClaudeInteractiveError) as excinfo:
+        run_claude_interactive(
+            em_id="em-1",
+            run_dir=run_dir,
+            working_dir=tmp_path / "daemon-agent",
+            task="interactive task",
+            cancel_event=threading.Event(),
+            env=os.environ.copy(),
+        )
+    msg = str(excinfo.value).lower()
+    assert "windows" in msg
+    assert "pywinpty" in msg or "conpty" in msg
