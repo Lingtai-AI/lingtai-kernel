@@ -22,7 +22,7 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `AnthropicAdapter`, `AnthropicChatSession` |
-| `adapter.py` | 832 | Adapter + session + helpers |
+| `adapter.py` | 823 | Adapter + session + helpers |
 | `defaults.py` | 6 | `DEFAULTS` dict: `api_key_env=ANTHROPIC_API_KEY`, `model=claude-sonnet-4-20250514` |
 
 ### Classes
@@ -122,7 +122,7 @@ Both `send` and `send_stream` revert the interface on API error via `interface.d
 
 - **Strict alternation**: Anthropic rejects consecutive same-role messages. `_ensure_alternation()` at `adapter.py:201` merges them by combining content lists.
 - **JSON schema enforcement**: Implemented as a synthetic tool with `tool_choice: {"type": "tool", "name": ...}` (`adapter.py:726-737`).
-- **`client` property**: Escape hatch to raw SDK at `adapter.py:827`.
+- **`client` property**: Escape hatch to raw SDK at `adapter.py:820`.
 - **MiniMax inheritance**: `MiniMaxAdapter` subclasses `AnthropicAdapter` directly, overriding only `__init__` to set `base_url`. Inherits the pre-request hook automatically.
 - **`send(None)` contract** (`f596ec1`): both `send` and `send_stream` accept `None` as the "continue from wire" signal — caller has already pre-staged the canonical interface (e.g. `BaseAgent._inject_notification_pair` spliced a synthesized `notification(action="check")` `(call, result)` pair). The input-dispatch ladder tests `if message is None: pass` first; the error-path `drop_trailing(lambda e: e.role == "user")` is guarded with `if message is not None` so an API failure during a `send(None)` cannot corrupt the pre-staged pair. Driven from `base_agent/turn.py:_handle_tc_wake`. From the LLM's viewpoint, the wake is indistinguishable from the agent voluntarily calling the tool itself.
 - **Pre-request hook** (`f46b346`, dormant after notification redesign): both `send` and `send_stream` fire `self.pre_request_hook(self._interface)` after committing the message but before the API call. Historically used for mid-turn tc_inbox drain (canonical-interface regime, same-turn delivery). Post-`fadbabf`/`d2da97e` the hook still fires but the queue is always empty — ACTIVE notifications now defer to the post-turn IDLE synthetic-pair path rather than mutating tool results at send time. Phase 3 will remove the hook. See root `ANATOMY.md` "Notifications".

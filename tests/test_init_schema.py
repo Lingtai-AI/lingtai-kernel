@@ -186,6 +186,54 @@ def test_api_key_env_wrong_type():
         validate_init(data)
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("api_key_evn", "ANTHROPIC_API_KEY"),
+        ("base-url", "https://example.test/v1"),
+        ("context_limit", 200_000),
+        ("max_rpm", 60),
+    ],
+)
+def test_unknown_manifest_llm_fields_warn(key, value):
+    data = _valid_init()
+    data["manifest"]["llm"][key] = value
+
+    warnings = validate_init(data)
+
+    assert f"unknown field in manifest.llm: {key}" in warnings
+
+
+def test_unknown_manifest_soul_field_warns():
+    data = _valid_init()
+    data["manifest"]["soul"]["voice_promt"] = "speak plainly"
+
+    warnings = validate_init(data)
+
+    assert "unknown field in manifest.soul: voice_promt" in warnings
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("api_compat", "anthropic"),
+        ("default_headers", {"x-test": "1"}),
+        ("codex_session_anchor", "/agents/alice/init.json"),
+        ("codex_thread_salt", "alice"),
+        ("codex_auth_path", "/tokens/alice/codex-auth.json"),
+        ("codex_auth_pool_path", "/tokens/codex-pool.json"),
+        ("codex_base_urls", ["https://codex-a.example.test/v1"]),
+    ],
+)
+def test_known_manifest_llm_pass_through_fields_do_not_warn(key, value):
+    data = _valid_init()
+    data["manifest"]["llm"][key] = value
+
+    warnings = validate_init(data)
+
+    assert all(f"unknown field in manifest.llm: {key}" != w for w in warnings)
+
+
 @pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh"])
 def test_llm_thinking_valid_values(value):
     data = _valid_init()
@@ -219,6 +267,16 @@ def test_llm_thinking_accepted_for_codex_pool(provider):
     data["manifest"]["llm"]["provider"] = provider
     data["manifest"]["llm"]["thinking"] = "xhigh"
     validate_init(data)
+
+
+def test_llm_thinking_known_field_does_not_warn():
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = "codex"
+    data["manifest"]["llm"]["thinking"] = "high"
+
+    warnings = validate_init(data)
+
+    assert "unknown field in manifest.llm: thinking" not in warnings
 
 
 # --- addons (list of curated MCP names; mcp capability handles the rest) ---
@@ -435,6 +493,48 @@ def test_top_optional_fields_all_in_known():
         f"Fields in TOP_OPTIONAL but not in TOP_KNOWN "
         f"(would trigger unknown-field warning): {sorted(missing)}"
     )
+
+
+def test_llm_known_fields_compose_from_schema_sets():
+    from lingtai.init_schema import (
+        LLM_KNOWN,
+        LLM_OPTIONAL,
+        LLM_PASS_THROUGH_KNOWN,
+        LLM_REQUIRED,
+        LLM_SPECIAL_KNOWN,
+    )
+
+    expected = (
+        set(LLM_REQUIRED)
+        | set(LLM_OPTIONAL)
+        | LLM_SPECIAL_KNOWN
+        | LLM_PASS_THROUGH_KNOWN
+    )
+    assert LLM_KNOWN == expected
+
+
+def test_soul_optional_fields_all_in_known():
+    from lingtai.init_schema import SOUL_KNOWN, SOUL_OPTIONAL
+
+    missing = set(SOUL_OPTIONAL) - SOUL_KNOWN
+    assert not missing, (
+        f"Fields in SOUL_OPTIONAL but not in SOUL_KNOWN "
+        f"(would trigger unknown-field warning): {sorted(missing)}"
+    )
+
+
+def test_provider_default_manifest_llm_keys_are_known():
+    from lingtai.init_schema import LLM_KNOWN, LLM_OPTIONAL
+    from lingtai.llm import service as llm_service
+
+    pass_through = set(llm_service._PROVIDER_DEFAULTS_PASS_THROUGH_KEYS) | {
+        "default_headers"
+    }
+    preserve_none = set(llm_service._PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS)
+
+    assert pass_through <= LLM_KNOWN
+    assert preserve_none <= set(LLM_OPTIONAL)
+    assert preserve_none <= LLM_KNOWN
 
 
 def test_manifest_accepts_pseudo_agent_subscriptions():
