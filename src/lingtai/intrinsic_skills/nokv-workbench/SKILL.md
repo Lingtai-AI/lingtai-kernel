@@ -1,5 +1,5 @@
 ---
-last_changed_at: 2026-07-03T01:26:14-07:00
+last_changed_at: 2026-07-08T14:30:00-07:00
 name: nokv-workbench
 description: >
   Thin routing manual for NoKV-controlled workbenches. Use when an agent is
@@ -7,9 +7,10 @@ description: >
   manifests through the `workbench_*` MCP tools instead of ordinary local
   file writes. Covers MCP registration, directory layout, append and edit
   discipline, conditional reads, cross-workbench queries, commit discipline,
-  and snapshot references.
-version: 0.2.0
-tags: [nokv, mcp, workbench, artifacts, provenance, snapshots]
+  and leased checkpoint snapshots with naming, renewal, discovery, and
+  point-in-time history reads.
+version: 0.3.0
+tags: [nokv, mcp, workbench, artifacts, provenance, snapshots, checkpoints, leases]
 ---
 
 # NoKV Workbench
@@ -152,8 +153,83 @@ with `workbench_create`.
 `workbench_commit` publishes `metadata/run_manifest.json`. In v0 this file
 is the completion marker. A workbench without it is not complete.
 
-6. Snapshot the committed workbench with `workbench_snapshot` and cite the
-returned `snapshot_id` and `read_version` in final reports or handoff notes.
+6. Snapshot the committed workbench with `workbench_snapshot`, giving it a
+   `name` (a stable checkpoint alias) and a `ttl_days` that outlasts how long
+   the handoff must stay restorable (default lease is 7 days). In final reports
+   or handoff notes, cite the checkpoint `name`, its `snapshot_id`, and the
+   returned `lease_expires_at` so a later reader knows both what to restore and
+   when it reaps. If the note must outlive the lease, call
+   `workbench_snapshot_renew` first — see "Checkpoints and leases".
+
+## Checkpoints and leases
+
+A `workbench_snapshot` is a **leased checkpoint**, not a permanent archive.
+Every snapshot carries a lease; once the lease expires, NoKV's background
+collector reaps the checkpoint and its point-in-time view is gone. This is the
+failure mode that strands handoffs — a `snapshot_id` cited in a note, then
+unreachable a couple of days later because nobody extended it.
+
+**The default lease is 7 days, but only when you mint through this tool.** Pass
+`ttl_days` to `workbench_snapshot` to choose the lease (default 7, maximum 90):
+
+```json
+{"id":"spedas-task-001","name":"final-v1","ttl_days":30}
+```
+
+The response adds `name`, `lease_expires_at` (the reap deadline), and an
+`expiry_warning` when the lease is short, alongside the usual `snapshot_id` and
+`read_version`. **A snapshot minted with the bare NoKV CLI outside this tool
+gets only the 1-hour default lease** — never hand a raw-CLI snapshot to a
+handoff.
+
+**Name your checkpoints.** `name` is a stable alias you can renew, list, and
+read by, instead of memorizing an opaque `snapshot_id`. The name is the durable
+handle; the id is for pinning an exact version.
+
+### Renew before a handoff outlives the lease
+
+If a checkpoint must survive longer than its lease — a cross-session handoff, a
+note someone opens next week — renew it **before** you commit or hand off:
+
+```json
+{"id":"spedas-task-001","name":"final-v1","ttl_days":30}
+```
+
+with `workbench_snapshot_renew`. Renew is **extend-only**: it pushes
+`lease_expires_at` further out and never pulls it in, so a `ttl_days` that would
+shorten the lease is ignored. Address the checkpoint by `name` or `snapshot_id`.
+
+### Discover checkpoints with workbench_snapshot_list
+
+Do not rely on a `snapshot_id` you remembered in a note — that note is exactly
+what goes stale. `workbench_snapshot_list {"id":"spedas-task-001"}` enumerates
+every checkpoint of the workbench with its `name`, `snapshot_id`,
+`lease_expires_at`, and lifecycle `status` (`alive`, `expired`, or `reaped`).
+Use it to see what is still restorable before you try to read history.
+
+### Read history with at_snapshot
+
+`workbench_stat`, `workbench_list`, and `workbench_read` accept an optional
+`at_snapshot` (a `name` or `snapshot_id`) to view the workbench **as it was at
+that checkpoint** instead of its current state:
+
+```json
+{"id":"spedas-task-001","section":"outputs","path":"spectrum.csv","at_snapshot":"final-v1"}
+```
+
+Historical `workbench_read` serves the checkpoint's bytes/text-lines. Reading a
+checkpoint whose lease has expired now fails **loudly** — an explicit error that
+tells you to `workbench_snapshot_renew` (if a grace window remains) or re-mint —
+rather than silently returning current state or empty data.
+
+### Expired is not the same as data lost
+
+An expired checkpoint loses only the **point-in-time view**, not your work. The
+workbench's committed files stay put: after `workbench_commit`, the current
+artifacts remain reachable with `workbench_read`, `workbench_list`, and
+`workbench_stat` (no `at_snapshot`). Only the frozen historical view needs a
+live lease. If a checkpoint has reaped, re-mint a fresh one from the current
+committed state — the artifacts themselves are intact.
 
 ## Concurrency
 
@@ -184,6 +260,10 @@ Reading inside one workbench:
 - Files larger than the structured limit: use `format="bytes"` with
   `offset`/`limit` ranges (bytes come back base64-encoded), or
   `workbench_grep` to locate lines first.
+- To read a past checkpoint instead of the current state, pass `at_snapshot`
+  (a checkpoint `name` or `snapshot_id`) to `workbench_read`, `workbench_list`,
+  or `workbench_stat`. Reaped checkpoints error loudly — see "Checkpoints and
+  leases".
 - Record shape depends on content type: `.json` files parse into JSON
   records; `.jsonl`, `.log`, and other text files come back as `text_lines`
   records whose `value.text` holds the raw line — parse it yourself when the
