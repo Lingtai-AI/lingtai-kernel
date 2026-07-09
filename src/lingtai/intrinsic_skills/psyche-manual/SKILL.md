@@ -198,6 +198,14 @@ Before you call `psyche(object="context", action="molt", ...)`, always verify at
 
 Context pressure is agent state, not a dismissible notification. Tool results surface a natural-language reminder under `_meta.tool_meta.context.molt` only after context has stayed high for several consecutive fresh provider rounds (the sustained-pressure threshold is 75%). It rides on permanent `tool_meta` (restamped on every result while active) so the reminder persists. The field name is historical: the reminder is a context-pressure action, not an early staged molt order or a machine-readable tag block.
 
+`token_usage.current_call` on a molt result still reflects the last completed
+provider request, so the high `input`/`cache_miss` you saw just before the molt
+is the *pre-molt* state and the reason to molt. A full molt also re-anchors
+`session.context_*` to a local post-molt estimate before stamping its result; the
+provider-measured level lands on the next request. See
+`meta_guidance.token_efficiency` for field reading and procedures for the action
+boundary; do not abort or re-molt on stale pre-molt numbers.
+
 When this reminder appears, batch already-digested noisy history before summarizing. Repeated summarize calls while context stays above 75% substantially hurt token efficiency, so avoid summarizing one small piece at a time. If a batched summarize/reconstruction pass still leaves context above 75%, stop repeating summarize, tend durable stores, and molt deliberately. If context falls below the high-pressure threshold but remains above the recovery target, continue only when the current task still needs the carried context; otherwise molt at a natural task boundary. The reminder points back to this manual/procedure without inlining the full workflow.
 
 ### Cache-miss budget

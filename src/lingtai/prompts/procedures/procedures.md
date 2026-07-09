@@ -86,6 +86,14 @@ cache-miss budget reached (`cache_miss_budget` / `cache_miss_tokens`, default
 refresh), molt to shed the carried context. If you have already decided to molt,
 do not summarize first
 merely to prepare; read `psyche-manual`, tend the stores, and molt deliberately.
+Do not conclude a molt or rebuild failed to reduce context from the metadata on
+the immediately following result: visible context/token telemetry describes the
+last completed provider request, so it lags the just-executed action by a request.
+Wait for fresh telemetry (a new provider request / tool result) or verify the
+before→after numbers in `reconstruction` metadata/warnings or the logs before judging.
+Still act on sustained high context *after* fresh telemetry confirms it — a
+persistent high `session.context_usage` across new rounds is a real signal, not
+lag.
 
 ### Write Skills As You Work
 

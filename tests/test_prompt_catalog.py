@@ -64,6 +64,10 @@ def _mentioned_file_paths(body: str) -> list[str]:
         value = match.group(1).strip()
         if value.startswith("tests/"):
             continue
+        # related_files is the repo-internal prompt-source graph; shell/home-dir
+        # examples like `~/.lingtai-tui/runtime/venv` are not crawl links.
+        if value.startswith("~/"):
+            continue
         if "/" in value or any(
             suffix in value
             for suffix in (".md", ".json", ".jsonl", ".py", ".go", ".toml", ".txt")

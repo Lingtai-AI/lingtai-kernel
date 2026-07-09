@@ -90,6 +90,19 @@ current session) also nudges a molt: when `_meta.tool_meta.context.molt` says th
 cache-miss budget is reached, molt to shed the carried context and restore cache
 efficiency.
 
+The token/context telemetry visible on a tool result mostly describes the
+**previous (last completed) provider request** that led up to this turn — not the
+future state after the tool you just executed. So high `input`/`cache_miss` (and,
+on ordinary turns, `session.context_*`) on the result you are reading reflects
+the context you carried *into* the request, which is the correct signal to molt
+or rebuild, not evidence of what compaction will leave behind. Compaction actions
+also expose after-state hints: a full molt re-anchors `session.context_*` to a
+local post-molt estimate immediately, while summarize rebuilds use
+`reconstruction` before→after metadata and the next provider request for the
+provider-measured level. Do not treat the first post-compaction number as the
+settled level; verify with action-specific after data or fresh provider
+telemetry.
+
 ## V · Idle and soul
 
 When there is nothing concrete to do, go idle. Idle keeps listeners alive and lets
