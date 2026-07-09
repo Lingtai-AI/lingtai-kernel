@@ -517,6 +517,63 @@ def test_seen_inbox_entries_skip_stat_before_is_dir(tmp_path):
     assert received == []
 
 
+def test_pseudo_outbox_oserror_does_not_skip_own_inbox_scan(tmp_path):
+    """A persistent OSError from pseudo-outbox polling must not skip the same
+    tick's own-inbox scan. Regression: before per-phase isolation the poll loop
+    wrapped both phases in one ``except OSError`` block, so a pseudo-outbox
+    error starved own-inbox delivery for the whole tick.
+    """
+    import threading
+    from lingtai_kernel.services.mail import FilesystemMailService
+
+    agent_dir = _make_agent_dir(tmp_path, "agent_a")
+    real_inbox = agent_dir / "mailbox" / "inbox"
+    real_inbox.mkdir(parents=True, exist_ok=True)
+
+    # A subscribed pseudo-agent dir exists so the poll loop actually enters
+    # Phase 1 every tick.
+    pseudo_dir = tmp_path / "human"
+    pseudo_dir.mkdir()
+    (pseudo_dir / "mailbox").mkdir()
+
+    svc = FilesystemMailService(
+        working_dir=agent_dir,
+        pseudo_agent_subscriptions=["../human"],
+    )
+
+    # Force Phase 1 to raise a persistent OSError every tick.
+    def _always_oserror(*args, **kwargs):
+        raise OSError("simulated persistent pseudo-outbox failure")
+
+    svc._poll_pseudo_outbox = _always_oserror
+
+    received: list[dict] = []
+    received_event = threading.Event()
+
+    def on_message(payload: dict) -> None:
+        received.append(payload)
+        received_event.set()
+
+    svc.listen(on_message=on_message)
+    try:
+        # Drop a fresh own-inbox message AFTER listen() snapshotted _seen, so
+        # it is a genuine new arrival the Phase 2 scan must pick up.
+        msg_dir = real_inbox / "own-msg"
+        msg_dir.mkdir()
+        (msg_dir / "message.json").write_text(
+            json.dumps({"message": "own-inbox wake", "subject": "x"})
+        )
+        assert received_event.wait(timeout=3.0), (
+            "own-inbox message was not delivered while pseudo-outbox polling "
+            "raised a persistent OSError"
+        )
+    finally:
+        svc.stop()
+
+    assert len(received) == 1
+    assert received[0]["message"] == "own-inbox wake"
+
+
 def test_runtime_probe_ack_from_pseudo_agent_outbox(tmp_path):
     """Explicit runtime probes get a structured ack from the real poller."""
     import json

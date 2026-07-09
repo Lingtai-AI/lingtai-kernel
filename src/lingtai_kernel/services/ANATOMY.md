@@ -27,8 +27,8 @@ Kernel-side service ABCs and implementations. Services back cross-cutting kernel
   - `MailService` is the ABC for `send()`, `listen()`, `stop()`, and `address` (`services/mail.py:29`).
   - `FilesystemMailService` implements directory-based delivery (`services/mail.py:81`); its constructor takes `working_dir`, `mailbox_rel`, and optional pseudo-agent subscriptions (`services/mail.py:94`).
   - `send()` resolves peer/absolute addresses, checks `is_agent`/`is_alive`, generates ids through `intrinsics.email._new_mailbox_id`, copies attachments, and writes `message.json` atomically (`services/mail.py:131`, `services/mail.py:165`, `services/mail.py:199-206`).
-  - `listen()` starts a daemon polling thread (`services/mail.py:216`), snapshots existing inbox ids into `_seen` (`services/mail.py:224-227`), polls subscribed pseudo-agent outboxes before each own-inbox scan, and waits 0.5s between iterations (`services/mail.py:234-260`, `services/mail.py:265-387`).
-  - `stop()` sets the poll stop event and joins the thread (`services/mail.py:469-474`).
+  - `listen()` starts a daemon polling thread (`services/mail.py:216`), snapshots existing inbox ids into `_seen` (`services/mail.py:224-227`), polls subscribed pseudo-agent outboxes before each own-inbox scan (each phase isolated so a persistent OSError in one phase cannot skip the other), and waits 0.5s between iterations (`services/mail.py:233-264`, `services/mail.py:269-391`).
+  - `stop()` sets the poll stop event and joins the thread (`services/mail.py:473-477`).
 - `services/logging.py` — structured event log, token-ledger mirror, and additive SQLite trace query index. Agent event rows are stamped upstream with compact kernel runtime identity fields (`kernel_version`, `kernel_runtime_stamp`, `kernel_runtime`) before durable JSONL/SQLite persistence.
   - `LoggingService` is the ABC for `log(event)` and `close()`; `log()` may return optional storage metadata such as JSONL offsets (`services/logging.py:76`, `services/logging.py:83-89`).
   - `JSONLLoggingService` appends UTF-8 JSON lines with a lock and flush per write, returning `(source_file, source_offset)` metadata (`services/logging.py:95`, `services/logging.py:104-111`, `services/logging.py:119-130`).
@@ -60,7 +60,7 @@ Kernel-side service ABCs and implementations. Services back cross-cutting kernel
 
 ## Notes
 
-- Pseudo-agent outbox claiming is optimistic concurrency: pollers copy to inbox, race on outbox→sent rename, and losers delete their speculative copy and clear `_seen` (`services/mail.py:325-370`).
+- Pseudo-agent outbox claiming is optimistic concurrency: pollers copy to inbox, race on outbox→sent rename, and losers delete their speculative copy and clear `_seen` (`services/mail.py:329-374`).
 - The services package has two ABCs but mail and logging now differ in shape: mail still has one filesystem implementation, while logging composes the JSONL primary with optional derived indexes.
 - `get_events()` favors simplicity over hot-path performance: it re-opens and parses the whole JSONL file each call (`services/logging.py:153-168`).
 - SQLite is intentionally additive: JSONL remains the durable source of truth; rebuild requires the agent working-directory lock (offline/stopped agent), uses a temporary database and atomic replace, and checkpoints WAL before replacing so the final artifact is self-contained (`services/logging.py:845-959`).

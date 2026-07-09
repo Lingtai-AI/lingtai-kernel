@@ -230,14 +230,19 @@ class FilesystemMailService(MailService):
 
         def _poll_loop() -> None:
             while not self._poll_stop.is_set():
+                # Phase 1 — subscribed pseudo-agent outboxes. Poll these
+                # before historical own-inbox scans so urgent human/TUI
+                # wake mail cannot starve behind old inbox entries. Isolated
+                # from Phase 2 so a persistent OSError here cannot skip the
+                # same tick's own-inbox scan.
                 try:
-                    # Phase 1 — subscribed pseudo-agent outboxes. Poll these
-                    # before historical own-inbox scans so urgent human/TUI
-                    # wake mail cannot starve behind old inbox entries.
                     for pseudo_dir in self._pseudo_agent_dirs:
                         self._poll_pseudo_outbox(pseudo_dir, on_message)
+                except OSError:
+                    pass
 
-                    # Phase 2 — own inbox.
+                # Phase 2 — own inbox.
+                try:
                     if self._inbox_dir.is_dir():
                         for entry in self._inbox_dir.iterdir():
                             # _seen only holds handled directory names or
@@ -254,7 +259,6 @@ class FilesystemMailService(MailService):
                                 except (json.JSONDecodeError, OSError):
                                     pass
                                 self._seen.add(entry.name)
-
                 except OSError:
                     pass
                 self._poll_stop.wait(0.5)
