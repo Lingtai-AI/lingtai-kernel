@@ -230,13 +230,26 @@ class FilesystemMailService(MailService):
 
         def _poll_loop() -> None:
             while not self._poll_stop.is_set():
+                # Phase 1 — subscribed pseudo-agent outboxes. Poll these
+                # before historical own-inbox scans so urgent human/TUI
+                # wake mail cannot starve behind old inbox entries. Isolated
+                # from Phase 2 so a persistent OSError here cannot skip the
+                # same tick's own-inbox scan.
                 try:
-                    # Phase 1 — own inbox.
+                    for pseudo_dir in self._pseudo_agent_dirs:
+                        self._poll_pseudo_outbox(pseudo_dir, on_message)
+                except OSError:
+                    pass
+
+                # Phase 2 — own inbox.
+                try:
                     if self._inbox_dir.is_dir():
                         for entry in self._inbox_dir.iterdir():
-                            if not entry.is_dir():
-                                continue
+                            # _seen only holds handled directory names or
+                            # pseudo-claim UUIDs, so skip before the stat.
                             if entry.name in self._seen:
+                                continue
+                            if not entry.is_dir():
                                 continue
                             msg_file = entry / "message.json"
                             if msg_file.is_file():
@@ -246,11 +259,6 @@ class FilesystemMailService(MailService):
                                 except (json.JSONDecodeError, OSError):
                                     pass
                                 self._seen.add(entry.name)
-
-                    # Phase 2 — subscribed pseudo-agent outboxes. Claim
-                    # messages addressed to self via atomic rename outbox→sent.
-                    for pseudo_dir in self._pseudo_agent_dirs:
-                        self._poll_pseudo_outbox(pseudo_dir, on_message)
                 except OSError:
                     pass
                 self._poll_stop.wait(0.5)
@@ -272,8 +280,9 @@ class FilesystemMailService(MailService):
           1. Atomically rename ``<pseudo_dir>/mailbox/outbox/<uuid>/`` to a
              temporary claim directory under ``sent``. Only one poller can win
              this claim.
-          2. Pre-mark the UUID in ``_seen`` so Phase 1 won't re-dispatch it
-             after we place a copy in own inbox.
+          2. Pre-mark the UUID in ``_seen`` so the own-inbox scan in this
+             tick, and later ticks, won't re-dispatch it after we place a copy
+             in own inbox.
           3. Write ``message.json`` atomically into
              ``<self>/mailbox/inbox/<uuid>/``. This makes the wake signal
              truthful: by the time ``on_message`` fires, the message really is
@@ -329,9 +338,9 @@ class FilesystemMailService(MailService):
             except OSError:
                 continue
 
-            # Pre-mark BEFORE placing the file so Phase 1's own-inbox scan
-            # on the next tick doesn't treat this UUID as a new arrival and
-            # double-dispatch. Removed on rollback.
+            # Pre-mark BEFORE placing the file so the same poll iteration's
+            # own-inbox scan, and later ticks, do not double-dispatch it.
+            # Removed on rollback.
             self._seen.add(uuid_name)
 
             # Step 1: write the payload to own inbox (tmp -> rename).
