@@ -35,18 +35,27 @@ from typing import Callable
 from .run_dir import DaemonRunDir
 from .runtime import kill_process_group
 
-# POSIX-only stdlib ``pty`` is imported lazily inside ``run()`` (just before
-# ``pty.openpty()``) so this module stays importable on native Windows, where
-# the interactive backend fails loud instead (ConPTY/pywinpty + a Windows hook
-# relay are not implemented yet). Historically this module did ``import pty`` at
-# the top level, which made merely importing the daemon capability crash on
-# native Windows. No Windows terminal abstraction is introduced here on purpose:
-# there is no second terminal implementation to share a seam with yet.
+# The terminal that drives ``claude`` is platform-specific and lives behind the
+# ``_Terminal`` seam below (POSIX ``pty`` vs Windows ConPTY/pywinpty). The
+# platform-only imports (``pty`` on POSIX, ``winpty`` on native Windows) are done
+# lazily inside those terminal implementations so merely importing this module —
+# and therefore the daemon capability — never crashes on the other platform.
 
 
 def _native_windows() -> bool:
     """True on native Windows (``os.name == "nt"``); False under WSL/POSIX."""
     return os.name == "nt"
+
+
+# Actionable message when interactive Claude is requested on native Windows but
+# the pywinpty/ConPTY support it needs is not installed. Kept as a constant so
+# the run-time guard and tests agree on the wording.
+_PYWINPTY_MISSING_MESSAGE = (
+    "interactive Claude backend on native Windows requires the 'pywinpty' "
+    "package (ConPTY terminal support), which is not installed. Install "
+    "pywinpty (pip install pywinpty), or use a headless backend, "
+    "backend='lingtai', or WSL."
+)
 
 
 @dataclass(slots=True)
@@ -112,6 +121,211 @@ class ClaudeInteractiveError(RuntimeError):
     """Raised when the interactive Claude bridge cannot finish a turn."""
 
 
+# ----------------------------------------------------------------------------
+# Terminal seam
+# ----------------------------------------------------------------------------
+#
+# The bridge drives ``claude`` through a real terminal and matches raw ANSI
+# bytes (terminal probes, trust prompts) and injects a bracketed-paste prompt.
+# That byte-oriented logic is platform-neutral; only the terminal underneath it
+# differs. ``_Terminal`` is the seam: ``_PosixPtyTerminal`` wraps the stdlib
+# ``pty`` + ``subprocess.Popen`` path (unchanged POSIX behavior);
+# ``_WinptyTerminal`` wraps pywinpty/ConPTY. Both read/write **bytes** so the
+# probe/prompt logic never changes.
+
+
+class _PosixPtyTerminal:
+    """POSIX ``pty.openpty()`` + ``subprocess.Popen`` terminal (bytes I/O)."""
+
+    def __init__(
+        self,
+        cmd: list[str],
+        *,
+        cwd: str,
+        env: dict[str, str],
+    ) -> None:
+        import pty  # lazy: POSIX-only stdlib module
+
+        self._master_fd: int | None = None
+        self._proc: subprocess.Popen | None = None
+        try:
+            master_fd, slave_fd = pty.openpty()
+            try:
+                self._proc = subprocess.Popen(
+                    cmd,
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    cwd=cwd,
+                    env=env,
+                    start_new_session=True,
+                    close_fds=True,
+                )
+            finally:
+                os.close(slave_fd)
+            self._master_fd = master_fd
+        except FileNotFoundError as exc:
+            raise ClaudeInteractiveError("'claude' CLI not found on PATH") from exc
+        except OSError as exc:
+            raise ClaudeInteractiveError(
+                f"Failed to start interactive claude CLI: {exc}"
+            ) from exc
+
+    def read(self, timeout: float) -> bytes:
+        assert self._master_fd is not None
+        ready, _, _ = select.select([self._master_fd], [], [], timeout)
+        if not ready:
+            return b""
+        try:
+            return os.read(self._master_fd, 8192)
+        except OSError:
+            return b""
+
+    def write(self, data: bytes) -> None:
+        assert self._master_fd is not None
+        try:
+            os.write(self._master_fd, data)
+        except OSError:
+            pass
+
+    def poll(self) -> int | None:
+        assert self._proc is not None
+        return self._proc.poll()
+
+    def wait(self, timeout: float) -> None:
+        assert self._proc is not None
+        try:
+            self._proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.kill()
+
+    def kill(self) -> None:
+        # Preserve #812 semantics: POSIX cleanup goes through the shared
+        # process-group killer (which is also Windows-taskkill-aware).
+        if self._proc is not None:
+            kill_process_group(self._proc, term_timeout=2.0, kill_timeout=1.0)
+
+    def close(self) -> None:
+        if self._master_fd is not None:
+            try:
+                os.close(self._master_fd)
+            except OSError:
+                pass
+            self._master_fd = None
+
+    @property
+    def returncode(self) -> int | None:
+        return self._proc.returncode if self._proc is not None else None
+
+
+class _WinptyTerminal:
+    """Native-Windows ConPTY terminal backed by ``winpty.PtyProcess``.
+
+    pywinpty's ``read()`` blocks and raises ``EOFError`` at end of stream, and
+    its handle is not selectable, so a dedicated reader thread loops on
+    ``read()`` and pushes decoded bytes onto a queue that :meth:`read` drains.
+    All I/O is bytes at this boundary (pywinpty itself speaks ``str``).
+    """
+
+    def __init__(
+        self,
+        cmd: list[str],
+        *,
+        cwd: str,
+        env: dict[str, str],
+    ) -> None:
+        try:
+            from winpty import PtyProcess  # lazy: Windows-only third-party dep
+        except ImportError as exc:
+            raise ClaudeInteractiveError(_PYWINPTY_MISSING_MESSAGE) from exc
+
+        self._out: queue.Queue[bytes] = queue.Queue()
+        self._eof = threading.Event()
+        try:
+            # pywinpty accepts an argv list; dimensions is (rows, cols).
+            self._proc = PtyProcess.spawn(
+                cmd,
+                cwd=cwd,
+                env=env,
+                dimensions=(40, 120),
+            )
+        except FileNotFoundError as exc:
+            raise ClaudeInteractiveError("'claude' CLI not found on PATH") from exc
+        except OSError as exc:
+            raise ClaudeInteractiveError(
+                f"Failed to start interactive claude CLI: {exc}"
+            ) from exc
+
+        self._reader = threading.Thread(
+            target=self._read_loop, daemon=True, name="daemon-claude-winpty-reader"
+        )
+        self._reader.start()
+
+    def _read_loop(self) -> None:
+        try:
+            while True:
+                data = self._proc.read(8192)
+                if data:
+                    self._out.put(data.encode("utf-8", errors="replace"))
+        except EOFError:
+            pass
+        except Exception:  # pragma: no cover - defensive; child pty went away
+            pass
+        finally:
+            self._eof.set()
+
+    def read(self, timeout: float) -> bytes:
+        try:
+            return self._out.get(timeout=timeout)
+        except queue.Empty:
+            return b""
+
+    def write(self, data: bytes) -> None:
+        try:
+            self._proc.write(data.decode("utf-8", errors="replace"))
+        except (EOFError, OSError):
+            pass
+
+    def poll(self) -> int | None:
+        if self._proc.isalive():
+            return None
+        return self._proc.exitstatus
+
+    def wait(self, timeout: float) -> None:
+        # pywinpty's wait() has no timeout; poll briefly then force-terminate.
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not self._proc.isalive():
+                return
+            time.sleep(0.02)
+        self.kill()
+
+    def kill(self) -> None:
+        # ConPTY owns the child's process group; terminate directly. The
+        # headless-CLI taskkill path stays in runtime.py (#812) and is not
+        # reused here on purpose.
+        try:
+            if self._proc.isalive():
+                self._proc.terminate(force=True)
+        except Exception:  # pragma: no cover - already dead
+            pass
+
+    def close(self) -> None:
+        try:
+            self._proc.close(force=True)
+        except Exception:  # pragma: no cover - already closed
+            pass
+
+    @property
+    def returncode(self) -> int | None:
+        return None if self._proc.isalive() else self._proc.exitstatus
+
+
+# Structural union of the two terminal implementations. Both expose the same
+# bytes-oriented ``read``/``write``/``poll``/``wait``/``kill``/``close`` surface.
+_Terminal = _PosixPtyTerminal | _WinptyTerminal
+
+
 class ClaudeInteractiveBridge:
     """Drive one interactive Claude Code turn through a PTY.
 
@@ -160,8 +374,15 @@ class ClaudeInteractiveBridge:
         self.system_prompt_path = self.prompt_dir / "lingtai-system-prompt.md"
 
         self.harness_dir = self.managed_run_root / "harness"
+        # Hook relay is platform-specific: POSIX uses a FIFO + ``/bin/sh``
+        # script; native Windows uses an append-only log tailed by a poller +
+        # a PowerShell script (no ``mkfifo``/``/bin/sh`` on Windows).
+        self._windows = _native_windows()
         self.fifo_path = self.harness_dir / "hooks.fifo"
-        self.hook_script_path = self.harness_dir / "hook-relay.sh"
+        self.hook_log_path = self.harness_dir / "hooks.log"
+        self.hook_script_path = self.harness_dir / (
+            "hook-relay.ps1" if self._windows else "hook-relay.sh"
+        )
         self.raw_pty_log_path = self.harness_dir / "pty.ansi.log"
 
         self.claude_cwd = self.managed_worktree_path
@@ -220,13 +441,33 @@ class ClaudeInteractiveBridge:
             self.run_dir.daemon_json_path, self.run_dir._state,
         )
 
-    def _build_settings_json(self) -> str:
-        script = shlex.quote(str(self.hook_script_path))
+    def _hook_command(self, event: str) -> str:
+        """Shell command Claude Code runs for one hook event.
 
+        POSIX invokes the ``/bin/sh`` relay directly; native Windows invokes the
+        PowerShell relay via ``powershell -File`` (no ``/bin/sh`` on Windows).
+        Both relays receive the event name as their single argument and read the
+        hook JSON payload from stdin.
+        """
+        if self._windows:
+            # PowerShell single-quoting: escape embedded single quotes by
+            # doubling them. Paths under the managed run root do not normally
+            # contain quotes, but stay honest about it.
+            def ps_quote(value: str) -> str:
+                return "'" + value.replace("'", "''") + "'"
+
+            return (
+                "powershell -NoProfile -ExecutionPolicy Bypass -File "
+                f"{ps_quote(str(self.hook_script_path))} {event}"
+            )
+        script = shlex.quote(str(self.hook_script_path))
+        return f"{script} {event}"
+
+    def _build_settings_json(self) -> str:
         def hook(event: str) -> list[dict]:
             return [{
                 "matcher": "*",
-                "hooks": [{"type": "command", "command": f"{script} {event}"}],
+                "hooks": [{"type": "command", "command": self._hook_command(event)}],
             }]
 
         return json.dumps({
@@ -326,6 +567,23 @@ class ClaudeInteractiveBridge:
 
     def _prepare_harness(self) -> str:
         self.harness_dir.mkdir(parents=True, exist_ok=True)
+        self.raw_pty_log_path.write_bytes(b"")
+        if self._windows:
+            self._prepare_windows_harness()
+        else:
+            self._prepare_posix_harness()
+        settings_json = self._build_settings_json()
+        state: dict[str, object] = {
+            "claude_interactive_raw_pty_log": str(self.raw_pty_log_path),
+        }
+        if self._windows:
+            state["claude_interactive_hook_log"] = str(self.hook_log_path)
+        else:
+            state["claude_interactive_hook_fifo"] = str(self.fifo_path)
+        self._write_state(**state)
+        return settings_json
+
+    def _prepare_posix_harness(self) -> None:
         if self.fifo_path.exists():
             self.fifo_path.unlink()
         os.mkfifo(self.fifo_path)
@@ -339,19 +597,60 @@ class ClaudeInteractiveBridge:
             encoding="utf-8",
         )
         self.hook_script_path.chmod(0o700)
-        self.raw_pty_log_path.write_bytes(b"")
-        settings_json = self._build_settings_json()
-        self._write_state(
-            claude_interactive_hook_fifo=str(self.fifo_path),
-            claude_interactive_raw_pty_log=str(self.raw_pty_log_path),
+
+    def _prepare_windows_harness(self) -> None:
+        # Append-only log tailed by a poller stands in for the POSIX FIFO: no
+        # ``mkfifo`` on Windows, so the hook appends one ``event<TAB>json`` line
+        # per invocation and ``_hook_reader`` tails the file for new records.
+        # Truncate any stale log so the tail reader starts from a clean offset.
+        self.hook_log_path.write_bytes(b"")
+        # PowerShell relay: read the hook JSON from stdin ($input), collapse any
+        # embedded newlines so the record stays one line, and append
+        # "<event>\t<payload>`n" to the log named by the env var. Use .NET's
+        # BOM-less UTF-8 append path instead of Add-Content -Encoding utf8 so a
+        # Windows PowerShell 5.1 BOM cannot prefix the first event name.
+        self.hook_script_path.write_text(
+            "param([Parameter(Mandatory=$true)][string]$Event)\n"
+            "$ErrorActionPreference = 'Stop'\n"
+            "$logPath = $env:LINGTAI_CLAUDE_INTERACTIVE_HOOK_LOG\n"
+            "if (-not $logPath) { throw 'missing LINGTAI_CLAUDE_INTERACTIVE_HOOK_LOG' }\n"
+            "$payload = [Console]::In.ReadToEnd()\n"
+            "$payload = $payload -replace \"`r\", '' -replace \"`n\", ' '\n"
+            "$line = $Event + \"`t\" + $payload + [Environment]::NewLine\n"
+            "$encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false\n"
+            "[System.IO.File]::AppendAllText($logPath, $line, $encoding)\n",
+            encoding="utf-8",
         )
-        return settings_json
 
     # ------------------------------------------------------------------
     # Hook and transcript parsing
     # ------------------------------------------------------------------
 
+    def _emit_hook_line(self, line: bytes) -> None:
+        """Parse one ``event<TAB>json`` record and enqueue a hook event.
+
+        Shared by the POSIX FIFO reader and the Windows log tailer so both
+        platforms use the identical record format and downstream plumbing.
+        """
+        if not line:
+            return
+        try:
+            event_b, payload_b = line.split(b"\t", 1)
+            payload = json.loads(payload_b.decode("utf-8"))
+            event = event_b.decode("utf-8", errors="replace")
+        except Exception as exc:  # pragma: no cover - defensive
+            self._log("daemon_claude_interactive_bad_hook",
+                      em_id=self.em_id, error=str(exc))
+            return
+        self._hook_events.put(_HookEvent(event=event, payload=payload))
+
     def _hook_reader(self) -> None:
+        if self._windows:
+            self._windows_hook_reader()
+        else:
+            self._posix_hook_reader()
+
+    def _posix_hook_reader(self) -> None:
         fd: int | None = None
         try:
             fd = os.open(self.fifo_path, os.O_RDONLY | os.O_NONBLOCK)
@@ -367,23 +666,37 @@ class ClaudeInteractiveBridge:
                 buf += chunk
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
-                    if not line:
-                        continue
-                    try:
-                        event_b, payload_b = line.split(b"\t", 1)
-                        payload = json.loads(payload_b.decode("utf-8"))
-                        event = event_b.decode("utf-8", errors="replace")
-                    except Exception as exc:  # pragma: no cover - defensive
-                        self._log("daemon_claude_interactive_bad_hook",
-                                  em_id=self.em_id, error=str(exc))
-                        continue
-                    self._hook_events.put(_HookEvent(event=event, payload=payload))
+                    self._emit_hook_line(line)
         finally:
             if fd is not None:
                 try:
                     os.close(fd)
                 except OSError:
                     pass
+
+    def _windows_hook_reader(self) -> None:
+        # Tail the append-only hook log by byte offset. No ``select`` on Windows
+        # file handles, so poll on a short interval. Add-Content writes CRLF-ish
+        # line endings depending on shell; split on ``\n`` and strip a trailing
+        # ``\r`` before parsing.
+        offset = 0
+        buf = b""
+        while not self._hook_done.is_set():
+            try:
+                with open(self.hook_log_path, "rb") as fh:
+                    fh.seek(offset)
+                    chunk = fh.read()
+                    offset = fh.tell()
+            except OSError:
+                time.sleep(0.05)
+                continue
+            if not chunk:
+                time.sleep(0.05)
+                continue
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                self._emit_hook_line(line.rstrip(b"\r"))
 
     def _remember_hook_payload(self, payload: dict) -> None:
         sid = payload.get("session_id") or payload.get("sessionId")
@@ -402,7 +715,7 @@ class ClaudeInteractiveBridge:
         if isinstance(last_msg, str) and last_msg.strip():
             self._last_assistant_message = last_msg.strip()
 
-    def _handle_hook_events(self, master_fd: int) -> None:
+    def _handle_hook_events(self, terminal: _Terminal) -> None:
         while True:
             try:
                 item = self._hook_events.get_nowait()
@@ -413,7 +726,7 @@ class ClaudeInteractiveBridge:
                 self.run_dir.record_cli_output(
                     "[claude interactive SessionStart]", stream="stdout",
                 )
-                self._send_prompt(master_fd)
+                self._send_prompt(terminal)
             elif item.event == "Stop":
                 self.run_dir.record_cli_output(
                     "[claude interactive Stop]", stream="stdout",
@@ -520,14 +833,11 @@ class ClaudeInteractiveBridge:
     # PTY driving
     # ------------------------------------------------------------------
 
-    def _respond_to_terminal_probes(self, master_fd: int, data: bytes) -> None:
+    def _respond_to_terminal_probes(self, terminal: _Terminal, data: bytes) -> None:
         self._pty_tail = (self._pty_tail + data)[-512:]
         for probe, response in _TERMINAL_RESPONSES:
             if probe in self._pty_tail:
-                try:
-                    os.write(master_fd, response)
-                except OSError:
-                    return
+                terminal.write(response)
                 self._pty_tail = self._pty_tail.replace(probe, b"")
 
     def _normalized_prompt_text(self, data: bytes) -> tuple[str, str]:
@@ -544,7 +854,7 @@ class ClaudeInteractiveBridge:
             marker in normalized for marker in markers
         )
 
-    def _handle_auth_or_trust_prompt(self, master_fd: int, data: bytes) -> None:
+    def _handle_auth_or_trust_prompt(self, terminal: _Terminal, data: bytes) -> None:
         if self._prompt_warning:
             return
         text, normalized = self._normalized_prompt_text(data)
@@ -557,10 +867,7 @@ class ClaudeInteractiveBridge:
                     # workspace trust request; let the process advance or time
                     # out normally.
                     return
-                try:
-                    os.write(master_fd, b"1\r")
-                except OSError:
-                    return
+                terminal.write(b"1\r")
                 self._trust_prompt_answered = True
                 msg = (
                     "Claude interactive backend auto-selected workspace trust "
@@ -586,13 +893,13 @@ class ClaudeInteractiveBridge:
             )
             self.run_dir.record_cli_output(self._prompt_warning, stream="stderr")
 
-    def _send_prompt(self, master_fd: int) -> None:
+    def _send_prompt(self, terminal: _Terminal) -> None:
         payload = self.task.encode("utf-8")
         # Bracketed paste avoids treating prompt content as terminal control
         # input in most readline/Ink text areas.  Fall back naturally if Claude
         # ignores bracketed paste markers.
         framed = b"\x1b[200~" + payload + b"\x1b[201~\r"
-        os.write(master_fd, framed)
+        terminal.write(framed)
         self._prompt_sent = True
         self._write_state(claude_interactive_prompt_sent=True)
 
@@ -606,17 +913,18 @@ class ClaudeInteractiveBridge:
             cmd.extend(self.backend_argv)
         return cmd
 
+    def _open_terminal(self, cmd: list[str], env: dict[str, str]) -> _Terminal:
+        """Construct the platform terminal that drives ``claude``.
+
+        On native Windows this fails loud if pywinpty/ConPTY is not installed
+        (``_WinptyTerminal`` raises with an actionable message); on POSIX it
+        opens a stdlib ``pty``. No placeholder terminal exists.
+        """
+        if self._windows:
+            return _WinptyTerminal(cmd, cwd=str(self.claude_cwd), env=env)
+        return _PosixPtyTerminal(cmd, cwd=str(self.claude_cwd), env=env)
+
     def run(self) -> ClaudeInteractiveResult:
-        if _native_windows():
-            # Defense-in-depth: DaemonManager already refuses the interactive
-            # Claude backend on native Windows, but fail loud here too rather
-            # than importing POSIX ``pty`` (which does not exist) or pretending
-            # ConPTY/pywinpty + the Windows hook relay are wired up.
-            raise ClaudeInteractiveError(
-                "interactive Claude backend is not supported on native Windows: "
-                "pywinpty/ConPTY terminal and the Windows hook relay are not "
-                "implemented. Use a headless backend, backend='lingtai', or WSL."
-            )
         self._prepare_managed_workspace()
         settings_json = self._prepare_harness()
         hook_thread = threading.Thread(
@@ -627,7 +935,10 @@ class ClaudeInteractiveBridge:
         hook_thread.start()
 
         env = dict(self.env)
-        env["LINGTAI_CLAUDE_INTERACTIVE_FIFO"] = str(self.fifo_path)
+        if self._windows:
+            env["LINGTAI_CLAUDE_INTERACTIVE_HOOK_LOG"] = str(self.hook_log_path)
+        else:
+            env["LINGTAI_CLAUDE_INTERACTIVE_FIFO"] = str(self.fifo_path)
         cmd = self._command(settings_json)
         self._log(
             "daemon_claude_interactive_start",
@@ -637,77 +948,47 @@ class ClaudeInteractiveBridge:
         )
         self._write_state(claude_interactive_command=cmd, claude_interactive_cwd=str(self.claude_cwd))
 
-        # Lazy POSIX-only import: this module must stay importable on native
-        # Windows (the Windows path fails loud above before reaching here).
-        import pty
-
-        master_fd: int | None = None
-        proc: subprocess.Popen | None = None
-        try:
-            master_fd, slave_fd = pty.openpty()
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdin=slave_fd,
-                    stdout=slave_fd,
-                    stderr=slave_fd,
-                    cwd=str(self.claude_cwd),
-                    env=env,
-                    start_new_session=True,
-                    close_fds=True,
-                )
-            finally:
-                os.close(slave_fd)
-        except FileNotFoundError as exc:
-            raise ClaudeInteractiveError("'claude' CLI not found on PATH") from exc
-        except OSError as exc:
-            raise ClaudeInteractiveError(f"Failed to start interactive claude CLI: {exc}") from exc
-
+        terminal: _Terminal | None = None
         stop_seen_at: float | None = None
         exited_seen_at: float | None = None
         try:
-            assert master_fd is not None
+            terminal = self._open_terminal(cmd, env)
             with self.raw_pty_log_path.open("ab") as raw_log:
                 while True:
                     if self.cancel_event.is_set():
-                        kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)
+                        terminal.kill()
                         break
 
-                    self._handle_hook_events(master_fd)
+                    self._handle_hook_events(terminal)
                     if self._stop_payload is not None and stop_seen_at is None:
                         stop_seen_at = time.monotonic()
 
-                    ready, _, _ = select.select([master_fd], [], [], 0.05)
-                    if ready:
-                        try:
-                            data = os.read(master_fd, 8192)
-                        except OSError:
-                            data = b""
-                        if data:
-                            raw_log.write(data)
-                            raw_log.flush()
-                            self._respond_to_terminal_probes(master_fd, data)
-                            self._handle_auth_or_trust_prompt(master_fd, data)
-                            if self._prompt_warning:
-                                kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)
-                                break
+                    data = terminal.read(0.05)
+                    if data:
+                        raw_log.write(data)
+                        raw_log.flush()
+                        self._respond_to_terminal_probes(terminal, data)
+                        self._handle_auth_or_trust_prompt(terminal, data)
+                        if self._prompt_warning:
+                            terminal.kill()
+                            break
 
                     # After Stop, Claude's turn is complete.  Give the process a
                     # small grace period to exit naturally, then terminate the
                     # TUI so the daemon can finish deterministically.
                     if stop_seen_at is not None:
-                        if proc.poll() is not None:
+                        if terminal.poll() is not None:
                             break
                         if time.monotonic() - stop_seen_at > 0.25:
-                            kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)
+                            terminal.kill()
                             break
 
                     # A fast fake (and occasionally a fast real failure) can
-                    # exit before the hook-reader thread has drained the FIFO.
+                    # exit before the hook-reader thread has drained the relay.
                     # Keep the loop alive briefly after process exit so queued
                     # SessionStart/Stop lines can be processed before we decide
                     # that no Stop hook was observed.
-                    if proc.poll() is not None:
+                    if terminal.poll() is not None:
                         if exited_seen_at is None:
                             exited_seen_at = time.monotonic()
                         if self._stop_payload is not None:
@@ -715,25 +996,22 @@ class ClaudeInteractiveBridge:
                         if time.monotonic() - exited_seen_at > 1.0:
                             break
 
-            if proc.poll() is None:
-                try:
-                    proc.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)
+            if terminal.poll() is None:
+                terminal.wait(1.0)
         finally:
             self._hook_done.set()
-            # Wake the nonblocking FIFO reader if it is sitting in select/read.
-            try:
-                fd = os.open(self.fifo_path, os.O_WRONLY | os.O_NONBLOCK)
-                os.close(fd)
-            except OSError:
-                pass
-            hook_thread.join(timeout=1.0)
-            if master_fd is not None:
+            # Wake the nonblocking POSIX FIFO reader if it is sitting in
+            # select/read. The Windows tail reader polls on an interval and stops
+            # on ``_hook_done`` without needing a wake.
+            if not self._windows:
                 try:
-                    os.close(master_fd)
+                    fd = os.open(self.fifo_path, os.O_WRONLY | os.O_NONBLOCK)
+                    os.close(fd)
                 except OSError:
                     pass
+            hook_thread.join(timeout=1.0)
+            if terminal is not None:
+                terminal.close()
 
         if self.cancel_event.is_set():
             return ClaudeInteractiveResult(
@@ -743,7 +1021,7 @@ class ClaudeInteractiveBridge:
                 raw_pty_log_path=str(self.raw_pty_log_path),
             )
 
-        rc = proc.returncode if proc is not None else None
+        rc = terminal.returncode
         # When Stop fired we may have intentionally terminated the still-open
         # interactive TUI.  Treat that as successful; the transcript is the
         # source of truth for the turn result.

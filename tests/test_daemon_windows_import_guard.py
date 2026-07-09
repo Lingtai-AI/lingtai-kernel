@@ -80,27 +80,26 @@ def test_native_windows_predicate_reads_os_name(monkeypatch):
     assert daemon._native_windows() is False
 
 
-def test_emanate_interactive_claude_rejected_on_native_windows(tmp_path, monkeypatch):
-    # Only the interactive Claude PTY backend is refused on native Windows: it
-    # needs the ConPTY/pywinpty terminal + hook relay that aren't implemented.
+def test_emanate_interactive_claude_dispatched_on_native_windows(tmp_path, monkeypatch):
+    # Interactive Claude now runs on native Windows via ConPTY/pywinpty, so it
+    # is dispatched through the CLI path rather than rejected at dispatch. If
+    # pywinpty is missing the bridge fails loud at run time (covered separately
+    # in test_daemon_claude_interactive_backend.py).
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     monkeypatch.setattr(daemon, "_native_windows", lambda: True)
 
+    sentinel = {"status": "dispatched", "ids": ["fake-em"]}
+    monkeypatch.setattr(mgr, "_handle_emanate_cli", lambda *a, **k: sentinel)
+
     result = mgr.handle({
         "action": "emanate",
         "backend": "claude",
-        "tasks": [{"task": "should not spawn on windows", "tools": []}],
+        "tasks": [{"task": "interactive claude on windows", "tools": []}],
     })
 
-    assert result["status"] == "error"
-    msg = result["message"].lower()
-    assert "windows" in msg
-    assert "interactive" in msg
-    # Names the missing runtime slice honestly rather than faking support.
-    assert "conpty" in msg or "pywinpty" in msg
-    # No emanation was scheduled.
-    assert mgr._emanations == {}
+    # Reached the CLI dispatch rather than a Windows rejection.
+    assert result is sentinel
 
 
 def test_emanate_headless_cli_backend_not_rejected_on_native_windows(tmp_path, monkeypatch):
@@ -129,20 +128,22 @@ def test_emanate_headless_cli_backend_not_rejected_on_native_windows(tmp_path, m
     mgr._emanations[em_id]["future"].result(timeout=5)
 
 
-def test_ask_interactive_claude_rejected_on_native_windows(tmp_path, monkeypatch):
+def test_ask_interactive_claude_dispatched_on_native_windows(tmp_path, monkeypatch):
+    # Interactive Claude follow-ups route to their ask handler on native Windows
+    # (ConPTY/pywinpty) rather than being rejected at dispatch.
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     monkeypatch.setattr(daemon, "_native_windows", lambda: True)
     mgr._emanations["em-win-interactive"] = {"backend": "claude"}
 
+    def fake_ask(em_id, entry, message):
+        return {"status": "sent", "id": em_id}
+
+    monkeypatch.setattr(mgr, "_handle_ask_claude_interactive", fake_ask)
+
     result = mgr._handle_ask("em-win-interactive", "hello from windows")
 
-    assert result["status"] == "error"
-    assert result["id"] == "em-win-interactive"
-    msg = result["message"].lower()
-    assert "windows" in msg
-    assert "interactive" in msg
-    assert "conpty" in msg or "pywinpty" in msg
+    assert result == {"status": "sent", "id": "em-win-interactive"}
 
 
 def test_ask_headless_cli_backend_not_rejected_on_native_windows(tmp_path, monkeypatch):
@@ -191,22 +192,24 @@ def test_emanate_lingtai_backend_not_rejected_by_windows_guard(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("backend", ["claude", "claude-interactive"])
-def test_interactive_claude_backends_reject_on_windows(tmp_path, monkeypatch, backend):
-    # Both spellings of the interactive Claude PTY backend are refused on
-    # native Windows until the ConPTY/pywinpty + hook-relay slice lands.
+def test_interactive_claude_backends_dispatched_on_windows(tmp_path, monkeypatch, backend):
+    # Both spellings of the interactive Claude backend now dispatch through the
+    # CLI path on native Windows (ConPTY/pywinpty terminal + Windows hook relay);
+    # they are no longer rejected at dispatch by the platform guard.
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     monkeypatch.setattr(daemon, "_native_windows", lambda: True)
 
+    sentinel = {"status": "dispatched", "ids": ["fake-em"]}
+    monkeypatch.setattr(mgr, "_handle_emanate_cli", lambda *a, **k: sentinel)
+
     result = mgr.handle({
         "action": "emanate",
         "backend": backend,
-        "tasks": [{"task": "no interactive claude on native windows", "tools": []}],
+        "tasks": [{"task": "interactive claude on native windows", "tools": []}],
     })
 
-    assert result["status"] == "error"
-    assert "windows" in result["message"].lower()
-    assert mgr._emanations == {}
+    assert result is sentinel
 
 
 @pytest.mark.parametrize(

@@ -139,29 +139,12 @@ def _lazy_claude_interactive():
 def _native_windows() -> bool:
     """True on native Windows (``os.name == "nt"``); False under WSL/POSIX.
 
-    Native Windows lacks the POSIX PTY assumptions required by the legacy
-    interactive Claude backend. Headless CLI backends use platform-aware spawn
-    and cleanup helpers instead of this predicate; the predicate remains small
-    so the interactive-backend guard can be tested without a real Windows host.
+    Headless CLI backends use platform-aware spawn/cleanup helpers keyed on this
+    predicate, and the interactive Claude backend keys its terminal/hook-relay
+    choice on it (see ``claude_interactive``). Kept small so platform behavior
+    can be tested without a real Windows host.
     """
     return os.name == "nt"
-
-
-# Only the legacy hidden interactive Claude backend (``claude`` /
-# ``claude-interactive``) is refused on native Windows: it drives a real
-# terminal, and the ConPTY/pywinpty terminal bridge plus its Windows hook relay
-# are not implemented yet. The headless print/JSON CLI backends are plain pipe
-# subprocesses and DO run on native Windows (platform-aware spawn + taskkill
-# process-tree cleanup), as does ``backend="lingtai"`` (in-process). We fail
-# loud here rather than silently falling back so the caller knows the real
-# constraint and the workaround.
-_WINDOWS_INTERACTIVE_BACKEND_UNSUPPORTED = (
-    "daemon backend {backend!r} (interactive Claude) is not supported on native "
-    "Windows yet: the interactive backend needs a ConPTY/pywinpty terminal and a "
-    "Windows hook relay that are not implemented. Use a headless backend "
-    "(backend='claude-p'/'claude-code'/'codex'/'opencode'/'cursor'/...), "
-    "backend='lingtai' (in-process), or run LingTai under WSL."
-)
 
 
 def _normalize_claude_usage(usage: dict | None) -> dict | None:
@@ -2822,12 +2805,10 @@ class DaemonManager:
         # --- External CLI backends: skip preset resolution entirely ---
         backend_spec = _backend_spec(backend)
         if backend_spec is not None and backend_spec.is_cli:
-            if _native_windows() and backend_spec.is_interactive_pty:
-                # Fail loud: only the interactive Claude backend needs a
-                # ConPTY/pywinpty terminal + Windows hook relay that don't
-                # exist yet. Headless CLI backends fall through and run.
-                return {"status": "error",
-                        "message": _WINDOWS_INTERACTIVE_BACKEND_UNSUPPORTED.format(backend=backend)}
+            # The interactive Claude backend runs on native Windows via
+            # ConPTY/pywinpty (see claude_interactive._WinptyTerminal); it is no
+            # longer rejected at dispatch. If pywinpty is missing the bridge
+            # fails loud at run time with an actionable install message.
             return self._handle_emanate_cli(
                 tasks, backend=backend,
                 effective_max_turns=effective_max_turns,
@@ -3737,9 +3718,9 @@ class DaemonManager:
         backend = entry.get("backend")
         backend_spec = _backend_spec(backend)
         if backend_spec is not None and backend_spec.is_cli:
-            if _native_windows() and backend_spec.is_interactive_pty:
-                return {"status": "error", "id": em_id,
-                        "message": _WINDOWS_INTERACTIVE_BACKEND_UNSUPPORTED.format(backend=backend)}
+            # Interactive Claude follow-ups run on native Windows via
+            # ConPTY/pywinpty; no dispatch-time platform rejection. A missing
+            # pywinpty fails loud at run time inside the interactive bridge.
             if backend_spec.ask_handler_attr is None:
                 return {"status": "error", "id": em_id,
                         "message": backend_spec.ask_unsupported_msg}

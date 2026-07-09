@@ -36,6 +36,10 @@ dependencies = [
     "cryptography>=42.0.0",
     "qrcode>=7.4.0",
     "faster-whisper>=1.0.0",
+    # Native-Windows only: ConPTY terminal for the interactive Claude daemon
+    # backend (lingtai.core.daemon.claude_interactive imports ``winpty`` in its
+    # Windows path). POSIX uses the stdlib ``pty`` module and never resolves this.
+    "pywinpty>=2.0; sys_platform == 'win32'",
 ]
 
 [project.scripts]

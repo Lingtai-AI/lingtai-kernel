@@ -558,13 +558,17 @@ def test_claude_interactive_import_safe_without_pty(tmp_path):
     assert proc.stdout.strip() == "IMPORT_OK", proc.stdout + proc.stderr
 
 
-def test_run_claude_interactive_fails_loud_on_native_windows(tmp_path, monkeypatch):
-    # On native Windows the interactive backend must fail loud with a clear
-    # pywinpty/hook-relay message rather than importing POSIX ``pty`` or
-    # pretending ConPTY support exists.
+def test_run_claude_interactive_fails_loud_when_pywinpty_missing_on_windows(
+    tmp_path, monkeypatch
+):
+    # On native Windows the interactive backend uses pywinpty/ConPTY. When
+    # pywinpty is NOT installed it must fail loud with an actionable install
+    # message rather than importing POSIX ``pty`` or faking ConPTY support.
     from lingtai.core.daemon import claude_interactive as ci
 
     monkeypatch.setattr(ci, "_native_windows", lambda: True)
+    # Ensure ``import winpty`` fails inside the winpty terminal.
+    monkeypatch.setitem(sys.modules, "winpty", None)
 
     run_dir = _make_run_dir(tmp_path)
     with pytest.raises(ClaudeInteractiveError) as excinfo:
@@ -578,4 +582,214 @@ def test_run_claude_interactive_fails_loud_on_native_windows(tmp_path, monkeypat
         )
     msg = str(excinfo.value).lower()
     assert "windows" in msg
-    assert "pywinpty" in msg or "conpty" in msg
+    assert "pywinpty" in msg
+    assert "install" in msg
+
+
+class _FakePtyProcess:
+    """Minimal stand-in for ``winpty.PtyProcess`` for structural Windows tests.
+
+    Drives the bridge deterministically: on the first read it emits terminal
+    probe bytes, runs the SessionStart hook relay, waits for the pasted prompt
+    on ``write``, writes a transcript, runs the Stop hook relay, then exits.
+    """
+
+    spawned: dict = {}
+
+    def __init__(self, settings, session_prompt_path):
+        self._settings = settings
+        self._alive = True
+        self.exitstatus = 0
+        self._reads = 0
+        self._written = ""
+        self._transcript = None
+        self._session_id = "winpty-session-123"
+
+    @classmethod
+    def spawn(cls, argv, cwd=None, env=None, dimensions=None):
+        # Record what the bridge asked us to run so the test can assert the
+        # Windows path was taken with the expected command + cwd.
+        cls.spawned = {
+            "argv": list(argv),
+            "cwd": cwd,
+            "env": dict(env or {}),
+            "dimensions": dimensions,
+        }
+        args = list(argv)[1:]
+        settings = None
+        system_prompt_path = None
+        i = 0
+        while i < len(args):
+            if args[i] == "--settings":
+                settings = json.loads(args[i + 1])
+                i += 2
+            elif args[i] == "--append-system-prompt-file":
+                system_prompt_path = args[i + 1]
+                i += 2
+            else:
+                i += 1
+        inst = cls(settings, system_prompt_path)
+        inst._cwd = cwd
+        inst._env = dict(env or {})
+        return inst
+
+    def _hook_command(self, event):
+        for group in self._settings["hooks"][event]:
+            for hook in group["hooks"]:
+                return hook["command"]
+        raise AssertionError(f"missing hook {event}")
+
+    def _run_hook(self, event, payload):
+        # The real relay is a PowerShell script; on the POSIX test host we
+        # emulate it by appending the same ``event\tjson`` record the tail
+        # reader expects, honoring the env var the .ps1 reads.
+        log_path = self._env["LINGTAI_CLAUDE_INTERACTIVE_HOOK_LOG"]
+        line = f"{event}\t{json.dumps(payload)}\n"
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(line)
+
+    def read(self, size):
+        self._reads += 1
+        if self._reads == 1:
+            self._run_hook("SessionStart", {"session_id": self._session_id})
+            return "\x1b[c\x1b[6n"
+        # Block-ish: yield control until the prompt has been written.
+        time.sleep(0.02)
+        return ""
+
+    def write(self, s):
+        self._written += s
+        if "interactive task" in self._written and self._transcript is None:
+            transcript = Path(self._cwd) / "winpty-transcript.jsonl"
+            transcript.write_text(
+                json.dumps({
+                    "type": "assistant",
+                    "session_id": self._session_id,
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "winpty answer"}],
+                    },
+                }) + "\n",
+                encoding="utf-8",
+            )
+            self._transcript = str(transcript)
+            self._run_hook("Stop", {
+                "session_id": self._session_id,
+                "transcript_path": self._transcript,
+                "last_assistant_message": "winpty answer",
+            })
+            self._alive = False
+        return len(s)
+
+    def isalive(self):
+        return self._alive
+
+    def wait(self):
+        self._alive = False
+        return self.exitstatus
+
+    def setwinsize(self, rows, cols):
+        pass
+
+    def terminate(self, force=False):
+        self._alive = False
+
+    def close(self, force=False):
+        self._alive = False
+
+
+def test_run_claude_interactive_uses_winpty_on_windows(tmp_path, monkeypatch):
+    # Structural Windows coverage runnable on macOS/Linux CI: fake pywinpty and
+    # force the native-Windows path. Assert the bridge spawns via the winpty
+    # terminal (not the POSIX pty), that the hook relay is a PowerShell command
+    # writing to an append-only log, and that the tail reader drives the turn to
+    # a transcript result.
+    import types
+    from lingtai.core.daemon import claude_interactive as ci
+
+    monkeypatch.setattr(ci, "_native_windows", lambda: True)
+    fake_winpty = types.ModuleType("winpty")
+    fake_winpty.PtyProcess = _FakePtyProcess
+    monkeypatch.setitem(sys.modules, "winpty", fake_winpty)
+    _FakePtyProcess.spawned = {}
+
+    run_dir = _make_run_dir(tmp_path)
+    result = run_claude_interactive(
+        em_id="em-1",
+        run_dir=run_dir,
+        working_dir=tmp_path / "daemon-agent",
+        task="interactive task",
+        cancel_event=threading.Event(),
+        env=os.environ.copy(),
+    )
+
+    assert result.final_text == "winpty answer"
+    assert result.session_id == "winpty-session-123"
+
+    # The winpty terminal was chosen (not the POSIX pty): spawn saw our argv.
+    assert _FakePtyProcess.spawned["argv"][0] == "claude"
+
+    # The hook relay is PowerShell-shaped and points at the .ps1 relay script.
+    settings_arg = _FakePtyProcess.spawned["argv"][
+        _FakePtyProcess.spawned["argv"].index("--settings") + 1
+    ]
+    settings = json.loads(settings_arg)
+    hook_cmd = settings["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    assert hook_cmd.startswith("powershell")
+    assert "hook-relay.ps1" in hook_cmd
+    assert hook_cmd.rstrip().endswith("SessionStart")
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert "claude_interactive_hook_log" in state
+    assert "claude_interactive_hook_fifo" not in state
+    assert Path(state["claude_interactive_hook_log"]).name == "hooks.log"
+
+
+def test_windows_hook_relay_script_and_command_are_powershell(tmp_path, monkeypatch):
+    # Unit-level: the Windows harness writes a PowerShell relay script and a
+    # PowerShell-invokable hook command; the tail reader parses appended
+    # ``event\tjson`` records. No FIFO or /bin/sh on the Windows path.
+    from lingtai.core.daemon import claude_interactive as ci
+
+    monkeypatch.setattr(ci, "_native_windows", lambda: True)
+    monkeypatch.setenv("LINGTAI_CLAUDE_MANAGED_ROOT", str(tmp_path / "managed-claude"))
+
+    run_dir = _make_run_dir(tmp_path)
+    bridge = ci.ClaudeInteractiveBridge(
+        em_id="em-1",
+        run_dir=run_dir,
+        working_dir=tmp_path / "daemon-agent",
+        task="interactive task",
+        cancel_event=threading.Event(),
+        env=os.environ.copy(),
+    )
+    bridge._prepare_managed_workspace()
+    settings_json = bridge._prepare_harness()
+
+    # Relay script is a .ps1 that reads the log path from the env var and
+    # appends an event<TAB>payload record.
+    assert bridge.hook_script_path.name == "hook-relay.ps1"
+    script = bridge.hook_script_path.read_text(encoding="utf-8")
+    assert "LINGTAI_CLAUDE_INTERACTIVE_HOOK_LOG" in script
+    assert "AppendAllText" in script
+    assert "UTF8Encoding" in script
+
+    # Hook command is PowerShell-invokable and passes the event name.
+    settings = json.loads(settings_json)
+    cmd = settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+    assert cmd.startswith("powershell")
+    assert "-File" in cmd
+    assert cmd.rstrip().endswith("Stop")
+
+    # The tail reader parses an appended record into a hook event.
+    with open(bridge.hook_log_path, "a", encoding="utf-8") as fh:
+        fh.write("Stop\t" + json.dumps({"session_id": "abc"}) + "\n")
+    reader = threading.Thread(target=bridge._windows_hook_reader, daemon=True)
+    reader.start()
+    try:
+        event = bridge._hook_events.get(timeout=2)
+    finally:
+        bridge._hook_done.set()
+        reader.join(timeout=1)
+    assert event.event == "Stop"
+    assert event.payload["session_id"] == "abc"
