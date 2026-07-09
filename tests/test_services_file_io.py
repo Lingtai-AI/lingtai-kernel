@@ -214,6 +214,87 @@ class TestTraversalBudgets:
         assert any(".git" in r for r in results)
 
 
+class TestGlobSeparatorNormalization:
+    """Forward-slash glob patterns must match native-separator paths.
+
+    Agents write patterns with ``/`` (the ``src/*.py`` / ``**/*.py``
+    contract). On Windows, ``os.path.relpath`` produces ``\\``-separated
+    rel-paths, and ``fnmatch`` does not treat ``\\`` and ``/`` as
+    equivalent — so without normalization a ``/`` pattern would match
+    nothing on Windows. These tests pin the normalization at both the
+    unit level (``_to_forward_slashes``, POSIX-safe) and the integration
+    level (``glob`` with a simulated Windows separator).
+    """
+
+    def test_to_forward_slashes_rewrites_backslash_sep(self):
+        # Simulated Windows: native sep is backslash.
+        assert file_io._to_forward_slashes("src\\main.py", "\\") == "src/main.py"
+        assert file_io._to_forward_slashes("a\\b\\c.py", "\\") == "a/b/c.py"
+
+    def test_to_forward_slashes_noop_on_posix(self):
+        # POSIX: sep is already "/", so nothing changes — a literal
+        # backslash in a filename is preserved (not treated as a sep).
+        assert file_io._to_forward_slashes("weird\\name.py", "/") == "weird\\name.py"
+        assert file_io._to_forward_slashes("src/main.py", "/") == "src/main.py"
+
+    def test_glob_forward_slash_pattern_matches_windows_separators(
+        self, svc, tmp_dir, monkeypatch
+    ):
+        # Regression: emulate Windows by making the module see ``\`` as the
+        # native separator and ``os.path.relpath`` emit backslash rel-paths.
+        # ``os.walk`` still runs over the real POSIX tree, so we translate
+        # its ``/`` output to ``\`` in the fake relpath to mimic Windows.
+        svc.write("src/main.py", "# main")
+        svc.write("src/utils.py", "# utils")
+        svc.write("tests/test.py", "# test")
+
+        real_relpath = os.path.relpath
+
+        def win_relpath(path, start):
+            return real_relpath(path, start).replace("/", "\\")
+
+        # ``glob`` does ``import os`` locally, so it sees the real ``os``
+        # singleton — patch that directly to emulate Windows.
+        monkeypatch.setattr(os, "sep", "\\")
+        monkeypatch.setattr(os.path, "relpath", win_relpath)
+
+        # Forward-slash pattern must still match the backslash rel-paths.
+        results = svc.glob("src/*.py")
+        assert len(results) == 2
+        assert all(r.endswith(".py") for r in results)
+
+    def test_glob_backslash_pattern_matches_windows_separators(
+        self, svc, tmp_dir, monkeypatch
+    ):
+        # A pattern that itself uses ``\`` (as a Windows agent might paste)
+        # is normalized the same way, so both slash styles behave alike.
+        svc.write("src/main.py", "# main")
+        svc.write("tests/test.py", "# test")
+
+        real_relpath = os.path.relpath
+
+        def win_relpath(path, start):
+            return real_relpath(path, start).replace("/", "\\")
+
+        # ``glob`` does ``import os`` locally, so it sees the real ``os``
+        # singleton — patch that directly to emulate Windows.
+        monkeypatch.setattr(os, "sep", "\\")
+        monkeypatch.setattr(os.path, "relpath", win_relpath)
+
+        results = svc.glob("src\\*.py")
+        assert len(results) == 1
+        assert results[0].endswith("main.py")
+
+    def test_glob_forward_slash_pattern_still_works_on_posix(self, svc, tmp_dir):
+        # Guard the POSIX contract: normalization must not regress the
+        # native ``/`` case.
+        svc.write("src/main.py", "# main")
+        svc.write("src/utils.py", "# utils")
+        svc.write("tests/test.py", "# test")
+        results = svc.glob("src/*.py")
+        assert len(results) == 2
+
+
 class TestGrepGlobFilter:
     """``glob_filter`` prunes the candidate set *before* stat / read.
 

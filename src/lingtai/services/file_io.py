@@ -88,6 +88,26 @@ DEFAULT_MAX_VISITED: int = 20_000
 DEFAULT_MAX_FILE_BYTES: int = 4 * 1024 * 1024  # 4 MiB
 
 
+def _to_forward_slashes(text: str, sep: str) -> str:
+    """Return ``text`` with the native path separator ``sep`` rewritten to ``/``.
+
+    Agent-facing glob patterns use ``/`` as the path separator (the
+    ``**/*.py`` contract), but ``os.path.relpath`` yields the native
+    separator — ``\\`` on Windows. ``fnmatch`` does not treat ``\\`` and
+    ``/`` as equivalent, so a forward-slash pattern would never match a
+    backslash rel-path on Windows. Normalizing both the pattern and the
+    rel-path to ``/`` for the match keeps glob behavior identical across
+    platforms. ``sep`` is passed explicitly (defaulting to ``os.sep`` at
+    the call site) so the separator being normalized is a parameter, not a
+    hidden platform global — which also makes the logic unit-testable on
+    POSIX. On POSIX (``sep == "/"``) this is a no-op, so a literal ``\\``
+    in a filename is preserved.
+    """
+    if sep == "/":
+        return text
+    return text.replace(sep, "/")
+
+
 class FileIOService(ABC):
     """Abstract file I/O service.
 
@@ -326,6 +346,10 @@ class LocalFileIOBackend(FileIOBackend):
 
         self.last_traversal = TraversalStats()
         search_root = Path(root) if root else (self._root or Path("."))
+        # Normalize the pattern's separators to ``/`` once, matching the
+        # rel-path normalization below (see ``_to_forward_slashes``). The
+        # returned paths keep their native form; only the match form changes.
+        match_pattern = _to_forward_slashes(pattern, os.sep)
         results: list[str] = []
         for path in self._walk_files(
             search_root,
@@ -340,7 +364,9 @@ class LocalFileIOBackend(FileIOBackend):
             except ValueError:
                 # cross-volume on Windows — fall back to absolute.
                 rel = str(path)
-            if fnmatch.fnmatch(rel, pattern):
+            # Match on the forward-slash form so ``/`` patterns match the
+            # native-separator rel-path on Windows.
+            if fnmatch.fnmatch(_to_forward_slashes(rel, os.sep), match_pattern):
                 results.append(str(path))
                 if max_results is not None and len(results) >= max_results:
                     self.last_traversal.truncated_reason = (
