@@ -21,6 +21,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ...i18n import t
+from ..daemon.runtime import (
+    _new_process_group_kwargs,
+    _supports_killpg,
+    kill_process_group,
+)
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
@@ -28,6 +33,41 @@ if TYPE_CHECKING:
 PROVIDERS = {"providers": [], "default": "builtin"}
 
 _DEFAULT_POLICY_FILE = Path(__file__).parent / "bash_policy.json"
+
+
+def _spawn_kwargs(command: str) -> dict:
+    """Platform-correct ``subprocess`` kwargs for running an agent *command*.
+
+    POSIX/macOS/Linux (``os.killpg`` present): keep the historical behavior —
+    hand the raw command string to the platform shell via ``shell=True`` so
+    ``/bin/sh`` interprets pipes/globs/redirection exactly as before.
+
+    Native Windows (no ``os.killpg``): stop relying on the implicit
+    ``shell=True`` → ``cmd.exe`` path. Invoke an explicit PowerShell command
+    line instead — ``powershell.exe -NoProfile -NonInteractive -Command
+    <command>`` with ``shell=False`` — so the agent-facing shell is a declared
+    strategy rather than whatever ``COMSPEC`` happens to resolve to. The command
+    string is passed as a single argv element; PowerShell parses it, matching the
+    "one shell interprets the whole line" contract POSIX callers already rely on.
+
+    Returns a kwargs dict suitable for both ``subprocess.run`` and
+    ``subprocess.Popen`` (``args`` under the ``"args"`` key). Process-group /
+    creation-flag isolation is layered on separately by the caller via
+    :func:`_new_process_group_kwargs`, so this concerns only *what shell* runs
+    the command, not *how the process group* is torn down.
+    """
+    if _supports_killpg():
+        return {"args": command, "shell": True}
+    return {
+        "args": [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ],
+        "shell": False,
+    }
 
 # Length of the stderr tail surfaced in the failure warning. Short on purpose:
 # the full stderr is already present in the result; the tail just makes the
@@ -332,9 +372,12 @@ class BashManager:
     def _validate_working_dir(self, cwd: str) -> dict | None:
         """Validate cwd is under the agent sandbox. Returns error dict or None."""
         try:
-            resolved = str(Path(cwd).resolve())
-            sandbox = str(Path(self._working_dir).resolve())
-            if not (resolved == sandbox or resolved.startswith(sandbox + "/")):
+            resolved_path = Path(cwd).resolve()
+            sandbox_path = Path(self._working_dir).resolve()
+            try:
+                resolved_path.relative_to(sandbox_path)
+            except ValueError:
+                resolved = str(resolved_path)
                 return {
                     "status": "error",
                     "message": (
@@ -403,11 +446,19 @@ class BashManager:
         return self._run_sync(command, cwd, args.get("timeout", 30))
 
     def _run_sync(self, command: str, cwd: str, timeout: float) -> dict:
-        """Synchronous execution — original behavior, unchanged."""
+        """Synchronous execution.
+
+        POSIX behavior is unchanged (``shell=True`` → ``/bin/sh``). On native
+        Windows the command runs through an explicit PowerShell command line
+        instead of the implicit ``cmd.exe`` path (:func:`_spawn_kwargs`), so the
+        agent-facing shell is a declared strategy; cwd/timeout/stdout/stderr and
+        the returned exit code are handled identically on both platforms.
+        """
+        spawn = _spawn_kwargs(command)
         try:
             result = subprocess.run(
-                command,
-                shell=True,
+                spawn["args"],
+                shell=spawn["shell"],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -448,14 +499,19 @@ class BashManager:
         stdout_f = open(job_dir / "stdout.log", "w", encoding="utf-8")
         stderr_f = open(job_dir / "stderr.log", "w", encoding="utf-8")
 
+        # Platform-correct shell + process-group isolation. POSIX keeps
+        # shell=True + start_new_session=True (pgid == pid for killpg). Native
+        # Windows runs the explicit PowerShell command line and spawns with
+        # CREATE_NEW_PROCESS_GROUP so cancel can taskkill the tree.
+        spawn = _spawn_kwargs(command)
         try:
             proc = subprocess.Popen(
-                command,
-                shell=True,
+                spawn["args"],
+                shell=spawn["shell"],
                 stdout=stdout_f,
                 stderr=stderr_f,
                 cwd=cwd,
-                start_new_session=True,
+                **_new_process_group_kwargs(),
             )
         except Exception as e:
             stdout_f.close()
@@ -557,24 +613,15 @@ class BashManager:
 
         pid = int((job_dir / "pid").read_text(encoding="utf-8").strip())
 
-        # Use Popen.poll() if we have the handle (same process), else os.waitpid
+        # Use Popen.poll() if we have the handle (same process), else fall back
+        # to a PID liveness probe (different manager instance, same PID file).
         handles = getattr(self, "_open_handles", {})
         entry = handles.get(job_id)
         if entry:
             proc = entry[0]
             returncode = proc.poll()
         else:
-            # Fallback: try waitpid (different manager instance, same PID file)
-            try:
-                wpid, wait_status = os.waitpid(pid, os.WNOHANG)
-                returncode = os.waitstatus_to_exitcode(wait_status) if wpid != 0 else None
-            except ChildProcessError:
-                # Not our child — check if alive via signal 0
-                try:
-                    os.kill(pid, 0)
-                    returncode = None  # still alive
-                except OSError:
-                    returncode = -1  # dead but we can't get the code
+            returncode = self._poll_foreign_pid(pid)
 
         if returncode is None:
             return {"status": "running", "job_id": job_id, "pid": pid}
@@ -619,22 +666,19 @@ class BashManager:
 
         pid = int((job_dir / "pid").read_text(encoding="utf-8").strip())
 
-        # Kill the entire process group (start_new_session=True makes pid the pgid)
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass  # Already dead
-
-        # Reap via Popen if we have the handle, to avoid zombies
+        # Tear down the whole process tree. When we hold the Popen handle,
+        # reuse the daemon runtime's platform-aware teardown: POSIX signals the
+        # process group (start_new_session ⇒ pgid == pid), native Windows runs
+        # `taskkill /T /F` with a direct-child fallback. Without the handle
+        # (a different manager instance polling by PID file) fall back to a
+        # platform-guarded direct kill so Windows never calls POSIX-only
+        # os.killpg/os.getpgid unguarded.
         handles = getattr(self, "_open_handles", {})
         entry = handles.get(job_id)
         if entry:
-            proc = entry[0]
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
+            kill_process_group(entry[0])
+        else:
+            self._kill_foreign_pid(pid)
 
         self._close_handles(job_id)
 
@@ -643,6 +687,85 @@ class BashManager:
         shutil.rmtree(job_dir, ignore_errors=True)
 
         return {"status": "cancelled", "job_id": job_id}
+
+    @staticmethod
+    def _poll_foreign_pid(pid: int) -> int | None:
+        """Liveness probe for a job owned by a *different* manager instance.
+
+        The in-process path uses ``Popen.poll()``; this is the fallback when
+        only the PID file survives (another manager instance polling). Returns
+        ``None`` if the process is still alive, or a sentinel exit code if it is
+        gone (we cannot recover the real code without the child handle).
+
+        POSIX: try ``os.waitpid(WNOHANG)`` in case the pid is somehow still our
+        child, then fall back to the ``os.kill(pid, 0)`` liveness signal.
+
+        Native Windows (no ``os.killpg`` ⇒ no ``os.waitpid``/``os.kill(pid, 0)``
+        semantics): probe liveness via ``tasklist`` (see
+        :meth:`_foreign_pid_alive_windows`). This never calls the POSIX-only
+        APIs, so a Windows poll cannot crash or silently fake a result.
+        """
+        if not _supports_killpg():
+            return BashManager._foreign_pid_alive_windows(pid)
+        try:
+            wpid, wait_status = os.waitpid(pid, os.WNOHANG)
+            return (
+                os.waitstatus_to_exitcode(wait_status) if wpid != 0 else None
+            )
+        except ChildProcessError:
+            # Not our child — check liveness via signal 0.
+            try:
+                os.kill(pid, 0)
+                return None  # still alive
+            except OSError:
+                return -1  # dead but we can't get the code
+
+    @staticmethod
+    def _foreign_pid_alive_windows(pid: int) -> int | None:
+        """Windows PID liveness via ``tasklist`` — returns ``None`` if alive.
+
+        ``tasklist /FI "PID eq <pid>"`` prints a header + a row when the process
+        exists and only an "INFO: No tasks" line otherwise. We treat "the pid
+        string appears in the output" as alive. If ``tasklist`` is missing or
+        errors we cannot prove the process is gone, so we report it as still
+        running (``None``) rather than fabricating a completed exit code — fail
+        loud/uncertain rather than fake success.
+        """
+        try:
+            completed = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+            )
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return None  # cannot prove death — keep reporting running
+        if completed.returncode == 0 and str(pid) in completed.stdout:
+            return None  # still alive
+        return -1  # gone; real exit code unrecoverable without the handle
+
+    @staticmethod
+    def _kill_foreign_pid(pid: int) -> None:
+        """Kill a job owned by a *different* manager instance (no Popen handle).
+
+        POSIX: signal the process group (``start_new_session`` at spawn time
+        made ``pgid == pid``). Native Windows: ``taskkill /T /F`` reaps the tree.
+        Neither path calls a POSIX-only API on the wrong platform.
+        """
+        if not _supports_killpg():
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    capture_output=True,
+                    timeout=5.0,
+                )
+            except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+                pass  # best-effort; process may already be gone
+            return
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass  # already dead
 
     def _close_handles(self, job_id: str) -> None:
         """Close open file handles for a job if we hold them."""

@@ -4,7 +4,9 @@ related_files:
   - src/lingtai/core/bash/__init__.py
   - src/lingtai/core/bash/bash_policy.json
   - src/lingtai/core/bash/manual/SKILL.md
+  - src/lingtai/core/daemon/runtime.py
   - tests/test_bash_async.py
+  - tests/test_bash_windows.py
   - tests/test_layers_bash.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
@@ -40,7 +42,9 @@ The `bash` tool supports synchronous and asynchronous execution:
 
 **Sync mode** (`async=false`, default): Returns `{status, exit_code, stdout, stderr, ok, command_status[, warning]}` once the command completes, or `{status: "error", message}` only when the shell itself could not run it (empty command, policy denial, timeout, spawn failure).
 
-**Async mode** (`async=true`): Returns `{status: "ok", job_id, pid, message}` immediately. Use `action="poll"` with the job_id to check status: returns `{status: "running", job_id, pid}` while running, or `{status: "done", exit_code, stdout, stderr, ok, command_status[, warning]}` once finished. Use `action="cancel"` to kill the process group.
+**Async mode** (`async=true`): Returns `{status: "ok", job_id, pid, message}` immediately. Use `action="poll"` with the job_id to check status: returns `{status: "running", job_id, pid}` while running, or `{status: "done", exit_code, stdout, stderr, ok, command_status[, warning]}` once finished. Use `action="cancel"` to tear down the whole process tree (POSIX process group / Windows `taskkill /T /F`).
+
+**Native-Windows shell strategy.** Command shape and process teardown are platform-aware (`_spawn_kwargs`, keyed off `daemon.runtime._supports_killpg`). On POSIX/macOS/Linux the raw command runs via `shell=True` → `/bin/sh` (unchanged). On native Windows the capability does **not** rely on the implicit `shell=True` → `cmd.exe` path: it invokes an explicit PowerShell command line — `powershell.exe -NoProfile -NonInteractive -Command <command>` with `shell=False`. Async spawns reuse `daemon.runtime._new_process_group_kwargs` (POSIX `start_new_session=True`; Windows `CREATE_NEW_PROCESS_GROUP`). Cancellation reuses `daemon.runtime.kill_process_group` when the `Popen` handle is held (POSIX `killpg`; Windows `taskkill /T /F` with a direct-child fallback); a cross-instance cancel with only the PID file falls back to `_kill_foreign_pid`. Poll's PID-file fallback (`_poll_foreign_pid`) probes liveness via `os.waitpid`/`os.kill(pid, 0)` on POSIX and `tasklist` on Windows — no POSIX-only API is called on Windows, and an unavailable `tasklist` reports "still running" rather than fabricating a completed exit.
 
 **Result fidelity — top-level `status` vs. inner command success.** The top-level `status` (`ok`/`done`) reflects only that the shell *spawned* the command; it stays `ok`/`done` even when the inner command exits nonzero. To make inner failures impossible to skim past *without* changing the `status` contract that downstream recovery/telemetry branch on (`tool_executor.py` enriches/logs/collects on `status == "error"`), `_augment_command_result` (`bash/__init__.py`) adds three additive, model-visible fields keyed off `exit_code`:
 
@@ -61,6 +65,7 @@ bash/__init__.py
   ├── _detect_failure_signature()    — labels python_traceback / missing_module in output
   ├── _broad_scan_hint()             — rg recipe hint for broad-recursive-walk timeouts
   ├── _augment_command_result()      — adds ok / command_status / warning to completed results
+  ├── _spawn_kwargs(command)         — platform-aware shell: shell=True (POSIX) / explicit powershell.exe (Windows)
   │
   ├── BashPolicy                     — command execution policy
   │   ├── __init__(allow, deny)      — two modes: allowlist (if allow present) or denylist
@@ -75,10 +80,12 @@ bash/__init__.py
   │   ├── __init__(policy, working_dir, max_output) — stores policy + config
   │   ├── handle(args)               — dispatches to _handle_run / _handle_poll / _handle_cancel
   │   ├── _handle_run(args)          — validates + runs sync or async
-  │   ├── _run_sync(command, cwd, timeout) — subprocess.run path; augments result + timeout hint
-  │   ├── _run_async(command, cwd)   — subprocess.Popen with start_new_session, returns job_id
-  │   ├── _handle_poll(args)         — checks job status; augments completed result
-  │   ├── _handle_cancel(args)       — SIGTERM to process group, cleanup
+  │   ├── _run_sync(command, cwd, timeout) — subprocess.run via _spawn_kwargs (POSIX sh / Windows powershell); augments result + timeout hint
+  │   ├── _run_async(command, cwd)   — subprocess.Popen via _spawn_kwargs + runtime._new_process_group_kwargs, returns job_id
+  │   ├── _handle_poll(args)         — checks job status (Popen.poll or _poll_foreign_pid); augments completed result
+  │   ├── _handle_cancel(args)       — runtime.kill_process_group (handle) / _kill_foreign_pid (PID-file), cleanup
+  │   ├── _poll_foreign_pid(pid)     — cross-instance liveness: waitpid/kill(pid,0) POSIX, tasklist Windows
+  │   ├── _kill_foreign_pid(pid)     — cross-instance kill: killpg POSIX, taskkill /T /F Windows
   │   └── _close_handles(job_id)     — closes open file handles for a job
   │
   └── setup(agent, policy_file, yolo) — resolves policy, registers bash tool
@@ -88,17 +95,19 @@ bash/__init__.py
 
 - **Two policy modes:** Allowlist mode (when `allow` key is present in policy) — only listed commands permitted, everything else blocked. Denylist mode (only `deny` key) — everything allowed except denied commands. The mode is implicit.
 - **Pipe-aware command extraction:** `_extract_commands()` parses `|`, `&&`, `||`, `;`, newlines, `$()`, backticks, and env-var prefixes to find every command name in a compound expression.
-- **Working directory sandbox:** `working_dir` is validated to be under the agent's working directory. Paths are resolved and checked with `startswith(sandbox + "/")`.
+- **Working directory sandbox:** `working_dir` is validated to be under the agent's working directory. Paths are resolved and checked with `Path.relative_to(...)` rather than a slash-string prefix, so containment remains correct across POSIX and native-Windows path separators.
 - **Result fidelity is additive, never status-changing:** A completed command always returns top-level `status: "ok"`/`"done"` regardless of `exit_code`. The pass/fail signal lives in additive `ok`/`command_status`/`warning` fields. `status: "error"` is reserved for the shell failing to run the command at all (empty/denied command, timeout, spawn failure) — this preserves the `tool_executor` contract that branches on `status == "error"` for error enrichment, lifecycle logging, and `collected_errors`.
 - **Output truncation:** `max_output = 50_000` chars. Both stdout and stderr are truncated with a note showing total length.
-- **Subprocess isolation:** Commands run via `subprocess.run(shell=True, capture_output=True, text=True, timeout=...)` in the agent's working directory by default.
-- **Async subprocess:** Async commands use `subprocess.Popen(shell=True, start_new_session=True)` with stdout/stderr redirected to files under `system/jobs/{job_id}/`. `start_new_session=True` ensures the process gets its own session, enabling `os.killpg()` for clean cancellation.
+- **Subprocess isolation:** Commands run via `subprocess.run(capture_output=True, text=True, timeout=...)` in the agent's working directory by default. The shell is platform-aware (`_spawn_kwargs`): `shell=True` → `/bin/sh` on POSIX (unchanged); an explicit `powershell.exe -NoProfile -NonInteractive -Command <command>` argv with `shell=False` on native Windows (never the implicit `cmd.exe`).
+- **Async subprocess:** Async commands use `subprocess.Popen` with the same platform-aware shell plus `daemon.runtime._new_process_group_kwargs()` for isolation — `start_new_session=True` on POSIX (so `pgid == pid` enables `os.killpg`), `CREATE_NEW_PROCESS_GROUP` on native Windows (so `taskkill /T` reaps the tree). stdout/stderr are redirected to files under `system/jobs/{job_id}/`.
+- **Platform-guarded process control:** No POSIX-only API (`os.killpg`, `os.getpgid`, `os.waitpid`, `os.kill(pid, 0)`) is called on native Windows. Cancel prefers `daemon.runtime.kill_process_group` when the `Popen` handle is held (POSIX process-group signal / Windows `taskkill /T /F` + direct-child fallback); the cross-instance path (`_kill_foreign_pid`) and poll liveness (`_poll_foreign_pid`) branch on `daemon.runtime._supports_killpg`. A Windows poll with no `tasklist` reports the job as still running rather than fabricating a completed exit — fail loud/uncertain, never fake success.
 - **Job lifecycle:** Jobs are created on async run, tracked via PID files, and cleaned up (directory deleted) after poll-completion or cancel. File handles are closed via `_close_handles()` to avoid resource leaks.
 - **Policy file location:** Default policy is `bash/bash_policy.json` (shipped with the kernel). Can be overridden via `policy_file` arg or bypassed with `yolo=True`.
 
 ## Dependencies
 
 - `lingtai.i18n` — `t()` for localized strings
+- `lingtai.core.daemon.runtime` — reuses the shared process-cleanup primitives so bash and the daemon backends share one platform-teardown implementation: `_supports_killpg` (POSIX-vs-Windows predicate), `_new_process_group_kwargs` (POSIX `start_new_session` / Windows `CREATE_NEW_PROCESS_GROUP`), `kill_process_group` (POSIX `killpg` / Windows `taskkill /T /F` + fallback). `runtime` is stdlib-only, so the import adds no cycle.
 - `lingtai_kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
 - `lingtai_kernel.trace_redaction.redact_text` — mechanical secret redaction for the stderr tail hoisted into `warning` (imported lazily inside `_redact_warning_tail`, fail-open).
 
