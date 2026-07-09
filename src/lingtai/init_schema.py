@@ -90,6 +90,16 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     # meta_block.build_molt_context. See MANIFEST_LEGACY_IGNORED below.
     "max_turns": int,
     "max_rpm": int,
+    # Max AED (agent-environment-defibrillation) retry attempts per inbox
+    # message turn (see turn.py). Hydrated into AgentConfig.max_aed_attempts by
+    # agent.build_agent_config; AgentConfig clamps it to >= 1 (issue #654), so
+    # the (int) type here only rejects non-int types like str/float.
+    "max_aed_attempts": int,
+    # Max seconds an agent may remain STUCK before the AED subsystem
+    # transitions it to ASLEEP (see lifecycle.py). Hydrated into
+    # AgentConfig.aed_timeout by agent.build_agent_config (default 360.0);
+    # accepts integer or float seconds.
+    "aed_timeout": (int, float),
     # Soft per-molt/session cache-miss token budget. Positive int; default
     # 1_000_000 lives in AgentConfig.cache_miss_budget. The range check
     # (reject bool and <= 0) is enforced explicitly in validate_init below —
