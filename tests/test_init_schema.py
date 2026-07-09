@@ -134,6 +134,48 @@ def test_cache_miss_budget_rejects_bool():
         validate_init(data)
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("max_aed_attempts", 5),
+        ("aed_timeout", 120),
+        ("aed_timeout", 360.0),
+    ],
+)
+def test_aed_manifest_fields_accept_valid_values_without_warning(field, value):
+    """Both AED manifest fields — max_aed_attempts (int) and aed_timeout
+    (int/float seconds) — are hydrated into AgentConfig by
+    agent.build_agent_config and consumed by the AED subsystem, so init_schema
+    must recognize them as known optional fields: a valid value must not warn
+    as 'unknown field' (issue #612).
+    """
+    data = _valid_init()
+    data["manifest"][field] = value
+
+    warnings = validate_init(data)
+
+    assert not any(field in w for w in warnings), (
+        f"valid manifest.{field} should not warn, got: {warnings}"
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("max_aed_attempts", "five"),
+        ("aed_timeout", "soon"),
+    ],
+)
+def test_aed_manifest_fields_reject_wrong_type(field, value):
+    """Each AED field must raise when given a value of the wrong type:
+    max_aed_attempts is int; aed_timeout is int or float seconds."""
+    data = _valid_init()
+    data["manifest"][field] = value
+
+    with pytest.raises(ValueError, match=rf"manifest\.{field}"):
+        validate_init(data)
+
+
 def test_wrong_type_capabilities():
     data = _valid_init()
     data["manifest"]["capabilities"] = ["file", "bash"]
