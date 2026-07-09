@@ -156,6 +156,49 @@ def test_daemon_setup_keeps_current_and_live_parent_records(tmp_path, monkeypatc
     assert mgr._emanations == {}
 
 
+def test_daemon_reap_windows_reaps_only_known_dead_parent(tmp_path, monkeypatch):
+    """Native-Windows startup reaps a record only when the parent is *known*
+    dead (pid_is_alive -> False). An indeterminate probe (None) leaves the
+    record alone — no faking a definite answer.
+
+    os.kill(pid, 0) is not a valid liveness probe on Windows, so the reap path
+    routes through ``pid_is_alive``; here we simulate a Windows host by forcing
+    the POSIX-signal predicate off and stubbing the liveness answers.
+    """
+    from lingtai_kernel import process_control as pc
+
+    dead_pid = 111111
+    indeterminate_pid = 222222
+    dead_json = _write_daemon_json(
+        tmp_path, "em-dead-20260101-000000-aaaaaa", parent_pid=dead_pid,
+    )
+    keep_json = _write_daemon_json(
+        tmp_path, "em-keep-20260101-000000-bbbbbb", parent_pid=indeterminate_pid,
+    )
+
+    monkeypatch.setattr(pc, "supports_posix_signals", lambda: False)
+
+    def fake_alive(pid):
+        if pid == dead_pid:
+            return False
+        return None  # indeterminate (e.g. Windows without ctypes)
+
+    monkeypatch.setattr(
+        "lingtai_kernel.process_control.pid_is_alive", fake_alive
+    )
+
+    _make_agent(tmp_path, ["daemon"])
+
+    dead_data = json.loads(dead_json.read_text(encoding="utf-8"))
+    keep_data = json.loads(keep_json.read_text(encoding="utf-8"))
+    # Known-dead parent -> reaped.
+    assert dead_data["state"] == "failed"
+    assert dead_data["error"]["type"] == "DaemonOrphaned"
+    # Indeterminate parent -> left alone (not faked failed).
+    assert keep_data["state"] == "running"
+    assert keep_data["error"] is None
+
+
 def test_build_tool_surface_expands_groups(tmp_path):
     """'file' group expands to read/write/edit/glob/grep."""
     agent = _make_agent(tmp_path, ["file", "daemon"])

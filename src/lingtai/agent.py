@@ -793,12 +793,13 @@ class Agent(BaseAgent):
 
         with log_path.open("ab", buffering=0) as log_fh:
             log_fh.write(f"\n--- CPR launch {timestamp}: {quoted_cmd} ---\n".encode("utf-8"))
+            from lingtai_kernel.process_control import detached_process_kwargs
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.DEVNULL,
                 stdout=log_fh,
                 stderr=subprocess.STDOUT,
-                start_new_session=True,
+                **detached_process_kwargs(),
             )
 
         self._log("cpr_launched", target=str(target), pid=proc.pid, log=str(log_path))

@@ -989,13 +989,13 @@ class DaemonManager:
             if parent_pid == current_pid:
                 continue
 
-            try:
-                os.kill(parent_pid, 0)
-            except ProcessLookupError:
-                pass
-            except (PermissionError, OSError):
-                continue
-            else:
+            # Platform-aware liveness: os.kill(pid, 0) is a POSIX-only probe and
+            # is not a valid liveness check on native Windows. pid_is_alive
+            # returns True (alive), False (gone), or None (indeterminate — e.g.
+            # Windows without ctypes). Only reap when the parent is *known* gone;
+            # treat alive/indeterminate as "leave the record alone."
+            from lingtai_kernel.process_control import pid_is_alive
+            if pid_is_alive(parent_pid) is not False:
                 continue
 
             state["state"] = "failed"

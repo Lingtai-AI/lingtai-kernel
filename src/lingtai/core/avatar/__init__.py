@@ -659,12 +659,13 @@ class AvatarManager:
         stderr_path = logs_dir / "spawn.stderr"
         stderr_fh = stderr_path.open("wb")
         try:
+            from lingtai_kernel.process_control import detached_process_kwargs
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=stderr_fh,
-                start_new_session=True,
+                **detached_process_kwargs(),
             )
         finally:
             # Popen dups the fd; we can close ours immediately. The child
