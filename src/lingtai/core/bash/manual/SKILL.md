@@ -4,15 +4,16 @@ description: >
   **Read this before running long-lived agent/coding CLIs (`claude -p`,
   `codex exec`, `opencode run`, Cursor Agent, Gemini CLI, Aider, Goose,
   OpenHands, Crush, or similar harnesses), or before setting up cron,
-  launchd, systemd timers, crontab jobs, or scheduled reminders.** Router for
+  launchd, systemd timers, crontab jobs, native Windows Task Scheduler
+  (`schtasks.exe` / `Register-ScheduledTask`), or scheduled reminders.** Router for
   Bash-related operational depth beyond the bash tool schema: async + poll
   discipline for long-running child agents, host-scheduler setup, LingTai
   wake-by-mailbox-drop, script hygiene, one-shot `.notification/cron.json`
   reminders, debugging silent jobs, and safe cleanup. Start here for any
   long-running agent CLI, time-driven recurring work ("every hour", "weekdays at
   9", "remind me later"), or when a scheduled job misbehaves.
-version: 1.6.1
-last_changed_at: "2026-06-24T14:38:03-07:00"
+version: 1.6.2
+last_changed_at: "2026-07-09T00:00:00-07:00"
 ---
 
 # Bash Manual — Router
@@ -37,8 +38,9 @@ files, not standalone top-level skills.
   description: |
     Cron-driven scheduled work: when to use host schedulers, the LingTai
     wake-by-mailbox-drop contract, prompt boundaries, script hygiene, macOS
-    launchd, Linux systemd timers, crontab fallback, and the launchd
-    process-tree reaping gotcha.
+    launchd, Linux systemd timers, crontab fallback, the launchd process-tree
+    reaping gotcha, and native Windows Task Scheduler (PowerShell wrapper,
+    schtasks.exe, Register-ScheduledTask).
 - name: bash-notification-reminders
   location: reference/notification-reminders/SKILL.md
   description: |
@@ -126,7 +128,7 @@ files, not standalone top-level skills.
 | Need / keywords | Read |
 |---|---|
 | Running a long-running agent/coding CLI as a sub-process: `claude -p`, `codex exec`, `opencode run`, Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, Gemini CLI, Aider, Goose, OpenHands, Crush; "run an agent in the background"; avoid blocking the turn | `reference/bash-claude-code/SKILL.md`, `reference/bash-openai-codex/SKILL.md`, `reference/bash-opencode/SKILL.md`, or the matching `reference/bash-*/SKILL.md`; keep the core async/poll rules below resident |
-| Human asks for time-driven recurring work: "every hour", "daily", "weekdays at 9", "write/check/send on a schedule"; choose cron vs event watcher; create launchd/systemd/crontab wiring; understand wake-by-mailbox-drop; write scheduler prompt/script hygiene | `reference/scheduled-work/SKILL.md` |
+| Human asks for time-driven recurring work: "every hour", "daily", "weekdays at 9", "write/check/send on a schedule"; choose cron vs event watcher; create launchd/systemd/crontab wiring, or **Windows Task Scheduler** (`schtasks.exe` / `Register-ScheduledTask`, PowerShell `.ps1` wrapper); understand wake-by-mailbox-drop; write scheduler prompt/script hygiene | `reference/scheduled-work/SKILL.md` |
 | Need a one-shot reminder or wakeup nudge while work is pending; `.notification/cron.json`; atomic reminder writer; rest checklist | `reference/notification-reminders/SKILL.md` |
 | Scheduled job is silent, fires twice, exits immediately, gets killed by launchd, fails to deliver mail, or must be retired/cleaned up | `reference/debugging-cleanup/SKILL.md` |
 
@@ -246,10 +248,13 @@ reading the whole file when you only need recent events.
   rule exists to catch.
 
 - LingTai has no built-in recurring scheduler. Host schedulers wake agents by
-  producing channel input, usually a mailbox-drop or notification file.
+  producing channel input, usually a mailbox-drop or notification file. On
+  native Windows the host scheduler is **Task Scheduler** (`schtasks.exe` /
+  `Register-ScheduledTask`), not POSIX cron/launchd/systemd — route
+  Windows time-driven work through the same scheduled-work reference.
 - Prefer event watchers/webhooks when an external event is the real trigger;
-  prefer cron/launchd/systemd only when time is the trigger or polling is truly
-  the right tradeoff.
+  prefer cron/launchd/systemd/Task Scheduler only when time is the trigger or
+  polling is truly the right tradeoff.
 - Scheduler scripts must be idempotent, audited, logged, absolute-path based,
   and explicit about how they wake the agent.
 - On macOS, remember launchd process-tree reaping; use the documented
