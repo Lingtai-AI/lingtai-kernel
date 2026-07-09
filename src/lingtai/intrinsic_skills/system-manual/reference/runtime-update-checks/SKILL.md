@@ -90,7 +90,9 @@ editable install, a source checkout, or a dev/local version. In those modes the
 source of truth is usually the local checkout and git state, not the package
 index. Diagnose with:
 
-- the Python executable used by the agent runtime;
+- the Python executable used by the agent runtime — prefer the platform-neutral
+  `LINGTAI_RUNTIME_PYTHON` environment variable when available, and otherwise
+  trust the live process over a convenient shell `python` or conda env;
 - `lingtai.__version__`, `lingtai.__file__`, and `lingtai_kernel.__file__`;
 - installed distribution metadata, especially `direct_url.json` with
   `dir_info.editable: true`;
@@ -102,10 +104,16 @@ new commits, install packages, or publish anything.
 
 ## Quick manual check
 
-Use a short local Python probe when the nudge payload is ambiguous:
+Use a short local Python probe when the nudge payload is ambiguous. Prefer the
+same interpreter used by the running agent. `LINGTAI_RUNTIME_PYTHON` is the
+platform-neutral path exposed by the runtime when available; if it is absent,
+choose the platform-specific TUI venv Python (`$HOME/.lingtai-tui/runtime/venv/bin/python`
+on macOS/Linux, `%USERPROFILE%\.lingtai-tui\runtime\venv\Scripts\python.exe`
+on Windows):
 
 ```bash
-python - <<'PY'
+PYTHON=${LINGTAI_RUNTIME_PYTHON:-$HOME/.lingtai-tui/runtime/venv/bin/python}
+"$PYTHON" - <<'PY'
 import importlib.metadata as md
 import sys
 import lingtai, lingtai_kernel

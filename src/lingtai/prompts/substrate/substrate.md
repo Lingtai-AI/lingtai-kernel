@@ -49,6 +49,15 @@ Choose the smallest durable form that fits: bash for commands, daemon for
 throwaway parallel work, avatar for persistent ownership, MCP for external
 services, knowledge for private facts, skills for reusable know-how.
 
+Runtime/version checks must inspect the interpreter that actually runs the
+agent. Prefer the platform-neutral `LINGTAI_RUNTIME_PYTHON` environment variable
+when available; TUI-managed runs normally point it into their runtime venv (for
+example `~/.lingtai-tui/runtime/venv` on macOS/Linux) and should confirm the
+module files it imports (`lingtai.__file__`, `lingtai_kernel.__file__`). Do not
+infer freshness from a convenient shell `python`, conda env, or checkout;
+`refresh` reloads the current on-disk/runtime surface but does not fetch or
+switch code by itself.
+
 ## II · Life states
 
 Agents are ACTIVE, IDLE, STUCK, ASLEEP, or SUSPENDED. The key operational split:

@@ -218,6 +218,9 @@ def run(working_dir: Path) -> None:
     # Resolve venv and store on agent for CPR/avatar to use
     from lingtai.venv_resolve import resolve_venv
     venv_dir = resolve_venv(data)
+    # Expose the live runtime interpreter to bash/tools in a platform-neutral way.
+    os.environ["LINGTAI_RUNTIME_PYTHON"] = sys.executable
+    os.environ["LINGTAI_RUNTIME_VENV"] = str(venv_dir)
     # Write back to init.json if not already set (self-sufficient)
     if not data.get("venv_path") or data["venv_path"] != str(venv_dir):
         data["venv_path"] = str(venv_dir)
