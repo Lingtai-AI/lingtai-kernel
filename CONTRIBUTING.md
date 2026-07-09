@@ -9,6 +9,8 @@ Thank you for helping improve the LingTai Python runtime. GitHub discovers this 
   [`docs/references/claude-code-guide.md`](docs/references/claude-code-guide.md)
 - Source-root anatomy: [`src/lingtai_kernel/ANATOMY.md`](src/lingtai_kernel/ANATOMY.md)
 - Rust sidecar notes: [`crates/lingtai-search-sidecar/README.md`](crates/lingtai-search-sidecar/README.md)
+- Native Windows / PowerShell support status (open PR-candidate stack, not yet merged/released):
+  [`docs/references/windows-support-status.md`](docs/references/windows-support-status.md)
 
 ## Community and safety
 
