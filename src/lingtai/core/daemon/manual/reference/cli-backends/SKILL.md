@@ -172,6 +172,37 @@ backends.
 
 ## Passing free-form CLI flags via `backend_options`
 
+### Typed Codex reasoning effort (including Ultra)
+
+For the Codex backend, prefer the discoverable `codex_reasoning_effort` task
+field when selecting reasoning effort:
+
+```json
+{
+  "action": "emanate",
+  "backend": "codex",
+  "tasks": [{
+    "task": "Implement and validate the change.",
+    "tools": [],
+    "codex_reasoning_effort": "ultra"
+  }]
+}
+```
+
+Accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`,
+`max`, and `ultra`. LingTai emits
+`--config model_reasoning_effort="<value>"`; `ultra` therefore passes through
+to Codex CLI's own Ultra behavior, and the CLI decides the exact semantics.
+LingTai does not simulate Ultra itself. The field is rejected for every backend
+other than `codex` before any daemon starts.
+
+This option applies only to the initial `emanate`. A later `daemon(ask)` resumes
+the existing Codex session without re-passing it. Native LingTai/Codex provider
+`thinking` is a separate setting from CLI Ultra.
+If `backend_options.config` also sets `model_reasoning_effort`, the typed field
+is emitted afterward and therefore takes precedence. The raw typed value and
+the resolved config argv are persisted in `daemon.json`.
+
 For CLI backends, each task may carry an optional `backend_options` JSON object
 that is converted to argv tokens and appended to the CLI command before the task
 prompt. This lets you reach the underlying CLI's flag surface (model selection,

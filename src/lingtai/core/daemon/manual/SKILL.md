@@ -130,6 +130,8 @@ files, not standalone top-level skills.
     silent success. Secret `env`/`headers` values are redacted in prompts.
   - `preset`: optional body/model/tool-shape override for this daemon.
   - `backend_options`: raw CLI flags for CLI backends only.
+  - `codex_reasoning_effort`: typed Codex CLI effort, including `ultra`;
+    valid only with `backend="codex"` at initial emanation.
 - Treat `system_prompt` as the parent's behavioral contract for **all** tools
   and selected skills/MCP context, not only for communication. If a daemon receives `bash`,
   say whether it may run mutating commands; if it receives file access, say what

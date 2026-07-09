@@ -418,6 +418,10 @@ _BACKEND_ALIASES = {
     "kimi": "kimicode",
 }
 
+_CODEX_REASONING_EFFORTS = (
+    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+)
+
 _QWEN_CODE_ASK_UNSUPPORTED_MESSAGE = (
     "qwen-code daemon backend does not support daemon(action='ask') yet; "
     "start a new qwen-code emanation instead."
@@ -700,6 +704,13 @@ def get_schema(lang: str = "en") -> dict:
                         "backend_options": {
                             "type": "object",
                             "description": t(lang, "daemon.tasks.backend_options"),
+                        },
+                        "codex_reasoning_effort": {
+                            "type": "string",
+                            "enum": list(_CODEX_REASONING_EFFORTS),
+                            "description": t(
+                                lang, "daemon.tasks.codex_reasoning_effort"
+                            ),
                         },
                         "system_prompt": {
                             "type": "string",
@@ -2731,6 +2742,19 @@ class DaemonManager:
         if not tasks:
             return {"status": "error", "message": "No tasks provided"}
 
+        # This typed option controls Codex CLI behavior, not the native
+        # LingTai provider's thinking setting. Reject mismatched backends before
+        # any run directory or worker is created.
+        for i, spec in enumerate(tasks):
+            if "codex_reasoning_effort" in spec and backend != "codex":
+                return {
+                    "status": "error",
+                    "message": (
+                        f"tasks[{i}].codex_reasoning_effort is only valid "
+                        "with backend='codex'"
+                    ),
+                }
+
         # Per-batch limit overrides — capped at the manager's ceilings.
         # Author-set ceilings (self._max_turns, self._timeout) are the upper
         # bounds; the agent picks within them. None means "use ceiling".
@@ -3043,6 +3067,21 @@ class DaemonManager:
                 except ValueError as e:
                     return {"status": "error",
                             "message": f"tasks[{i}].backend_options: {e}"}
+            codex_effort = spec.get("codex_reasoning_effort")
+            if "codex_reasoning_effort" in spec:
+                if codex_effort not in _CODEX_REASONING_EFFORTS:
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"tasks[{i}].codex_reasoning_effort must be one of: "
+                            + ", ".join(_CODEX_REASONING_EFFORTS)
+                        ),
+                    }
+                # Append after free-form options so the discoverable typed
+                # field wins if both configure model_reasoning_effort.
+                backend_argv.extend([
+                    "--config", f'model_reasoning_effort="{codex_effort}"',
+                ])
             contexts.append(_CliTaskContext(
                 backend_argv=backend_argv,
                 system_prompt=task_system_prompt,
@@ -3101,6 +3140,9 @@ class DaemonManager:
                         "mcp": [],
                         "system_prompt": context.system_prompt,
                         "backend_options": backend_options,
+                        "codex_reasoning_effort": spec.get(
+                            "codex_reasoning_effort"
+                        ),
                     },
                     log_callback=self._log,
                     backend=backend,
@@ -3171,11 +3213,20 @@ class DaemonManager:
             # so run artifacts do not imply the model supplied MCP loader flags.
             if backend_options is not None:
                 run_dir._state["backend_options"] = backend_options
+            if "codex_reasoning_effort" in spec:
+                run_dir._state["codex_reasoning_effort"] = spec[
+                    "codex_reasoning_effort"
+                ]
+            if (
+                backend_options is not None
+                or "codex_reasoning_effort" in spec
+            ):
                 run_dir._state["backend_argv"] = list(user_backend_argv)
             if backend_harness_argv:
                 run_dir._state["backend_harness_argv"] = list(backend_harness_argv)
             if (
                 backend_options is not None
+                or "codex_reasoning_effort" in spec
                 or backend_harness_argv
                 or run_dir._state.get("backend_harness_files")
             ):

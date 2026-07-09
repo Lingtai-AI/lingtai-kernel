@@ -152,6 +152,85 @@ def test_emanate_cli_rejects_bad_backend_options(tmp_path):
     assert mgr._emanations == {}
 
 
+@pytest.mark.parametrize("backend", ["lingtai", "claude-p", "opencode"])
+def test_codex_reasoning_effort_rejects_non_codex_backend(tmp_path, backend):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": backend,
+        "tasks": [{
+            "task": "Do work.",
+            "tools": [],
+            "codex_reasoning_effort": "ultra",
+        }],
+    })
+
+    assert result["status"] == "error"
+    assert "only valid with backend='codex'" in result["message"]
+    assert mgr._emanations == {}
+
+
+@pytest.mark.parametrize("value", ["extreme", None, 1])
+def test_codex_reasoning_effort_rejects_invalid_value(tmp_path, value):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "codex",
+        "tasks": [{
+            "task": "Do work.",
+            "tools": [],
+            "codex_reasoning_effort": value,
+        }],
+    })
+
+    assert result["status"] == "error"
+    assert "tasks[0].codex_reasoning_effort must be one of" in result["message"]
+    assert mgr._emanations == {}
+
+
+def test_codex_reasoning_effort_emits_and_persists_ultra(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured: dict = {}
+
+    def fake_run(em_id, run_dir, task, cancel_event, timeout_event,
+                 backend_argv=None):
+        captured["backend_argv"] = list(backend_argv or [])
+        captured["state"] = json.loads(run_dir.daemon_json_path.read_text())
+        run_dir.mark_done("[fake done]")
+        return "[fake done]"
+
+    with patch.object(mgr, "_run_codex_emanation", side_effect=fake_run):
+        result = mgr.handle({
+            "action": "emanate",
+            "backend": "codex",
+            "tasks": [{
+                "task": "Do work.",
+                "tools": [],
+                "backend_options": {
+                    "config": 'model_reasoning_effort="low"',
+                },
+                "codex_reasoning_effort": "ultra",
+            }],
+        })
+        assert result["status"] == "dispatched"
+        em_id = result["ids"][0]
+        mgr._emanations[em_id]["future"].result(timeout=5)
+
+    expected_user_argv = [
+        "--config", 'model_reasoning_effort="low"',
+        "--config", 'model_reasoning_effort="ultra"',
+    ]
+    assert captured["backend_argv"][:4] == expected_user_argv
+    assert captured["state"]["codex_reasoning_effort"] == "ultra"
+    assert captured["state"]["backend_argv"] == expected_user_argv
+    assert captured["state"]["call_parameters"]["codex_reasoning_effort"] == "ultra"
+
+
 def test_emanate_cli_persists_resolved_options(tmp_path):
     """Successful CLI emanate persists user argv separately from harness argv."""
     agent = make_daemon_agent(tmp_path)
@@ -439,6 +518,18 @@ def test_schema_includes_backend_options():
     # The free-form description should mention discovery via --help so
     # agents know not to expect a fixed list here.
     assert "--help" in task_props["backend_options"]["description"]
+
+
+def test_schema_includes_codex_reasoning_effort():
+    from lingtai.core.daemon import get_schema
+
+    task_props = get_schema("en")["properties"]["tasks"]["items"]["properties"]
+    field = task_props["codex_reasoning_effort"]
+    assert field["type"] == "string"
+    assert field["enum"] == [
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+    ]
+    assert "Codex CLI" in field["description"]
 
 
 def test_backend_schema_enum_matches_ordered_contract():
