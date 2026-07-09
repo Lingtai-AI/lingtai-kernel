@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenAI-Compatible Wire Controls PR Explainer</title>
+<style>
+:root{color-scheme:light dark;--fg:#172026;--muted:#52616b;--border:#c9d3dc;--bg:#f7f9fb;--panel:#fff;--accent:#175ea8;--code:#102033}body{margin:0;font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--fg);background:var(--bg)}main{max-width:1040px;margin:0 auto;padding:32px 24px 56px}h1{font-size:28px;margin:0 0 8px}h2{font-size:20px;margin:28px 0 10px;border-bottom:1px solid var(--border);padding-bottom:6px}h3{font-size:16px;margin:18px 0 8px}.meta{color:var(--muted);margin-bottom:24px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.box{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:14px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}pre{background:#edf2f7;color:var(--code);padding:12px;border-radius:6px;overflow:auto;border:1px solid var(--border)}ul{padding-left:22px}.ok{color:#116329;font-weight:600}.warn{color:#8a4b00;font-weight:600}.todo{color:#7a1f1f;font-weight:600}table{border-collapse:collapse;width:100%;background:var(--panel)}td,th{border:1px solid var(--border);padding:8px;text-align:left;vertical-align:top}th{background:#edf2f7}@media (prefers-color-scheme:dark){:root{--fg:#e8edf2;--muted:#a9b6c2;--border:#34495e;--bg:#0e151b;--panel:#151f27;--accent:#8bc1ff;--code:#d9e7f5}pre,th{background:#101922;color:var(--code)}}
+</style>
+</head>
+<body><main>
+<h1>OpenAI-Compatible Wire Controls</h1>
+<div class="meta">Local kernel PR prep · branch <code>fix/custom-openai-wire-api-service-tier</code> · commit <code>b8a878a9</code> · base <code>origin/main@2a376f5b</code></div>
+
+<h2>TL;DR</h2>
+<div class="box"><strong>Conclusion:</strong> this local commit adds manifest-level control for OpenAI-compatible providers that need explicit Responses API routing or request-level service tier passthrough. It is aimed at Codex subscription access routed through sub2api/intermediate OpenAI-compatible providers, where endpoints may be Responses-only or expose fast-tier behavior through OpenAI-compatible fields.</div>
+
+<h2>Baseline</h2>
+<ul>
+<li>Before: <code>api_compat</code> selected protocol family, but custom OpenAI-compatible providers did not have a first-class manifest field to force <code>responses</code> vs <code>chat_completions</code>.</li>
+<li>Before: service-tier passthrough was not consistently propagated from manifest/provider defaults into OpenAI-compatible request kwargs.</li>
+<li>Repo state used for prep: clean worktree from <code>origin/main@2a376f5b</code>; original dirty branch was preserved as <code>&lt;agent-artifacts&gt;/lingtai-custom-api-pr-prep/kernel-custom-api-20260709.patch</code>.</li>
+</ul>
+
+<h2>What Was Done</h2>
+<div class="grid">
+<div class="box"><h3>Manifest/provider defaults</h3><p><code>manifest.llm.wire_api</code> now accepts <code>auto</code>, <code>chat_completions</code>, or <code>responses</code>. <code>service_tier</code> is passed through as an optional string.</p></div>
+<div class="box"><h3>Adapter routing</h3><p>OpenAI and custom OpenAI-compatible factories map <code>wire_api="responses"</code> to forced Responses mode and <code>wire_api="chat_completions"</code> to Chat Completions mode.</p></div>
+<div class="box"><h3>Diagnostics</h3><p>Wrong-shaped Chat Completions responses now fail with an explicit hint that the endpoint may require <code>wire_api="responses"</code>.</p></div>
+<div class="box"><h3>Anatomy</h3><p>LLM anatomy files were updated to mention the new manifest/provider-default fields and OpenAI/custom adapter surfaces.</p></div>
+</div>
+
+<h3>Representative Diff Snippets</h3>
+<pre><code>manifest.llm.wire_api: "auto" | "chat_completions" | "responses"
+manifest.llm.service_tier: string | null</code></pre>
+<pre><code>wire_api == "responses"       -> use_responses=True, force_responses=True
+wire_api == "chat_completions" -> use_responses=False, force_responses=False
+service_tier                  -> request kwargs when non-empty</code></pre>
+<pre><code>TypeError: Expected ChatCompletion with choices ... This endpoint may require wire_api="responses".</code></pre>
+
+<h2>Validation</h2>
+<table><thead><tr><th>Check</th><th>Result</th></tr></thead><tbody>
+<tr><td><code>git diff --check</code></td><td class="ok">passed</td></tr>
+<tr><td><code>python -m compileall -q src/lingtai src/lingtai_kernel tests/test_openai_compact_threshold.py</code></td><td class="ok">passed</td></tr>
+<tr><td><code>pytest -q tests/test_openai_compact_threshold.py</code></td><td class="ok">passed: 37 passed</td></tr>
+<tr><td>Local self-review</td><td class="ok">completed; see risks/decisions below</td></tr>
+</tbody></table>
+
+<h2>Risks / Decisions</h2>
+<ul>
+<li><span class="warn">Alias precedence:</span> backward-compatible <code>use_responses*</code> aliases can still interact with <code>wire_api</code>. The code keeps aliases for compatibility and tests the preferred <code>wire_api</code> path.</li>
+<li><span class="warn">Codex service tier:</span> <code>service_tier</code> is passed into the Codex Responses path. If an upstream-compatible backend rejects the field, users can omit/default it.</li>
+<li><span class="warn">No remote issue linked yet:</span> dev-guide prefers issue → branch → PR. Filing/linking an issue requires explicit authorization, so the PR body draft uses <code>TBD</code>.</li>
+<li><span class="ok">Decision:</span> <code>api_compat</code> remains the protocol family; <code>wire_api</code> is only the OpenAI-family wire selector.</li>
+</ul>
+
+<h2>Next Steps</h2>
+<ol>
+<li>Maintainer chooses whether this is one kernel PR paired with a TUI PR, or a combined release note across repos.</li>
+<li>File/link issue if desired, then replace <code>TBD</code> in the PR body.</li>
+<li>Push/open PR only after explicit authorization.</li>
+</ol>
+
+<h2>Source Index</h2>
+<ul>
+<li><code>src/lingtai/init_schema.py</code> — schema validation for <code>wire_api</code> and <code>service_tier</code>.</li>
+<li><code>src/lingtai/llm/service.py</code> — manifest/provider-default passthrough.</li>
+<li><code>src/lingtai/llm/_register.py</code> — factory mapping for OpenAI/custom providers.</li>
+<li><code>src/lingtai/llm/custom/adapter.py</code> — custom OpenAI-compatible <code>wire_api</code> routing.</li>
+<li><code>src/lingtai/llm/openai/adapter.py</code> — <code>service_tier</code> request passthrough and shape diagnostics.</li>
+<li><code>tests/test_openai_compact_threshold.py</code> — focused validation.</li>
+<li><code>src/lingtai/llm/ANATOMY.md</code>, <code>src/lingtai/llm/custom/ANATOMY.md</code>, <code>src/lingtai/llm/openai/ANATOMY.md</code> — anatomy updates.</li>
+</ul>
+</main></body></html>

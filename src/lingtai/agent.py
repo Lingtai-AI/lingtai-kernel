@@ -325,7 +325,7 @@ class Agent(BaseAgent):
     #: as defense-in-depth — init.json's ``manifest.llm`` may carry api_key /
     #: api_key_env values that must never reach the on-disk manifest or the
     #: system prompt's identity section.
-    _LLM_PUBLIC_KEYS = ("provider", "model", "base_url", "api_compat", "context_limit")
+    _LLM_PUBLIC_KEYS = ("provider", "model", "base_url", "api_compat", "wire_api", "service_tier", "context_limit")
 
     #: Safelist for the public ``preset`` block. ``active`` and ``default`` are
     #: path strings, ``allowed`` is a list of path strings — none of these

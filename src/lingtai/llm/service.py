@@ -74,6 +74,13 @@ def _generate_tool_call_id() -> str:
 # no longer derives a separate thread id (the thread tracks the session id), and
 # nothing reads the token ledger to pick the Codex identity.
 #
+# ``wire_api`` and the response-mode aliases let OpenAI-compatible custom
+# providers choose between Chat Completions and Responses wire formats. New
+# presets should prefer ``wire_api``; the aliases remain for compatibility.
+#
+# ``service_tier`` is a request-level OpenAI-compatible passthrough, normalized
+# by the adapter before it is sent.
+#
 # ``codex_base_urls`` is an OPTIONAL Codex-only endpoint pool (a list/tuple of
 # URLs, or a comma/newline-separated string). When it carries 2+ valid entries
 # the adapter chooses one per LingTai molt segment — stable within the segment,
@@ -93,6 +100,11 @@ def _generate_tool_call_id() -> str:
 # omitted by the factory (legacy default-path behavior).
 _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     "api_compat",
+    "wire_api",
+    "service_tier",
+    "use_responses_api",
+    "use_responses",
+    "force_responses",
     "codex_session_anchor",
     "codex_thread_salt",
     "codex_auth_path",

@@ -767,6 +767,13 @@ def _read_molt_count(agent_json_path: Path) -> int:
         return 0
 
 
+def _normalize_service_tier(value) -> str | None:
+    if value is None or value is False:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _validate_compact_threshold(value: int | None) -> int | None:
     """Normalize the OpenAI Responses auto-compaction threshold.
 
@@ -1039,8 +1046,43 @@ def _parse_tool_calls(raw_tool_calls) -> list[ToolCall]:
     return result
 
 
+def _chat_completion_is_empty(raw) -> bool:
+    """Return True when a ChatCompletion has no usable assistant payload."""
+    choices = getattr(raw, "choices", None) or []
+    if not choices:
+        return True
+    message = getattr(choices[0], "message", None)
+    if message is None:
+        return True
+    reasoning = (
+        getattr(message, "reasoning_content", None)
+        or getattr(message, "reasoning", None)
+    )
+    return (
+        not getattr(message, "content", None)
+        and not getattr(message, "tool_calls", None)
+        and not reasoning
+    )
+
+
+def _prompt_tokens(raw) -> int:
+    usage = getattr(raw, "usage", None)
+    value = getattr(usage, "prompt_tokens", 0) if usage is not None else 0
+    return value or 0
+
+
+def _ensure_chat_completion(raw):
+    if not hasattr(raw, "choices"):
+        raise TypeError(
+            f"Expected ChatCompletion with choices, got {type(raw).__name__}. "
+            "This endpoint may require wire_api=\"responses\"."
+        )
+    return raw
+
+
 def _parse_response(raw) -> LLMResponse:
     """Parse a raw OpenAI ChatCompletion into a provider-agnostic LLMResponse."""
+    raw = _ensure_chat_completion(raw)
     if not raw.choices:
         return LLMResponse(raw=raw)
 
@@ -1481,6 +1523,7 @@ class OpenAIChatSession(ChatSession):
 
     def _record_assistant_response(self, raw) -> None:
         """Parse a raw ChatCompletion and record the assistant response into the interface."""
+        raw = _ensure_chat_completion(raw)
         choice = raw.choices[0] if raw.choices else None
         blocks: list = []
         if choice and choice.message:
@@ -1524,6 +1567,7 @@ class OpenAIChatSession(ChatSession):
     @staticmethod
     def _response_to_message(raw) -> dict:
         """Convert an OpenAI ChatCompletion response to a message dict for history."""
+        raw = _ensure_chat_completion(raw)
         choice = raw.choices[0] if raw.choices else None
         if not choice:
             return {"role": "assistant", "content": ""}
@@ -1948,6 +1992,7 @@ class OpenAIAdapter(LLMAdapter):
         default_headers: dict | None = None,
         compact_threshold: int | None = 100_000,
         prompt_cache_key: str | bool | None = None,
+        service_tier: str | None = None,
     ):
         self.base_url = base_url
         self._use_responses = use_responses
@@ -1965,6 +2010,7 @@ class OpenAIAdapter(LLMAdapter):
             self._prompt_cache_key_policy = _AUTO_PROMPT_CACHE_KEY
         else:
             self._prompt_cache_key_policy = prompt_cache_key
+        self._service_tier = _normalize_service_tier(service_tier)
         # Responses-API auto-compaction threshold (input tokens). The host
         # injects its resolved config value via the adapter factory
         # (lingtai/llm/_register.py:_openai reads provider defaults); when
@@ -2092,6 +2138,7 @@ class OpenAIAdapter(LLMAdapter):
         # silently drops the field on the OpenAI Responses endpoint and 400s
         # on Codex's `/backend-api/codex/responses`.
         extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+        self._add_service_tier(extra_kwargs)
 
         return OpenAIResponsesSession(
             client=self._client,
@@ -2153,6 +2200,7 @@ class OpenAIAdapter(LLMAdapter):
         if sub_extra_body:
             existing = extra_kwargs.get("extra_body") or {}
             extra_kwargs["extra_body"] = {**sub_extra_body, **existing}
+        self._add_service_tier(extra_kwargs)
 
         return self._session_class(
             client=self._client,
@@ -2174,6 +2222,10 @@ class OpenAIAdapter(LLMAdapter):
         surface reasoning text on reasoning-capable models).
         """
         return {}
+
+    def _add_service_tier(self, kwargs: dict[str, Any]) -> None:
+        if self._service_tier:
+            kwargs["service_tier"] = self._service_tier
 
     def generate(
         self,
@@ -2212,6 +2264,7 @@ class OpenAIAdapter(LLMAdapter):
                     "schema": json_schema,
                 },
             }
+        self._add_service_tier(kwargs)
 
         raw = self._gated_call(lambda: self._client.chat.completions.create(**kwargs))
         return _parse_response(raw)
@@ -4214,6 +4267,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         if thinking in (None, "default"):
             thinking = "xhigh"
         extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+        self._add_service_tier(extra_kwargs)
 
         # Codex's backend doesn't accept context_management compaction —
         # leave compact_threshold unset.

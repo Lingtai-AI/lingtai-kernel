@@ -22,7 +22,7 @@ Custom adapter — factory for named provider aliases routing to OpenAI, Anthrop
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `create_custom_adapter`, `DEFAULTS` |
-| `adapter.py` | 51 | `create_custom_adapter()` factory function |
+| `adapter.py` | 69 | `create_custom_adapter()` factory function |
 | `defaults.py` | 6 | `DEFAULTS` dict: `api_compat=openai`, `base_url=None`, `api_key_env=CUSTOM_API_KEY`, `model=""` |
 
 ## Connections
@@ -46,8 +46,10 @@ Factory function (not a class). Returns an `LLMAdapter` instance:
 Parameters:
 - `api_key: str | None` — passed through to chosen adapter.
 - `api_compat: str` — selects backend (`"openai"`, `"anthropic"`, `"gemini"`).
+- `wire_api: str` — OpenAI-compatible wire selector (`"auto"`, `"chat_completions"`, `"responses"`); non-OpenAI compat paths ignore it.
 - `base_url: str | None` — provider endpoint URL.
 - `default_headers: dict | None` — forwarded to all compat paths that expose SDK HTTP header configuration (OpenAI-, Anthropic-, and Gemini-compatible).
+- `service_tier` in `**kwargs` — normalized and forwarded only for OpenAI-compatible adapters.
 - `**kwargs` — forwarded to adapter constructor (`timeout_ms`, `max_rpm`, etc.).
 
 ### No class of its own

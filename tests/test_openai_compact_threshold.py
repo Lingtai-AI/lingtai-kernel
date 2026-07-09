@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 from lingtai.init_schema import validate_init
-from lingtai.llm.openai.adapter import OpenAIAdapter
+from lingtai.llm.openai.adapter import OpenAIAdapter, _parse_response
 from lingtai.llm.service import (
     LLMService,
     build_provider_defaults_from_manifest_llm,
@@ -58,9 +58,33 @@ class _FakeResponses:
         return SimpleNamespace(id="resp_fake", output=[], usage=None)
 
 
+class _FakeChatCompletions:
+    def __init__(self) -> None:
+        self.kwargs: list[dict] = []
+
+    def create(self, **kwargs):
+        self.kwargs.append(kwargs)
+        message = SimpleNamespace(
+            content="ok",
+            tool_calls=None,
+            reasoning_content=None,
+            reasoning=None,
+        )
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message)],
+            usage=None,
+        )
+
+
+class _FakeChat:
+    def __init__(self) -> None:
+        self.completions = _FakeChatCompletions()
+
+
 class _FakeClient:
     def __init__(self) -> None:
         self.responses = _FakeResponses()
+        self.chat = _FakeChat()
 
 
 # -- Default behavior is preserved (100000) --------------------------------
@@ -133,6 +157,38 @@ def test_no_context_management_when_threshold_disabled():
     assert "context_management" not in sent
 
 
+def test_service_tier_reaches_responses_wire():
+    adapter = OpenAIAdapter(api_key="fake", use_responses=True, service_tier=" fast ")
+    adapter._client = _FakeClient()
+    session = adapter._create_responses_session("gpt-5.5", "sys")
+
+    session.send_stream("hello")
+
+    sent = adapter._client.responses.kwargs[-1]
+    assert sent["service_tier"] == "fast"
+
+
+def test_service_tier_reaches_chat_completions_wire():
+    adapter = OpenAIAdapter(api_key="fake", service_tier="fast")
+    adapter._client = _FakeClient()
+    session = adapter._create_completions_session("gpt-5.5", "sys")
+
+    session.send("hello")
+
+    sent = adapter._client.chat.completions.kwargs[-1]
+    assert sent["service_tier"] == "fast"
+
+
+def test_service_tier_reaches_generate_wire():
+    adapter = OpenAIAdapter(api_key="fake", service_tier="fast")
+    adapter._client = _FakeClient()
+
+    adapter.generate("gpt-5.5", "hello")
+
+    sent = adapter._client.chat.completions.kwargs[-1]
+    assert sent["service_tier"] == "fast"
+
+
 # -- Config flows from the injected provider defaults (host config path) ---
 
 
@@ -165,6 +221,44 @@ def test_openai_factory_preserves_explicit_none_disable():
     assert adapter._compact_threshold is None
 
 
+def test_openai_factory_passes_wire_api_responses_from_defaults():
+    register_all_adapters()
+    factory = LLMService._adapter_registry["openai"]
+    adapter = factory(
+        model="gpt-5.5",
+        defaults={"wire_api": "responses"},
+        api_key="fake",
+    )
+    assert adapter._use_responses is True
+    assert adapter._force_responses is True
+
+
+def test_custom_factory_defaults_to_auto_without_wire_api():
+    register_all_adapters()
+    factory = LLMService._adapter_registry["custom"]
+    adapter = factory(
+        model="gpt-5.5",
+        defaults={"api_compat": "openai"},
+        api_key="fake",
+        base_url="https://example.test/v1",
+    )
+    assert adapter._use_responses is False
+    assert adapter._force_responses is False
+
+
+def test_custom_factory_wire_api_responses_forces_responses_with_base_url():
+    register_all_adapters()
+    factory = LLMService._adapter_registry["custom"]
+    adapter = factory(
+        model="gpt-5.5",
+        defaults={"api_compat": "openai", "wire_api": "responses"},
+        api_key="fake",
+        base_url="https://example.test/v1",
+    )
+    assert adapter._use_responses is True
+    assert adapter._force_responses is True
+
+
 def test_llm_service_threads_compact_threshold_via_provider_defaults():
     register_all_adapters()
     service = LLMService(
@@ -186,6 +280,14 @@ def test_manifest_llm_compact_threshold_propagates_to_provider_defaults():
         max_rpm=0,
     )
     assert defaults == {"openai": {"compact_threshold": 250}}
+
+
+def test_manifest_llm_wire_api_propagates_to_provider_defaults():
+    defaults = build_provider_defaults_from_manifest_llm(
+        {"provider": "custom", "wire_api": "responses"},
+        max_rpm=0,
+    )
+    assert defaults == {"custom": {"wire_api": "responses"}}
 
 
 def test_manifest_llm_explicit_none_compact_threshold_is_preserved():
@@ -223,4 +325,23 @@ def test_init_schema_accepts_valid_compact_threshold(value):
 def test_init_schema_rejects_invalid_compact_threshold(value):
     with pytest.raises(ValueError, match="manifest.llm.compact_threshold"):
         validate_init(_minimal_init_with_compact_threshold(value))
+
+
+@pytest.mark.parametrize("wire_api", ["chat_completions", "responses", "auto"])
+def test_init_schema_accepts_wire_api(wire_api):
+    data = _minimal_init_with_compact_threshold(None)
+    data["manifest"]["llm"]["wire_api"] = wire_api
+    validate_init(data)
+
+
+def test_init_schema_rejects_invalid_wire_api():
+    data = _minimal_init_with_compact_threshold(None)
+    data["manifest"]["llm"]["wire_api"] = "completions"
+    with pytest.raises(ValueError, match="manifest.llm.wire_api"):
+        validate_init(data)
+
+
+def test_chat_completion_wrong_shape_reports_wire_api_hint():
+    with pytest.raises(TypeError, match='wire_api="responses"'):
+        _parse_response("not a chat completion")
 

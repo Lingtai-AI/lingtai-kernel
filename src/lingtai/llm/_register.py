@@ -41,6 +41,18 @@ def register_all_adapters() -> None:
         # from defaults -> let OpenAIAdapter's 100k constructor default stand;
         # explicit None -> disable Responses context_management.
         adapter_kw = {k: v for k, v in kw.items() if v is not None}
+        if defaults:
+            wire_api = defaults.get("wire_api")
+            if wire_api == "responses":
+                adapter_kw["use_responses"] = True
+                adapter_kw["force_responses"] = True
+            elif wire_api == "chat_completions":
+                adapter_kw["use_responses"] = False
+                adapter_kw["force_responses"] = False
+            for key in ("service_tier", "use_responses_api", "use_responses", "force_responses"):
+                if key in defaults:
+                    target = "use_responses" if key == "use_responses_api" else key
+                    adapter_kw[target] = defaults[key]
         if defaults and "compact_threshold" in defaults:
             # Preserve explicit None after the general None-pruning pass above.
             adapter_kw["compact_threshold"] = defaults["compact_threshold"]
@@ -60,7 +72,14 @@ def register_all_adapters() -> None:
         from .custom.adapter import create_custom_adapter
         kw.pop("model", None)
         compat = defaults.get("api_compat", "openai") if defaults else "openai"
-        return create_custom_adapter(api_compat=compat, **{k: v for k, v in kw.items() if v is not None})
+        wire_api = defaults.get("wire_api", "auto") if defaults else "auto"
+        adapter_kw = {k: v for k, v in kw.items() if v is not None}
+        if defaults:
+            for key in ("service_tier", "use_responses_api", "use_responses", "force_responses"):
+                if key in defaults:
+                    target = "use_responses" if key == "use_responses_api" else key
+                    adapter_kw[target] = defaults[key]
+        return create_custom_adapter(api_compat=compat, wire_api=wire_api, **adapter_kw)
 
     LLMService.register_adapter("gemini", _gemini)
     LLMService.register_adapter("anthropic", _anthropic)

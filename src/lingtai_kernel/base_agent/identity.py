@@ -55,7 +55,7 @@ def _update_identity(agent) -> None:
 #: field is enough to break the contract, so anything outside this set is
 #: dropped silently. ``base_url`` is included because operators rely on it
 #: to disambiguate self-hosted endpoints from upstream providers.
-_LLM_PUBLIC_KEYS = ("provider", "model", "base_url", "api_compat", "context_limit")
+_LLM_PUBLIC_KEYS = ("provider", "model", "base_url", "api_compat", "wire_api", "service_tier", "context_limit")
 
 
 def _build_manifest(agent) -> dict:
@@ -135,6 +135,12 @@ def _safe_llm_from_service(agent) -> dict:
     api_compat = _provider_default_from_service(service, "api_compat")
     if isinstance(api_compat, str) and api_compat:
         llm["api_compat"] = api_compat
+    wire_api = _provider_default_from_service(service, "wire_api")
+    if isinstance(wire_api, str) and wire_api:
+        llm["wire_api"] = wire_api
+    service_tier = _provider_default_from_service(service, "service_tier")
+    if isinstance(service_tier, str) and service_tier:
+        llm["service_tier"] = service_tier
 
     return llm
 

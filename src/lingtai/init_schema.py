@@ -323,8 +323,20 @@ def validate_init(data: dict) -> list[str]:
         "api_key": (str, type(None)),
         "api_key_env": str,
         "base_url": (str, type(None)),
+        "api_compat": str,
+        "wire_api": str,
+        "service_tier": (str, type(None)),
+        "use_responses_api": bool,
+        "use_responses": bool,
+        "force_responses": bool,
         "compact_threshold": (int, type(None)),
     }, prefix="manifest.llm")
+    if "wire_api" in llm:
+        wire_api = llm["wire_api"]
+        if wire_api not in {"chat_completions", "responses", "auto"}:
+            raise ValueError(
+                "manifest.llm.wire_api: expected 'chat_completions', 'responses', or 'auto'"
+            )
     if "compact_threshold" in llm:
         compact_threshold = llm["compact_threshold"]
         if isinstance(compact_threshold, bool):
