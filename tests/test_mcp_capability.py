@@ -181,6 +181,8 @@ def test_nokv_workbench_skill_documents_strict_restore_contract():
     assert "workbench_restore" in skill
     assert '"destination_id"' in skill
     assert "restore-to-fork" in skill
+    assert "metadata/restore_manifest.json" in skill
+    assert "`restored_from` object" in skill
     assert "expired checkpoints cannot be renewed" in skill
     assert "grace window" not in skill
     assert "17-tool surface" in preflight
@@ -192,8 +194,10 @@ def test_nokv_workbench_skill_documents_strict_restore_contract():
         "SnapshotRenewContended",
         "RestoreInProgress",
         "RestoreDestinationConflict",
+        "RestoreResourceLimit",
     ):
         assert code in skill
+    assert "must reject `null`" in preflight
     assert "Branch on `code`" in skill
 
 

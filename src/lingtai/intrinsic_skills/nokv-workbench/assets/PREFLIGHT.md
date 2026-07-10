@@ -53,9 +53,10 @@ simply absent from tools/list, and the SKILL sections about them do not apply.
   `workbench_restore` tool or schema field as a failed preflight — do not run
   the restore workflow against an older surface and silently downgrade
   checkpoint guarantees. Verify that `workbench_restore` requires `id`,
-  `at_snapshot`, and `destination_id`. Expired checkpoints must return a
-  structured error and must not be described as renewable within a grace
-  period.
+  `at_snapshot`, and `destination_id`; its `at_snapshot` schema must accept
+  only a checkpoint name or non-negative numeric snapshot id and must reject
+  `null`. Expired checkpoints must return a structured error and must not be
+  described as renewable within a grace period.
 
 Run the checked-in NoKV/LingTai live acceptance harness before deploying a new
 pair of builds that includes workbench_restore. It must exercise the real

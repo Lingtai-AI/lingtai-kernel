@@ -256,8 +256,11 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert "version: 0.4.0" in nokv_body
         assert "workbench_restore" in nokv_body
         assert "restore-to-fork" in nokv_body
+        assert "metadata/restore_manifest.json" in nokv_body
+        assert "`restored_from` object" in nokv_body
         assert "SnapshotLeaseExpired" in nokv_body
         assert "RestoreDestinationConflict" in nokv_body
+        assert "RestoreResourceLimit" in nokv_body
         assert "metadata/run_manifest.json" in nokv_body
         assert (
             nokv_md.parent / "assets" / "mcp_registry.example.jsonl"

@@ -230,10 +230,13 @@ it returns the existing restored workbench instead of creating a second fork.
 Using the same destination with a different checkpoint is a conflict.
 
 The restored workbench contains the files visible at the checkpoint, is
-independently writable, and records `restored_from` provenance. It does not
-inherit the source's checkpoint aliases. After success, read the destination's
-manifest and required outputs before handing work to another agent. The source
-workbench remains at its current state throughout the restore.
+independently writable, and writes `metadata/restore_manifest.json`. Its
+`restored_from` object binds `workbench_id`, absolute source `path`, and
+`snapshot_id`; the manifest also records the deterministic `operation_id`. The
+destination does not inherit the source's checkpoint aliases. After success,
+read this manifest and the required outputs before handing work to another
+agent. The source workbench remains at its current state throughout the
+restore.
 
 Do not request an in-place rollback from normal agent workflows. In-place
 replacement is an operator-only recovery action because it temporarily fences
@@ -253,6 +256,7 @@ message:
 | `SnapshotRenewContended` | Retry renewal with bounded backoff; the lease in the error response is not authoritative. |
 | `RestoreInProgress` | Back off and retry the blocked write after the operator restore reaches a terminal state. |
 | `RestoreDestinationConflict` | Choose a new empty `destination_id`, unless this was an exact retry of the same restore operation. |
+| `RestoreResourceLimit` | Do not retry unchanged. Reduce the restore subtree or metadata payload reported in `details`, then create a new checkpoint and destination if needed. |
 
 Honor the returned `retryable` flag when it is stricter than this table. A
 failed renew never changes the locally recorded expiry; use the authoritative
