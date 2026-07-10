@@ -6,6 +6,9 @@ related_files:
   - src/tools/system/preset.py
   - src/tools/system/schema.py
   - src/tools/system/summarize.py
+  - src/tools/system/glossary-en.md
+  - src/tools/system/glossary-zh.md
+  - src/tools/system/glossary-wen.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from lingtai_kernel.i18n import t
 from .._file_paths import resolve_workdir_path
 
 if TYPE_CHECKING:
@@ -14,15 +13,15 @@ if TYPE_CHECKING:
 
 
 def get_description(lang: str = "en") -> str:
-    return t(lang, "write.description")
+    return 'Create or overwrite a file with the given content. Parent directories are created automatically. Use this for creating new files or complete rewrites. For small changes to existing files, prefer edit.'
 
 
 def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
         "properties": {
-            "file_path": {"type": "string", "description": t(lang, "write.file_path")},
-            "content": {"type": "string", "description": t(lang, "write.content")},
+            "file_path": {"type": "string", "description": 'Absolute path to the file to write'},
+            "content": {"type": "string", "description": 'Content to write'},
         },
         "required": ["file_path", "content"],
     }
@@ -31,7 +30,6 @@ def get_schema(lang: str = "en") -> dict:
 
 def setup(agent: "BaseAgent") -> None:
     """Set up the write capability on an agent."""
-    lang = agent._config.language
 
     def handle_write(args: dict) -> dict:
         path = args.get("file_path", "")
@@ -45,4 +43,4 @@ def setup(agent: "BaseAgent") -> None:
         except Exception as e:
             return {"status": "error", "message": f"Cannot write {path}: {e}"}
 
-    agent.add_tool("write", schema=get_schema(lang), handler=handle_write, description=get_description(lang))
+    agent.add_tool("write", schema=get_schema(), handler=handle_write, description=get_description(), glossary_package=__package__)

@@ -424,22 +424,6 @@ class Agent(BaseAgent):
                     clean[key] = allowed
         return clean
 
-    def _refresh_tool_inventory_section(self) -> None:
-        """Refresh the 'tools' section — wrapper override includes MCP schemas."""
-        lang = self._config.language
-        lines = []
-        for name in self._intrinsics:
-            module = self._intrinsic_modules.get(name)
-            if module:
-                lines.append(f"### {name}\n{module.get_description(lang)}")
-        for s in self._tool_schemas:
-            if s.description:
-                lines.append(f"### {s.name}\n{s.description}")
-        if lines:
-            self._prompt_manager.write_section(
-                "tools", "\n\n".join(lines), protected=True
-            )
-
     def _build_system_prompt(self) -> str:
         """Override kernel's prompt builder to inject app tool descriptions.
 

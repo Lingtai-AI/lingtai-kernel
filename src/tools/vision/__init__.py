@@ -18,7 +18,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from lingtai_kernel.i18n import t
 
 from ..registry import CAPABILITY_UNAVAILABLE
 
@@ -33,17 +32,17 @@ PROVIDERS = {
 }
 
 def get_description(lang: str = "en") -> str:
-    return t(lang, "vision.description")
+    return "Analyze an image using the LLM's vision capabilities. Supports JPEG, PNG, and WebP. Ask any question about the image — describe contents, read text, interpret charts, identify objects, assess style or mood. Combine with draw to generate then analyze images."
 
 
 def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
         "properties": {
-            "image_path": {"type": "string", "description": t(lang, "vision.image_path")},
+            "image_path": {"type": "string", "description": 'Path to the image file'},
             "question": {
                 "type": "string",
-                "description": t(lang, "vision.question"),
+                "description": 'Question about the image',
                 "default": "Describe this image.",
             },
         },
@@ -195,7 +194,6 @@ def setup(
             "Example: capabilities={'vision': {'provider': 'gemini', 'api_key': '...'}}"
         )
 
-    lang = agent._config.language
     mgr = VisionManager(agent, vision_service=vision_service)
-    agent.add_tool("vision", schema=get_schema(lang), handler=mgr.handle, description=get_description(lang))
+    agent.add_tool("vision", schema=get_schema(), handler=mgr.handle, description=get_description(), glossary_package=__package__)
     return mgr

@@ -7,6 +7,5 @@
   "system.stuck_revive": "[system] LLM call failed at {ts}. Last error: {err_desc}. Retrying.",
   "system.molt_wiped": "[system] Molt complete. Working memory is empty. If you want to retrieve some prior context, check logs/events.jsonl — the file is large, so grep/tail/filter rather than dumping it whole.",
   "insight.auto_question": "You are producing insights for the human operator. Based on everything in this conversation — the task, the context, domain knowledge, risks, and opportunities — produce exactly 2-3 bullet points of things the human would benefit from knowing. Each bullet should be a concrete, specific insight: a pattern you've noticed, relevant background knowledge, a risk they may not see, or an opportunity to explore. Format: start each bullet with '- ' on its own line. No preamble, no summary — just the bullets.",
-  "system.refresh_successful": "[system] Refresh successful. Tools and configuration reloaded. You may continue.",
-  "tool.reasoning_description": "Brief explanation of why you are calling this tool (recorded in your diary)."
+  "system.refresh_successful": "[system] Refresh successful. Tools and configuration reloaded. You may continue."
 }

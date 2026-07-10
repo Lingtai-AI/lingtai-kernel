@@ -39,6 +39,7 @@ def _build_http_timeout(request_timeout: float | None):
 
 
 from lingtai_kernel.llm.base import (
+    WIRE_TOOL_DESCRIPTION,
     ChatSession,
     FunctionSchema,
     LLMResponse,
@@ -61,13 +62,17 @@ from lingtai.llm.identity_headers import merge_lingtai_identity_headers
 def _build_tools(
     schemas: list[FunctionSchema] | None, *, cache_tools: bool = False
 ) -> list[dict] | None:
-    """Convert FunctionSchema list to Anthropic tool format."""
+    """Convert FunctionSchema list to Anthropic tool format.
+
+    The wire description is the constant ``WIRE_TOOL_DESCRIPTION``; the full
+    prose stays in the system prompt's ``## tools`` section.
+    """
     if not schemas:
         return None
     tools = [
         {
             "name": s.name,
-            "description": s.description,
+            "description": WIRE_TOOL_DESCRIPTION,
             "input_schema": s.parameters,
         }
         for s in schemas

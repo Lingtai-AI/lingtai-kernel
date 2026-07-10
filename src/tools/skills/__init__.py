@@ -192,7 +192,7 @@ def _skills_manual(agent: "BaseAgent") -> dict:
 # ---------------------------------------------------------------------------
 
 def get_description(lang: str = "en") -> str:
-    return t(lang, "skills.description")
+    return 'SIGNPOST ONLY: this tool does not author, pin, publish, install, or execute skills; `info` only refreshes/reconciles the skills catalog and returns health without the manual body; `manual` returns the skills-manual body. Your per-agent skill catalog. The skills section of your system prompt is a YAML list — one `- name:` block per skill with `location:` and `description:` — covering every skill reachable right now. Before using this tool (authoring, pinning, publishing, or managing skills), read the `skills-manual` skill — call `manual` for its body and `info` for a runtime health snapshot; no exceptions.'
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -202,7 +202,7 @@ def get_schema(lang: str = "en") -> dict:
             "action": {
                 "type": "string",
                 "enum": ["info", "manual"],
-                "description": t(lang, "skills.action_info"),
+                "description": 'info: refresh/reconcile the skills catalog and return runtime health (catalog size, resolved paths, problems) without the manual body. manual: return only the skills-manual skill body.',
             },
         },
         "required": ["action"],
@@ -221,7 +221,6 @@ def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> Non
     scans whatever is on disk and injects the YAML catalog so the first turn
     sees a ready catalog.
     """
-    lang = agent._config.language
     path_list = list(paths) if paths else []
 
     # Run reconciliation once on setup so the catalog is ready before first turn.
@@ -244,7 +243,8 @@ def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> Non
 
     agent.add_tool(
         "skills",
-        schema=get_schema(lang),
+        schema=get_schema(),
         handler=handle_skills,
-        description=get_description(lang),
+        description=get_description(),
+        glossary_package=__package__,
     )

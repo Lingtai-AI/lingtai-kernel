@@ -6,6 +6,9 @@ related_files:
   - src/tools/email/manager.py
   - src/tools/email/primitives.py
   - src/tools/email/schema.py
+  - src/tools/email/glossary-en.md
+  - src/tools/email/glossary-zh.md
+  - src/tools/email/glossary-wen.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -31,7 +34,7 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
   - Delivery: `_is_self_send` (`primitives.py:150-159`), `_persist_to_inbox` (`primitives.py:162-173`), `_persist_to_outbox` (`primitives.py:176-188`), `_move_to_sent` (`primitives.py:191-207`), `_mailman` (`primitives.py:210-267`) — daemon thread that waits, dispatches, and archives.
   - Filtering helpers: `_coerce_address_list` (`primitives.py:274-286`), `_preview` (`primitives.py:289-293`), `_email_time` (`primitives.py:296-298`).
 
-- `schema.py` — Tool registration. `get_description` (`schema.py:10-11`) and `get_schema` (`schema.py:14-132`) build the JSON Schema for the email tool. Imports `mode_field` from `primitives`.
+- `schema.py` — Tool registration. `get_description` (`schema.py:10-11`) and `get_schema` (`schema.py:14-130`) build the JSON Schema for the email tool. Imports `mode_field` from `primitives`.
 
 - `manager.py` — `EmailManager` class (`manager.py:46-876`). The core filesystem-based email manager. Key sections:
   - Lifecycle: `__init__` (`manager.py:48-55`), `start_scheduler` (`manager.py:57-66`), `stop_scheduler` (`manager.py:68-72`).

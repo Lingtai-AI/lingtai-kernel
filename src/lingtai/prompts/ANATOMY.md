@@ -6,7 +6,10 @@ related_files:
   - src/lingtai/agent.py
   - src/lingtai/prompts/principle/principle.yaml
   - src/lingtai/prompts/principle/principle.md
+  - src/lingtai/prompts/tools/tools.yaml
   - src/lingtai/prompts/meta_guidance/catalog/INDEX.md
+  - src/lingtai_kernel/base_agent/tools.py
+  - src/lingtai_kernel/tool_glossary.py
   - tests/test_prompt_catalog.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
@@ -64,6 +67,7 @@ sources, catalog INDEX ↔ catalog sections).
 | `<section>/<section>.yaml` | `prompt-section-definition` YAML: `name_definition`, `purpose`, `scope`, `injection_contract`, `related_files`, `maintenance`. Present for every section. |
 | `principle/principle.md`, `substrate/substrate.md`, `procedures/procedures.md` | The three kernel-owned, packaged section bodies (skill-style frontmatter + Markdown body; frontmatter stripped on render). |
 | `meta_guidance/catalog/` | Runtime-guidance Markdown catalog: `INDEX.md` (manifest frontmatter) + one `<id>.md` per section, nested under the `meta_guidance` section it generates. Assembled into the `meta_guidance` body; order is code-owned in `GUIDANCE_SECTION_ORDER`. |
+| `tools/tools.yaml` | Semantic contract for the generated `tools` section. Resident tool inventory renders each canonical-English description/schema plus the selected package-owned glossary body; provider tool definitions remain the fixed generic wire description with unchanged nested parameters. |
 
 ## Render ownership and definition vs injection
 
@@ -84,6 +88,15 @@ Each section has a `<section>/<section>.yaml` definition. Bodies split three way
 - **Injected sections** — `covenant`, `comment`, `rules`, `brief`, `character`,
   `pad`. No packaged body; content supplied by init/recipe/operator or the
   persistent agent store and mirrored to `system/<section>.md`.
+
+For the generated `tools` section, `src/lingtai_kernel/base_agent/tools.py`
+collects canonical-English descriptions and parameter schemas, then appends the
+selected `glossary-{en,zh,wen}.md` body through
+`src/lingtai_kernel/tool_glossary.py`; English glossary bodies are deliberately
+empty. Daemon prompt construction follows the same package-owned glossary rule.
+This resident prompt path is intentionally separate from provider tool
+serialization, whose top-level description is always the fixed generic wire
+sentence and whose nested parameter schema remains canonical English.
 
 The `injection_contract` block in each YAML is the authority for which of these a
 section is: `defined_by`, `injected_by`, `content_source`, optional

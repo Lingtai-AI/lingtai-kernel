@@ -3,6 +3,9 @@ related_files:
   - src/tools/ANATOMY.md
   - src/tools/web_search/__init__.py
   - src/lingtai/services/websearch/ANATOMY.md
+  - src/tools/web_search/glossary-en.md
+  - src/tools/web_search/glossary-zh.md
+  - src/tools/web_search/glossary-wen.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

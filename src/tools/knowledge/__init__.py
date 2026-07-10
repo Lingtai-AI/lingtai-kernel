@@ -282,7 +282,7 @@ def _knowledge_manual(agent: "BaseAgent") -> dict:
 
 
 def get_description(lang: str = "en") -> str:
-    return t(lang, "knowledge.description")
+    return "SIGNPOST ONLY: this tool does not create, edit, search, or load knowledge entries; `info` only re-scans the knowledge catalog and reports health; `manual` returns the knowledge-manual body. Your private durable knowledge catalog across molts — what you've learned, decided, and discovered. Each entry is a folder at knowledge/<name>/ containing KNOWLEDGE.md (YAML frontmatter with name + description) and any supporting files (scripts, assets, notes, raw logs). The knowledge catalog in your system prompt is a YAML list — each entry is a `- name:` block with `location:` and `description:` — bodies load on demand via the read tool, just like skills. Knowledge is private and agent-owned: entries may reference local paths, mail ids, and logs that skills must not depend on. Author new entries by writing knowledge/<name>/KNOWLEDGE.md with write/edit; revise the same way. Call info to refresh the catalog and inspect health. Before using this tool, read the `knowledge-manual` skill — no exceptions."
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -292,7 +292,7 @@ def get_schema(lang: str = "en") -> dict:
             "action": {
                 "type": "string",
                 "enum": ["info", "manual"],
-                "description": t(lang, "knowledge.action_info"),
+                "description": 'info: re-scan knowledge/ and return runtime health (catalog size, resolved root path, malformed entries) without the manual body. manual: return only the knowledge-manual skill body.',
             },
         },
         "required": ["action"],
@@ -309,8 +309,6 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
     Unknown kwargs (e.g. the historical ``knowledge_limit``) are accepted and
     ignored — the file-backed catalog has no fixed-size limit.
     """
-    lang = agent._config.language
-
     _reconcile(agent)
 
     def handle_knowledge(args: dict) -> dict:
@@ -328,7 +326,8 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
 
     agent.add_tool(
         "knowledge",
-        schema=get_schema(lang),
+        schema=get_schema(),
         handler=handle_knowledge,
-        description=get_description(lang),
+        description=get_description(),
+        glossary_package=__package__,
     )

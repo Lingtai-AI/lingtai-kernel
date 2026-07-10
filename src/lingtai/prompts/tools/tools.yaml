@@ -25,7 +25,10 @@ injection_contract:
   override_policy: not_user_overridable
   notes: >
     Generated from the active tool schema/catalog by the kernel/tool registry; there is
-    no static tools.md body. Content changes as the active tool set changes.
+    no static tools.md body. Content changes as the active tool set changes. Each tool's
+    full canonical English description is appended with its package-owned glossary body
+    (selected by prompt language) via append_tool_glossary. Provider function
+    descriptions/schemas are a separate wire surface (WIRE_TOOL_DESCRIPTION).
 related_files:
   - path: src/lingtai/prompts/ANATOMY.md
     why: >
@@ -34,13 +37,15 @@ related_files:
   - path: src/lingtai_kernel/base_agent/tools.py
     why: >
       Owns the concrete tools-section build rule: _refresh_tool_inventory_section()
-      renders the section from ALL_INTRINSICS descriptions plus the active tool schemas.
+      renders the section from intrinsic descriptions plus the active tool schemas,
+      appending each tool's package glossary body via append_tool_glossary.
       Crawl here for the exact per-tool rendering this contract only summarizes.
-  - path: src/lingtai/agent.py
+  - path: src/lingtai_kernel/tool_glossary.py
     why: >
-      The lingtai wrapper overrides _refresh_tool_inventory_section() to also fold in MCP
-      tool schemas before the kernel renders the section. Crawl here to see how the
-      concrete tool surface differs from the bare-kernel build.
+      Kernel-owned strict cached loader for package glossary resources
+      (glossary-{en,zh,wen}.md). Loads via importlib.resources with allowlisted
+      language normalization/fallback; fail-closed for localized text, fail-open
+      for tool availability. Never affects provider schemas or dispatch.
   - path: src/lingtai/prompts/procedures/procedures.yaml
     why: >
       tools renders concrete capabilities; procedures owns when/how to route them. Edit

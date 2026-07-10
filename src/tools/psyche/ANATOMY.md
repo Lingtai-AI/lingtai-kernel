@@ -8,6 +8,9 @@ related_files:
   - src/tools/psyche/_pad.py
   - src/tools/psyche/_session_journal.py
   - src/tools/psyche/_snapshots.py
+  - src/tools/psyche/glossary-en.md
+  - src/tools/psyche/glossary-zh.md
+  - src/tools/psyche/glossary-wen.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

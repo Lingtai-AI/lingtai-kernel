@@ -20,7 +20,6 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from lingtai_kernel.i18n import t
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
@@ -171,7 +170,7 @@ def _augment_command_result(result: dict) -> dict:
     return result
 
 def get_description(lang: str = "en") -> str:
-    return t(lang, "bash.description")
+    return "Execute a shell command and return stdout/stderr. Any system program — scripts, git, curl, pip, data pipelines. Returns exit_code, stdout, stderr, plus ok (bool) and command_status ('success'/'failed'). IMPORTANT: top-level status stays 'ok' even when the command FAILS — it only means the shell ran. Always check exit_code/ok and read the warning field (it names nonzero exits, Python tracebacks, and missing modules); never assume success from status alone. Avoid broad recursive scans (find … -name, rglob, os.walk, glob('**')) — they time out; prefer `rg --files`. Parse JSONL line-by-line, not as one JSON blob. Supports async mode (async=true → job_id, then poll/cancel). Before using this tool, read the `bash-manual` skill — it covers cron setup, async hygiene, and advanced usage; no exceptions."
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -181,34 +180,34 @@ def get_schema(lang: str = "en") -> dict:
             "action": {
                 "type": "string",
                 "enum": ["run", "poll", "cancel"],
-                "description": t(lang, "bash.action"),
+                "description": "Action to perform: 'run' (default) executes a command, 'poll' checks async job status, 'cancel' kills an async job",
                 "default": "run",
             },
             "command": {
                 "type": "string",
-                "description": t(lang, "bash.command"),
+                "description": 'The shell command to execute',
             },
             "timeout": {
                 "type": "number",
-                "description": t(lang, "bash.timeout"),
+                "description": 'Timeout in seconds (default: 30, only for sync execution)',
                 "default": 30,
             },
             "working_dir": {
                 "type": "string",
-                "description": t(lang, "bash.working_dir"),
+                "description": 'Working directory for the command (optional). Leave it out (or pass an empty string) to use the agent working directory. Must be inside the agent working directory sandbox; paths outside it are rejected. For external repos/paths, keep working_dir at the agent dir and put an explicit cd in command, e.g. cd /absolute/path && ...',
             },
             "async": {
                 "type": "boolean",
-                "description": t(lang, "bash.async"),
+                "description": "Run command in background and return immediately with a job_id (default: false, only for action='run')",
                 "default": False,
             },
             "job_id": {
                 "type": "string",
-                "description": t(lang, "bash.job_id"),
+                "description": 'Job ID for poll/cancel actions (returned by async run)',
             },
             "summary": {
                 "type": "boolean",
-                "description": t(lang, "tool.summary_option"),
+                "description": 'Optional. Default false. When true, this tool runs normally and the raw result is preserved in the durable log (retrievable by tool_call_id), but before the result enters your context it is replaced by an LLM-generated summary driven by your `reasoning` field — so make `reasoning` specific about what to retain. Set true only when the output is expected to be large (>10k chars) and you do NOT need the exact raw text. Leave false when you need exact line/file/diff/stderr text. The summary is non-canonical; if the raw exceeds 500,000 chars no summary is generated and you get a refusal pointing at the preserved raw.',
                 "default": False,
             },
         },
@@ -682,17 +681,16 @@ def setup(
     else:
         policy = BashPolicy.from_file(str(_DEFAULT_POLICY_FILE))
 
-    lang = agent._config.language
 
     mgr = BashManager(
         policy=policy,
         working_dir=str(agent._working_dir),
     )
     # Build description with policy rules
-    desc = get_description(lang)
+    desc = get_description()
     policy_summary = policy.describe()
     if policy_summary:
         desc = f"{desc}\n\n{policy_summary}"
 
-    agent.add_tool("bash", schema=get_schema(lang), handler=mgr.handle, description=desc)
+    agent.add_tool("bash", schema=get_schema(), handler=mgr.handle, description=desc, glossary_package=__package__)
     return mgr

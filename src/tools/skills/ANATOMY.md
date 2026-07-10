@@ -8,6 +8,9 @@ related_files:
   - src/lingtai/init_schema.py
   - tests/test_skills.py
   - tests/test_validate_skill.py
+  - src/tools/skills/glossary-en.md
+  - src/tools/skills/glossary-zh.md
+  - src/tools/skills/glossary-wen.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

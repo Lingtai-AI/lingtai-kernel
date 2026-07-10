@@ -31,6 +31,7 @@ from lingtai_kernel.config import (
 )
 
 from lingtai_kernel.llm.base import (
+    WIRE_TOOL_DESCRIPTION,
     ChatSession,
     FunctionSchema,
     LLMResponse,
@@ -915,7 +916,11 @@ def _build_http_timeout(request_timeout: float | None):
 
 
 def _build_tools(schemas: list[FunctionSchema] | None) -> list[dict] | None:
-    """Convert FunctionSchema list to OpenAI tool format."""
+    """Convert FunctionSchema list to OpenAI tool format.
+
+    The wire description is the constant ``WIRE_TOOL_DESCRIPTION``; the full
+    prose stays in the system prompt's ``## tools`` section.
+    """
     if not schemas:
         return None
     return [
@@ -923,7 +928,7 @@ def _build_tools(schemas: list[FunctionSchema] | None) -> list[dict] | None:
             "type": "function",
             "function": {
                 "name": s.name,
-                "description": s.description,
+                "description": WIRE_TOOL_DESCRIPTION,
                 "parameters": s.parameters,
             },
         }
@@ -1012,7 +1017,7 @@ def _build_responses_tools(schemas: list[FunctionSchema] | None) -> list[dict] |
             {
                 "type": "function",
                 "name": s.name,
-                "description": s.description,
+                "description": WIRE_TOOL_DESCRIPTION,
                 "parameters": params,
             }
         )

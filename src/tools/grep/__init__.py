@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from lingtai_kernel.i18n import t
 from .._file_paths import resolve_workdir_path
 
 if TYPE_CHECKING:
@@ -14,18 +13,18 @@ if TYPE_CHECKING:
 
 
 def get_description(lang: str = "en") -> str:
-    return t(lang, "grep.description")
+    return 'Search file contents for lines matching a regex pattern. Returns matching lines with file path and line number. Searches recursively when given a directory. Use the glob filter to narrow to specific file types.'
 
 
 def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
         "properties": {
-            "pattern": {"type": "string", "description": t(lang, "grep.pattern")},
-            "path": {"type": "string", "description": t(lang, "grep.path")},
-            "glob": {"type": "string", "description": t(lang, "grep.glob"), "default": "*"},
-            "max_matches": {"type": "integer", "description": t(lang, "grep.max_matches"), "default": 200},
-            "summary": {"type": "boolean", "description": t(lang, "tool.summary_option"), "default": False},
+            "pattern": {"type": "string", "description": 'Regex pattern to search for'},
+            "path": {"type": "string", "description": 'File or directory to search in'},
+            "glob": {"type": "string", "description": "File glob filter (e.g., '*.py')", "default": "*"},
+            "max_matches": {"type": "integer", "description": 'Maximum matches to return', "default": 200},
+            "summary": {"type": "boolean", "description": 'Optional. Default false. When true, this tool runs normally and the raw result is preserved in the durable log (retrievable by tool_call_id), but before the result enters your context it is replaced by an LLM-generated summary driven by your `reasoning` field — so make `reasoning` specific about what to retain. Set true only when the output is expected to be large (>10k chars) and you do NOT need the exact raw text. Leave false when you need exact line/file/diff/stderr text. The summary is non-canonical; if the raw exceeds 500,000 chars no summary is generated and you get a refusal pointing at the preserved raw.', "default": False},
         },
         "required": ["pattern"],
     }
@@ -34,7 +33,6 @@ def get_schema(lang: str = "en") -> dict:
 
 def setup(agent: "BaseAgent") -> None:
     """Set up the grep capability on an agent."""
-    lang = agent._config.language
 
     def handle_grep(args: dict) -> dict:
         pattern = args.get("pattern", "")
@@ -84,4 +82,4 @@ def setup(agent: "BaseAgent") -> None:
         except Exception as e:
             return {"status": "error", "message": f"Grep failed: {e}"}
 
-    agent.add_tool("grep", schema=get_schema(lang), handler=handle_grep, description=get_description(lang))
+    agent.add_tool("grep", schema=get_schema(), handler=handle_grep, description=get_description(), glossary_package=__package__)

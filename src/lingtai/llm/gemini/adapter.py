@@ -16,6 +16,7 @@ from google.genai import errors as genai_errors, types
 from lingtai_kernel.logging import get_logger
 
 from lingtai_kernel.llm.base import (
+    WIRE_TOOL_DESCRIPTION,
     ChatSession,
     FunctionSchema,
     LLMResponse,
@@ -39,13 +40,17 @@ logger = get_logger()
 def _build_function_declarations(
     tools: list[FunctionSchema] | None,
 ) -> list[types.FunctionDeclaration] | None:
-    """Convert our FunctionSchema list to Gemini FunctionDeclaration list."""
+    """Convert our FunctionSchema list to Gemini FunctionDeclaration list.
+
+    The wire description is the constant ``WIRE_TOOL_DESCRIPTION``; the full
+    prose stays in the system prompt's ``## tools`` section.
+    """
     if not tools:
         return None
     return [
         types.FunctionDeclaration(
             name=t.name,
-            description=t.description,
+            description=WIRE_TOOL_DESCRIPTION,
             parameters=t.parameters,
         )
         for t in tools
@@ -205,14 +210,18 @@ def _sanitize_parameters_for_interactions(params: dict) -> dict:
 def _build_interactions_tools(
     tools: list[FunctionSchema] | None,
 ) -> list[dict] | None:
-    """Convert FunctionSchema list to Interactions API tool dicts."""
+    """Convert FunctionSchema list to Interactions API tool dicts.
+
+    The wire description is the constant ``WIRE_TOOL_DESCRIPTION``; the full
+    prose stays in the system prompt's ``## tools`` section.
+    """
     if not tools:
         return None
     return [
         {
             "type": "function",
             "name": t.name,
-            "description": t.description,
+            "description": WIRE_TOOL_DESCRIPTION,
             "parameters": _sanitize_parameters_for_interactions(t.parameters),
         }
         for t in tools

@@ -185,3 +185,26 @@ Run before merging knowledge changes:
 ```bash
 python -m pytest tests/test_knowledge.py tests/test_skills.py tests/test_check_caps.py tests/test_daemon_preset_capabilities.py -q
 ```
+
+## Schema and glossary ownership
+
+- **Canonical identifiers:** function names, JSON property names, action/enum
+  values, required fields, defaults, and bounds are canonical English literals.
+  The schema (`get_schema()`) and description (`get_description()`) are
+  language-independent; the optional `lang` argument is accepted for source
+  compatibility but ignored.
+- **Provider wire:** provider adapters send the global `WIRE_TOOL_DESCRIPTION`
+  constant as the top-level tool description; `FunctionSchema.description`
+  holds the full canonical prose rendered into `## tools`.
+- **Glossary resources:** this package owns `glossary-en.md`, `glossary-zh.md`,
+  and `glossary-wen.md`. Each has strict YAML frontmatter
+  (`kind: tool-glossary`, `schema_version: 1`, `tool_package: tools.<pkg>`,
+  `language: <lang>`). English body is empty; zh/wen bodies contain concise
+  terminology mappings that quote immutable English identifiers and never offer
+  localized aliases.
+- **Fallback:** exact normalized language lookup, then English, then no
+  appendix. Fail-closed for localized text; fail-open for tool availability.
+- **Update triggers:** changing a function name, action/enum value, property
+  name, or user-visible concept requires reviewing all three glossary files in
+  the same PR.
+- **Validation:** `python -m tools.glossary_validator --check`.

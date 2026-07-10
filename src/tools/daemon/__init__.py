@@ -27,13 +27,13 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-from lingtai_kernel.i18n import t
 
 if TYPE_CHECKING:
     from lingtai.agent import Agent
 
 from lingtai_kernel._fsutil import atomic_write_json
 from lingtai_kernel.llm.base import FunctionSchema
+from lingtai_kernel.tool_glossary import append_tool_glossary
 from lingtai_kernel.loop_guard import LoopGuard
 from lingtai_kernel.meta_block import build_meta
 from lingtai_kernel.tool_executor import ToolExecutor
@@ -650,13 +650,15 @@ class _ToolCollector:
         self.handlers: dict = {}
 
     def add_tool(self, name, *, schema=None, handler=None,
-                 description: str = "", system_prompt: str = ""):
+                 description: str = "", system_prompt: str = "",
+                 glossary_package: str | None = None):
         if handler is not None:
             self.handlers[name] = handler
         if schema is not None:
             self.schemas[name] = FunctionSchema(
                 name=name, description=description,
                 parameters=schema, system_prompt=system_prompt,
+                glossary_package=glossary_package,
             )
 
     def __getattr__(self, n):
@@ -664,7 +666,7 @@ class _ToolCollector:
 
 
 def get_description(lang: str = "en") -> str:
-    return t(lang, "daemon.description")
+    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Actions: emanate (dispatch), list (status), ask (follow-up), check (inspect recent events), reclaim (kill all). Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", id=...). Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, and preset/capability inheritance; no exceptions.'
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -674,7 +676,7 @@ def get_schema(lang: str = "en") -> dict:
             "action": {
                 "type": "string",
                 "enum": ["emanate", "list", "ask", "check", "reclaim"],
-                "description": t(lang, "daemon.action"),
+                "description": "Action to perform: 'emanate' (dispatch subagents), 'list' (show status), 'ask' (follow-up message), 'check' (read recent events of one emanation), 'reclaim' (kill all)",
             },
             "tasks": {
                 "type": "array",
@@ -686,72 +688,72 @@ def get_schema(lang: str = "en") -> dict:
                         "skills": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": t(lang, "daemon.tasks.skills"),
+                            "description": "Optional skill context for this daemon task. Array of paths; each item may be a skill directory (containing SKILL.md) or a direct SKILL.md file path. Relative paths resolve against the parent agent working directory. The daemon runtime parses each skill frontmatter and injects a compact YAML skill list into this run's prompt; use system_prompt to say when/how to apply those skills.",
                         },
                         "mcp": {
                             "type": "array",
                             "items": {"type": "object"},
-                            "description": t(lang, "daemon.tasks.mcp"),
+                            "description": 'Optional one-run MCP registrations for this daemon task. Array of full MCP registration objects: {name, transport/type: stdio|http, command+args+env for stdio or url+headers for http}. The registrations are serialized into the daemon prompt as YAML; LingTai backend also starts them as task-scoped MCP clients and exposes their tools for this run. CLI backends receive the same serialized registrations as context and may load them if their runtime supports MCP. Secret env/header values are redacted in prompts.',
                         },
                         "preset": {
                             "type": "string",
-                            "description": t(lang, "daemon.tasks.preset"),
+                            "description": "Optional preset file path. Must be a .json/.jsonc path as returned by system(action='presets'). Do NOT use shorthand names — use the full 'name' field from the presets listing. Example: '~/.lingtai-tui/presets/saved/cheap.json'. Omit to inherit the parent's regular (non-MCP) tool surface; provide task MCP registrations separately with `mcp`.",
                         },
                         "backend_options": {
                             "type": "object",
-                            "description": t(lang, "daemon.tasks.backend_options"),
+                            "description": 'Optional free-form CLI options for \'claude-code\' / \'codex\' / \'opencode\' / \'mimocode\' / \'qwen-code\' / \'oh-my-pi\' / \'kimicode\' / \'cursor\' backends ONLY (ignored by lingtai). JSON object mapping flag names to values: true → flag only (e.g. {"search": true} → --search); string/int/float → \'--flag <value>\'; list of scalars → \'--flag <v1> --flag <v2>\'; false/null omits the flag. Underscores in keys become dashes; nested objects and unsafe keys are rejected. Applies only when starting the emanation (not to `ask`). Discover supported flags by running \'claude --help\', \'codex exec --help\', \'opencode run --help\', \'mimo run --help\', \'qwen --help\', \'omp --help\', \'kimi --help\', or \'agent --help\' in bash — the CLI\'s flag list changes between versions; this field is intentionally a passthrough rather than a fixed list. See daemon-manual.',
                         },
                         "system_prompt": {
                             "type": "string",
-                            "description": t(lang, "daemon.tasks.system_prompt"),
+                            "description": 'Optional oneshot behavior contract appended to this daemon task: role, constraints, tool-use policy, collaboration boundaries, and safety posture. Leave blank or omit it for the default daemon persona. It can guide how the daemon works, but cannot override tool availability, cancellation/timeout limits, or tool execution/approval guards.',
                         },
                     },
                     "required": ["task", "tools"],
                 },
-                "description": t(lang, "daemon.tasks"),
+                "description": "List of task objects for 'emanate'. Each: {task: str (required — instructions including where to save work), tools: list[str] (required — capability names, e.g. ['file', 'bash']), skills: list[str] (optional — skill directory or SKILL.md paths to render into the daemon prompt), mcp: list[object] (optional — full one-run MCP registrations to serialize into daemon context; LingTai backend also loads them as task-scoped MCP tools), preset: str (optional — preset file path, use name from system(action='presets') output). Omit preset to inherit the parent's regular tool surface. Parent MCP tools are not auto-inherited; provide complete task mcp registrations when needed. See daemon-manual for preset inheritance and capability resolution details.",
             },
             "id": {
                 "type": "string",
-                "description": t(lang, "daemon.id"),
+                "description": "Subagent ID for 'ask' action (e.g. 'em-1')",
             },
             "message": {
                 "type": "string",
-                "description": t(lang, "daemon.message"),
+                "description": "Follow-up message for 'ask' action",
             },
             "last": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 1000,
-                "description": t(lang, "daemon.last"),
+                "description": "For 'check': how many most-recent events to return from events.jsonl. For 'list': positive maximum number of list entries to show after filtering. Default 20 for check; no list limit unless provided.",
             },
             "truncate": {
                 "type": "integer",
                 "minimum": 0,
-                "description": t(lang, "daemon.truncate"),
+                "description": "For 'check': maximum length of any string field in returned events; longer fields get an ellipsis suffix. Default 500. Set to 0 to disable.",
             },
             "contains": {
                 "type": "string",
-                "description": t(lang, "daemon.contains"),
+                "description": "For 'list': case-insensitive substring search across daemon task, prompt preview, result preview, backend, status, group_id, run_id, and visible call parameters.",
             },
             "status": {
                 "type": "string",
-                "description": t(lang, "daemon.status"),
+                "description": "For 'list': optional status filter such as running, done, failed, cancelled, timeout, or all.",
             },
             "include_done": {
                 "type": "boolean",
-                "description": t(lang, "daemon.include_done"),
+                "description": "For 'list': include completed historical daemon run directories as well as currently tracked runs. Defaults to true.",
             },
-            "summary": {"type": "boolean", "description": t(lang, "tool.summary_option"), "default": False},
+            "summary": {"type": "boolean", "description": 'Optional. Default false. When true, this tool runs normally and the raw result is preserved in the durable log (retrievable by tool_call_id), but before the result enters your context it is replaced by an LLM-generated summary driven by your `reasoning` field — so make `reasoning` specific about what to retain. Set true only when the output is expected to be large (>10k chars) and you do NOT need the exact raw text. Leave false when you need exact line/file/diff/stderr text. The summary is non-canonical; if the raw exceeds 500,000 chars no summary is generated and you get a refusal pointing at the preserved raw.', "default": False},
             "max_turns": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": DEFAULT_MAX_TURNS,
-                "description": t(lang, "daemon.max_turns"),
+                "description": "For 'emanate': max LLM tool-loop turns per emanation. Default: parent ceiling (1000). Use a smaller value to keep simple emanations bounded.",
             },
             "timeout": {
                 "type": "number",
                 "minimum": 5,
-                "description": t(lang, "daemon.timeout"),
+                "description": "For 'emanate': max wall-clock seconds for the whole batch. Default: parent max (3600s). Watchdog kills any emanation still running when the timer fires.",
             },
             "backend": {
                 "type": "string",
@@ -1020,7 +1022,6 @@ class DaemonManager:
         allowed = {"email"}
         schemas: dict[str, FunctionSchema] = {}
         handlers: dict = {}
-        lang = self._agent._config.language
         for name in sorted(allowed):
             if name not in self._agent._intrinsics:
                 continue
@@ -1029,8 +1030,9 @@ class DaemonManager:
                 continue
             schemas[name] = FunctionSchema(
                 name=name,
-                description=module.get_description(lang),
-                parameters=module.get_schema(lang),
+                description=module.get_description(),
+                parameters=module.get_schema(),
+                glossary_package=getattr(module, "__package__", None),
             )
             handlers[name] = self._agent._intrinsics[name]
         return schemas, handlers
@@ -1833,11 +1835,15 @@ class DaemonManager:
             "outside your assigned scope.",
         ]
 
-        # Tool descriptions
+        # Tool descriptions — append package glossary body for the selected language.
+        lang = self._agent._config.language
         tool_lines = []
         for s in schemas:
             if s.description:
-                tool_lines.append(f"### {s.name}\n{s.description}")
+                rendered = append_tool_glossary(
+                    s.description, tool_package=s.glossary_package, language=lang
+                )
+                tool_lines.append(f"### {s.name}\n{rendered}")
         if tool_lines:
             lines.append("")
             lines.append("## tools")
@@ -6112,11 +6118,10 @@ def setup(agent: "Agent", max_emanations: int = 100,
           max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
           notify_threshold: int = 20) -> DaemonManager:
     """Set up the daemon capability on an agent."""
-    lang = agent._config.language
     mgr = DaemonManager(agent, max_emanations=max_emanations,
                         max_turns=max_turns, timeout=timeout,
                         notify_threshold=notify_threshold)
-    schema = get_schema(lang)
+    schema = get_schema()
     agent.add_tool("daemon", schema=schema, handler=mgr.handle,
-                   description=get_description(lang))
+                   description=get_description(), glossary_package=__package__)
     return mgr

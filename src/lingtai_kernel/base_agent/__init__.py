@@ -1944,9 +1944,10 @@ class BaseAgent:
         handler: Callable[[dict], dict] | None = None,
         description: str = "",
         system_prompt: str = "",
+        glossary_package: str | None = None,
     ) -> None:
         from .tools import _add_tool
-        _add_tool(self, name, schema=schema, handler=handler, description=description, system_prompt=system_prompt)
+        _add_tool(self, name, schema=schema, handler=handler, description=description, system_prompt=system_prompt, glossary_package=glossary_package)
 
     def remove_tool(self, name: str) -> None:
         from .tools import _remove_tool
