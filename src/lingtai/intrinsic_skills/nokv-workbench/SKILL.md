@@ -239,6 +239,25 @@ Do not request an in-place rollback from normal agent workflows. In-place
 replacement is an operator-only recovery action because it temporarily fences
 writes and invalidates the entire target subtree.
 
+### Handle structured checkpoint errors
+
+Checkpoint and restore failures use a structured MCP error with `code`,
+`message`, `retryable`, and `details`. Branch on `code`; do not parse the human
+message:
+
+| Code | Agent action |
+|---|---|
+| `SnapshotLeaseExpired` | Do not retry or attempt revival. Mint a new checkpoint from current state when appropriate. |
+| `SnapshotRootMismatch` | Stop. The checkpoint belongs to another workbench root; never substitute or copy its id. |
+| `SnapshotBindingChanged` | Refresh the MCP/workbench resolution and retry once because the root binding changed during the operation. |
+| `SnapshotRenewContended` | Retry renewal with bounded backoff; the lease in the error response is not authoritative. |
+| `RestoreInProgress` | Back off and retry the blocked write after the operator restore reaches a terminal state. |
+| `RestoreDestinationConflict` | Choose a new empty `destination_id`, unless this was an exact retry of the same restore operation. |
+
+Honor the returned `retryable` flag when it is stricter than this table. A
+failed renew never changes the locally recorded expiry; use the authoritative
+pin returned by a successful renew or refresh with `workbench_snapshot_list`.
+
 ### Expired is not the same as data lost
 
 An expired checkpoint loses only the **point-in-time view**, not your current

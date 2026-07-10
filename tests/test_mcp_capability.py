@@ -185,6 +185,16 @@ def test_nokv_workbench_skill_documents_strict_restore_contract():
     assert "grace window" not in skill
     assert "17-tool surface" in preflight
     assert "workbench_restore" in preflight
+    for code in (
+        "SnapshotLeaseExpired",
+        "SnapshotRootMismatch",
+        "SnapshotBindingChanged",
+        "SnapshotRenewContended",
+        "RestoreInProgress",
+        "RestoreDestinationConflict",
+    ):
+        assert code in skill
+    assert "Branch on `code`" in skill
 
 
 def test_expand_agent_placeholders_scopes_workbench_root(tmp_path):
