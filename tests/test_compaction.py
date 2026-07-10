@@ -1,15 +1,15 @@
-"""Tests for context compaction in LLMService.check_and_compact().
+"""Tests for ChatInterface compaction primitives and context-pressure metadata.
 
-Exercises the full compaction pipeline:
-  1. estimate_context_tokens() detects context > threshold
-  2. find_compaction_boundary() splits at the right turn
-  3. format_for_summary() produces text for the summarizer
-  4. The new ChatInterface has: system + summary + ack + recent turns
+Covers:
+  1. find_compaction_boundary() — turn-aware boundary detection
+  2. format_for_summary() — text extraction for summarizers
+  3. estimate_context_tokens() — context-size estimation
+  4. Context-pressure metadata in BaseAgent._handle_request
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from lingtai_kernel.llm.interface import (
     ChatInterface,
@@ -17,8 +17,6 @@ from lingtai_kernel.llm.interface import (
     ToolCallBlock,
     ToolResultBlock,
 )
-from lingtai_kernel.llm.base import ChatSession, FunctionSchema
-from lingtai.llm.service import LLMService
 
 
 # ---------------------------------------------------------------------------
@@ -75,28 +73,6 @@ def _build_conversation_with_tools(
         )
 
     return iface
-
-
-class FakeChatSession(ChatSession):
-    """Minimal ChatSession for testing compaction logic."""
-
-    def __init__(self, interface: ChatInterface, ctx_window: int = 0):
-        self._interface = interface
-        self._context_window_val = ctx_window
-        self._model = "test-model"
-        self._agent_type = "test"
-        self._tracked = True
-        self.session_id = "test-session"
-
-    @property
-    def interface(self) -> ChatInterface:
-        return self._interface
-
-    def send(self, message):
-        raise NotImplementedError
-
-    def context_window(self) -> int:
-        return self._context_window_val
 
 
 # ---------------------------------------------------------------------------
@@ -181,21 +157,7 @@ class TestEstimateContextTokens:
 
 
 # ---------------------------------------------------------------------------
-# Tests — LLMService.check_and_compact() integration
-# ---------------------------------------------------------------------------
-
-
-
-# TestCheckAndCompact removed — check_and_compact was replaced by molt (psyche intrinsic).
-# Compaction is now handled by SessionManager internally, not via LLMService method.
-
-
-
-# get_context_limit tests removed — context window is now caller-provided.
-
-
-# ---------------------------------------------------------------------------
-# Tests — Compaction pressure system in BaseAgent._handle_request
+# Tests — Context-pressure metadata in BaseAgent._handle_request
 # ---------------------------------------------------------------------------
 
 
