@@ -30,6 +30,9 @@ while long-form references live under [`docs/`](docs/).
 - [`.github/`](.github/) — GitHub Actions, issue templates, and pull request templates.
 - [`crates/lingtai-search-sidecar/`](crates/lingtai-search-sidecar/) — Rust
   file-search sidecar crate packaged with the Python runtime.
+- [`scripts/`](scripts/) — repository maintenance, checker, and benchmark
+  dev scripts (e.g. `check_anatomy_drift.py`, `bench_agent_session_rebuild.py`);
+  not part of the importable package.
 - [`docs/`](docs/) — durable documentation, plans, language-specific readmes,
   and long-form references.
 - [`src/lingtai/`](src/lingtai/) — compatibility package and service modules

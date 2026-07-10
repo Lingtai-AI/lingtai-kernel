@@ -8,10 +8,10 @@ many-molt trajectory. Also times Tier 2 (bounded reverse scan) for reference.
 Usage:
 
     # Synthetic source (default): N total events, a molt boundary every K events.
-    python tools/bench_agent_session_rebuild.py --events 200000 --molt-every 4000
+    python scripts/bench_agent_session_rebuild.py --events 200000 --molt-every 4000
 
     # Against a real agent dir (uses its existing logs/events.jsonl + log.sqlite):
-    python tools/bench_agent_session_rebuild.py --agent-dir /path/to/agent
+    python scripts/bench_agent_session_rebuild.py --agent-dir /path/to/agent
 
 The synthetic generator writes a temp agent dir with ``logs/events.jsonl`` and a
 matching ``logs/log.sqlite`` built via the kernel's own SQLiteEventIndex, so the

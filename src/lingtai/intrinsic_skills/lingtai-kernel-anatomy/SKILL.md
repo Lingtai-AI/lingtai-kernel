@@ -134,11 +134,11 @@ Concretely, if a commit moves `intrinsics/soul.py` → `intrinsics/soul/{config,
 For cheap mechanical checking, run the advisory drift checker before commit:
 
 ```bash
-python tools/check_anatomy_drift.py            # report drift, exit 0
-python tools/check_anatomy_drift.py --check    # exit 1 if any drift (CI/pre-commit)
+python scripts/check_anatomy_drift.py            # report drift, exit 0
+python scripts/check_anatomy_drift.py --check    # exit 1 if any drift (CI/pre-commit)
 ```
 
-`tools/check_anatomy_drift.py` scans every `ANATOMY.md` under `src/` and flags
+`scripts/check_anatomy_drift.py` scans every `ANATOMY.md` under `src/` and flags
 **citation rot**: a `file.py:line` citation whose target is missing or whose
 line is past the end of the file. It resolves cited paths by searching upward
 from each anatomy's directory, so kernel-root-relative citations work.

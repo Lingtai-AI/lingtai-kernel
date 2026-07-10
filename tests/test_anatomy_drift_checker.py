@@ -1,13 +1,13 @@
 """Tests for the advisory ANATOMY drift checker (issue #509).
 
-The checker lives in tools/ (a dev script, not part of the importable package),
+The checker lives in scripts/ (a dev script, not part of the importable package),
 so it is loaded by file path here.
 """
 
 import importlib.util
 from pathlib import Path
 
-_CHECKER_PATH = Path(__file__).resolve().parents[1] / "tools" / "check_anatomy_drift.py"
+_CHECKER_PATH = Path(__file__).resolve().parents[1] / "scripts" / "check_anatomy_drift.py"
 
 
 def _load_checker():

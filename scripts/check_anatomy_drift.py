@@ -14,9 +14,9 @@ claim (see the `lingtai-kernel-anatomy` skill). This checker only catches the
 advisory gate.
 
 Usage:
-    python tools/check_anatomy_drift.py            # report, exit 0 unless --check
-    python tools/check_anatomy_drift.py --check    # exit 1 if any drift found
-    python tools/check_anatomy_drift.py --root src/lingtai_kernel
+    python scripts/check_anatomy_drift.py            # report, exit 0 unless --check
+    python scripts/check_anatomy_drift.py --check    # exit 1 if any drift found
+    python scripts/check_anatomy_drift.py --root src/lingtai_kernel
 """
 
 from __future__ import annotations
