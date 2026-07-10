@@ -77,11 +77,24 @@ class LLMResponse:
     api_call_id: str | None = None
 
 
+# The single wire-facing description for registered ``FunctionSchema`` tools.
+# Provider payload builders send this constant as those tools' top-level
+# description; the full ``FunctionSchema.description`` prose renders only into
+# the system prompt's
+# ``## tools`` section (base_agent/tools.py:_refresh_tool_inventory_section).
+# Parameter/property descriptions inside ``parameters`` are never touched.
+WIRE_TOOL_DESCRIPTION = "See the system prompt for tool usage guidance."
+
+
 @dataclass
 class FunctionSchema:
     """Wraps a tool/function schema dict for type clarity.
 
     The ``parameters`` dict is already JSON-schema-shaped and provider-agnostic.
+
+    ``description`` holds the full tool prose. It is rendered into the system
+    prompt's ``## tools`` section and stored in canonical ChatInterface tool
+    snapshots; provider wire payloads carry ``WIRE_TOOL_DESCRIPTION`` instead.
     """
 
     name: str

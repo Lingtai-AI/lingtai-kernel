@@ -20,6 +20,7 @@ related_files:
   - src/lingtai_kernel/llm/ANATOMY.md
   - tests/test_codex_endpoint_pool.py
   - tests/test_llm_identity_headers.py
+  - tests/test_wire_tool_description.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -78,6 +79,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 
 ## Notes
 
+- **Wire tool descriptions are single-sourced** — every provider payload builder for registered `FunctionSchema` tools sends the kernel constant `WIRE_TOOL_DESCRIPTION` (`src/lingtai_kernel/llm/base.py:86`) as the top-level tool description instead of `FunctionSchema.description`: openai `_build_tools` (`openai/adapter.py:918`) / `_build_responses_tools` (`openai/adapter.py:998`), anthropic `_build_tools` (`anthropic/adapter.py:62`), gemini `_build_function_declarations` (`gemini/adapter.py:40`) / `_build_interactions_tools` (`gemini/adapter.py:210`). The full prose stays in the system prompt's `## tools` section and in canonical `ChatInterface` tool snapshots (`FunctionSchema.list_to_dicts` at the `add_system` call sites); nested parameter descriptions are untouched. Structured-output pseudo-tools keep their task-specific descriptions. `claude_code` is deliberately excluded — it has no tools wire array; `_render_prompt` serialises the full description into the CLI prompt, which *is* its system-prompt side. Tests: `tests/test_wire_tool_description.py`.
 - **Abstract methods** — `LLMAdapter` requires: `create_chat()` (line 86), `generate()` (line 119), `make_tool_result_message()` (line 136), `is_quota_error()` (line 148).
 - **Tool-call ID dual system** — Provider-issued wire IDs (e.g. Anthropic `tool_use_id`, OpenAI `tool_call_id`) flow through `tool_call_id` kwarg. LingTai issues its own `_tool_call_id` (`service.py:35`: `tc_<unix>_<4-hex>`) stamped onto every result dict for agent-level correlation.
 - **Interface converters** — Four bidirectional pairs:
