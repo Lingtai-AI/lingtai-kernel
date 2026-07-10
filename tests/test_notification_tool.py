@@ -109,15 +109,20 @@ def test_notification_schema_has_no_kitchen_sink_dismiss() -> None:
     assert "summarize" not in enum
 
 
-def test_notification_schema_localized() -> None:
+def test_notification_schema_is_canonical_english() -> None:
+    """Schema descriptions are canonical English, language-independent."""
+    base_desc = notif_intrinsic.get_description()
+    base_schema = notif_intrinsic.get_schema()
+    # Ignored lang arg must not change the output.
     for lang in ("en", "zh", "wen"):
-        desc = notif_intrinsic.get_description(lang)
-        assert desc and desc != "notification_tool.description"
-        adesc = notif_intrinsic.get_schema(lang)["properties"]["action"]["description"]
-        assert adesc and adesc != "notification_tool.action_description"
-        # Notification-owned param strings resolve (not the raw key).
-        cdesc = notif_intrinsic.get_schema(lang)["properties"]["channel"]["description"]
-        assert cdesc and cdesc != "notification_tool.channel_description"
+        assert notif_intrinsic.get_description(lang) == base_desc
+        assert notif_intrinsic.get_schema(lang) == base_schema
+    # Descriptions are real prose, not raw i18n keys.
+    assert base_desc and "notification" in base_desc.casefold()
+    adesc = base_schema["properties"]["action"]["description"]
+    assert adesc and "check" in adesc.casefold()
+    cdesc = base_schema["properties"]["channel"]["description"]
+    assert cdesc and "channel" in cdesc.casefold()
 
 
 # ---------------------------------------------------------------------------

@@ -227,7 +227,7 @@ def test_generic_missing_file_still_generic(tmp_path):
     # Capture the handler registered via add_tool
     captured_handler = {}
 
-    def fake_add_tool(name, *, schema, handler, description):
+    def fake_add_tool(name, *, schema, handler, description, **kwargs):
         captured_handler[name] = handler
 
     mock_agent.add_tool = fake_add_tool
@@ -499,7 +499,7 @@ def test_read_tool_path_traversal_not_classified_as_spill(tmp_path):
 
     captured_handler = {}
 
-    def fake_add_tool(name, *, schema, handler, description):
+    def fake_add_tool(name, *, schema, handler, description, **kwargs):
         captured_handler[name] = handler
 
     mock_agent.add_tool = fake_add_tool

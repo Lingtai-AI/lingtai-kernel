@@ -95,12 +95,19 @@ class FunctionSchema:
     ``description`` holds the full tool prose. It is rendered into the system
     prompt's ``## tools`` section and stored in canonical ChatInterface tool
     snapshots; provider wire payloads carry ``WIRE_TOOL_DESCRIPTION`` instead.
+
+    ``glossary_package`` is an optional non-wire metadata field naming the
+    importable resource package that owns the tool's ``glossary-{lang}.md``
+    files.  The ``## tools`` renderer uses it to append a localized terminology
+    body; it is never serialized into provider payloads (``to_dict`` excludes
+    it alongside ``system_prompt``).
     """
 
     name: str
     description: str
     parameters: dict
     system_prompt: str = ""
+    glossary_package: str | None = None
 
     def to_dict(self) -> dict:
         return {"name": self.name, "description": self.description, "parameters": self.parameters}

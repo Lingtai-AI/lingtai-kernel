@@ -6,6 +6,9 @@ related_files:
   - src/tools/notification/schema.py
   - tests/test_notification_tool.py
   - tests/test_system_dismiss.py
+  - src/tools/notification/glossary-en.md
+  - src/tools/notification/glossary-zh.md
+  - src/tools/notification/glossary-wen.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

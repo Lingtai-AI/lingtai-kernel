@@ -80,7 +80,8 @@ def test_check_mode_exit_code(tmp_path, monkeypatch):
 def test_checker_lives_in_skill_bundle():
     """The checker's only operational ownership is the anatomy skill bundle."""
     assert _CHECKER_PATH.is_file(), f"checker missing from skill bundle: {_CHECKER_PATH}"
-    # No repo-root scripts/ directory should exist (PR #827 ownership contract).
+    # No repo-root scripts/ or tools/ directory should exist (PR #827
+    # ownership contract — skill sidecars live in the skill bundle).
     assert not (ROOT / "scripts").is_dir(), "stale repo-root scripts/ directory"
     assert not (ROOT / "tools").is_dir(), "stale repo-root tools/ directory"
 

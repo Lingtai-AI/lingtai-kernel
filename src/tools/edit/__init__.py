@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from lingtai_kernel.i18n import t
 from .._file_paths import resolve_workdir_path
 
 if TYPE_CHECKING:
@@ -14,17 +13,17 @@ if TYPE_CHECKING:
 
 
 def get_description(lang: str = "en") -> str:
-    return t(lang, "edit.description")
+    return 'Replace an exact string in a file. Fails if old_string is not found or is ambiguous.'
 
 
 def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
         "properties": {
-            "file_path": {"type": "string", "description": t(lang, "edit.file_path")},
-            "old_string": {"type": "string", "description": t(lang, "edit.old_string")},
-            "new_string": {"type": "string", "description": t(lang, "edit.new_string")},
-            "replace_all": {"type": "boolean", "description": t(lang, "edit.replace_all"), "default": False},
+            "file_path": {"type": "string", "description": 'Absolute path to the file to edit'},
+            "old_string": {"type": "string", "description": 'The exact text to find and replace'},
+            "new_string": {"type": "string", "description": 'The replacement text'},
+            "replace_all": {"type": "boolean", "description": 'Replace all occurrences', "default": False},
         },
         "required": ["file_path", "old_string", "new_string"],
     }
@@ -33,7 +32,6 @@ def get_schema(lang: str = "en") -> dict:
 
 def setup(agent: "BaseAgent") -> None:
     """Set up the edit capability on an agent."""
-    lang = agent._config.language
 
     def handle_edit(args: dict) -> dict:
         path = args.get("file_path", "")
@@ -64,4 +62,4 @@ def setup(agent: "BaseAgent") -> None:
             return {"status": "error", "message": f"Cannot write {path}: {e}"}
         return {"status": "ok", "replacements": count if replace_all else 1}
 
-    agent.add_tool("edit", schema=get_schema(lang), handler=handle_edit, description=get_description(lang))
+    agent.add_tool("edit", schema=get_schema(), handler=handle_edit, description=get_description(), glossary_package=__package__)

@@ -87,12 +87,11 @@ def test_main_and_daemon_tools_sections_render_full_prose():
     assert FULL_DESCRIPTION in sections["tools"]
     assert WIRE_TOOL_DESCRIPTION not in sections["tools"]
 
-    # Daemon emanations build their own resident ``## tools`` section. The
-    # builder does not consult instance state, so call it unbound with a stub.
+    # Daemon emanations build their own resident ``## tools`` section.
     from tools.daemon import DaemonManager
 
     daemon_prompt = DaemonManager._build_emanation_prompt(
-        SimpleNamespace(), "Inspect the repository", _schemas()
+        SimpleNamespace(_agent=agent), "Inspect the repository", _schemas()
     )
     assert FULL_DESCRIPTION in daemon_prompt
     assert WIRE_TOOL_DESCRIPTION not in daemon_prompt

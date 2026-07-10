@@ -78,7 +78,7 @@ if TYPE_CHECKING:
 PROVIDERS = {"providers": [], "default": "builtin"}
 
 def get_description(lang: str = "en") -> str:
-    return t(lang, "avatar.description")
+    return 'Spawn an independent agent (他我). Inherits init.json; boots on default preset. See avatar-manual skill for full guidance.'
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -94,24 +94,24 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "name": {
                 "type": "string",
-                "description": t(lang, "avatar.name"),
+                "description": 'True name for the avatar (required). Also the working-directory basename under .lingtai/. Single segment: letters/digits/underscore/hyphen, max 64 chars.',
             },
             "type": {
                 "type": "string",
                 "enum": ["shallow", "deep"],
-                "description": t(lang, "avatar.type"),
+                "description": "'shallow' (default): blank slate — init.json only. 'deep': full copy of character, pad, and codex.",
             },
             "comment": {
                 "type": "string",
-                "description": t(lang, "avatar.comment"),
+                "description": "Persistent system note in the avatar's prompt (survives molt/refresh/wake). Not inherited. Leave empty unless you have something the avatar must never forget.",
             },
             "dry_run": {
                 "type": "boolean",
-                "description": t(lang, "avatar.dry_run"),
+                "description": 'Preview the spawn without creating a process. Use to sanity-check before committing.',
             },
             "confirm": {
                 "type": "boolean",
-                "description": t(lang, "avatar.confirm"),
+                "description": 'Confirm you have reviewed the mission and intend to spawn. Required when the mission looks empty/short/test-like.',
             },
         },
         "required": ["name"],
@@ -119,7 +119,7 @@ def get_schema(lang: str = "en") -> dict:
 
 
 def get_rules_description(lang: str = "en") -> str:
-    return t(lang, "avatar.rules_description")
+    return 'Set network rules for all descendants (requires karma). See avatar-manual skill for full guidance.'
 
 
 def get_rules_schema(lang: str = "en") -> dict:
@@ -128,7 +128,7 @@ def get_rules_schema(lang: str = "en") -> dict:
         "properties": {
             "rules_content": {
                 "type": "string",
-                "description": t(lang, "avatar.rules_content"),
+                "description": 'Rules content for avatar_rules. Plain text, one rule per line. Non-negotiable constraints distributed to all descendants.',
             },
         },
         "required": ["rules_content"],
@@ -798,18 +798,19 @@ class AvatarManager:
 
 def setup(agent: "Agent", **kwargs) -> AvatarManager:
     """Set up the avatar capability on an agent."""
-    lang = agent._config.language
     mgr = AvatarManager(agent)
     agent.add_tool(
         "avatar_spawn",
-        schema=get_schema(lang),
+        schema=get_schema(),
         handler=mgr.handle_spawn,
-        description=get_description(lang),
+        description=get_description(),
+        glossary_package=__package__,
     )
     agent.add_tool(
         "avatar_rules",
-        schema=get_rules_schema(lang),
+        schema=get_rules_schema(),
         handler=mgr.handle_rules,
-        description=get_rules_description(lang),
+        description=get_rules_description(),
+        glossary_package=__package__,
     )
     return mgr

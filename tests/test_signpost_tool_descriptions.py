@@ -1,23 +1,18 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
+from tools.knowledge import get_description as knowledge_description
 from tools.mcp import get_description as mcp_description
 from tools.mcp import get_schema as mcp_schema
-
-
-def _i18n(lang: str) -> dict[str, str]:
-    path = Path(__file__).resolve().parents[1] / "src" / "tools" / "i18n" / f"{lang}.json"
-    return json.loads(path.read_text())
+from tools.skills import get_description as skills_description
 
 
 def test_skills_and_knowledge_descriptions_are_explicit_signposts() -> None:
-    en = _i18n("en")
-    assert en["skills.description"].startswith("SIGNPOST ONLY:")
-    assert "does not author, pin, publish, install, or execute skills" in en["skills.description"]
-    assert en["knowledge.description"].startswith("SIGNPOST ONLY:")
-    assert "does not create, edit, search, or load knowledge entries" in en["knowledge.description"]
+    skills_desc = skills_description()
+    assert skills_desc.startswith("SIGNPOST ONLY:")
+    assert "does not author, pin, publish, install, or execute skills" in skills_desc
+    knowledge_desc = knowledge_description()
+    assert knowledge_desc.startswith("SIGNPOST ONLY:")
+    assert "does not create, edit, search, or load knowledge entries" in knowledge_desc
 
 
 def test_mcp_description_and_actions_are_explicit_signposts() -> None:

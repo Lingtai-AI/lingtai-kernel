@@ -27,39 +27,37 @@ LARGE_RESULT_FORCE_NOTE = (
 
 
 def get_description(lang: str = "en") -> str:
-    from lingtai_kernel.i18n import t
-    return t(lang, "notification_tool.description")
+    return "Notification surface — read and clear the agent's notification channels. Self-actions, no permissions needed.\n\nThis is the only tool that exposes notification verbs; the system tool no longer offers notification or dismiss aliases.\n\nUse check to read all channels, dismiss_channel to clear one channel whole, and dismiss_event / dismiss_ref to remove a single system event by event_id / ref_id. To compress a large tool result, use system(action=summarize). See system-manual / notification-manual."
 
 
 def get_schema(lang: str = "en") -> dict:
-    from lingtai_kernel.i18n import t
     return {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
                 "enum": ["check", "dismiss_channel", "dismiss_event", "dismiss_ref"],
-                "description": t(lang, "notification_tool.action_description") + "\n\n" + LARGE_RESULT_DISMISS_ACTION_NOTE,
+                "description": "check: read all notification channels. Returns a placeholder; the live payload is stamped onto this same result under `_meta.notifications` and `_meta.notification_guidance`. Replace-only — do not call voluntarily after handling; dismiss instead. Prefer coalescing the dismiss with other tool work you already need this turn when safe; dismiss alone only when there is no useful coalesced work or safety requires it.\n\ndismiss_channel: clear one notification channel whole (channel=<name>). Use producer-specific verbs first (for email, use email(read/dismiss)); guarded channels require force=true only for stale mirrors. Rejects event_id/ref_id — use dismiss_event/dismiss_ref for those.\n\ndismiss_event: remove a single system event by event_id from .notification/system.json (channel defaults to 'system').\n\ndismiss_ref: remove system event(s) by ref_id from .notification/system.json (channel defaults to 'system')." + "\n\n" + LARGE_RESULT_DISMISS_ACTION_NOTE,
             },
             "channel": {
                 "type": "string",
-                "description": t(lang, "notification_tool.channel_description"),
+                "description": "Notification channel to act on (e.g. soul, system, mcp.telegram). Required for dismiss_channel; for dismiss_event/dismiss_ref it defaults to 'system'. For producer-owned channels like email, prefer the producer's own verb (email(read/dismiss)).",
             },
             "force": {
                 "type": "boolean",
-                "description": t(lang, "notification_tool.force_description") + " " + LARGE_RESULT_FORCE_NOTE,
+                "description": 'Optional for dismiss verbs. When true, bypasses a producer-registered generic-dismiss guard and the stale-channel-version refusal. Use only when knowingly clearing a stale mirror; producer-owned state is never changed.' + " " + LARGE_RESULT_FORCE_NOTE,
             },
             "event_id": {
                 "type": "string",
-                "description": t(lang, "notification_tool.event_id_description"),
+                "description": 'For dismiss_event: remove only the matching system notification event_id from .notification/system.json instead of the whole channel.',
             },
             "ref_id": {
                 "type": "string",
-                "description": t(lang, "notification_tool.ref_id_description"),
+                "description": 'For dismiss_ref: remove system notification event(s) carrying this producer ref_id from .notification/system.json instead of the whole channel.',
             },
             "reason": {
                 "type": "string",
-                "description": t(lang, "notification_tool.reason_description"),
+                "description": "Optional acknowledgement reason, logged to the event log. Required when dismissing the post-molt continuation channel (use reason='<continue|defer|obsolete>: ...').",
             },
         },
         "required": ["action"],

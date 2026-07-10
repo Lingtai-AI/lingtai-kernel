@@ -9,6 +9,9 @@ related_files:
   - src/lingtai/mcp_servers/daemon_common/server.py
   - tests/test_daemon.py
   - tests/test_daemon_run_dir.py
+  - src/tools/daemon/glossary-en.md
+  - src/tools/daemon/glossary-zh.md
+  - src/tools/daemon/glossary-wen.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

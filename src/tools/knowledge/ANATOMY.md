@@ -6,6 +6,9 @@ related_files:
   - src/tools/knowledge/__init__.py
   - src/tools/knowledge/manual/SKILL.md
   - tests/test_knowledge.py
+  - src/tools/knowledge/glossary-en.md
+  - src/tools/knowledge/glossary-zh.md
+  - src/tools/knowledge/glossary-wen.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

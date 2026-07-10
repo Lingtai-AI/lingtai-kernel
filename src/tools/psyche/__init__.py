@@ -39,49 +39,47 @@ from ._molt import _context_molt, _name_set, _name_nickname, context_forget  # n
 
 
 def get_description(lang: str = "en") -> str:
-    from lingtai_kernel.i18n import t
-    return t(lang, "psyche.description")
+    return 'Identity, pad, and context management — three objects, all molt-surviving. lingtai: your 灵台 (character) — update after significant work or before molt. pad: system-prompt sketchboard (system/pad.md) — plans, tasks, notes. context: molt (凝蜕) — shed conversation, keep stores. name: set true name (once) or change nickname. See psyche-manual skill for full molt/pad guidance.'
 
 
 def get_schema(lang: str = "en") -> dict:
-    from lingtai_kernel.i18n import t
     return {
         "type": "object",
         "properties": {
             "object": {
                 "type": "string",
                 "enum": ["pad", "context", "name", "lingtai"],
-                "description": t(lang, "psyche.object_description"),
+                "description": 'lingtai: your 灵台 — what distinguishes you from every other agent.\npad: your sketchboard in your system prompt (system/pad.md).\ncontext: your conversation context window.\nname: your true name (set once) and nickname (mutable).',
             },
             "action": {
                 "type": "string",
-                "description": t(lang, "psyche.action_description"),
+                "description": 'lingtai: update | load. update auto-loads.\npad: edit | load | append. edit auto-loads. append pins files as read-only reference.\ncontext: molt. Requires `summary` — tend the four stores BEFORE molting. See psyche-manual.\nname: set (true name, once) | nickname (display name, mutable).',
             },
             "content": {
                 "type": "string",
-                "description": t(lang, "psyche.content_description"),
+                "description": 'Text content. For lingtai update: your full identity (replaces entirely). For pad edit: written as-is to pad.md. For name set/nickname: your chosen name.',
             },
             "files": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": t(lang, "psyche.files_description"),
+                "description": 'File paths (text files only). For pad append: pins files as read-only reference in your system prompt — re-read on every load including after molt. Pass files=[] to clear. Max 100k tokens total. Paths relative to working directory. See psyche-manual for detailed usage.',
             },
             "summary": {
                 "type": "string",
-                "description": t(lang, "psyche.summary_description"),
+                "description": 'For context molt: your session retrospective (~10,000 tokens). Write as a record — what happened, what you learned, what remains. The four stores must be tended BEFORE molt. Saved to `system/summaries/molt_<count>_<ts>.md` and replayed to the next you. See psyche-manual for full writing guidance.',
             },
             "keep_tool_calls": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": t(lang, "psyche.keep_tool_calls_description"),
+                "description": 'Optional list of tool-call IDs to replay across the molt, in your chosen order. If any ID is not found, molt is refused. Keep short — durable stores are primary persistence. See psyche-manual.',
             },
             "keep_last": {
                 "type": "integer",
-                "description": t(lang, "psyche.keep_last_description"),
+                "description": 'Optional integer (default: 20). Number of recent conversation entries to replay into the fresh session. Pass 0 to archive everything. Overlapping entries with keep_tool_calls are deduplicated. See psyche-manual.',
             },
             "session_journal_path": {
                 "type": "string",
-                "description": t(lang, "psyche.session_journal_path_description"),
+                "description": 'REQUIRED for context molt. The path to the session-journal entry you wrote for the just-finished segment BEFORE molting: knowledge/session-journal/<entry>/KNOWLEDGE.md (a per-segment sub-entry, NOT the parent index). Must be inside your workdir, exist, be non-empty UTF-8, have valid YAML frontmatter with `name` and `description`, and identify itself as session knowledge via `type: session-journal` or `session_journal: true`. The molt is refused before any context is shed if this is missing or invalid. See psyche-manual §4.',
             },
         },
         "required": ["object", "action"],

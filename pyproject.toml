@@ -76,6 +76,13 @@ tools = [
     # extension contract) from the wheel.
     "*/CONTRACT.md",
     "*/DAEMON_CONTRACT.md",
+    # Per-tool glossary resources — exactly glossary-{en,zh,wen}.md per
+    # first-party package (18 packages × 3 languages = 54 files). The
+    # renderer loads them via importlib.resources to append localized
+    # terminology bodies to each tool's ## tools description.
+    "*/glossary-en.md",
+    "*/glossary-zh.md",
+    "*/glossary-wen.md",
 ]
 lingtai = [
     "mcp_catalog.json",

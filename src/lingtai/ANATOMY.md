@@ -44,7 +44,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 |---|---|
 | `__init__.py` | Public API facade — re-exports `Agent`, `BaseAgent`, `Message`, services from kernel+wrapper |
 | `__main__.py` | `python -m lingtai` → `cli.main()` |
-| `agent.py` | **THE key file.** `Agent(BaseAgent)` — layer-2 agent with capability composition, preset swap, MCP, init.json refresh |
+| `agent.py` | **THE key file.** `Agent(BaseAgent)` — layer-2 agent with capability composition, preset swap, MCP, init.json refresh. Tool schemas registered here carry package ownership into the inherited BaseAgent inventory renderer; `Agent` no longer duplicates tool-inventory rendering, so package glossaries are appended once in the kernel path. |
 | `cli.py` | `lingtai-agent run <dir>` / `lingtai-agent check-caps` / `lingtai-agent log ...` / `lingtai-agent maintenance cleanup <target>` entry points |
 | `network.py` | Read-only network topology crawler — avatar/contact/mail edge discovery |
 | `presets.py` | Compatibility shim re-exporting the kernel preset library (`lingtai_kernel.presets`) |
