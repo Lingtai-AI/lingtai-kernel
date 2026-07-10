@@ -4,10 +4,10 @@ description: >
   Nested daemon-manual reference for daemon API details and CLI backends:
   daemon(action=list), claude-p/codex/opencode behavior,
   backend_options flag passing, preset/capability inheritance, and nested
-  per-backend references (Codex, OpenCode, claude-p, and MiMo Code flag
-  discovery, built-in LingTai knowledge entrypoint).
-version: 1.9.0
-last_changed_at: "2026-07-09T20:06:40-07:00"
+  per-backend references (Codex, OpenCode, claude-p, MiMo Code, and Qwen
+  Code flag discovery, built-in LingTai knowledge entrypoint).
+version: 1.10.0
+last_changed_at: "2026-07-09T20:15:31-07:00"
 ---
 
 # Daemon CLI Backend Reference
@@ -60,6 +60,15 @@ catalog. Only backends with proven demand get a page.
     needs MiMo-specific CLI flags (model selection, provider switches): it
     routes to the installed CLI's live help via bash (`mimo run --help`) and
     shows how to translate that help into generic `backend_options`.
+- name: daemon-backend-qwen-code
+  location: reference/backends/qwen-code/SKILL.md
+  description: |
+    Nested daemon-cli-backends reference for the Qwen Code (`qwen-code` /
+    `qwen`) daemon backend's flag surface. Read this only when a daemon task
+    needs Qwen-specific CLI flags (model selection, provider tunables): it
+    routes to the installed CLI's live help via bash and shows how to
+    translate that help into generic `backend_options`, plus the backend's
+    reserved-flag and no-resume boundaries.
 - name: daemon-backend-lingtai
   location: reference/backends/lingtai/SKILL.md
   description: |
@@ -79,6 +88,7 @@ catalog. Only backends with proven demand get a page.
 | OpenCode-specific flags for a daemon task: model selection (`--model provider/model`), reasoning variant (`--variant`), agent choice; discover the installed OpenCode CLI's flags and translate them into `backend_options` | `reference/backends/opencode/SKILL.md` |
 | Claude Code-specific flags for a `claude-p` / `claude-code` daemon task: model selection, `--fallback-model`, tool restrictions; reserved/harness-owned flag boundary, resume and auth-env behavior; discover the installed Claude CLI's flags and translate them into `backend_options` | `reference/backends/claude-p/SKILL.md` |
 | MiMo Code-specific flags for a daemon task (`mimocode` / `mimo`): model selection, provider switches; discover the installed `mimo` CLI's flags (`mimo run --help`) and translate them into `backend_options` | `reference/backends/mimocode/SKILL.md` |
+| Qwen Code (`qwen-code` / `qwen`)-specific flags for a daemon task: model selection, provider tunables, reserved `--prompt`/`--yolo`/`--approval-mode` boundary, no-`ask` planning; discover the installed `qwen` CLI's flags and translate them into `backend_options` | `reference/backends/qwen-code/SKILL.md` |
 | Built-in `lingtai` backend knowledge for a daemon task: confirm it has no CLI/`backend_options` flag surface; find the live authorities for preset selection/inspection, tools/skills/MCP inheritance, and the completion contract | `reference/backends/lingtai/SKILL.md` |
 
 ## API note: `daemon(action="list")`
@@ -253,7 +263,9 @@ examples (e.g. reasoning effort via repeated `--config` overrides), read
 the `claude-p` harness boundary (reserved flags, MCP config, resume, auth-env
 hygiene), read `reference/backends/claude-p/SKILL.md`. For MiMo Code
 (`mimocode` / `mimo`) discovery and translation, read
-`reference/backends/mimocode/SKILL.md`.
+`reference/backends/mimocode/SKILL.md`. For Qwen Code–specific discovery and
+translation (e.g. model selection, reserved headless flags), read
+`reference/backends/qwen-code/SKILL.md`.
 
 This is intentionally a passthrough, not a fixed table. Claude Code, Codex,
 OpenCode, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, and Cursor rev their flag
