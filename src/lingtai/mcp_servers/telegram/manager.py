@@ -56,6 +56,38 @@ _COMPOUND_ID_RE = re.compile(r"#([^\s:#]+:-?\d+:\d+)\b")
 _CONVERSATION_PREVIEW_MESSAGES = 20
 # Keep 20 structured Telegram messages below the MCP inbox structured metadata cap.
 _STRUCTURED_MESSAGE_TEXT_CAP = 500
+_DOCUMENT_DOWNLOAD_REASON_CAP = 200
+_TELEGRAM_API_ERROR_PREFIX = "Telegram API error: "
+
+
+def _safe_document_download_reason(exc: Exception) -> str:
+    """Return a bounded provider reason without retaining arbitrary exception text."""
+    detail = str(exc)
+    if detail.startswith(_TELEGRAM_API_ERROR_PREFIX):
+        description = " ".join(detail[len(_TELEGRAM_API_ERROR_PREFIX):].split())
+        if description:
+            return description[:_DOCUMENT_DOWNLOAD_REASON_CAP]
+
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    exc_class = type(exc).__name__
+    if isinstance(status, int) and not isinstance(status, bool):
+        return f"{exc_class} (HTTP {status})"
+    return exc_class
+
+
+def _document_download_failure_notice(reason: str) -> str:
+    if reason.casefold() == "bad request: file is too big":
+        guidance = (
+            "Ask the sender to split the document into parts no larger than 20 MB "
+            "or use another transfer method."
+        )
+    else:
+        guidance = (
+            "Ask the sender to resend the document or use another transfer method."
+        )
+    return f"[Document download failed: {reason}. {guidance}]"
 
 
 def _looks_like_compound_id(value: str) -> bool:
@@ -653,14 +685,27 @@ class TelegramManager:
         file_id = None
         media_type = None
         media_meta: dict = {}
+        document_meta: dict = {}
 
         if tg_msg.get("photo"):
             # Photos come as array of sizes — take the largest
             file_id = tg_msg["photo"][-1]["file_id"]
             media_type = "photo"
         elif tg_msg.get("document"):
-            file_id = tg_msg["document"]["file_id"]
+            document = tg_msg["document"]
+            file_id = document["file_id"]
             media_type = "document"
+            document_meta = {
+                key: document[key]
+                for key in (
+                    "file_name",
+                    "file_size",
+                    "file_id",
+                    "file_unique_id",
+                    "mime_type",
+                )
+                if document.get(key) is not None
+            }
         elif tg_msg.get("voice"):
             # Voice messages: .oga format, typically short recordings
             file_id = tg_msg["voice"]["file_id"]
@@ -697,10 +742,28 @@ class TelegramManager:
                 "size": len(data),
                 **media_meta,
             }
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Failed to download media: %s", e,
+        except Exception as exc:
+            if media_type != "document":
+                logging.getLogger(__name__).warning(
+                    "Failed to download media: %s", exc,
+                )
+                return
+
+            reason = _safe_document_download_reason(exc)
+            payload["media"] = {
+                "type": "document",
+                **document_meta,
+                "download_error": reason,
+            }
+            failure_notice = _document_download_failure_notice(reason)
+            existing_text = str(payload.get("text") or "")
+            payload["text"] = (
+                f"{existing_text}\n\n{failure_notice}" if existing_text else failure_notice
+            )
+            log.warning(
+                "Failed to download inbound Telegram document (%s); "
+                "preserved metadata without path",
+                reason,
             )
 
     # ------------------------------------------------------------------
