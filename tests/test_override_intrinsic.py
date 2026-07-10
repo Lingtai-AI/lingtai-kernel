@@ -2,8 +2,6 @@
 from __future__ import annotations
 from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from lingtai_kernel.base_agent import BaseAgent

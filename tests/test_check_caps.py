@@ -40,7 +40,7 @@ def test_provider_dependent_capabilities():
     assert "gemini" in result["vision"]["providers"]
     # "local" is intentionally NOT advertised in PROVIDERS yet — it works
     # via explicit opt-in (add_capability(..., provider="local")) but
-    # should not appear in check-caps output. See capabilities/vision.py.
+    # should not appear in check-caps output. See tools/vision.
     assert "local" not in result["vision"]["providers"]
 
 

@@ -30,7 +30,6 @@ def make_session_manager(**kw):
     mock_session.interface.estimate_context_tokens.return_value = 5000
     mock_session.interface.current_system_prompt = "test prompt"
     svc.create_session.return_value = mock_session
-    svc.check_and_compact.return_value = None
     config = kw.get("config", AgentConfig())
     return (
         SessionManager(

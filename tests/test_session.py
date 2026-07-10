@@ -1,4 +1,4 @@
-"""Tests for SessionManager — LLM session, token tracking, compaction."""
+"""Tests for SessionManager — LLM session, token tracking, context pressure."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch, PropertyMock
@@ -30,7 +30,6 @@ def make_session_manager(**kw):
         ),
     )
     svc.create_session.return_value = mock_session
-    svc.check_and_compact.return_value = None  # no compaction by default
     config = kw.get("config", AgentConfig())
     return SessionManager(
         llm_service=svc,
@@ -157,13 +156,6 @@ def test_send_llm_call_omits_codex_pool_for_other_providers():
 
     llm_call = next(fields for event, fields in events if event == "llm_call")
     assert "codex_pool" not in llm_call
-
-
-def test_send_does_not_call_compaction():
-    sm, svc, _ = make_session_manager()
-    sm.send("hello")
-    # Compaction is no longer auto-triggered from SessionManager.send()
-    svc.check_and_compact.assert_not_called()
 
 
 def test_send_error_propagates():
