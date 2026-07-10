@@ -1,7 +1,7 @@
 from pathlib import Path
-from lingtai_kernel.prompt import build_system_prompt
-from lingtai_kernel.prompt import build_system_prompt_batches
-from lingtai_kernel.prompt import SystemPromptManager
+from lingtai.kernel.prompt import build_system_prompt
+from lingtai.kernel.prompt import build_system_prompt_batches
+from lingtai.kernel.prompt import SystemPromptManager
 
 
 def test_build_system_prompt_minimal():
@@ -202,7 +202,7 @@ def test_packaged_principle_owns_static_progressive_and_token_efficiency_rules()
 
 def test_task_boundary_molt_guidance_is_cost_thresholded():
     """Resident and manual guidance should agree that task-boundary molt is costed."""
-    from lingtai_kernel._frontmatter import strip_frontmatter
+    from lingtai.kernel._frontmatter import strip_frontmatter
 
     # Skill-style section/manual files carry developer-facing YAML frontmatter;
     # strip it so the corpus is the rendered body only (not metadata text).
@@ -216,7 +216,7 @@ def test_task_boundary_molt_guidance_is_cost_thresholded():
     ]
     parts = [strip_frontmatter(path.read_text()) for path in md_paths]
     # Guidance is now a skill-style Markdown catalog; fold each section body in.
-    from lingtai_kernel.meta_block import build_runtime_guidance
+    from lingtai.kernel.meta_block import build_runtime_guidance
 
     for section in build_runtime_guidance().get("sections", []):
         parts.append(section.get("body", ""))

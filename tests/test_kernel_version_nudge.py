@@ -1,8 +1,8 @@
 import json
 
-from lingtai_kernel.notifications import collect_notifications
-from lingtai_kernel.nudge import upsert
-from lingtai_kernel.nudge import kernel_version as kv
+from lingtai.kernel.notifications import collect_notifications
+from lingtai.kernel.nudge import upsert
+from lingtai.kernel.nudge import kernel_version as kv
 
 
 class _Agent:
@@ -76,7 +76,7 @@ def test_local_refresh_mismatch_does_not_re_emit_same_utc_day(tmp_path, monkeypa
     assert len(_entries(tmp_path)) == 1
 
     # Agent dismisses the nudge (deletes nudge.json).
-    from lingtai_kernel.nudge import remove
+    from lingtai.kernel.nudge import remove
 
     remove(agent, "kernel_version")
     assert _entries(tmp_path) == []
@@ -103,7 +103,7 @@ def test_local_refresh_mismatch_re_emits_next_utc_day(tmp_path, monkeypatch):
     kv.check(agent)
     assert len(_entries(tmp_path)) == 1
 
-    from lingtai_kernel.nudge import remove
+    from lingtai.kernel.nudge import remove
 
     remove(agent, "kernel_version")
     assert _entries(tmp_path) == []

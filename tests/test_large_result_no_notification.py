@@ -16,13 +16,13 @@ from __future__ import annotations
 import threading
 from unittest.mock import MagicMock
 
-from lingtai_kernel.llm.interface import (
+from lingtai.kernel.llm.interface import (
     ChatInterface,
     ToolCallBlock,
     ToolResultBlock,
 )
-from lingtai_kernel.base_agent.messaging import _rescan_large_tool_results
-from lingtai_kernel import meta_block
+from lingtai.kernel.base_agent.messaging import _rescan_large_tool_results
+from lingtai.kernel import meta_block
 
 
 def _make_stub_agent(iface: ChatInterface):
@@ -82,7 +82,7 @@ def test_rescan_never_publishes_for_many_large_results():
 
 def test_maybe_notify_large_tool_result_publishes_nothing():
     """The per-result hook produces no large_tool_result event."""
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
     iface = ChatInterface()
     _add_tool_pair(iface, "tc-big", "bash", {"output": "Z" * 80000, "status": "ok"})

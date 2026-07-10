@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lingtai_kernel.process_match import match_agent_run
+from lingtai.kernel.process_match import match_agent_run
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,7 +48,7 @@ def _load_doctor_module():
 
 
 def _watcher_match_agent_run(tmp_path):
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
     service = MagicMock()
     service.get_adapter.return_value = MagicMock()

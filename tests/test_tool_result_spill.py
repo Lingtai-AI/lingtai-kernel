@@ -14,14 +14,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.llm.base import ToolCall
-from lingtai_kernel.loop_guard import LoopGuard
-from lingtai_kernel.tool_executor import (
+from lingtai.kernel.llm.base import ToolCall
+from lingtai.kernel.loop_guard import LoopGuard
+from lingtai.kernel.tool_executor import (
     _DEFAULT_MAX_RESULT_CHARS,
     ToolExecutor,
     _spill_oversized_result,
 )
-from lingtai_kernel.tool_result_artifacts import PREVENTIVE_MAX_CHARS
+from lingtai.kernel.tool_result_artifacts import PREVENTIVE_MAX_CHARS
 
 
 CAP = _DEFAULT_MAX_RESULT_CHARS

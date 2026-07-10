@@ -9,8 +9,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.base_agent import BaseAgent
-from lingtai_kernel.state import AgentState
+from lingtai.kernel.base_agent import BaseAgent
+from lingtai.kernel.state import AgentState
 
 
 def _make_agent(tmp_path, **kwargs):
@@ -341,7 +341,7 @@ class TestSelfSleepPendingNotificationsGuard:
         """A notification on disk whose fingerprint matches the agent's
         last-committed fingerprint = already processed. Sleep is fine."""
         from tools.system import handle
-        from lingtai_kernel.notifications import notification_fingerprint
+        from lingtai.kernel.notifications import notification_fingerprint
         agent = _make_agent(tmp_path)
 
         self._write_notification(agent, "email.json", {

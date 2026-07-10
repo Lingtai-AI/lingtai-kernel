@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lingtai_kernel.llm.base import UsageMetadata
+from lingtai.kernel.llm.base import UsageMetadata
 
 from lingtai.llm.openai.codex_ws import SyncCodexWebsocketTransport
 
@@ -922,7 +922,7 @@ def test_request_history_rebuild_records_manual_reconstruction_event(monkeypatch
 
 def _add_pending_marker(iface, tool_call_id, *, original=4000, summary=10):
     """Append a status: pending summarize marker to a session interface."""
-    from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
+    from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
     from tools.system.summarize import (
         SUMMARIZE_MARKER,
         SUMMARY_STATUS_PENDING,
@@ -941,7 +941,7 @@ def _add_pending_marker(iface, tool_call_id, *, original=4000, summary=10):
 
 
 def _marker_status(iface, tool_call_id):
-    from lingtai_kernel.llm.interface import ToolResultBlock
+    from lingtai.kernel.llm.interface import ToolResultBlock
     for entry in iface._entries:
         for b in entry.content:
             if isinstance(b, ToolResultBlock) and b.id == tool_call_id and isinstance(b.content, dict):
@@ -1096,7 +1096,7 @@ def test_rest_parallel_multi_tool_result_stays_incremental():
     The fix appends placeholders contiguously at the tail and strips them from the
     recorded baseline, so the real tool results strictly extend the baseline.
     """
-    from lingtai_kernel.llm.interface import ToolResultBlock
+    from lingtai.kernel.llm.interface import ToolResultBlock
 
     client = _MultiToolCallRestClient()
     session = _make_rest_session(client)
@@ -1120,7 +1120,7 @@ def test_tool_result_continuation_stays_incremental():
     ``function_call``) must NOT reset to ``ws_full``. The converter injects an
     orphan-output placeholder into the baseline; the fix trims it so the real
     tool result strictly extends the baseline and rides as a delta."""
-    from lingtai_kernel.llm.interface import ToolResultBlock
+    from lingtai.kernel.llm.interface import ToolResultBlock
 
     t = ToolCallWsTransport()
     session = _make_session(t)
@@ -1164,7 +1164,7 @@ def _strip_resident_meta_from_oldest_tool_result(session) -> bool:
     """Mimic ``attach_active_runtime``: strip the latest-only ``_meta`` blocks
     from the OLDEST tool result's content in place (the kernel moves them onto
     the freshest result each turn). Returns True if a result was mutated."""
-    from lingtai_kernel.llm.interface import ToolResultBlock
+    from lingtai.kernel.llm.interface import ToolResultBlock
 
     for entry in session._interface.entries:
         for block in getattr(entry, "content", []) or []:
@@ -1192,7 +1192,7 @@ def test_resident_meta_movement_does_not_break_incremental_delta():
     prefix and forcing ``ws_full`` (``prefix_mismatch``). With freezing the older
     output replays byte-identically and the delta stays ``ws_incremental``.
     """
-    from lingtai_kernel.llm.interface import ToolResultBlock
+    from lingtai.kernel.llm.interface import ToolResultBlock
 
     t = _PerTurnToolCallWsTransport()
     session = _make_session(t)
@@ -1300,7 +1300,7 @@ def test_failed_stream_restores_prior_baseline_and_next_turn_chains_off_it():
 def test_new_user_turn_after_tool_loop_keeps_incremental_chain():
     """Boundary: tool call -> tool result -> new user text all stay incremental
     within the same websocket session (no spurious reset breaks the delta)."""
-    from lingtai_kernel.llm.interface import ToolResultBlock
+    from lingtai.kernel.llm.interface import ToolResultBlock
 
     t = ToolCallWsTransport()
     session = _make_session(t)

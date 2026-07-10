@@ -13,7 +13,7 @@ the INDEX. It is not a test list or a place to dump indirect dependencies.
 
 This module owns the tiny dependency-free frontmatter parser used by both the
 kernel (prompt catalog / guidance loader) and the wrapper (curated MCP skills).
-It lives in ``lingtai_kernel`` so the kernel never has to import from the
+It lives in ``lingtai.kernel`` so the kernel never has to import from the
 ``lingtai`` wrapper (the kernel↔wrapper import direction is one-way; see
 ``ANATOMY.md``). ``mcp_servers/_skill.py`` re-exports :func:`split_frontmatter`
 for back-compat.

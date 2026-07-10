@@ -23,15 +23,15 @@ import json
 import threading
 from pathlib import Path
 
-from lingtai_kernel.base_agent.turn import _process_response
-from lingtai_kernel.llm.base import LLMResponse, ToolCall
-from lingtai_kernel.llm.interface import (
+from lingtai.kernel.base_agent.turn import _process_response
+from lingtai.kernel.llm.base import LLMResponse, ToolCall
+from lingtai.kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ToolCallBlock,
     ToolResultBlock,
 )
-from lingtai_kernel.meta_block import stamp_meta
+from lingtai.kernel.meta_block import stamp_meta
 
 
 class _Guard:

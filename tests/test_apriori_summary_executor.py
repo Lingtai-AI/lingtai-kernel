@@ -14,11 +14,11 @@ summarizer (no real LLM) to prove the contract:
 """
 from __future__ import annotations
 
-from lingtai_kernel.base_agent import turn
-from lingtai_kernel.llm.base import ToolCall
-from lingtai_kernel.loop_guard import LoopGuard
-from lingtai_kernel.tool_executor import ToolExecutor
-from lingtai_kernel.tool_result_summary import (
+from lingtai.kernel.base_agent import turn
+from lingtai.kernel.llm.base import ToolCall
+from lingtai.kernel.loop_guard import LoopGuard
+from lingtai.kernel.tool_executor import ToolExecutor
+from lingtai.kernel.tool_result_summary import (
     APRIORI_SUMMARY_CAP,
     APRIORI_SUMMARY_MARKER,
 )
@@ -434,7 +434,7 @@ def test_apriori_summary_writes_main_ledger_row(tmp_path):
     """A successful a-priori summarizer call writes exactly one main-ledger row
     tagged source=summarize_apriori, with input/output matching response.usage,
     correlatable by tool_call_id, and NOT a daemon row."""
-    from lingtai_kernel.token_ledger import is_daemon_entry
+    from lingtai.kernel.token_ledger import is_daemon_entry
 
     agent = _AgentStub(_SessionService(), working_dir=tmp_path)
     fn = turn._build_apriori_summarizer_fn(agent)

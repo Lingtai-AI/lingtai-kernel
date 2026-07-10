@@ -13,10 +13,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from lingtai_kernel.llm.interface import (
+from lingtai.kernel.llm.interface import (
     ChatInterface, ToolCallBlock, ToolResultBlock,
 )
-from lingtai_kernel.tc_inbox import TCInbox, InvoluntaryToolCall
+from lingtai.kernel.tc_inbox import TCInbox, InvoluntaryToolCall
 
 
 class _StubChatSession:
@@ -207,7 +207,7 @@ def test_no_msg_request_from_system_in_inbox():
     # chat_history.jsonl for sender="system" user-turns.
     # For now, the unit-level assertion is that _enqueue_system_notification
     # exists on BaseAgent and that the constants we expect are wired:
-    from lingtai_kernel.base_agent import BaseAgent
-    from lingtai_kernel.message import MSG_TC_WAKE
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.message import MSG_TC_WAKE
     assert hasattr(BaseAgent, "_enqueue_system_notification")
     assert MSG_TC_WAKE == "tc_wake"

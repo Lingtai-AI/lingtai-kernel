@@ -7,10 +7,10 @@ import stat
 from pathlib import Path
 from types import SimpleNamespace
 
-import lingtai_kernel.base_agent as base_agent_module
+import lingtai.kernel.base_agent as base_agent_module
 import pytest
-from lingtai_kernel import _fsutil
-from lingtai_kernel.base_agent import BaseAgent
+from lingtai.kernel import _fsutil
+from lingtai.kernel.base_agent import BaseAgent
 
 
 def test_status_snapshot_atomically_replaces_with_legacy_bytes(tmp_path, monkeypatch):

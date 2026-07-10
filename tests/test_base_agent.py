@@ -6,10 +6,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lingtai_kernel.base_agent import BaseAgent
-from lingtai_kernel.message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT
-from lingtai_kernel.state import AgentState
-from lingtai_kernel.types import UnknownToolError
+from lingtai.kernel.base_agent import BaseAgent
+from lingtai.kernel.message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT
+from lingtai.kernel.state import AgentState
+from lingtai.kernel.types import UnknownToolError
 from tests._service_helpers import make_tool_result_mock_service as make_mock_service
 
 
@@ -125,7 +125,7 @@ def test_worker_hang_system_notification_is_high_priority(tmp_path):
     """The worker-hang notification is published to system.json with a
     high-priority envelope and the expected structured fields."""
     import json
-    from lingtai_kernel.base_agent.worker_recovery import publish_worker_hang_notification
+    from lingtai.kernel.base_agent.worker_recovery import publish_worker_hang_notification
 
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test")
     artifact = "history/unfinished_turns/worker_still_running_test.json"

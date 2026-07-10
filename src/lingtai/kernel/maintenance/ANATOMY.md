@@ -1,8 +1,8 @@
 ---
 related_files:
-  - src/lingtai_kernel/ANATOMY.md
-  - src/lingtai_kernel/maintenance/__init__.py
-  - src/lingtai_kernel/maintenance/retention.py
+  - src/lingtai/kernel/ANATOMY.md
+  - src/lingtai/kernel/maintenance/__init__.py
+  - src/lingtai/kernel/maintenance/retention.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -28,7 +28,7 @@ Kernel-owned maintenance reporters and future maintenance actions.
 
 ## Composition
 
-Parent: `src/lingtai_kernel/`. Siblings include `services/` for authoritative log/mail services and `base_agent/` for lifecycle state.
+Parent: `src/lingtai/kernel/`. Siblings include `services/` for authoritative log/mail services and `base_agent/` for lifecycle state.
 
 ## State
 

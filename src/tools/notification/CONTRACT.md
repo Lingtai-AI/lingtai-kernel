@@ -29,12 +29,12 @@ is no kitchen-sink `dismiss`. The implementation lives in
 
 **Do not use this for:**
 - Publishing notifications: producers call
-  `lingtai_kernel.notifications.submit`/`clear` (re-exported by `system` as
+  `lingtai.kernel.notifications.submit`/`clear` (re-exported by `system` as
   `publish_notification`/`clear_notification`). This tool only reads/clears.
 - `summarize` / large-result compaction: that is `system(action='summarize')`
   (`src/tools/system/CONTRACT.md`) — `summarize` is not a notification verb.
 - The decision logic behind dismissal (allowlists, protected channels,
-  stale-version guard): that lives in `lingtai_kernel.notifications.
+  stale-version guard): that lives in `lingtai.kernel.notifications.
   dismiss_channel`, not here.
 - Code navigation only: read `src/tools/notification/ANATOMY.md`.
 
@@ -64,7 +64,7 @@ Schema (`src/tools/notification/schema.py`) and dispatch
 
 An unknown/absent `action` returns `{status: "error", message: "Unknown
 notification action: ..."}`. All three dismiss verbs delegate to
-`lingtai_kernel.notifications.dismiss_channel(..., invoked_by="notification")`,
+`lingtai.kernel.notifications.dismiss_channel(..., invoked_by="notification")`,
 so the allowlist, post-molt ack-reason requirement, protected-channel refusal,
 generic-dismiss guard, and stale-channel-version refusal all hold here by
 construction.
@@ -92,7 +92,7 @@ dismissal; guarded mirrors refuse without `force`.
   in-memory dict, and every dismiss verb delegates to the shared
   `dismiss_channel` helper (which performs the pathlib-based, compare-and-clear
   channel writes). DOCUMENT — no platform-specific behavior in this tool; all
-  file access is via `lingtai_kernel.notifications`.
+  file access is via `lingtai.kernel.notifications`.
 - No PTY/subprocess. DOCUMENT (do not change).
 
 ## Anchored claims
@@ -108,7 +108,7 @@ dismissal; guarded mirrors refuse without `force`.
 | `dismiss_event` removes one event and defaults to the `system` channel | `src/tools/notification/__init__.py:_dismiss_event` | `tests/test_notification_tool.py::test_dismiss_event_removes_one`, `tests/test_notification_tool.py::test_dismiss_event_defaults_to_system_channel` |
 | `dismiss_ref` removes events by ref_id | `src/tools/notification/__init__.py:_dismiss_ref` | `tests/test_notification_tool.py::test_dismiss_ref_removes_by_ref`, `tests/test_notification_tool.py::test_dismiss_ref_missing_ref_id` |
 | `system` schema drops notification/dismiss; `summarize` is not a notification verb | `src/tools/notification/schema.py`, `src/tools/system/schema.py` | `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss`, `tests/test_notification_tool.py::test_summarize_is_not_a_notification_action` |
-| Guarded/protected channels refuse without `force`; the delegation preserves every guard | `src/tools/notification/__init__.py` → `lingtai_kernel.notifications.dismiss_channel` | `tests/test_notification_tool.py::test_guarded_channel_refuses_without_force`, `tests/test_notification_tool.py::test_protected_goal_channel_refused` |
+| Guarded/protected channels refuse without `force`; the delegation preserves every guard | `src/tools/notification/__init__.py` → `lingtai.kernel.notifications.dismiss_channel` | `tests/test_notification_tool.py::test_guarded_channel_refuses_without_force`, `tests/test_notification_tool.py::test_protected_goal_channel_refused` |
 
 ## Verification matrix
 

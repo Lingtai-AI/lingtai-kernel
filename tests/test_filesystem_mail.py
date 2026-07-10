@@ -12,7 +12,7 @@ from ._agent_dir_helpers import make_agent_dir as _make_agent_dir
 class TestSend:
 
     def test_send_creates_message(self, tmp_path):
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = _make_agent_dir(tmp_path, "recip01")
@@ -31,7 +31,7 @@ class TestSend:
 
     def test_send_injects_mailbox_metadata(self, tmp_path):
         """send() must inject _mailbox_id and received_at for mail intrinsic."""
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = _make_agent_dir(tmp_path, "recip01")
@@ -50,7 +50,7 @@ class TestSend:
         assert data["received_at"].endswith("Z")  # UTC format
 
     def test_send_copies_attachments(self, tmp_path):
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = _make_agent_dir(tmp_path, "recip01")
@@ -79,7 +79,7 @@ class TestSend:
         assert "report.txt" in data["attachments"][0]
 
     def test_send_fails_no_agent_json(self, tmp_path):
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         bad_dir = tmp_path / "noagent"
@@ -91,7 +91,7 @@ class TestSend:
         assert "no agent" in result.lower()
 
     def test_send_fails_stale_heartbeat(self, tmp_path):
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = _make_agent_dir(tmp_path, "recip01")
@@ -106,7 +106,7 @@ class TestSend:
 
     def test_send_self(self, tmp_path):
         """Send to own address should work (self-send)."""
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         agent_dir = _make_agent_dir(tmp_path, "agent01")
         (agent_dir / "mailbox" / "inbox").mkdir(parents=True)
@@ -122,7 +122,7 @@ class TestSend:
         assert data["message"] == "note to self"
 
     def test_send_fails_missing_attachment(self, tmp_path):
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = _make_agent_dir(tmp_path, "recip01")
@@ -138,7 +138,7 @@ class TestSend:
 
     def test_send_to_human_skips_heartbeat(self, tmp_path):
         """Human recipients (admin=null) don't need a heartbeat."""
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         human_dir = tmp_path / "human01"
@@ -161,7 +161,7 @@ class TestSend:
         assert msg["message"] == "hello human"
 
     def test_send_fails_no_heartbeat_file(self, tmp_path):
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = tmp_path / "recip01"
@@ -179,7 +179,7 @@ class TestSend:
 
     def test_send_atomic_write(self, tmp_path):
         """Verify no .tmp file is left behind after successful send."""
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = _make_agent_dir(tmp_path, "recip01")
@@ -197,7 +197,7 @@ class TestSend:
 class TestListen:
 
     def test_listen_detects_new_message(self, tmp_path):
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         agent_dir = _make_agent_dir(tmp_path, "agent01")
         (agent_dir / "mailbox" / "inbox").mkdir(parents=True)
@@ -220,7 +220,7 @@ class TestListen:
         assert received[0]["message"] == "hi"
 
     def test_listen_ignores_existing_messages(self, tmp_path):
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         agent_dir = _make_agent_dir(tmp_path, "agent01")
         inbox = agent_dir / "mailbox" / "inbox"
@@ -239,7 +239,7 @@ class TestListen:
         assert len(received) == 0
 
     def test_listen_detects_multiple_messages(self, tmp_path):
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         agent_dir = _make_agent_dir(tmp_path, "agent01")
         (agent_dir / "mailbox" / "inbox").mkdir(parents=True)
@@ -262,7 +262,7 @@ class TestListen:
         assert messages == ["msg-0", "msg-1", "msg-2"]
 
     def test_stop_is_idempotent(self, tmp_path):
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         agent_dir = _make_agent_dir(tmp_path, "agent01")
         svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
@@ -274,14 +274,14 @@ class TestListen:
 class TestAddress:
 
     def test_address_returns_working_dir_name(self, tmp_path):
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         agent_dir = _make_agent_dir(tmp_path, "agent01")
         svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
         assert svc.address == agent_dir.name
 
     def test_address_is_str(self, tmp_path):
-        from lingtai_kernel.services.mail import FilesystemMailService
+        from lingtai.kernel.services.mail import FilesystemMailService
 
         agent_dir = _make_agent_dir(tmp_path, "agent01")
         svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
@@ -294,7 +294,7 @@ def test_pseudo_agent_outbox_pickup(tmp_path):
     import json
     import threading
     import time
-    from lingtai_kernel.services.mail import FilesystemMailService
+    from lingtai.kernel.services.mail import FilesystemMailService
 
     # Two sibling folders under a shared parent.
     base = tmp_path
@@ -372,7 +372,7 @@ def test_pseudo_agent_outbox_polled_before_blocking_inbox_scan(tmp_path):
     """Pseudo-agent outbox delivery should not wait behind an own-inbox scan."""
     import json
     import threading
-    from lingtai_kernel.services.mail import FilesystemMailService
+    from lingtai.kernel.services.mail import FilesystemMailService
 
     base = tmp_path
     pseudo_dir = base / "human"
@@ -452,7 +452,7 @@ def test_pseudo_agent_outbox_polled_before_blocking_inbox_scan(tmp_path):
 def test_seen_inbox_entries_skip_stat_before_is_dir(tmp_path):
     """Already-seen inbox names should not pay an is_dir/stat call each tick."""
     import threading
-    from lingtai_kernel.services.mail import FilesystemMailService
+    from lingtai.kernel.services.mail import FilesystemMailService
 
     agent_dir = _make_agent_dir(tmp_path, "agent_a")
     real_inbox = agent_dir / "mailbox" / "inbox"
@@ -524,7 +524,7 @@ def test_pseudo_outbox_oserror_does_not_skip_own_inbox_scan(tmp_path):
     error starved own-inbox delivery for the whole tick.
     """
     import threading
-    from lingtai_kernel.services.mail import FilesystemMailService
+    from lingtai.kernel.services.mail import FilesystemMailService
 
     agent_dir = _make_agent_dir(tmp_path, "agent_a")
     real_inbox = agent_dir / "mailbox" / "inbox"
@@ -578,7 +578,7 @@ def test_runtime_probe_ack_from_pseudo_agent_outbox(tmp_path):
     """Explicit runtime probes get a structured ack from the real poller."""
     import json
     import time
-    from lingtai_kernel.services.mail import FilesystemMailService
+    from lingtai.kernel.services.mail import FilesystemMailService
 
     base = tmp_path
     pseudo_dir = base / "human"
@@ -654,7 +654,7 @@ def test_pseudo_agent_outbox_lost_race_rollback(tmp_path):
     import json
     import threading
     import time
-    from lingtai_kernel.services.mail import FilesystemMailService
+    from lingtai.kernel.services.mail import FilesystemMailService
 
     base = tmp_path
     pseudo_dir = base / "human"
@@ -750,7 +750,7 @@ def test_pseudo_agent_outbox_skips_non_matching_to(tmp_path):
     """Messages addressed to a different agent are not claimed."""
     import json
     import time
-    from lingtai_kernel.services.mail import FilesystemMailService
+    from lingtai.kernel.services.mail import FilesystemMailService
 
     base = tmp_path
     pseudo_dir = base / "human"

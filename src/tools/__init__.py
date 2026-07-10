@@ -2,17 +2,17 @@
 
 Every concrete built-in Agent tool lives here, one directory per tool package,
 flat — no ``intrinsics/`` / ``core/`` / ``capabilities/`` interior ownership
-layers. The kernel (``lingtai_kernel``) owns the tool *machinery* (protocol,
+layers. The kernel (``lingtai.kernel``) owns the tool *machinery* (protocol,
 schema build, registry wiring, guard, executor, dispatch, meta/notifications);
 this package owns the *concrete tools* and the built-in registry that composes
 them onto an agent.
 
 Import DAG (enforced by ``tests/test_kernel_isolation.py``):
 
-    lingtai  →  tools  →  lingtai_kernel
+    lingtai  →  tools  →  lingtai.kernel
 
-- ``lingtai_kernel`` imports neither ``lingtai`` nor ``tools``.
-- ``tools`` may import ``lingtai_kernel`` freely (static).
+- ``lingtai.kernel`` imports neither ``lingtai`` nor ``tools``.
+- ``tools`` may import ``lingtai.kernel`` freely (static).
 - ``lingtai`` imports ``tools`` freely (static).
 - ``tools`` → ``lingtai`` is allowed **only lazily inside setup()/handlers**,
   never at module top. In particular ``import tools`` must not transitively

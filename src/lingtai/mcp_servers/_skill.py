@@ -17,7 +17,7 @@ from importlib import resources
 # wrapper, but the wrapper may import from the kernel). Re-exported here so the
 # curated MCPs keep their historical ``from ._skill import split_frontmatter``
 # call site while sharing one implementation with the prompt-section catalog.
-from lingtai_kernel._frontmatter import split_frontmatter
+from lingtai.kernel._frontmatter import split_frontmatter
 
 SKILL_FILENAME = "SKILL.md"
 

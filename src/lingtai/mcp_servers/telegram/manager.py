@@ -1245,7 +1245,7 @@ class TelegramManager:
             return
 
         try:
-            from lingtai_kernel.notifications import clear as clear_notification
+            from lingtai.kernel.notifications import clear as clear_notification
 
             clear_notification(self._working_dir, _NOTIFICATION_CHANNEL)
             log.info(

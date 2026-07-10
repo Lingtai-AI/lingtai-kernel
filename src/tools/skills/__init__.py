@@ -30,13 +30,13 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from lingtai_kernel.tool_dispatch import dispatch_action
+from lingtai.kernel.tool_dispatch import dispatch_action
 
 from .._catalog import build_catalog_yaml, scan_markdown_catalog
-from lingtai_kernel.i18n import t
+from lingtai.kernel.i18n import t
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
 log = logging.getLogger(__name__)
 

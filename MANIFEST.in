@@ -32,6 +32,10 @@ include README.md
 recursive-include src/lingtai/prompts *.md
 recursive-include src/lingtai/prompts *.yaml
 
+# Kernel i18n catalogs ship with the runtime; mirror the wheel package-data
+# glob so source releases carry the same localized strings.
+recursive-include src/lingtai/kernel/i18n *.json
+
 # Consolidated tool packages ship data assets (i18n catalogs, per-tool JSON
 # policy/data files, and manual trees). pyproject.toml owns the wheel
 # package-data globs; mirror them here so source releases carry the same tool

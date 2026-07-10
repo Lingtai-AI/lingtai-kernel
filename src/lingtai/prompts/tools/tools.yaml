@@ -34,13 +34,13 @@ related_files:
     why: >
       The owning prompt-source anatomy: it records tools as a generated section with no
       body. Read it before looking for a tools.md.
-  - path: src/lingtai_kernel/base_agent/tools.py
+  - path: src/lingtai/kernel/base_agent/tools.py
     why: >
       Owns the concrete tools-section build rule: _refresh_tool_inventory_section()
       renders the section from intrinsic descriptions plus the active tool schemas,
       appending each tool's package glossary body via append_tool_glossary.
       Crawl here for the exact per-tool rendering this contract only summarizes.
-  - path: src/lingtai_kernel/tool_glossary.py
+  - path: src/lingtai/kernel/tool_glossary.py
     why: >
       Kernel-owned strict cached loader for package glossary resources
       (glossary-{en,zh,wen}.md). Loads via importlib.resources with allowlisted

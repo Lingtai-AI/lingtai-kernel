@@ -20,10 +20,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import lingtai_kernel.tool_glossary as tool_glossary
-from lingtai_kernel.base_agent.tools import _refresh_tool_inventory_section
-from lingtai_kernel.llm.base import WIRE_TOOL_DESCRIPTION
-from lingtai_kernel.tool_glossary import (
+import lingtai.kernel.tool_glossary as tool_glossary
+from lingtai.kernel.base_agent.tools import _refresh_tool_inventory_section
+from lingtai.kernel.llm.base import WIRE_TOOL_DESCRIPTION
+from lingtai.kernel.tool_glossary import (
     GlossaryValidationError,
     _cache,
     _warned,
@@ -33,7 +33,7 @@ from lingtai_kernel.tool_glossary import (
     normalize_tool_glossary_language,
     parse_glossary,
 )
-from lingtai_kernel.llm.base import FunctionSchema
+from lingtai.kernel.llm.base import FunctionSchema
 from tools.registry import BUILTIN_TOOLS, INTRINSICS
 
 

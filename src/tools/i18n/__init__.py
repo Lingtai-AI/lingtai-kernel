@@ -1,7 +1,7 @@
 """Tool locale catalog — en / zh / wen tables for runtime manager prose.
 
 Ownership: these catalogs hold the *human-facing manager prose* that concrete
-tools resolve through ``lingtai_kernel.i18n.t(lang, key)`` — runtime
+tools resolve through ``lingtai.kernel.i18n.t(lang, key)`` — runtime
 preambles, prompts, and system messages such as ``soul.system_prompt``,
 ``psyche.context_forget_summary``, ``knowledge.preamble``, and
 ``email.unread_digest``.
@@ -11,10 +11,10 @@ and schema-field text were moved out of these catalogs: they now live in the
 tool packages' canonical English source code and per-package glossary
 resources (``glossary-{en,zh,wen}.md``). The kernel reasoning-description key
 (``tool.reasoning_description``) is a language-independent constant in
-``lingtai_kernel/base_agent/tools.py``; it no longer resides in any catalog.
+``lingtai/kernel/base_agent/tools.py``; it no longer resides in any catalog.
 
 Before consolidation the manager prose was split across
-``lingtai_kernel/i18n/*.json`` (the five intrinsics: ``email.*``, ``psyche.*``,
+``lingtai/kernel/i18n/*.json`` (the five intrinsics: ``email.*``, ``psyche.*``,
 ``soul.*``, ``system_tool.*``, ``notification_tool.*``) and
 ``lingtai/i18n/*.json`` (the wrapper tools: ``read.*``, ``write.*``, ``edit.*``,
 ``glob.*``, ``grep.*``, ``bash.*``, ``daemon.*``, ``avatar.*``, ``knowledge.*``,
@@ -23,7 +23,7 @@ Before consolidation the manager prose was split across
 
 Registration: on import (triggered by importing :mod:`tools.registry`), every
 key from every locale table is pushed into the kernel i18n cache via
-``lingtai_kernel.i18n.register_strings`` so that ``t(lang, key)`` call sites in
+``lingtai.kernel.i18n.register_strings`` so that ``t(lang, key)`` call sites in
 tool code resolve unchanged. This is additive and order-independent with the
 kernel's own on-disk load.
 """
@@ -45,7 +45,7 @@ def _load(lang: str) -> dict[str, str]:
 
 def _register_all() -> None:
     """Push every tool string into the kernel i18n cache."""
-    from lingtai_kernel.i18n import register_strings
+    from lingtai.kernel.i18n import register_strings
 
     for lang in _LOCALES:
         table = _load(lang)

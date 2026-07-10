@@ -17,8 +17,8 @@ from lingtai.llm.claude_code.adapter import (
     ClaudeCodeError,
     _extract_json_object,
 )
-from lingtai_kernel.llm.base import FunctionSchema
-from lingtai_kernel.llm.interface import TextBlock
+from lingtai.kernel.llm.base import FunctionSchema
+from lingtai.kernel.llm.interface import TextBlock
 
 
 # ---------------------------------------------------------------------------

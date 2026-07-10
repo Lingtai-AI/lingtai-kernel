@@ -23,12 +23,12 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from lingtai_kernel.llm.interface import (
+from lingtai.kernel.llm.interface import (
     ChatInterface,
     ToolCallBlock,
     ToolResultBlock,
 )
-from lingtai_kernel.base_agent.messaging import (
+from lingtai.kernel.base_agent.messaging import (
     _rescan_large_tool_results,
     _enqueue_system_notification,
 )
@@ -78,10 +78,10 @@ def _run_executor_metadata(
     threshold: int | None = None,
 ):
     """Run one tool call through a real ToolExecutor and return its result content."""
-    from lingtai_kernel.tool_executor import ToolExecutor
-    from lingtai_kernel.loop_guard import LoopGuard
-    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
-    from lingtai_kernel.llm.base import ToolCall as _TC
+    from lingtai.kernel.tool_executor import ToolExecutor
+    from lingtai.kernel.loop_guard import LoopGuard
+    from lingtai.kernel.llm.interface import ToolResultBlock as _TRB
+    from lingtai.kernel.llm.base import ToolCall as _TC
 
     def _dispatch(tc):
         return {"output": output, "status": "ok"}
@@ -135,7 +135,7 @@ def test_rescan_no_chat_session_is_noop():
 
 def test_base_agent_has_rescan_method(tmp_path):
     """BaseAgent exposes _rescan_large_tool_results as a callable inert no-op."""
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
@@ -149,7 +149,7 @@ def test_base_agent_has_rescan_method(tmp_path):
 
 def test_base_agent_rescan_with_chat_session_publishes_nothing(tmp_path):
     """With a real chat session holding a large block, rescan still publishes nothing."""
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
@@ -189,7 +189,7 @@ def test_base_agent_rescan_with_chat_session_publishes_nothing(tmp_path):
 
 def test_enqueue_skip_if_ref_id_exists(tmp_path):
     """skip_if_ref_id_exists=True skips publishing when ref_id already in events."""
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
@@ -216,7 +216,7 @@ def test_enqueue_skip_if_ref_id_exists(tmp_path):
     )
     assert ev2 == "", "must return empty string when skipped"
 
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
     notifs = collect_notifications(agent._working_dir)
     events = notifs.get("system", {}).get("data", {}).get("events", [])
     ref_ids = [ev.get("ref_id") for ev in events]
@@ -225,7 +225,7 @@ def test_enqueue_skip_if_ref_id_exists(tmp_path):
 
 def test_enqueue_no_skip_publishes_twice(tmp_path):
     """Without skip_if_ref_id_exists, same ref_id is published twice (normal behavior)."""
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
@@ -252,7 +252,7 @@ def test_enqueue_no_skip_publishes_twice(tmp_path):
     assert ev2 != ""
     assert ev1 != ev2
 
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
     notifs = collect_notifications(agent._working_dir)
     events = notifs.get("system", {}).get("data", {}).get("events", [])
     ref_ids = [ev.get("ref_id") for ev in events]
@@ -270,7 +270,7 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
     import threading
     from dataclasses import dataclass, field
     from typing import Any
-    from lingtai_kernel.notifications import (
+    from lingtai.kernel.notifications import (
         load_large_result_acks,
         notification_fingerprint,
         publish,

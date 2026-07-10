@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from lingtai_kernel.llm.interface import (
+from lingtai.kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ToolCallBlock,
@@ -203,7 +203,7 @@ def test_compaction_pressure_not_published_as_notification(tmp_path):
 
         agent._session.send = capture_send
 
-        from lingtai_kernel.message import _make_message, MSG_REQUEST
+        from lingtai.kernel.message import _make_message, MSG_REQUEST
         msg = _make_message(MSG_REQUEST, sender="test", content="do something")
         agent._handle_request(msg)
 

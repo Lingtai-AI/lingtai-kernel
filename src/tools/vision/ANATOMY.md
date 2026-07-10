@@ -36,7 +36,7 @@ Vision capability — image understanding via pluggable VisionService backends.
 - **→ `lingtai.services.vision.VisionService`** (L22) — abstract service interface + `create_vision_service()` factory.
 - **→ `capabilities._media_host.resolve_media_host`** (L120) — injected for `minimax` provider.
 - **→ `capabilities._zhipu_mode.resolve_z_ai_mode`** (L123) — injected for `zhipu` provider.
-- **→ `lingtai_kernel.base_agent.BaseAgent`** — type-only (L25).
+- **→ `lingtai.kernel.base_agent.BaseAgent`** — type-only (L25).
 - **← `capabilities.__init__`** — registered as `".vision"` in `_BUILTIN`.
 
 ## Composition

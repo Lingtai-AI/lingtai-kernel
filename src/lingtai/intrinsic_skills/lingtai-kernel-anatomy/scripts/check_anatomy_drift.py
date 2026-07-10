@@ -16,7 +16,7 @@ advisory gate.
 Usage (run from the kernel repo root — cwd is taken as the repo root):
     python src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py            # report, exit 0 unless --check
     python src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py --check    # exit 1 if any drift found
-    python src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py --root src/lingtai_kernel
+    python src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py --root src/lingtai/kernel
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def resolve_path(rel: str, anatomy: Path, repo_root: Path) -> Path | None:
 
     Anatomy citations are written relative to some ancestor folder (often the
     kernel root), e.g. `base_agent/__init__.py` cited from
-    `.../lingtai_kernel/base_agent/ANATOMY.md`. Try the anatomy's directory and
+    `.../lingtai/kernel/base_agent/ANATOMY.md`. Try the anatomy's directory and
     each ancestor up to the repo root; also honour explicit `src/`-rooted paths.
     """
     if rel.startswith("src/"):

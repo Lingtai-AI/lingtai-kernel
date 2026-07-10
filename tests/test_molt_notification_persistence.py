@@ -45,7 +45,7 @@ def _make_mock_response():
 
 
 def _send_request(agent, content="do something"):
-    from lingtai_kernel.message import _make_message, MSG_REQUEST
+    from lingtai.kernel.message import _make_message, MSG_REQUEST
     msg = _make_message(MSG_REQUEST, sender="test", content=content)
     agent._handle_request(msg)
 
@@ -124,7 +124,7 @@ class TestNotificationPersistenceAgentMolt:
 
             # Build a fake ToolCallBlock for the molt
             from tools.psyche._molt import _context_molt
-            from lingtai_kernel.llm.interface import ToolCallBlock
+            from lingtai.kernel.llm.interface import ToolCallBlock
             tc_id = "toolu_test_123"
             tc_block = ToolCallBlock(
                 id=tc_id, name="psyche",
@@ -185,7 +185,7 @@ class TestNotificationPersistenceAgentMolt:
             mock_interface = _setup_mock_chat(agent)
 
             from tools.psyche._molt import _context_molt
-            from lingtai_kernel.llm.interface import ToolCallBlock
+            from lingtai.kernel.llm.interface import ToolCallBlock
 
             tc_id = "toolu_test_456"
             tc_block = ToolCallBlock(
@@ -303,7 +303,7 @@ class TestNotificationTrackingStateAfterMolt:
             mock_interface = _setup_mock_chat(agent)
 
             from tools.psyche._molt import _context_molt
-            from lingtai_kernel.llm.interface import ToolCallBlock
+            from lingtai.kernel.llm.interface import ToolCallBlock
 
             tc_id = "toolu_test_789"
             tc_block = ToolCallBlock(

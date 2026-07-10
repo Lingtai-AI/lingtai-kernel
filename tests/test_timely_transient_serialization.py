@@ -35,7 +35,7 @@ import json
 
 import pytest
 
-from lingtai_kernel.llm.interface import (
+from lingtai.kernel.llm.interface import (
     ChatInterface,
     ToolCallBlock,
     ToolResultBlock,

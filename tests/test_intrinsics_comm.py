@@ -1,4 +1,4 @@
-from lingtai_kernel.prompt import SystemPromptManager
+from lingtai.kernel.prompt import SystemPromptManager
 from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 
@@ -40,7 +40,7 @@ def test_system_prompt_manager_read_nonexistent():
 
 def test_mail_send_passes_attachments(tmp_path):
     """Mail handler should pass attachments to mail service."""
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
     from unittest.mock import MagicMock
     from pathlib import Path
 

@@ -9,7 +9,7 @@ from a source checkout and from an installed wheel::
     python -m tools.glossary_validator --check
 
 The validator and runtime loader share
-:func:`lingtai_kernel.tool_glossary.parse_glossary`; there is one strict grammar
+:func:`lingtai.kernel.tool_glossary.parse_glossary`; there is one strict grammar
 for duplicate keys, required fields, types, and package/language identity.
 """
 
@@ -19,7 +19,7 @@ import argparse
 import sys
 from importlib import resources as importlib_resources
 
-from lingtai_kernel.tool_glossary import (
+from lingtai.kernel.tool_glossary import (
     GlossaryValidationError,
     SUPPORTED_TOOL_GLOSSARY_LANGUAGES as SUPPORTED_LANGS,
     parse_glossary,

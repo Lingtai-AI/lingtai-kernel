@@ -2,14 +2,14 @@
 related_files:
   - ANATOMY.md
   - src/lingtai/ANATOMY.md
-  - src/lingtai_kernel/ANATOMY.md
+  - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/agent.py
   - src/lingtai/prompts/principle/principle.yaml
   - src/lingtai/prompts/principle/principle.md
   - src/lingtai/prompts/tools/tools.yaml
   - src/lingtai/prompts/meta_guidance/catalog/INDEX.md
-  - src/lingtai_kernel/base_agent/tools.py
-  - src/lingtai_kernel/tool_glossary.py
+  - src/lingtai/kernel/base_agent/tools.py
+  - src/lingtai/kernel/tool_glossary.py
   - tests/test_prompt_catalog.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
@@ -71,7 +71,7 @@ sources, catalog INDEX ↔ catalog sections).
 
 ## Render ownership and definition vs injection
 
-Rendered system-prompt order (owned by `src/lingtai_kernel/prompt.py`, mapped in
+Rendered system-prompt order (owned by `src/lingtai/kernel/prompt.py`, mapped in
 the kernel-root anatomy):
 `principle → covenant → tools → substrate → procedures → meta_guidance →
 comment → rules → brief → mcp → skills → knowledge → identity → character → pad`.
@@ -89,10 +89,10 @@ Each section has a `<section>/<section>.yaml` definition. Bodies split three way
   `pad`. No packaged body; content supplied by init/recipe/operator or the
   persistent agent store and mirrored to `system/<section>.md`.
 
-For the generated `tools` section, `src/lingtai_kernel/base_agent/tools.py`
+For the generated `tools` section, `src/lingtai/kernel/base_agent/tools.py`
 collects canonical-English descriptions and parameter schemas, then appends the
 selected `glossary-{en,zh,wen}.md` body through
-`src/lingtai_kernel/tool_glossary.py`; English glossary bodies are deliberately
+`src/lingtai/kernel/tool_glossary.py`; English glossary bodies are deliberately
 empty. Daemon prompt construction follows the same package-owned glossary rule.
 This resident prompt path is intentionally separate from provider tool
 serialization, whose top-level description is always the fixed generic wire
@@ -107,9 +107,9 @@ section is: `defined_by`, `injected_by`, `content_source`, optional
 - **Parent:** `src/lingtai/ANATOMY.md` (the `lingtai` wrapper package).
 - **Loader:** `src/lingtai/agent.py` reads the three packaged bodies and assembles
   the catalog-derived `system/guidance.json` (catalog now at `meta_guidance/catalog/`).
-- **Render order + catalog loader:** `src/lingtai_kernel/prompt.py` (order) and
-  `src/lingtai_kernel/prompt_catalog.py` (`load_guidance_catalog`), mapped in
-  `src/lingtai_kernel/ANATOMY.md`.
+- **Render order + catalog loader:** `src/lingtai/kernel/prompt.py` (order) and
+  `src/lingtai/kernel/prompt_catalog.py` (`load_guidance_catalog`), mapped in
+  `src/lingtai/kernel/ANATOMY.md`.
 
 ## State
 

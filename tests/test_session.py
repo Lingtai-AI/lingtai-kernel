@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
-from lingtai_kernel.session import SessionManager
-from lingtai_kernel.config import AgentConfig
+from lingtai.kernel.session import SessionManager
+from lingtai.kernel.config import AgentConfig
 
 
 def make_session_manager(**kw):
@@ -161,7 +161,7 @@ def test_send_llm_call_omits_codex_pool_for_other_providers():
 def test_safe_usage_extra_event_filter_allows_pool_model_scope():
     """``codex_pool_model_scope`` (model-classified pools) passes the
     ``llm_response`` usage-extra allowlist; unknown keys still don't."""
-    from lingtai_kernel.session import _safe_usage_extra_for_event
+    from lingtai.kernel.session import _safe_usage_extra_for_event
 
     extra = {
         "codex_pool_model_scope": "gpt-5.6-sol",
@@ -176,7 +176,7 @@ def test_send_error_propagates():
     """Errors from send_with_timeout propagate directly — no retry in SessionManager."""
     sm, _, _ = make_session_manager()
 
-    with patch("lingtai_kernel.session.send_with_timeout", side_effect=ValueError("real error")):
+    with patch("lingtai.kernel.session.send_with_timeout", side_effect=ValueError("real error")):
         with pytest.raises(ValueError, match="real error"):
             sm.send("hello")
 
@@ -185,7 +185,7 @@ def test_send_timeout_propagates():
     """TimeoutError propagates directly — caller (AED loop) handles recovery."""
     sm, _, _ = make_session_manager()
 
-    with patch("lingtai_kernel.session.send_with_timeout", side_effect=TimeoutError("timed out")):
+    with patch("lingtai.kernel.session.send_with_timeout", side_effect=TimeoutError("timed out")):
         with pytest.raises(TimeoutError, match="timed out"):
             sm.send("hello")
 
@@ -194,7 +194,7 @@ def test_send_preserves_interaction_id():
     sm, _, mock_session = make_session_manager()
     mock_session.interaction_id = "new-id"
 
-    with patch("lingtai_kernel.session.send_with_timeout", return_value=mock_session.send.return_value):
+    with patch("lingtai.kernel.session.send_with_timeout", return_value=mock_session.send.return_value):
         sm.send("hello")
 
     assert sm.interaction_id == "new-id"

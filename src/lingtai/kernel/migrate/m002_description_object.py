@@ -27,7 +27,7 @@ import logging
 import os
 from pathlib import Path
 
-from lingtai_kernel.config_resolve import load_jsonc
+from lingtai.kernel.config_resolve import load_jsonc
 
 log = logging.getLogger(__name__)
 

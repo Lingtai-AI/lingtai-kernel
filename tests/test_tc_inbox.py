@@ -1,4 +1,4 @@
-"""Tests for lingtai_kernel.tc_inbox — the involuntary tool-call inbox."""
+"""Tests for lingtai.kernel.tc_inbox — the involuntary tool-call inbox."""
 from __future__ import annotations
 from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
@@ -8,8 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
-from lingtai_kernel.tc_inbox import InvoluntaryToolCall, TCInbox
+from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
+from lingtai.kernel.tc_inbox import InvoluntaryToolCall, TCInbox
 
 
 def _make_item(source: str, voice: str = "v", coalesce: bool = False) -> InvoluntaryToolCall:
@@ -93,7 +93,7 @@ class TestDrainTCInbox:
     """Tests for BaseAgent._drain_tc_inbox — the wire-chat splice site."""
 
     def _make_agent(self, tmp_path):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         svc = MagicMock()
         svc.model = "test-model"
         agent = BaseAgent(
@@ -113,7 +113,7 @@ class TestDrainTCInbox:
         assert len(agent._tc_inbox) == 1
 
     def test_drain_splices_pair_into_wire_chat(self, tmp_path):
-        from lingtai_kernel.llm.interface import ChatInterface, TextBlock
+        from lingtai.kernel.llm.interface import ChatInterface, TextBlock
         agent = self._make_agent(tmp_path)
         iface = ChatInterface()
         iface.add_user_message("hi")
@@ -139,7 +139,7 @@ class TestDrainTCInbox:
         assert len(agent._tc_inbox) == 0
 
     def test_drain_skips_when_pending_tool_calls(self, tmp_path):
-        from lingtai_kernel.llm.interface import ChatInterface, TextBlock
+        from lingtai.kernel.llm.interface import ChatInterface, TextBlock
         agent = self._make_agent(tmp_path)
         iface = ChatInterface()
         iface.add_user_message("do thing")
@@ -158,7 +158,7 @@ class TestDrainTCInbox:
         assert len(agent._tc_inbox) == 1
 
     def test_drain_noop_when_queue_empty(self, tmp_path):
-        from lingtai_kernel.llm.interface import ChatInterface, TextBlock
+        from lingtai.kernel.llm.interface import ChatInterface, TextBlock
         agent = self._make_agent(tmp_path)
         iface = ChatInterface()
         iface.add_user_message("hi")
@@ -190,8 +190,8 @@ class TestReplaceInHistory:
     appending the new one. Used by soul flow."""
 
     def _make_agent(self, tmp_path):
-        from lingtai_kernel import BaseAgent
-        from lingtai_kernel.llm.interface import ChatInterface, TextBlock
+        from lingtai.kernel import BaseAgent
+        from lingtai.kernel.llm.interface import ChatInterface, TextBlock
         svc = MagicMock()
         svc.model = "test-model"
         agent = BaseAgent(

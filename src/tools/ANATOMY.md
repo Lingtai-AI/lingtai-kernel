@@ -2,7 +2,7 @@
 related_files:
   - ANATOMY.md
   - src/lingtai/ANATOMY.md
-  - src/lingtai_kernel/ANATOMY.md
+  - src/lingtai/kernel/ANATOMY.md
   - src/tools/registry.py
   - src/tools/glossary_validator.py
   - src/tools/i18n/__init__.py
@@ -17,7 +17,7 @@ maintenance: |
 
 Top-level home for every concrete built-in agent tool. One directory per tool
 package, flat — there is no `intrinsics/` / `core/` / `capabilities/` interior
-ownership layer. The kernel (`lingtai_kernel`) owns the tool *machinery*
+ownership layer. The kernel (`lingtai.kernel`) owns the tool *machinery*
 (protocol, schema build, dispatch, guard, executor, meta/notifications,
 lifecycle); this package owns the *concrete tools* and the registry that
 composes them.
@@ -44,7 +44,7 @@ floor); `vision/`, `web_search/` (opt-in). `avatar/` registers two tools
 
 ## Connections
 
-- **→ `lingtai_kernel`** — tools import kernel machinery freely (static): schema
+- **→ `lingtai.kernel`** — tools import kernel machinery freely (static): schema
   types, dispatch helpers, notifications, i18n, services. This is the allowed
   downward edge.
 - **← `lingtai.Agent`** — passes `tools.registry.INTRINSICS` into
@@ -58,9 +58,9 @@ floor); `vision/`, `web_search/` (opt-in). `avatar/` registers two tools
 
 ## Import DAG
 
-    lingtai  →  tools  →  lingtai_kernel
+    lingtai  →  tools  →  lingtai.kernel
 
-`lingtai_kernel` imports neither `lingtai` nor `tools`
+`lingtai.kernel` imports neither `lingtai` nor `tools`
 (`tests/test_kernel_isolation.py`). The single back-edge `tools → lingtai` is
 lazy-only, keeping import-time acyclicity.
 

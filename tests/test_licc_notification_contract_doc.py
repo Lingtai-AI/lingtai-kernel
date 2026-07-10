@@ -7,8 +7,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md"
 DOC_REL = "src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md"
 REQUIRED_ANATOMIES = [
-    "src/lingtai_kernel/ANATOMY.md",
-    "src/lingtai_kernel/base_agent/ANATOMY.md",
+    "src/lingtai/kernel/ANATOMY.md",
+    "src/lingtai/kernel/base_agent/ANATOMY.md",
     "src/tools/notification/ANATOMY.md",
     "src/tools/mcp/ANATOMY.md",
     "src/lingtai/mcp_servers/ANATOMY.md",
@@ -16,11 +16,11 @@ REQUIRED_ANATOMIES = [
 REQUIRED_TRIGGERS = [
     "src/lingtai/services/mcp_inbox.py",
     "src/lingtai/services/mcp_licc.py",
-    "src/lingtai_kernel/meta_block.py",
-    "src/lingtai_kernel/notifications.py",
-    "src/lingtai_kernel/base_agent/__init__.py",
-    "src/lingtai_kernel/base_agent/turn.py",
-    "src/lingtai_kernel/base_agent/messaging.py",
+    "src/lingtai/kernel/meta_block.py",
+    "src/lingtai/kernel/notifications.py",
+    "src/lingtai/kernel/base_agent/__init__.py",
+    "src/lingtai/kernel/base_agent/turn.py",
+    "src/lingtai/kernel/base_agent/messaging.py",
     "src/lingtai/mcp_servers/telegram/manager.py",
     "src/lingtai/mcp_servers/feishu/manager.py",
     "src/lingtai/mcp_servers/wechat/manager.py",

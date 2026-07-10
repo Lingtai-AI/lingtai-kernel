@@ -30,10 +30,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from lingtai_kernel.tool_dispatch import dispatch_action
+from lingtai.kernel.tool_dispatch import dispatch_action
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 

@@ -31,7 +31,7 @@ from tools.system.summarize import (
     _visible_len,
     mark_pending_summaries_done,
 )
-from lingtai_kernel.llm.interface import (
+from lingtai.kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ToolCallBlock,
@@ -742,7 +742,7 @@ def test_summarize_save_failure_is_non_fatal():
 
 
 def test_handle_dispatches_summarize(tmp_path):
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
@@ -768,7 +768,7 @@ def test_handle_dispatches_summarize(tmp_path):
 
 
 def _make_base_agent_for_notification(tmp_path):
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
     svc.provider = "gemini"
@@ -785,9 +785,9 @@ def test_large_result_threshold_default(tmp_path):
 
 def test_tool_executor_calls_hook_in_parallel_path():
     """on_result_hook must be invoked in the parallel execution path."""
-    from lingtai_kernel.tool_executor import ToolExecutor
-    from lingtai_kernel.llm.base import ToolCall
-    from lingtai_kernel.loop_guard import LoopGuard
+    from lingtai.kernel.tool_executor import ToolExecutor
+    from lingtai.kernel.llm.base import ToolCall
+    from lingtai.kernel.loop_guard import LoopGuard
 
     hook_calls = []
 
@@ -827,9 +827,9 @@ def test_tool_executor_calls_hook_in_parallel_path():
 
 def test_tool_executor_parallel_hook_intercept():
     """If hook returns intercept text in parallel path, execution stops."""
-    from lingtai_kernel.tool_executor import ToolExecutor
-    from lingtai_kernel.llm.base import ToolCall
-    from lingtai_kernel.loop_guard import LoopGuard
+    from lingtai.kernel.tool_executor import ToolExecutor
+    from lingtai.kernel.llm.base import ToolCall
+    from lingtai.kernel.loop_guard import LoopGuard
 
     hook_calls = []
 
@@ -974,7 +974,7 @@ def test_base_agent_threshold_init_from_config(tmp_path):
     constructing a full LLM adapter. We directly simulate the manifest dict
     that _setup_from_init receives from _read_init().
     """
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
     from unittest.mock import MagicMock
 
     svc = MagicMock()
@@ -1004,7 +1004,7 @@ def test_base_agent_threshold_init_from_config(tmp_path):
 
 def test_base_agent_threshold_config_accepts_zero(tmp_path):
     """summarize_notification_threshold=0 in manifest disables notifications."""
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
     from unittest.mock import MagicMock
 
     svc = MagicMock()
@@ -1029,7 +1029,7 @@ def test_base_agent_threshold_config_accepts_zero(tmp_path):
 
 def test_base_agent_threshold_config_rejects_bool(tmp_path):
     """bool values for summarize_notification_threshold fall back to default 3000."""
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
     from unittest.mock import MagicMock
 
     svc = MagicMock()
@@ -1054,7 +1054,7 @@ def test_base_agent_threshold_config_rejects_bool(tmp_path):
 
 def test_base_agent_threshold_default_when_not_in_config(tmp_path):
     """BaseAgent uses default 3000 when init.json has no summarize_notification_threshold."""
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
     from unittest.mock import MagicMock
 
     svc = MagicMock()
@@ -1090,7 +1090,7 @@ def _make_stub_agent_with_workdir(tmp_path, iface):
 
 
 def _publish_large_result_event(workdir, tool_call_id, *, extra=None):
-    from lingtai_kernel.notifications import publish
+    from lingtai.kernel.notifications import publish
 
     events = []
     if extra:
@@ -1112,7 +1112,7 @@ def _publish_large_result_event(workdir, tool_call_id, *, extra=None):
 
 
 def test_summarize_clears_matching_large_result_reminder(tmp_path):
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     iface = ChatInterface()
     _add_tool_pair(iface, "toolu_big", "bash", "A" * 9000)
@@ -1131,7 +1131,7 @@ def test_summarize_clears_matching_large_result_reminder(tmp_path):
 
 
 def test_summarize_clears_only_matching_reminder_preserves_others(tmp_path):
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     iface = ChatInterface()
     _add_tool_pair(iface, "toolu_big", "bash", "A" * 9000)
@@ -1166,7 +1166,7 @@ def test_summarize_clears_only_matching_reminder_preserves_others(tmp_path):
 
 
 def test_summarize_batch_clears_each_matching_reminder(tmp_path):
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     iface = ChatInterface()
     _add_tool_pair(iface, "tc-A", "bash", "A" * 9000)
@@ -1201,7 +1201,7 @@ def test_summarize_batch_clears_each_matching_reminder(tmp_path):
 
 def test_summarize_failure_does_not_clear_reminder(tmp_path):
     """A failed (not_found) summarize must NOT clear any reminder."""
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     iface = ChatInterface()
     # No tool pair for toolu_big — summarize will fail with not_found.
@@ -1240,7 +1240,7 @@ def test_summarize_then_dismiss_is_unnecessary_end_to_end(tmp_path):
     and system summarize also clears the reminder. Dismissal is an alternative
     to summarize, not blocked. Summarize stays on the system tool."""
     from tools import notification as notif_intrinsic
-    from lingtai_kernel.notifications import collect_notifications, notification_fingerprint
+    from lingtai.kernel.notifications import collect_notifications, notification_fingerprint
 
     iface = ChatInterface()
     _add_tool_pair(iface, "toolu_big", "bash", "A" * 9000)

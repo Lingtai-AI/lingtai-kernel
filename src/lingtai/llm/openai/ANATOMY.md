@@ -64,9 +64,9 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 ## Connections
 
 - **Base class** — `OpenAIAdapter` extends `LLMAdapter` (`from lingtai.llm.base import LLMAdapter`, line 29).
-- **Kernel types** — imports `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata` from `lingtai_kernel.llm.base`.
+- **Kernel types** — imports `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata` from `lingtai.kernel.llm.base`.
 - **Interface converters** — imports `to_openai` and `to_responses_input` from `lingtai.llm.interface_converters` (line 31).
-- **Streaming** — imports `StreamingAccumulator` from `lingtai_kernel.llm.streaming` (line 32).
+- **Streaming** — imports `StreamingAccumulator` from `lingtai.kernel.llm.streaming` (line 32).
 - **HTTP client** — imports `httpx` for timeout construction (line 16); `openai` SDK for all API calls (line 17).
 - **Subclass hooks** — `_session_class` (line 1215) for Completions path; `_adapter_extra_body()` (line 1446) for provider-specific `extra_body`; `_default_prompt_cache_key()` (line 1265) for the provider-namespaced cache key.
 
@@ -232,10 +232,10 @@ When a Codex session has a stable LingTai session/thread identity, `CodexRespons
 
 ### Context overflow auto-recovery
 
-`OpenAIChatSession._run_with_overflow_recovery()` is inherited from `ChatSession` (`lingtai_kernel/llm/base.py:384`) and wraps any API call in a retry loop:
+`OpenAIChatSession._run_with_overflow_recovery()` is inherited from `ChatSession` (`lingtai/kernel/llm/base.py:384`) and wraps any API call in a retry loop:
 - Detects 400 `context_length_exceeded` via `_is_context_overflow_error()` (line 276) — checks both canonical OpenAI code and loose string heuristics for compatible vendors.
-- `_trim_context_one_round()` (`lingtai_kernel/llm/base.py:303`) drops ~10% of non-system entries from the FRONT of the interface. Snaps cut point to never split `assistant[ToolCallBlock]` from `user[ToolResultBlock]`.
-- Max 10 rounds (`lingtai_kernel/llm/base.py:291`). On successful recovery, injects a `[kernel]` molt notice via `_inject_overflow_notice()` (`lingtai_kernel/llm/base.py:363`).
+- `_trim_context_one_round()` (`lingtai/kernel/llm/base.py:303`) drops ~10% of non-system entries from the FRONT of the interface. Snaps cut point to never split `assistant[ToolCallBlock]` from `user[ToolResultBlock]`.
+- Max 10 rounds (`lingtai/kernel/llm/base.py:291`). On successful recovery, injects a `[kernel]` molt notice via `_inject_overflow_notice()` (`lingtai/kernel/llm/base.py:363`).
 
 ### Wire-layer orphan guard
 
@@ -251,7 +251,7 @@ On the Responses/Codex path the system prompt is **not** an `input` item — it 
 
 That `instructions` value is **frozen at session construction**: `OpenAIResponsesSession.__init__` captures `self._instructions = instructions` (`adapter.py:1711`) and every send replays that same frozen value (`adapter.py:1785-1786`, `adapter.py:1818-1819`; Codex `adapter.py:3367-3368`). There is no re-read from the interface.
 
-In-flight Responses/Codex sessions therefore have a **no-op `update_system_prompt`**: the base `ChatSession.update_system_prompt` is a default no-op (`lingtai_kernel/llm/base.py:289-293`), and only `OpenAIChatSession` overrides it to mutate the interface (`adapter.py:1429-1431`). `OpenAIResponsesSession` and `CodexResponsesSession` do **not** override it, so it stays inert on those paths.
+In-flight Responses/Codex sessions therefore have a **no-op `update_system_prompt`**: the base `ChatSession.update_system_prompt` is a default no-op (`lingtai/kernel/llm/base.py:289-293`), and only `OpenAIChatSession` overrides it to mutate the interface (`adapter.py:1429-1431`). `OpenAIResponsesSession` and `CodexResponsesSession` do **not** override it, so it stays inert on those paths.
 
 **Behavior-code contract:** a pad / system-prompt edit mid-session changes nothing on the wire — it does **not** break the current input-prefix continuation or cache, so the warm continuation is preserved. A changed system prompt takes effect only when a **new** session is constructed (molt / refresh / restart / bootstrap), since `instructions` is re-resolved from the live system prompt at that point (`_create_responses_session` / Codex create path pass `instructions=system_prompt`, e.g. `adapter.py:2063`, `adapter.py:3939`). This is the contract surfaced to the agent by `_CODEX_SYSTEM_PROMPT_UPDATE_NOTE` (`adapter.py:2237-2245`) via the static adapter comment (`system_prompt_update_note`, `adapter.py:2279`, `adapter.py:2312`).
 

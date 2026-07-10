@@ -24,7 +24,7 @@ from tools.soul import (
     _run_consultation_batch,
     build_consultation_pair,
 )
-from lingtai_kernel.llm.interface import (
+from lingtai.kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ThinkingBlock,
@@ -495,7 +495,7 @@ class TestRunConsultationRedirectLoop:
             f.write(json.dumps({"type": "diary", "text": text, "ts": 1_700_000_000}) + "\n")
 
     def test_consultation_redirects_tool_calls(self, tmp_path):
-        from lingtai_kernel.llm.base import LLMResponse, ToolCall
+        from lingtai.kernel.llm.base import LLMResponse, ToolCall
 
         agent = _FakeAgent(tmp_path)
         self._seed_diary(tmp_path)
@@ -544,7 +544,7 @@ class TestRunConsultationRedirectLoop:
         assert isinstance(sent[1][0], ToolResultBlock)
 
     def test_consultation_max_rounds_exhausted(self, tmp_path):
-        from lingtai_kernel.llm.base import LLMResponse, ToolCall
+        from lingtai.kernel.llm.base import LLMResponse, ToolCall
         from tools.soul import _CONSULTATION_MAX_ROUNDS
 
         agent = _FakeAgent(tmp_path)
@@ -594,7 +594,7 @@ class TestRunConsultationRedirectLoop:
     def test_consultation_spark_is_raw_diary(self, tmp_path):
         """The spark sent to session.send() is the raw diary cue, not a
         wrapped/localized version from _build_consultation_cue."""
-        from lingtai_kernel.llm.base import LLMResponse
+        from lingtai.kernel.llm.base import LLMResponse
 
         agent = _FakeAgent(tmp_path)
         self._seed_diary(tmp_path, text="MEANINGFUL DIARY TEXT")
@@ -626,7 +626,7 @@ class TestRunConsultationRedirectLoop:
         """Flow consultations resolve their system prompt through the soul
         voice profile, so soul(action='voice', set='custom') affects flow.
         """
-        from lingtai_kernel.llm.base import LLMResponse
+        from lingtai.kernel.llm.base import LLMResponse
 
         agent = _FakeAgent(tmp_path)
         agent._config.soul_voice = "custom"
@@ -711,7 +711,7 @@ class TestRenderCurrentDiary:
         self._write_events(tmp_path, records)
         result = _render_current_diary(agent)
         assert result
-        from lingtai_kernel.token_counter import count_tokens
+        from lingtai.kernel.token_counter import count_tokens
         token_count = count_tokens(result)
         assert token_count <= _DIARY_CUE_TOKEN_CAP, (
             f"cue is {token_count} tokens, exceeds cap of {_DIARY_CUE_TOKEN_CAP}"
@@ -812,7 +812,7 @@ class TestBuildConsultationPair:
 class TestRunConsultationFire:
 
     def _make_real_agent(self, tmp_path):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
@@ -838,7 +838,7 @@ class TestRunConsultationFire:
         file and injects the wire pair (single-slot replace, by
         construction of the filesystem write).
         """
-        from lingtai_kernel.notifications import collect_notifications
+        from lingtai.kernel.notifications import collect_notifications
 
         agent = self._make_real_agent(tmp_path)
         with patch(
@@ -885,7 +885,7 @@ class TestSoulFlowPersistenceSchema:
     the on-disk records in logs/soul_flow.jsonl."""
 
     def _make_real_agent(self, tmp_path):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
@@ -994,7 +994,7 @@ class TestSoulFlowPersistenceSchema:
         fire_id are the same string, so cross-referencing between the
         wire and the soul-flow log stays trivial under the
         .notification/ redesign."""
-        from lingtai_kernel.notifications import collect_notifications
+        from lingtai.kernel.notifications import collect_notifications
 
         agent = self._make_real_agent(tmp_path)
         self._seed_diary(agent, "diary text")
@@ -1083,7 +1083,7 @@ class TestPersistSoulEntryUnchanged:
     """Inquiry path still uses the legacy schema — make sure we didn't break it."""
 
     def _make_real_agent(self, tmp_path):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
@@ -1117,7 +1117,7 @@ class TestPersistSoulEntryUnchanged:
 class TestRehydrateAppendixTracking:
 
     def _make_real_agent(self, tmp_path):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
@@ -1196,7 +1196,7 @@ class TestRehydrateAppendixTracking:
         """The wall-clock soul timer (driven by config.soul_delay) now fires
         past-self consultation instead of the legacy diary+mirror-session
         flow. Verifies _soul_whisper -> _run_consultation_fire wiring."""
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
@@ -1213,7 +1213,7 @@ class TestRehydrateAppendixTracking:
     def test_soul_whisper_swallows_consultation_fire_error(self, tmp_path):
         """Errors in the consultation fire must not break the cadence —
         the timer reschedules itself in finally regardless."""
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
@@ -1340,7 +1340,7 @@ class TestRenderCurrentDiary:
 
     def test_render_diary_tail_cap(self, tmp_path):
         from tools.soul import _render_current_diary, _DIARY_CUE_TOKEN_CAP
-        from lingtai_kernel.token_counter import count_tokens
+        from lingtai.kernel.token_counter import count_tokens
         agent = _FakeAgent(tmp_path, with_chat=False)
         records = []
         for i in range(240):
@@ -1671,7 +1671,7 @@ class TestRunConsultationDispatchesByKind:
 
         captured = {}
 
-        from lingtai_kernel.llm.base import LLMResponse
+        from lingtai.kernel.llm.base import LLMResponse
 
         class _MockSession:
             def __init__(self, interface):
@@ -1940,7 +1940,7 @@ class TestSoulNotificationInstructions:
     had only sent a short email."""
 
     def _make_real_agent(self, tmp_path):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,

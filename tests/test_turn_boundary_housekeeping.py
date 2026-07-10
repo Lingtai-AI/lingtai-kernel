@@ -14,7 +14,7 @@ refactor cannot silently change which step swallows errors or the call order.
 
 import pytest
 
-from lingtai_kernel.base_agent import turn
+from lingtai.kernel.base_agent import turn
 
 
 class _FakeAgent:

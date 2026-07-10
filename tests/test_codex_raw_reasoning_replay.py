@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 from lingtai.llm.interface_converters import to_responses_input
 from lingtai.llm.openai.adapter import CodexOpenAIAdapter
-from lingtai_kernel.llm.base import FunctionSchema
-from lingtai_kernel.llm.interface import (
+from lingtai.kernel.llm.base import FunctionSchema
+from lingtai.kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ThinkingBlock,

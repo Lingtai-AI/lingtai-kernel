@@ -7,61 +7,61 @@ related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
-  - src/lingtai_kernel/__init__.py
-  - src/lingtai_kernel/_frontmatter.py
-  - src/lingtai_kernel/agent_session.py
-  - src/lingtai_kernel/_fsutil.py
-  - src/lingtai_kernel/base_agent/ANATOMY.md
-  - src/lingtai_kernel/base_agent/__init__.py
-  - src/lingtai_kernel/base_agent/lifecycle.py
-  - src/lingtai_kernel/base_agent/messaging.py
-  - src/lingtai_kernel/base_agent/prompt.py
-  - src/lingtai_kernel/base_agent/turn.py
-  - src/lingtai_kernel/base_agent/worker_recovery.py
-  - src/lingtai_kernel/config.py
-  - src/lingtai_kernel/config_resolve.py
-  - src/lingtai_kernel/handshake.py
-  - src/lingtai_kernel/i18n/ANATOMY.md
+  - src/lingtai/kernel/__init__.py
+  - src/lingtai/kernel/_frontmatter.py
+  - src/lingtai/kernel/agent_session.py
+  - src/lingtai/kernel/_fsutil.py
+  - src/lingtai/kernel/base_agent/ANATOMY.md
+  - src/lingtai/kernel/base_agent/__init__.py
+  - src/lingtai/kernel/base_agent/lifecycle.py
+  - src/lingtai/kernel/base_agent/messaging.py
+  - src/lingtai/kernel/base_agent/prompt.py
+  - src/lingtai/kernel/base_agent/turn.py
+  - src/lingtai/kernel/base_agent/worker_recovery.py
+  - src/lingtai/kernel/config.py
+  - src/lingtai/kernel/config_resolve.py
+  - src/lingtai/kernel/handshake.py
+  - src/lingtai/kernel/i18n/ANATOMY.md
   - src/tools/ANATOMY.md
   - src/tools/notification/__init__.py
   - src/tools/soul/flow.py
-  - src/lingtai_kernel/llm/ANATOMY.md
-  - src/lingtai_kernel/llm/interface.py
-  - src/lingtai_kernel/llm_utils.py
-  - src/lingtai_kernel/logging.py
-  - src/lingtai_kernel/loop_guard.py
-  - src/lingtai_kernel/maintenance/ANATOMY.md
-  - src/lingtai_kernel/message.py
-  - src/lingtai_kernel/meta_block.py
-  - src/lingtai_kernel/migrate/ANATOMY.md
-  - src/lingtai_kernel/notifications.py
-  - src/lingtai_kernel/nudge/ANATOMY.md
-  - src/lingtai_kernel/preset_connectivity.py
-  - src/lingtai_kernel/presets.py
-  - src/lingtai_kernel/prompt.py
-  - src/lingtai_kernel/prompt_catalog.py
-  - src/lingtai_kernel/reminders/ANATOMY.md
-  - src/lingtai_kernel/runtime_identity.py
-  - src/lingtai_kernel/safety_limits.py
-  - src/lingtai_kernel/sent_message_tracker.py
-  - src/lingtai_kernel/services/ANATOMY.md
-  - src/lingtai_kernel/services/logging.py
-  - src/lingtai_kernel/session.py
-  - src/lingtai_kernel/state.py
-  - src/lingtai_kernel/tool_glossary.py
-  - src/lingtai_kernel/tc_inbox.py
-  - src/lingtai_kernel/time_veil.py
-  - src/lingtai_kernel/token_counter.py
-  - src/lingtai_kernel/token_ledger.py
-  - src/lingtai_kernel/tool_call_guard.py
-  - src/lingtai_kernel/tool_executor.py
-  - src/lingtai_kernel/tool_result_artifacts.py
-  - src/lingtai_kernel/tool_result_recovery.py
-  - src/lingtai_kernel/tool_result_summary.py
-  - src/lingtai_kernel/tool_timing.py
-  - src/lingtai_kernel/trace_redaction.py
-  - src/lingtai_kernel/types.py
-  - src/lingtai_kernel/workdir.py
+  - src/lingtai/kernel/llm/ANATOMY.md
+  - src/lingtai/kernel/llm/interface.py
+  - src/lingtai/kernel/llm_utils.py
+  - src/lingtai/kernel/logging.py
+  - src/lingtai/kernel/loop_guard.py
+  - src/lingtai/kernel/maintenance/ANATOMY.md
+  - src/lingtai/kernel/message.py
+  - src/lingtai/kernel/meta_block.py
+  - src/lingtai/kernel/migrate/ANATOMY.md
+  - src/lingtai/kernel/notifications.py
+  - src/lingtai/kernel/nudge/ANATOMY.md
+  - src/lingtai/kernel/preset_connectivity.py
+  - src/lingtai/kernel/presets.py
+  - src/lingtai/kernel/prompt.py
+  - src/lingtai/kernel/prompt_catalog.py
+  - src/lingtai/kernel/reminders/ANATOMY.md
+  - src/lingtai/kernel/runtime_identity.py
+  - src/lingtai/kernel/safety_limits.py
+  - src/lingtai/kernel/sent_message_tracker.py
+  - src/lingtai/kernel/services/ANATOMY.md
+  - src/lingtai/kernel/services/logging.py
+  - src/lingtai/kernel/session.py
+  - src/lingtai/kernel/state.py
+  - src/lingtai/kernel/tool_glossary.py
+  - src/lingtai/kernel/tc_inbox.py
+  - src/lingtai/kernel/time_veil.py
+  - src/lingtai/kernel/token_counter.py
+  - src/lingtai/kernel/token_ledger.py
+  - src/lingtai/kernel/tool_call_guard.py
+  - src/lingtai/kernel/tool_executor.py
+  - src/lingtai/kernel/tool_result_artifacts.py
+  - src/lingtai/kernel/tool_result_recovery.py
+  - src/lingtai/kernel/tool_result_summary.py
+  - src/lingtai/kernel/tool_timing.py
+  - src/lingtai/kernel/trace_redaction.py
+  - src/lingtai/kernel/types.py
+  - src/lingtai/kernel/workdir.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -69,7 +69,7 @@ maintenance: |
   maintenance field. If you notice drift between this anatomy and the code,
   report it. See lingtai-dev-guide for details.
 ---
-# lingtai_kernel
+# lingtai.kernel
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.
 
@@ -118,7 +118,7 @@ The kernel root holds the coordinator (`base_agent/`) plus a flat collection of 
 
 ## Connections
 
-- **Kernel must never import from the wrapper.** `lingtai_kernel` is standalone; `lingtai` (the wrapper at `src/lingtai/`) depends on it strictly one-directionally.
+- **Kernel must never import from the wrapper.** `lingtai.kernel` is standalone; `lingtai` (the wrapper at `src/lingtai/`) depends on it strictly one-directionally.
 - The kernel exposes its public surface through `__init__.py`. Anything not re-exported there is implementation detail.
 - The wrapper layer registers LLM adapters into `llm.service` at import time, registers capabilities into `Agent` (which subclasses `BaseAgent`), and provides MCP, FileIO, Vision, Search, and the CLI.
 
@@ -175,7 +175,7 @@ At most ONE holder is tracked as the LIVE notification payload at any time, reco
 In-process producers call **`publish_notification`** (re-exported by the `system` intrinsic from `notifications.submit`) — the canonical helper that wraps `notifications.publish` with the standard envelope:
 
 ```python
-from lingtai_kernel.notifications import submit as publish_notification, clear as clear_notification
+from lingtai.kernel.notifications import submit as publish_notification, clear as clear_notification
 
 publish_notification(
     agent._working_dir, "email",

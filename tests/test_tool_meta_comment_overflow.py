@@ -19,10 +19,10 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
-from lingtai_kernel.llm.base import ToolCall
-from lingtai_kernel.loop_guard import LoopGuard
-from lingtai_kernel.meta_block import build_tool_meta_overflow_comment
-from lingtai_kernel.tool_executor import (
+from lingtai.kernel.llm.base import ToolCall
+from lingtai.kernel.loop_guard import LoopGuard
+from lingtai.kernel.meta_block import build_tool_meta_overflow_comment
+from lingtai.kernel.tool_executor import (
     _DEFAULT_MAX_RESULT_CHARS,
     ToolExecutor,
 )

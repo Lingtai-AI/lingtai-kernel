@@ -23,14 +23,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.base_agent.turn import _handle_tc_wake
-from lingtai_kernel.llm.interface import (
+from lingtai.kernel.base_agent.turn import _handle_tc_wake
+from lingtai.kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ToolCallBlock,
     ToolResultBlock,
 )
-from lingtai_kernel.tc_inbox import InvoluntaryToolCall, TCInbox
+from lingtai.kernel.tc_inbox import InvoluntaryToolCall, TCInbox
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +278,8 @@ def test_tc_wake_worker_still_running_does_not_touch_iface_in_except(tmp_path):
     except path must re-raise WITHOUT re-inspecting/healing/saving the
     poisoned interface. The run loop's central branch owns poisoning and
     refresh — touching the interface here could race the live worker."""
-    from lingtai_kernel.llm_utils import WorkerStillRunningError
-    from lingtai_kernel.message import Message, MSG_TC_WAKE
+    from lingtai.kernel.llm_utils import WorkerStillRunningError
+    from lingtai.kernel.message import Message, MSG_TC_WAKE
 
     iface = ChatInterface()
     iface.add_assistant_message([

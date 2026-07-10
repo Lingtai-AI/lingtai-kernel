@@ -18,7 +18,7 @@ is unchanged. Guidance section order remains code-owned through
 ``GUIDANCE_SECTION_ORDER``; ordering is intentionally not frontmatter behavior
 configuration.
 
-Frontmatter values arrive as strings (see :mod:`lingtai_kernel._frontmatter`);
+Frontmatter values arrive as strings (see :mod:`lingtai.kernel._frontmatter`);
 typed fields such as ``schema_version`` are coerced here. The body is preserved
 verbatim except for a single trailing newline, which is stripped so the
 assembled body is byte-identical to the old JSON-authored ``body`` value.

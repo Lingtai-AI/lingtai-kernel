@@ -1,11 +1,11 @@
 ---
 related_files:
   - CLAUDE.md
-  - src/lingtai_kernel/ANATOMY.md
-  - src/lingtai_kernel/nudge/__init__.py
-  - src/lingtai_kernel/nudge/goal.py
-  - src/lingtai_kernel/nudge/kernel_version.py
-  - src/lingtai_kernel/nudge/source_drift.py
+  - src/lingtai/kernel/ANATOMY.md
+  - src/lingtai/kernel/nudge/__init__.py
+  - src/lingtai/kernel/nudge/goal.py
+  - src/lingtai/kernel/nudge/kernel_version.py
+  - src/lingtai/kernel/nudge/source_drift.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

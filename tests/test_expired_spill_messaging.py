@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.tool_result_artifacts import (
+from lingtai.kernel.tool_result_artifacts import (
     ARTIFACT_MARKER,
     is_spill_manifest,
     mark_expired_spill_manifests,
@@ -318,7 +318,7 @@ def test_legacy_manifest_without_new_fields(tmp_path):
 def test_ensure_spill_manifest_fields_in_session_restore():
     """``_ensure_spill_manifest_fields`` backfills ephemeral fields on
     in-memory messages that bypassed lifecycle.py stale-marking."""
-    from lingtai_kernel.session import _ensure_spill_manifest_fields
+    from lingtai.kernel.session import _ensure_spill_manifest_fields
 
     manifest = {
         "artifact": ARTIFACT_MARKER,
@@ -341,7 +341,7 @@ def test_ensure_spill_manifest_fields_in_session_restore():
 
 def test_ensure_spill_manifest_fields_idempotent():
     """Backfilling is idempotent — existing values are not overwritten."""
-    from lingtai_kernel.session import _ensure_spill_manifest_fields
+    from lingtai.kernel.session import _ensure_spill_manifest_fields
 
     manifest = {
         "artifact": ARTIFACT_MARKER,

@@ -15,9 +15,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from lingtai_kernel.i18n import t
-from lingtai_kernel.time_veil import scrub_time_fields
-from lingtai_kernel.token_counter import count_tokens
+from lingtai.kernel.i18n import t
+from lingtai.kernel.time_veil import scrub_time_fields
+from lingtai.kernel.token_counter import count_tokens
 
 from .primitives import (
     EMAIL_BODY_CHAR_LIMIT,
@@ -41,7 +41,7 @@ from .primitives import (
 )
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
 
 class EmailManager:

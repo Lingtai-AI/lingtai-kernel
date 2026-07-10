@@ -10,18 +10,18 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from lingtai_kernel.llm.base import ToolCall
-from lingtai_kernel.loop_guard import LoopGuard
-from lingtai_kernel.meta_block import (
+from lingtai.kernel.llm.base import ToolCall
+from lingtai.kernel.loop_guard import LoopGuard
+from lingtai.kernel.meta_block import (
     TOOL_META_CONTEXT_EVENT_PENDING_KEY,
     TOOL_META_CONTEXT_PENDING_KEY,
     stamp_meta,
 )
-from lingtai_kernel.reminders.context_pressure import (
+from lingtai.kernel.reminders.context_pressure import (
     CURRENT_MOLT_EVENT,
     CURRENT_MOLT_TARGET_PATH,
 )
-from lingtai_kernel.tool_executor import (
+from lingtai.kernel.tool_executor import (
     _DEFAULT_MAX_RESULT_CHARS,
     ToolExecutor,
 )

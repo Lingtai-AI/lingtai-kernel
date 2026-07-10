@@ -50,7 +50,7 @@ lingtai-cloud-mail = "lingtai.mcp_servers.cloud_mail.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["lingtai*", "lingtai_kernel*", "tools*"]
+include = ["lingtai*", "tools*"]
 exclude = [
     "lingtai_imap*",
     "lingtai_telegram*",
@@ -61,7 +61,7 @@ exclude = [
 ]
 
 [tool.setuptools.package-data]
-lingtai_kernel = ["i18n/*.json"]
+"lingtai.kernel" = ["i18n/*.json"]
 # Consolidated tool packages: i18n catalogs, per-tool JSON policy/data files
 # (e.g. tools/bash/bash_policy.json), and every tool manual tree. Without these
 # the wheel installs the tool code but silently drops its data assets.

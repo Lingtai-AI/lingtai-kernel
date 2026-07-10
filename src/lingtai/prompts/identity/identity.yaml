@@ -30,7 +30,7 @@ related_files:
     why: >
       The owning prompt-source anatomy: it records identity as generated mechanical
       facts. Read it before confusing identity with the self-authored character.
-  - path: src/lingtai_kernel/base_agent/identity.py
+  - path: src/lingtai/kernel/base_agent/identity.py
     why: >
       Owns the concrete identity-section build rule: _update_identity() builds the
       manifest and _build_identity_section() renders the mechanical facts (deliberately

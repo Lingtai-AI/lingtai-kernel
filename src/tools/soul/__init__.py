@@ -21,7 +21,7 @@ Three actions:
 from __future__ import annotations
 
 # Re-export constants from config.py
-from lingtai_kernel.config import DEFAULT_SOUL_DELAY_SECONDS
+from lingtai.kernel.config import DEFAULT_SOUL_DELAY_SECONDS
 from .config import (
     SOUL_DELAY_MIN_SECONDS,
     CONSULTATION_PAST_COUNT_MIN,
@@ -234,7 +234,7 @@ def handle(agent, args: dict) -> dict:
         return _handle_voice(agent, args)
 
     if action == "dismiss":
-        from lingtai_kernel.notifications import dismiss_channel
+        from lingtai.kernel.notifications import dismiss_channel
         result = dismiss_channel(agent, "soul", invoked_by="soul")
         if result.get("status") == "ok":
             result.setdefault("message", "Soul flow notification dismissed.")

@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
+from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
 
 
 from tests._molt_helpers import write_session_journal as _write_session_journal
@@ -272,7 +272,7 @@ class TestContextMoltKeepLast:
     def test_keep_last_deduplicates_with_keep_tool_calls(self, tmp_path):
         """Entries already in keep_tool_calls are removed from keep_last."""
         from tools.psyche._molt import _context_molt
-        from lingtai_kernel.llm.interface import ToolResultBlock
+        from lingtai.kernel.llm.interface import ToolResultBlock
 
         agent = _make_agent(tmp_path)
         agent.start()
@@ -388,7 +388,7 @@ class TestContextMoltKeepLast:
     def test_keep_last_with_keep_tool_calls(self, tmp_path):
         """keep_last and keep_tool_calls can be used together."""
         from tools.psyche._molt import _context_molt
-        from lingtai_kernel.llm.interface import ToolResultBlock
+        from lingtai.kernel.llm.interface import ToolResultBlock
 
         agent = _make_agent(tmp_path)
         agent.start()

@@ -11,7 +11,7 @@ related_files:
   - pyproject.toml
   - setup.py
   - src/lingtai/ANATOMY.md
-  - src/lingtai_kernel/ANATOMY.md
+  - src/lingtai/kernel/ANATOMY.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -22,7 +22,7 @@ maintenance: |
 # lingtai-kernel Repository Anatomy
 
 This root anatomy is a router for the repository. It intentionally stays short:
-code-level anatomy begins at [`src/lingtai_kernel/ANATOMY.md`](src/lingtai_kernel/ANATOMY.md),
+code-level anatomy begins at [`src/lingtai/kernel/ANATOMY.md`](src/lingtai/kernel/ANATOMY.md),
 while long-form references live under [`docs/`](docs/).
 
 ## Components
@@ -34,8 +34,8 @@ while long-form references live under [`docs/`](docs/).
   and long-form references.
 - [`src/lingtai/`](src/lingtai/) — compatibility package and service modules
   exposed under the `lingtai` package name.
-- [`src/lingtai_kernel/`](src/lingtai_kernel/) — core Python runtime; start with
-  [`src/lingtai_kernel/ANATOMY.md`](src/lingtai_kernel/ANATOMY.md).
+- [`src/lingtai/kernel/`](src/lingtai/kernel/) — core Python runtime; start with
+  [`src/lingtai/kernel/ANATOMY.md`](src/lingtai/kernel/ANATOMY.md).
 - [`tests/`](tests/) — pytest suite for runtime, services, tools, and packaging
   behavior.
 
@@ -56,7 +56,7 @@ while long-form references live under [`docs/`](docs/).
 
 `pyproject.toml` declares the Python package metadata and delegates sidecar build
 hooks to `setup.py`. `MANIFEST.in` keeps the Rust sidecar sources and packaged
-prompt Markdown resources connected to source distributions. The runtime code under `src/lingtai_kernel/` is the primary source
+prompt Markdown resources connected to source distributions. The runtime code under `src/lingtai/kernel/` is the primary source
 of truth for agent behavior; `src/lingtai/` contains public compatibility/service
 surfaces. Documentation that does not need root discovery is kept in `docs/` so
 the root remains an entry-point layer rather than an archive.
@@ -64,7 +64,7 @@ the root remains an entry-point layer rather than an archive.
 ## Maintenance notes
 
 - Keep this file aligned with root-level moves and top-level package layout.
-- If code moves under `src/lingtai_kernel/`, update the nearest nested
+- If code moves under `src/lingtai/kernel/`, update the nearest nested
   `ANATOMY.md` together with the code.
 - Keep long-form guidance out of root unless an external tool requires the file
   to be discovered there.

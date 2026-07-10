@@ -59,8 +59,8 @@ Agent identity, working notes, and context lifecycle — the "bare essentials of
 
 ## Connections
 
-- **Inbound:** `handle()` is called by the tool dispatcher (via `base_agent._dispatch_tool`). `boot()` is called during agent construction by the generic intrinsic-boot loop in `src/lingtai_kernel/base_agent/__init__.py:685`.
-- **Inbound (cross-module):** `context_forget` is resolved via `_intrinsic_hook("psyche", "context_forget")` and called by `src/lingtai_kernel/base_agent/lifecycle.py:455-457` for the `.clear` signal.
+- **Inbound:** `handle()` is called by the tool dispatcher (via `base_agent._dispatch_tool`). `boot()` is called during agent construction by the generic intrinsic-boot loop in `src/lingtai/kernel/base_agent/__init__.py:685`.
+- **Inbound (cross-module):** `context_forget` is resolved via `_intrinsic_hook("psyche", "context_forget")` and called by `src/lingtai/kernel/base_agent/lifecycle.py:455-457` for the `.clear` signal.
 - **Inbound (cross-module):** `_write_molt_snapshot` is imported by `src/tools/soul/consultation.py` for snapshot loading via `_load_snapshot_interface`.
 - **Outbound:** Depends on `..i18n` (translations), `..llm.interface` (`ToolCallBlock`, `ToolResultBlock`), `..token_counter` (token budget checks in `_pad_append`).
 - **Data flow:** All state lives in the filesystem under `system/` (`pad.md`, `lingtai.md`, `pad_append.json`, `summaries/`) and `history/` (`chat_history.jsonl`, `chat_history_archive.jsonl`, `snapshots/`). `_lingtai_load` reads `lingtai.md` alone (→ `character` section); `system/covenant.md` is owned by `Agent._reload_prompt_sections` (→ `covenant` section), not this package. The molt path preserves `.notification/` files and resets only the agent's in-memory notification-tracking attributes so the fresh session re-reads the files cleanly.

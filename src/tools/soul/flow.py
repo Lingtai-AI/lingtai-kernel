@@ -87,8 +87,8 @@ def _soul_whisper(agent) -> None:
     consultation. This ensures messages are seen within one soul delay
     cycle instead of waiting indefinitely.
     """
-    from lingtai_kernel.state import AgentState
-    from lingtai_kernel.notifications import notification_fingerprint, collect_notifications
+    from lingtai.kernel.state import AgentState
+    from lingtai.kernel.notifications import notification_fingerprint, collect_notifications
 
     agent._soul_timer = None
     try:
@@ -148,7 +148,7 @@ def _append_soul_flow_record(agent, record: dict) -> None:
 
 def _flatten_v3_for_pair(agent, voice: dict) -> dict:
     """Bridge v3 consultation blocks to the legacy appendix renderer."""
-    from lingtai_kernel.llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
+    from lingtai.kernel.llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
 
     voice_text_parts: list[str] = []
     thinking_parts: list[str] = []
@@ -225,7 +225,7 @@ def _run_consultation_fire(agent) -> None:
     """
     from datetime import datetime, timezone
     import secrets as _secrets
-    from lingtai_kernel.message import _make_message, MSG_TC_WAKE
+    from lingtai.kernel.message import _make_message, MSG_TC_WAKE
 
     # Opt-in gate (belt-and-suspenders): even if a residual caller reaches
     # here while flow is disabled, no fire runs. This closes the loophole
@@ -419,7 +419,7 @@ def _rehydrate_appendix_tracking(agent) -> None:
         iface = agent._chat.interface
     except Exception:
         return
-    from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
+    from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
     entries = iface.entries
     for i in range(len(entries) - 1):
         a = entries[i]

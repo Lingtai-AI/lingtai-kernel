@@ -53,12 +53,12 @@ Properties (contract):
 
 What plays this role today (implicitly): the since-refresh delta baselines on
 `SessionManager` — `_session_baseline_input_tokens` / `_session_baseline_cached_tokens`
-/ `_session_baseline_api_calls` (`src/lingtai_kernel/session.py:143-145`), read
+/ `_session_baseline_api_calls` (`src/lingtai/kernel/session.py:143-145`), read
 out by `get_runtime_session_token_usage()`
-(`src/lingtai_kernel/session.py:649-694`) as
+(`src/lingtai/kernel/session.py:649-694`) as
 `current_total - session_baseline`. These are re-anchored to the restored totals
-on `restore_token_state` (`src/lingtai_kernel/session.py:798-816`) and on molt via
-`reset_runtime_session_token_usage` (`src/lingtai_kernel/session.py:761-770`), i.e.
+on `restore_token_state` (`src/lingtai/kernel/session.py:798-816`) and on molt via
+`reset_runtime_session_token_usage` (`src/lingtai/kernel/session.py:761-770`), i.e.
 they already reset to "zero" at each runtime-session boundary. That is exactly
 the runtime-session boundary this spec names.
 
@@ -84,8 +84,8 @@ Properties (contract):
 
 `molt_count` today: initialized from the persisted manifest
 (`self._molt_count = existing.get("molt_count", 0)`,
-`src/lingtai_kernel/base_agent/__init__.py:427`), written back into the manifest
-(`src/lingtai_kernel/base_agent/identity.py:81`), incremented only inside molt
+`src/lingtai/kernel/base_agent/__init__.py:427`), written back into the manifest
+(`src/lingtai/kernel/base_agent/identity.py:81`), incremented only inside molt
 (`src/tools/psyche/_molt.py:356,595`), and even read live off
 disk by the Codex adapter for its per-molt cache key
 (`src/lingtai/llm/openai/adapter.py:747 _read_molt_count`). It is already the de
@@ -114,11 +114,11 @@ molt lifetime:      [ agent session (molt_count=7) .......... ][ agent session (
 
 Both objects are owned by the kernel and hang off the session/lifecycle layer.
 No wrapper (`src/lingtai/`) types — the kernel must not depend on the wrapper
-(`src/lingtai_kernel/ANATOMY.md:116`).
+(`src/lingtai/kernel/ANATOMY.md:116`).
 
 | Object | Owner | Key | Lifetime | Rebuilt from events? |
 |---|---|---|---|---|
-| `RuntimeSession` | `SessionManager` (`src/lingtai_kernel/session.py`) | none | process start → refresh/restart | **No** — fresh empty each boundary |
+| `RuntimeSession` | `SessionManager` (`src/lingtai/kernel/session.py`) | none | process start → refresh/restart | **No** — fresh empty each boundary |
 | `AgentSession` | `SessionManager`, keyed by `BaseAgent._molt_count` | `molt_count` | molt → molt | **Yes** — rebuilt for current `molt_count` on start |
 
 Rationale for keeping both on `SessionManager`: that is where the token
@@ -172,7 +172,7 @@ metadata can consume the object instead of recomputing.
 
 ### 3.3 Source-of-truth ordering
 
-`events.jsonl` is the source of truth (`src/lingtai_kernel/services/logging.py:1-6`).
+`events.jsonl` is the source of truth (`src/lingtai/kernel/services/logging.py:1-6`).
 The SQLite index `log.sqlite` is an **additive, rebuildable sidecar** of that
 JSONL (`services/logging.py:174-180`) — it is derived and safe to delete. The
 rebuild therefore prefers the sidecar for speed but must **fall back to JSONL**
@@ -194,10 +194,10 @@ Three tiers, in preference order:
 The kernel already wires a **live** `log.sqlite` sidecar into the composite
 logger: `SQLiteEventIndex(log_dir / "log.sqlite", ...)` inside
 `CompositeLoggingService` at
-`src/lingtai_kernel/base_agent/__init__.py:317-319`, so every event written to
+`src/lingtai/kernel/base_agent/__init__.py:317-319`, so every event written to
 `events.jsonl` is also indexed in real time (best-effort, fail-open). The
 `events` table is indexed on `(type, ts DESC)`
-(`idx_events_type_ts`, `src/lingtai_kernel/services/logging.py:328`) and on
+(`idx_events_type_ts`, `src/lingtai/kernel/services/logging.py:328`) and on
 `ts DESC` (`idx_events_ts`, `services/logging.py:329`).
 
 The rebuild is then two indexed queries, no scan:
@@ -208,7 +208,7 @@ The rebuild is then two indexed queries, no scan:
 2. Aggregate the session: sum the `llm_response` token fields for events at/after
    that boundary (`WHERE type='llm_response' AND ts >= :boundary_ts`), served by
    `idx_events_type_ts`. `llm_response` carries `input_tokens`, `output_tokens`,
-   `thinking_tokens`, `cached_tokens` (`src/lingtai_kernel/session.py:608-616`).
+   `thinking_tokens`, `cached_tokens` (`src/lingtai/kernel/session.py:608-616`).
 
 Both queries touch O(rows-of-that-type-since-boundary), not O(all events).
 Read-only access already exists: `query_sqlite_event_index(agent_dir, sql)`
@@ -237,7 +237,7 @@ see it happened. It is never the default path.
 Note the *current* startup restore does **not** rebuild from `events.jsonl` at
 all — it sums the entire `logs/token_ledger.jsonl` via
 `sum_token_ledger(ledger_path)` and feeds it to `restore_token_state`
-(`src/lingtai_kernel/base_agent/lifecycle.py:170-177`). That is a **full-file
+(`src/lingtai/kernel/base_agent/lifecycle.py:170-177`). That is a **full-file
 scan of the ledger** and it restores *lifetime* totals, not since-molt totals.
 The token ledger remains for compatibility/TUI (§5) but is **not** the
 definition source for the agent session. The agent-session rebuild uses the
@@ -249,7 +249,7 @@ follow-up migrates it.
 ## 5. Existing token ledger — compatibility, not definition
 
 `logs/token_ledger.jsonl` (append-only per-call log,
-`src/lingtai_kernel/token_ledger.py`) stays for compatibility and TUI surfaces.
+`src/lingtai/kernel/token_ledger.py`) stays for compatibility and TUI surfaces.
 It is a *mixed lifetime stream* (main + soul + involuntary + daemon rows) and its
 `sum_token_ledger` is a lifetime aggregate (`token_ledger.py:194+`). This spec
 does **not** make the ledger the definition source for either session object:
@@ -293,12 +293,12 @@ agent.get_token_usage()      -> dict                   # since-molt cumulative t
 `RuntimeSession` / `AgentSession` are thin dataclasses (§7). The existing
 numeric getters (`get_runtime_session_token_usage`, `get_token_usage`) are the
 back-compat surface and keep their exact contracts
-(`src/lingtai_kernel/session.py:649-694`, `session.py:625-647`).
+(`src/lingtai/kernel/session.py:649-694`, `session.py:625-647`).
 
 ### 6.2 `_meta.tool_meta.token_usage` should consume these objects
 
 `meta_block.build_tool_meta_token_usage` builds the injected `current_call` and
-`session` halves (`src/lingtai_kernel/meta_block.py:1250+`). Per the #679 fix,
+`session` halves (`src/lingtai/kernel/meta_block.py:1250+`). Per the #679 fix,
 the `session` half must read the **since-molt cumulative** totals
 (`get_token_usage`), which survive refresh — *not* the since-refresh runtime
 deltas. Once the `AgentSession` object exists, that half should read the object's
@@ -388,7 +388,7 @@ testable and benchmarkable offline.
 - **Spec:** this document. ✅
 - **Optimized rebuild primitive:** `rebuild_agent_session_from_events` +
   `RuntimeSession`/`AgentSession` dataclasses shipped as a self-contained kernel
-  module (`src/lingtai_kernel/agent_session.py`). ✅ (prototype — not yet wired
+  module (`src/lingtai/kernel/agent_session.py`). ✅ (prototype — not yet wired
   into `_start`; see follow-up #2.)
 - **Benchmark:** the `lingtai-kernel-anatomy` skill's
   `scripts/bench_agent_session_rebuild.py` measures rebuild time and proves

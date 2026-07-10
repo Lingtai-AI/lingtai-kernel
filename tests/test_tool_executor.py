@@ -7,17 +7,17 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import lingtai_kernel.tool_executor as tool_executor_module
-from lingtai_kernel.meta_block import (
+import lingtai.kernel.tool_executor as tool_executor_module
+from lingtai.kernel.meta_block import (
     TOOL_META_TOKEN_USAGE_KEY,
     TOOL_META_TOKEN_USAGE_PENDING_KEY,
 )
-from lingtai_kernel.llm.base import ToolCall
-from lingtai_kernel.llm.interface import ToolResultBlock
-from lingtai_kernel.loop_guard import LoopGuard
-from lingtai_kernel.tool_call_guard import GuardDecision, ToolCallGuard
-from lingtai_kernel.tool_executor import ToolExecutor
-from lingtai_kernel.types import UnknownToolError
+from lingtai.kernel.llm.base import ToolCall
+from lingtai.kernel.llm.interface import ToolResultBlock
+from lingtai.kernel.loop_guard import LoopGuard
+from lingtai.kernel.tool_call_guard import GuardDecision, ToolCallGuard
+from lingtai.kernel.tool_executor import ToolExecutor
+from lingtai.kernel.types import UnknownToolError
 
 
 def make_executor(
@@ -1127,8 +1127,8 @@ def test_tool_executor_attaches_batch_progress_notice_only():
 def test_tool_executor_runtime_counter_stamped_at_boundary():
     """The ACTIVE-turn counter reaches the model via _meta.agent_meta (latest-only),
     sourced from the guard at the tool-batch boundary by attach_active_runtime."""
-    from lingtai_kernel.meta_block import attach_active_runtime
-    from lingtai_kernel.llm.interface import ToolResultBlock
+    from lingtai.kernel.meta_block import attach_active_runtime
+    from lingtai.kernel.llm.interface import ToolResultBlock
     from types import SimpleNamespace
 
     guard = LoopGuard(max_total_calls=10_000, notice_interval=500)
@@ -1138,7 +1138,7 @@ def test_tool_executor_runtime_counter_stamped_at_boundary():
 
     # A stamped result content (carries _runtime_pending via meta_fn-less path:
     # stamp it explicitly to mimic a time-aware agent's result).
-    from lingtai_kernel.meta_block import stamp_meta
+    from lingtai.kernel.meta_block import stamp_meta
     content = {"status": "ok"}
     stamp_meta(content, {"current_time": "T"}, 7)
     block = ToolResultBlock(id="tc1", name="read", content=content)

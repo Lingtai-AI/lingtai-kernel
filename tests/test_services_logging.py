@@ -5,7 +5,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-from lingtai_kernel.services.logging import (
+from lingtai.kernel.services.logging import (
     CompositeLoggingService,
     JSONLLoggingService,
     LoggingService,
@@ -140,9 +140,9 @@ class TestJSONLLoggingService:
 # ---------------------------------------------------------------------------
 
 from unittest.mock import MagicMock
-from lingtai_kernel import BaseAgent, AgentState
-from lingtai_kernel.llm import ToolCall
-from lingtai_kernel.loop_guard import LoopGuard
+from lingtai.kernel import BaseAgent, AgentState
+from lingtai.kernel.llm import ToolCall
+from lingtai.kernel.loop_guard import LoopGuard
 
 
 
@@ -151,7 +151,7 @@ class TestBaseAgentLoggingIntegration:
 
     def test_tool_call_logged(self, tmp_path):
         """Executing a tool logs tool_call and tool_result events."""
-        from lingtai_kernel.tool_executor import ToolExecutor
+        from lingtai.kernel.tool_executor import ToolExecutor
 
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
@@ -189,7 +189,7 @@ class TestBaseAgentLoggingIntegration:
 
     def test_auto_logging_to_working_dir(self, tmp_path):
         """Agent always creates JSONL log in working dir."""
-        from lingtai_kernel.tool_executor import ToolExecutor
+        from lingtai.kernel.tool_executor import ToolExecutor
 
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
@@ -710,7 +710,7 @@ class TestSQLiteEventIndex:
         assert index.disabled_reason == "simulated"
 
     def test_rebuild_requires_offline_agent_lock(self, tmp_path):
-        from lingtai_kernel.workdir import WorkingDir
+        from lingtai.kernel.workdir import WorkingDir
 
         logs = tmp_path / "logs"
         logs.mkdir()

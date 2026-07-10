@@ -72,7 +72,7 @@ def test_daemon_shutdown_for_agent_stop_reclaims_pools_and_cli_processes(tmp_pat
 
 
 def test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock(monkeypatch):
-    from lingtai_kernel.base_agent import lifecycle
+    from lingtai.kernel.base_agent import lifecycle
     import tools.soul.flow as soul_flow
 
     order = []

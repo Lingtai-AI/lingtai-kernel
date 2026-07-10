@@ -19,7 +19,7 @@ import pytest
 _FORBIDDEN_AFTER_BARE_IMPORT: frozenset[str] = frozenset(
     {
         "lingtai.agent",
-        "lingtai_kernel",
+        "lingtai.kernel",
         "tools",
         "lingtai.llm",
         "lingtai.services.file_io",
@@ -68,7 +68,7 @@ def test_bare_import_lingtai_is_lightweight():
         "import lingtai; "
         "loaded = set(sys.modules); "
         f"exact = {_FORBIDDEN_AFTER_BARE_IMPORT!r}; "
-        "prefixes = ('lingtai_kernel.', 'tools.', 'lingtai.services.', 'lingtai.llm.', 'lingtai.mcp_servers.'); "
+        "prefixes = ('lingtai.kernel.', 'tools.', 'lingtai.services.', 'lingtai.llm.', 'lingtai.mcp_servers.'); "
         "forbidden = sorted((loaded & exact) | {m for m in loaded if any(m.startswith(p) for p in prefixes)}); "
         "print('FORBIDDEN:', forbidden) if forbidden else print('LIGHTWEIGHT')"
     )
@@ -87,13 +87,13 @@ def test_facade_names_match_canonical_objects():
 
     # Pre-load canonical modules so the identity check is unambiguous.
     import lingtai.agent
-    import lingtai_kernel.base_agent
-    import lingtai_kernel.config
-    import lingtai_kernel.message
-    import lingtai_kernel.services.logging
-    import lingtai_kernel.services.mail
-    import lingtai_kernel.state
-    import lingtai_kernel.types
+    import lingtai.kernel.base_agent
+    import lingtai.kernel.config
+    import lingtai.kernel.message
+    import lingtai.kernel.services.logging
+    import lingtai.kernel.services.mail
+    import lingtai.kernel.state
+    import lingtai.kernel.types
     import lingtai.services.file_io
     import lingtai.services.file_io_sidecar
     import lingtai.services.vision
@@ -104,13 +104,13 @@ def test_facade_names_match_canonical_objects():
     import tools.registry
 
     assert lingtai.Agent is lingtai.agent.Agent
-    assert lingtai.BaseAgent is lingtai_kernel.base_agent.BaseAgent
-    assert lingtai.AgentConfig is lingtai_kernel.config.AgentConfig
-    assert lingtai.AgentState is lingtai_kernel.state.AgentState
-    assert lingtai.Message is lingtai_kernel.message.Message
-    assert lingtai.MSG_REQUEST is lingtai_kernel.message.MSG_REQUEST
-    assert lingtai.MSG_USER_INPUT is lingtai_kernel.message.MSG_USER_INPUT
-    assert lingtai.UnknownToolError is lingtai_kernel.types.UnknownToolError
+    assert lingtai.BaseAgent is lingtai.kernel.base_agent.BaseAgent
+    assert lingtai.AgentConfig is lingtai.kernel.config.AgentConfig
+    assert lingtai.AgentState is lingtai.kernel.state.AgentState
+    assert lingtai.Message is lingtai.kernel.message.Message
+    assert lingtai.MSG_REQUEST is lingtai.kernel.message.MSG_REQUEST
+    assert lingtai.MSG_USER_INPUT is lingtai.kernel.message.MSG_USER_INPUT
+    assert lingtai.UnknownToolError is lingtai.kernel.types.UnknownToolError
 
     assert lingtai.setup_capability is tools.registry.setup_capability
     assert lingtai.BashManager is tools.bash.BashManager
@@ -135,13 +135,13 @@ def test_facade_names_match_canonical_objects():
         is lingtai.services.file_io_sidecar.resolve_sidecar_binary
     )
 
-    assert lingtai.MailService is lingtai_kernel.services.mail.MailService
+    assert lingtai.MailService is lingtai.kernel.services.mail.MailService
     assert (
         lingtai.FilesystemMailService
-        is lingtai_kernel.services.mail.FilesystemMailService
+        is lingtai.kernel.services.mail.FilesystemMailService
     )
-    assert lingtai.LoggingService is lingtai_kernel.services.logging.LoggingService
-    assert lingtai.JSONLLoggingService is lingtai_kernel.services.logging.JSONLLoggingService
+    assert lingtai.LoggingService is lingtai.kernel.services.logging.LoggingService
+    assert lingtai.JSONLLoggingService is lingtai.kernel.services.logging.JSONLLoggingService
 
     assert lingtai.VisionService is lingtai.services.vision.VisionService
     assert (

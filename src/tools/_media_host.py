@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse, urlunparse
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
 
 def resolve_media_host(agent: "BaseAgent") -> str | None:

@@ -7,7 +7,7 @@ Thank you for helping improve the LingTai Python runtime. GitHub discovers this 
 - Repository navigation: [`ANATOMY.md`](ANATOMY.md)
 - Claude Code / coding-agent guidance:
   [`docs/references/claude-code-guide.md`](docs/references/claude-code-guide.md)
-- Source-root anatomy: [`src/lingtai_kernel/ANATOMY.md`](src/lingtai_kernel/ANATOMY.md)
+- Source-root anatomy: [`src/lingtai/kernel/ANATOMY.md`](src/lingtai/kernel/ANATOMY.md)
 - Rust sidecar notes: [`crates/lingtai-search-sidecar/README.md`](crates/lingtai-search-sidecar/README.md)
 
 ## Community and safety

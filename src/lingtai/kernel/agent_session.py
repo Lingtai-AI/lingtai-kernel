@@ -47,7 +47,7 @@ __all__ = [
 MOLT_BOUNDARY_EVENT = "psyche_molt"
 
 # The event type carrying per-provider-round token usage. See
-# src/lingtai_kernel/session.py:608-616 (``llm_response`` with input_tokens/
+# src/lingtai/kernel/session.py:608-616 (``llm_response`` with input_tokens/
 # output_tokens/thinking_tokens/cached_tokens).
 TOKEN_EVENT = "llm_response"
 

@@ -34,7 +34,7 @@ from tools import (
     notification as notif_intrinsic,
     system as sys_intrinsic,
 )
-from lingtai_kernel.notifications import (
+from lingtai.kernel.notifications import (
     collect_notifications,
     notification_fingerprint,
     publish,
@@ -67,7 +67,7 @@ def test_notification_wired_into_every_agent() -> None:
     (``tools.registry.INTRINSICS``) is wired into ``agent._intrinsics``. Proving
     'notification' lands there alongside 'system' is the mandatory-include proof.
     """
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
     wired: dict[str, Any] = {}
     modules: dict[str, Any] = {}
@@ -391,7 +391,7 @@ class _SummarizeAgent:
 
 
 def _make_summarize_agent(tmp_path: Path, tool_call_id: str) -> _SummarizeAgent:
-    from lingtai_kernel.llm.interface import ToolResultBlock
+    from lingtai.kernel.llm.interface import ToolResultBlock
 
     block = ToolResultBlock(id=tool_call_id, name="read", content="x" * 5000)
     entry = _Entry("user", [block])

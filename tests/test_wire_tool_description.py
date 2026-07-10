@@ -14,8 +14,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from lingtai_kernel.llm.base import WIRE_TOOL_DESCRIPTION, FunctionSchema
-from lingtai_kernel.base_agent.tools import _refresh_tool_inventory_section
+from lingtai.kernel.llm.base import WIRE_TOOL_DESCRIPTION, FunctionSchema
+from lingtai.kernel.base_agent.tools import _refresh_tool_inventory_section
 
 FULL_DESCRIPTION = (
     "Send an email. Full multi-paragraph usage guidance lives here and must "

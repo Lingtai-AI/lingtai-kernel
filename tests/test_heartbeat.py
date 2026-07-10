@@ -10,7 +10,7 @@ from tests._service_helpers import make_tool_result_mock_service as make_mock_se
 class TestHeartbeatInit:
 
     def test_heartbeat_counter_initialized(self, tmp_path):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -26,7 +26,7 @@ class TestHeartbeatInit:
         live-runtime ``status()`` no longer surfaces it directly — the
         canonical liveness signal is the ``.agent.heartbeat`` file on
         disk (consumed by ``handshake.is_alive``)."""
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -46,7 +46,7 @@ class TestHeartbeatInit:
 class TestHeartbeatBeating:
 
     def test_heartbeat_increments(self, tmp_path):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -61,7 +61,7 @@ class TestHeartbeatBeating:
 
     def test_no_aed_on_idle(self, tmp_path):
         """Heartbeat does NOT set _aed_start when agent is IDLE."""
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -81,7 +81,7 @@ class TestHeartbeatFile:
 
     def test_heartbeat_writes_file(self, tmp_path):
         """Heartbeat file exists while running, deleted after stop."""
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -100,7 +100,7 @@ class TestHeartbeatFile:
 
     def test_heartbeat_file_written_while_running(self, tmp_path):
         """While ACTIVE, heartbeat file exists with a fresh timestamp."""
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -120,8 +120,8 @@ class TestHeartbeatFile:
 
     def test_heartbeat_file_alive_when_asleep(self, tmp_path):
         """ASLEEP is a living sleep — heartbeat keeps ticking."""
-        from lingtai_kernel import BaseAgent, AgentState
-        from lingtai_kernel.config import AgentConfig
+        from lingtai.kernel import BaseAgent, AgentState
+        from lingtai.kernel.config import AgentConfig
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -153,8 +153,8 @@ class TestHeartbeatAEDTimeout:
 
     def test_aed_timeout_triggers_asleep(self, tmp_path):
         """After aed_timeout in STUCK, agent goes ASLEEP."""
-        from lingtai_kernel import BaseAgent, AgentState
-        from lingtai_kernel.config import AgentConfig
+        from lingtai.kernel import BaseAgent, AgentState
+        from lingtai.kernel.config import AgentConfig
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -175,7 +175,7 @@ class TestHeartbeatAEDTimeout:
 
     def test_aed_start_resets_on_recovery(self, tmp_path):
         """When agent recovers from STUCK, _aed_start resets."""
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -195,7 +195,7 @@ class TestHeartbeatAEDTimeout:
         assert agent._aed_start is None
 
     def test_asleep_state_in_status(self, tmp_path):
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -213,7 +213,7 @@ class TestSleepFile:
 
     def test_sleep_file_triggers_asleep_not_shutdown(self, tmp_path):
         """When .sleep is detected, agent goes ASLEEP and _asleep is set, _shutdown is NOT set."""
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -237,7 +237,7 @@ class TestSuspendFile:
 
     def test_suspend_file_triggers_shutdown(self, tmp_path):
         """When .suspend is detected, agent goes SUSPENDED and _shutdown IS set."""
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -260,7 +260,7 @@ class TestSelfSleep:
 
     def test_self_sleep_no_karma_required(self, tmp_path):
         """Any agent can self-sleep to ASLEEP without admin.karma."""
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         from tools.system import handle
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,

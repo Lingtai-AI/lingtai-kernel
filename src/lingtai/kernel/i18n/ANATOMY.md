@@ -2,11 +2,11 @@
 related_files:
   - src/lingtai/i18n/ANATOMY.md
   - src/lingtai/i18n/__init__.py
-  - src/lingtai_kernel/ANATOMY.md
-  - src/lingtai_kernel/i18n/__init__.py
-  - src/lingtai_kernel/i18n/en.json
-  - src/lingtai_kernel/i18n/wen.json
-  - src/lingtai_kernel/i18n/zh.json
+  - src/lingtai/kernel/ANATOMY.md
+  - src/lingtai/kernel/i18n/__init__.py
+  - src/lingtai/kernel/i18n/en.json
+  - src/lingtai/kernel/i18n/wen.json
+  - src/lingtai/kernel/i18n/zh.json
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -50,7 +50,7 @@ The kernel's message catalog — a flat key-value string table covering system n
 
 ## Composition
 
-- **Parent:** `src/lingtai_kernel/` (see `ANATOMY.md`).
+- **Parent:** `src/lingtai/kernel/` (see `ANATOMY.md`).
 - **Siblings:** `intrinsics/` is the main consumer; other kernel modules call `t()` where they render user-facing system text.
 - **No subfolders.** This is a flat leaf.
 

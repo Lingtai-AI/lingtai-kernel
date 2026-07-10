@@ -194,7 +194,7 @@ def _pad_append(agent, args: dict) -> dict:
         return {"error": f"Only text files are accepted. Binary files: {', '.join(not_text)}"}
 
     if files:
-        from lingtai_kernel.token_counter import count_tokens
+        from lingtai.kernel.token_counter import count_tokens
         combined, _ = _read_append_content(agent, files)
         tokens = count_tokens(combined)
         if tokens > _APPEND_TOKEN_LIMIT:

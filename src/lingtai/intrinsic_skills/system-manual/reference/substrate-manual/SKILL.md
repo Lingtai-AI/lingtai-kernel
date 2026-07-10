@@ -82,7 +82,7 @@ Use after changing `init.json`, MCP registry, presets, prompt sections, or
 installed capabilities. Refresh preserves identity and conversation while
 rebuilding the runtime surface. For runtime/version checks, inspect the live
 agent interpreter and imports — prefer `LINGTAI_RUNTIME_PYTHON` when available,
-then confirm `lingtai.__file__` and `lingtai_kernel.__file__` — rather than a
+then confirm `lingtai.__file__` and `lingtai.kernel.__file__` — rather than a
 convenient shell `python`, conda env, or unrelated checkout. TUI-managed runs
 normally expose that interpreter from their runtime venv (for example
 `~/.lingtai-tui/runtime/venv` on macOS/Linux; Windows uses the corresponding

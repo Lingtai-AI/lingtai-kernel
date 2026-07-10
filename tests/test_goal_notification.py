@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from tools import notification as notif_intrinsic
-from lingtai_kernel.notifications import collect_notifications, notification_fingerprint, publish
-from lingtai_kernel.nudge.goal import check as check_goal
-from lingtai_kernel.state import AgentState
+from lingtai.kernel.notifications import collect_notifications, notification_fingerprint, publish
+from lingtai.kernel.nudge.goal import check as check_goal
+from lingtai.kernel.state import AgentState
 
 
 @dataclass
@@ -30,7 +30,7 @@ class _GoalAgent:
         self._wake_reason = reason
 
     def _enqueue_system_notification(self, *, source: str, ref_id: str, body: str) -> str:
-        from lingtai_kernel.base_agent.messaging import _enqueue_system_notification
+        from lingtai.kernel.base_agent.messaging import _enqueue_system_notification
         return _enqueue_system_notification(self, source=source, ref_id=ref_id, body=body)
 
 

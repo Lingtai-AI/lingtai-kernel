@@ -51,7 +51,7 @@ This repo contains both packages. The dependency is strictly one-directional:
 
 | Package | Role |
 |---------|------|
-| **`lingtai_kernel`** (`import lingtai_kernel`) | Minimal runtime — BaseAgent, intrinsics, LLM protocol, mail, logging. Zero hard dependencies. |
+| **`lingtai.kernel`** (`import lingtai.kernel`) | Minimal runtime — BaseAgent, intrinsics, LLM protocol, mail, logging. Zero hard dependencies. |
 | **`lingtai`** (`import lingtai`) | Batteries-included — Agent with 19 capabilities, 5 LLM adapters, MCP integration, addons. Re-exports the kernel's public API. |
 
 ```

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
     from lingtai.services.websearch import SearchService
 
 PROVIDERS = {
@@ -98,7 +98,7 @@ def setup(
 
     if search_service is None and provider is not None:
         if api_key_env:
-            from lingtai_kernel.config_resolve import resolve_env
+            from lingtai.kernel.config_resolve import resolve_env
             api_key = resolve_env(api_key, api_key_env)
 
         # Graceful fallback: if the resolved provider isn't supported by web_search,

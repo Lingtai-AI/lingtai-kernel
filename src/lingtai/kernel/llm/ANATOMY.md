@@ -2,12 +2,12 @@
 related_files:
   - src/lingtai/llm/ANATOMY.md
   - src/lingtai/llm/service.py
-  - src/lingtai_kernel/ANATOMY.md
-  - src/lingtai_kernel/llm/__init__.py
-  - src/lingtai_kernel/llm/base.py
-  - src/lingtai_kernel/llm/interface.py
-  - src/lingtai_kernel/llm/service.py
-  - src/lingtai_kernel/llm/streaming.py
+  - src/lingtai/kernel/ANATOMY.md
+  - src/lingtai/kernel/llm/__init__.py
+  - src/lingtai/kernel/llm/base.py
+  - src/lingtai/kernel/llm/interface.py
+  - src/lingtai/kernel/llm/service.py
+  - src/lingtai/kernel/llm/streaming.py
   - tests/test_llm_service.py
   - tests/test_wire_tool_description.py
 maintenance: |
@@ -28,7 +28,7 @@ Provider-agnostic LLM protocol layer. This folder defines the canonical chat log
 - `llm/__init__.py` — public re-export surface for `ChatSession`, `LLMResponse`, `ToolCall`, `FunctionSchema`, and `LLMService` (`llm/__init__.py:2-10`).
 - `llm/base.py` — normalized dataclasses plus `ChatSession` ABC.
   - `ToolCall`, `UsageMetadata`, `LLMResponse`, and `FunctionSchema` define tool calls, token usage, provider responses, and tool schemas (`llm/base.py:25-127`). `FunctionSchema.glossary_package` (`llm/base.py:110`) is an optional non-wire metadata field naming the importable resource package that owns the tool's `glossary-{lang}.md` files; the `## tools` renderer uses it to append a localized terminology body via `tool_glossary.append_tool_glossary`. It is never serialized into provider payloads (`to_dict` excludes it alongside `system_prompt`). `WIRE_TOOL_DESCRIPTION` (`llm/base.py:86`) is the single wire-facing description for registered `FunctionSchema` tools. Provider payload builders in the wrapper adapters send this constant as those tools' top-level description; the full `FunctionSchema.description` prose renders only into the system prompt's `## tools` section (`base_agent/tools.py:34-48`) and canonical `ChatInterface` tool snapshots (`to_dict`/`list_to_dicts`). Nested parameter/property descriptions are untouched. Separate structured-output pseudo-tools keep their task-specific descriptions. Tests: `tests/test_wire_tool_description.py`.
-  - `ChatSession` requires an `interface` property and `send()` accepting text, tool results, or `None` (`lingtai_kernel/llm/base.py:135-263`), then supplies default helpers for history/state, usage totals, streaming fallback, tool-result commits, tool/system updates, reset, interaction id, context window, and context-overflow recovery (`lingtai_kernel/llm/base.py:264-503`).
+  - `ChatSession` requires an `interface` property and `send()` accepting text, tool results, or `None` (`lingtai/kernel/llm/base.py:135-263`), then supplies default helpers for history/state, usage totals, streaming fallback, tool-result commits, tool/system updates, reset, interaction id, context window, and context-overflow recovery (`lingtai/kernel/llm/base.py:264-503`).
   - **`send()` signature contract** — adapters accept three message shapes: `str` (new user text → `add_user_message`), `list[ToolResultBlock]` (tool returns → `add_tool_results`), and `None` (the "continue from wire" signal — caller has already pre-staged the canonical interface, e.g. via `_inject_notification_pair`; the adapter must skip the input-append step and send the wire as-is). On API error the error-path `drop_trailing` must be guarded so a `None` send does not corrupt the pre-staged wire. See `lingtai/llm/openai/ANATOMY.md` and `lingtai/llm/anthropic/ANATOMY.md` for adapter-side details, and `base_agent/turn.py:_handle_tc_wake` for the call site that drives a turn off the existing wire.
   - **`pre_request_hook`** (`llm/base.py:168`) — optional callable adapters fire after committing the message to the canonical `ChatInterface` but before the API call. Historically the kernel installed `BaseAgent._drain_tc_inbox_for_hook` here to drain the involuntary tool-call inbox mid-turn. Post-`.notification/`-redesign (`fadbabf` / `d2da97e`) the hook is still installed but the queue is always empty in production — ACTIVE notifications now defer to the post-turn IDLE synthetic-pair path instead of a send-time prefix hook. Default `None` — adapters that don't install treat the call as a no-op. Phase 3 will remove the hook. See root `ANATOMY.md` "Notifications" for the full picture, including the canonical-vs-server-state regime distinction.
 - `llm/interface.py` — canonical conversation representation.
@@ -49,7 +49,7 @@ Provider-agnostic LLM protocol layer. This folder defines the canonical chat log
 
 ## Composition
 
-- **Parent:** `src/lingtai_kernel/` (see `ANATOMY.md`).
+- **Parent:** `src/lingtai/kernel/` (see `ANATOMY.md`).
 - **Subfolders:** none.
 - **Siblings:** `session.py` persists and compacts `ChatInterface`; `token_ledger.py` persists usage; `intrinsics/` manufactures synthetic LLM blocks for psyche/soul/email flows.
 

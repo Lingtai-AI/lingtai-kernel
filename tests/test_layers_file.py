@@ -160,7 +160,7 @@ def test_file_capability_relative_paths_resolve_under_workdir(tmp_path):
 
 def test_base_agent_has_no_file_intrinsics(tmp_path):
     """BaseAgent should NOT have file intrinsics after phase 2."""
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     for name in ("read", "write", "edit", "glob", "grep"):
         assert name not in agent._intrinsics, f"{name} should not be in BaseAgent intrinsics"
@@ -169,7 +169,7 @@ def test_base_agent_has_no_file_intrinsics(tmp_path):
 
 def test_base_agent_kernel_only(tmp_path):
     """BaseAgent should have exactly 5 intrinsics: email, system, psyche, soul, notification."""
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert set(agent._intrinsics.keys()) == {"email", "system", "psyche", "soul", "notification"}
     agent.stop(timeout=1.0)

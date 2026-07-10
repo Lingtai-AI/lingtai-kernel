@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 
 from lingtai.agent import Agent
 from tools.daemon.run_dir import DaemonRunDir
-from lingtai_kernel.config import AgentConfig
+from lingtai.kernel.config import AgentConfig
 
 
 def make_daemon_agent(

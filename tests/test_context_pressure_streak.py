@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from lingtai_kernel.config import AgentConfig
-from lingtai_kernel.session import (
+from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.session import (
     SessionManager,
     CONTEXT_PRESSURE_HIGH_RATIO,
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
