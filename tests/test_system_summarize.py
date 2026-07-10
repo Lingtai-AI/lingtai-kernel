@@ -149,6 +149,13 @@ def test_rebuild_true_with_no_items_no_pending_markers():
         reason="summarize_rebuild_only"
     )
     agent._save_chat_history.assert_not_called()
+    # The rebuild action's own formal result belongs to the provider round that
+    # requested the rebuild.  Post-rebuild context usage does not exist yet; the
+    # agent must wait for the next provider round before judging recovery/molt.
+    recon = result["reconstruction"]
+    assert "provider round that requested this rebuild" in recon
+    assert "Post-rebuild context usage does not exist yet" in recon
+    assert "next provider round" in recon
 
 
 def test_rebuild_true_no_items_applies_existing_pending_markers():
@@ -231,6 +238,9 @@ def test_rebuild_true_with_items_records_marks_done_then_rebuilds():
     assert "marked done" in recon
     assert "recovery target" in recon
     assert "molt" in recon
+    assert "provider round that requested this rebuild" in recon
+    assert "Post-rebuild context usage does not exist yet" in recon
+    assert "next provider round" in recon
     # Applied totals reflect the batch that was pending; the marker is now done.
     applied = result["applied_summary_totals"]
     assert applied["pending_summaries"] == 1

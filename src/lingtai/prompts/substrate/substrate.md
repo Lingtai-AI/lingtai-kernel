@@ -144,9 +144,15 @@ summarize. Once context is at/above `0.75`, the runtime stamps
 `_meta.tool_meta.context.rebuild`, which permits a proactive manual rebuild with
 `system(action="summarize", rebuild=true)` — either with new items (record then
 apply) or with no items (apply already-pending summaries) — when the fresh
-context is worth the cost; applied summaries flip to `status: done`. At context
-usage `1.0` (the full-context hard boundary) the runtime **forces** a
-provider-context rebuild / fresh replay on the next request **regardless of
+context is worth the cost; applied summaries flip to `status: done`. The manual
+rebuild action's own tool result, including its `context` snapshot plus
+`token_usage.session.context_tokens` and `token_usage.session.context_usage`,
+reports the provider round that requested the rebuild.
+Post-rebuild context usage does not exist yet; it first becomes observable on the
+next provider round. Wait for that round before judging recovery or deciding to
+molt. At context usage `1.0` (the full-context hard boundary) the runtime
+**forces** a provider-context rebuild / fresh replay on the next request
+**regardless of
 whether pending summaries exist**: pending markers are applied and marked done,
 and even with no pending summaries the fresh replay sheds stale timely
 transient `_meta` copies (agent_meta/guidance and notifications/notification_guidance)
