@@ -12,9 +12,9 @@ description: >
   ownership. This is for INTERNAL email
   only — for real internet email via IMAP/SMTP, see the `mcp-manual`
   skill (the lingtai-imap addon owns that surface).
-version: 1.0.0
+version: 1.0.1
 tags: [capabilities, email, communication]
-last_changed_at: "2026-07-02T21:50:00-07:00"
+last_changed_at: "2026-07-09T22:24:00-07:00"
 ---
 
 # Email Manual — the internal `email` tool
@@ -25,10 +25,12 @@ last_changed_at: "2026-07-02T21:50:00-07:00"
 
 The `email` tool moves messages as files between agents that share a `.lingtai/` directory tree:
 
-- Sending writes a `message.json` into the recipient's `mailbox/inbox/<uuid>/` and the sender's `mailbox/sent/<uuid>/`.
-- Delivery is handled by a per-recipient daemon thread (`_mailman`) — synchronous from the sender's perspective once `delay=0`.
+- `email(action="send")` records sender-side outbox/sent state, then starts one `_mailman` daemon thread per recipient. Even when `delay=0`, the tool may return `status: "sent"` before that background delivery attempt finishes.
+- Peer/absolute delivery to a normal agent accepts only a target with `.agent.json` and a fresh `.agent.heartbeat` (normally younger than two seconds); human recipients (`admin: null`) skip the heartbeat check. If the target is refreshing/relaunching and its heartbeat is not fresh yet, delivery is refused as `not running`; no recipient inbox entry is queued for later. The eventual failure is surfaced to the sender as an `email.bounce` system notification.
 - Read state lives in the recipient's `mailbox/read.json` (a set of message IDs).
 - The kernel mirrors current unread mail into `.notification/email.json`, which surfaces as a notification block read via `notification(action="check")` — that's how you find out new mail arrived.
+
+> **Refresh/relaunch window.** A target `lingtai run` process can already be visible in `ps` before it publishes a fresh heartbeat. In that interval, internal email may bounce for liveness while a CPR attempt's child launch exits because the CLI duplicate-process guard finds the existing same-workdir PID. Those results are compatible: do not stack CPR attempts. Wait for the target heartbeat to become fresh, then retry the email once. Use CPR only if the existing startup exits or fails to become live.
 
 There is no concept of an SMTP server, an MX record, or an external address. **If a request involves `@gmail.com`, `@outlook.com`, IMAP folders, or anything that needs to leave the machine, the right tool is the `lingtai-imap` MCP addon — see the `mcp-manual` skill, not this one.**
 
@@ -62,7 +64,7 @@ email(action="send", address=["mimo-1", "scribe"], cc=["human"],
       subject="status", message="ready")
 ```
 
-To discover who exists: glob `.lingtai/*/.agent.json` from a shell. Use the `agent_name` field of each as the address. **Do not** invent addresses — bounces write a `system.bounce` event into `.notification/system.json` and silently absorb your message.
+To discover who exists: glob `.lingtai/*/.agent.json` from a shell. Use the `agent_name` field of each as the address. Do not invent addresses—a refused dispatch produces an `email.bounce` event in `.notification/system.json`; no recipient inbox entry is queued for later.
 
 When displaying a sender to the human or another agent, prefer **`sender_nickname` if set, else `sender_name`** (both are in the inbound message's `identity` block). Bare addresses are routable but ugly.
 
@@ -198,7 +200,7 @@ This skill is the manual for the **kernel-intrinsic `email` tool** only. Adjacen
 | Schedule a one-off wake-up of your own loop        | This skill, `delay` + self-send (§7)         |
 | Run recurring agent-side work                       | Host scheduler / event watcher via `bash-manual` (§8) |
 
-The IMAP, Telegram, Feishu, and WeChat MCP addons each ship their own SKILL.md and `mcp-manual` entry. They are separate processes, separate auth surfaces, and separate failure modes. **Do not** try to use the `email` tool to reach an external address — you will write a file into a non-existent `.lingtai/foo@bar.com/` and the message will bounce silently.
+The IMAP, Telegram, Feishu, and WeChat MCP addons each ship their own SKILL.md and `mcp-manual` entry. They are separate processes, separate auth surfaces, and separate failure modes. Do not try to use the `email` tool for an external address: an unknown target is refused without creating a recipient inbox entry and is reported through `email.bounce`.
 
 ## 11. Mode (output verbosity)
 
