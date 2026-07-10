@@ -11,13 +11,20 @@ two extra steps into the standard ``setuptools.build_meta`` flow:
    idempotent — repeated invocations are cheap because cargo no-ops when
    nothing changed.
 
-2. **Mark the wheel as platform-specific.** Since the wheel ships a native
-   binary, ``bdist_wheel`` is overridden so ``root_is_pure=False`` and the
-   wheel filename carries the correct platform tag (e.g.
-   ``lingtai-0.10.10-cp311-cp311-macosx_14_0_arm64.whl``). The "is the
-   binary actually present?" check runs *after* ``_ensure_sidecar_built()``,
-   so soft-fallback builds (no cargo, ``LINGTAI_SKIP_RUST_BUILD=1``) still
-   produce a universal wheel and skip the platform tag.
+2. **Mark the wheel as platform-specific *and* platlib-compliant.** Since the
+   wheel ships a native binary, ``bdist_wheel`` is overridden so the
+   distribution reports ``has_ext_modules()`` *before* superclass layout
+   finalization. That single predicate drives the platform tag
+   (``root_is_pure=False`` → e.g.
+   ``lingtai-0.10.10-cp311-cp311-macosx_14_0_arm64.whl``) *and* the install
+   scheme, so every package — including the bundled binary under
+   ``lingtai/bin/`` — lands at the archive root (platlib) instead of under
+   ``<name>-<ver>.data/purelib/``. The latter placement is what auditwheel
+   rejects on Linux; see ``BdistWheelImpure`` and
+   ``tests/test_wheel_platlib_layout.py``. The sidecar-present check runs after
+   ``_ensure_sidecar_built()``, so soft-fallback builds (no cargo,
+   ``LINGTAI_SKIP_RUST_BUILD=1``) leave the distribution pure and produce a
+   universal ``py3-none-any`` wheel.
 
 Skip / fallback behavior:
 
@@ -194,23 +201,59 @@ class BuildPyWithSidecar(_build_py):
 if _bdist_wheel is not None:
 
     class BdistWheelImpure(_bdist_wheel):
-        """Force a platform-specific wheel when a native binary is bundled.
+        """Force a platform-specific, platlib-compliant wheel when a native
+        binary is bundled.
 
-        Why this needs ``finalize_options``: ``bdist_wheel`` decides the
-        wheel tag (``py3-none-any`` vs platform-specific) inside
-        ``get_tag``, which reads ``self.root_is_pure`` set during
-        ``finalize_options``. ``build_py`` runs *later*, so we have to
-        kick off the cargo build from here too — otherwise the file
-        existence check below would always be ``False`` on a fresh
-        checkout and we'd ship the binary inside a misleadingly
-        ``py3-none-any`` wheel (which pip won't even look at on a
-        machine with a different ABI).
+        The native/platlib decision must be made *before*
+        ``super().finalize_options()`` runs, because setuptools finalizes the
+        whole wheel layout off a single predicate — ``distribution.has_ext_modules()``:
+
+        * ``bdist_wheel.finalize_options`` recomputes ``root_is_pure`` as
+          ``not (has_ext_modules() or has_c_libraries())`` — this drives the
+          platform tag (``py3-none-any`` vs ``…-macosx_14_0_arm64``).
+        * ``bdist_wheel.run`` then routes the *purelib* scheme to the archive
+          root only when ``root_is_pure`` is true; when false it routes the
+          *platlib* scheme to the root and leaves purelib under
+          ``<name>-<ver>.data/purelib/``.
+        * The nested ``install`` command independently picks
+          ``install_lib = install_platlib if has_ext_modules() else install_purelib``.
+
+        Setting ``root_is_pure = False`` *after* the superclass has finalized
+        (the previous approach) fixed only the tag: ``has_ext_modules()`` stayed
+        false, so ``install`` still routed the pure-Python packages — and the
+        bundled binary under ``lingtai/bin/`` — through *purelib*, landing the
+        whole tree under ``<name>.data/purelib/``. auditwheel then rejects the
+        Linux wheel because the native ``lingtai-search-sidecar`` is not at
+        platlib. See ``tests/test_wheel_platlib_layout.py`` for the regression.
+
+        The fix makes ``has_ext_modules()`` report true *before* the superclass
+        reads it, so tag, run-layout, and install-routing all agree and every
+        package (binary included) lands at the archive root (platlib). We have
+        no ``ext_modules`` list, so ``build_ext`` still runs as a no-op — the
+        native binary is a prebuilt data payload, not a compiled extension.
+
+        ``build_py`` runs *later* than ``finalize_options``, so the cargo build
+        is kicked off here too; otherwise the sidecar-present check would always
+        be false on a fresh checkout and we would ship a misleadingly pure wheel.
+        The pure-Python fallback (``LINGTAI_SKIP_RUST_BUILD=1`` or no cargo) is
+        preserved: with no bundled binary, ``has_ext_modules()`` is left
+        untouched and the superclass produces the normal ``py3-none-any`` wheel.
         """
 
         def finalize_options(self) -> None:  # noqa: D401 - setuptools API
-            super().finalize_options()
             built = _ensure_sidecar_built()
             if built is not None:
+                # Report an ext-module distribution *before* the superclass
+                # finalizes layout, so root_is_pure, the run() install-scheme
+                # routing, and install_lib selection all pick platlib and place
+                # the bundled binary at the archive root — auditwheel-repairable.
+                self.distribution.has_ext_modules = lambda: True
+            super().finalize_options()
+            if built is not None:
+                # Belt-and-braces: the tag is derived from root_is_pure, which
+                # the has_ext_modules() override already forces false. Assert the
+                # invariant so a future setuptools refactor can't silently ship a
+                # pure-tagged wheel around a native binary.
                 self.root_is_pure = False
 
     cmdclass = {"build_py": BuildPyWithSidecar, "bdist_wheel": BdistWheelImpure}
