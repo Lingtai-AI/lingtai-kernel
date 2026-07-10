@@ -54,6 +54,9 @@ def test_argv_bool_false_and_null_are_omitted():
 
 
 def test_argv_string_int_float():
+    out = _backend_options_to_argv({"config": "model_reasoning_effort=ultra"})
+    assert out == ["--config", "model_reasoning_effort=ultra"]
+
     out = _backend_options_to_argv({"model": "gpt-5"})
     assert out == ["--model", "gpt-5"]
 
@@ -180,9 +183,7 @@ def test_emanate_cli_persists_resolved_options(tmp_path):
                 "task": "Refactor auth.",
                 "tools": [],
                 "backend_options": {
-                    "effort": "high",
-                    "model": "claude-opus-4-7",
-                    "search": True,
+                    "config": "model_reasoning_effort=ultra",
                 },
             }],
         })
@@ -194,9 +195,7 @@ def test_emanate_cli_persists_resolved_options(tmp_path):
         fut.result(timeout=5)
 
     user_argv = [
-        "--effort", "high",
-        "--model", "claude-opus-4-7",
-        "--search",
+        "--config", "model_reasoning_effort=ultra",
     ]
     assert captured["backend_argv"][:len(user_argv)] == user_argv
     assert "--mcp-config" in captured["backend_argv"]
@@ -204,9 +203,7 @@ def test_emanate_cli_persists_resolved_options(tmp_path):
     state = captured["daemon_json_state"]
     assert state["backend"] == "claude-code"
     assert state["backend_options"] == {
-        "effort": "high",
-        "model": "claude-opus-4-7",
-        "search": True,
+        "config": "model_reasoning_effort=ultra",
     }
     assert state["backend_argv"] == user_argv
     assert "--mcp-config" in state["backend_harness_argv"]
@@ -436,6 +433,21 @@ def test_schema_includes_backend_options():
     task_props = schema["properties"]["tasks"]["items"]["properties"]
     assert "backend_options" in task_props
     assert task_props["backend_options"]["type"] == "object"
+    passthrough = task_props["backend_options"]["additionalProperties"]
+    alternatives = passthrough["anyOf"]
+    assert {item.get("type") for item in alternatives} == {
+        "boolean", "string", "integer", "number", "null", "array",
+    }
+    array_schema = next(item for item in alternatives if item.get("type") == "array")
+    assert {item["type"] for item in array_schema["items"]["anyOf"]} == {
+        "string", "integer", "number",
+    }
+    # Nested objects and booleans in lists are intentionally not representable.
+    assert all(item.get("type") != "object" for item in alternatives)
+    assert all(
+        item["type"] != "boolean"
+        for item in array_schema["items"]["anyOf"]
+    )
     # The free-form description should mention discovery via --help so
     # agents know not to expect a fixed list here.
     assert "--help" in task_props["backend_options"]["description"]

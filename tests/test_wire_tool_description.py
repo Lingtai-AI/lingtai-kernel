@@ -132,6 +132,25 @@ def test_openai_responses_wire_description():
     assert schemas[0].description == FULL_DESCRIPTION
 
 
+def test_openai_responses_preserves_daemon_backend_options_passthrough_schema():
+    from lingtai.llm.openai.adapter import _build_responses_tools
+    from tools.daemon import get_schema
+
+    tools = _build_responses_tools([
+        FunctionSchema(name="daemon", description="daemon", parameters=get_schema())
+    ])
+    backend_options = tools[0]["parameters"]["properties"]["tasks"]["items"][
+        "properties"
+    ]["backend_options"]
+
+    assert "additionalProperties" in backend_options
+    assert "properties" not in backend_options
+    assert any(
+        option == {"type": "string"}
+        for option in backend_options["additionalProperties"]["anyOf"]
+    )
+
+
 def test_anthropic_wire_description_and_cache_control():
     from lingtai.llm.anthropic.adapter import _build_tools
 
