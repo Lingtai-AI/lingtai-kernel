@@ -45,6 +45,7 @@ These are migration *candidates*, not a commitment to change every one.
 
 ### Stage 1 — riskiest crash-sensitive / model-visible state (do first)
 - [x] `workdir.py::WorkingDir.write_manifest` (`.agent.json`) — **migrated here**
+- [x] `base_agent/__init__.py::_write_status_snapshot` (`.status.json`) — migrated with byte-parity coverage
 - [ ] `workdir.py::write_resolved_manifest` (`manifest.resolved.json`, trailing newline → pass explicit newline or keep inline)
 - [ ] notification files (`.notification/*.json`)
 - [ ] `intrinsics/email/primitives.py` message/`message.json` writes (currently direct `write_text`; some non-contact paths can escape non-ASCII)
