@@ -43,6 +43,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import ntpath
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -109,8 +111,83 @@ def _sidecar_in_prefix(prefix_purelib: str, prefix_platlib: str) -> Path | None:
     return None
 
 
+def _strip_extended_prefix(path: str) -> str:
+    """Drop a Windows extended-length / device path prefix if present.
+
+    The sidecar canonicalizes paths with Rust's ``Path::canonicalize``, which on
+    Windows yields verbatim ``\\\\?\\C:\\...`` paths, then normalizes separators to
+    ``/`` (``main.rs``: ``abs.to_string_lossy().replace('\\\\', "/")``). So a real
+    Windows glob hit looks like ``//?/C:/Users/.../a.txt``. That prefix is a
+    spelling artifact, not part of the file's identity — strip it before
+    comparison. POSIX paths are returned unchanged.
+    """
+    for prefix in ("\\\\?\\", "\\\\.\\", "//?/", "//./"):
+        if path.startswith(prefix):
+            return path[len(prefix):]
+    return path
+
+
+def _canonical_key(path: str) -> str:
+    """Spelling-independent identity key for a filesystem path.
+
+    Folds away the platform-specific spelling the sidecar emits — the Windows
+    extended-length prefix, ``/`` vs ``\\`` separators, and case-insensitive
+    volumes — so the same key falls out of ``//?/C:/Users/.../a.txt`` and
+    ``C:\\Users\\...\\A.TXT`` while a genuinely different file (other basename or
+    other directory) yields a different key. On POSIX it is an ordinary
+    case-sensitive normpath. This mirrors how the production integration test
+    compares glob output rather than reconstructing the path with
+    ``Path.resolve``, which does not equate these Windows spellings.
+    """
+    stripped = _strip_extended_prefix(path)
+    # A drive letter (``C:``) or a backslash means Windows path semantics;
+    # otherwise treat it as POSIX. ``normcase`` lowercases + unifies separators
+    # on Windows and is a no-op on POSIX; ``normpath`` collapses ``.``/``..``.
+    mod = ntpath if (ntpath.splitdrive(stripped)[0] or "\\" in stripped) else posixpath
+    return mod.normcase(mod.normpath(stripped))
+
+
+def _assert_glob_envelope_locates(response: dict, expected_key: str) -> None:
+    """Assert a ``glob`` envelope canonically located exactly ``expected_key``.
+
+    Encodes the canonical sidecar contract (``crates/lingtai-search-sidecar``):
+    a ``glob`` op returns its hits in ``paths`` (``matches`` is a grep-only
+    field and is legitimately empty here), each an absolute, canonicalized path
+    in the sidecar's platform spelling. The comparison is robust across POSIX
+    and the Windows ``//?/C:/...`` spelling but still demands the *exact* file —
+    an unrelated or missing path fails loud. ``expected_key`` is a
+    ``_canonical_key``; taking it (rather than a live ``Path``) lets the
+    Windows response shape be exercised deterministically off-Windows.
+    """
+    assert response.get("ok") is True, f"sidecar not ok: {response}"
+    assert response.get("backend") == "lingtai-search-sidecar", response
+    assert response.get("op") == "glob", response
+    # The walk must have actually traversed the tree (root + the one file).
+    assert response.get("visited", 0) >= 1, f"sidecar visited nothing: {response}"
+    # glob hits live in ``paths``; ``matches`` belongs to ``grep`` and is empty.
+    assert not response.get("matches"), f"glob unexpectedly set matches: {response}"
+    paths = response.get("paths") or []
+    got = {_canonical_key(p) for p in paths}
+    assert got == {expected_key}, (
+        f"glob did not return exactly the expected file.\n"
+        f"  expected key: {expected_key}\n"
+        f"  got keys:     {sorted(got)}\n"
+        f"  raw response: {response}"
+    )
+
+
+def _assert_glob_found_target(response: dict, target: Path) -> None:
+    """Assert a ``glob`` envelope located exactly ``target`` (live filesystem)."""
+    _assert_glob_envelope_locates(response, _canonical_key(str(target.resolve())))
+
+
 def _drive_sidecar(binary: Path) -> None:
-    """Run the sidecar over its JSON stdin protocol and assert a good response."""
+    """Run the sidecar over its JSON stdin protocol and assert a good response.
+
+    Proves the native binary launches, returns ``ok: true`` with the expected
+    backend/op, traverses the tree, and returns exactly the seeded test file —
+    across POSIX and Windows path spellings — then lets the tempdir clean up.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         target = root / "a.txt"
@@ -130,10 +207,7 @@ def _drive_sidecar(binary: Path) -> None:
             f"sidecar exited {proc.returncode}: {proc.stdout}\n{proc.stderr}"
         )
         response = json.loads(proc.stdout)
-        assert response.get("ok") is True, f"sidecar not ok: {proc.stdout}"
-        assert response.get("op") == "glob", response
-        got = [Path(p).resolve() for p in response.get("paths", [])]
-        assert got == [target.resolve()], f"unexpected glob result: {response}"
+        _assert_glob_found_target(response, target)
 
 
 def wheel_runnable_here(wheel: Path) -> bool:
@@ -229,6 +303,122 @@ if pytest is not None:  # only collected under pytest; CI runs this file scriptw
     def test_native_wheel_ships_and_runs_sidecar(tmp_path: Path) -> None:
         wheel = _build_native_wheel(tmp_path)
         verify_wheel_install_and_run(wheel)
+
+    # -----------------------------------------------------------------------
+    # Deterministic regression for the Windows glob response shape.
+    #
+    # These run on any host (no Windows, no Rust). They pin the exact response
+    # shape from the failing Windows CI run (job 86408373017, run
+    # 29106557281): a successful ``glob`` whose hit is spelled with the
+    # extended-length ``//?/C:/...`` prefix and forward slashes, with an empty
+    # ``matches`` array. The pre-fix assertion compared ``Path(p).resolve()``
+    # against the local tempfile and failed on that spelling even though the
+    # sidecar had located the exact file.
+    # -----------------------------------------------------------------------
+
+    # The literal path from windows-latest.log line 804.
+    _WIN_GLOB_PATH = (
+        "//?/C:/Users/runneradmin/AppData/Local/Temp/tmpduegvy1z/a.txt"
+    )
+    _WIN_TARGET = "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\tmpduegvy1z\\a.txt"
+
+    def _win_response(paths: list[str]) -> dict:
+        # Mirrors the exact envelope fields the sidecar emitted on Windows.
+        return {
+            "ok": True,
+            "backend": "lingtai-search-sidecar",
+            "op": "glob",
+            "matches": [],
+            "paths": paths,
+            "visited": 2,
+            "files_skipped_size": 0,
+            "files_skipped_binary": 0,
+            "dirs_pruned": 0,
+            "elapsed_ms": 4,
+            "truncated_reason": None,
+            "error": None,
+        }
+
+    def test_canonical_key_folds_windows_extended_length_spelling() -> None:
+        # The //?/ + forward-slash spelling keys equal to the plain Windows path.
+        assert _canonical_key(_WIN_GLOB_PATH) == _canonical_key(_WIN_TARGET)
+        # Case-insensitive volume: an upper-cased expected path still matches.
+        assert _canonical_key(_WIN_GLOB_PATH) == _canonical_key(
+            "C:/USERS/runneradmin/AppData/Local/Temp/tmpduegvy1z/A.TXT"
+        )
+
+    def test_canonical_key_distinguishes_different_files() -> None:
+        # Same directory, different basename — must NOT collapse.
+        assert _canonical_key(_WIN_GLOB_PATH) != _canonical_key(
+            "//?/C:/Users/runneradmin/AppData/Local/Temp/tmpduegvy1z/b.txt"
+        )
+        # Same basename, different directory — must NOT collapse.
+        assert _canonical_key(_WIN_GLOB_PATH) != _canonical_key(
+            "//?/C:/Users/runneradmin/AppData/Local/Temp/OTHER/a.txt"
+        )
+        # POSIX pair sanity: distinct files differ, identical spelling matches.
+        assert _canonical_key("/tmp/x/a.txt") != _canonical_key("/tmp/x/b.txt")
+        assert _canonical_key("/tmp/x/a.txt") == _canonical_key("/tmp/x/a.txt")
+
+    def test_windows_glob_envelope_accepts_exact_file() -> None:
+        # The full envelope assertion accepts the real Windows response shape.
+        _assert_glob_envelope_locates(
+            _win_response([_WIN_GLOB_PATH]), _canonical_key(_WIN_TARGET)
+        )
+
+    def test_windows_glob_envelope_rejects_unrelated_file() -> None:
+        # A hit for a different file under the same temp dir must fail loud.
+        with pytest.raises(AssertionError):
+            _assert_glob_envelope_locates(
+                _win_response(
+                    ["//?/C:/Users/runneradmin/AppData/Local/Temp/tmpduegvy1z/b.txt"]
+                ),
+                _canonical_key(_WIN_TARGET),
+            )
+
+    def test_windows_glob_envelope_rejects_missing_and_extra_paths() -> None:
+        # Empty paths (found nothing) fails loud …
+        with pytest.raises(AssertionError):
+            _assert_glob_envelope_locates(
+                _win_response([]), _canonical_key(_WIN_TARGET)
+            )
+        # … and an extra unrelated hit alongside the right one also fails.
+        with pytest.raises(AssertionError):
+            _assert_glob_envelope_locates(
+                _win_response(
+                    [
+                        _WIN_GLOB_PATH,
+                        "//?/C:/Users/runneradmin/AppData/Local/Temp/tmpduegvy1z/b.txt",
+                    ]
+                ),
+                _canonical_key(_WIN_TARGET),
+            )
+
+    def test_glob_envelope_rejects_grep_style_and_not_ok() -> None:
+        # A glob envelope must not carry grep ``matches`` …
+        bad = _win_response([_WIN_GLOB_PATH])
+        bad["matches"] = [{"path": "a.txt", "line_number": 1, "line": "x"}]
+        with pytest.raises(AssertionError):
+            _assert_glob_envelope_locates(bad, _canonical_key(_WIN_TARGET))
+        # … and an ``ok: false`` envelope always fails loud.
+        not_ok = _win_response([_WIN_GLOB_PATH])
+        not_ok["ok"] = False
+        with pytest.raises(AssertionError):
+            _assert_glob_envelope_locates(not_ok, _canonical_key(_WIN_TARGET))
+
+    def test_posix_glob_envelope_accepts_forward_slash_path(tmp_path: Path) -> None:
+        # The POSIX shape still works through the same assertion.
+        target = tmp_path / "a.txt"
+        target.write_text("x", encoding="utf-8")
+        resp = {
+            "ok": True,
+            "backend": "lingtai-search-sidecar",
+            "op": "glob",
+            "matches": [],
+            "paths": [str(target.resolve())],
+            "visited": 2,
+        }
+        _assert_glob_found_target(resp, target)
 
 
 # ---------------------------------------------------------------------------
