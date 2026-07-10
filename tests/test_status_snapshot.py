@@ -2,10 +2,13 @@
 
 import json
 import logging
+import os
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 
 import lingtai_kernel.base_agent as base_agent_module
+import pytest
 from lingtai_kernel import _fsutil
 from lingtai_kernel.base_agent import BaseAgent
 
@@ -62,3 +65,36 @@ def test_status_snapshot_write_failure_warns_and_preserves_prior_bytes(
 
     assert "[test] Failed to write .status.json: representative write failure" in caplog.text
     assert target.read_bytes() == prior_bytes
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits required")
+def test_status_snapshot_preserves_existing_mode(tmp_path):
+    target = tmp_path / ".status.json"
+    target.write_text('{"old": true}')
+    target.chmod(0o600)
+    agent = SimpleNamespace(
+        _working_dir=tmp_path,
+        agent_name="test",
+        status=lambda: {"replacement": True},
+    )
+
+    BaseAgent._write_status_snapshot(agent)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits required")
+def test_status_snapshot_first_creation_inherits_umask(tmp_path):
+    target = tmp_path / ".status.json"
+    agent = SimpleNamespace(
+        _working_dir=tmp_path,
+        agent_name="test",
+        status=lambda: {"created": True},
+    )
+    old_umask = os.umask(0o027)
+    try:
+        BaseAgent._write_status_snapshot(agent)
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640

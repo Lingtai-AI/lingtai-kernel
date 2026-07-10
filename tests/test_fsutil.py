@@ -2,6 +2,7 @@
 
 import json
 import os
+import stat
 
 import pytest
 
@@ -30,6 +31,31 @@ def test_atomic_write_text_overwrites_existing(tmp_path):
     target.write_text("old")
     _fsutil.atomic_write_text(target, "new")
     assert target.read_text() == "new"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits required")
+def test_atomic_write_text_preserves_existing_mode_when_requested(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("old")
+    target.chmod(0o600)
+
+    _fsutil.atomic_write_text(target, "new", preserve_existing_mode=True)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits required")
+def test_atomic_write_text_default_still_uses_umask_for_replacement(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("old")
+    target.chmod(0o600)
+    old_umask = os.umask(0o022)
+    try:
+        _fsutil.atomic_write_text(target, "new")
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
 
 
 def test_atomic_write_temp_is_sibling_of_target(tmp_path, monkeypatch):

@@ -1998,7 +1998,11 @@ class BaseAgent:
     def _write_status_snapshot(self) -> None:
         """Write .status.json — live runtime snapshot consumed by TUI/portal."""
         try:
-            atomic_write_json(self._working_dir / ".status.json", self.status())
+            atomic_write_json(
+                self._working_dir / ".status.json",
+                self.status(),
+                preserve_existing_mode=True,
+            )
         except Exception as e:
             logger.warning(f"[{self.agent_name}] Failed to write .status.json: {e}")
 

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -79,6 +80,7 @@ def atomic_write_text(
     *,
     encoding: str = "utf-8",
     fsync: bool = False,
+    preserve_existing_mode: bool = False,
 ) -> Path:
     """Atomically write ``text`` to ``path``.
 
@@ -92,11 +94,22 @@ def atomic_write_text(
     fsyncs the *file content* only, not the parent directory, so the rename
     metadata is not guaranteed durable across a power loss; that is stronger
     than the default and sufficient for the current opt-out callers.
+
+    ``preserve_existing_mode`` is also opt-in.  When True and the target
+    exists, its permission bits are applied to the new temp file before the
+    replace.  A missing target still inherits the process umask, and the
+    default False preserves the existing behaviour for other callers.
     """
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = _unique_tmp(target)
     try:
+        existing_mode = None
+        if preserve_existing_mode:
+            try:
+                existing_mode = stat.S_IMODE(target.stat().st_mode)
+            except FileNotFoundError:
+                pass
         # "x" (exclusive create) guarantees we never write into a temp file
         # another writer already created; combined with the uuid4 name this
         # makes concurrent same-target writes collision-free.
@@ -105,6 +118,8 @@ def atomic_write_text(
             if fsync:
                 f.flush()
                 os.fsync(f.fileno())
+        if existing_mode is not None:
+            tmp.chmod(existing_mode)
         os.replace(str(tmp), str(target))
     except BaseException:
         # Best-effort cleanup so a failed write does not leave temp litter.
@@ -125,6 +140,7 @@ def atomic_write_json(
     sort_keys: bool = False,
     default: Optional[Callable[[Any], Any]] = None,
     fsync: bool = False,
+    preserve_existing_mode: bool = False,
 ) -> Path:
     """Atomically write ``obj`` as JSON to ``path``.
 
@@ -132,6 +148,9 @@ def atomic_write_json(
     the kernel's dominant model-visible JSON convention.  Serialization happens
     *before* the file is touched, so a non-serializable ``obj`` raises without
     leaving a temp file or clobbering the target.
+
+    ``preserve_existing_mode`` is forwarded to :func:`atomic_write_text` and
+    remains disabled by default.
     """
     text = json.dumps(
         obj,
@@ -140,7 +159,13 @@ def atomic_write_json(
         sort_keys=sort_keys,
         default=default,
     )
-    return atomic_write_text(path, text, encoding="utf-8", fsync=fsync)
+    return atomic_write_text(
+        path,
+        text,
+        encoding="utf-8",
+        fsync=fsync,
+        preserve_existing_mode=preserve_existing_mode,
+    )
 
 
 def read_json(
