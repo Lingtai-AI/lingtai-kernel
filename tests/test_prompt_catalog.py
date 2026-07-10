@@ -58,11 +58,22 @@ _PROMPT_SOURCE_GRAPH = {
 
 
 def _mentioned_file_paths(body: str) -> list[str]:
-    """Return file paths explicitly mentioned in Markdown body backticks."""
+    """Return repo-relative source/document paths mentioned in body backticks.
+
+    The prompt-source crawl graph (`related_files`) is a graph of repo-relative
+    prompt/guidance/reference sources. Body backticks also carry non-source
+    references that must never become crawl links: test paths (`tests/...`) and
+    external runtime locations that live outside the repo — home-directory paths
+    (`~/.lingtai-tui/runtime/venv`) and absolute paths (`/usr/...`). Those are
+    filtered here so the graph invariant only enforces real repo-relative
+    sources.
+    """
     paths: list[str] = []
     for match in _FILE_PATH_IN_BACKTICKS.finditer(body):
         value = match.group(1).strip()
         if value.startswith("tests/"):
+            continue
+        if value.startswith(("~/", "~", "/")):
             continue
         if "/" in value or any(
             suffix in value
@@ -118,6 +129,42 @@ def _prompt_source_path_for_section(name: str) -> str:
 
 def _prompt_source_path_for_guidance(filename: str) -> str:
     return f"{_GUIDANCE_CATALOG_DIR}/{filename}"
+
+
+# ---------------------------------------------------------------------------
+# Body path detection for the crawl-graph invariant
+# ---------------------------------------------------------------------------
+
+
+def test_mentioned_file_paths_ignores_external_runtime_paths():
+    """External home/absolute runtime paths are not prompt-source crawl links.
+
+    `substrate.md` documents the TUI runtime venv `~/.lingtai-tui/runtime/venv`;
+    it lives outside the repo and must never be added to `related_files`. Only
+    repo-relative source/document references feed the crawl-graph invariant.
+    """
+    body = (
+        "Prefer `LINGTAI_RUNTIME_PYTHON`; TUI runs point it into the runtime venv "
+        "(for example `~/.lingtai-tui/runtime/venv` on macOS/Linux). See "
+        "`reference/substrate-manual/SKILL.md` for the full model. Absolute paths "
+        "like `/usr/local/bin/python` are external too.\n"
+    )
+    mentioned = _mentioned_file_paths(body)
+    assert "~/.lingtai-tui/runtime/venv" not in mentioned
+    assert "/usr/local/bin/python" not in mentioned
+    # A real repo-relative document reference is still detected and enforced.
+    assert "reference/substrate-manual/SKILL.md" in mentioned
+
+
+def test_mentioned_file_paths_detects_repo_relative_sources():
+    """Repo-relative paths — including placeholder segments — stay enforced."""
+    body = (
+        "See `src/lingtai/prompts/principle/principle.md` and the journal at "
+        "`knowledge/session-journal/<YYYY-MM-DD>-<slug>/KNOWLEDGE.md`.\n"
+    )
+    mentioned = _mentioned_file_paths(body)
+    assert "src/lingtai/prompts/principle/principle.md" in mentioned
+    assert "knowledge/session-journal/<YYYY-MM-DD>-<slug>/KNOWLEDGE.md" in mentioned
 
 
 # ---------------------------------------------------------------------------
