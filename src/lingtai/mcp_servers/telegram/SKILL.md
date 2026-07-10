@@ -7,8 +7,8 @@ description: |
   messages, reply vs send, read/check/search, parse_mode/entities, chat_action, dynamic slash commands,
   and error surfacing. Pulled on demand via action='manual'; you do not need to
   call it before every send.
-version: 1.1.0
-last_changed_at: "2026-07-02T15:34:00-07:00"
+version: 1.1.1
+last_changed_at: "2026-07-10T14:24:00-07:00"
 ---
 
 # Telegram MCP — usage manual (progressive disclosure)
@@ -136,5 +136,14 @@ Important behavior notes:
   failure (e.g. missing `chat_id`, unreadable `media.path`, bad `parse_mode`).
   Check for the `'error'` key and surface or act on it rather than assuming the
   message was delivered.
+- The hosted Telegram Bot API limits `getFile` downloads to 20 MB. If an inbound
+  document cannot be downloaded, `read` retains its available Telegram metadata
+  without a local path, adds a safe bounded provider reason in `download_error`,
+  and includes actionable resend/alternate-transfer guidance in the message text.
+  For the hosted size error, ask for parts no larger than 20 MB or another transfer
+  method. No reply is sent to the Telegram user automatically.
+- Telegram's upstream local Bot API server can download files without that limit,
+  but this addon currently uses the official hosted endpoints and does not expose
+  local-server configuration or support.
 - A duplicate identical send returns `{'status': 'blocked'}`; treat that as
   'already sent', not as a transient error to retry.
