@@ -5,9 +5,9 @@ description: >
   daemon(action=list), claude-p/codex/opencode behavior,
   backend_options flag passing, preset/capability inheritance, and nested
   per-backend references (Codex, OpenCode, claude-p, MiMo Code, Qwen Code,
-  and Kimi Code flag discovery, built-in LingTai knowledge entrypoint).
-version: 1.11.0
-last_changed_at: "2026-07-09T20:30:50-07:00"
+  Kimi Code, and Cursor flag discovery, built-in LingTai knowledge entrypoint).
+version: 1.12.0
+last_changed_at: "2026-07-09T20:34:39-07:00"
 ---
 
 # Daemon CLI Backend Reference
@@ -78,6 +78,14 @@ catalog. Only backends with proven demand get a page.
     installed CLI's live help via bash and shows how to translate that help
     into generic `backend_options`, plus the exact reserved harness flags,
     the run-private `mcp.json` loader, and the current ask/resume limitation.
+- name: daemon-backend-cursor
+  location: reference/backends/cursor/SKILL.md
+  description: |
+    Nested daemon-cli-backends reference for the Cursor daemon backend's flag
+    surface. Read this only when a daemon task needs Cursor-specific CLI
+    flags (model selection, output/tooling switches): it routes to the
+    installed `agent` CLI's live help via bash and shows how to translate
+    that help into generic `backend_options`.
 - name: daemon-backend-lingtai
   location: reference/backends/lingtai/SKILL.md
   description: |
@@ -99,6 +107,7 @@ catalog. Only backends with proven demand get a page.
 | MiMo Code-specific flags for a daemon task (`mimocode` / `mimo`): model selection, provider switches; discover the installed `mimo` CLI's flags (`mimo run --help`) and translate them into `backend_options` | `reference/backends/mimocode/SKILL.md` |
 | Qwen Code (`qwen-code` / `qwen`)-specific flags for a daemon task: model selection, provider tunables, reserved `--prompt`/`--yolo`/`--approval-mode` boundary, no-`ask` planning; discover the installed `qwen` CLI's flags and translate them into `backend_options` | `reference/backends/qwen-code/SKILL.md` |
 | Kimi Code (`kimicode` / `kimi`)-specific flags for a daemon task: model selection (`--model`), skills/workspace dirs; reserved harness flags, run-private `mcp.json` MCP loader, why `ask`/resume is unsupported; discover the installed Kimi CLI's flags and translate them into `backend_options` | `reference/backends/kimicode/SKILL.md` |
+| Cursor-specific flags for a daemon task: model selection, output/tooling switches; discover the installed Cursor Agent CLI's (`agent`) flags and translate them into `backend_options` | `reference/backends/cursor/SKILL.md` |
 | Built-in `lingtai` backend knowledge for a daemon task: confirm it has no CLI/`backend_options` flag surface; find the live authorities for preset selection/inspection, tools/skills/MCP inheritance, and the completion contract | `reference/backends/lingtai/SKILL.md` |
 
 ## API note: `daemon(action="list")`
@@ -277,7 +286,8 @@ hygiene), read `reference/backends/claude-p/SKILL.md`. For MiMo Code
 translation (e.g. model selection, reserved headless flags), read
 `reference/backends/qwen-code/SKILL.md`. For Kimi Code-specific discovery and
 translation (model selection, exact reserved flags, the run-private `mcp.json`
-loader), read `reference/backends/kimicode/SKILL.md`.
+loader), read `reference/backends/kimicode/SKILL.md`. For Cursor (binary `agent`), read
+`reference/backends/cursor/SKILL.md`.
 
 This is intentionally a passthrough, not a fixed table. Claude Code, Codex,
 OpenCode, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, and Cursor rev their flag
