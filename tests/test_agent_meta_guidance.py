@@ -174,6 +174,20 @@ def test_init_substrate_override_is_not_honored(tmp_path):
     assert agent._prompt_manager.read_section("substrate") == strip_frontmatter(packaged)
 
 
+def test_packaged_substrate_explains_rebuild_context_observation_timing(tmp_path):
+    """Resident substrate must prevent agents from reading the rebuild action's
+    requesting-round telemetry as post-rebuild context usage."""
+    agent = _agent_with_static_comment(tmp_path)
+    agent._reload_prompt_sections({})
+
+    prompt = agent._build_system_prompt()
+    assert "reports the provider round" in prompt
+    assert "that requested the rebuild" in prompt
+    assert "Post-rebuild context usage" in prompt
+    assert "does not exist yet" in prompt
+    assert "next provider round" in prompt
+
+
 def test_section_mirrors_keep_frontmatter_but_prompt_is_body_only(tmp_path):
     """Jason's contract: `system/*.md` section mirrors may carry frontmatter, but
     the rendered LLM prompt and the final `system/system.md` must be body-only.
