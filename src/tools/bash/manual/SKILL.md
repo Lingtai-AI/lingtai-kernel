@@ -7,7 +7,7 @@ description: >
   launchd, systemd timers, crontab jobs, or scheduled reminders.** Router for
   Bash-related operational depth beyond the bash tool schema: async + poll
   discipline for long-running child agents, host-scheduler setup, LingTai
-  wake-by-mailbox-drop, script hygiene, one-shot `.notification/cron.json`
+  wake-by-mailbox-drop, built-in async last-resort reminders, script hygiene, one-shot `.notification/cron.json`
   reminders, debugging silent jobs, and safe cleanup. Start here for any
   long-running agent CLI, time-driven recurring work ("every hour", "weekdays at
   9", "remind me later"), or when a scheduled job misbehaves.
@@ -19,7 +19,7 @@ last_changed_at: "2026-06-24T14:38:03-07:00"
 
 The `bash` tool schema covers one-off command execution. This manual routes to
 operational depth that is too long for the schema: host scheduling, mailbox-drop
-wakeups, reminder files, debugging, and cleanup.
+wakeups, async last-resort reminders, reminder files, debugging, and cleanup.
 
 For ordinary short, deterministic one-off shell commands, use the tool schema
 synchronously. For anything involving time, recurring work, external schedulers,
@@ -208,18 +208,18 @@ reading the whole file when you only need recent events.
 
   ```text
   # Start the child agent in the background — returns immediately with a job_id:
-  bash(async=true, command="claude -p 'refactor the auth module' --output-format json")
-  # → {"status": "ok", "job_id": "ab12…", "pid": 4321}
+  bash(async=true, reminder=1800, command="claude -p 'refactor the auth module' --output-format json")
+  # → {"status": "ok", "job_id": "job-a1b2c3d4", "pid": 4321}
 
   # Later turns: poll until done (handle mail/other work between polls):
-  bash(action="poll", job_id="ab12…")
+  bash(action="poll", job_id="job-a1b2c3d4", reminder=1800)
   # → {"status": "running", …}   then eventually
   # → {"status": "done", "exit_code": 0, "ok": true, "command_status": "success", "stdout": "…", "stderr": "…"}
   #   On failure: {"status": "done", "exit_code": 1, "ok": false,
   #                "command_status": "failed", "warning": "command exited with code 1; …"}
 
   # Abandon it if needed:
-  bash(action="cancel", job_id="ab12…")
+  bash(action="cancel", job_id="job-a1b2c3d4", reminder=1800)
   ```
 
 - **If repeated-call `_advisory` appears on `bash(action="poll")`, stop
@@ -230,20 +230,27 @@ reading the whole file when you only need recent events.
   a completion notification arrives, the reminder fires, or you have a concrete
   reason to expect new state.
 
-- **Idle care: never hand a launched async job entirely to its completion
-  notification.** Once you start a long-running agent/coding CLI with
-  `bash(async=true)` (or any child sub-process), do not go fully IDLE relying
-  only on the completion/IDLE signal. Before resting, arm **at least one**
-  self-wake (a `.notification/cron.json` reminder or an internal delayed
-  self-email). Pick the delay from the task's *expected* duration — not a fixed
-  number; a 30 s scan and a 40 min build warrant different windows. When the
-  wake fires, health-check rather than assume progress: confirm the log is
-  **growing**, the PID/child is **alive**, the output file/worktree shows
+- **Idle care: set an async `reminder` that matches the expected duration.**
+  Every `bash(async=true)` call has a last-resort `reminder` delay, required in
+  the top-level provider schema and defaulted by the runtime to 1800 seconds
+  when omitted by older direct callers. Provider-facing sync commands, `poll`,
+  and `cancel` also carry `reminder` because of that schema shape, but the field
+  is meaningful and runtime-validated only for async `run`; sync commands,
+  `poll`, and `cancel` ignore it.
+  When that delay expires, Bash publishes a `bash.reminder` event into
+  `.notification/system.json` unless the job has already been terminally polled
+  or cancelled. The normal completion notification still arrives through
+  `.notification/bash.json`; the reminder is separate and intentionally still
+  fires for an unpolled job even if the process already exited. Pick the delay
+  from the task's *expected* duration — not a fixed number; a 30 s scan and a
+  40 min build warrant different windows. When the reminder fires, health-check
+  rather than assume progress: poll the job, confirm the log is **growing**, the
+  PID/child is **alive** if still running, the output file/worktree shows
   **progress**, and the job is not stuck on an interactive prompt or a
   provider/model error. If there is no progress, do not keep waiting — cancel,
-  downgrade, or switch path, and report to the human. A job that exits
-  immediately or sits silent past its expected window is the failure mode this
-  rule exists to catch.
+  downgrade, or switch path, and report to the human. Use a separate
+  `.notification/cron.json` reminder or delayed self-email only for a broader
+  workflow wake that is not tied to one Bash async job.
 
 - LingTai has no built-in recurring scheduler. Host schedulers wake agents by
   producing channel input, usually a mailbox-drop or notification file.

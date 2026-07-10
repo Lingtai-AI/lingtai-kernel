@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import signal
@@ -27,6 +28,8 @@ if TYPE_CHECKING:
 PROVIDERS = {"providers": [], "default": "builtin"}
 
 _DEFAULT_POLICY_FILE = Path(__file__).parent / "bash_policy.json"
+_DEFAULT_ASYNC_REMINDER_SECONDS = 1800.0
+_SYSTEM_NOTIFICATION_FALLBACK_LOCK = threading.Lock()
 
 # Length of the stderr tail surfaced in the failure warning. Short on purpose:
 # the full stderr is already present in the result; the tail just makes the
@@ -201,6 +204,11 @@ def get_schema(lang: str = "en") -> dict:
                 "description": "Run command in background and return immediately with a job_id (default: false, only for action='run')",
                 "default": False,
             },
+            "reminder": {
+                "type": "number",
+                "description": "Last-resort async wake delay in seconds (default: 1800). For async run only: if the job has not been terminally polled or cancelled by then, publish a system notification reminding you to poll it.",
+                "default": _DEFAULT_ASYNC_REMINDER_SECONDS,
+            },
             "job_id": {
                 "type": "string",
                 "description": 'Job ID for poll/cancel actions (returned by async run)',
@@ -211,7 +219,7 @@ def get_schema(lang: str = "en") -> dict:
                 "default": False,
             },
         },
-        "required": [],  # command required only for action=run; job_id for poll/cancel
+        "required": ["reminder"],  # command/job_id are enforced per action; handler defaults omitted reminder for runtime compatibility
     }
 
 
@@ -315,11 +323,15 @@ class BashManager:
         policy: BashPolicy,
         working_dir: str,
         max_output: int = 50_000,
+        agent: "BaseAgent | None" = None,
     ):
         self._policy = policy
         self._working_dir = working_dir
         self._max_output = max_output
+        self._agent = agent
         self._jobs_dir: Path | None = None
+        self._reminder_lock = threading.Lock()
+        self._reminder_cancel_events: dict[str, threading.Event] = {}
 
     def _ensure_jobs_dir(self) -> Path:
         """Create and return the jobs directory (lazy init)."""
@@ -370,6 +382,31 @@ class BashManager:
             return {"status": "error", "message": f"Invalid job_id: {job_id}"}
         return None
 
+    @staticmethod
+    def _validate_reminder(value) -> tuple[float | None, dict | None]:
+        """Validate async reminder delay, defaulting omitted values for runtime compatibility."""
+        if value is None:
+            return _DEFAULT_ASYNC_REMINDER_SECONDS, None
+        if isinstance(value, bool):
+            return None, {"status": "error", "message": "reminder must be a finite non-negative number of seconds"}
+        try:
+            delay = float(value)
+        except (TypeError, ValueError):
+            return None, {"status": "error", "message": "reminder must be a finite non-negative number of seconds"}
+        if (
+            delay < 0
+            or not math.isfinite(delay)
+            or delay > threading.TIMEOUT_MAX
+        ):
+            return None, {
+                "status": "error",
+                "message": (
+                    "reminder must be a finite non-negative number of seconds "
+                    f"not greater than {threading.TIMEOUT_MAX}"
+                ),
+            }
+        return delay, None
+
     def handle(self, args: dict) -> dict:
         action = args.get("action", "run")
 
@@ -398,7 +435,10 @@ class BashManager:
 
         is_async = args.get("async", False)
         if is_async:
-            return self._run_async(command, cwd)
+            reminder, err = self._validate_reminder(args.get("reminder"))
+            if err:
+                return err
+            return self._run_async(command, cwd, reminder)
         return self._run_sync(command, cwd, args.get("timeout", 30))
 
     def _run_sync(self, command: str, cwd: str, timeout: float) -> dict:
@@ -434,7 +474,7 @@ class BashManager:
         except Exception as e:
             return {"status": "error", "message": f"Command failed: {e}"}
 
-    def _run_async(self, command: str, cwd: str) -> dict:
+    def _run_async(self, command: str, cwd: str, reminder: float) -> dict:
         """Start command in background, return job_id immediately."""
         jobs_dir = self._ensure_jobs_dir()
         job_id = f"job-{uuid.uuid4().hex[:8]}"
@@ -469,6 +509,7 @@ class BashManager:
         if not hasattr(self, "_open_handles"):
             self._open_handles: dict[str, tuple] = {}
         self._open_handles[job_id] = (proc, stdout_f, stderr_f)
+        self._start_reminder_timer(job_id, job_dir, reminder)
 
         # Start background watcher — writes .notification/bash.json when
         # the process exits, so the agent gets notified via the standard
@@ -486,6 +527,126 @@ class BashManager:
             "pid": proc.pid,
             "message": f'Job started. Use bash(action="poll", job_id="{job_id}") to check.',
         }
+
+    def _start_reminder_timer(self, job_id: str, job_dir: Path, delay: float) -> None:
+        """Arm the last-resort async poll reminder for a job."""
+        cancel_event = threading.Event()
+        with self._reminder_lock:
+            self._reminder_cancel_events[job_id] = cancel_event
+        timer = threading.Thread(
+            target=self._run_reminder_timer,
+            args=(job_id, job_dir, delay, cancel_event),
+            daemon=True,
+        )
+        timer.start()
+
+    def _run_reminder_timer(
+        self,
+        job_id: str,
+        job_dir: Path,
+        delay: float,
+        cancel_event: threading.Event,
+    ) -> None:
+        """Publish one reminder unless terminal poll/cancel handles the job first."""
+        if cancel_event.wait(delay):
+            return
+        if not self._claim_reminder_timer(job_id, job_dir, cancel_event):
+            return
+        self._publish_async_reminder(job_id)
+
+    def _claim_reminder_timer(
+        self,
+        job_id: str,
+        job_dir: Path,
+        cancel_event: threading.Event,
+    ) -> bool:
+        """Atomically claim the reminder deadline before publishing."""
+        with self._reminder_lock:
+            current = self._reminder_cancel_events.get(job_id)
+            if current is not cancel_event or cancel_event.is_set() or not job_dir.is_dir():
+                return False
+            self._reminder_cancel_events.pop(job_id, None)
+            cancel_event.set()
+            return True
+
+    def _cancel_reminder_timer(self, job_id: str) -> None:
+        """Suppress and forget a pending reminder after terminal poll/cancel."""
+        with self._reminder_lock:
+            cancel_event = self._reminder_cancel_events.pop(job_id, None)
+        if cancel_event is not None:
+            cancel_event.set()
+
+    def _publish_async_reminder(self, job_id: str) -> None:
+        """Append the last-resort reminder to the durable multi-event system channel."""
+        body = (
+            f"Bash async job {job_id} may still be running. "
+            f"Poll it with bash(action=\"poll\", job_id=\"{job_id}\")."
+        )
+        agent = self._agent
+        if agent is not None and hasattr(agent, "_enqueue_system_notification"):
+            try:
+                agent._enqueue_system_notification(
+                    source="bash.reminder",
+                    ref_id=f"bash.reminder:{job_id}",
+                    body=body,
+                    skip_if_ref_id_exists=True,
+                )
+                return
+            except Exception:
+                pass
+        fallback_lock = getattr(agent, "_system_notification_lock", None)
+        self._append_system_notification_fallback(
+            source="bash.reminder",
+            ref_id=f"bash.reminder:{job_id}",
+            body=body,
+            lock=fallback_lock,
+        )
+
+    def _append_system_notification_fallback(
+        self,
+        *,
+        source: str,
+        ref_id: str,
+        body: str,
+        lock: threading.Lock | None = None,
+    ) -> str:
+        """Small direct-manager equivalent of BaseAgent._enqueue_system_notification."""
+        import secrets
+        import time
+        from datetime import datetime, timezone
+
+        from lingtai_kernel.notifications import collect_notifications
+        from lingtai_kernel.notifications import submit as publish_notification
+
+        event_id = f"evt_{int(time.time()*1000):x}_{secrets.token_hex(8)}"
+        received_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        actual_lock = lock or _SYSTEM_NOTIFICATION_FALLBACK_LOCK
+        with actual_lock:
+            current = collect_notifications(Path(self._working_dir)).get("system", {})
+            events = list(current.get("data", {}).get("events", []))
+            if any(isinstance(ev, dict) and ev.get("ref_id") == ref_id for ev in events):
+                return ""
+            events.append({
+                "event_id": event_id,
+                "source": source,
+                "ref_id": ref_id,
+                "body": body,
+                "at": received_at,
+            })
+            events = events[-20:]
+            publish_notification(
+                Path(self._working_dir),
+                "system",
+                header=(
+                    f"{len(events)} system notification"
+                    f"{'s' if len(events) != 1 else ''}"
+                ),
+                icon="🔔",
+                priority="normal",
+                data={"events": events},
+            )
+        return event_id
 
     def _watch_async_job(
         self, job_id: str, command: str, proc: subprocess.Popen,
@@ -579,6 +740,7 @@ class BashManager:
             return {"status": "running", "job_id": job_id, "pid": pid}
 
         # Process finished — close file handles, read output
+        self._cancel_reminder_timer(job_id)
         self._close_handles(job_id)
 
         stdout = (job_dir / "stdout.log").read_text(encoding="utf-8", errors="replace")
@@ -636,6 +798,7 @@ class BashManager:
                 proc.wait()
 
         self._close_handles(job_id)
+        self._cancel_reminder_timer(job_id)
 
         # Clean up
         import shutil
@@ -685,6 +848,7 @@ def setup(
     mgr = BashManager(
         policy=policy,
         working_dir=str(agent._working_dir),
+        agent=agent,
     )
     # Build description with policy rules
     desc = get_description()

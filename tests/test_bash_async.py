@@ -1,11 +1,15 @@
 """Tests for async mode of the bash capability."""
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 
-from tools.bash import BashManager, BashPolicy
+from lingtai_kernel.notifications import collect_notifications
+from tools.bash import BashManager, BashPolicy, get_schema
 
 
 class TestBashAsync:
@@ -172,6 +176,13 @@ class TestBashAsync:
         assert result["exit_code"] == 0
         assert "sync-test" in result["stdout"]
 
+    def test_sync_ignores_reminder_field(self, tmp_path):
+        mgr = self._make_manager(tmp_path)
+        result = mgr.handle({"command": "echo sync-test", "reminder": float("nan")})
+        assert result["status"] == "ok"
+        assert result["exit_code"] == 0
+        assert "sync-test" in result["stdout"]
+
     def test_async_stderr_captured(self, tmp_path):
         mgr = self._make_manager(tmp_path)
         result = mgr.handle({"command": "echo err >&2", "async": True})
@@ -182,3 +193,220 @@ class TestBashAsync:
         poll = mgr.handle({"action": "poll", "command": "", "job_id": job_id})
         assert poll["status"] == "done"
         assert "err" in poll["stderr"]
+
+    def test_schema_requires_reminder_with_runtime_default(self, tmp_path):
+        schema = get_schema()
+        assert "reminder" in schema["required"]
+        assert schema["properties"]["reminder"]["default"] == 1800.0
+
+        mgr = self._make_manager(tmp_path)
+        result = mgr.handle({"command": "echo compat", "async": True})
+        assert result["status"] == "ok"
+        mgr.handle({"action": "cancel", "command": "", "job_id": result["job_id"]})
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            -1,
+            "soon",
+            object(),
+            True,
+            float("nan"),
+            float("inf"),
+            -float("inf"),
+            threading.TIMEOUT_MAX + 1,
+        ],
+    )
+    def test_async_reminder_rejects_invalid_values(self, tmp_path, value):
+        mgr = self._make_manager(tmp_path)
+        result = mgr.handle({"command": "echo nope", "async": True, "reminder": value})
+        assert result["status"] == "error"
+        assert "reminder" in result["message"]
+
+    def test_async_reminder_publishes_after_delay_even_if_process_exited_unpolled(self, tmp_path):
+        mgr = self._make_manager(tmp_path)
+        result = mgr.handle({"command": "echo finished", "async": True, "reminder": 0.05})
+        job_id = result["job_id"]
+
+        time.sleep(0.3)
+
+        events = collect_notifications(tmp_path)["system"]["data"]["events"]
+        assert len(events) == 1
+        event = events[0]
+        assert event["source"] == "bash.reminder"
+        assert event["ref_id"] == f"bash.reminder:{job_id}"
+        assert job_id in event["body"]
+        assert "poll" in event["body"]
+        assert "echo finished" not in event["body"]
+
+        poll = mgr.handle({"action": "poll", "command": "", "job_id": job_id})
+        assert poll["status"] == "done"
+
+    def test_async_reminder_does_not_overwrite_close_due_jobs(self, tmp_path):
+        mgr = self._make_manager(tmp_path)
+        first = mgr.handle({"command": "sleep 1", "async": True, "reminder": 0.05})
+        second = mgr.handle({"command": "sleep 1", "async": True, "reminder": 0.05})
+        job_ids = {first["job_id"], second["job_id"]}
+
+        time.sleep(0.3)
+
+        events = collect_notifications(tmp_path)["system"]["data"]["events"]
+        assert len(events) == 2
+        assert {event["ref_id"] for event in events} == {
+            f"bash.reminder:{job_id}" for job_id in job_ids
+        }
+        assert len({event["event_id"] for event in events}) == 2
+
+        for job_id in job_ids:
+            mgr.handle({"action": "cancel", "command": "", "job_id": job_id})
+
+    def test_terminal_poll_suppresses_async_reminder(self, tmp_path):
+        mgr = self._make_manager(tmp_path)
+        result = mgr.handle({"command": "echo handled", "async": True, "reminder": 0.3})
+        job_id = result["job_id"]
+
+        time.sleep(0.1)
+        poll = mgr.handle({"action": "poll", "command": "", "job_id": job_id})
+        assert poll["status"] == "done"
+        time.sleep(0.3)
+
+        assert "system" not in collect_notifications(tmp_path)
+
+    def test_successful_cancel_suppresses_async_reminder(self, tmp_path):
+        mgr = self._make_manager(tmp_path)
+        result = mgr.handle({"command": "sleep 5", "async": True, "reminder": 0.2})
+        job_id = result["job_id"]
+
+        cancel = mgr.handle({
+            "action": "cancel",
+            "command": "",
+            "job_id": job_id,
+            "reminder": float("nan"),
+        })
+        assert cancel["status"] == "cancelled"
+        time.sleep(0.3)
+
+        assert "system" not in collect_notifications(tmp_path)
+
+    def test_poll_ignores_reminder_field(self, tmp_path):
+        mgr = self._make_manager(tmp_path)
+        result = mgr.handle({"command": "sleep 5", "async": True, "reminder": 10})
+        job_id = result["job_id"]
+
+        poll = mgr.handle({
+            "action": "poll",
+            "command": "",
+            "job_id": job_id,
+            "reminder": float("nan"),
+        })
+        assert poll["status"] == "running"
+
+        mgr.handle({"action": "cancel", "command": "", "job_id": job_id})
+
+    def test_terminal_pop_before_deadline_claim_suppresses_reminder(self, tmp_path, monkeypatch):
+        mgr = self._make_manager(tmp_path)
+        job_id = "job-race-terminal"
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        cancel_event = threading.Event()
+        with mgr._reminder_lock:
+            mgr._reminder_cancel_events[job_id] = cancel_event
+
+        published = []
+        monkeypatch.setattr(mgr, "_publish_async_reminder", published.append)
+
+        mgr._cancel_reminder_timer(job_id)
+        mgr._run_reminder_timer(job_id, job_dir, 0, cancel_event)
+
+        assert published == []
+        assert job_id not in mgr._reminder_cancel_events
+
+    def test_deadline_claim_before_terminal_pop_publishes_once(self, tmp_path, monkeypatch):
+        mgr = self._make_manager(tmp_path)
+        job_id = "job-race-deadline"
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        cancel_event = threading.Event()
+        with mgr._reminder_lock:
+            mgr._reminder_cancel_events[job_id] = cancel_event
+
+        published = []
+
+        def fake_publish(claimed_job_id):
+            published.append(claimed_job_id)
+            mgr._cancel_reminder_timer(claimed_job_id)
+
+        monkeypatch.setattr(mgr, "_publish_async_reminder", fake_publish)
+
+        mgr._run_reminder_timer(job_id, job_dir, 0, cancel_event)
+
+        assert published == [job_id]
+        assert job_id not in mgr._reminder_cancel_events
+
+    def test_agent_exception_fallback_uses_agent_system_lock(self, tmp_path, monkeypatch):
+        agent_lock = threading.Lock()
+        agent = SimpleNamespace(_system_notification_lock=agent_lock)
+
+        def failing_enqueue(**_kwargs):
+            raise RuntimeError("boom")
+
+        agent._enqueue_system_notification = failing_enqueue
+        mgr = BashManager(policy=BashPolicy.yolo(), working_dir=str(tmp_path), agent=agent)
+
+        seen = {}
+
+        def fake_fallback(**kwargs):
+            seen.update(kwargs)
+
+        monkeypatch.setattr(mgr, "_append_system_notification_fallback", fake_fallback)
+
+        mgr._publish_async_reminder("job-fallback")
+
+        assert seen["lock"] is agent_lock
+
+    def test_direct_manager_fallback_is_shared_across_managers(self, tmp_path):
+        first = self._make_manager(tmp_path)
+        second = self._make_manager(tmp_path)
+        managers = [first, second]
+        n_events = 20
+
+        def worker(i: int) -> None:
+            managers[i % 2]._append_system_notification_fallback(
+                source="bash.reminder",
+                ref_id=f"bash.reminder:job-{i}",
+                body=f"poll job-{i}",
+            )
+
+        with ThreadPoolExecutor(max_workers=n_events) as pool:
+            list(pool.map(worker, range(n_events)))
+
+        events = collect_notifications(tmp_path)["system"]["data"]["events"]
+        assert len(events) == n_events
+        assert {event["ref_id"] for event in events} == {
+            f"bash.reminder:job-{i}" for i in range(n_events)
+        }
+        assert len({event["event_id"] for event in events}) == n_events
+
+    def test_direct_manager_fallback_event_ids_keep_entropy_with_fixed_millisecond(
+        self, tmp_path, monkeypatch
+    ):
+        mgr = self._make_manager(tmp_path)
+        suffixes = iter(("a" * 16, "b" * 16))
+        monkeypatch.setattr("time.time", lambda: 1234.567)
+        monkeypatch.setattr("secrets.token_hex", lambda n: next(suffixes))
+
+        first = mgr._append_system_notification_fallback(
+            source="bash.reminder",
+            ref_id="bash.reminder:job-a",
+            body="poll job-a",
+        )
+        second = mgr._append_system_notification_fallback(
+            source="bash.reminder",
+            ref_id="bash.reminder:job-b",
+            body="poll job-b",
+        )
+
+        assert first.startswith("evt_")
+        assert second.startswith("evt_")
+        assert first != second
+        assert [len(event_id.rsplit("_", 1)[1]) for event_id in (first, second)] == [16, 16]

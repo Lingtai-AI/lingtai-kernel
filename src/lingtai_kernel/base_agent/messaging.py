@@ -121,7 +121,7 @@ def _enqueue_system_notification(
     from ..notifications import collect_notifications
     from ..notifications import submit as publish_notification
 
-    event_id = f"evt_{int(time.time()*1000):x}_{secrets.token_hex(2)}"
+    event_id = f"evt_{int(time.time()*1000):x}_{secrets.token_hex(8)}"
     received_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     lock = agent._system_notification_lock
