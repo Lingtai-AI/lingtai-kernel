@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from lingtai.core.bash import BashManager, BashPolicy
+from tools.bash import BashManager, BashPolicy
 
 
 class TestBashAsync:

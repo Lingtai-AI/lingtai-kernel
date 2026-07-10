@@ -17,6 +17,7 @@ This file pins what survives that removal:
 4. ToolExecutor metadata stamping (``tool_meta``) is unaffected.
 """
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import threading
 from pathlib import Path
@@ -141,7 +142,7 @@ def test_base_agent_has_rescan_method(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(service=svc, agent_name="test-rescan", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-rescan", working_dir=tmp_path / "ag")
     assert callable(agent._rescan_large_tool_results)
     assert agent._rescan_large_tool_results() == 0
 
@@ -155,7 +156,7 @@ def test_base_agent_rescan_with_chat_session_publishes_nothing(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(service=svc, agent_name="test-rescan-chat", working_dir=tmp_path / "ag2")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-rescan-chat", working_dir=tmp_path / "ag2")
     agent._summarize_notification_threshold = 100
 
     iface = ChatInterface()
@@ -195,7 +196,7 @@ def test_enqueue_skip_if_ref_id_exists(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(service=svc, agent_name="test-dedup", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-dedup", working_dir=tmp_path / "ag")
 
     ev1 = _enqueue_system_notification(
         agent,
@@ -231,7 +232,7 @@ def test_enqueue_no_skip_publishes_twice(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(service=svc, agent_name="test-nodedup", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-nodedup", working_dir=tmp_path / "ag")
 
     ev1 = _enqueue_system_notification(
         agent,
@@ -274,7 +275,7 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
         notification_fingerprint,
         publish,
     )
-    from lingtai_kernel.intrinsics import notification as notif_intrinsic
+    from tools import notification as notif_intrinsic
 
     @dataclass
     class _StubAgent:

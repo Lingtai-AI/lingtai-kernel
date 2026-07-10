@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from lingtai.core.avatar import AvatarManager
+from tools.avatar import AvatarManager
 
 import pytest
 from tests._service_helpers import make_gemini_mock_service as make_mock_service

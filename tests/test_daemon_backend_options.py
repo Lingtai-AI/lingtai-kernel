@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lingtai.core.daemon import (
+from tools.daemon import (
     _BACKEND_ALIASES,
     _backend_options_to_argv,
     _BACKEND_SCHEMA_ENUM,
@@ -342,7 +342,7 @@ def test_claude_code_cmd_appends_backend_argv_before_task(tmp_path):
     cancel = threading.Event()
     timeout = threading.Event()
 
-    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
         mgr._run_claude_code_emanation(
             "em-test", run_dir, "Refactor auth.",
             cancel, timeout,
@@ -404,7 +404,7 @@ def test_codex_cmd_appends_backend_argv_before_task(tmp_path):
         '{"type":"turn.completed"}\n',
     ]
 
-    with patch("lingtai.core.daemon.subprocess.Popen",
+    with patch("tools.daemon.subprocess.Popen",
                side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
                                                   or FiniteFakeProc(
                                                       stdout_lines=fake_stdout_lines,
@@ -431,7 +431,7 @@ def test_codex_cmd_appends_backend_argv_before_task(tmp_path):
 
 
 def test_schema_includes_backend_options():
-    from lingtai.core.daemon import get_schema
+    from tools.daemon import get_schema
     schema = get_schema("en")
     task_props = schema["properties"]["tasks"]["items"]["properties"]
     assert "backend_options" in task_props
@@ -442,7 +442,7 @@ def test_schema_includes_backend_options():
 
 
 def test_backend_schema_enum_matches_ordered_contract():
-    from lingtai.core.daemon import get_schema
+    from tools.daemon import get_schema
 
     expected = [
         "lingtai",
@@ -493,7 +493,7 @@ def test_normalize_backend_aliases_only_true_aliases():
 
 
 def test_schema_includes_mimocode_and_qwen_code_backends():
-    from lingtai.core.daemon import get_schema
+    from tools.daemon import get_schema
 
     backend = get_schema("en")["properties"]["backend"]
     for name in ("mimocode", "mimo", "qwen-code", "qwen"):
@@ -622,7 +622,7 @@ def test_mimocode_cmd_appends_backend_argv_before_prompt(tmp_path):
         '{"type":"message.completed","text":"done"}\n',
     ]
 
-    with patch("lingtai.core.daemon.subprocess.Popen",
+    with patch("tools.daemon.subprocess.Popen",
                side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
                                                   or FiniteFakeProc(
                                                       stdout_lines=stdout_lines,
@@ -659,7 +659,7 @@ def test_qwen_code_cmd_appends_backend_argv_before_prompt(tmp_path):
         backend="qwen-code",
     )
 
-    with patch("lingtai.core.daemon.subprocess.Popen",
+    with patch("tools.daemon.subprocess.Popen",
                side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
                                                   or FiniteFakeProc(
                                                       stdout_lines=["qwen done\n"],
@@ -727,7 +727,7 @@ def test_qwen_code_ask_is_explicitly_unsupported(tmp_path):
 
 
 def test_schema_includes_kimicode_backend():
-    from lingtai.core.daemon import get_schema
+    from tools.daemon import get_schema
 
     backend = get_schema("en")["properties"]["backend"]
     for name in ("kimicode", "kimi"):
@@ -791,7 +791,7 @@ def test_kimicode_cmd_appends_backend_argv_before_owned_flags(tmp_path):
         captured_env.append(dict(kw.get("env") or {}))
         return FiniteFakeProc(stdout_lines=["kimi done\n"])
 
-    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
         mgr._run_kimicode_emanation(
             "em-kimi", run_dir, "Refactor with Kimi.",
             threading.Event(), threading.Event(),
@@ -840,7 +840,7 @@ def test_kimicode_run_env_defaults_and_home(tmp_path, monkeypatch):
         captured_env.append(dict(kw.get("env") or {}))
         return FiniteFakeProc(stdout_lines=["ok\n"])
 
-    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
         mgr._run_kimicode_emanation(
             "em-kimi-env", run_dir, "Do it.",
             threading.Event(), threading.Event(),
@@ -888,7 +888,7 @@ def test_kimicode_run_env_respects_existing_operator_values(tmp_path, monkeypatc
         captured_env.append(dict(kw.get("env") or {}))
         return FiniteFakeProc(stdout_lines=["ok\n"])
 
-    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
         mgr._run_kimicode_emanation(
             "em-kimi-op", run_dir, "Do it.",
             threading.Event(), threading.Event(),
@@ -942,7 +942,7 @@ def test_kimicode_run_env_api_key_fallback_sources(
         captured_env.append(dict(kw.get("env") or {}))
         return FiniteFakeProc(stdout_lines=["ok\n"])
 
-    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
         mgr._run_kimicode_emanation(
             "em-kimi-fallback", run_dir, "Do it.",
             threading.Event(), threading.Event(),
@@ -982,7 +982,7 @@ def test_kimicode_run_env_api_key_fallback_precedence(tmp_path, monkeypatch):
         captured_env.append(dict(kw.get("env") or {}))
         return FiniteFakeProc(stdout_lines=["ok\n"])
 
-    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
         mgr._run_kimicode_emanation(
             "em-kimi-precedence", run_dir, "Do it.",
             threading.Event(), threading.Event(),
@@ -1094,7 +1094,7 @@ def test_kimicode_missing_completion_signal_prevents_done(tmp_path):
     def fake_popen(cmd, *a, **kw):
         return FiniteFakeProc(stdout_lines=["kimi says done\n"])
 
-    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
         with pytest.raises(RuntimeError, match="missing completion"):
             mgr._run_kimicode_emanation(
                 "em-kimi-completion",
@@ -1161,7 +1161,7 @@ def test_kimicode_ask_is_explicitly_unsupported(tmp_path):
 
 
 def test_schema_includes_oh_my_pi_backend():
-    from lingtai.core.daemon import get_schema
+    from tools.daemon import get_schema
 
     backend = get_schema("en")["properties"]["backend"]
     for name in ("oh-my-pi", "omp"):
@@ -1226,7 +1226,7 @@ def test_oh_my_pi_cmd_includes_mode_json_and_session_id_from_header(tmp_path):
         backend="oh-my-pi",
     )
 
-    with patch("lingtai.core.daemon.subprocess.Popen",
+    with patch("tools.daemon.subprocess.Popen",
                side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
                                                   or FiniteFakeProc(
                                                       stdout_lines=stdout_lines,
@@ -1279,7 +1279,7 @@ def test_oh_my_pi_ask_resume_uses_session_flag(tmp_path):
         ask_in_flight=False,
     )
 
-    with patch("lingtai.core.daemon.subprocess.Popen",
+    with patch("tools.daemon.subprocess.Popen",
                side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
                                                   or FiniteFakeProc(
                                                       stdout_lines=[

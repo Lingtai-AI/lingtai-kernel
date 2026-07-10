@@ -1,6 +1,6 @@
 """Pure unit tests for daemon backend runtime primitives.
 
-These exercise ``lingtai.core.daemon.runtime`` helpers in isolation with small
+These exercise ``tools.daemon.runtime`` helpers in isolation with small
 fakes — no real subprocesses, no LLM mocks, no DaemonManager. The integrated
 behavior (closure -> helper swap inside the backend runners) is covered by the
 existing ``tests/test_daemon.py`` cancellation/timeout tests.
@@ -8,7 +8,7 @@ existing ``tests/test_daemon.py`` cancellation/timeout tests.
 import subprocess
 import threading
 
-from lingtai.core.daemon import runtime
+from tools.daemon import runtime
 
 
 class _FakeRunDir:

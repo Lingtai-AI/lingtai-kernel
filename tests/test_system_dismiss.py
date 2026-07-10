@@ -22,7 +22,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-from lingtai_kernel.intrinsics import notification as notif_intrinsic
+from tools import notification as notif_intrinsic
 from lingtai_kernel.notifications import (
     collect_notifications,
     is_generic_dismiss_guarded,
@@ -120,7 +120,7 @@ def test_dismiss_validation_errors(tmp_path: Path) -> None:
 
 
 def test_email_registers_generic_dismiss_guard() -> None:
-    import lingtai_kernel.intrinsics.email  # noqa: F401 - import performs registration
+    import tools.email  # noqa: F401 - import performs registration
 
     suggestion = is_generic_dismiss_guarded("email")
     assert suggestion is not None
@@ -129,7 +129,7 @@ def test_email_registers_generic_dismiss_guard() -> None:
 
 
 def test_guarded_email_refuses_without_force(tmp_path: Path) -> None:
-    import lingtai_kernel.intrinsics.email  # noqa: F401 - import performs registration
+    import tools.email  # noqa: F401 - import performs registration
 
     agent = _StubAgent(tmp_path)
     publish(tmp_path, "email", {"header": "1 unread"})
@@ -148,7 +148,7 @@ def test_guarded_email_refuses_without_force(tmp_path: Path) -> None:
 def test_guarded_email_force_clears_surface_but_not_mail_state(tmp_path: Path) -> None:
     from lingtai.agent import Agent
 
-    import lingtai_kernel.intrinsics.email  # noqa: F401 - import performs registration
+    import tools.email  # noqa: F401 - import performs registration
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
@@ -184,7 +184,7 @@ def test_guarded_email_force_clears_surface_but_not_mail_state(tmp_path: Path) -
 
 
 def test_soul_dismiss_alias_uses_shared_helper(tmp_path: Path) -> None:
-    from lingtai_kernel.intrinsics import soul
+    from tools import soul
 
     agent = _StubAgent(tmp_path)
     publish(tmp_path, "soul", {"header": "soul flow"})
@@ -624,7 +624,7 @@ def test_noop_dismiss_does_not_signal_chat(tmp_path: Path) -> None:
 
 
 def test_refused_dismiss_does_not_signal_chat(tmp_path: Path) -> None:
-    import lingtai_kernel.intrinsics.email  # noqa: F401 - import performs registration
+    import tools.email  # noqa: F401 - import performs registration
 
     agent = _agent_with_chat(tmp_path)
     publish(tmp_path, "email", {"header": "1 unread"})

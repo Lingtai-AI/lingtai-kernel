@@ -1,5 +1,6 @@
 """Tests for LingTai agent process-command matching."""
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import importlib.util
 import sys
@@ -56,7 +57,7 @@ def _watcher_match_agent_run(tmp_path):
 
     working_dir = tmp_path / "agent"
     working_dir.mkdir()
-    agent = BaseAgent(service=service, agent_name="alice", working_dir=working_dir)
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=service, agent_name="alice", working_dir=working_dir)
     agent._build_launch_cmd = lambda: ["python", "-c", "print('relaunch sentinel')"]
 
     with patch("subprocess.Popen") as mock_popen:

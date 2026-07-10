@@ -22,7 +22,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.agent import Agent
-from lingtai.core.mcp.inbox import (
+from lingtai.services.mcp_inbox import (
     DEAD_DIRNAME,
     INBOX_DIRNAME,
     MCPInboxPoller,
@@ -252,7 +252,7 @@ def test_scan_coalesces_multiple_events_into_one_notification(tmp_path):
     assert {p["from"] for p in previews} == {"alice", "bob", "carol"}
     assert {p["subject"] for p in previews} == {"s1", "s2", "s3"}
     # Body snippets are present and capped at _PREVIEW_FIELD_CAP.
-    from lingtai.core.mcp.inbox import _PREVIEW_FIELD_CAP
+    from lingtai.services.mcp_inbox import _PREVIEW_FIELD_CAP
     for p in previews:
         assert "preview" in p
         assert len(p["preview"]) <= _PREVIEW_FIELD_CAP
@@ -312,7 +312,7 @@ def test_scan_truncates_long_body_into_preview_snippet(tmp_path):
     validate_event)."""
     import json as _json
 
-    from lingtai.core.mcp.inbox import _PREVIEW_FIELD_CAP
+    from lingtai.services.mcp_inbox import _PREVIEW_FIELD_CAP
 
     agent, workdir = _mk_agent(tmp_path)
     long_body = "B" * (_PREVIEW_FIELD_CAP + 500)
@@ -477,7 +477,7 @@ def test_scan_ignores_non_string_or_empty_metadata_values(tmp_path):
     not become dead-lettered."""
     import json as _json
 
-    from lingtai.core.mcp.inbox import _PREVIEW_META_FIELD_CAP
+    from lingtai.services.mcp_inbox import _PREVIEW_META_FIELD_CAP
 
     agent, workdir = _mk_agent(tmp_path)
     _write_event(workdir, "telegram", "ev1", {

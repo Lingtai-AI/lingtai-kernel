@@ -39,7 +39,7 @@ def test_avatar_inherits_active_preset_and_absolute_path(tmp_path):
     parent_init = _baseline_parent_init(
         preset_path="/abs/path/to/presets", active_preset="minimax")
 
-    from lingtai.core.avatar import AvatarManager
+    from tools.avatar import AvatarManager
     avatar_init = AvatarManager._make_avatar_init(parent_init, "child")
 
     # active is rewritten to default (both were "minimax")
@@ -58,7 +58,7 @@ def test_avatar_resolves_relative_preset_default(tmp_path):
     parent_wd.mkdir()
     parent_init = _baseline_parent_init(active_preset="./presets/x.json")
 
-    from lingtai.core.avatar import AvatarManager
+    from tools.avatar import AvatarManager
     avatar_init = AvatarManager._make_avatar_init(
         parent_init, "child", parent_working_dir=parent_wd)
 
@@ -71,7 +71,7 @@ def test_avatar_no_preset_unchanged(tmp_path):
     """Avatar with parent that has no preset block carries no preset."""
     parent_init = _baseline_parent_init()
 
-    from lingtai.core.avatar import AvatarManager
+    from tools.avatar import AvatarManager
     avatar_init = AvatarManager._make_avatar_init(parent_init, "child")
 
     assert "preset" not in avatar_init["manifest"]
@@ -86,7 +86,7 @@ def test_avatar_no_parent_working_dir_relative_path_unchanged(tmp_path):
     parent_init = _baseline_parent_init(
         preset_path="./presets", active_preset="x")
 
-    from lingtai.core.avatar import AvatarManager
+    from tools.avatar import AvatarManager
     avatar_init = AvatarManager._make_avatar_init(parent_init, "child")
 
     # Without parent_working_dir, the path is preserved verbatim
@@ -117,7 +117,7 @@ def test_avatar_spawns_with_parent_default_when_active_differs(tmp_path):
         "principle": "p", "covenant": "c", "pad": "", "lingtai": "", "soul": "",
     }
 
-    from lingtai.core.avatar import AvatarManager
+    from tools.avatar import AvatarManager
     avatar_init = AvatarManager._make_avatar_init(parent_init, "child")
 
     # Avatar's preset block: active rewritten to default, default unchanged
@@ -147,7 +147,7 @@ def test_avatar_no_preset_block_inherits_flat_config(tmp_path):
         "principle": "p", "covenant": "c", "pad": "", "lingtai": "", "soul": "",
     }
 
-    from lingtai.core.avatar import AvatarManager
+    from tools.avatar import AvatarManager
     avatar_init = AvatarManager._make_avatar_init(parent_init, "child")
 
     # No preset block, no stripping
@@ -174,7 +174,7 @@ def test_avatar_strips_materialized_when_active_equals_default(tmp_path):
         "principle": "p", "covenant": "c", "pad": "", "lingtai": "", "soul": "",
     }
 
-    from lingtai.core.avatar import AvatarManager
+    from tools.avatar import AvatarManager
     avatar_init = AvatarManager._make_avatar_init(parent_init, "child")
 
     avatar_preset = avatar_init["manifest"]["preset"]
@@ -204,7 +204,7 @@ def test_avatar_init_keeps_base_prompt_and_drops_kernel_prompt_overrides(tmp_pat
     }
     parent_init.update(retired)
 
-    from lingtai.core.avatar import AvatarManager
+    from tools.avatar import AvatarManager
     avatar_init = AvatarManager._make_avatar_init(parent_init, "child")
 
     assert avatar_init["base_prompt"] == "recipe base prompt"

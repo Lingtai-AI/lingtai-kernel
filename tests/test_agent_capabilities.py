@@ -22,12 +22,12 @@ class FakeSearchService(SearchService):
 
 
 def test_agent_no_capabilities_boots_core_floor(tmp_path):
-    """Agent with no explicit capabilities still boots the `lingtai.core.*` floor.
+    """Agent with no explicit capabilities still boots the always-on tool floor.
 
     The default-on set covers knowledge/skills/bash/avatar/daemon/mcp + file caps.
     Opt-in capabilities (vision, web_search) stay off until requested.
     """
-    from lingtai.capabilities import CORE_DEFAULTS
+    from tools.registry import CORE_DEFAULTS
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     registered = {name for name, _ in agent._capabilities}
     assert registered == set(CORE_DEFAULTS), (

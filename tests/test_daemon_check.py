@@ -208,7 +208,7 @@ def test_check_rejects_negative_truncate(tmp_path):
 def test_check_caps_last_at_max(tmp_path):
     """last is capped at _CHECK_LAST_MAX so events.jsonl can't be slurped
     unboundedly (readlines() would otherwise read the whole file)."""
-    from lingtai.core.daemon import DaemonManager
+    from tools.daemon import DaemonManager
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     rd = make_daemon_run_dir(agent, handle="em-cap")

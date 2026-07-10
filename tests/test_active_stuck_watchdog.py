@@ -13,6 +13,7 @@ The watchdog protects against two real-world failure modes documented in
 Both cases used to be invisible to the heartbeat-only liveness check.
 """
 import json
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 import time
 from unittest.mock import MagicMock
 from tests._service_helpers import make_tool_result_mock_service as make_mock_service
@@ -27,6 +28,7 @@ class TestProgressBookkeeping:
     def test_state_change_bumps_progress_and_state_change_clocks(self, tmp_path):
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -40,6 +42,7 @@ class TestProgressBookkeeping:
     def test_active_seeds_pending_turn_kind(self, tmp_path):
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -51,6 +54,7 @@ class TestProgressBookkeeping:
     def test_llm_call_event_refines_turn_kind(self, tmp_path):
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -62,6 +66,7 @@ class TestProgressBookkeeping:
     def test_tool_call_event_refines_turn_kind_and_records_id(self, tmp_path):
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -74,6 +79,7 @@ class TestProgressBookkeeping:
     def test_leaving_active_clears_turn_block_and_latch(self, tmp_path):
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -95,6 +101,7 @@ class TestDeferredNotificationsCounter:
     def test_counter_increments(self, tmp_path):
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -109,6 +116,7 @@ class TestDeferredNotificationsCounter:
     def test_state_change_resets_counter(self, tmp_path):
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -128,6 +136,7 @@ class TestStatusJsonExposesActiveTurn:
     def test_status_has_state_changed_at_and_last_progress_at(self, tmp_path):
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -144,6 +153,7 @@ class TestStatusJsonExposesActiveTurn:
     def test_status_active_turn_block_present_only_in_active(self, tmp_path):
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -163,6 +173,7 @@ class TestStatusJsonExposesActiveTurn:
     def test_status_deferred_notifications_block(self, tmp_path):
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -186,6 +197,7 @@ class TestWatchdogFires:
 
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -227,6 +239,7 @@ class TestWatchdogFires:
 
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -256,6 +269,7 @@ class TestWatchdogFires:
 
         from lingtai_kernel import BaseAgent, AgentState
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -289,6 +303,7 @@ class TestWatchdogFires:
 
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",

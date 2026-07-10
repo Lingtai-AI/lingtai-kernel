@@ -14,6 +14,7 @@ Signal file detection and karma system intrinsic actions are tested in
 test_karma.py.
 """
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import json
 import threading
@@ -59,7 +60,7 @@ def make_mock_service():
 
 def test_cancel_event_always_created(tmp_path):
     """Agent should always have _cancel_event (no external injection)."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert isinstance(agent._cancel_event, threading.Event)
     assert not agent._cancel_event.is_set()
 
@@ -71,13 +72,14 @@ def test_cancel_event_always_created(tmp_path):
 
 def test_admin_dict_stored_defaults_empty(tmp_path):
     """Agent without admin= should have an empty _admin dict."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="a", working_dir=tmp_path / "t1")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="a", working_dir=tmp_path / "t1")
     assert agent._admin == {}
 
 
 def test_karma_admin_stored(tmp_path):
     """admin={"karma": True} should be stored on the agent as-is."""
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="b", working_dir=tmp_path / "t2",
         admin={"karma": True},
     )
@@ -87,6 +89,7 @@ def test_karma_admin_stored(tmp_path):
 def test_nirvana_admin_stored(tmp_path):
     """admin={"nirvana": True} should be stored on the agent as-is."""
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="c", working_dir=tmp_path / "t3",
         admin={"nirvana": True},
     )
@@ -96,6 +99,7 @@ def test_nirvana_admin_stored(tmp_path):
 def test_old_admin_keys_ignored(tmp_path):
     """admin={"silence": True} should NOT grant karma authority."""
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="d", working_dir=tmp_path / "t4",
         admin={"silence": True, "kill": True},
     )
@@ -116,7 +120,7 @@ def test_sequential_execution_stops_on_cancel(tmp_path):
     from lingtai_kernel.tool_executor import ToolExecutor
     from lingtai.llm import ToolCall
 
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent._cancel_event.set()
 
     tc = ToolCall(name="system", args={"action": "sleep"}, id="tc1")
@@ -156,7 +160,7 @@ def test_normal_email_notifies_inbox(tmp_path):
     """
     from lingtai_kernel.notifications import collect_notifications
 
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     _persist_inbox_email(agent.working_dir, sender="colleague", subject="hello", message="hi there")
     agent._on_mail_received({
         "_mailbox_id": "test123",
@@ -172,6 +176,7 @@ def test_normal_email_notifies_inbox(tmp_path):
 def test_non_admin_can_send_normal_mail(tmp_path):
     """Non-admin should be able to send normal mail."""
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", admin={},
     )
     mock_mail = MagicMock()
@@ -196,7 +201,7 @@ def test_mail_type_silence_treated_as_normal(tmp_path):
     does not set cancel."""
     from lingtai_kernel.notifications import collect_notifications
 
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert not agent._cancel_event.is_set()
     _persist_inbox_email(agent.working_dir, sender="boss", subject="shh", message="be quiet")
 
@@ -219,7 +224,7 @@ def test_mail_type_kill_treated_as_normal(tmp_path):
     does not set cancel or shutdown."""
     from lingtai_kernel.notifications import collect_notifications
 
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert not agent._cancel_event.is_set()
     _persist_inbox_email(agent.working_dir, sender="boss", subject="die", message="terminate")
 

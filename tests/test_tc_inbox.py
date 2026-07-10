@@ -1,5 +1,6 @@
 """Tests for lingtai_kernel.tc_inbox — the involuntary tool-call inbox."""
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import threading
 import time
@@ -96,6 +97,7 @@ class TestDrainTCInbox:
         svc = MagicMock()
         svc.model = "test-model"
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=svc,
             agent_name="test",
             working_dir=tmp_path / "agent",
@@ -193,6 +195,7 @@ class TestReplaceInHistory:
         svc = MagicMock()
         svc.model = "test-model"
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=svc,
             agent_name="test",
             working_dir=tmp_path / "agent",

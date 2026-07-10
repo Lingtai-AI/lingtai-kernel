@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from lingtai.core.mcp import inbox
+from lingtai.services import mcp_inbox as inbox
 from lingtai.mcp_servers.telegram.manager import TelegramManager
 from lingtai_kernel.notifications import submit
 

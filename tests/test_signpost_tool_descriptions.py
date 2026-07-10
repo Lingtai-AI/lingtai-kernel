@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from lingtai.core.mcp import get_description as mcp_description
-from lingtai.core.mcp import get_schema as mcp_schema
+from tools.mcp import get_description as mcp_description
+from tools.mcp import get_schema as mcp_schema
 
 
 def _i18n(lang: str) -> dict[str, str]:
-    path = Path(__file__).resolve().parents[1] / "src" / "lingtai" / "i18n" / f"{lang}.json"
+    path = Path(__file__).resolve().parents[1] / "src" / "tools" / "i18n" / f"{lang}.json"
     return json.loads(path.read_text())
 
 

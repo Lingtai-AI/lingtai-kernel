@@ -54,74 +54,13 @@ def _on_normal_mail(agent, payload: dict) -> None:
     agent._log("mail_received", address=address, subject=subject,
                message=payload.get("message", ""))
 
-    _rerender_unread_digest(agent)
-
-
-def _rerender_unread_digest(agent) -> str | None:
-    """Publish (or clear) ``.notification/email.json`` per current unread state.
-
-    Computes the unread set via ``_render_unread_digest``.  When count
-    is positive, submits the raw unread mirror via ``system.publish_notification``;
-    the model-visible persistent lane carries full unread email bodies. When
-    count drops to 0, clears the file so the kernel's sync strips the wire's
-    notification block.
-
-    Returns ``"email"`` when published, ``None`` when cleared.  The
-    caller doesn't typically use the return value — the side-effect on
-    ``.notification/`` is the contract.
-    """
-    from ..intrinsics.system import publish_notification, clear_notification
-    from ..intrinsics.email.primitives import (
-        _render_unread_digest,
-        _unread_notification_context,
-    )
-
-    body, count, newest_ts = _render_unread_digest(agent)
-
-    if count == 0:
-        clear_notification(agent._working_dir, "email")
-        agent._log("email_notification_cleared")
-        return None
-
-    email_items, email_ids = _unread_notification_context(agent)
-
-    publish_notification(
-        agent._working_dir, "email",
-        header=f"{count} unread email{'s' if count != 1 else ''}",
-        icon="📧",
-        instructions=(
-            "Unread email bodies are injected in full into "
-            "_meta.notification_persistent.email. You do not need "
-            "email.read merely to see ordinary message content. After you "
-            "handle a mail, prefer email(action='dismiss', "
-            "email_id=[id1, id2, ...]) to mark it read and clear the "
-            "notification without re-fetching content. Use email.read when "
-            "you need to refresh source-of-truth mailbox state, inspect "
-            "attachments/metadata, or intentionally fetch the producer record; "
-            "use email.reply/reply_all to answer. Read and dismiss both accept "
-            "lists, so process multiple mails in one call. Sending refuses "
-            "bodies over 50,000 characters because unread bodies are injected "
-            "without notification-layer truncation. Until you read, dismiss, "
-            "archive, or delete a mail, this notification will keep reminding "
-            "you about it. IDs can become stale if already handled elsewhere; "
-            "if read/dismiss returns not_found, call email(action='check', "
-            "filter={'unread_only': true}) to see what is still pending. "
-            "See email-manual."
-        ),
-        data={
-            "count": count,
-            "newest_received_at": newest_ts,
-            "email_ids": email_ids,
-            "emails": email_items,
-        },
-    )
-
-    agent._log(
-        "email_notification_published",
-        count=count,
-        newest_received_at=newest_ts,
-    )
-    return "email"
+    # The unread-digest producer is email-domain logic and lives with the email
+    # tool. Resolve it through the injected intrinsic registry rather than
+    # importing ``tools`` (the kernel must not import ``tools``). No-op when the
+    # email intrinsic is absent (bare BaseAgent, or a wrapper that disabled it).
+    rerender = agent._intrinsic_hook("email", "_rerender_unread_digest")
+    if rerender is not None:
+        rerender(agent)
 
 
 def _enqueue_system_notification(
@@ -172,7 +111,7 @@ def _enqueue_system_notification(
     import secrets
     from datetime import datetime, timezone
     from ..notifications import collect_notifications
-    from ..intrinsics.system import publish_notification
+    from ..notifications import submit as publish_notification
 
     event_id = f"evt_{int(time.time()*1000):x}_{secrets.token_hex(2)}"
     received_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

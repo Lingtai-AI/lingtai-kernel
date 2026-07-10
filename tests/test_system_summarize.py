@@ -14,6 +14,7 @@ Covers:
 - large-result notification: skips spill manifests
 """
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import json
 import threading
@@ -21,7 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lingtai_kernel.intrinsics.system.summarize import (
+from tools.system.summarize import (
     SUMMARIZE_MARKER,
     SUMMARY_STATUS_DONE,
     SUMMARY_STATUS_PENDING,
@@ -93,13 +94,13 @@ def _marker_status(iface, tool_call_id):
 
 
 def test_summarize_in_schema_enum():
-    from lingtai_kernel.intrinsics.system.schema import get_schema
+    from tools.system.schema import get_schema
     schema = get_schema("en")
     assert "summarize" in schema["properties"]["action"]["enum"]
 
 
 def test_schema_has_items_property():
-    from lingtai_kernel.intrinsics.system.schema import get_schema
+    from tools.system.schema import get_schema
     schema = get_schema("en")
     assert "items" in schema["properties"]
     items_schema = schema["properties"]["items"]
@@ -107,14 +108,14 @@ def test_schema_has_items_property():
 
 
 def test_schema_has_rebuild_boolean_property():
-    from lingtai_kernel.intrinsics.system.schema import get_schema
+    from tools.system.schema import get_schema
     schema = get_schema("en")
     assert schema["properties"]["rebuild"]["type"] == "boolean"
 
 
 def test_schema_removed_legacy_rebuild_params():
     # The old public params are gone with NO legacy aliases retained.
-    from lingtai_kernel.intrinsics.system.schema import get_schema
+    from tools.system.schema import get_schema
     schema = get_schema("en")
     assert "rebuild_only" not in schema["properties"]
     assert "dry_run" not in schema["properties"]
@@ -356,7 +357,7 @@ def test_summarize_only_pending_positive_offers_forced_boundary_and_proactive():
 def test_summarize_only_wording_conditional_pending_zero():
     # Force the pending==0 branch of the summarize-only comment builder and assert
     # it does NOT present the 1.0 forced rebuild as a useful way to compact.
-    from lingtai_kernel.intrinsics.system import summarize as _mod
+    from tools.system import summarize as _mod
 
     snapshot = {"usage": 0.80, "tokens": 8000, "window": 10000}
     zero_totals = {
@@ -748,7 +749,7 @@ def test_handle_dispatches_summarize(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(service=svc, agent_name="test", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag")
 
     result = agent._intrinsics["system"]({"action": "summarize", "items": []})
     # Empty items → error, but the dispatch must reach _summarize (not unknown action)
@@ -772,7 +773,7 @@ def _make_base_agent_for_notification(tmp_path):
     svc.get_adapter.return_value = MagicMock()
     svc.provider = "gemini"
     svc.model = "gemini-test"
-    agent = BaseAgent(service=svc, agent_name="test", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag")
     return agent
 
 
@@ -875,7 +876,7 @@ def test_summarize_runtime_threshold_change_rejected(tmp_path):
     The threshold is config-only (init.json + refresh). Runtime mutation is
     no longer supported so agents discover the policy change loudly.
     """
-    from lingtai_kernel.intrinsics.system.summarize import _summarize
+    from tools.system.summarize import _summarize
 
     agent = _make_base_agent_for_notification(tmp_path)
     original_threshold = agent._summarize_notification_threshold
@@ -893,7 +894,7 @@ def test_summarize_runtime_threshold_change_rejected(tmp_path):
 
 def test_summarize_runtime_threshold_zero_rejected(tmp_path):
     """Passing notification_threshold_chars=0 at runtime must also be rejected."""
-    from lingtai_kernel.intrinsics.system.summarize import _summarize
+    from tools.system.summarize import _summarize
 
     agent = _make_base_agent_for_notification(tmp_path)
     original_threshold = agent._summarize_notification_threshold
@@ -910,7 +911,7 @@ def test_summarize_runtime_threshold_zero_rejected(tmp_path):
 
 def test_summarize_runtime_threshold_with_items_rejected(tmp_path):
     """notification_threshold_chars combined with items is also rejected."""
-    from lingtai_kernel.intrinsics.system.summarize import _summarize
+    from tools.system.summarize import _summarize
 
     iface = ChatInterface()
     _add_tool_pair(iface, "tc-combo", "bash", "X" * 500)
@@ -932,7 +933,7 @@ def test_summarize_runtime_threshold_with_items_rejected(tmp_path):
 
 def test_summarize_result_always_contains_threshold(tmp_path):
     """All summarize responses (ok, partial, error) must include notification_threshold_chars."""
-    from lingtai_kernel.intrinsics.system.summarize import _summarize
+    from tools.system.summarize import _summarize
 
     agent = _make_base_agent_for_notification(tmp_path)
 
@@ -953,7 +954,7 @@ def test_summarize_result_always_contains_threshold(tmp_path):
 
 def test_schema_does_not_include_notification_threshold_chars():
     """notification_threshold_chars must NOT appear in the system tool schema."""
-    from lingtai_kernel.intrinsics.system.schema import get_schema
+    from tools.system.schema import get_schema
     schema = get_schema("en")
     assert "notification_threshold_chars" not in schema["properties"], (
         "notification_threshold_chars must be removed from the schema — "
@@ -981,7 +982,7 @@ def test_base_agent_threshold_init_from_config(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(service=svc, agent_name="cfg-test", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-test", working_dir=tmp_path / "ag")
     assert agent._summarize_notification_threshold == 3000  # default
 
     # Simulate what _setup_from_init does after reading manifest.  An explicit
@@ -1011,7 +1012,7 @@ def test_base_agent_threshold_config_accepts_zero(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(service=svc, agent_name="cfg-zero", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-zero", working_dir=tmp_path / "ag")
 
     manifest = {
         "llm": {"provider": "gemini", "model": "gemini-test"},
@@ -1036,7 +1037,7 @@ def test_base_agent_threshold_config_rejects_bool(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(service=svc, agent_name="cfg-bool", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-bool", working_dir=tmp_path / "ag")
 
     manifest = {
         "llm": {"provider": "gemini", "model": "gemini-test"},
@@ -1061,7 +1062,7 @@ def test_base_agent_threshold_default_when_not_in_config(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(service=svc, agent_name="default-test", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="default-test", working_dir=tmp_path / "ag")
     assert agent._summarize_notification_threshold == 3000
 
 
@@ -1238,7 +1239,7 @@ def test_summarize_then_dismiss_is_unnecessary_end_to_end(tmp_path):
     """End-to-end: notification dismiss now succeeds as an escape hatch (issue #425),
     and system summarize also clears the reminder. Dismissal is an alternative
     to summarize, not blocked. Summarize stays on the system tool."""
-    from lingtai_kernel.intrinsics import notification as notif_intrinsic
+    from tools import notification as notif_intrinsic
     from lingtai_kernel.notifications import collect_notifications, notification_fingerprint
 
     iface = ChatInterface()

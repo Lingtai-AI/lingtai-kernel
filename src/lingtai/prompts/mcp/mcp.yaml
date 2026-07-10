@@ -29,7 +29,7 @@ related_files:
     why: >
       The owning prompt-source anatomy: it records mcp as a generated, optional section.
       Read it before looking for an mcp.md body.
-  - path: src/lingtai/core/mcp/__init__.py
+  - path: src/tools/mcp/__init__.py
     why: >
       Owns the concrete mcp-section build rule: _reconcile() reads the MCP registry and
       _build_registry_xml() renders it, then update_system_prompt("mcp", ...) injects the
@@ -47,6 +47,6 @@ related_files:
       substrate explains tool/integration concepts; mcp lists concrete integrations.
       Edit together so the conceptual model and the generated catalog do not overlap.
 maintenance:
-  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical builder/navigation files that own the concrete construction rules (here core/mcp). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
+  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical builder/navigation files that own the concrete construction rules (here tools/mcp). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
   - mcp is generated; do not add an mcp.md body. The body relation lives in injection_contract.content_source, so do not point related_files at a concrete prompt `.md` body. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules, never a prompt body or a test.
   - Keep native-tool vs MCP-integration ownership explicit against tools.yaml.

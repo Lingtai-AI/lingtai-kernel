@@ -1,9 +1,9 @@
 ---
 related_files:
-  - src/lingtai/core/mcp/LICC_NOTIFICATION_CONTRACT.md
+  - src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md
   - pyproject.toml
   - src/lingtai/ANATOMY.md
-  - src/lingtai/core/mcp/ANATOMY.md
+  - src/tools/mcp/ANATOMY.md
   - src/lingtai/mcp_catalog.json
   - src/lingtai/mcp_servers/__init__.py
   - src/lingtai/mcp_servers/_identity.py
@@ -42,7 +42,7 @@ Curated and built-in MCP server package implementations shipped inside the `ling
 
 ## Connections
 
-- Catalog/script launchers (`pyproject.toml:43-49`) start these servers as subprocess MCPs; agents activate them through the generic MCP capability (`src/lingtai/core/mcp/ANATOMY.md`).
+- Catalog/script launchers (`pyproject.toml:43-49`) start these servers as subprocess MCPs; agents activate them through the generic MCP capability (`src/tools/mcp/ANATOMY.md`).
 - Manager schemas include `manual` in each action enum and use `_skill.manual_action_description()` to advertise the bundled skill without loading the full body into the resident schema.
 - Tests pin the manual contract, package-data sidecar support, and Telegram parity in `tests/test_mcp_skill_manuals.py` and `tests/test_telegram_rich_formatting.py`.
 
@@ -56,6 +56,6 @@ The package itself is mostly code + packaged manuals. Runtime state is per-agent
 
 ## Notes
 
-- **Notification contract:** curated messaging MCPs that change structured notification metadata (`recent_messages`, `latest_incoming`, `referenced_messages`, stable IDs, routing hooks, or preview/body placement) must check `src/lingtai/core/mcp/LICC_NOTIFICATION_CONTRACT.md` in the same change.
+- **Notification contract:** curated messaging MCPs that change structured notification metadata (`recent_messages`, `latest_incoming`, `referenced_messages`, stable IDs, routing hooks, or preview/body placement) must check `src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md` in the same change.
 - **Manual sidecar minimal contract:** `action="manual"` returns the main `SKILL.md` body, parsed metadata, and the main `SKILL.md` absolute `path` only. Concrete `assets/` and `reference/` lists MUST NOT be returned as structured tool fields; `SKILL.md` is the single source of truth for what sidecars exist and how to follow their relative paths.
 - **Packaging discipline:** when adding manual sidecars, put their relative paths in `SKILL.md` and keep the package-data globs for `reference/**/*` / `assets/**/*` so wheels contain them (`pyproject.toml:81-86`).

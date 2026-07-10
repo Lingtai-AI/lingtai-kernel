@@ -1,5 +1,6 @@
 """Tests for file I/O capabilities (read, write, edit, glob, grep)."""
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -37,7 +38,7 @@ def test_file_sugar_dict_form(tmp_path):
 def test_individual_file_capability(tmp_path):
     """Each file capability can be disabled individually via `disable=[...]`.
 
-    The `lingtai.core.*` file caps are default-on; `disable` is the opt-out
+    The always-on file caps are default-on; `disable` is the opt-out
     channel for hosts that want a narrower surface.
     """
     agent = Agent(
@@ -160,7 +161,7 @@ def test_file_capability_relative_paths_resolve_under_workdir(tmp_path):
 def test_base_agent_has_no_file_intrinsics(tmp_path):
     """BaseAgent should NOT have file intrinsics after phase 2."""
     from lingtai_kernel.base_agent import BaseAgent
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     for name in ("read", "write", "edit", "glob", "grep"):
         assert name not in agent._intrinsics, f"{name} should not be in BaseAgent intrinsics"
     agent.stop(timeout=1.0)
@@ -169,7 +170,7 @@ def test_base_agent_has_no_file_intrinsics(tmp_path):
 def test_base_agent_kernel_only(tmp_path):
     """BaseAgent should have exactly 5 intrinsics: email, system, psyche, soul, notification."""
     from lingtai_kernel.base_agent import BaseAgent
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert set(agent._intrinsics.keys()) == {"email", "system", "psyche", "soul", "notification"}
     agent.stop(timeout=1.0)
 

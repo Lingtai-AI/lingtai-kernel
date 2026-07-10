@@ -4,18 +4,18 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DOC = ROOT / "src/lingtai/core/mcp/LICC_NOTIFICATION_CONTRACT.md"
-DOC_REL = "src/lingtai/core/mcp/LICC_NOTIFICATION_CONTRACT.md"
+DOC = ROOT / "src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md"
+DOC_REL = "src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md"
 REQUIRED_ANATOMIES = [
     "src/lingtai_kernel/ANATOMY.md",
     "src/lingtai_kernel/base_agent/ANATOMY.md",
-    "src/lingtai_kernel/intrinsics/notification/ANATOMY.md",
-    "src/lingtai/core/mcp/ANATOMY.md",
+    "src/tools/notification/ANATOMY.md",
+    "src/tools/mcp/ANATOMY.md",
     "src/lingtai/mcp_servers/ANATOMY.md",
 ]
 REQUIRED_TRIGGERS = [
-    "src/lingtai/core/mcp/inbox.py",
-    "src/lingtai/core/mcp/licc.py",
+    "src/lingtai/services/mcp_inbox.py",
+    "src/lingtai/services/mcp_licc.py",
     "src/lingtai_kernel/meta_block.py",
     "src/lingtai_kernel/notifications.py",
     "src/lingtai_kernel/base_agent/__init__.py",
@@ -25,8 +25,8 @@ REQUIRED_TRIGGERS = [
     "src/lingtai/mcp_servers/feishu/manager.py",
     "src/lingtai/mcp_servers/wechat/manager.py",
     "src/lingtai/mcp_servers/whatsapp/manager.py",
-    "src/lingtai_kernel/intrinsics/email/",
-    "src/lingtai_kernel/intrinsics/notification/",
+    "src/tools/email/",
+    "src/tools/notification/",
 ]
 
 

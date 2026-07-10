@@ -8,6 +8,7 @@ which model/backend it is currently running. **No API keys, no env-var
 names, no secrets** must ever appear in either surface.
 """
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import json
 from pathlib import Path
@@ -72,6 +73,7 @@ def _write_init(
 
 def test_kernel_manifest_includes_llm_from_service(tmp_path):
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=_mock_service("anthropic", "claude-opus-4-7", "https://api.anthropic.com"),
         agent_name="alice",
         working_dir=tmp_path / "alice",
@@ -87,6 +89,7 @@ def test_kernel_manifest_includes_llm_from_service(tmp_path):
 
 def test_kernel_manifest_omits_base_url_when_none(tmp_path):
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=_mock_service("openai", "gpt-4.6", base_url=None),
         agent_name="bob",
         working_dir=tmp_path / "bob",
@@ -98,7 +101,7 @@ def test_kernel_manifest_omits_base_url_when_none(tmp_path):
 
 def test_kernel_manifest_drops_mock_attrs(tmp_path):
     svc = MagicMock()
-    agent = BaseAgent(service=svc, agent_name="ghost", working_dir=tmp_path / "ghost")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="ghost", working_dir=tmp_path / "ghost")
     data = _build_manifest(agent)
     if "llm" in data:
         for v in data["llm"].values():

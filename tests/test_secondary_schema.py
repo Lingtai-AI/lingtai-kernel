@@ -1,5 +1,6 @@
 """Tests that the removed secondary channel is absent from tool schemas."""
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 from unittest.mock import MagicMock
 
@@ -14,7 +15,7 @@ def _schema_by_name(agent: BaseAgent) -> dict[str, dict]:
 
 
 def test_secondary_schema_not_injected_into_dynamic_or_intrinsic_tools(tmp_path):
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.add_tool(
         "long_work",
         schema={"type": "object", "properties": {"path": {"type": "string"}}},

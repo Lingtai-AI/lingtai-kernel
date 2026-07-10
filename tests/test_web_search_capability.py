@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lingtai.agent import Agent
-from lingtai.capabilities.web_search import WebSearchManager, setup
+from tools.web_search import WebSearchManager, setup
 from lingtai.services.websearch import SearchResult, SearchService, create_search_service
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
@@ -134,7 +134,7 @@ def test_web_search_setup_resolves_api_key_env(monkeypatch):
     agent._config.language = "en"
     agent.service._base_url = None
 
-    with patch("lingtai.capabilities.web_search.create_search_service") as mock_factory:
+    with patch("lingtai.services.websearch.create_search_service") as mock_factory:
         mock_factory.return_value = MagicMock(spec=SearchService)
         mgr = setup(agent, provider="gemini", api_key_env="WEB_SEARCH_TEST_API_KEY")
 
@@ -151,7 +151,7 @@ def test_web_search_setup_api_key_env_overrides_raw_key(monkeypatch):
     agent._config.language = "en"
     agent.service._base_url = None
 
-    with patch("lingtai.capabilities.web_search.create_search_service") as mock_factory:
+    with patch("lingtai.services.websearch.create_search_service") as mock_factory:
         mock_factory.return_value = MagicMock(spec=SearchService)
         setup(
             agent,
@@ -169,8 +169,8 @@ def test_web_search_setup_omits_api_host_for_gemini():
     agent._config.language = "en"
 
     with (
-        patch("lingtai.capabilities.web_search.create_search_service") as mock_factory,
-        patch("lingtai.capabilities._media_host.resolve_media_host") as mock_media_host,
+        patch("lingtai.services.websearch.create_search_service") as mock_factory,
+        patch("tools._media_host.resolve_media_host") as mock_media_host,
     ):
         mock_factory.return_value = MagicMock(spec=SearchService)
         setup(agent, provider="gemini", api_key="sk-test")
@@ -187,9 +187,9 @@ def test_web_search_setup_passes_api_host_for_minimax():
     agent._config.language = "en"
 
     with (
-        patch("lingtai.capabilities.web_search.create_search_service") as mock_factory,
+        patch("lingtai.services.websearch.create_search_service") as mock_factory,
         patch(
-            "lingtai.capabilities._media_host.resolve_media_host",
+            "tools._media_host.resolve_media_host",
             return_value="https://mini.example",
         ) as mock_media_host,
     ):
@@ -207,12 +207,12 @@ def test_web_search_setup_passes_zhipu_mode_without_api_host():
     agent._config.language = "en"
 
     with (
-        patch("lingtai.capabilities.web_search.create_search_service") as mock_factory,
+        patch("lingtai.services.websearch.create_search_service") as mock_factory,
         patch(
-            "lingtai.capabilities._zhipu_mode.resolve_z_ai_mode",
+            "tools._zhipu_mode.resolve_z_ai_mode",
             return_value="ZHIPU",
         ) as mock_z_mode,
-        patch("lingtai.capabilities._media_host.resolve_media_host") as mock_media_host,
+        patch("tools._media_host.resolve_media_host") as mock_media_host,
     ):
         mock_factory.return_value = MagicMock(spec=SearchService)
         setup(agent, provider="zhipu", api_key="sk-test")
@@ -239,7 +239,7 @@ def test_inherited_web_search_env_key_registers(tmp_path, monkeypatch):
         },
     )
 
-    with patch("lingtai.capabilities.web_search.create_search_service") as mock_factory:
+    with patch("lingtai.services.websearch.create_search_service") as mock_factory:
         mock_factory.return_value = MagicMock(spec=SearchService)
         service = make_mock_service()
         service._base_url = None

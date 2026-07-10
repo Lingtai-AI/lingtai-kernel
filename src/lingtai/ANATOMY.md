@@ -5,16 +5,9 @@ related_files:
   - src/lingtai/__main__.py
   - src/lingtai/agent.py
   - src/lingtai/auth/ANATOMY.md
-  - src/lingtai/capabilities/ANATOMY.md
-  - src/lingtai/capabilities/__init__.py
   - src/lingtai/cli.py
-  - src/lingtai/core/avatar/ANATOMY.md
-  - src/lingtai/core/bash/ANATOMY.md
-  - src/lingtai/core/daemon/ANATOMY.md
-  - src/lingtai/core/knowledge/ANATOMY.md
-  - src/lingtai/core/mcp/ANATOMY.md
-  - src/lingtai/core/skills/ANATOMY.md
-  - src/lingtai/i18n/ANATOMY.md
+  - src/tools/ANATOMY.md
+  - src/tools/registry.py
   - src/lingtai/init_schema.py
   - src/lingtai/intrinsic_skills/__init__.py
   - src/lingtai/llm/ANATOMY.md
@@ -80,19 +73,19 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **Inbound:** `lingtai-tui` calls `cli.run()` to boot agents; imports `load_preset`, `discover_presets_in_dirs` for UI. Kernel's `BaseAgent` is the parent class.
 
-**Outbound — kernel:** `lingtai_kernel.base_agent.BaseAgent`, `.config.AgentConfig`, `.prompt.build_system_prompt`, `.handshake.resolve_address`, `.intrinsics.{email,psyche}`, `.services.mail.FilesystemMailService`, `.migrate.run_migrations` (preset libraries) and `.migrate.run_agent_migrations` (agent workdir/init migrations; see `../lingtai_kernel/migrate/ANATOMY.md`).
+**Outbound — kernel:** `lingtai_kernel.base_agent.BaseAgent`, `.config.AgentConfig`, `.prompt.build_system_prompt`, `.handshake.resolve_address`, `tools.{email,psyche}` (injected), `.services.mail.FilesystemMailService`, `.migrate.run_migrations` (preset libraries) and `.migrate.run_agent_migrations` (agent workdir/init migrations; see `../lingtai_kernel/migrate/ANATOMY.md`).
 
-**Cross-module:** `agent.py` → `capabilities.setup_capability`, `core.mcp.{decompress_addons,read_registry,MCPInboxPoller}`, `services.mcp.{MCPClient,HTTPMCPClient}`, `llm.service.LLMService`, `presets`, `lingtai_kernel.config_resolve`, `init_schema`. `cli.py` → `agent.Agent`, `lingtai_kernel.config_resolve`, `presets`.
+**Cross-module:** `agent.py` → `tools.registry.{setup_capability,INTRINSICS,CORE_DEFAULTS}`, `services.mcp_registry.{decompress_addons,read_registry}`, `services.mcp_inbox.MCPInboxPoller`, `services.mcp.{MCPClient,HTTPMCPClient}`, `llm.service.LLMService`, `presets`, `lingtai_kernel.config_resolve`, `init_schema`. `cli.py` → `agent.Agent`, `tools.registry.{CORE_DEFAULTS,get_all_providers}`, `lingtai_kernel.config_resolve`, `presets`.
 
 **Agent → BaseAgent:** Three-layer hierarchy: `BaseAgent` (kernel) → `Agent` (capabilities) → `CustomAgent` (domain). Agent adds capability registration, MCP auto-loading, preset swap, full init.json reconstruct.
 
-**Capability registration:** `setup_capability()` in `capabilities/__init__.py`; the registry is `_BUILTIN` (per-capability module paths) plus `CORE_DEFAULTS` (which boot automatically). Agent calls `apply_core_defaults` + `_setup_capability` (agent.py:152) during `__init__` and `_setup_from_init`. Hosts disable defaults via the `disable=[...]` kwarg or `manifest.disable` in init.json.
+**Capability registration:** `setup_capability()` in `tools/registry.py`; the registry is `BUILTIN_TOOLS` (per-tool module paths under `tools.<pkg>`) plus `CORE_DEFAULTS` (which boot automatically). Agent calls `apply_core_defaults` + `_setup_capability` (agent.py) during `__init__` and `_setup_from_init`. Hosts disable defaults via the `disable=[...]` kwarg or `manifest.disable` in init.json. The five mandatory intrinsics are injected separately as `BaseAgent(intrinsics=tools.registry.INTRINSICS)`.
 
-**Agent init migration + preset materialization:** `run_agent_migrations` (`lingtai_kernel/migrate/migrate.py:285`) is called by `cli.load_init` (boot) and `Agent._read_init` (refresh) before `init.json` is read/validated. Then `materialize_active_preset` (`lingtai_kernel/presets.py:289`) reads `manifest.preset.active`, loads preset, substitutes `llm`+`capabilities` into manifest before validation. The preset owns explicit opt-in capabilities, but per-agent init.json kwargs survive in two ways: (1) for capabilities the preset *also* enables, init.json wins key-by-key; (2) for always-on `CORE_DEFAULTS` capabilities the preset *omits* (daemon, bash, knowledge, …), init.json kwargs are carried forward so `apply_core_defaults` doesn't re-add an empty entry and lose e.g. `daemon.max_emanations`. Non-core optional caps the preset omits are dropped (the swap). `CORE_DEFAULTS` lives in `lingtai.capabilities` and is injected via the `core_defaults=` arg by both callers (`agent._read_init` :866, `cli.load_init` :49) — the kernel does not import the wrapper. `skills.paths` additionally append-merges (preset defaults first).
+**Agent init migration + preset materialization:** `run_agent_migrations` (`lingtai_kernel/migrate/migrate.py:285`) is called by `cli.load_init` (boot) and `Agent._read_init` (refresh) before `init.json` is read/validated. Then `materialize_active_preset` (`lingtai_kernel/presets.py:289`) reads `manifest.preset.active`, loads preset, substitutes `llm`+`capabilities` into manifest before validation. The preset owns explicit opt-in capabilities, but per-agent init.json kwargs survive in two ways: (1) for capabilities the preset *also* enables, init.json wins key-by-key; (2) for always-on `CORE_DEFAULTS` capabilities the preset *omits* (daemon, bash, knowledge, …), init.json kwargs are carried forward so `apply_core_defaults` doesn't re-add an empty entry and lose e.g. `daemon.max_emanations`. Non-core optional caps the preset omits are dropped (the swap). `CORE_DEFAULTS` lives in `tools.registry` and is injected via the `core_defaults=` arg by both callers (`agent._read_init` :1071, `cli.load_init` :50) — the kernel does not import the `tools` package. `skills.paths` additionally append-merges (preset defaults first).
 
 ## Composition
 
-Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai_kernel/` (kernel package). Siblings: `capabilities/`, `core/`, `llm/`, `services/`, `auth/`, `i18n/`. See `../ANATOMY.md`.
+Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai_kernel/` (kernel package) and the top-level `tools/` package (concrete built-in tools; see `../tools/ANATOMY.md`). Siblings: `llm/`, `services/`, `auth/`. See `../ANATOMY.md`.
 
 ## State
 
@@ -116,5 +109,5 @@ Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai_kernel/` (
 - **LLM / preset safelists (issue #78):** `_build_manifest` :262 also re-applies `_LLM_PUBLIC_KEYS = ("provider", "model", "base_url", "api_compat", "context_limit")` to the kernel-supplied `llm` block as defense-in-depth, and reads `manifest.preset` from init.json via `_read_preset_from_init` :300 filtered to `_PRESET_PUBLIC_KEYS = ("active", "default", "allowed")`. Anything outside the safelists never reaches `.agent.json` or the identity prompt section. This is the central safety claim of #78 — see `tests/test_agent_preset_manifest.py::test_manifest_never_contains_api_key`.
 - **AgentConfig hydration:** `_setup_from_init` :1137 rebuilds runtime config via `build_agent_config`, overlaying explicit init.json values onto `lingtai_kernel.config.AgentConfig` defaults. `manifest.cache_miss_budget` overlays `AgentConfig.cache_miss_budget` (default 1,000,000). Legacy `max_turns` and `molt_*` manifest values remain deliberately ignored. `manifest.llm.thinking` hydrates verbatim when present (schema values `none`/`minimal`/`low`/`medium`/`high`/`xhigh`); when omitted, Codex-family providers (`THINKING_PROVIDERS`) keep the `"default"` sentinel so the Codex adapter applies its own default (`reasoning.effort = "xhigh"`), while other providers keep the legacy cross-provider `"high"` main-session default.
 - **Addon decompression** runs BEFORE capability setup so `mcp` capability sees populated `mcp_registry.jsonl` on first reconcile (`Agent.__init__` :33, `_setup_from_init` :989).
-- **MCP retry contract (issue #34):** `_load_mcp_from_workdir` :376 records every registered init.json mcp entry into `self._mcp_init_specs` (name → `{cfg, source, client}`). `_retry_failed_mcps` :524 walks this dict, closes any dead client (`is_connected()` False), respawns with the original config, and reports `{retried, recovered, still_failed, healthy}`. `system(action="refresh")` calls it via `intrinsics/system/preset.py:_refresh` before `_perform_refresh` so the documented "fix config → refresh" recovery path works without full process restart.
+- **MCP retry contract (issue #34):** `_load_mcp_from_workdir` :376 records every registered init.json mcp entry into `self._mcp_init_specs` (name → `{cfg, source, client}`). `_retry_failed_mcps` :524 walks this dict, closes any dead client (`is_connected()` False), respawns with the original config, and reports `{retried, recovered, still_failed, healthy}`. `system(action="refresh")` calls it via `tools/system/preset.py:_refresh` before `_perform_refresh` so the documented "fix config → refresh" recovery path works without full process restart.
 - **Runtime venv markers:** `venv_resolve.py` accepts legacy managed venvs without `.lingtai-env.json` if `import lingtai` succeeds, then stamps the marker best-effort. Marker read/parse/probe failures are `error`, not `mismatch`, and never delete the managed runtime. A valid marker that proves a different OS/arch/Python environment is a confirmed mismatch: explicit `init.venv_path` candidates are rejected but left on disk, while only the managed global runtime venv (`~/.lingtai-tui/runtime/venv/`) may be removed before auto-create. The TUI calls this same logic through `python -m lingtai.venv_resolve env-marker {check,stamp} --venv <path>`.

@@ -1,5 +1,6 @@
 """Tests for lingtai.services.logging."""
 import json
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 import sqlite3
 import threading
 from pathlib import Path
@@ -153,6 +154,7 @@ class TestBaseAgentLoggingIntegration:
         from lingtai_kernel.tool_executor import ToolExecutor
 
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -190,6 +192,7 @@ class TestBaseAgentLoggingIntegration:
         from lingtai_kernel.tool_executor import ToolExecutor
 
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -220,6 +223,7 @@ class TestBaseAgentLoggingIntegration:
     def test_state_change_logged(self, tmp_path):
         """State transitions are logged."""
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -359,6 +363,7 @@ class TestSQLiteEventIndex:
 
     def test_base_agent_creates_sqlite_sidecar(self, tmp_path):
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",

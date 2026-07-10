@@ -22,6 +22,7 @@ These tests verify:
 7. Hook fires unconditionally per the proposal §8.3 (text + tool sends).
 """
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import threading
 import time
@@ -244,6 +245,7 @@ class TestInstallDrainHook:
 
     def test_install_on_canonical_session(self, tmp_path):
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="hook-test",
             working_dir=tmp_path / "hook-test",
@@ -261,6 +263,7 @@ class TestInstallDrainHook:
     def test_no_install_when_chat_none(self, tmp_path):
         """Should be a no-op (no exception) when _chat is None."""
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="hook-test",
             working_dir=tmp_path / "hook-test",
@@ -272,6 +275,7 @@ class TestInstallDrainHook:
     def test_no_install_when_session_lacks_attribute(self, tmp_path):
         """Sessions without pre_request_hook (legacy mocks etc.) are skipped."""
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="hook-test",
             working_dir=tmp_path / "hook-test",
@@ -284,6 +288,7 @@ class TestInstallDrainHook:
     def test_idempotent(self, tmp_path):
         """Calling twice on the same session re-installs cleanly."""
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="hook-test",
             working_dir=tmp_path / "hook-test",
@@ -314,6 +319,7 @@ class TestDrainHookSplices:
 
     def test_drain_splices_pending_pair(self, tmp_path):
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="splice-test",
             working_dir=tmp_path / "splice-test",
@@ -351,6 +357,7 @@ class TestDrainHookSplices:
     def test_drain_noop_on_empty_queue(self, tmp_path):
         """Hook is cheap when the queue is empty — no interface mutation."""
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="noop-test",
             working_dir=tmp_path / "noop-test",
@@ -380,6 +387,7 @@ class TestReplaceInHistoryMidTurn:
 
     def test_replace_removes_prior_pair(self, tmp_path):
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="replace-test",
             working_dir=tmp_path / "replace-test",
@@ -442,6 +450,7 @@ class TestNoDoubleSplice:
 
     def test_entry_drain_then_hook_drain(self, tmp_path):
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="double-splice-test",
             working_dir=tmp_path / "double-splice-test",

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from lingtai.core.mcp import inbox
+from lingtai.services import mcp_inbox as inbox
 from lingtai.mcp_servers import _entrypoint, _licc_compat
 
 PROVIDERS = ("imap", "telegram", "feishu", "wechat", "whatsapp", "cloud_mail")

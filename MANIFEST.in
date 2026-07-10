@@ -31,3 +31,25 @@ include README.md
 # section-definition YAML under prompts/<section>/ into source releases too.
 recursive-include src/lingtai/prompts *.md
 recursive-include src/lingtai/prompts *.yaml
+
+# Consolidated tool packages ship data assets (i18n catalogs, per-tool JSON
+# policy/data files, and manual trees). pyproject.toml owns the wheel
+# package-data globs; mirror them here so source releases carry the same tool
+# assets. ``graft`` pulls the manual trees (arbitrary file types) wholesale.
+recursive-include src/tools *.json
+# Per-tool contracts (src/tools/<tool>/CONTRACT.md) and the daemon extension
+# contract (tools/daemon/DAEMON_CONTRACT.md) — mirror the package-data globs
+# in pyproject.toml so source releases carry the same tool contracts.
+recursive-include src/tools CONTRACT.md
+recursive-include src/tools DAEMON_CONTRACT.md
+graft src/tools/email/manual
+graft src/tools/system/manual
+graft src/tools/psyche/manual
+graft src/tools/soul/manual
+graft src/tools/notification/manual
+graft src/tools/knowledge/manual
+graft src/tools/skills/manual
+graft src/tools/bash/manual
+graft src/tools/avatar/manual
+graft src/tools/daemon/manual
+graft src/tools/mcp/manual

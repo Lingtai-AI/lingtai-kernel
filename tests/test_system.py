@@ -1,5 +1,6 @@
 """Tests for system intrinsic — runtime, lifecycle, and synchronization."""
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import threading
 import time
@@ -8,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai_kernel.base_agent import BaseAgent
-from lingtai_kernel.intrinsics import ALL_INTRINSICS
+from tools.registry import INTRINSICS as ALL_INTRINSICS
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +46,7 @@ def test_system_in_all_intrinsics():
 
 
 def test_system_wired_in_agent(tmp_path):
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert "system" in agent._intrinsics
 
 
@@ -60,7 +61,7 @@ def test_system_wired_in_agent(tmp_path):
 
 
 def test_status_returns_identity(tmp_path):
-    agent = BaseAgent(service=make_mock_service(), agent_name="alice", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="alice", working_dir=tmp_path / "test")
     agent.start()
     try:
         result = agent.status()
@@ -73,7 +74,7 @@ def test_status_returns_identity(tmp_path):
 
 
 def test_status_returns_runtime(tmp_path):
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
         time.sleep(0.1)
@@ -87,7 +88,7 @@ def test_status_returns_runtime(tmp_path):
 
 def test_status_returns_state(tmp_path):
     """status() exposes runtime.state so the TUI knows the lifecycle phase."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
         result = agent.status()
@@ -101,7 +102,7 @@ def test_status_returns_state(tmp_path):
 
 def test_status_dict_state_matches_agent_state(tmp_path):
     """C1: agent.status() and agent._state agree."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
         result = agent.status()
@@ -111,7 +112,7 @@ def test_status_dict_state_matches_agent_state(tmp_path):
 
 
 def test_status_returns_tokens(tmp_path):
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
         result = agent.status()
@@ -132,6 +133,7 @@ def test_status_with_mail_service(tmp_path):
     mock_mail = MagicMock()
     mock_mail.address = "127.0.0.1:8301"
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         agent_name="test", working_dir=tmp_path / "test",
         service=make_mock_service(),
         mail_service=mock_mail,
@@ -145,7 +147,7 @@ def test_status_with_mail_service(tmp_path):
 
 
 def test_status_context_null_without_session(tmp_path):
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     result = agent.status()
     ctx = result["tokens"]["context"]
     assert ctx["window_size"] is None
@@ -154,7 +156,7 @@ def test_status_context_null_without_session(tmp_path):
 
 def test_system_show_action_rejected(tmp_path):
     """system(action='show') was removed; calling it must error, not silently no-op."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     result = agent._intrinsics["system"]({"action": "show"})
     assert result["status"] == "error"
     assert "Unknown system action" in result["message"]
@@ -169,7 +171,7 @@ def test_system_show_action_rejected(tmp_path):
 
 def test_system_nap_returns_unknown_action(tmp_path):
     """nap is no longer a valid system action."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     result = agent._intrinsics["system"]({"action": "nap", "seconds": 1})
     assert result["status"] == "error"
     assert "Unknown system action" in result["message"]
@@ -181,7 +183,7 @@ def test_system_nap_returns_unknown_action(tmp_path):
 
 
 def test_system_self_sleep(tmp_path):
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", admin={"karma": True})
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", admin={"karma": True})
     result = agent._intrinsics["system"]({"action": "sleep", "reason": "need bash"})
     assert result["status"] == "ok"
     assert agent._asleep.is_set()
@@ -200,7 +202,7 @@ def test_system_refresh(tmp_path):
     ``agent._shutdown`` synchronously — both retired in favor of the
     signal-file + watcher-subprocess pattern.)
     """
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     result = agent._intrinsics["system"]({"action": "refresh", "reason": "new tools"})
     assert result["status"] == "ok"
     # The signal file is the contract; the heartbeat loop keys off it.
@@ -216,7 +218,7 @@ def test_system_refresh(tmp_path):
 
 
 def test_system_unknown_action(tmp_path):
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     result = agent._intrinsics["system"]({"action": "bogus"})
     assert result["status"] == "error"
 
@@ -289,7 +291,7 @@ def _make_test_agent_for_presets(tmp_path, presets_path=None, active_preset=None
         "soul": "",
     }
     (wd / "init.json").write_text(json.dumps(init))
-    agent = BaseAgent(service=make_mock_service(), agent_name="alice",
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="alice",
                       working_dir=wd)
     return agent
 
@@ -343,7 +345,7 @@ def test_preset_ref_in_normalizes_tilde_and_absolute(tmp_path, monkeypatch):
     path as the same preset, in both directions — otherwise the
     allowed-gate refuses legitimate swaps when path forms diverge."""
     from pathlib import Path
-    from lingtai_kernel.intrinsics.system import _preset_ref_in
+    from tools.system import _preset_ref_in
     # Path.expanduser() reads $HOME — point it at a tempdir we can resolve.
     home = tmp_path / "home"
     home.mkdir()
@@ -675,7 +677,7 @@ def test_refresh_revert_preset_when_no_preset_configured_errors(tmp_path, monkey
         "principle": "p", "covenant": "c", "pad": "", "lingtai": "", "soul": "",
     }
     (wd / "init.json").write_text(json.dumps(init))
-    agent = BaseAgent(service=svc, agent_name="alice", working_dir=wd)
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="alice", working_dir=wd)
 
     # Don't actually relaunch on _perform_refresh
     monkeypatch.setattr(agent, "_perform_refresh", lambda: None)
@@ -825,7 +827,7 @@ def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch
 
 def test_cpr_propagates_launch_failure_instead_of_resuscitated(tmp_path):
     """A failed CPR launch must not be reported as resuscitated."""
-    from lingtai_kernel.intrinsics.system.karma import _cpr
+    from tools.system.karma import _cpr
 
     target = tmp_path / "target"
     target.mkdir()

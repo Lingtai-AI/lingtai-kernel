@@ -104,6 +104,14 @@ class Agent(BaseAgent):
         # Default karma authority for the primary agent (本我)
         kwargs.setdefault("admin", {"karma": True})
 
+        # Inject the built-in intrinsic tool registry. The kernel owns the tool
+        # machinery, not the concrete tools: it accepts intrinsics as injection
+        # and a bare BaseAgent has none. lingtai.Agent is the composing layer, so
+        # it supplies the five mandatory intrinsics here. ``setdefault`` lets a
+        # host override (e.g. a test injecting a subset).
+        from tools.registry import INTRINSICS
+        kwargs.setdefault("intrinsics", INTRINSICS)
+
         # Store combo name before super().__init__ (not forwarded to BaseAgent)
         self._combo_name = combo_name
 
@@ -123,11 +131,11 @@ class Agent(BaseAgent):
 
         # Expand groups and normalize to dict
         if isinstance(capabilities, list):
-            from .capabilities import expand_groups, normalize_capabilities
+            from tools.registry import expand_groups, normalize_capabilities
             expanded = expand_groups(capabilities)
             capabilities = normalize_capabilities({name: {} for name in expanded})
         elif isinstance(capabilities, dict):
-            from .capabilities import _GROUPS, normalize_capabilities
+            from tools.registry import _GROUPS, normalize_capabilities
             expanded_dict: dict[str, dict] = {}
             for name, cap_kwargs in capabilities.items():
                 if name in _GROUPS:
@@ -145,10 +153,10 @@ class Agent(BaseAgent):
                 if v is None:
                     capabilities[n] = None  # type: ignore[assignment]
 
-        # Apply core defaults — the `lingtai.core.*` floor boots on every agent
+        # Apply core defaults — the always-on tool floor boots on every agent
         # unless explicitly disabled via `disable=[...]` or `"name": null` in
         # the capabilities dict. init.json kwargs override default kwargs.
-        from .capabilities import apply_core_defaults
+        from tools.registry import apply_core_defaults
         capabilities = apply_core_defaults(capabilities, disable=disable)
 
         # Track for avatar replay
@@ -163,7 +171,7 @@ class Agent(BaseAgent):
         # sees the populated registry on its first reconcile.
         if addons:
             try:
-                from .core.mcp import decompress_addons
+                from .services.mcp_registry import decompress_addons
                 report = decompress_addons(self._working_dir, addons)
                 self._log("mcp_decompress", **report)
             except Exception as e:
@@ -226,7 +234,7 @@ class Agent(BaseAgent):
         Not directly sealed — but setup() calls add_tool() which checks the seal.
         Must only be called from __init__ (before start()).
         """
-        from .capabilities import CAPABILITY_UNAVAILABLE, setup_capability
+        from tools.registry import CAPABILITY_UNAVAILABLE, setup_capability
 
         serializable_kw = {
             k: v for k, v in kwargs.items()
@@ -258,8 +266,7 @@ class Agent(BaseAgent):
         Never touches ``.library/custom/``. That is the agent's territory.
         """
         import shutil
-        import lingtai.capabilities as caps_pkg
-        import lingtai.core as core_pkg
+        import tools as tools_pkg
         import lingtai.intrinsic_skills as skills_pkg
 
         library_dir = self._working_dir / ".library"
@@ -300,10 +307,13 @@ class Agent(BaseAgent):
                     continue
                 shutil.copytree(entry, intrinsic_dir / subdir / entry.name)
 
-        # core/ and capabilities/ both install into intrinsic/capabilities/ —
-        # agents see one flat capability namespace.
-        install_from(core_pkg, "capabilities")
-        install_from(caps_pkg, "capabilities")
+        # Every tool package with a manual/ installs into
+        # intrinsic/capabilities/<name>/ — agents see one flat capability
+        # namespace. Scanning the consolidated ``tools`` package replaces the
+        # former core/ + capabilities/ dual scan; tools without a manual/ (the
+        # file tools, the non-email intrinsics whose manuals ship as
+        # intrinsic_skills bundles below) are simply skipped.
+        install_from(tools_pkg, "capabilities")
         install_skills_from(skills_pkg, "capabilities")
 
         # If the skills capability is loaded, re-run its reconcile now that
@@ -313,7 +323,7 @@ class Agent(BaseAgent):
         for cap_name, cap_kwargs in self._capabilities:
             if cap_name == "skills":
                 try:
-                    from .core import skills as skillsmod
+                    from tools import skills as skillsmod
                     skillsmod._reconcile(self, list(cap_kwargs.get("paths", []) or []))
                 except Exception as e:
                     self._log("skills_reconcile_failed", reason=str(e))
@@ -418,11 +428,10 @@ class Agent(BaseAgent):
         """Refresh the 'tools' section — wrapper override includes MCP schemas."""
         lang = self._config.language
         lines = []
-        from lingtai_kernel.intrinsics import ALL_INTRINSICS
         for name in self._intrinsics:
-            info = ALL_INTRINSICS.get(name)
-            if info:
-                lines.append(f"### {name}\n{info['module'].get_description(lang)}")
+            module = self._intrinsic_modules.get(name)
+            if module:
+                lines.append(f"### {name}\n{module.get_description(lang)}")
         for s in self._tool_schemas:
             if s.description:
                 lines.append(f"### {s.name}\n{s.description}")
@@ -585,7 +594,7 @@ class Agent(BaseAgent):
 
         # Cross-reference against the registry.
         try:
-            from .core.mcp import read_registry
+            from .services.mcp_registry import read_registry
             registered, _problems = read_registry(self._working_dir)
             registered_names = {r["name"] for r in registered}
         except Exception as e:
@@ -830,7 +839,7 @@ class Agent(BaseAgent):
     def start(self) -> None:
         super().start()
         # LICC poller: watch .mcp_inbox/ for events from out-of-process MCPs.
-        from .core.mcp.inbox import MCPInboxPoller
+        from .services.mcp_inbox import MCPInboxPoller
         self._mcp_inbox_poller = MCPInboxPoller(self)
         self._mcp_inbox_poller.start()
 
@@ -1027,7 +1036,7 @@ class Agent(BaseAgent):
         from lingtai_kernel.config_resolve import resolve_paths
         from lingtai_kernel.migrate import run_agent_migrations
         from .presets import expand_inherit, materialize_active_preset
-        from .capabilities import CORE_DEFAULTS
+        from tools.registry import CORE_DEFAULTS
 
         run_agent_migrations(self._working_dir)
 
@@ -1238,6 +1247,7 @@ class Agent(BaseAgent):
         self._capability_managers.clear()
 
         self._intrinsics.clear()
+        self._intrinsic_modules.clear()
         self._wire_intrinsics()
 
         # Reset capability-owned flags (email.boot below resets to "email box"/"email")
@@ -1335,7 +1345,7 @@ class Agent(BaseAgent):
         # `_reload_prompt_sections` now route through the same canonical
         # composers (`_lingtai_load`, `_pad_load`), so they produce identical
         # content and the result is independent of which runs last.
-        from lingtai_kernel.intrinsics import psyche as _psyche
+        from tools import psyche as _psyche
         _psyche.boot(self)
 
         # Re-boot email so a fresh EmailManager + scheduler thread are wired.
@@ -1343,7 +1353,7 @@ class Agent(BaseAgent):
         # starting a new one — without that, the prior daemon thread keeps
         # polling ``mailbox/schedules/*/schedule.json`` and races the new
         # thread, double-sending the same due tick (issue #154).
-        from lingtai_kernel.intrinsics import email as _email
+        from tools import email as _email
         _email.boot(self)
 
         # Decompress addons BEFORE capability setup so the `mcp` capability
@@ -1351,14 +1361,14 @@ class Agent(BaseAgent):
         addons = data.get("addons") or []
         if addons:
             try:
-                from .core.mcp import decompress_addons
+                from .services.mcp_registry import decompress_addons
                 report = decompress_addons(self._working_dir, addons)
                 self._log("mcp_decompress", **report)
             except Exception as e:
                 self._log("mcp_decompress_failed", reason=str(e))
 
         # Re-run capability setup. init.json declares overrides/opt-ins;
-        # `apply_core_defaults` ensures the `lingtai.core.*` floor boots even
+        # `apply_core_defaults` ensures the always-on tool floor boots even
         # when the manifest omits it. `manifest.disable` and `"name": null`
         # entries are the opt-out channels.
         raw_caps = m.get("capabilities", {}) or {}
@@ -1366,7 +1376,7 @@ class Agent(BaseAgent):
         # Preserve null sentinels through env-resolution (it converts None to {}).
         null_outs = {n for n, v in raw_caps.items() if v is None}
 
-        from .capabilities import (
+        from tools.registry import (
             _GROUPS,
             apply_core_defaults,
             normalize_capabilities,
@@ -1507,7 +1517,7 @@ class Agent(BaseAgent):
         # Delegate to the single canonical composer so boot/refresh/molt all
         # produce byte-identical `character` content and no longer depend on
         # post-molt hook ordering.
-        from lingtai_kernel.intrinsics.psyche import _lingtai_load
+        from tools.psyche import _lingtai_load
         _lingtai_load(self, {})
 
         # --- Substrate (kernel-owned, cross-app stable; #39) ---
@@ -1568,7 +1578,7 @@ class Agent(BaseAgent):
         # Delegate to the single canonical composer rather than re-reading
         # pad.md alone — otherwise the post-molt hook ordering silently drops
         # the pinned append references. `_pad_load` composes both.
-        from lingtai_kernel.intrinsics.psyche import _pad_load
+        from tools.psyche import _pad_load
         _pad_load(self, {})
 
         # --- Principle (kernel-owned top-level progressive-disclosure contract) ---

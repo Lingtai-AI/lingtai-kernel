@@ -47,7 +47,7 @@ def _make_manager(tmp_path):
 
 
 def _make_run_dir(tmp_path, handle="em-5"):
-    from lingtai.core.daemon.run_dir import DaemonRunDir
+    from tools.daemon.run_dir import DaemonRunDir
 
     parent_wd = tmp_path / "rd-parent"
     parent_wd.mkdir(exist_ok=True)
@@ -70,7 +70,7 @@ def _make_run_dir(tmp_path, handle="em-5"):
 
 
 def test_signal_exit_name_covers_both_conventions():
-    from lingtai.core.daemon import DaemonManager
+    from tools.daemon import DaemonManager
 
     # subprocess negative convention and shell 128+signum convention
     assert DaemonManager._signal_exit_name(-15) == "SIGTERM"
@@ -93,7 +93,7 @@ def test_drain_all_stamps_reason(tmp_path, monkeypatch):
     so the read loop only observes the returncode and must recover the reason.
     """
     mgr = _make_manager(tmp_path)
-    monkeypatch.setattr("lingtai.core.daemon._kill_process_group", lambda p: None)
+    monkeypatch.setattr("tools.daemon._kill_process_group", lambda p: None)
 
     proc = _FakeProc()
     mgr._register_cli_proc(proc, group_id="g")
@@ -118,7 +118,7 @@ def test_drain_all_without_reason_stamps_nothing(tmp_path):
 def test_kill_cli_group_stamps_timeout(tmp_path, monkeypatch):
     """A batch timeout watchdog kill attributes its procs as ``timeout``."""
     mgr = _make_manager(tmp_path)
-    monkeypatch.setattr("lingtai.core.daemon._kill_process_group", lambda p: None)
+    monkeypatch.setattr("tools.daemon._kill_process_group", lambda p: None)
 
     proc = _FakeProc()
     mgr._register_cli_proc(proc, group_id="grp")
@@ -155,7 +155,7 @@ def test_register_clears_stale_reason(tmp_path):
 def test_attributed_exit_names_reason_and_records(tmp_path, monkeypatch):
     """A -15 exit with a recorded reason -> attributed message + forensic record."""
     mgr = _make_manager(tmp_path)
-    monkeypatch.setattr("lingtai.core.daemon._kill_process_group", lambda p: None)
+    monkeypatch.setattr("tools.daemon._kill_process_group", lambda p: None)
     run_dir = _make_run_dir(tmp_path)
 
     proc = _FakeProc(returncode=-15)

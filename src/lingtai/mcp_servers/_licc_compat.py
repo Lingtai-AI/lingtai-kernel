@@ -1,7 +1,7 @@
 """LICC v1 client compatibility wrapper shared by curated MCP servers.
 
 The canonical first-party LICC producer implementation lives in
-``lingtai.core.mcp.licc`` inside lingtai-kernel. Curated MCP servers import this
+``lingtai.services.mcp_licc`` inside lingtai-kernel. Curated MCP servers import this
 module through their per-provider ``lingtai.mcp_servers.<name>.licc`` shim and
 delegate to the kernel helper whenever it is available.
 
@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:  # pragma: no cover - availability depends on the host LingTai runtime.
-    from lingtai.core.mcp.licc import push_inbox_event as _kernel_push_inbox_event
+    from lingtai.services.mcp_licc import push_inbox_event as _kernel_push_inbox_event
 except ImportError:  # Older/standalone environments keep using the fallback below.
     _kernel_push_inbox_event = None
 

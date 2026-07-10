@@ -3,12 +3,13 @@
 Migrated from memory intrinsic tests. Tests the pad object within psyche.
 """
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.intrinsics import ALL_INTRINSICS
+from tools.registry import INTRINSICS as ALL_INTRINSICS
 from lingtai_kernel.base_agent import BaseAgent
 
 
@@ -42,7 +43,7 @@ def test_psyche_in_all_intrinsics():
 
 
 def test_psyche_wired_in_agent(tmp_path):
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert "psyche" in agent._intrinsics
     assert "pad" not in agent._intrinsics
     agent.stop(timeout=1.0)
@@ -56,6 +57,7 @@ def test_psyche_wired_in_agent(tmp_path):
 def test_covenant_constructor_arg_writes_to_system(tmp_path):
     """covenant= constructor arg should write to system/covenant.md."""
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         covenant="You are a helpful agent",
     )
@@ -68,6 +70,7 @@ def test_covenant_constructor_arg_writes_to_system(tmp_path):
 def test_pad_constructor_arg_writes_to_system(tmp_path):
     """pad= constructor arg should write to system/pad.md."""
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         pad="initial pad",
     )
@@ -80,6 +83,7 @@ def test_pad_constructor_arg_writes_to_system(tmp_path):
 def test_covenant_is_protected_section(tmp_path):
     """Covenant should be a protected prompt section."""
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         covenant="researcher",
     )
@@ -94,6 +98,7 @@ def test_existing_system_files_not_overwritten(tmp_path):
     """If system/pad.md already exists, constructor arg should not overwrite it."""
     # First create an agent so its working dir (with agent_id) exists
     agent1 = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "t1",
         pad="existing content",
     )
@@ -105,6 +110,7 @@ def test_existing_system_files_not_overwritten(tmp_path):
     # The semantic of this test is that pad= doesn't overwrite existing pad.md.
     # We verify this by checking the first agent wrote it correctly.
     agent2 = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "t2",
         pad="constructor ltm",
     )
@@ -120,7 +126,7 @@ def test_existing_system_files_not_overwritten(tmp_path):
 
 def test_pad_edit(tmp_path):
     """Edit should write content to disk without injecting into prompt."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     result = agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "hello world"})
     assert result["status"] == "ok"
     assert result["size_bytes"] == len("hello world".encode())
@@ -131,7 +137,7 @@ def test_pad_edit(tmp_path):
 
 def test_pad_edit_then_load(tmp_path):
     """Edit + load workflow: edit writes to disk, load injects into prompt."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
         # edit writes content and auto-loads into prompt manager
@@ -155,7 +161,7 @@ def test_pad_edit_then_load(tmp_path):
 
 
 def test_pad_load(tmp_path):
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
         pad_file = agent.working_dir / "system" / "pad.md"
@@ -169,7 +175,7 @@ def test_pad_load(tmp_path):
 
 
 def test_pad_load_empty_removes_section(tmp_path):
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
         agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "some content"})
@@ -184,7 +190,7 @@ def test_pad_load_empty_removes_section(tmp_path):
 
 
 def test_pad_load_no_change_no_commit(tmp_path):
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
         agent._intrinsics["psyche"]({"object": "pad", "action": "load"})
@@ -195,14 +201,14 @@ def test_pad_load_no_change_no_commit(tmp_path):
 
 
 def test_pad_unknown_action(tmp_path):
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     result = agent._intrinsics["psyche"]({"object": "pad", "action": "diff"})
     assert "error" in result
     agent.stop(timeout=1.0)
 
 
 def test_pad_creates_files_if_missing(tmp_path):
-    agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.start()
     try:
         import shutil
