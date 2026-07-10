@@ -5,9 +5,9 @@ description: >
   daemon(action=list), claude-p/codex/opencode behavior,
   backend_options flag passing, preset/capability inheritance, and nested
   per-backend references (Codex, OpenCode, claude-p, MiMo Code, Qwen Code,
-  Kimi Code, and Cursor flag discovery, built-in LingTai knowledge entrypoint).
-version: 1.12.0
-last_changed_at: "2026-07-09T20:34:39-07:00"
+  Kimi Code, Cursor, and Oh-My-Pi flag discovery, built-in LingTai knowledge entrypoint).
+version: 1.13.0
+last_changed_at: "2026-07-09T19:24:35-07:00"
 ---
 
 # Daemon CLI Backend Reference
@@ -86,6 +86,15 @@ catalog. Only backends with proven demand get a page.
     flags (model selection, output/tooling switches): it routes to the
     installed `agent` CLI's live help via bash and shows how to translate
     that help into generic `backend_options`.
+- name: daemon-backend-oh-my-pi
+  location: reference/backends/oh-my-pi/SKILL.md
+  description: |
+    Nested daemon-cli-backends reference for the Oh-My-Pi (`omp`) daemon
+    backend's flag surface. Read this only when a daemon task needs
+    Oh-My-Pi-specific CLI flags (model selection, tool or provider
+    switches): it routes to the installed CLI's live help via bash, lists
+    the exact harness-reserved flags, and shows how to translate that help
+    into generic `backend_options`.
 - name: daemon-backend-lingtai
   location: reference/backends/lingtai/SKILL.md
   description: |
@@ -108,6 +117,7 @@ catalog. Only backends with proven demand get a page.
 | Qwen Code (`qwen-code` / `qwen`)-specific flags for a daemon task: model selection, provider tunables, reserved `--prompt`/`--yolo`/`--approval-mode` boundary, no-`ask` planning; discover the installed `qwen` CLI's flags and translate them into `backend_options` | `reference/backends/qwen-code/SKILL.md` |
 | Kimi Code (`kimicode` / `kimi`)-specific flags for a daemon task: model selection (`--model`), skills/workspace dirs; reserved harness flags, run-private `mcp.json` MCP loader, why `ask`/resume is unsupported; discover the installed Kimi CLI's flags and translate them into `backend_options` | `reference/backends/kimicode/SKILL.md` |
 | Cursor-specific flags for a daemon task: model selection, output/tooling switches; discover the installed Cursor Agent CLI's (`agent`) flags and translate them into `backend_options` | `reference/backends/cursor/SKILL.md` |
+| Oh-My-Pi (`omp`)-specific flags for a daemon task: model selection, tool/provider switches, the harness-reserved mode/approval/session flags; discover the installed `omp` CLI's flags and translate them into `backend_options` | `reference/backends/oh-my-pi/SKILL.md` |
 | Built-in `lingtai` backend knowledge for a daemon task: confirm it has no CLI/`backend_options` flag surface; find the live authorities for preset selection/inspection, tools/skills/MCP inheritance, and the completion contract | `reference/backends/lingtai/SKILL.md` |
 
 ## API note: `daemon(action="list")`
