@@ -10,9 +10,9 @@ description: >
   idle/soul behavior, preset tiers, and resident substrate maintenance. This is
   a nested skill-reference under `system-manual`, not a standalone catalog skill;
   its folder may carry scripts/assets as the substrate reference grows.
-version: 1.0.1
+version: 1.0.2
 tags: [lingtai, system-manual, substrate, runtime, lifecycle, communication, memory, notifications, mcp]
-last_changed_at: "2026-07-03T00:00:00Z"
+last_changed_at: "2026-07-09T22:24:00-07:00"
 ---
 
 # Substrate Manual
@@ -88,6 +88,14 @@ normally expose that interpreter from their runtime venv (for example
 `~/.lingtai-tui/runtime/venv` on macOS/Linux; Windows uses the corresponding
 `Scripts\python.exe` inside the venv). If a new MCP/tool still does not appear
 after refresh, inspect registry/config health before retrying.
+
+**Peer readiness during relaunch.** A same-workdir `lingtai run` process can exist
+before it has published a fresh heartbeat. During that gap, peer internal email
+can bounce while CPR's child launch is refused as a duplicate PID; these
+observations are compatible. Wait for the fresh heartbeat and retry the original
+email instead of stacking CPR attempts. Internal email does not queue recipient
+delivery across this gap; `email-manual` owns the detailed delivery and bounce
+contract.
 
 Refresh is also the **emergency** context-reconstruction path: reach for it when
 context is broken or stale, or when an immediate provider-side rebuild is urgently
