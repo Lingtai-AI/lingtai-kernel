@@ -4,9 +4,9 @@ description: >
   Nested daemon-manual reference for daemon API details and CLI backends:
   daemon(action=list), claude-p/codex/opencode behavior,
   backend_options flag passing, preset/capability inheritance, and nested
-  per-backend flag-discovery references (Codex, OpenCode, claude-p).
-version: 1.7.0
-last_changed_at: "2026-07-09T19:47:33-07:00"
+  per-backend flag-discovery references (Codex, OpenCode, claude-p, MiMo Code).
+version: 1.8.0
+last_changed_at: "2026-07-09T19:56:24-07:00"
 ---
 
 # Daemon CLI Backend Reference
@@ -48,6 +48,14 @@ maintained flag catalog. Only backends with proven demand get a page.
     restrictions): it routes to the installed CLI's live help via bash and
     shows how to translate that help into generic `backend_options` (e.g.
     underscore keys becoming dashed long flags like `--fallback-model`).
+- name: daemon-backend-mimocode
+  location: reference/backends/mimocode/SKILL.md
+  description: |
+    Nested daemon-cli-backends reference for the MiMo Code (`mimocode` /
+    `mimo`) daemon backend's flag surface. Read this only when a daemon task
+    needs MiMo-specific CLI flags (model selection, provider switches): it
+    routes to the installed CLI's live help via bash (`mimo run --help`) and
+    shows how to translate that help into generic `backend_options`.
 ```
 
 ## Routing table
@@ -57,6 +65,7 @@ maintained flag catalog. Only backends with proven demand get a page.
 | Codex-specific flags for a daemon task: model selection, reasoning effort (`model_reasoning_effort`, ultra), `--config` overrides; discover the installed Codex CLI's flags and translate them into `backend_options` | `reference/backends/codex/SKILL.md` |
 | OpenCode-specific flags for a daemon task: model selection (`--model provider/model`), reasoning variant (`--variant`), agent choice; discover the installed OpenCode CLI's flags and translate them into `backend_options` | `reference/backends/opencode/SKILL.md` |
 | Claude Code-specific flags for a `claude-p` / `claude-code` daemon task: model selection, `--fallback-model`, tool restrictions; reserved/harness-owned flag boundary, resume and auth-env behavior; discover the installed Claude CLI's flags and translate them into `backend_options` | `reference/backends/claude-p/SKILL.md` |
+| MiMo Code-specific flags for a daemon task (`mimocode` / `mimo`): model selection, provider switches; discover the installed `mimo` CLI's flags (`mimo run --help`) and translate them into `backend_options` | `reference/backends/mimocode/SKILL.md` |
 
 ## API note: `daemon(action="list")`
 
@@ -228,7 +237,9 @@ examples (e.g. reasoning effort via repeated `--config` overrides), read
 `--model provider/model`, `--variant`), read
 `reference/backends/opencode/SKILL.md`. For Claude Code-specific discovery and
 the `claude-p` harness boundary (reserved flags, MCP config, resume, auth-env
-hygiene), read `reference/backends/claude-p/SKILL.md`.
+hygiene), read `reference/backends/claude-p/SKILL.md`. For MiMo Code
+(`mimocode` / `mimo`) discovery and translation, read
+`reference/backends/mimocode/SKILL.md`.
 
 This is intentionally a passthrough, not a fixed table. Claude Code, Codex,
 OpenCode, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, and Cursor rev their flag
