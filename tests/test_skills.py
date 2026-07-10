@@ -262,6 +262,7 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
             "mimocode",
             "qwen-code",
             "kimicode",
+            "cursor",
             "lingtai",
         ):
             backend_reference = (
