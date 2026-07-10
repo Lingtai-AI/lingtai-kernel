@@ -36,9 +36,13 @@ bad check never breaks the loop). It dispatches to each check's
   helpers (`upsert`, `remove`) that operate on the `nudge.json`
   multi-entry payload under a lazy per-agent lock. Runs `kernel_version.check`,
   `source_drift.check`, and then `goal.check` once per heartbeat tick.
-- `kernel_version.py` — read-only runtime/update check. It first detects
-  whether the installed `lingtai` distribution on disk differs from the running
-  `lingtai.__version__` and emits a fast local refresh nudge. For packaged,
+- `kernel_version.py` — read-only runtime/update check. It probes the installed
+  `lingtai` distribution through ``importlib.metadata`` and reads the already-loaded
+  wrapper module from ``sys.modules.get("lingtai")`` without importing it
+  (`kernel_version.py:220-252`). The running version comes from the wrapper's
+  in-memory ``__version__`` so an in-place upgrade after process start is detected;
+  the installed version comes from distribution metadata. If the wrapper module is
+  not loaded, running falls back to installed metadata. For packaged,
   non-editable/non-dev runtimes, it also performs an at-most-once-per-UTC-day
   package-index check for a newer kernel version and nudges the agent to read
   `system-manual -> reference/runtime-update-checks/SKILL.md` before asking the

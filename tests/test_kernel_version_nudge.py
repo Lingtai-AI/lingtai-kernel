@@ -271,3 +271,162 @@ def test_current_remote_version_clears_existing_kernel_nudge(tmp_path, monkeypat
     state = json.loads((tmp_path / ".notification" / ".nudge_state.json").read_text())
     assert state["kernel_version"]["latest_seen"] == "0.14.1"
     assert state["kernel_version"]["emitted_for_latest"] is None
+
+
+def test_runtime_info_uses_loaded_wrapper_version(tmp_path, monkeypatch):
+    """_runtime_info reads running_version from sys.modules['lingtai'] without importing it."""
+    import sys
+    import types
+    from importlib import metadata
+
+    fake_wrapper = types.ModuleType("lingtai")
+    fake_wrapper.__version__ = "0.14.1"
+    fake_wrapper.__file__ = str(tmp_path / "site-packages" / "lingtai" / "__init__.py")
+    monkeypatch.setitem(sys.modules, "lingtai", fake_wrapper)
+
+    class FakeDist:
+        version = "0.14.2"
+
+        def read_text(self, name):
+            return None
+
+        def locate_file(self, path):
+            return tmp_path / "site-packages" / path
+
+    monkeypatch.setattr(
+        metadata, "distribution", lambda name: FakeDist() if name == "lingtai" else None
+    )
+
+    info = kv._runtime_info()
+    assert info.running_version == "0.14.1"
+    assert info.installed_version == "0.14.2"
+    assert info.dev_reason is None
+
+
+def test_runtime_info_wrapper_absent_falls_back_to_metadata(tmp_path, monkeypatch):
+    """When the wrapper module is not loaded, running_version falls back to installed metadata."""
+    import sys
+    from importlib import metadata
+
+    monkeypatch.delitem(sys.modules, "lingtai", raising=False)
+
+    class FakeDist:
+        version = "0.14.2"
+
+        def read_text(self, name):
+            return None
+
+        def locate_file(self, path):
+            return tmp_path / "site-packages" / path
+
+    monkeypatch.setattr(
+        metadata, "distribution", lambda name: FakeDist() if name == "lingtai" else None
+    )
+
+    info = kv._runtime_info()
+    assert info.running_version == "0.14.2"
+    assert info.installed_version == "0.14.2"
+
+
+def test_runtime_info_detects_source_checkout_from_wrapper_file(tmp_path, monkeypatch):
+    """Source-checkout detection uses the already-loaded wrapper's __file__."""
+    import sys
+    import types
+    from importlib import metadata
+
+    checkout = tmp_path / "repo"
+    (checkout / ".git").mkdir(parents=True)
+    (checkout / "pyproject.toml").write_text("")
+    wrapper_file = checkout / "src" / "lingtai" / "__init__.py"
+    wrapper_file.parent.mkdir(parents=True)
+    wrapper_file.write_text("")
+
+    fake_wrapper = types.ModuleType("lingtai")
+    fake_wrapper.__version__ = "0.14.1"
+    fake_wrapper.__file__ = str(wrapper_file)
+    monkeypatch.setitem(sys.modules, "lingtai", fake_wrapper)
+
+    class FakeDist:
+        version = "0.14.1"
+
+        def read_text(self, name):
+            return None
+
+        def locate_file(self, path):
+            return tmp_path / "site-packages" / path
+
+    monkeypatch.setattr(
+        metadata, "distribution", lambda name: FakeDist() if name == "lingtai" else None
+    )
+
+    info = kv._runtime_info()
+    assert info.dev_reason == "source-checkout"
+
+
+def test_runtime_info_wrapper_without_file_is_not_source_checkout(tmp_path, monkeypatch):
+    """A loaded wrapper lacking __file__ must not be misclassified as source-checkout."""
+    import sys
+    import types
+    from importlib import metadata
+
+    fake_wrapper = types.ModuleType("lingtai")
+    fake_wrapper.__version__ = "0.14.1"
+    # No __file__ attribute.
+    monkeypatch.setitem(sys.modules, "lingtai", fake_wrapper)
+
+    class FakeDist:
+        version = "0.14.1"
+
+        def read_text(self, name):
+            return None
+
+        def locate_file(self, path):
+            return tmp_path / "site-packages" / path
+
+    monkeypatch.setattr(
+        metadata, "distribution", lambda name: FakeDist() if name == "lingtai" else None
+    )
+
+    info = kv._runtime_info()
+    assert info.dev_reason is None
+
+
+def test_runtime_info_loaded_wrapper_triggers_local_refresh_nudge(tmp_path, monkeypatch):
+    """A loaded wrapper at X plus installed metadata at Y emits the local refresh nudge."""
+    import sys
+    import types
+    from importlib import metadata
+
+    fake_wrapper = types.ModuleType("lingtai")
+    fake_wrapper.__version__ = "0.14.1"
+    fake_wrapper.__file__ = str(tmp_path / "site-packages" / "lingtai" / "__init__.py")
+    monkeypatch.setitem(sys.modules, "lingtai", fake_wrapper)
+
+    class FakeDist:
+        version = "0.14.2"
+
+        def read_text(self, name):
+            return None
+
+        def locate_file(self, path):
+            return tmp_path / "site-packages" / path
+
+    monkeypatch.setattr(
+        metadata, "distribution", lambda name: FakeDist() if name == "lingtai" else None
+    )
+    monkeypatch.setattr(
+        kv,
+        "_fetch_latest_version",
+        lambda: (_ for _ in ()).throw(AssertionError("remote should not be queried")),
+    )
+
+    agent = _Agent(tmp_path)
+    kv.check(agent)
+
+    entries = _entries(tmp_path)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["kind"] == "kernel_version"
+    assert entry["source"] == "installed-distribution"
+    assert entry["running"] == "0.14.1"
+    assert entry["installed"] == "0.14.2"

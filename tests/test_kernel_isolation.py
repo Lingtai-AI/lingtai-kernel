@@ -73,7 +73,8 @@ def test_kernel_has_no_lingtai_submodules():
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     if (
-                        (
+                        alias.name == "lingtai"
+                        or (
                             alias.name.startswith("lingtai.")
                             and not alias.name.startswith("lingtai_kernel.")
                         )
@@ -88,6 +89,50 @@ def test_kernel_has_no_lingtai_submodules():
         "depend on lingtai or tools (the DAG is lingtai → tools → lingtai_kernel).\n"
         + "\n".join(violations)
     )
+
+
+def test_kernel_isolation_scanner_catches_bare_lingtai_import():
+    """The AST scanner flags bare ``import lingtai`` but allows kernel-relative ``.tools``."""
+    import ast
+    from pathlib import Path
+
+    source = '''\
+"""Synthetic kernel module."""
+import lingtai
+from .tools import add_tool
+from lingtai_kernel.message import Message
+'''
+    tree = ast.parse(source)
+    violations = []
+    kernel_src = Path(__file__).parent.parent / "src" / "lingtai_kernel"
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.level == 0 and node.module and (
+                (
+                    node.module.startswith("lingtai.")
+                    and not node.module.startswith("lingtai_kernel.")
+                )
+                or node.module == "tools"
+                or node.module.startswith("tools.")
+            ):
+                violations.append(f"from {node.module} ...")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if (
+                    alias.name == "lingtai"
+                    or (
+                        alias.name.startswith("lingtai.")
+                        and not alias.name.startswith("lingtai_kernel.")
+                    )
+                    or alias.name == "tools"
+                    or alias.name.startswith("tools.")
+                ):
+                    violations.append(f"import {alias.name}")
+
+    assert "import lingtai" in violations
+    assert "from lingtai_kernel.message ..." not in violations
+    assert "from .tools ..." not in violations
 
 
 def test_kernel_import_does_not_pull_lingtai():
