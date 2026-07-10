@@ -65,6 +65,10 @@ def create_custom_adapter(
         if wire_api == "responses":
             oa_kwargs["use_responses"] = True
             oa_kwargs["force_responses"] = True
+            # Compatible REST endpoints commonly reject OpenAI's server-side
+            # response chain (or reserve it for WebSocket v2). Replay the
+            # canonical conversation instead so tool continuations are complete.
+            oa_kwargs["responses_use_previous_response_id"] = False
         elif wire_api == "chat_completions":
             oa_kwargs.setdefault("use_responses", False)
             oa_kwargs.setdefault("force_responses", False)

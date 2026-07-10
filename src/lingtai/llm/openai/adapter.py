@@ -1762,7 +1762,12 @@ class OpenAIChatSession(ChatSession):
 
 
 class OpenAIResponsesSession(ChatSession):
-    """Session backed by OpenAI's Responses API with server-side state."""
+    """Session backed by OpenAI's Responses API.
+
+    Official OpenAI sessions use server-side state via ``previous_response_id``.
+    Compatible REST endpoints can opt out and replay the canonical interface on
+    every request instead.
+    """
 
     def __init__(
         self,
@@ -1777,6 +1782,7 @@ class OpenAIResponsesSession(ChatSession):
         interface: ChatInterface | None = None,
         prompt_cache_key: str | None = None,
         context_window: int = 0,
+        use_previous_response_id: bool = True,
     ):
         self._client = client
         self._model = model
@@ -1785,6 +1791,7 @@ class OpenAIResponsesSession(ChatSession):
         self._tool_choice = tool_choice
         self._extra_kwargs = extra_kwargs
         self._response_id: str | None = previous_response_id
+        self._use_previous_response_id = bool(use_previous_response_id)
         self._compact_threshold = _validate_compact_threshold(compact_threshold)
         self._interface = interface or ChatInterface()
         # Optional OpenAI Responses ``prompt_cache_key`` — opts the request
@@ -1821,7 +1828,20 @@ class OpenAIResponsesSession(ChatSession):
         elif isinstance(message, list):
             items = []
             for item in message:
-                if (
+                if isinstance(item, ToolResultBlock):
+                    output = (
+                        item.content
+                        if isinstance(item.content, str)
+                        else json.dumps(item.content, default=str)
+                    )
+                    items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": item.id,
+                            "output": output,
+                        }
+                    )
+                elif (
                     isinstance(item, dict)
                     and item.get("type") == "function_call_output"
                 ):
@@ -1840,21 +1860,79 @@ class OpenAIResponsesSession(ChatSession):
         else:
             raise TypeError(f"Unsupported message type: {type(message)}")
 
-    def send(self, message) -> LLMResponse:
-        """Send a user message (str) or tool results (list of dicts)."""
-        # Pre-request hook — fired for the kernel-side drain. NOTE: this
-        # session uses server-side state (previous_response_id) and does
-        # NOT commit message content to the canonical ChatInterface, so a
-        # pair the hook splices is only visible to the LLM on the *next*
-        # turn (when the interface re-syncs). This is acceptable because
-        # the agent's local view is updated immediately for persistence
-        # and inspection. Most agents using this session use it via Codex
-        # OAuth (CodexResponsesSession), which DOES replay the full
-        # interface and gets same-turn delivery.
+    def _prepare_input(self, message) -> tuple[list[dict], bool]:
+        """Stage canonical input for replay mode and build the wire input."""
+        staged = False
+        if not self._use_previous_response_id:
+            if message is None:
+                pass
+            elif isinstance(message, str):
+                self._interface.add_user_message(message)
+                staged = True
+            elif isinstance(message, list) and message and all(
+                isinstance(item, ToolResultBlock) for item in message
+            ):
+                self._interface.add_tool_results(message)
+                staged = True
+            elif isinstance(message, (dict, list)):
+                # Preserve support for pre-built Responses input in tests and
+                # legacy callers. It cannot be represented canonically, so it
+                # is appended only to this request's replay payload.
+                pass
+            else:
+                raise TypeError(f"Unsupported message type: {type(message)}")
+
         if self.pre_request_hook is not None:
             self.pre_request_hook(self._interface)
 
-        input_items = self._convert_input(message)
+        if self._use_previous_response_id:
+            return self._convert_input(message), staged
+
+        self._interface.enforce_tool_pairing()
+        input_items = to_responses_input(self._interface)
+        if isinstance(message, dict):
+            input_items.append(message)
+        elif isinstance(message, list) and not (
+            message and all(isinstance(item, ToolResultBlock) for item in message)
+        ):
+            input_items.extend(self._convert_input(message))
+        return input_items, staged
+
+    def _record_assistant_response(self, result: LLMResponse) -> None:
+        """Persist a Responses result for the next stateless full replay."""
+        if self._use_previous_response_id:
+            return
+
+        blocks: list = []
+        joined_thoughts = "\n".join(thought for thought in result.thoughts if thought)
+        if joined_thoughts:
+            blocks.append(ThinkingBlock(text=joined_thoughts))
+        if result.text:
+            blocks.append(TextBlock(text=result.text))
+        for tool_call in result.tool_calls:
+            blocks.append(
+                ToolCallBlock(
+                    id=tool_call.id or "",
+                    name=tool_call.name,
+                    args=tool_call.args,
+                )
+            )
+        if not blocks:
+            blocks.append(TextBlock(text=""))
+        self._interface.add_assistant_message(
+            blocks,
+            model=self._model,
+            provider="openai",
+            usage={
+                "input_tokens": result.usage.input_tokens,
+                "output_tokens": result.usage.output_tokens,
+                "thinking_tokens": result.usage.thinking_tokens,
+            },
+        )
+
+    def send(self, message) -> LLMResponse:
+        """Send a user message (str) or tool results (list of dicts)."""
+        input_items, staged = self._prepare_input(message)
 
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -1867,7 +1945,7 @@ class OpenAIResponsesSession(ChatSession):
             kwargs["tools"] = self._tools
             if self._tool_choice:
                 kwargs["tool_choice"] = self._tool_choice
-        if self._response_id:
+        if self._use_previous_response_id and self._response_id:
             kwargs["previous_response_id"] = self._response_id
         if self._compact_threshold:
             kwargs["context_management"] = [
@@ -1876,17 +1954,20 @@ class OpenAIResponsesSession(ChatSession):
         if self._prompt_cache_key:
             kwargs["prompt_cache_key"] = self._prompt_cache_key
 
-        raw = self._client.responses.create(**kwargs)
+        try:
+            raw = self._client.responses.create(**kwargs)
+        except Exception:
+            if staged:
+                self._interface.drop_trailing(lambda entry: entry.role == "user")
+            raise
         self._response_id = raw.id
-        return _parse_responses_api_response(raw)
+        result = _parse_responses_api_response(raw)
+        self._record_assistant_response(result)
+        return result
 
     def send_stream(self, message, on_chunk=None) -> LLMResponse:
         """Send a streaming request."""
-        # Pre-request hook — see send() above for contract + caveat.
-        if self.pre_request_hook is not None:
-            self.pre_request_hook(self._interface)
-
-        input_items = self._convert_input(message)
+        input_items, staged = self._prepare_input(message)
 
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -1900,7 +1981,7 @@ class OpenAIResponsesSession(ChatSession):
             kwargs["tools"] = self._tools
             if self._tool_choice:
                 kwargs["tool_choice"] = self._tool_choice
-        if self._response_id:
+        if self._use_previous_response_id and self._response_id:
             kwargs["previous_response_id"] = self._response_id
         if self._compact_threshold:
             kwargs["context_management"] = [
@@ -1914,55 +1995,89 @@ class OpenAIResponsesSession(ChatSession):
         usage = UsageMetadata()
         seen_reasoning_summary_items: set[str] = set()
 
-        stream = self._client.responses.create(**kwargs)
-        for event in stream:
-            if _handle_responses_reasoning_event(event, acc, seen_reasoning_summary_items):
-                continue
-            if event.type == "response.output_text.delta":
-                acc.add_text(event.delta)
-                if on_chunk:
-                    on_chunk(event.delta)
-            elif event.type == "response.function_call_arguments.delta":
-                acc.add_tool_args(event.delta)
-            elif event.type == "response.output_item.added":
-                if getattr(event.item, "type", None) == "function_call":
-                    acc.start_tool(id=event.item.call_id, name=event.item.name)
-            elif event.type == "response.output_item.done":
-                if getattr(event.item, "type", None) == "function_call":
-                    acc.finish_tool()
-            elif event.type == "response.completed":
-                response_id = event.response.id
-                if event.response.usage:
-                    cached = getattr(event.response.usage, "input_tokens_details", None)
-                    cached_tokens = (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
-                    usage = UsageMetadata(
-                        input_tokens=getattr(event.response.usage, "input_tokens", 0)
-                        or 0,
-                        output_tokens=getattr(event.response.usage, "output_tokens", 0)
-                        or 0,
-                        thinking_tokens=getattr(
-                            event.response.usage, "output_tokens_details", None
+        try:
+            stream = self._client.responses.create(**kwargs)
+            for event in stream:
+                if _handle_responses_reasoning_event(event, acc, seen_reasoning_summary_items):
+                    continue
+                if event.type == "response.output_text.delta":
+                    acc.add_text(event.delta)
+                    if on_chunk:
+                        on_chunk(event.delta)
+                elif event.type == "response.function_call_arguments.delta":
+                    acc.add_tool_args(event.delta)
+                elif event.type == "response.output_item.added":
+                    if getattr(event.item, "type", None) == "function_call":
+                        acc.start_tool(id=event.item.call_id, name=event.item.name)
+                elif event.type == "response.output_item.done":
+                    if getattr(event.item, "type", None) == "function_call":
+                        acc.finish_tool()
+                elif event.type == "response.completed":
+                    response_id = event.response.id
+                    if event.response.usage:
+                        cached = getattr(event.response.usage, "input_tokens_details", None)
+                        cached_tokens = (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
+                        usage = UsageMetadata(
+                            input_tokens=getattr(event.response.usage, "input_tokens", 0)
+                            or 0,
+                            output_tokens=getattr(event.response.usage, "output_tokens", 0)
+                            or 0,
+                            thinking_tokens=getattr(
+                                event.response.usage, "output_tokens_details", None
+                            )
+                            and getattr(
+                                event.response.usage.output_tokens_details,
+                                "reasoning_tokens",
+                                0,
+                            )
+                            or 0,
+                            cached_tokens=cached_tokens,
                         )
-                        and getattr(
-                            event.response.usage.output_tokens_details,
-                            "reasoning_tokens",
-                            0,
-                        )
-                        or 0,
-                        cached_tokens=cached_tokens,
-                    )
+        except Exception:
+            if staged:
+                self._interface.drop_trailing(lambda entry: entry.role == "user")
+            raise
 
         self._response_id = response_id
-        return acc.finalize(usage=usage)
+        result = acc.finalize(usage=usage)
+        self._record_assistant_response(result)
+        return result
+
+    def commit_tool_results(self, tool_results: list) -> None:
+        """Append intercepted tool results for stateless replay sessions."""
+        if not self._use_previous_response_id and tool_results:
+            self._interface.add_tool_results(tool_results)
+
+    def update_tools(self, tools: list[FunctionSchema] | None) -> None:
+        """Replace tools for stateless replay without changing stateful chains."""
+        if self._use_previous_response_id:
+            return
+        self._tools = _build_responses_tools(tools)
+        self._interface.add_system(
+            self._instructions,
+            tools=FunctionSchema.list_to_dicts(tools),
+        )
+
+    def update_system_prompt(self, system_prompt: str) -> None:
+        """Replace instructions for stateless replay sessions."""
+        if self._use_previous_response_id:
+            return
+        self._instructions = system_prompt
+        self._interface.add_system(
+            system_prompt,
+            tools=self._interface.current_tools,
+        )
 
     def get_history(self) -> list[dict]:
-        """Return minimal state for session persistence (server-side)."""
+        """Return server state or the canonical stateless replay history."""
+        if not self._use_previous_response_id:
+            return self._interface.to_dict()
         return [{"_response_id": self._response_id}]
 
     @property
     def session_resume_id(self) -> str | None:
         """Return the response ID for session resumption."""
-        return self._response_id
+        return self._response_id if self._use_previous_response_id else None
 
 
 # ---------------------------------------------------------------------------
@@ -1993,10 +2108,14 @@ class OpenAIAdapter(LLMAdapter):
         compact_threshold: int | None = 100_000,
         prompt_cache_key: str | bool | None = None,
         service_tier: str | None = None,
+        responses_use_previous_response_id: bool = True,
     ):
         self.base_url = base_url
         self._use_responses = use_responses
         self._force_responses = force_responses
+        self._responses_use_previous_response_id = bool(
+            responses_use_previous_response_id
+        )
         # Prompt-cache-key policy for this adapter's OpenAI-compatible sessions:
         #   None  -> auto-derive a stable, namespaced default per model
         #   str   -> use this exact key for every session (override)
@@ -2152,6 +2271,7 @@ class OpenAIAdapter(LLMAdapter):
             interface=interface,
             prompt_cache_key=self._resolve_prompt_cache_key(model),
             context_window=context_window,
+            use_previous_response_id=self._responses_use_previous_response_id,
         )
 
     def _create_completions_session(

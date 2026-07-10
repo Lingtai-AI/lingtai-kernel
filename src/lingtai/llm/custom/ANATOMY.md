@@ -46,7 +46,7 @@ Factory function (not a class). Returns an `LLMAdapter` instance:
 Parameters:
 - `api_key: str | None` — passed through to chosen adapter.
 - `api_compat: str` — selects backend (`"openai"`, `"anthropic"`, `"gemini"`).
-- `wire_api: str` — OpenAI-compatible wire selector (`"auto"`, `"chat_completions"`, `"responses"`); non-OpenAI compat paths ignore it.
+- `wire_api: str` — OpenAI-compatible wire selector (`"auto"`, `"chat_completions"`, `"responses"`); non-OpenAI compat paths ignore it. Custom Responses sessions replay the full canonical conversation over REST and omit `previous_response_id`, since compatible gateways commonly reserve that field for Responses WebSocket v2.
 - `base_url: str | None` — provider endpoint URL.
 - `default_headers: dict | None` — forwarded to all compat paths that expose SDK HTTP header configuration (OpenAI-, Anthropic-, and Gemini-compatible).
 - `service_tier` in `**kwargs` — normalized and forwarded only for OpenAI-compatible adapters.

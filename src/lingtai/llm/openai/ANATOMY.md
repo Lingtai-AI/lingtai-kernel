@@ -38,7 +38,7 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | Class | Lines | Role |
 |-------|-------|------|
 | `OpenAIChatSession` | 492–1003 | Chat Completions session with context overflow auto-recovery; sends optional `prompt_cache_key` |
-| `OpenAIResponsesSession` | 1006–1204 | Responses API session with server-side `previous_response_id` chaining, optional `context_management` compaction, and optional `prompt_cache_key` |
+| `OpenAIResponsesSession` | 1006–1204 | Responses API session with selectable server-side `previous_response_id` chaining or stateless canonical-history replay, optional `context_management` compaction, and optional `prompt_cache_key` |
 | `OpenAIAdapter` | 1207–1520 | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold` and optional `service_tier`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key` |
 | `CodexResponsesSession` | `adapter.py:2223` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include/replay, encrypted-reasoning self-heal, cache-affinity headers, honest client/account identity, and honest Codex metadata envelope. |
 | `CodexOpenAIAdapter` | `adapter.py:2017` | Codex provider specialization: forces Responses mode, derives stable per-agent cache/session ids plus a LingTai installation id from the configured anchor, and wires account/metadata hints into Codex sessions. Maps an omitted/`default` thinking level to an explicit `reasoning.effort = "xhigh"` in its `_create_responses_session` (Codex-only default — omitting the field would fall back to the backend's lower default; explicit levels pass through unchanged, and the generic `OpenAIAdapter` keeps omit-on-default). `codex-pool` reuses this adapter, so it inherits the same default. |
@@ -89,10 +89,10 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 
 ### Responses API session flow (`OpenAIResponsesSession.send`, line 853)
 
-1. `_convert_input(message)` → Responses API input items
-2. Chain `previous_response_id` if available
+1. Stateful mode converts only the new message; stateless mode stages it in `ChatInterface` and serializes the complete history with `to_responses_input`
+2. Chain `previous_response_id` only in stateful mode
 3. Call `client.responses.create(**kwargs)`
-4. Store `response_id` for next turn
+4. Store `response_id`; stateless mode also records assistant text, reasoning, and tool calls for the next full replay
 
 ### Codex continuation flow (`CodexResponsesSession.send_stream`)
 
@@ -208,7 +208,7 @@ When a Codex session has a stable LingTai session/thread identity, `CodexRespons
 
 - **`OpenAIChatSession._interface`** — canonical `ChatInterface`, single source of truth. Mutated in-place: `add_user_message`, `add_tool_results`, `add_assistant_message`, `drop_trailing`.
 - **`OpenAIChatSession._request_timeout`** — per-request HTTP timeout set by caller before dispatch (line 319). Prevents race between watchdog and SDK.
-- **`OpenAIResponsesSession._response_id`** — server-side session chain pointer. Updated after each `send()` / streamed response.
+- **`OpenAIResponsesSession._response_id`** — server-side session chain pointer in stateful mode and response metadata only in stateless mode. Updated after each `send()` / streamed response.
 - **`CodexResponsesSession._response_id`** — transient debug aid only; never threaded into next request (line 1538).
 - **`CodexResponsesSession._current_id`** — the single per-agent affinity id (the hash of the agent path + current molt count) handed to this session, used byte-identically for `_prompt_cache_key` / `_session_id` / `_thread_id`. Set once per session at construction — a NEW session is built for each `create_chat`, and the adapter resolves the molt-current id at that point, so a molt-advanced id reaches the next session without any in-session mutation (no rotation, no epoch, no clock).
 - **Codex Responses trace** — opt-in diagnostics write JSONL metadata to `logs/codex_responses_trace.jsonl` when `LINGTAI_CODEX_RESPONSES_TRACE=1` (override path with `LINGTAI_CODEX_RESPONSES_TRACE_PATH`). Default off; stores event/item shapes, lengths/hashes, usage, and accumulator counts, not raw content.
@@ -291,7 +291,7 @@ Implementation: the input-dispatch ladder at the top of each method tests `if me
 All four `send` / `send_stream` paths in this file fire `self.pre_request_hook(self._interface)` after committing the message to the canonical interface but before the API call. Historically the kernel installed `BaseAgent._drain_tc_inbox_for_hook` here so involuntary tool-call pairs (mail notifications, soul.flow voices) spliced into the wire chat mid-turn. After the `.notification/` redesign (`fadbabf`/`d2da97e`) the hook is still installed but the queue is always empty in production; ACTIVE notifications now defer to the post-turn IDLE synthetic-pair path rather than mutating tool results at send time. Phase 3 will remove the hook entirely. Three regimes (preserved for historical context and future re-use):
 
 - **`OpenAIChatSession.send` / `send_stream`** — canonical-interface; the hook splices into the same interface that's about to be serialized via `_build_messages()`. Spliced pair appears in this same API request. Same-turn delivery.
-- **`OpenAIResponsesSession.send` / `send_stream`** — server-state via `previous_response_id`; the hook splices into `self._interface` but the wire payload comes from `_convert_input(message)` (just the new input). Spliced pair is recorded in canonical interface immediately for persistence/inspection but only reaches the LLM next turn after re-sync. Documented inline.
+- **`OpenAIResponsesSession.send` / `send_stream`** — official OpenAI defaults to server-state via `previous_response_id`, where the wire payload contains only new input. Custom REST Responses disables that chain and serializes `self._interface` in full, so hook-spliced pairs are delivered in the same request.
 - **`CodexResponsesSession.send_stream`** — Codex's stateless backend replays the full canonical interface on every request (`to_responses_input(self._interface)`), so the hook delivers same-turn just like the CC path.
 
 ### Git history

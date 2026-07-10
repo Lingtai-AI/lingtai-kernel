@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from lingtai.llm.custom.adapter import create_custom_adapter
 from lingtai.llm.interface_converters import to_responses_input
 from lingtai.llm.openai.adapter import (
     CodexOpenAIAdapter,
@@ -16,7 +17,12 @@ from lingtai.llm.openai.adapter import (
     OpenAIResponsesSession,
 )
 from lingtai_kernel.llm.base import FunctionSchema
-from lingtai_kernel.llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
+from lingtai_kernel.llm.interface import (
+    TextBlock,
+    ThinkingBlock,
+    ToolCallBlock,
+    ToolResultBlock,
+)
 
 
 @dataclass
@@ -42,6 +48,21 @@ class FakeResponses:
 class FakeClient:
     def __init__(self, events: list[Event]):
         self.responses = FakeResponses(events)
+
+
+class FakeSyncResponses:
+    def __init__(self, responses: list[object]):
+        self.responses = responses
+        self.kwargs: list[dict] = []
+
+    def create(self, **kwargs):
+        self.kwargs.append(kwargs)
+        return self.responses.pop(0)
+
+
+class FakeSyncClient:
+    def __init__(self, responses: list[object]):
+        self.responses = FakeSyncResponses(responses)
 
 
 def _usage(*, reasoning_tokens: int = 7) -> SimpleNamespace:
@@ -408,3 +429,190 @@ def test_openai_responses_stream_captures_summary_thoughts():
     result = session.send_stream("think")
 
     assert result.thoughts == ["I should call the report tool."]
+
+
+def test_openai_responses_converts_canonical_tool_results_to_json_input():
+    session = OpenAIResponsesSession(
+        client=FakeClient([]),
+        model="gpt-5.5",
+        instructions="system prompt",
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+    )
+
+    converted = session._convert_input(
+        [ToolResultBlock(id="call_1", name="lookup", content={"ok": True})]
+    )
+
+    assert converted == [
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": '{"ok": true}',
+        }
+    ]
+    json.dumps(converted)
+
+
+def test_custom_responses_stream_replays_full_tool_conversation_without_previous_id():
+    events = _function_call_events() + [_completed()]
+    adapter = OpenAIAdapter(
+        api_key="fake",
+        base_url="http://compatible.example/v1",
+        use_responses=True,
+        force_responses=True,
+        responses_use_previous_response_id=False,
+    )
+    adapter._client = FakeClient(events)
+    session = adapter.create_chat(
+        "gpt-5.5",
+        "system prompt",
+        tools=[_function_schema()],
+    )
+
+    first = session.send_stream("use the tool")
+    session.send_stream(
+        [
+            ToolResultBlock(
+                id=first.tool_calls[0].id or "",
+                name=first.tool_calls[0].name,
+                content={"answer": 42},
+            )
+        ]
+    )
+
+    first_request, second_request = adapter._client.responses.kwargs
+    assert "previous_response_id" not in first_request
+    assert "previous_response_id" not in second_request
+    assert second_request["input"][0] == {
+        "role": "user",
+        "content": "use the tool",
+    }
+    assert {
+        "type": "function_call",
+        "call_id": "call_fake123",
+        "name": "report_answer",
+        "arguments": '{"answer": "42"}',
+    } in second_request["input"]
+    assert {
+        "type": "function_call_output",
+        "call_id": "call_fake123",
+        "output": '{"answer": 42}',
+    } in second_request["input"]
+    json.dumps(second_request["input"])
+
+
+def test_custom_responses_nonstream_replays_full_tool_conversation():
+    function_response = SimpleNamespace(
+        id="resp_function",
+        output=[
+            SimpleNamespace(
+                type="function_call",
+                call_id="call_sync",
+                name="report_answer",
+                arguments='{"answer":"42"}',
+            )
+        ],
+        usage=_usage(),
+    )
+    text_response = SimpleNamespace(
+        id="resp_text",
+        output=[
+            SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(type="output_text", text="done")],
+            )
+        ],
+        usage=_usage(reasoning_tokens=0),
+    )
+    adapter = OpenAIAdapter(
+        api_key="fake",
+        base_url="http://compatible.example/v1",
+        use_responses=True,
+        force_responses=True,
+        responses_use_previous_response_id=False,
+    )
+    adapter._client = FakeSyncClient([function_response, text_response])
+    session = adapter.create_chat(
+        "gpt-5.5",
+        "system prompt",
+        tools=[_function_schema()],
+    )
+
+    first = session.send("use the tool")
+    second = session.send(
+        [
+            ToolResultBlock(
+                id=first.tool_calls[0].id or "",
+                name=first.tool_calls[0].name,
+                content="42",
+            )
+        ]
+    )
+
+    assert second.text == "done"
+    sent = adapter._client.responses.kwargs[-1]
+    assert "previous_response_id" not in sent
+    assert [item.get("type") for item in sent["input"]] == [
+        None,
+        "function_call",
+        "function_call_output",
+    ]
+    assert session.session_resume_id is None
+    assert session.get_history() == session.interface.to_dict()
+
+
+def test_custom_factory_disables_previous_response_id_for_responses_wire():
+    adapter = create_custom_adapter(
+        api_key="fake",
+        api_compat="openai",
+        wire_api="responses",
+        base_url="http://compatible.example/v1",
+    )
+
+    assert adapter._use_responses is True
+    assert adapter._force_responses is True
+    assert adapter._responses_use_previous_response_id is False
+
+
+def test_custom_responses_updates_instructions_and_tools_for_stateless_replay():
+    response = SimpleNamespace(id="resp_text", output=[], usage=_usage())
+    session = OpenAIResponsesSession(
+        client=FakeSyncClient([response]),
+        model="gpt-5.5",
+        instructions="old prompt",
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+        use_previous_response_id=False,
+    )
+
+    session.update_system_prompt("new prompt")
+    session.update_tools([_function_schema()])
+    session.send("hello")
+
+    sent = session._client.responses.kwargs[-1]
+    assert sent["instructions"] == "new prompt"
+    assert [tool["name"] for tool in sent["tools"]] == ["report_answer"]
+    assert session.interface.current_system_prompt == "new prompt"
+    assert session.interface.current_tools == [_function_schema().to_dict()]
+
+
+def test_official_openai_responses_keeps_previous_response_id_state_chain():
+    session = OpenAIResponsesSession(
+        client=FakeClient([_completed()]),
+        model="gpt-5.5",
+        instructions="system prompt",
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+    )
+
+    session.send_stream("first")
+    session.send_stream("second")
+
+    first_request, second_request = session._client.responses.kwargs
+    assert "previous_response_id" not in first_request
+    assert second_request["previous_response_id"] == "resp_fake"
+    assert second_request["input"] == [{"role": "user", "content": "second"}]
