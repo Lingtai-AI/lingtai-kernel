@@ -8,11 +8,12 @@ the tool code still installs (the consolidation blocker this test guards).
 
 Rather than grepping the config text, this test builds a real wheel and inspects
 the distribution manifest at the correct boundary — the archive that pip
-actually installs. Path handling is layout-aware: a pure-Python wheel places
-packages at the archive root (``tools/...``) while a platform wheel that bundles
-the Rust sidecar places pure-Python packages under
-``<name>-<ver>.data/purelib/tools/...``; both are normalized to the logical
-package path before assertion.
+actually installs. Both the pure-Python wheel (built here) and the native
+sidecar wheel place packages at the archive root (``tools/...``): the native
+wheel is platlib-compliant, so it does *not* bury packages under
+``<name>-<ver>.data/purelib/`` — that placement was the auditwheel release
+blocker fixed in ``setup.py`` and is guarded by
+``tests/test_wheel_platlib_layout.py``.
 """
 
 from __future__ import annotations
@@ -107,13 +108,24 @@ def _build_wheel(dest: Path) -> Path:
 
 
 def _logical(path: str) -> str:
-    """Normalize a wheel archive entry to its logical package path.
+    """Return a wheel archive entry's logical package path.
 
-    Strips a leading ``<name>-<ver>.data/purelib/`` prefix (platform wheels)
-    so entries compare against the same ``tools/...`` paths a pure wheel uses.
+    Both pure and native wheels now place packages at the archive root, so this
+    is effectively identity for ``tools/...`` entries. A ``*.data/{purelib,
+    platlib}/`` prefix is *not* normalized away — it is the auditwheel-rejected
+    layout the packaging fix eliminated. If one ever reappears it must surface as
+    a broken path, not be silently accepted; ``test_wheel_platlib_layout.py``
+    asserts the native wheel never produces one.
     """
     parts = path.split("/")
     for i, segment in enumerate(parts):
+        if segment.endswith(".data") and i + 1 < len(parts) and parts[i + 1] in ("purelib", "platlib"):
+            # Fail loud rather than normalize: this placement is the release
+            # blocker, not an acceptable alternate layout.
+            raise AssertionError(
+                "wheel entry under *.data/%s is the auditwheel-rejected layout: %r"
+                % (parts[i + 1], path)
+            )
         if segment == "tools":
             return "/".join(parts[i:])
     return path

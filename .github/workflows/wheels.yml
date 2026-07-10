@@ -12,10 +12,18 @@ jobs:
   build-wheels:
     name: Wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # Fail loud instead of hanging: cibuildwheel across three CPythons plus a
+    # QEMU-emulated aarch64 leg is the long pole, so give it a generous but
+    # bounded ceiling rather than the 6h GitHub default.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-13, macos-14, windows-latest]
+        # Four-platform coverage. macos-15-intel is the current GitHub-hosted
+        # Intel label (macos-13 was retired); macos-14 is Apple Silicon (arm64).
+        # cibuildwheel builds arch-specific macOS wheels (CIBW_ARCHS_MACOS=auto),
+        # so each runner yields its own native slice — no universal2.
+        os: [ubuntu-latest, macos-15-intel, macos-14, windows-latest]
 
     steps:
       - name: Check out repository
@@ -53,10 +61,6 @@ jobs:
           CIBW_TEST_REQUIRES: "pytest"
           CIBW_TEST_COMMAND: "python -m pytest {project}/tests/test_wheel_sidecar_smoke.py -q"
 
-      - name: Build source distribution
-        if: runner.os == 'Linux'
-        run: uv build --sdist --out-dir dist
-
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -64,8 +68,25 @@ jobs:
           path: ./wheelhouse/*.whl
           if-no-files-found: error
 
+  build-sdist:
+    name: Source distribution
+    runs-on: ubuntu-latest
+    # Independent of build-wheels so a wheel/auditwheel failure on any platform
+    # cannot suppress the source release. The sdist is source-only (setup.py's
+    # cargo hook fires only for bdist_wheel/build_py), so it needs no Rust.
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build source distribution
+        run: uv build --sdist --out-dir dist
+
       - name: Upload sdist artifact
-        if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: sdist
