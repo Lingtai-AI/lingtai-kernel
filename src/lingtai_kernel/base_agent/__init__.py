@@ -980,6 +980,8 @@ class BaseAgent:
         ref_id: str,
         body: str,
         skip_if_ref_id_exists: bool = False,
+        idempotency_key: str | None = None,
+        skip_if_idempotency_key_exists: bool = False,
         priority: str = "normal",
         extra: dict | None = None,
     ) -> str:
@@ -990,6 +992,8 @@ class BaseAgent:
             ref_id=ref_id,
             body=body,
             skip_if_ref_id_exists=skip_if_ref_id_exists,
+            idempotency_key=idempotency_key,
+            skip_if_idempotency_key_exists=skip_if_idempotency_key_exists,
             priority=priority,
             extra=extra,
         )

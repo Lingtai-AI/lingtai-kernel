@@ -4,7 +4,7 @@
 Modernized from PR #296 (#194) against current main. Current main already
 keys the terminal status off ``run_dir.state_snapshot()`` (the authoritative
 P1 signal) and delivers each terminal notification exactly once via
-``run_dir.claim_terminal_notification()``. These tests verify the *fallback*
+``run_dir.claim_terminal_notification(status)``. These tests verify the *fallback*
 signals layered on top of that: when the run_dir state was never recorded
 (crash before mark_*, missing run_dir), the timeout_event / cancel_event /
 ``[cancelled]`` sentinel / elapsed-near-timeout signals still keep a

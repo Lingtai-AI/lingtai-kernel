@@ -927,6 +927,7 @@ class DaemonManager:
             thread_name_prefix="daemon-cli-ask",
         )
         self._reap_dead_parent_daemon_records()
+        self._reconcile_terminal_notifications()
 
     def _reap_dead_parent_daemon_records(self) -> None:
         """Mark stale running daemon.json records failed after parent restart."""
@@ -980,6 +981,67 @@ class DaemonManager:
                 atomic_write_json(daemon_json_path, state, ensure_ascii=False, indent=2)
             except OSError:
                 continue
+
+    def _reconcile_terminal_notifications(self) -> None:
+        """Retry terminal daemon notifications that lack a published receipt."""
+        daemons_dir = self._agent._working_dir / "daemons"
+        if not daemons_dir.is_dir():
+            return
+        for daemon_json_path in daemons_dir.glob("*/daemon.json"):
+            try:
+                state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if not isinstance(state, dict):
+                continue
+            status = state.get("state")
+            if status not in {"done", "failed", "cancelled", "timeout"}:
+                continue
+            # Only explicit new-schema receipts are replay candidates. Older
+            # terminal daemon.json records had no terminal_notified key; treating
+            # them as retryable would replay historical completions on upgrade.
+            if state.get("terminal_notified") is not False:
+                continue
+            run_id = str(state.get("run_id") or daemon_json_path.parent.name)
+            key = DaemonRunDir.terminal_notification_idempotency_key(run_id)
+            text = self._terminal_notification_text_from_state(
+                state, daemon_json_path.parent,
+            )
+            if self._publish_daemon_notification(
+                run_id,
+                status=status,
+                text=text,
+                run_state=state,
+                run_path=daemon_json_path.parent,
+                idempotency_key=key,
+            ):
+                DaemonRunDir.mark_terminal_notification_published_on_disk(
+                    daemon_json_path, idempotency_key=key,
+                )
+
+    def _terminal_notification_text_from_state(
+        self, state: dict, run_path: Path
+    ) -> str:
+        result_path = state.get("result_path")
+        if isinstance(result_path, str) and result_path:
+            try:
+                with open(result_path, encoding="utf-8") as f:
+                    return f.read(2000)
+            except (OSError, UnicodeDecodeError):
+                pass
+        preview = state.get("result_preview") or state.get("last_output")
+        if isinstance(preview, str) and preview:
+            return preview
+        error = state.get("error")
+        if isinstance(error, dict):
+            message = error.get("message")
+            if isinstance(message, str) and message:
+                return message
+        try:
+            with open(run_path / "result.txt", encoding="utf-8") as f:
+                return f.read(2000)
+        except (OSError, UnicodeDecodeError):
+            return ""
 
     def handle(self, args: dict) -> dict:
         action = args.get("action")
@@ -2591,7 +2653,10 @@ class DaemonManager:
         status: str,
         text: str,
         run_dir: DaemonRunDir | None = None,
-    ) -> None:
+        run_state: dict | None = None,
+        run_path: Path | None = None,
+        idempotency_key: str | None = None,
+    ) -> bool:
         """Publish a compact daemon terminal event via .notification/system.json.
 
         Fired on every terminal status (done / failed / cancelled / timeout) so
@@ -2602,9 +2667,10 @@ class DaemonManager:
         wake signal with provenance, bounded preview, and the inspection path.
         It must not arrive as ordinary ``MSG_REQUEST`` text.
 
-        Once-only delivery is the caller's responsibility via
-        ``DaemonRunDir.claim_terminal_notification`` (terminal path); follow-up
-        (``ask``) notifications intentionally reuse this same compact format.
+        Terminal callers pass an idempotency key and persist a durable receipt
+        only after this method returns True. Follow-up (``ask``) notifications
+        intentionally reuse this same compact format without terminal receipt
+        state.
         """
         preview = text or ""
         if len(preview) > self._NOTIFICATION_PREVIEW_MAX:
@@ -2619,12 +2685,20 @@ class DaemonManager:
         recorded_error = None
         if run_dir is not None:
             snapshot = run_dir.state_snapshot()
+        elif run_state is not None:
+            snapshot = dict(run_state)
+        else:
+            snapshot = None
+        if snapshot is not None:
             task = (snapshot.get("task") or "").strip()
             if task:
                 if len(task) > self._NOTIFICATION_PREVIEW_MAX:
                     task = task[: self._NOTIFICATION_PREVIEW_MAX] + "..."
                 parts.append(f"Task: {task}")
-            parts.append(f"Run directory: {run_dir.path}")
+            if run_dir is not None:
+                parts.append(f"Run directory: {run_dir.path}")
+            elif run_path is not None:
+                parts.append(f"Run directory: {run_path}")
             result_path = snapshot.get("result_path")
             if result_path:
                 parts.append(f"Result file: {result_path}")
@@ -2641,6 +2715,8 @@ class DaemonManager:
                 source="daemon",
                 ref_id=em_id,
                 body=body,
+                idempotency_key=idempotency_key,
+                skip_if_idempotency_key_exists=bool(idempotency_key),
             )
         except Exception as e:
             self._log(
@@ -2649,6 +2725,8 @@ class DaemonManager:
                 status=status,
                 error=str(e)[:200],
             )
+            return False
+        return True
 
     def _publish_followup_if_live(
         self,
@@ -5861,13 +5939,22 @@ class DaemonManager:
         # run directory owns the once-only claim, decoupled from the system
         # channel's ref_id dedup so an earlier follow-up (``ask``) event sharing
         # this run's ref_id cannot suppress the terminal notification.
-        if run_dir is not None and not run_dir.claim_terminal_notification():
-            self._log("daemon_terminal_notify_skipped_duplicate",
-                      em_id=em_id, status=status)
-            return
-        self._publish_daemon_notification(
+        idempotency_key = None
+        if run_dir is not None:
+            idempotency_key = run_dir.claim_terminal_notification(status)
+            if idempotency_key is None:
+                self._log("daemon_terminal_notify_skipped_duplicate",
+                          em_id=em_id, status=status)
+                return
+        published = self._publish_daemon_notification(
             em_id, status=status, text=text, run_dir=run_dir,
+            idempotency_key=idempotency_key,
         )
+        if run_dir is not None and idempotency_key is not None:
+            if published:
+                run_dir.mark_terminal_notification_published(idempotency_key)
+            else:
+                run_dir.clear_terminal_notification_claim()
 
     # ------------------------------------------------------------------
     # CLI process-group tracking helpers

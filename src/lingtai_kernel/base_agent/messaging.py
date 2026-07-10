@@ -70,6 +70,8 @@ def _enqueue_system_notification(
     ref_id: str,
     body: str,
     skip_if_ref_id_exists: bool = False,
+    idempotency_key: str | None = None,
+    skip_if_idempotency_key_exists: bool = False,
     priority: str = "normal",
     extra: dict | None = None,
 ) -> str:
@@ -96,6 +98,12 @@ def _enqueue_system_notification(
             the same ref_id already exists in system.json.  Used by the
             large-result rescan path to avoid duplicate notifications.
             Returns "" (empty string) when skipped.
+        idempotency_key: Optional producer-owned stable event identity for
+            retryable publication paths whose public ref_id may be reused by
+            other event types.
+        skip_if_idempotency_key_exists: When True, skip publishing if an event
+            with the same idempotency_key already exists in system.json.
+            Returns "" (empty string) when skipped.
         priority: Notification envelope priority. Defaults to ``"normal"``.
             ``"high"`` (or any event carrying a high severity/priority) makes
             the published envelope high priority so frontends surface it.
@@ -106,7 +114,7 @@ def _enqueue_system_notification(
         An identifier for the event (for logging and back-compat with
         callers that expected a notif_id; not actually used for any
         per-id lifecycle under the new model).  Returns "" when skipped
-        due to skip_if_ref_id_exists.
+        due to skip_if_ref_id_exists or skip_if_idempotency_key_exists.
     """
     import secrets
     from datetime import datetime, timezone
@@ -126,6 +134,10 @@ def _enqueue_system_notification(
             for ev in events:
                 if ev.get("ref_id") == ref_id:
                     return ""
+        if skip_if_idempotency_key_exists and idempotency_key:
+            for ev in events:
+                if ev.get("idempotency_key") == idempotency_key:
+                    return ""
 
         event = {
             "event_id": event_id,
@@ -134,6 +146,8 @@ def _enqueue_system_notification(
             "body": body,
             "at": received_at,
         }
+        if idempotency_key:
+            event["idempotency_key"] = idempotency_key
         if isinstance(extra, dict):
             event.update(extra)
         events.append(event)
