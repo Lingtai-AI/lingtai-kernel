@@ -4,9 +4,9 @@ description: >
   Nested daemon-manual reference for daemon API details and CLI backends:
   daemon(action=list), claude-p/codex/opencode behavior,
   backend_options flag passing, preset/capability inheritance, and nested
-  per-backend flag-discovery references (Codex).
-version: 1.5.0
-last_changed_at: "2026-07-09T18:46:53-07:00"
+  per-backend flag-discovery references (Codex, OpenCode).
+version: 1.6.0
+last_changed_at: "2026-07-09T19:22:21-07:00"
 ---
 
 # Daemon CLI Backend Reference
@@ -31,6 +31,14 @@ maintained flag catalog. Only backends with proven demand get a page.
     (model selection, reasoning effort, config overrides): it routes to the
     installed CLI's live help via bash and shows how to translate that help
     into generic `backend_options` (e.g. repeated `--config` overrides).
+- name: daemon-backend-opencode
+  location: reference/backends/opencode/SKILL.md
+  description: |
+    Nested daemon-cli-backends reference for the OpenCode daemon backend's
+    flag surface. Read this only when a daemon task needs OpenCode-specific
+    CLI flags (model selection, reasoning variants, agent choice): it routes
+    to the installed CLI's live help via bash and shows how to translate that
+    help into generic `backend_options` (e.g. `--model provider/model`).
 ```
 
 ## Routing table
@@ -38,6 +46,7 @@ maintained flag catalog. Only backends with proven demand get a page.
 | Need / keywords | Read |
 |---|---|
 | Codex-specific flags for a daemon task: model selection, reasoning effort (`model_reasoning_effort`, ultra), `--config` overrides; discover the installed Codex CLI's flags and translate them into `backend_options` | `reference/backends/codex/SKILL.md` |
+| OpenCode-specific flags for a daemon task: model selection (`--model provider/model`), reasoning variant (`--variant`), agent choice; discover the installed OpenCode CLI's flags and translate them into `backend_options` | `reference/backends/opencode/SKILL.md` |
 
 ## API note: `daemon(action="list")`
 
@@ -205,7 +214,9 @@ daemon needing to hard-code every flag. This is the default generic path for
 backend flags: one object may carry any number of keys, each converted
 independently in insertion order. For Codex-specific discovery and translation
 examples (e.g. reasoning effort via repeated `--config` overrides), read
-`reference/backends/codex/SKILL.md`.
+`reference/backends/codex/SKILL.md`. For OpenCode-specific examples (e.g.
+`--model provider/model`, `--variant`), read
+`reference/backends/opencode/SKILL.md`.
 
 This is intentionally a passthrough, not a fixed table. Claude Code, Codex,
 OpenCode, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, and Cursor rev their flag

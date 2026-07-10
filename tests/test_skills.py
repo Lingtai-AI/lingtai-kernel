@@ -264,6 +264,15 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
             / "SKILL.md"
         )
         assert codex_backend_reference.is_file()
+        opencode_backend_reference = (
+            daemon_reference_dir
+            / "cli-backends"
+            / "reference"
+            / "backends"
+            / "opencode"
+            / "SKILL.md"
+        )
+        assert opencode_backend_reference.is_file()
         assert "Nested daemon-manual reference" in (
             daemon_reference_dir / "forensics" / "SKILL.md"
         ).read_text(encoding="utf-8")
