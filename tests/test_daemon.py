@@ -2972,6 +2972,24 @@ def test_daemon_llm_defaults_carries_codex_auth_path():
     assert "api_key" not in defaults
 
 
+def test_daemon_llm_defaults_carries_openai_wire_controls():
+    """Explicit daemon presets preserve the OpenAI transport selection."""
+    from lingtai.core.daemon import DaemonManager
+
+    defaults = DaemonManager._llm_defaults_from_manifest(
+        {
+            "provider": "custom",
+            "model": "gpt-test",
+            "api_compat": "openai",
+            "wire_api": "responses",
+            "service_tier": "fast",
+        }
+    )
+
+    assert defaults["wire_api"] == "responses"
+    assert defaults["service_tier"] == "fast"
+
+
 def test_daemon_provider_defaults_preserves_codex_auth_path(tmp_path):
     """Daemon-scoped Codex defaults keep the agent's ``codex_auth_path``.
 

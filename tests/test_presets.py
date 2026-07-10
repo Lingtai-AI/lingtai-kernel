@@ -220,6 +220,84 @@ def test_load_preset_empty_model_raises(tmp_path):
         load_preset(str(p))
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("wire_api", "responses"),
+        ("service_tier", "fast"),
+        ("use_responses_api", True),
+        ("use_responses", True),
+        ("force_responses", True),
+    ],
+)
+def test_load_preset_rejects_openai_controls_for_anthropic_compat(
+    tmp_path, field, value
+):
+    preset = {
+        "name": "anthropic-controls",
+        "description": _DESC,
+        "manifest": {
+            "llm": {
+                "provider": "custom",
+                "api_compat": "anthropic",
+                "model": "claude-test",
+                field: value,
+            },
+            "capabilities": {},
+        },
+    }
+    path = tmp_path / "anthropic-controls.json"
+    path.write_text(json.dumps(preset))
+
+    with pytest.raises(ValueError, match="supported only for OpenAI-compatible"):
+        load_preset(str(path))
+
+
+def test_load_preset_accepts_openai_wire_controls(tmp_path):
+    preset = {
+        "name": "openai-controls",
+        "description": _DESC,
+        "manifest": {
+            "llm": {
+                "provider": "custom",
+                "api_compat": "openai",
+                "model": "gpt-test",
+                "wire_api": "responses",
+                "service_tier": "fast",
+            },
+            "capabilities": {},
+        },
+    }
+    path = tmp_path / "openai-controls.json"
+    path.write_text(json.dumps(preset))
+
+    loaded = load_preset(str(path))
+
+    assert loaded["manifest"]["llm"]["wire_api"] == "responses"
+    assert loaded["manifest"]["llm"]["service_tier"] == "fast"
+
+
+def test_load_preset_accepts_codex_service_tier(tmp_path):
+    preset = {
+        "name": "codex-tier",
+        "description": _DESC,
+        "manifest": {
+            "llm": {
+                "provider": "codex",
+                "model": "gpt-5.5",
+                "service_tier": "fast",
+            },
+            "capabilities": {},
+        },
+    }
+    path = tmp_path / "codex-tier.json"
+    path.write_text(json.dumps(preset))
+
+    loaded = load_preset(str(path))
+
+    assert loaded["manifest"]["llm"]["service_tier"] == "fast"
+
+
 def test_load_preset_malformed_json_raises(tmp_path):
     p = tmp_path / "broken.json"
     p.write_text("{ not valid json }")
@@ -475,6 +553,24 @@ def test_expand_inherit_propagates_api_compat():
     expand_inherit(caps, main_llm)
     assert caps["vision"]["api_compat"] == "anthropic"
     assert caps["vision"]["base_url"] == "http://127.0.0.1:34891"
+
+
+def test_expand_inherit_does_not_leak_main_llm_openai_controls():
+    main_llm = {
+        "provider": "custom",
+        "api_compat": "openai",
+        "model": "gpt-test",
+        "base_url": "https://example.test/v1",
+        "wire_api": "responses",
+        "service_tier": "fast",
+    }
+    caps = {"vision": {"provider": "inherit"}}
+
+    expand_inherit(caps, main_llm)
+
+    assert caps["vision"]["api_compat"] == "openai"
+    assert "wire_api" not in caps["vision"]
+    assert "service_tier" not in caps["vision"]
 
 
 # ---------------------------------------------------------------------------

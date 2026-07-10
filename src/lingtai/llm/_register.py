@@ -74,7 +74,7 @@ def register_all_adapters() -> None:
         compat = defaults.get("api_compat", "openai") if defaults else "openai"
         wire_api = defaults.get("wire_api", "auto") if defaults else "auto"
         adapter_kw = {k: v for k, v in kw.items() if v is not None}
-        if defaults:
+        if defaults and isinstance(compat, str) and compat.lower() == "openai":
             for key in ("service_tier", "use_responses_api", "use_responses", "force_responses"):
                 if key in defaults:
                     target = "use_responses" if key == "use_responses_api" else key
@@ -152,6 +152,10 @@ def register_all_adapters() -> None:
             else None
         )
         codex_auth_path_source = "configured" if mgr_kw.get("token_path") else "legacy_default"
+        service_tier = d.get("service_tier")
+        request_kw: dict = {}
+        if service_tier is not None:
+            request_kw["service_tier"] = service_tier
         adapter = CodexOpenAIAdapter(
             api_key=mgr.get_access_token(),
             base_url=codex_base_url,
@@ -164,6 +168,7 @@ def register_all_adapters() -> None:
             codex_auth_path_sha8=codex_auth_path_sha8,
             codex_auth_path_source=codex_auth_path_source,
             **codex_id_kw,
+            **request_kw,
         )
         # Store the token manager so we can refresh before each API call.
         # The openai SDK's client.api_key is mutable — we update it in-place.
@@ -267,3 +272,11 @@ def register_all_adapters() -> None:
     # Providers routed through the generic custom adapter
     for name in ("grok", "qwen", "kimi"):
         LLMService.register_adapter(name, _custom)
+
+    def _nvidia(*, model=None, defaults=None, **kw):
+        # NVIDIA NIM rejects OpenAI's prompt_cache_key passthrough, so route
+        # through the generic OpenAI-compatible factory with that field disabled.
+        kw["prompt_cache_key"] = False
+        return _custom(model=model, defaults=defaults, **kw)
+
+    LLMService.register_adapter("nvidia", _nvidia)

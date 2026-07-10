@@ -38,6 +38,11 @@ def create_custom_adapter(
     compat paths that expose HTTP header configuration.
     """
     service_tier = _normalize_service_tier(kwargs.pop("service_tier", None))
+    response_controls: dict = {}
+    for key in ("use_responses_api", "use_responses", "force_responses"):
+        if key in kwargs:
+            target = "use_responses" if key == "use_responses_api" else key
+            response_controls[target] = kwargs.pop(key)
     if api_compat == "gemini":
         from ..gemini.adapter import GeminiAdapter
         if default_headers is not None:
@@ -68,6 +73,7 @@ def create_custom_adapter(
                 "OpenAI-compat custom provider wire_api must be "
                 "'chat_completions', 'responses', or 'auto'"
             )
+        oa_kwargs.update(response_controls)
         if default_headers is not None:
             oa_kwargs["default_headers"] = default_headers
         return OpenAIAdapter(api_key=api_key, base_url=base_url, **oa_kwargs)

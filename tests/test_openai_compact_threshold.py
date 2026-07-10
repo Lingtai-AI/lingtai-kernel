@@ -259,6 +259,69 @@ def test_custom_factory_wire_api_responses_forces_responses_with_base_url():
     assert adapter._force_responses is True
 
 
+def test_nvidia_factory_uses_openai_compat_without_prompt_cache_key():
+    register_all_adapters()
+    factory = LLMService._adapter_registry["nvidia"]
+    adapter = factory(
+        model="meta/llama-3.3-70b-instruct",
+        defaults={"api_compat": "openai"},
+        api_key="fake",
+        base_url="https://integrate.api.nvidia.com/v1",
+    )
+
+    assert isinstance(adapter, OpenAIAdapter)
+    assert adapter._prompt_cache_key_policy is False
+
+
+def test_custom_factory_drops_openai_controls_for_anthropic_compat():
+    from lingtai.llm.anthropic.adapter import AnthropicAdapter
+
+    register_all_adapters()
+    factory = LLMService._adapter_registry["custom"]
+    adapter = factory(
+        model="claude-test",
+        defaults={
+            "api_compat": "anthropic",
+            "wire_api": "responses",
+            "service_tier": "fast",
+            "use_responses_api": True,
+            "use_responses": True,
+            "force_responses": True,
+        },
+        api_key="fake",
+        base_url="https://example.test",
+    )
+
+    assert isinstance(adapter, AnthropicAdapter)
+
+
+def test_codex_factory_passes_service_tier_from_defaults(monkeypatch):
+    import lingtai.auth.codex as codex_auth
+
+    class _FakeCodexTokenManager:
+        _path = None
+
+        def __init__(self, **kwargs):
+            pass
+
+        def get_access_token(self):
+            return "fake"
+
+        def get_account_id(self):
+            return None
+
+    monkeypatch.setattr(codex_auth, "CodexTokenManager", _FakeCodexTokenManager)
+    register_all_adapters()
+    factory = LLMService._adapter_registry["codex"]
+
+    adapter = factory(
+        model="gpt-5.5",
+        defaults={"service_tier": "fast"},
+    )
+
+    assert adapter._service_tier == "fast"
+
+
 def test_llm_service_threads_compact_threshold_via_provider_defaults():
     register_all_adapters()
     service = LLMService(
@@ -334,6 +397,20 @@ def test_init_schema_accepts_wire_api(wire_api):
     validate_init(data)
 
 
+def test_init_schema_accepts_openai_controls_for_nvidia():
+    data = _minimal_init_with_compact_threshold(None)
+    llm = data["manifest"]["llm"]
+    llm.update({
+        "provider": "nvidia",
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "api_compat": "openai",
+        "wire_api": "chat_completions",
+        "service_tier": "fast",
+    })
+
+    validate_init(data)
+
+
 def test_init_schema_rejects_invalid_wire_api():
     data = _minimal_init_with_compact_threshold(None)
     data["manifest"]["llm"]["wire_api"] = "completions"
@@ -341,7 +418,64 @@ def test_init_schema_rejects_invalid_wire_api():
         validate_init(data)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("wire_api", "responses"),
+        ("service_tier", "fast"),
+        ("use_responses_api", True),
+        ("use_responses", True),
+        ("force_responses", True),
+    ],
+)
+def test_init_schema_rejects_openai_controls_for_anthropic_compat(field, value):
+    data = _minimal_init_with_compact_threshold(None)
+    llm = data["manifest"]["llm"]
+    llm.update({"provider": "custom", "api_compat": "anthropic", field: value})
+
+    with pytest.raises(ValueError, match="supported only for OpenAI-compatible"):
+        validate_init(data)
+
+
+def test_init_schema_accepts_service_tier_for_codex():
+    data = _minimal_init_with_compact_threshold(None)
+    llm = data["manifest"]["llm"]
+    llm.update({"provider": "codex", "service_tier": "fast"})
+
+    validate_init(data)
+
+
+def test_init_schema_rejects_wire_api_for_fixed_responses_codex():
+    data = _minimal_init_with_compact_threshold(None)
+    llm = data["manifest"]["llm"]
+    llm.update({"provider": "codex", "wire_api": "responses"})
+
+    with pytest.raises(ValueError, match="configurable wire protocols"):
+        validate_init(data)
+
+
+def test_init_schema_rejects_service_tier_for_openrouter():
+    data = _minimal_init_with_compact_threshold(None)
+    llm = data["manifest"]["llm"]
+    llm.update({"provider": "openrouter", "service_tier": "fast"})
+
+    with pytest.raises(ValueError, match="OpenAI-compatible or Codex"):
+        validate_init(data)
+
+
+@pytest.mark.parametrize("provider", ["minimax", "deepseek", "zhipu", "mimo", "openrouter"])
+@pytest.mark.parametrize("field", ["wire_api", "service_tier"])
+def test_init_schema_rejects_openai_controls_for_native_providers(provider, field):
+    data = _minimal_init_with_compact_threshold(None)
+    llm = data["manifest"]["llm"]
+    llm.update({"provider": provider, "api_compat": "openai", field: "fast"})
+    if field == "wire_api":
+        llm[field] = "responses"
+
+    with pytest.raises(ValueError, match="supported only for OpenAI-compatible|OpenAI-compatible or Codex"):
+        validate_init(data)
+
+
 def test_chat_completion_wrong_shape_reports_wire_api_hint():
     with pytest.raises(TypeError, match='wire_api="responses"'):
         _parse_response("not a chat completion")
-

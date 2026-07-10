@@ -17,6 +17,79 @@ THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
 # preset validator and init-schema validator share one source of truth.
 THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
 
+# OpenAI-compatible transport controls accepted in manifest.llm. Providers
+# registered through the generic custom factory default to OpenAI compatibility
+# when api_compat is omitted. Codex has a fixed Responses wire, but its adapter
+# separately supports the request-level service_tier hint.
+OPENAI_WIRE_APIS = ("auto", "chat_completions", "responses")
+OPENAI_WIRE_LLM_FIELDS = (
+    "wire_api",
+    "use_responses_api",
+    "use_responses",
+    "force_responses",
+)
+CUSTOM_ADAPTER_PROVIDERS = ("custom", "grok", "qwen", "kimi", "nvidia")
+CODEX_PROVIDERS = ("codex", "codex-pool", "codex_pool")
+
+
+def supports_openai_wire_controls(llm: dict) -> bool:
+    """Return whether *llm* has a configurable OpenAI wire protocol."""
+    provider = llm.get("provider")
+    provider_key = provider.lower() if isinstance(provider, str) else ""
+    if provider_key == "openai":
+        return True
+    if provider_key not in CUSTOM_ADAPTER_PROVIDERS:
+        return False
+    api_compat = llm.get("api_compat", "openai")
+    return isinstance(api_compat, str) and api_compat.lower() == "openai"
+
+
+def supports_service_tier(llm: dict) -> bool:
+    """Return whether *llm* forwards the request-level service_tier hint."""
+    provider = llm.get("provider")
+    provider_key = provider.lower() if isinstance(provider, str) else ""
+    return provider_key in CODEX_PROVIDERS or supports_openai_wire_controls(llm)
+
+
+def validate_openai_llm_controls(
+    llm: dict,
+    *,
+    prefix: str = "manifest.llm",
+) -> None:
+    """Validate OpenAI-only wire controls shared by init and preset schemas."""
+    if "wire_api" in llm:
+        wire_api = llm["wire_api"]
+        if not isinstance(wire_api, str) or wire_api not in OPENAI_WIRE_APIS:
+            expected = ", ".join(repr(value) for value in OPENAI_WIRE_APIS)
+            raise ValueError(f"{prefix}.wire_api: expected one of {expected}")
+
+    if "service_tier" in llm and not isinstance(
+        llm["service_tier"], (str, type(None))
+    ):
+        raise ValueError(
+            f"{prefix}.service_tier: expected str or null, "
+            f"got {type(llm['service_tier']).__name__}"
+        )
+
+    for field in ("use_responses_api", "use_responses", "force_responses"):
+        if field in llm and not isinstance(llm[field], bool):
+            raise ValueError(
+                f"{prefix}.{field}: expected bool, got {type(llm[field]).__name__}"
+            )
+
+    configured_wire = [field for field in OPENAI_WIRE_LLM_FIELDS if field in llm]
+    if configured_wire and not supports_openai_wire_controls(llm):
+        raise ValueError(
+            f"{prefix}.{configured_wire[0]}: supported only for OpenAI-compatible "
+            "LLMs with configurable wire protocols"
+        )
+
+    if "service_tier" in llm and not supports_service_tier(llm):
+        raise ValueError(
+            f"{prefix}.service_tier: supported only for OpenAI-compatible "
+            "or Codex LLMs"
+        )
+
 # Molt context-pressure thresholds are kernel-fixed runtime constants — NOT
 # agent-configurable. An agent must not be able to raise its own molt
 # thresholds (or defeat them entirely) to avoid molting under pressure, so the

@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import logging
 
-from lingtai_kernel.config import THINKING_LEVELS, THINKING_PROVIDERS
+from lingtai_kernel.config import (
+    THINKING_LEVELS,
+    THINKING_PROVIDERS,
+    validate_openai_llm_controls,
+)
 
 log = logging.getLogger(__name__)
 
@@ -331,12 +335,7 @@ def validate_init(data: dict) -> list[str]:
         "force_responses": bool,
         "compact_threshold": (int, type(None)),
     }, prefix="manifest.llm")
-    if "wire_api" in llm:
-        wire_api = llm["wire_api"]
-        if wire_api not in {"chat_completions", "responses", "auto"}:
-            raise ValueError(
-                "manifest.llm.wire_api: expected 'chat_completions', 'responses', or 'auto'"
-            )
+    validate_openai_llm_controls(llm)
     if "compact_threshold" in llm:
         compact_threshold = llm["compact_threshold"]
         if isinstance(compact_threshold, bool):

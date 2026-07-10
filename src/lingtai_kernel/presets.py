@@ -38,7 +38,11 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from .config import THINKING_LEVELS, THINKING_PROVIDERS
+from .config import (
+    THINKING_LEVELS,
+    THINKING_PROVIDERS,
+    validate_openai_llm_controls,
+)
 
 log = logging.getLogger(__name__)
 
@@ -298,6 +302,11 @@ def load_preset(
 
     if not llm.get("provider") or not llm.get("model"):
         raise ValueError(f"preset {name!r} ({p}): manifest.llm requires non-empty 'provider' and 'model'")
+
+    try:
+        validate_openai_llm_controls(llm)
+    except ValueError as exc:
+        raise ValueError(f"preset {name!r} ({p}): {exc}") from exc
 
     # context_limit lives inside manifest.llm. The migration layer persists
     # straightforward root-only legacy files; the in-memory compatibility layer
@@ -572,16 +581,15 @@ def expand_inherit(capabilities: dict, main_llm: dict) -> dict:
 
     For each capability whose kwargs has `provider == "inherit"`, replace it
     with the main LLM's provider plus its credentials (api_key, api_key_env,
-    base_url), compatibility family (api_compat), OpenAI-family wire API
-    (wire_api), and request-tier hint (service_tier). The `model` field is NOT inherited — capabilities pick their
-    own model independently.
+    base_url) and compatibility family (api_compat). The `model` field is NOT
+    inherited — capabilities pick their own model independently.
 
     api_compat must inherit too: capability fallbacks (e.g. vision) dispatch
     between OpenAI / Anthropic / Gemini adapters based on it, and an inheriting
     capability that drops api_compat silently routes through the wrong adapter.
-    wire_api must inherit so OpenAI-compatible custom endpoints keep the same
-    Chat Completions vs Responses selection; service_tier must inherit so
-    fast/custom gateway settings are not silently dropped.
+    wire_api and service_tier are intentionally not inherited: they configure
+    the main LLM adapter, while capability services have independent transport
+    contracts and generally do not accept those constructor arguments.
 
     Mutates `capabilities` in place. Returns the same dict for convenience.
     """
@@ -595,6 +603,4 @@ def expand_inherit(capabilities: dict, main_llm: dict) -> dict:
         kwargs["api_key_env"] = main_llm.get("api_key_env")
         kwargs["base_url"]    = main_llm.get("base_url")
         kwargs["api_compat"]  = main_llm.get("api_compat")
-        kwargs["wire_api"]    = main_llm.get("wire_api")
-        kwargs["service_tier"] = main_llm.get("service_tier")
     return capabilities
