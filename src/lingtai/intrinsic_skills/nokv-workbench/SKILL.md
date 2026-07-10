@@ -189,7 +189,7 @@ the checkpoint by `name` or `snapshot_id`.
 Do not rely on a `snapshot_id` you remembered in a note — that note is exactly
 what goes stale. `workbench_snapshot_list {"id":"spedas-task-001"}` enumerates
 every checkpoint of the workbench with its `name`, `snapshot_id`,
-`lease_expires_at`, and lifecycle `status` (`alive`, `expired`, or `reaped`).
+`lease_expires_at`, and lifecycle `state` (`alive`, `expired`, or `reaped`).
 Use it to see what is still restorable before you try to read history.
 
 ### Read history with at_snapshot
@@ -238,9 +238,9 @@ read this manifest and the required outputs before handing work to another
 agent. The source workbench remains at its current state throughout the
 restore.
 
-Do not request an in-place rollback from normal agent workflows. In-place
-replacement is an operator-only recovery action because it temporarily fences
-writes and invalidates the entire target subtree.
+Do not request an in-place rollback from normal agent workflows. The Workbench
+contract exposed to agents supports restore-to-fork only; operator recovery
+APIs are outside this skill.
 
 ### Handle structured checkpoint errors
 
@@ -254,7 +254,7 @@ message:
 | `SnapshotRootMismatch` | Stop. The checkpoint belongs to another workbench root; never substitute or copy its id. |
 | `SnapshotBindingChanged` | Refresh the MCP/workbench resolution and retry once because the root binding changed during the operation. |
 | `SnapshotRenewContended` | Retry renewal with bounded backoff; the lease in the error response is not authoritative. |
-| `RestoreInProgress` | Back off and retry the blocked write after the operator restore reaches a terminal state. |
+| `RestoreInProgress` | Retry the exact restore-to-fork request with bounded backoff; the same operation is still preparing or cleaning staged state. |
 | `RestoreDestinationConflict` | Choose a new empty `destination_id`, unless this was an exact retry of the same restore operation. |
 | `RestoreResourceLimit` | Do not retry unchanged. Reduce the restore subtree or metadata payload reported in `details`, then create a new checkpoint and destination if needed. |
 

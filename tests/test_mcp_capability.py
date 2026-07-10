@@ -11,9 +11,6 @@ import json
 import re
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
-
-import pytest
 
 from lingtai.agent import Agent
 from lingtai.services.mcp_registry import (
@@ -181,12 +178,21 @@ def test_nokv_workbench_skill_documents_strict_restore_contract():
     assert "workbench_restore" in skill
     assert '"destination_id"' in skill
     assert "restore-to-fork" in skill
+    assert "Retry the exact restore-to-fork request" in skill
     assert "metadata/restore_manifest.json" in skill
     assert "`restored_from` object" in skill
     assert "expired checkpoints cannot be renewed" in skill
     assert "grace window" not in skill
+    assert "temporarily fences writes" not in skill
+    assert "invalidates the entire target subtree" not in skill
+    assert "blocked write after the operator restore" not in skill
+    assert "lifecycle `state` (`alive`, `expired`, or `reaped`)" in skill
+    assert "lifecycle `status`" not in skill
     assert "17-tool surface" in preflight
     assert "workbench_restore" in preflight
+    assert "--profile full --require-all" in preflight
+    assert "Agent MCP registration/retry handler" in preflight
+    assert "resolved per-agent launch config" in preflight
     for code in (
         "SnapshotLeaseExpired",
         "SnapshotRootMismatch",
