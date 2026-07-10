@@ -14,7 +14,11 @@ provider ``codex``. These tests exercise:
   * fallback to the legacy default token path when the pool is unusable;
   * provider ``codex`` is unaffected and never reads the pool file;
   * the ``codex-pool`` factory injects the selected path as ``codex_auth_path``
-    into the reused Codex adapter / ``CodexTokenManager``.
+    into the reused Codex adapter / ``CodexTokenManager``;
+  * model-classified pools (v2 ``models`` map): exact case-sensitive category
+    lookup by the configured model, category-relative selection/metadata
+    (``model_scope``), legacy fallback when no exact category exists, and
+    byte-identical v1 behavior regardless of the ``model`` argument.
 
 No network calls: ``CodexTokenManager`` is mocked where an adapter is built, and
 all token/pool files are real temp files. No token contents are read or logged.
@@ -51,6 +55,20 @@ def tui_dir(tmp_path, monkeypatch):
 def _write_pool(tui_dir: Path, accounts, *, version=1, name="codex-auth-pool.json"):
     path = tui_dir / name
     path.write_text(json.dumps({"version": version, "accounts": accounts}), encoding="utf-8")
+    return path
+
+
+def _write_pool_v2(tui_dir: Path, models, *, version=2, accounts=None, name="codex-auth-pool.json"):
+    """Write a model-classified (v2) pool file: top-level ``models`` map.
+
+    ``accounts`` writes an additional flat v1 list beside ``models`` (a mixed
+    file) — used to pin that ``models`` is the sole source of truth.
+    """
+    payload: dict = {"version": version, "models": models}
+    if accounts is not None:
+        payload["accounts"] = accounts
+    path = tui_dir / name
+    path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
 
@@ -315,6 +333,7 @@ def test_select_auth_returns_nonsecret_selection_metadata(tui_dir, tmp_path):
     meta = sel["selection"]
     assert set(meta) == {
         "source_ref", "source_index", "pool_size", "weight", "auth_path_sha8",
+        "model_scope",
     }
     refs = ["codex-auth/a.json", "codex-auth/b.json"]
     assert meta["source_ref"] in refs
@@ -323,6 +342,8 @@ def test_select_auth_returns_nonsecret_selection_metadata(tui_dir, tmp_path):
     assert meta["weight"] == (1 if meta["source_ref"] == refs[0] else 3)
     expected_hash = hashlib.sha256(sel["auth_path"].encode("utf-8")).hexdigest()[:8]
     assert meta["auth_path_sha8"] == expected_hash
+    # A flat (v1) pool is not model-classified.
+    assert meta["model_scope"] is None
 
 
 def test_select_auth_missing_pool_returns_none(tui_dir, tmp_path):
@@ -348,13 +369,248 @@ def test_selection_metadata_contains_no_secrets(tui_dir, tmp_path):
 
 
 # --------------------------------------------------------------------------
+# Model-classified pools (v2 ``models`` map)
+# --------------------------------------------------------------------------
+
+
+def test_v2_load_returns_exact_category(tui_dir):
+    pool = _write_pool_v2(tui_dir, {
+        "gpt-5.6-sol": [{"path": "sol.json", "weight": 3}],
+        "gpt-5.5": [{"path": "old.json", "weight": 1}],
+    })
+    assert codex_pool.load_codex_auth_pool(pool, model="gpt-5.6-sol") == [
+        {"path": "sol.json", "weight": 3},
+    ]
+    assert codex_pool.load_codex_auth_pool(pool, model="gpt-5.5") == [
+        {"path": "old.json", "weight": 1},
+    ]
+
+
+def test_v2_load_no_category_or_no_model_returns_empty(tui_dir):
+    pool = _write_pool_v2(tui_dir, {
+        "gpt-5.6-sol": [{"path": "sol.json", "weight": 1}],
+    })
+    assert codex_pool.load_codex_auth_pool(pool, model="gpt-5.6-terra") == []
+    # ``model`` unavailable (bare harness): a classified pool has no category
+    # for "no model" — legacy fallback, never a merged/arbitrary category.
+    assert codex_pool.load_codex_auth_pool(pool, model=None) == []
+    assert codex_pool.load_codex_auth_pool(pool) == []
+
+
+def test_v2_load_models_is_sole_source_of_truth(tui_dir):
+    """A mixed file: ``models`` wins; the flat ``accounts`` list is ignored."""
+    pool = _write_pool_v2(
+        tui_dir,
+        {"gpt-5.6-sol": [{"path": "sol.json", "weight": 1}]},
+        accounts=[{"path": "flat.json", "weight": 5}],
+    )
+    assert codex_pool.load_codex_auth_pool(pool, model="gpt-5.6-sol") == [
+        {"path": "sol.json", "weight": 1},
+    ]
+    # Non-matching model never falls back to ``accounts``.
+    assert codex_pool.load_codex_auth_pool(pool, model="gpt-5.5") == []
+    assert codex_pool.load_codex_auth_pool(pool) == []
+
+
+def test_v2_load_per_category_validation(tui_dir):
+    """The existing per-entry validation applies inside a category."""
+    pool = _write_pool_v2(tui_dir, {
+        "gpt-5.6-sol": [
+            {"path": "a.json", "weight": 1},
+            {"path": "disabled.json", "weight": 5, "enabled": False},
+            {"path": "  ", "weight": 1},            # blank path
+            {"path": "zero.json", "weight": 0},      # non-positive
+            {"path": "boolw.json", "weight": True},  # bool rejected
+            {"path": "noweight.json"},               # defaults to 1
+            "not-a-dict",
+        ],
+        "gpt-5.5": "not-a-list",
+    })
+    assert codex_pool.load_codex_auth_pool(pool, model="gpt-5.6-sol") == [
+        {"path": "a.json", "weight": 1},
+        {"path": "noweight.json", "weight": 1},
+    ]
+    # An invalid category value behaves like a missing category.
+    assert codex_pool.load_codex_auth_pool(pool, model="gpt-5.5") == []
+
+
+def test_v2_selection_stays_inside_the_exact_category(tui_dir, tmp_path):
+    """Across many seeds, selection never leaves the configured model's category."""
+    _write_pool_v2(tui_dir, {
+        "gpt-5.6-sol": [
+            {"path": "sol-a.json", "weight": 1},
+            {"path": "sol-b.json", "weight": 1},
+        ],
+        "gpt-5.5": [{"path": "old.json", "weight": 100}],
+    })
+    sol_paths = {str(tui_dir / "sol-a.json"), str(tui_dir / "sol-b.json")}
+    for i in range(30):
+        anchor = _anchor_with_started_at(tmp_path / f"agent{i}", f"start-{i}")
+        chosen = codex_pool.select_codex_pool_auth_path(
+            {"codex_session_anchor": anchor}, model="gpt-5.6-sol",
+        )
+        assert chosen in sol_paths
+
+
+def test_v2_no_exact_category_returns_none(tui_dir, tmp_path):
+    _write_pool_v2(tui_dir, {
+        "gpt-5.6-sol": [{"path": "sol.json", "weight": 1}],
+        "gpt-5.5": [{"path": "old.json", "weight": 1}],
+    })
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    defaults = {"codex_session_anchor": anchor}
+    assert codex_pool.select_codex_pool_auth(defaults, model="gpt-5.6-terra") is None
+    assert codex_pool.select_codex_pool_auth_path(defaults, model="gpt-5.6-terra") is None
+
+
+def test_v2_no_fuzzy_matching(tui_dir, tmp_path):
+    """Exact, case-sensitive equality only — no prefix/family/normalization."""
+    _write_pool_v2(tui_dir, {
+        "gpt-5.6-sol": [{"path": "sol.json", "weight": 1}],
+        "gpt-5.5": [{"path": "old.json", "weight": 1}],
+    })
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    defaults = {"codex_session_anchor": anchor}
+    for near_miss in ("gpt-5.6", "gpt-5.5 ", " gpt-5.5", "GPT-5.5", ""):
+        assert codex_pool.select_codex_pool_auth(defaults, model=near_miss) is None
+
+
+def test_v2_all_invalid_category_returns_none(tui_dir, tmp_path):
+    _write_pool_v2(tui_dir, {
+        "gpt-5.6-sol": [
+            {"path": "x.json", "weight": 0},
+            {"path": "y.json", "enabled": False, "weight": 3},
+        ],
+    })
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    defaults = {"codex_session_anchor": anchor}
+    assert codex_pool.select_codex_pool_auth(defaults, model="gpt-5.6-sol") is None
+
+
+def test_v1_selection_unchanged_by_model_argument(tui_dir, tmp_path):
+    """Zero churn for flat pools: any ``model`` value picks the same account."""
+    _write_pool(tui_dir, [
+        {"path": "a.json", "weight": 1},
+        {"path": "b.json", "weight": 2},
+        {"path": "c.json", "weight": 1},
+    ])
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    defaults = {"codex_session_anchor": anchor}
+    base = codex_pool.select_codex_pool_auth(defaults)
+    assert base is not None
+    for model in (None, "gpt-5.5", "gpt-5.6-sol", "anything"):
+        sel = codex_pool.select_codex_pool_auth(defaults, model=model)
+        assert sel["auth_path"] == base["auth_path"]
+        assert sel["selection"]["model_scope"] is None
+
+
+def test_v2_per_model_weights_within_category(tui_dir, tmp_path):
+    """One account may carry different weights per category; each category's
+    distribution follows its own weights (mirrors the v1 weighted test)."""
+    _write_pool_v2(tui_dir, {
+        "gpt-5.6-sol": [
+            {"path": "shared.json", "weight": 9},
+            {"path": "other.json", "weight": 1},
+        ],
+        "gpt-5.5": [
+            {"path": "shared.json", "weight": 1},
+            {"path": "other.json", "weight": 9},
+        ],
+    })
+    total = 200
+    for model, heavy_path in (
+        ("gpt-5.6-sol", str(tui_dir / "shared.json")),
+        ("gpt-5.5", str(tui_dir / "other.json")),
+    ):
+        heavy = 0
+        for i in range(total):
+            anchor = _anchor_with_started_at(tui_dir / f"agent-{model}-{i}", f"start-{i}")
+            chosen = codex_pool.select_codex_pool_auth_path(
+                {"codex_session_anchor": anchor}, model=model,
+            )
+            if chosen == heavy_path:
+                heavy += 1
+        # weight 9/10 -> expect a large majority; a loose bound keeps this stable.
+        assert heavy > total * 0.7
+
+
+def test_v2_sticky_within_category_across_molts(tui_dir, tmp_path):
+    """Same anchor + started_at -> same pick, molt-independent, per category."""
+    _write_pool_v2(tui_dir, {
+        "gpt-5.6-sol": [
+            {"path": "a.json", "weight": 1},
+            {"path": "b.json", "weight": 1},
+            {"path": "c.json", "weight": 1},
+        ],
+    })
+    agent_dir = tmp_path / "agent"
+    anchor = _anchor_with_started_at(agent_dir, "fixed-start", molt_count=0)
+    defaults = {"codex_session_anchor": anchor}
+    first = codex_pool.select_codex_pool_auth_path(defaults, model="gpt-5.6-sol")
+    assert first is not None
+    for molt in (1, 2, 7, 42):
+        _anchor_with_started_at(agent_dir, "fixed-start", molt_count=molt)
+        assert codex_pool.select_codex_pool_auth_path(defaults, model="gpt-5.6-sol") == first
+
+
+def test_v2_selection_metadata_shape_and_scope(tui_dir, tmp_path):
+    """``model_scope`` is the exact category key; index/size are category-relative."""
+    _write_pool_v2(tui_dir, {
+        "gpt-5.6-sol": [
+            {"path": "codex-auth/a.json", "weight": 1},
+            {"path": "codex-auth/b.json", "weight": 3},
+        ],
+        "gpt-5.5": [
+            {"path": "codex-auth/x.json", "weight": 1},
+            {"path": "codex-auth/y.json", "weight": 1},
+            {"path": "codex-auth/z.json", "weight": 1},
+        ],
+    })
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    sel = codex_pool.select_codex_pool_auth(
+        {"codex_session_anchor": anchor}, model="gpt-5.6-sol",
+    )
+    assert sel is not None
+    meta = sel["selection"]
+    assert set(meta) == {
+        "source_ref", "source_index", "pool_size", "weight", "auth_path_sha8",
+        "model_scope",
+    }
+    assert meta["model_scope"] == "gpt-5.6-sol"
+    refs = ["codex-auth/a.json", "codex-auth/b.json"]
+    assert meta["source_ref"] in refs
+    assert meta["source_index"] == refs.index(meta["source_ref"])
+    # Category-relative, NOT the file-wide account count (2, not 5).
+    assert meta["pool_size"] == 2
+
+
+def test_v2_selection_metadata_contains_no_secrets(tui_dir, tmp_path):
+    """The v2 selection dict never carries token contents or absolute paths."""
+    secret = "SECRET-token-value-do-not-log"
+    token = tui_dir / "work.json"
+    token.write_text(json.dumps({"access_token": secret}), encoding="utf-8")
+    _write_pool_v2(tui_dir, {
+        "gpt-5.6-sol": [{"path": "work.json", "weight": 1}],
+    })
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+
+    sel = codex_pool.select_codex_pool_auth(
+        {"codex_session_anchor": anchor}, model="gpt-5.6-sol",
+    )
+    dumped = json.dumps(sel["selection"])
+    assert secret not in dumped
+    assert "access_token" not in dumped
+    assert str(tui_dir) not in dumped
+
+
+# --------------------------------------------------------------------------
 # Factory integration: codex-pool injects codex_auth_path into the reused adapter
 # --------------------------------------------------------------------------
 
 
-def _codex_pool_adapter(provider, defaults):
+def _codex_pool_adapter(provider, defaults, model="gpt-5.5"):
     svc = LLMService(
-        provider=provider, model="gpt-5.5",
+        provider=provider, model=model,
         provider_defaults={provider: defaults},
     )
     return svc.get_adapter(provider)
@@ -415,6 +671,7 @@ def test_codex_pool_factory_stamps_selection_on_adapter_and_chat(tui_dir, tmp_pa
                 "pool_size": 1,
                 "weight": 2,
                 "auth_path_sha8": mock.ANY,
+                "model_scope": None,
             }
             chat = adapter.create_chat(model="gpt-5.5", system_prompt="s")
             assert chat is fake_chat
@@ -502,5 +759,83 @@ def test_codex_provider_honors_explicit_auth_path(tui_dir, tmp_path):
             "codex_auth_path": explicit,
         })
         cls.assert_called_with(token_path=explicit)
+    finally:
+        mgr.stop()
+
+
+# --------------------------------------------------------------------------
+# Factory integration: model-classified (v2) pools
+# --------------------------------------------------------------------------
+
+
+def test_codex_pool_factory_selects_within_configured_models_category(tui_dir, tmp_path):
+    """The configured model reaches selection: the category's path is injected."""
+    _write_pool_v2(tui_dir, {
+        "gpt-5.6-sol": [{"path": "sol.json", "weight": 1}],
+        "gpt-5.5": [{"path": "old.json", "weight": 1}],
+    })
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    for provider in ("codex-pool", "codex_pool"):
+        mgr, cls = _mock_mgr()
+        try:
+            _codex_pool_adapter(
+                provider, {"codex_session_anchor": anchor}, model="gpt-5.6-sol",
+            )
+            cls.assert_called_with(token_path=str(tui_dir / "sol.json"))
+        finally:
+            mgr.stop()
+
+
+def test_codex_pool_factory_stamps_model_scope_breadcrumb(tui_dir, tmp_path):
+    _write_pool_v2(tui_dir, {
+        "gpt-5.6-sol": [{"path": "sol.json", "weight": 2}],
+    })
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    mgr, cls = _mock_mgr()
+    try:
+        adapter = _codex_pool_adapter(
+            "codex-pool", {"codex_session_anchor": anchor}, model="gpt-5.6-sol",
+        )
+        assert adapter.codex_pool_selection == {
+            "source_ref": "sol.json",
+            "source_index": 0,
+            "pool_size": 1,
+            "weight": 2,
+            "auth_path_sha8": mock.ANY,
+            "model_scope": "gpt-5.6-sol",
+        }
+    finally:
+        mgr.stop()
+
+
+def test_codex_pool_factory_unclassified_model_falls_back_to_legacy(tui_dir, tmp_path):
+    """No exact category for the configured model -> legacy default token path,
+    with the existing explicit fallback breadcrumb — a pooled agent never half-pools."""
+    _write_pool_v2(tui_dir, {
+        "gpt-5.6-sol": [{"path": "sol.json", "weight": 1}],
+    })
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    mgr, cls = _mock_mgr()
+    try:
+        adapter = _codex_pool_adapter(
+            "codex-pool", {"codex_session_anchor": anchor}, model="gpt-5.6-terra",
+        )
+        # No token_path kwarg -> CodexTokenManager() legacy default behavior.
+        cls.assert_called_with()
+        assert adapter.codex_pool_selection == {"fallback": "legacy_default"}
+    finally:
+        mgr.stop()
+
+
+def test_codex_provider_ignores_v2_pool_file(tui_dir, tmp_path):
+    """A populated model-classified pool must NOT affect provider ``codex``."""
+    _write_pool_v2(tui_dir, {
+        "gpt-5.5": [{"path": "work.json", "weight": 1}],
+    })
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    mgr, cls = _mock_mgr()
+    try:
+        _codex_pool_adapter("codex", {"codex_session_anchor": anchor}, model="gpt-5.5")
+        cls.assert_called_with()
     finally:
         mgr.stop()

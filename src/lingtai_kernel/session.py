@@ -73,6 +73,7 @@ _SAFE_USAGE_EXTRA_EVENT_KEYS = {
     "codex_pool_source_index",
     "codex_pool_size",
     "codex_pool_weight",
+    "codex_pool_model_scope",
     "codex_session_id",
     "codex_thread_id",
     "codex_prompt_cache_key",
