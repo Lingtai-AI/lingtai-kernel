@@ -390,8 +390,9 @@ testable and benchmarkable offline.
   `RuntimeSession`/`AgentSession` dataclasses shipped as a self-contained kernel
   module (`src/lingtai_kernel/agent_session.py`). ✅ (prototype — not yet wired
   into `_start`; see follow-up #2.)
-- **Benchmark:** `tools/bench_agent_session_rebuild.py` measures rebuild time and
-  proves Tier 1 (indexed) vs. Tier 3 (full scan) on a synthetic events source.
+- **Benchmark:** the `lingtai-kernel-anatomy` skill's
+  `scripts/bench_agent_session_rebuild.py` measures rebuild time and proves
+  Tier 1 (indexed) vs. Tier 3 (full scan) on a synthetic events source.
   See the report for results and command. ✅
 - **Wiring into lifecycle / meta_block / startup restore:** spec-only in this
   branch (follow-ups #2, #4, #5). ❌ (deliberately deferred — hot path + #679.)

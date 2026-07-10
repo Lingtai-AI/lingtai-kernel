@@ -131,14 +131,20 @@ Concretely, if a commit moves `intrinsics/soul.py` → `intrinsics/soul/{config,
 2. Update every match to the new file location and verified line number.
 3. Repeat for any other file the refactor moved.
 
-For cheap mechanical checking, run the advisory drift checker before commit:
+For cheap mechanical checking, run the advisory drift checker before commit.
+The checker is owned by this skill and ships at `<skill-dir>/scripts/check_anatomy_drift.py`,
+run with **cwd at the kernel repo root** (cwd is taken as the repo root):
 
 ```bash
-python tools/check_anatomy_drift.py            # report drift, exit 0
-python tools/check_anatomy_drift.py --check    # exit 1 if any drift (CI/pre-commit)
+# In a contributor checkout (in-tree skill dir):
+python src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py            # report drift, exit 0
+python src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py --check    # exit 1 if any drift (CI/pre-commit)
+
+# In an installed/copied skill bundle (the same scripts/ tree is copied verbatim):
+python .library/intrinsic/capabilities/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py --check
 ```
 
-`tools/check_anatomy_drift.py` scans every `ANATOMY.md` under `src/` and flags
+The checker scans every `ANATOMY.md` under `src/` (relative to cwd) and flags
 **citation rot**: a `file.py:line` citation whose target is missing or whose
 line is past the end of the file. It resolves cited paths by searching upward
 from each anatomy's directory, so kernel-root-relative citations work.

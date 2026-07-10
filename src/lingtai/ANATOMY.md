@@ -57,7 +57,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `presets.py` | Compatibility shim re-exporting the kernel preset library (`lingtai_kernel.presets`) |
 | `init_schema.py` | `validate_init()` plus `strip_deprecated()` — strict schema for active init.json fields, simple deprecated-field cleanup, and known-but-inactive legacy fields migrated by `lingtai_kernel.migrate` |
 | `venv_resolve.py` | Python venv resolution — explicit `init.json` venv → global runtime → auto-create, plus kernel-owned `.lingtai-env.json` marker check/stamp semantics for TUI and kernel callers |
-| `intrinsic_skills/__init__.py` | Standalone skill bundles (docs-only) copied into `.library/intrinsic/` |
+| `intrinsic_skills/__init__.py` | Standalone skill bundles (manuals plus sidecar scripts/assets, e.g. the `lingtai-kernel-anatomy` checker and benchmark) copied verbatim into `.library/intrinsic/capabilities/` |
 | `mcp_servers/` | Curated MCP server implementations shipped in the `lingtai` distribution and launched by `mcp_catalog.json` via `python -m lingtai.mcp_servers.<name>`; see `mcp_servers/ANATOMY.md` for the bundled `SKILL.md` manual-action and sidecar packaging contract. Stateful curated servers may own per-agent sidecars: the WeChat manager checkpoints `wechat/state.json` cursor progress and `wechat/inbox_seen.json` replay guards in `mcp_servers/wechat/manager.py:266` and `mcp_servers/wechat/manager.py:912`. |
 
 ### Key functions / classes

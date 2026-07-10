@@ -13,10 +13,10 @@ claim (see the `lingtai-kernel-anatomy` skill). This checker only catches the
 *obvious* citation drift cheaply, so it can run in CI or pre-commit as an
 advisory gate.
 
-Usage:
-    python tools/check_anatomy_drift.py            # report, exit 0 unless --check
-    python tools/check_anatomy_drift.py --check    # exit 1 if any drift found
-    python tools/check_anatomy_drift.py --root src/lingtai_kernel
+Usage (run from the kernel repo root — cwd is taken as the repo root):
+    python src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py            # report, exit 0 unless --check
+    python src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py --check    # exit 1 if any drift found
+    python src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py --root src/lingtai_kernel
 """
 
 from __future__ import annotations
