@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from lingtai_kernel.i18n import t
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
@@ -24,14 +23,14 @@ PROVIDERS = {
 }
 
 def get_description(lang: str = "en") -> str:
-    return t(lang, "web_search.description")
+    return 'Search the web for current information. Use for real-time data, recent events, documentation, or anything beyond your training knowledge. Returns ranked search results with titles, URLs, and snippets. Before using this tool, read the `web-browsing` skill — it covers fetching specific URLs, PDF download, JS-rendered pages, scraping with stealth, and fallback APIs; no exceptions.'
 
 
 def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": t(lang, "web_search.query")},
+            "query": {"type": "string", "description": 'Search query'},
         },
         "required": ["query"],
     }
@@ -131,12 +130,12 @@ def setup(
     elif search_service is None and provider is None:
         search_service = create_search_service("duckduckgo")
 
-    lang = agent._config.language
     mgr = WebSearchManager(agent, search_service=search_service)
     agent.add_tool(
         "web_search",
-        schema=get_schema(lang),
+        schema=get_schema(),
         handler=mgr.handle,
-        description=get_description(lang),
+        description=get_description(),
+        glossary_package=__package__,
     )
     return mgr

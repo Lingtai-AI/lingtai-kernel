@@ -4,6 +4,9 @@ related_files:
   - src/tools/avatar/__init__.py
   - src/tools/avatar/manual/SKILL.md
   - tests/test_avatar_rules.py
+  - src/tools/avatar/glossary-en.md
+  - src/tools/avatar/glossary-zh.md
+  - src/tools/avatar/glossary-wen.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

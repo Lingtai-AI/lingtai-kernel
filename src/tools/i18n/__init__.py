@@ -1,8 +1,19 @@
-"""Tool string catalog — en / zh / wen tables for every built-in tool.
+"""Tool locale catalog — en / zh / wen tables for runtime manager prose.
 
-Ownership: these are the strings the concrete tools resolve through
-``lingtai_kernel.i18n.t(lang, key)`` (tool descriptions, schema field text,
-manager prose). Before consolidation they were split across
+Ownership: these catalogs hold the *human-facing manager prose* that concrete
+tools resolve through ``lingtai_kernel.i18n.t(lang, key)`` — runtime
+preambles, prompts, and system messages such as ``soul.system_prompt``,
+``psyche.context_forget_summary``, ``knowledge.preamble``, and
+``email.unread_digest``.
+
+They do **not** own model-facing schema or description text. Tool descriptions
+and schema-field text were moved out of these catalogs: they now live in the
+tool packages' canonical English source code and per-package glossary
+resources (``glossary-{en,zh,wen}.md``). The kernel reasoning-description key
+(``tool.reasoning_description``) is a language-independent constant in
+``lingtai_kernel/base_agent/tools.py``; it no longer resides in any catalog.
+
+Before consolidation the manager prose was split across
 ``lingtai_kernel/i18n/*.json`` (the five intrinsics: ``email.*``, ``psyche.*``,
 ``soul.*``, ``system_tool.*``, ``notification_tool.*``) and
 ``lingtai/i18n/*.json`` (the wrapper tools: ``read.*``, ``write.*``, ``edit.*``,
@@ -14,10 +25,7 @@ Registration: on import (triggered by importing :mod:`tools.registry`), every
 key from every locale table is pushed into the kernel i18n cache via
 ``lingtai_kernel.i18n.register_strings`` so that ``t(lang, key)`` call sites in
 tool code resolve unchanged. This is additive and order-independent with the
-kernel's own on-disk load: ``register_strings`` merges on top of whatever the
-kernel loaded, and the kernel loads any missing keys on top of what we
-registered. Machinery strings the kernel still owns (e.g.
-``tool.reasoning_description``) stay in ``lingtai_kernel/i18n/*.json``.
+kernel's own on-disk load.
 """
 from __future__ import annotations
 

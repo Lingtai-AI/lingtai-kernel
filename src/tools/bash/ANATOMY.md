@@ -6,6 +6,9 @@ related_files:
   - src/tools/bash/manual/SKILL.md
   - tests/test_bash_async.py
   - tests/test_layers_bash.py
+  - src/tools/bash/glossary-en.md
+  - src/tools/bash/glossary-zh.md
+  - src/tools/bash/glossary-wen.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

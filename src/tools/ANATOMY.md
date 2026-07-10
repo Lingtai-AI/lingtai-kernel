@@ -4,6 +4,7 @@ related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai_kernel/ANATOMY.md
   - src/tools/registry.py
+  - src/tools/glossary_validator.py
   - src/tools/i18n/__init__.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring

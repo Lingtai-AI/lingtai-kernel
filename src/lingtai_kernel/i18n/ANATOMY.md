@@ -18,7 +18,7 @@ maintenance: |
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.
 
-The kernel's message catalog — a flat key-value string table covering tool descriptions, system notifications, soul prompts, and molt instructions in three locales (en / zh / wen). The sole entry point is `t(lang, key, **kwargs)` which resolves a dotted key against the agent's configured language, falling back to English and then to the raw key itself.
+The kernel's message catalog — a flat key-value string table covering system notifications, soul prompts, molt instructions, and runtime manager prose in three locales (en / zh / wen). Model-facing tool schema/description text is no longer catalog-owned; it lives in canonical English tool source code and per-package glossary resources (`glossary-{en,zh,wen}.md`). The sole entry point is `t(lang, key, **kwargs)` which resolves a dotted key against the agent's configured language, falling back to English and then to the raw key itself.
 
 ## Components
 
@@ -39,10 +39,10 @@ The kernel's message catalog — a flat key-value string table covering tool des
 | Caller | Citation | Typical keys |
 |---|---|---|
 | `meta_block.py` | `meta_block.py:151-176` | `system.current_time`, context fragments |
-| `tools/system/` | `src/tools/system/schema.py:7`, `src/tools/system/schema.py:18` | `system_tool.*` descriptions/schema text |
-| `tools/psyche/` | `src/tools/psyche/__init__.py:42`, `src/tools/psyche/__init__.py:47` | `psyche.*` descriptions/schema text |
-| `tools/soul/` | `src/tools/soul/__init__.py:82`, `src/tools/soul/__init__.py:87` | `soul.*` descriptions/schema text |
-| `tools/email/` | `src/tools/email/schema.py:9`, `src/tools/email/schema.py:23` | `email.*` descriptions/schema text |
+| `tools/system/` | `src/tools/system/preset.py:223`, `src/tools/system/karma.py:71`, `src/tools/system/karma.py:90` | `system_tool.*` runtime manager prose |
+| `tools/psyche/` | `src/tools/psyche/_molt.py:490`, `src/tools/psyche/_molt.py:562-566`, `src/tools/psyche/_molt.py:708` | `psyche.*` runtime manager prose |
+| `tools/soul/` | `src/tools/soul/config.py:375`, `src/tools/soul/config.py:385`, `src/tools/soul/consultation.py:372` | `soul.*` runtime manager prose |
+| `tools/email/` | `src/tools/email/primitives.py:288` | `email.*` runtime manager prose |
 
 **Inbound — tools bridge.** The tools string catalog `src/tools/i18n/__init__.py` loads every locale table (`src/tools/i18n/__init__.py:31`) and pushes all keys into the kernel cache via `register_strings()` (`_register_all` at `src/tools/i18n/__init__.py:38`, calling `register_strings` at `src/tools/i18n/__init__.py:45`), triggered on import of `tools.registry`. The kernel side is only the additive merge hook (`i18n/__init__.py:33-41`).
 

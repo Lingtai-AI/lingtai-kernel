@@ -5,8 +5,16 @@ The 2-layer tool dispatch: intrinsics (built-in) + capabilities/MCP.
 from __future__ import annotations
 
 from ..llm import FunctionSchema
-from ..i18n import t as _t
+from ..tool_glossary import append_tool_glossary
 from ..types import UnknownToolError
+
+# Canonical English reasoning-property description — language-independent.
+# Formerly ``t(lang, "tool.reasoning_description")`` in the kernel i18n catalog;
+# the model-facing schema must not vary by prompt language.
+_REASONING_DESCRIPTION = (
+    "Brief explanation of why you are calling this tool "
+    "(recorded in your diary)."
+)
 
 
 def _dispatch_tool(agent, tc) -> dict:
@@ -32,16 +40,30 @@ def _dispatch_tool(agent, tc) -> dict:
 
 
 def _refresh_tool_inventory_section(agent) -> None:
-    """Rebuild the 'tools' section from current intrinsic + schema descriptions."""
+    """Rebuild the 'tools' section from current intrinsic + schema descriptions.
+
+    Each tool's full canonical English description (``get_description()`` for
+    intrinsics, ``FunctionSchema.description`` for dynamic/MCP tools) is
+    appended with the selected-language glossary body from its owning package.
+    Provider wire descriptions/schemas are a separate surface
+    (``_build_tool_schemas`` + ``WIRE_TOOL_DESCRIPTION``); this section never
+    affects them.
+    """
     lang = agent._config.language
     lines = []
     for name in agent._intrinsics:
         module = agent._intrinsic_modules.get(name)
         if module:
-            lines.append(f"### {name}\n{module.get_description(lang)}")
+            base = module.get_description()
+            pkg = getattr(module, "__package__", None)
+            rendered = append_tool_glossary(base, tool_package=pkg, language=lang)
+            lines.append(f"### {name}\n{rendered}")
     for s in agent._tool_schemas:
         if s.description:
-            lines.append(f"### {s.name}\n{s.description}")
+            rendered = append_tool_glossary(
+                s.description, tool_package=s.glossary_package, language=lang
+            )
+            lines.append(f"### {s.name}\n{rendered}")
     if lines:
         agent._prompt_manager.write_section(
             "tools", "\n\n".join(lines), protected=True
@@ -58,25 +80,24 @@ def _build_tool_schemas(agent) -> list[FunctionSchema]:
     reasoning_prop = {
         "reasoning": {
             "type": "string",
-            "description": _t(agent._config.language, "tool.reasoning_description"),
+            "description": _REASONING_DESCRIPTION,
         },
     }
 
     schemas = []
 
-    # Intrinsic schemas
-    lang = agent._config.language
+    # Intrinsic schemas — canonical English, language-independent.
     for name in agent._intrinsics:
         module = agent._intrinsic_modules.get(name)
         if module:
-            params = dict(module.get_schema(lang))
+            params = dict(module.get_schema())
             props = dict(params.get("properties", {}))
             props.update(reasoning_prop)
             params["properties"] = props
             schemas.append(
                 FunctionSchema(
                     name=name,
-                    description=module.get_description(lang),
+                    description=module.get_description(),
                     parameters=params,
                 )
             )
@@ -106,6 +127,7 @@ def _add_tool(
     handler=None,
     description: str = "",
     system_prompt: str = "",
+    glossary_package: str | None = None,
 ) -> None:
     """Register a dynamic tool."""
     if agent._sealed:
@@ -121,6 +143,7 @@ def _add_tool(
                 description=description,
                 parameters=schema,
                 system_prompt=system_prompt,
+                glossary_package=glossary_package,
             )
         )
     # Update the live session's tools if one exists

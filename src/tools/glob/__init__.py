@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from lingtai_kernel.i18n import t
 from .._file_paths import resolve_workdir_path
 
 if TYPE_CHECKING:
@@ -14,16 +13,16 @@ if TYPE_CHECKING:
 
 
 def get_description(lang: str = "en") -> str:
-    return t(lang, "glob.description")
+    return "Find files matching a glob pattern. Use '**/' for recursive search (e.g. '**/*.py' finds all Python files). Returns sorted list of matching file paths."
 
 
 def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
         "properties": {
-            "pattern": {"type": "string", "description": t(lang, "glob.pattern")},
-            "path": {"type": "string", "description": t(lang, "glob.path")},
-            "summary": {"type": "boolean", "description": t(lang, "tool.summary_option"), "default": False},
+            "pattern": {"type": "string", "description": "Glob pattern (e.g., '**/*.py')"},
+            "path": {"type": "string", "description": 'Directory to search in'},
+            "summary": {"type": "boolean", "description": 'Optional. Default false. When true, this tool runs normally and the raw result is preserved in the durable log (retrievable by tool_call_id), but before the result enters your context it is replaced by an LLM-generated summary driven by your `reasoning` field — so make `reasoning` specific about what to retain. Set true only when the output is expected to be large (>10k chars) and you do NOT need the exact raw text. Leave false when you need exact line/file/diff/stderr text. The summary is non-canonical; if the raw exceeds 500,000 chars no summary is generated and you get a refusal pointing at the preserved raw.', "default": False},
         },
         "required": ["pattern"],
     }
@@ -32,7 +31,6 @@ def get_schema(lang: str = "en") -> dict:
 
 def setup(agent: "BaseAgent") -> None:
     """Set up the glob capability on an agent."""
-    lang = agent._config.language
 
     def handle_glob(args: dict) -> dict:
         pattern = args.get("pattern", "")
@@ -59,4 +57,4 @@ def setup(agent: "BaseAgent") -> None:
         except Exception as e:
             return {"status": "error", "message": f"Glob failed: {e}"}
 
-    agent.add_tool("glob", schema=get_schema(lang), handler=handle_glob, description=get_description(lang))
+    agent.add_tool("glob", schema=get_schema(), handler=handle_glob, description=get_description(), glossary_package=__package__)

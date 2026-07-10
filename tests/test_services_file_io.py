@@ -309,7 +309,7 @@ class TestGrepGlobFilter:
             def __init__(self):
                 self.handlers = {}
 
-            def add_tool(self, name, *, schema, handler, description):
+            def add_tool(self, name, *, schema, handler, description, **kwargs):
                 self.handlers[name] = handler
 
         agent = _StubAgent()

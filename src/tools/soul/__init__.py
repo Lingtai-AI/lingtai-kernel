@@ -79,43 +79,41 @@ from .flow import (
 
 
 def get_description(lang: str = "en") -> str:
-    from lingtai_kernel.i18n import t
-    return t(lang, "soul.description")
+    return "Your inner voice. flow is OPT-IN and DISABLED by default: it runs only when the operator sets env LINGTAI_SOUL_FLOW_ENABLED=1 (then refreshes). While disabled, soul(action='flow') returns status='disabled' (not an error — do not retry); inquiry/config/voice/dismiss still work. When enabled, flow fires periodic past-self consultation every soul_delay seconds while IDLE — M=1+K parallel LLM calls (1 stepped-back read of current chat + K past-snapshot voices) arrive as an involuntary soul(action='flow') pair. delay_seconds is only the cadence after opt-in, NOT an off switch. inquiry: ask a deep copy of yourself a question; answer returns in the tool result. config: tune flow knobs at runtime (delay_seconds, consultation_past_count) — does not enable flow. dismiss: clear the current flow notification. See soul-manual skill."
 
 
 def get_schema(lang: str = "en") -> dict:
-    from lingtai_kernel.i18n import t
     return {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
                 "enum": ["inquiry", "flow", "config", "voice", "dismiss"],
-                "description": t(lang, "soul.action_description"),
+                "description": "inquiry: ask yourself a question — the answer returns in the tool result. Requires 'inquiry' parameter. Always available. flow: OPT-IN, DISABLED by default. Only runs when the operator sets env LINGTAI_SOUL_FLOW_ENABLED=1 (case-insensitive true/yes/on) and refreshes/restarts. While DISABLED, invoking flow returns {status:'disabled', enabled:false} with an explanation — this is expected config state, NOT an error, so do NOT retry it; the operator must set the env var first. When ENABLED, flow fires automatically every soul_delay seconds while IDLE — appears in history as a soul(action='flow') call you did not initiate, with voices from past selves and a stepped-back read of your current chat. You may ALSO invoke flow voluntarily while ACTIVE: the call returns immediately with a success acknowledgement, and the actual voices arrive shortly after as a separate involuntary soul(action='flow') pair. If a fire is already running when you invoke, the call is rejected with 'soul flow ongoing, request rejected' — wait for the current fire to land, then try again. config: tune flow knobs — pass any subset of delay_seconds (wall-clock cadence, min 30s), consultation_past_count (K voices per fire, 0–5). At least one field required. Persists to init.json. config does NOT enable flow — delay_seconds is only cadence after the env opt-in, never an off switch. voice: choose how your own soul-flow voice sounds. Bare (no 'set') reads the current voice + the resolved prompt. Pass set='inner' or set='observer' to switch presets. Pass set='custom' with a 'prompt' field to write your own — speak to yourself as the soul, describe how you want to be framed when reading your own diary. Persists to init.json. This is yours; the operator does not choose it for you. dismiss: clear the current soul flow notification from the notification panel. Use when you've read the voices and want to dismiss them before the next fire replaces them. inquiry/config/voice/dismiss all work whether or not flow is enabled. See soul-manual skill for enabling/disabling, troubleshooting, and the privacy/cost rationale.",
             },
             "inquiry": {
                 "type": "string",
-                "description": t(lang, "soul.inquiry_description"),
+                "description": "Your self-inquiry — a question to yourself. Required for action='inquiry'. This is you asking yourself a question, not prompting someone else.",
             },
             "delay_seconds": {
                 "type": "number",
                 "minimum": SOUL_DELAY_MIN_SECONDS,
-                "description": t(lang, "soul.delay_seconds_description"),
+                "description": "Wall-clock delay between soul flow fires, in seconds. This is ONLY the cadence AFTER soul flow is enabled via env LINGTAI_SOUL_FLOW_ENABLED=1 — it is NOT an off switch. If the env var is unset, soul flow is disabled entirely and NO fires occur regardless of this value (a large delay no longer even half-suppresses flow; the env gate does). Soul flow is your periodic inner reflection — when enabled and the timer fires, past versions of yourself (from molt snapshots) and a stepped-back read of your current work speak to you as voices, surfacing patterns, blind spots, and perspective you might miss while busy. Optional for action='config'. Minimum 30s. Lower for more frequent reflection (e.g. 300 = every 5 minutes; 7200 = every 2 hours). When flow is enabled, the currently-pending fire is cancelled and the timer restarts on the new schedule. See soul-manual skill.",
             },
             "consultation_past_count": {
                 "type": "integer",
                 "minimum": CONSULTATION_PAST_COUNT_MIN,
                 "maximum": CONSULTATION_PAST_COUNT_MAX,
-                "description": t(lang, "soul.consultation_past_count_description"),
+                "description": "K — number of past-self voices sampled per fire. Optional for action='config'. Each fire runs M=1+K parallel LLM calls (1 stepped-back diary reader + K random past-snapshot voices). Range [0, 5]. 0 = insights-only fires (cheapest, no past-self voices). Higher K is costlier per fire and fills more chat-history with voice content; lower K is faster and quieter.",
             },
             "set": {
                 "type": "string",
-                "description": t(lang, "soul.voice_set_description"),
+                "description": "Which voice profile to switch to. For action='voice'. Built-ins: 'inner' (terse — 'you are the soul, speak as inner voice') or 'observer' (structured stepped-back hook framing). Or 'custom', which requires a 'prompt' field with your own system-prompt text. Omit 'set' to read the current voice and resolved prompt without changing anything.",
             },
             "prompt": {
                 "type": "string",
                 "maxLength": SOUL_VOICE_PROMPT_MAX,
-                "description": t(lang, "soul.voice_prompt_description"),
+                "description": "Custom system prompt for soul-flow voice. Required when set='custom'; ignored otherwise. Length capped at 4000 characters. Speak to yourself as the soul — describe how you want to be framed when reading your own diary. The same prompt is used for both insights (current self) and past (frozen earlier self) consultations; the per-fire cue text differentiates whose diary you're reading.",
             },
         },
         "required": ["action"],

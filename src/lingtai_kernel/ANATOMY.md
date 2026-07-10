@@ -48,6 +48,7 @@ related_files:
   - src/lingtai_kernel/services/logging.py
   - src/lingtai_kernel/session.py
   - src/lingtai_kernel/state.py
+  - src/lingtai_kernel/tool_glossary.py
   - src/lingtai_kernel/tc_inbox.py
   - src/lingtai_kernel/time_veil.py
   - src/lingtai_kernel/token_counter.py
@@ -101,6 +102,7 @@ The kernel root holds the coordinator (`base_agent/`) plus a flat collection of 
 
 - `message.py` — `_make_message`, message-type sentinels (`MSG_REQUEST`, `MSG_TC_WAKE`). The wire format for the agent's inbox queue.
 - `state.py` — `AgentState` enum (ACTIVE / IDLE / STUCK / ASLEEP / SUSPENDED).
+- `tool_glossary.py` — tool glossary loader. Reads per-package `glossary-{en,zh,wen}.md` resources via `importlib.resources`, validates strict frontmatter (shared `parse_glossary` grammar), and appends the localized terminology body to each tool's `## tools` description. Fail-open with bounded warnings; cached with a process-wide lock. Must not import from `tools` or `lingtai`.
 - `config.py` — `AgentConfig` dataclass plus kernel-owned runtime constants. Constructor-time options include soul cadences, max RPM, and legacy ignored compatibility fields (`stamina`, language/activeness, etc.); the active IDLE→ASLEEP timeout is the fixed hidden `IDLE_SLEEP_TIMEOUT_SECONDS` constant, not an init/prompt/meta setting. Legacy `max_turns` remains for API compatibility but no longer owns the ACTIVE-turn tool-call emergency fuse.
 - `safety_limits.py` — kernel-owned safety constants that are deliberately not user/preset/agent manifest configuration. Currently owns `ACTIVE_TURN_TOOL_CALL_EMERGENCY_LIMIT = 10_000` and `ACTIVE_TURN_TOOL_CALL_NOTICE_INTERVAL = 500` for the tool-call progress meter / emergency fuse.
 - `workdir.py` — `WorkingDir`. Filesystem layout under the agent's working directory; manifest read/write; git operations. Also module-level `write_resolved_manifest` (`workdir.py:68`) — publishes the fully-resolved, secret-redacted manifest to `system/manifest.resolved.json` (atomic, best-effort) after every successful init read; called by `lingtai.Agent._read_init` (issue #259). Secret-key dropping lives in `_redact_secrets` (`workdir.py:50`).

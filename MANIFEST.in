@@ -42,6 +42,12 @@ recursive-include src/tools *.json
 # in pyproject.toml so source releases carry the same tool contracts.
 recursive-include src/tools CONTRACT.md
 recursive-include src/tools DAEMON_CONTRACT.md
+# Per-tool glossary resources — mirror the package-data globs in
+# pyproject.toml so source releases carry the 54 files (exact filenames,
+# not a wildcard, to prevent accidental inclusion of extra files).
+recursive-include src/tools glossary-en.md
+recursive-include src/tools glossary-zh.md
+recursive-include src/tools glossary-wen.md
 graft src/tools/email/manual
 graft src/tools/system/manual
 graft src/tools/psyche/manual

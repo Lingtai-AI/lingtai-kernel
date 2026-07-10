@@ -9,6 +9,9 @@ related_files:
   - src/lingtai/mcp_servers/ANATOMY.md
   - tests/test_mcp_capability.py
   - tests/test_mcp_inbox.py
+  - src/tools/mcp/glossary-en.md
+  - src/tools/mcp/glossary-zh.md
+  - src/tools/mcp/glossary-wen.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

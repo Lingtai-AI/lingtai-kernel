@@ -170,4 +170,5 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
         schema=get_schema(),
         handler=handle_mcp,
         description=get_description(),
+        glossary_package=__package__,
     )
