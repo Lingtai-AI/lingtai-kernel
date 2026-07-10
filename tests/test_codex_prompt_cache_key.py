@@ -843,6 +843,7 @@ def test_codex_usage_extra_carries_safe_auth_attribution():
         "pool_size": 5,
         "weight": 3,
         "auth_path_sha8": "poolabcd",
+        "model_scope": "gpt-5.6-sol",
     }
 
     result = session.send("x")
@@ -857,6 +858,7 @@ def test_codex_usage_extra_carries_safe_auth_attribution():
     assert extra["codex_pool_source_index"] == "2"
     assert extra["codex_pool_size"] == "5"
     assert extra["codex_pool_weight"] == "3"
+    assert extra["codex_pool_model_scope"] == "gpt-5.6-sol"
     assert _TEST_ACCOUNT_ID not in json.dumps(extra, default=str)
 
 

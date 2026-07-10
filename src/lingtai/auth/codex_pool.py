@@ -18,6 +18,15 @@ Design constraints (Jason's spec):
     molt (that is what the endpoint pool does, not this).
   * Missing / empty / invalid pool -> return ``None`` so the caller falls back to
     the legacy default Codex token path for the ``codex-pool`` provider.
+  * A pool file may be classified by EXACT model (v2): a top-level ``models``
+    dict maps an exact, case-sensitive model string to an account list of the
+    same entry shape as the flat v1 ``accounts`` list. When ``models`` is
+    present it is the sole source of truth (a flat ``accounts`` list in the
+    same file is ignored) and selection happens only inside the configured
+    model's category. There is no prefix, family, wildcard, or default
+    matching: a model with no exact category behaves like an unusable pool
+    (legacy fallback). Flat v1 files keep byte-identical behavior for every
+    model. The kernel keys off structure, never off the ``version`` field.
 
 Public helpers:
 
@@ -92,7 +101,7 @@ def _resolve_relative_to_tui(raw: str, tui_dir: Path) -> Path:
     return tui_dir / p
 
 
-def load_codex_auth_pool(pool_path: Path) -> list[dict]:
+def load_codex_auth_pool(pool_path: Path, model: str | None = None) -> list[dict]:
     """Parse the pool file into a list of validated, enabled accounts.
 
     Each returned entry is ``{"path": <str>, "weight": <positive int>}``. An
@@ -103,22 +112,47 @@ def load_codex_auth_pool(pool_path: Path) -> list[dict]:
         missing ``weight`` defaults to ``1`` (a hand-edited pool file may omit
         it; the TUI always writes an explicit weight).
 
+    A model-classified (v2) file has a top-level ``models`` dict instead of the
+    flat ``accounts`` list; the eligible entries are then ``models[model]``
+    under exact, case-sensitive string equality — no prefix/family/wildcard
+    matching, and ``models`` is the sole source of truth (any ``accounts`` list
+    beside it is ignored). No exact category (including ``model=None``) yields
+    ``[]`` so the caller falls back to the legacy default token path.
+
     A missing file, unreadable file, malformed JSON, or a non-dict / non-list
     structure yields ``[]`` (no exception) so the caller falls back cleanly.
     Token contents are never read here — only the pool file's own JSON.
     """
+    return _load_pool_entries(pool_path, model)[0]
+
+
+def _load_pool_entries(pool_path: Path, model: str | None) -> tuple[list[dict], bool]:
+    """Parse + validate the pool file; return ``(accounts, classified)``.
+
+    ``classified`` is ``True`` when the file carries a ``models`` dict (v2) —
+    the accounts then come from the exact-``model`` category only. Shared
+    parser behind :func:`load_codex_auth_pool` and the selection helpers (one
+    read, one validation, plus the classified/flat fact selection needs for
+    its ``model_scope`` metadata).
+    """
     try:
         raw = json.loads(pool_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return []
+        return [], False
     if not isinstance(raw, dict):
-        return []
-    accounts = raw.get("accounts")
-    if not isinstance(accounts, list):
-        return []
+        return [], False
+    models = raw.get("models")
+    if isinstance(models, dict):
+        entries = models.get(model)
+        classified = True
+    else:
+        entries = raw.get("accounts")
+        classified = False
+    if not isinstance(entries, list):
+        return [], classified
 
     valid: list[dict] = []
-    for acct in accounts:
+    for acct in entries:
         if not isinstance(acct, dict):
             continue
         if acct.get("enabled", True) is False:
@@ -130,7 +164,7 @@ def load_codex_auth_pool(pool_path: Path) -> list[dict]:
         if weight is None:
             continue
         valid.append({"path": path.strip(), "weight": weight})
-    return valid
+    return valid, classified
 
 
 def _coerce_weight(raw) -> int | None:
@@ -216,31 +250,44 @@ def _weighted_pick(accounts: list[dict], seed: str) -> tuple[int, dict]:
     return len(accounts) - 1, accounts[-1]
 
 
-def select_codex_pool_auth(defaults: dict | None = None) -> dict | None:
+def select_codex_pool_auth(
+    defaults: dict | None = None, model: str | None = None
+) -> dict | None:
     """Select the pool account and describe the choice for runtime logging.
 
     Returns ``{"auth_path": <resolved token path str>, "selection": <dict>}``,
     or ``None`` when the pool file is missing / has no valid enabled accounts —
     in which case the caller falls back to the legacy default Codex token path.
+    For a model-classified (v2) pool, ``model`` — the exact configured model
+    string — picks the category; only that category's accounts are eligible,
+    and no exact category means ``None`` (same fallback as an unusable pool).
+    The model is NOT mixed into the selection seed: a flat v1 pool picks the
+    same account regardless of ``model`` (zero churn), and for v2 the category
+    list itself already differentiates the outcome.
 
     ``selection`` is the NON-SECRET attribution breadcrumb an operator needs to
     answer "which codex-pool source handled this call" from the event log:
 
       * ``source_ref``     — the account ``path`` exactly as configured in the
                              pool file (relative refs stay relative);
-      * ``source_index``   — index within the validated enabled-account list;
-      * ``pool_size``      — number of validated enabled accounts;
+      * ``source_index``   — index within the validated enabled-account list
+                             (category-relative for a classified pool);
+      * ``pool_size``      — number of validated enabled accounts (category-
+                             relative for a classified pool);
       * ``weight``         — the chosen account's weight;
       * ``auth_path_sha8`` — first 8 hex chars of SHA-256 of the resolved token
                              path, a stable id that avoids logging the absolute
-                             path itself.
+                             path itself;
+      * ``model_scope``    — the exact category key used (classified pool), or
+                             ``None`` (flat v1 pool). Model names are already
+                             non-secret manifest values.
 
     No token file is read and no token content, Authorization material, or raw
     auth-file data appears in the returned metadata.
     """
     tui_dir = resolve_codex_tui_dir()
     pool_path = resolve_codex_pool_path(defaults)
-    accounts = load_codex_auth_pool(pool_path)
+    accounts, classified = _load_pool_entries(pool_path, model)
     if not accounts:
         return None
 
@@ -255,20 +302,24 @@ def select_codex_pool_auth(defaults: dict | None = None) -> dict | None:
             "pool_size": len(accounts),
             "weight": chosen["weight"],
             "auth_path_sha8": hashlib.sha256(auth_path.encode("utf-8")).hexdigest()[:8],
+            "model_scope": model if classified else None,
         },
     }
 
 
-def select_codex_pool_auth_path(defaults: dict | None = None) -> str | None:
+def select_codex_pool_auth_path(
+    defaults: dict | None = None, model: str | None = None
+) -> str | None:
     """Select the Codex token path for the ``codex-pool`` provider.
 
     Returns the resolved token file path (a filesystem string) chosen stickily
     for this agent session by weighted selection, or ``None`` when the pool file
-    is missing / has no valid enabled accounts — in which case the caller falls
-    back to the legacy default Codex token path.
+    is missing / has no valid enabled accounts (for a model-classified pool:
+    no valid accounts in the exact-``model`` category) — in which case the
+    caller falls back to the legacy default Codex token path.
 
     Path-only view of :func:`select_codex_pool_auth` (one selection, two views).
     Pure path computation: no token file is read and nothing secret is logged.
     """
-    selected = select_codex_pool_auth(defaults)
+    selected = select_codex_pool_auth(defaults, model)
     return selected["auth_path"] if selected else None

@@ -174,11 +174,13 @@ def register_all_adapters() -> None:
         # only pick WHICH Codex OAuth token file to read and inject it as the
         # ordinary ``codex_auth_path``, then delegate to ``_codex``. The choice is
         # sticky per agent session (weighted across the non-secret pool file); a
-        # missing/empty/invalid pool returns None here, so defaults pass through
-        # unchanged and ``CodexTokenManager`` uses its legacy default token path.
+        # model-classified pool restricts eligibility to the exact configured
+        # model's category. A missing/empty/invalid pool (or no exact category)
+        # returns None here, so defaults pass through unchanged and
+        # ``CodexTokenManager`` uses its legacy default token path.
         # Provider ``codex`` is never affected — it does not read the pool file.
         from lingtai.auth.codex_pool import select_codex_pool_auth
-        selected = select_codex_pool_auth(defaults)
+        selected = select_codex_pool_auth(defaults, model=model)
         if selected:
             defaults = dict(defaults or {})
             defaults["codex_auth_path"] = selected["auth_path"]

@@ -2543,6 +2543,9 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 "pool_size": "codex_pool_size",
                 "weight": "codex_pool_weight",
                 "auth_path_sha8": "codex_auth_path_sha8",
+                # Exact category key of a model-classified pool (a non-secret
+                # manifest model string); None on flat v1 pools -> omitted.
+                "model_scope": "codex_pool_model_scope",
             }
             for source_key, ledger_key in pool_fields.items():
                 value = pool_selection.get(source_key)

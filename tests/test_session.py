@@ -158,6 +158,20 @@ def test_send_llm_call_omits_codex_pool_for_other_providers():
     assert "codex_pool" not in llm_call
 
 
+def test_safe_usage_extra_event_filter_allows_pool_model_scope():
+    """``codex_pool_model_scope`` (model-classified pools) passes the
+    ``llm_response`` usage-extra allowlist; unknown keys still don't."""
+    from lingtai_kernel.session import _safe_usage_extra_for_event
+
+    extra = {
+        "codex_pool_model_scope": "gpt-5.6-sol",
+        "not_allowlisted": "dropped",
+    }
+    assert _safe_usage_extra_for_event(extra) == {
+        "codex_pool_model_scope": "gpt-5.6-sol",
+    }
+
+
 def test_send_error_propagates():
     """Errors from send_with_timeout propagate directly — no retry in SessionManager."""
     sm, _, _ = make_session_manager()
