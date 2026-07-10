@@ -3,16 +3,41 @@ name: daemon-cli-backends
 description: >
   Nested daemon-manual reference for daemon API details and CLI backends:
   daemon(action=list), claude-p/codex/opencode behavior,
-  backend_options flag passing, preset/capability inheritance, and Codex modal
-  capabilities.
-version: 1.4.0
-last_changed_at: "2026-06-30T00:00:00-07:00"
+  backend_options flag passing, preset/capability inheritance, and nested
+  per-backend flag-discovery references (Codex).
+version: 1.5.0
+last_changed_at: "2026-07-09T18:46:53-07:00"
 ---
 
 # Daemon CLI Backend Reference
 
 Nested daemon-manual reference. Open this when choosing a daemon backend,
 inspecting `daemon(action="list")`, or passing CLI flags through `backend_options`.
+
+## Nested reference catalog
+
+`daemon-cli-backends` owns these nested references. They are parent-owned
+drill-down files, not standalone top-level skills. Backend-specific pages live
+under `reference/backends/<backend>/`; each is a small flag-discovery and
+translation guide that routes to the installed CLI's live help, never a
+maintained flag catalog. Only backends with proven demand get a page.
+
+```yaml
+- name: daemon-backend-codex
+  location: reference/backends/codex/SKILL.md
+  description: |
+    Nested daemon-cli-backends reference for the Codex daemon backend's flag
+    surface. Read this only when a daemon task needs Codex-specific CLI flags
+    (model selection, reasoning effort, config overrides): it routes to the
+    installed CLI's live help via bash and shows how to translate that help
+    into generic `backend_options` (e.g. repeated `--config` overrides).
+```
+
+## Routing table
+
+| Need / keywords | Read |
+|---|---|
+| Codex-specific flags for a daemon task: model selection, reasoning effort (`model_reasoning_effort`, ultra), `--config` overrides; discover the installed Codex CLI's flags and translate them into `backend_options` | `reference/backends/codex/SKILL.md` |
 
 ## API note: `daemon(action="list")`
 
@@ -176,7 +201,11 @@ For CLI backends, each task may carry an optional `backend_options` JSON object
 that is converted to argv tokens and appended to the CLI command before the task
 prompt. This lets you reach the underlying CLI's flag surface (model selection,
 search/web access, effort levels, sandbox/policy switches, etc.) without the
-daemon needing to hard-code every flag.
+daemon needing to hard-code every flag. This is the default generic path for
+backend flags: one object may carry any number of keys, each converted
+independently in insertion order. For Codex-specific discovery and translation
+examples (e.g. reasoning effort via repeated `--config` overrides), read
+`reference/backends/codex/SKILL.md`.
 
 This is intentionally a passthrough, not a fixed table. Claude Code, Codex,
 OpenCode, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, and Cursor rev their flag
