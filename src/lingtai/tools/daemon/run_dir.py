@@ -222,6 +222,7 @@ class DaemonRunDir:
             "followup_status": None,
             "followup_result_path": None,
             "followup_result_preview": None,
+            "input_request": None,
             "preset_name": preset_name,
             "preset_provider": preset_provider,
             "preset_model": preset_model,
@@ -1320,6 +1321,26 @@ class DaemonRunDir:
                 },
             )
         self._safe_state("mark_failed", _write)
+        self.write_manifest()
+
+    def mark_waiting_input(self, request: dict) -> None:
+        """Pause after a structured daemon_common human-input request."""
+        def _write():
+            self._state["state"] = "waiting_input"
+            self._state["elapsed_s"] = self._now_secs()
+            self._state["current_tool"] = None
+            self._state["input_request"] = dict(request)
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._append_jsonl(
+                self.events_path,
+                {
+                    "event": "daemon_waiting_input",
+                    "request": dict(request),
+                    "ts": self._now_iso(),
+                },
+            )
+            self.heartbeat_path.touch()
+        self._safe("mark_waiting_input", _write)
         self.write_manifest()
 
     def record_cli_termination(

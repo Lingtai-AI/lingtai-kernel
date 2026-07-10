@@ -71,6 +71,10 @@ Related run-scoped behavior you should not fight through flags:
 - MCP: the harness writes stdio registrations (including `daemon_common`) to
   the run's `claude-mcp-config.json` and appends `--mcp-config <path>
   --strict-mcp-config` itself as `backend_harness_argv`.
+- Clarification: print mode has closed, non-TTY stdin. Claude must call
+  `daemon_common.ask_human(...)` and end the current turn; LingTai records
+  `waiting_input` and notifies the parent. It must not present a final-prose
+  question as though the process were still waiting interactively.
 - Safe mode: `--safe-mode` disables customizations including MCP servers; do
   not use it because claude-p terminal success requires the injected
   `daemon_common.finish(status="done")`. For read-only runs, keep MCP enabled
