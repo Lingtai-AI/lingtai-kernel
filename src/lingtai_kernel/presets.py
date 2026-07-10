@@ -572,12 +572,17 @@ def expand_inherit(capabilities: dict, main_llm: dict) -> dict:
 
     For each capability whose kwargs has `provider == "inherit"`, replace it
     with the main LLM's provider plus its credentials (api_key, api_key_env,
-    base_url) and wire-protocol flag (api_compat). The `model` field is NOT
+    base_url) and wire-protocol flag (api_compat, wire_api). The `model` field is NOT
     inherited — capabilities pick their own model independently.
 
     api_compat must inherit too: capability fallbacks (e.g. vision) dispatch
     between OpenAI / Anthropic / Gemini adapters based on it, and an inheriting
     capability that drops api_compat silently routes through the wrong adapter.
+
+    wire_api must inherit alongside api_compat for the same reason: an
+    OpenAI-compatible capability that explicitly selects the Responses or Chat
+    Completions wire must keep that selection on the fallback, or a custom
+    base URL silently drops back to Chat Completions.
 
     Mutates `capabilities` in place. Returns the same dict for convenience.
     """
@@ -591,4 +596,6 @@ def expand_inherit(capabilities: dict, main_llm: dict) -> dict:
         kwargs["api_key_env"] = main_llm.get("api_key_env")
         kwargs["base_url"]    = main_llm.get("base_url")
         kwargs["api_compat"]  = main_llm.get("api_compat")
+        if "wire_api" in main_llm:
+            kwargs["wire_api"] = main_llm["wire_api"]
     return capabilities

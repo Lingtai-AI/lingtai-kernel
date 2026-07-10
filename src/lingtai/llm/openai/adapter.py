@@ -1944,6 +1944,7 @@ class OpenAIAdapter(LLMAdapter):
         timeout_ms: int = 300_000,
         use_responses: bool = False,
         force_responses: bool = False,
+        wire_api: str | None = None,
         max_rpm: int = 0,
         default_headers: dict | None = None,
         compact_threshold: int | None = 100_000,
@@ -1952,6 +1953,16 @@ class OpenAIAdapter(LLMAdapter):
         self.base_url = base_url
         self._use_responses = use_responses
         self._force_responses = force_responses
+        # Canonical wire selection: ``auto`` delegates to the legacy
+        # ``use_responses``/``force_responses`` heuristics; explicit
+        # ``chat_completions``/``responses`` force that path regardless of
+        # base URL or legacy flags. ``None`` is treated as ``auto`` so
+        # existing callers keep their current behavior.
+        if wire_api is not None and wire_api not in {"auto", "chat_completions", "responses"}:
+            raise ValueError(
+                f"wire_api must be one of auto/chat_completions/responses, got {wire_api!r}"
+            )
+        self._wire_api = wire_api or "auto"
         # Prompt-cache-key policy for this adapter's OpenAI-compatible sessions:
         #   None  -> auto-derive a stable, namespaced default per model
         #   str   -> use this exact key for every session (override)
@@ -2011,6 +2022,23 @@ class OpenAIAdapter(LLMAdapter):
             return self._default_prompt_cache_key(model)
         return policy  # explicit override string
 
+    def _should_use_responses(self) -> bool:
+        """Return True if the selected wire API is the Responses path.
+
+        Canonical ``wire_api`` wins over legacy ``use_responses``/
+        ``force_responses`` heuristics:
+          * ``chat_completions`` -> always False
+          * ``responses``        -> always True, even for custom base URLs
+          * ``auto``             -> legacy behavior: ``use_responses`` AND
+            (no base URL OR ``force_responses``)
+        """
+        if self._wire_api == "chat_completions":
+            return False
+        if self._wire_api == "responses":
+            return True
+        # auto
+        return self._use_responses and (not self.base_url or self._force_responses)
+
     # -- LLMAdapter interface --------------------------------------------------
 
     def create_chat(
@@ -2032,10 +2060,8 @@ class OpenAIAdapter(LLMAdapter):
             interface = ChatInterface()
             interface.add_system(system_prompt, tools=tool_dicts)
 
-        use_responses = self._use_responses
-
-        # Only use Responses API for actual OpenAI (not compatible providers)
-        if use_responses and (not self.base_url or self._force_responses):
+        # Select the wire path. Canonical ``wire_api`` wins over legacy flags.
+        if self._should_use_responses():
             session = self._create_responses_session(
                 model,
                 system_prompt,
@@ -2185,6 +2211,35 @@ class OpenAIAdapter(LLMAdapter):
         json_schema: dict | None = None,
         max_output_tokens: int | None = None,
     ) -> LLMResponse:
+        # One-shot generation must follow the same wire path as session creation.
+        if self._should_use_responses():
+            return self._generate_responses(
+                model,
+                contents,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                json_schema=json_schema,
+                max_output_tokens=max_output_tokens,
+            )
+        return self._generate_chat_completions(
+            model,
+            contents,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            json_schema=json_schema,
+            max_output_tokens=max_output_tokens,
+        )
+
+    def _generate_chat_completions(
+        self,
+        model: str,
+        contents: str | list,
+        *,
+        system_prompt: str | None = None,
+        temperature: float | None = None,
+        json_schema: dict | None = None,
+        max_output_tokens: int | None = None,
+    ) -> LLMResponse:
         messages: list[dict] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -2215,6 +2270,48 @@ class OpenAIAdapter(LLMAdapter):
 
         raw = self._gated_call(lambda: self._client.chat.completions.create(**kwargs))
         return _parse_response(raw)
+
+    def _generate_responses(
+        self,
+        model: str,
+        contents: str | list,
+        *,
+        system_prompt: str | None = None,
+        temperature: float | None = None,
+        json_schema: dict | None = None,
+        max_output_tokens: int | None = None,
+    ) -> LLMResponse:
+        # contents can be a string or a list of content blocks
+        if isinstance(contents, str):
+            input_items = [{"role": "user", "content": contents}]
+        elif isinstance(contents, list):
+            input_items = [{"role": "user", "content": contents}]
+        else:
+            input_items = [{"role": "user", "content": str(contents)}]
+
+        kwargs: dict[str, Any] = {"model": model, "input": input_items}
+        if system_prompt:
+            kwargs["instructions"] = system_prompt
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        if max_output_tokens is not None:
+            kwargs["max_output_tokens"] = max_output_tokens
+
+        if json_schema is not None:
+            # The Responses API selects structured output via ``text.format``
+            # (openai>=2.x). It has NO ``response_format`` kwarg — unlike Chat
+            # Completions — so passing one raises on the installed SDK.
+            kwargs["text"] = {
+                "format": {
+                    "type": "json_schema",
+                    "name": json_schema.get("title", "response"),
+                    "schema": json_schema,
+                    "strict": True,
+                },
+            }
+
+        raw = self._gated_call(lambda: self._client.responses.create(**kwargs))
+        return _parse_responses_api_response(raw)
 
     def make_tool_result_message(
         self, tool_name: str, result: dict, *, tool_call_id: str | None = None

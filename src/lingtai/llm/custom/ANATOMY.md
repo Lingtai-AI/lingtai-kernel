@@ -48,6 +48,7 @@ Parameters:
 - `api_compat: str` — selects backend (`"openai"`, `"anthropic"`, `"gemini"`).
 - `base_url: str | None` — provider endpoint URL.
 - `default_headers: dict | None` — forwarded to all compat paths that expose SDK HTTP header configuration (OpenAI-, Anthropic-, and Gemini-compatible).
+- `wire_api: str | None` — scoped to `api_compat="openai"`; selects the OpenAI wire path (`auto`/`chat_completions`/`responses`). Explicit non-`auto` values raise for non-OpenAI backends; `auto` is ignored there.
 - `**kwargs` — forwarded to adapter constructor (`timeout_ms`, `max_rpm`, etc.).
 
 ### No class of its own

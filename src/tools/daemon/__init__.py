@@ -1538,6 +1538,7 @@ class DaemonManager:
             "compact_threshold",
             "default_headers",
             "max_rpm",
+            "wire_api",
         )
         return {key: llm[key] for key in keys if key in llm}
 
