@@ -255,6 +255,15 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         for reference_name in ("forensics", "inspection", "cli-backends", "cleanup"):
             daemon_reference = daemon_reference_dir / reference_name / "SKILL.md"
             assert daemon_reference.is_file()
+        codex_backend_reference = (
+            daemon_reference_dir
+            / "cli-backends"
+            / "reference"
+            / "backends"
+            / "codex"
+            / "SKILL.md"
+        )
+        assert codex_backend_reference.is_file()
         assert "Nested daemon-manual reference" in (
             daemon_reference_dir / "forensics" / "SKILL.md"
         ).read_text(encoding="utf-8")
