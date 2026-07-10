@@ -965,10 +965,9 @@ def _scrub_responses_schema(node: Any) -> Any:
          type-establishing key (see `_SCHEMA_KIND_KEYS`) gets `type:
          "string"`. This covers the nested `secondary.args.*` fields LingTai
          emits with only a description.
-      3. `{"type": "object"}` with neither `properties` nor
-         `additionalProperties` -> an empty `properties: {}` is added. An
-         empty `properties` map is accepted, while an explicit
-         `additionalProperties` schema already defines the object's values.
+      3. `{"type": "object"}` with no `properties` key (a free-form object,
+         e.g. `daemon`'s `tasks[].backend_options`) -> an empty
+         `properties: {}` is added. An empty `properties` map is accepted.
 
     `enum`/`anyOf`/`allOf` are left untouched (the backend accepts them
     nested). Walks dicts and lists so all fixes apply at any depth.
@@ -987,13 +986,8 @@ def _scrub_responses_schema(node: Any) -> Any:
         # empty {} or {"required": [...]} that aren't value descriptors.
         if "description" in out and not any(k in out for k in _SCHEMA_KIND_KEYS):
             out["type"] = "string"
-        # A typed object with no shape is rejected; give it an empty map.
-        # Preserve explicitly typed free-form values via additionalProperties.
-        if (
-            out.get("type") == "object"
-            and "properties" not in out
-            and "additionalProperties" not in out
-        ):
+        # A typed object with no `properties` is rejected; give it an empty map.
+        if out.get("type") == "object" and "properties" not in out:
             out["properties"] = {}
         return out
     if isinstance(node, list):

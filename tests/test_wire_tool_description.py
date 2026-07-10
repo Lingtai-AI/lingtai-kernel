@@ -144,7 +144,7 @@ def test_openai_responses_preserves_daemon_backend_options_passthrough_schema():
     ]["backend_options"]
 
     assert "additionalProperties" in backend_options
-    assert "properties" not in backend_options
+    assert backend_options["properties"] == {}
     assert any(
         option == {"type": "string"}
         for option in backend_options["additionalProperties"]["anyOf"]
