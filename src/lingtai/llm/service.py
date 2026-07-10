@@ -106,6 +106,10 @@ _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     # the adapter chooses one endpoint at request time without changing
     # prompt_cache_key/session/thread identity.
     "codex_base_urls",
+    # OpenAI-compatible wire selection. ``auto`` preserves legacy behavior;
+    # ``chat_completions``/``responses`` explicitly select the wire path even
+    # for custom base URLs. Scoped to OpenAI-compatible adapters.
+    "wire_api",
 )
 _PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS = ("compact_threshold",)
 

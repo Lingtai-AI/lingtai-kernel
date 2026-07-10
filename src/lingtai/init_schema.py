@@ -155,6 +155,10 @@ LLM_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "api_key_env": str,
     "base_url": (str, NoneType),
     "compact_threshold": (int, NoneType),
+    # OpenAI-compatible wire selection. ``auto`` preserves legacy behavior;
+    # ``chat_completions``/``responses`` force the respective wire path even
+    # for custom base URLs. Scoped to OpenAI-compatible providers.
+    "wire_api": str,
 }
 LLM_SPECIAL_KNOWN: set[str] = {"thinking"}
 LLM_PASS_THROUGH_KNOWN: set[str] = {
@@ -165,6 +169,7 @@ LLM_PASS_THROUGH_KNOWN: set[str] = {
     "codex_auth_pool_path",
     "codex_base_urls",
     "default_headers",
+    "wire_api",
 }
 LLM_KNOWN: set[str] = (
     set(LLM_REQUIRED) | set(LLM_OPTIONAL) | LLM_SPECIAL_KNOWN | LLM_PASS_THROUGH_KNOWN
@@ -367,6 +372,33 @@ def validate_init(data: dict) -> list[str]:
             raise ValueError(
                 "manifest.llm.compact_threshold: expected positive int or null"
             )
+    if "wire_api" in llm:
+        wire_api = llm["wire_api"]
+        allowed_wire_api = {"auto", "chat_completions", "responses"}
+        if wire_api not in allowed_wire_api:
+            raise ValueError(
+                "manifest.llm.wire_api: expected one of "
+                f"{', '.join(sorted(allowed_wire_api))}, got {wire_api!r}"
+            )
+        # The wire_api field is scoped to OpenAI-compatible wire semantics.
+        # Non-auto values are allowed only for the official OpenAI provider, or
+        # for a custom OpenAI-compatible endpoint (api_compat omitted/openai).
+        # Every other provider/compat is rejected — including Codex, which is
+        # forcibly on Responses and out of scope here — so misuse fails loudly.
+        # ``auto`` is harmless everywhere and is left through unchanged.
+        if wire_api != "auto":
+            provider = str(llm.get("provider", "")).lower()
+            api_compat = str(llm.get("api_compat", "openai")).lower() or "openai"
+            allowed_scope = provider == "openai" or (
+                provider == "custom" and api_compat == "openai"
+            )
+            if not allowed_scope:
+                raise ValueError(
+                    "manifest.llm.wire_api is scoped to OpenAI-compatible "
+                    "providers; it cannot be used with "
+                    f"provider={llm.get('provider')!r}"
+                    + (f" api_compat={llm.get('api_compat')!r}" if llm.get("api_compat") else "")
+                )
     if "thinking" in llm:
         if llm["provider"].lower() not in THINKING_PROVIDERS:
             raise ValueError(

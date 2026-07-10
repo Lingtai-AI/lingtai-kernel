@@ -41,9 +41,19 @@ def register_all_adapters() -> None:
         # from defaults -> let OpenAIAdapter's 100k constructor default stand;
         # explicit None -> disable Responses context_management.
         adapter_kw = {k: v for k, v in kw.items() if v is not None}
-        if defaults and "compact_threshold" in defaults:
+        d = defaults or {}
+        if "compact_threshold" in d:
             # Preserve explicit None after the general None-pruning pass above.
-            adapter_kw["compact_threshold"] = defaults["compact_threshold"]
+            adapter_kw["compact_threshold"] = d["compact_threshold"]
+        # Canonical ``wire_api`` and the legacy ``use_responses_api`` preference
+        # are independent and both may be present (as in the openai DEFAULTS).
+        # Pass each when present — do NOT ``elif`` them — so ``auto`` can delegate
+        # to the legacy flag while an explicit value wins over it inside
+        # ``_should_use_responses()``.
+        if "wire_api" in d:
+            adapter_kw["wire_api"] = d["wire_api"]
+        if "use_responses_api" in d:
+            adapter_kw["use_responses"] = d["use_responses_api"]
         return OpenAIAdapter(**adapter_kw)
 
     def _minimax(*, model=None, defaults=None, **kw):
@@ -59,8 +69,18 @@ def register_all_adapters() -> None:
     def _custom(*, model=None, defaults=None, **kw):
         from .custom.adapter import create_custom_adapter
         kw.pop("model", None)
-        compat = defaults.get("api_compat", "openai") if defaults else "openai"
-        return create_custom_adapter(api_compat=compat, **{k: v for k, v in kw.items() if v is not None})
+        d = defaults or {}
+        compat = d.get("api_compat", "openai")
+        adapter_kw = {k: v for k, v in kw.items() if v is not None}
+        # Canonical ``wire_api`` and the legacy ``use_responses_api`` preference
+        # are independent and both may be present. Pass each when present — do NOT
+        # ``elif`` them — so ``auto`` can delegate to the legacy flag while an
+        # explicit value wins over it inside ``_should_use_responses()``.
+        if "wire_api" in d:
+            adapter_kw["wire_api"] = d["wire_api"]
+        if "use_responses_api" in d:
+            adapter_kw["use_responses"] = d["use_responses_api"]
+        return create_custom_adapter(api_compat=compat, **adapter_kw)
 
     LLMService.register_adapter("gemini", _gemini)
     LLMService.register_adapter("anthropic", _anthropic)

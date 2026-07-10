@@ -30,8 +30,8 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `OpenAIAdapter`, `OpenAIChatSession` |
-| `adapter.py` | ~1880 | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
-| `defaults.py` | 7 | `DEFAULTS` dict: `api_compat="openai"`, `use_responses_api=True` |
+| `adapter.py` | ~4350 | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
+| `defaults.py` | 12 | `DEFAULTS` dict: `api_compat="openai"`, `use_responses_api=True`, `wire_api="auto"` |
 
 ### adapter.py class map
 
@@ -74,11 +74,15 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 
 ### Two session paths
 
-The adapter forks at `create_chat()` (line 1295):
-1. **Responses API** (`_create_responses_session`, line 1335) — when `use_responses=True` AND (`base_url` is None OR `force_responses=True`). Builds `OpenAIResponsesSession`.
-2. **Chat Completions** (`_create_completions_session`, line 1387) — fallback for compatible providers. Builds `self._session_class` (subclass-overridable).
+The adapter forks at `create_chat()` (`adapter.py:2044`) via `_should_use_responses()` (`adapter.py:2025`):
+1. **Responses API** (`_create_responses_session`, `adapter.py:2083`) — when canonical `wire_api="responses"`, or when `wire_api="auto"` and legacy `use_responses=True` AND (`base_url` is None OR `force_responses=True`). Builds `OpenAIResponsesSession`.
+2. **Chat Completions** (`_create_completions_session`, `adapter.py:2136`) — fallback for compatible providers and when `wire_api="chat_completions"`. Builds `self._session_class` (subclass-overridable).
 
-Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
+Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting. Canonical `wire_api` wins over legacy `use_responses`/`force_responses`; when `wire_api` is absent/`auto`, existing behavior is preserved.
+
+### One-shot generation (`OpenAIAdapter.generate`, `adapter.py:2204`)
+
+`generate()` follows the same wire selection as `create_chat()` via `_should_use_responses()`: Chat Completions by default/legacy, or Responses API when `wire_api="responses"` (or legacy `use_responses=True` without a custom base URL / with `force_responses=True`). This keeps service-level one-shot calls consistent with multi-turn sessions.
 
 ### Chat Completions session flow (`OpenAIChatSession.send`, line 438)
 

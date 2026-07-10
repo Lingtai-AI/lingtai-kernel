@@ -477,6 +477,33 @@ def test_expand_inherit_propagates_api_compat():
     assert caps["vision"]["base_url"] == "http://127.0.0.1:34891"
 
 
+def test_expand_inherit_propagates_wire_api():
+    # An OpenAI-compatible capability that explicitly selects the Responses or
+    # Chat Completions wire must keep that selection on the fallback — otherwise
+    # a custom base URL silently drops back to Chat Completions.
+    main_llm = {
+        "provider": "custom",
+        "api_compat": "openai",
+        "wire_api": "responses",
+        "model": "GLM-5.1",
+        "api_key_env": "CUSTOM_6_API_KEY",
+        "base_url": "https://openrouter.example/v1",
+    }
+    caps = {"vision": {"provider": "inherit"}}
+    expand_inherit(caps, main_llm)
+    assert caps["vision"]["wire_api"] == "responses"
+    assert caps["vision"]["api_compat"] == "openai"
+
+
+def test_expand_inherit_omits_wire_api_when_main_llm_unset():
+    # When the main LLM does not select a wire, the capability must not gain a
+    # fabricated ``wire_api=None`` entry that downstream code might misread.
+    main_llm = {"provider": "custom", "api_compat": "openai"}
+    caps = {"vision": {"provider": "inherit"}}
+    expand_inherit(caps, main_llm)
+    assert "wire_api" not in caps["vision"]
+
+
 # ---------------------------------------------------------------------------
 # resolve_preset_name
 # ---------------------------------------------------------------------------
