@@ -68,6 +68,35 @@ def _opt_str(value: object) -> str | None:
     return value
 
 
+def _safe_attachment_name(filename: str) -> str:
+    """Reduce a sender-controlled filename to a safe basename.
+
+    Attachment filenames come straight from the MIME headers of inbound
+    mail, so they can contain ``..`` traversal segments or be absolute
+    paths (a ``pathlib`` join with an absolute right-hand side discards
+    the left side entirely). Strip all directory components — normalizing
+    ``\\`` to ``/`` first so Windows-style separators cannot survive on
+    POSIX — and fall back to ``"attachment"`` for empty or degenerate
+    dot names.
+    """
+    name = Path(filename.replace("\\", "/")).name
+    if name in ("", ".", ".."):
+        return "attachment"
+    return name
+
+
+def _dedupe_name(name: str, seen: set[str]) -> str:
+    """Suffix ``name`` with ``' (1)'``, ``' (2)'``, ... before the extension
+    until it no longer collides with an entry in ``seen``."""
+    if name not in seen:
+        return name
+    stem, suffix = Path(name).stem, Path(name).suffix
+    counter = 1
+    while f"{stem} ({counter}){suffix}" in seen:
+        counter += 1
+    return f"{stem} ({counter}){suffix}"
+
+
 # ---------------------------------------------------------------------------
 # Tool schema
 # ---------------------------------------------------------------------------
@@ -543,14 +572,23 @@ class IMAPMailManager:
             )
             persist_dir.mkdir(parents=True, exist_ok=True)
 
-            # Save attachments to disk
+            # Save attachments to disk. Filenames are sender-controlled:
+            # sanitize to a basename (path traversal) and dedupe within the
+            # message so duplicate names do not silently overwrite each other.
+            # Re-reads overwrite the same files, keeping reads idempotent.
             attachments_raw = data.get("attachments_raw", [])
             saved_attachments: list[dict] = []
+            seen_names: set[str] = set()
             for att in attachments_raw:
-                att_path = persist_dir / att["filename"]
+                safe_name = _dedupe_name(
+                    _safe_attachment_name(att["filename"]), seen_names
+                )
+                seen_names.add(safe_name)
+                att_path = persist_dir / safe_name
                 att_path.write_bytes(att["data"])
                 saved_attachments.append({
-                    "filename": att["filename"],
+                    "filename": safe_name,
+                    "original_filename": att["filename"],
                     "content_type": att["content_type"],
                     "size": len(att["data"]),
                     "path": str(att_path),
