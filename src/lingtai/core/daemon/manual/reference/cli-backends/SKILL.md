@@ -4,9 +4,10 @@ description: >
   Nested daemon-manual reference for daemon API details and CLI backends:
   daemon(action=list), claude-p/codex/opencode behavior,
   backend_options flag passing, preset/capability inheritance, and nested
-  per-backend flag-discovery references (Codex, OpenCode, claude-p, MiMo Code).
-version: 1.8.0
-last_changed_at: "2026-07-09T19:56:24-07:00"
+  per-backend references (Codex, OpenCode, claude-p, and MiMo Code flag
+  discovery, built-in LingTai knowledge entrypoint).
+version: 1.9.0
+last_changed_at: "2026-07-09T20:06:40-07:00"
 ---
 
 # Daemon CLI Backend Reference
@@ -18,9 +19,12 @@ inspecting `daemon(action="list")`, or passing CLI flags through `backend_option
 
 `daemon-cli-backends` owns these nested references. They are parent-owned
 drill-down files, not standalone top-level skills. Backend-specific pages live
-under `reference/backends/<backend>/`; each is a small flag-discovery and
-translation guide that routes to the installed CLI's live help, never a
-maintained flag catalog. Only backends with proven demand get a page.
+under `reference/backends/<backend>/` — despite this router's historical
+`cli-backends` path, the built-in `lingtai` backend's page lives here too.
+Each page is a small knowledge entrypoint that routes to the current
+authority — a CLI backend's installed live help, or the built-in backend's
+live manuals/preset/contract sources — never a maintained flag or rules
+catalog. Only backends with proven demand get a page.
 
 ```yaml
 - name: daemon-backend-codex
@@ -56,6 +60,15 @@ maintained flag catalog. Only backends with proven demand get a page.
     needs MiMo-specific CLI flags (model selection, provider switches): it
     routes to the installed CLI's live help via bash (`mimo run --help`) and
     shows how to translate that help into generic `backend_options`.
+- name: daemon-backend-lingtai
+  location: reference/backends/lingtai/SKILL.md
+  description: |
+    Nested daemon-cli-backends reference for the built-in `lingtai` daemon
+    backend (the in-process ChatSession default). Read this when routing a
+    daemon task to the built-in backend: it has no external CLI and no
+    `backend_options` flag surface; the page routes to the live authorities
+    for preset selection/inspection, tools/skills/MCP inheritance, and the
+    daemon completion contract.
 ```
 
 ## Routing table
@@ -66,6 +79,7 @@ maintained flag catalog. Only backends with proven demand get a page.
 | OpenCode-specific flags for a daemon task: model selection (`--model provider/model`), reasoning variant (`--variant`), agent choice; discover the installed OpenCode CLI's flags and translate them into `backend_options` | `reference/backends/opencode/SKILL.md` |
 | Claude Code-specific flags for a `claude-p` / `claude-code` daemon task: model selection, `--fallback-model`, tool restrictions; reserved/harness-owned flag boundary, resume and auth-env behavior; discover the installed Claude CLI's flags and translate them into `backend_options` | `reference/backends/claude-p/SKILL.md` |
 | MiMo Code-specific flags for a daemon task (`mimocode` / `mimo`): model selection, provider switches; discover the installed `mimo` CLI's flags (`mimo run --help`) and translate them into `backend_options` | `reference/backends/mimocode/SKILL.md` |
+| Built-in `lingtai` backend knowledge for a daemon task: confirm it has no CLI/`backend_options` flag surface; find the live authorities for preset selection/inspection, tools/skills/MCP inheritance, and the completion contract | `reference/backends/lingtai/SKILL.md` |
 
 ## API note: `daemon(action="list")`
 
