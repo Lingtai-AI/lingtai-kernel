@@ -195,7 +195,7 @@ def test_concurrent_publish_atomicity(tmp_path: Path) -> None:
 def test_check_action_returns_empty_when_nothing_published(
     tmp_path: Path,
 ) -> None:
-    from lingtai_kernel.intrinsics.notification import handle
+    from tools.notification import handle
 
     @dataclass
     class _Stub:
@@ -218,7 +218,7 @@ def test_check_action_returns_empty_when_nothing_published(
 
 
 def test_check_action_returns_placeholder(tmp_path: Path) -> None:
-    from lingtai_kernel.intrinsics.notification import handle
+    from tools.notification import handle
 
     publish(tmp_path, "email", {"count": 5, "newest_received_at": "2026-05-05T00:00:00Z"})
     publish(tmp_path, "soul", {"voices": [{"source": "warmth", "voice": "..."}]})
@@ -245,7 +245,7 @@ def test_check_action_returns_placeholder(tmp_path: Path) -> None:
 
 def test_system_notification_action_is_removed(tmp_path: Path) -> None:
     """system(action="notification") is no longer a valid action."""
-    from lingtai_kernel.intrinsics.system import handle
+    from tools.system import handle
 
     @dataclass
     class _Stub:
@@ -285,7 +285,7 @@ class _ProducerStubAgent:
 def test_email_publish_writes_file(tmp_path: Path, monkeypatch) -> None:
     """When the email producer has unread mail, it writes
     `.notification/email.json` with full persistent email context."""
-    from lingtai_kernel.base_agent import messaging
+    from tools.email import _rerender_unread_digest
 
     agent = _ProducerStubAgent(_working_dir=tmp_path)
 
@@ -307,15 +307,15 @@ def test_email_publish_writes_file(tmp_path: Path, monkeypatch) -> None:
         }], ["email-1"])
 
     monkeypatch.setattr(
-        "lingtai_kernel.intrinsics.email.primitives._render_unread_digest",
+        "tools.email.primitives._render_unread_digest",
         fake_render,
     )
     monkeypatch.setattr(
-        "lingtai_kernel.intrinsics.email.primitives._unread_notification_context",
+        "tools.email.primitives._unread_notification_context",
         fake_context,
     )
 
-    result = messaging._rerender_unread_digest(agent)
+    result = _rerender_unread_digest(agent)
     assert result == "email"
 
     out = collect_notifications(tmp_path)
@@ -331,18 +331,18 @@ def test_email_publish_writes_file(tmp_path: Path, monkeypatch) -> None:
 
 def test_email_clear_on_zero(tmp_path: Path, monkeypatch) -> None:
     """When unread count drops to 0, the producer clears the file."""
-    from lingtai_kernel.base_agent import messaging
+    from tools.email import _rerender_unread_digest
 
     agent = _ProducerStubAgent(_working_dir=tmp_path)
     publish(tmp_path, "email", {"data": {"count": 5}})  # pre-existing
     assert (tmp_path / ".notification" / "email.json").exists()
 
     monkeypatch.setattr(
-        "lingtai_kernel.intrinsics.email.primitives._render_unread_digest",
+        "tools.email.primitives._render_unread_digest",
         lambda _agent, **_kw: ("", 0, None),
     )
 
-    result = messaging._rerender_unread_digest(agent)
+    result = _rerender_unread_digest(agent)
     assert result is None
     assert not (tmp_path / ".notification" / "email.json").exists()
 
@@ -412,7 +412,7 @@ def test_system_publish_concurrent_no_lost_writes(tmp_path: Path) -> None:
 
 def test_soul_voices_shape(tmp_path: Path) -> None:
     """The soul producer's voice-shaping helper trims empty fields."""
-    from lingtai_kernel.intrinsics.soul.flow import _shape_soul_voices
+    from tools.soul.flow import _shape_soul_voices
 
     voices = [
         {"source": "warmth", "voice": "remember to rest", "thinking": ["..."]},
@@ -430,7 +430,7 @@ def test_soul_voices_shape(tmp_path: Path) -> None:
 
 def test_human_soul_inquiry_publishes_btw_notification(tmp_path: Path) -> None:
     """Human `/btw` inquiry results are mirrored to the agent as notification."""
-    from lingtai_kernel.intrinsics.soul.inquiry import (
+    from tools.soul.inquiry import (
         _publish_human_inquiry_notification,
     )
 
@@ -466,7 +466,7 @@ def test_non_human_soul_inquiry_does_not_publish_btw_notification(
     monkeypatch,
 ) -> None:
     """Auto-insight / agent inquiries keep the existing log-only behavior."""
-    from lingtai_kernel.intrinsics.soul import inquiry
+    from tools.soul import inquiry
 
     agent = _ProducerStubAgent(_working_dir=tmp_path)
     monkeypatch.setattr(
@@ -525,7 +525,7 @@ def test_submit_priority_override(tmp_path: Path) -> None:
 def test_submit_via_system_alias(tmp_path: Path) -> None:
     """``intrinsics.system.publish_notification`` is the same callable
     as ``notifications.submit`` — producers can import either."""
-    from lingtai_kernel.intrinsics.system import (
+    from tools.system import (
         publish_notification, clear_notification,
     )
     from lingtai_kernel.notifications import submit, clear

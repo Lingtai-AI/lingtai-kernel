@@ -101,7 +101,6 @@ def _active_stuck_threshold_s() -> float:
 
 def _start(agent) -> None:
     """Start the agent's main loop thread."""
-    from ..intrinsics.soul.flow import _start_soul_timer, _rehydrate_appendix_tracking
     from ..token_ledger import sum_token_ledger
 
     agent._sealed = True
@@ -148,7 +147,7 @@ def _start(agent) -> None:
             ]
             agent.restore_chat({"messages": messages})
             agent._log("session_restored")
-            _rehydrate_appendix_tracking(agent)
+            agent._rehydrate_appendix_tracking()
         except Exception as e:
             from ..logging import get_logger
             get_logger().warning(f"[{agent.agent_name}] Failed to restore chat history: {e}")
@@ -241,7 +240,7 @@ def _start(agent) -> None:
     agent._thread.start()
     agent._heartbeat_runtime_ready = True
     # Boot state is IDLE (fire-eligible) — start the timer here.
-    _start_soul_timer(agent)
+    agent._start_soul_timer()
 
 
 def _reset_uptime(agent) -> None:
@@ -264,10 +263,8 @@ def _stop(agent, timeout: float = 5.0) -> None:
     keep this interpreter visible in `ps` after heartbeat/lock are gone, which
     makes refresh watchers race the duplicate-process guard.
     """
-    from ..intrinsics.soul.flow import _cancel_soul_timer
-
     agent._log("agent_stop")
-    _cancel_soul_timer(agent)
+    agent._cancel_soul_timer()
     agent._shutdown.set()
     if agent._thread:
         agent._thread.join(timeout=timeout)
@@ -366,7 +363,6 @@ def _heartbeat_loop(agent) -> None:
     don't reprocess `.suspend`/`.refresh` mid-teardown.
     """
     from ..state import AgentState
-    from ..intrinsics.soul.inquiry import _run_inquiry
 
     while agent._heartbeat_thread is not None:
         _write_heartbeat_tick(agent)
@@ -456,8 +452,9 @@ def _heartbeat_loop(agent) -> None:
             except OSError:
                 pass
             try:
-                from ..intrinsics import psyche as _psyche
-                _psyche.context_forget(agent, source=source)
+                context_forget = agent._intrinsic_hook("psyche", "context_forget")
+                if context_forget is not None:
+                    context_forget(agent, source=source)
                 agent._log("clear_received", source=source)
             except Exception as clear_err:
                 from ..logging import get_logger
@@ -487,7 +484,7 @@ def _heartbeat_loop(agent) -> None:
                     if question:
                         def _inquiry_done(q: str, s: str, tf) -> None:
                             try:
-                                _run_inquiry(agent, q, source=s)
+                                agent._run_inquiry(q, source=s)
                             finally:
                                 try:
                                     tf.unlink()

@@ -35,7 +35,7 @@ def test_emanate_default_uses_ceiling(tmp_path):
     mgr = agent.get_capability("daemon")
     captured, fake_submit = _stub_emanate_internals(mgr)
 
-    with patch("lingtai.core.daemon.ThreadPoolExecutor") as MockPool:
+    with patch("tools.daemon.ThreadPoolExecutor") as MockPool:
         pool = MockPool.return_value
         pool.submit.side_effect = fake_submit
         out = mgr.handle({"action": "emanate",
@@ -49,7 +49,7 @@ def test_emanate_default_uses_ceiling(tmp_path):
 
 
 def test_daemon_schema_advertises_1000_turn_ceiling():
-    from lingtai.core.daemon import get_schema
+    from tools.daemon import get_schema
 
     max_turns_schema = get_schema("en")["properties"]["max_turns"]
     assert max_turns_schema["minimum"] == 1
@@ -61,7 +61,7 @@ def test_emanate_respects_per_batch_max_turns(tmp_path):
     mgr = agent.get_capability("daemon")
     captured, fake_submit = _stub_emanate_internals(mgr)
 
-    with patch("lingtai.core.daemon.ThreadPoolExecutor") as MockPool:
+    with patch("tools.daemon.ThreadPoolExecutor") as MockPool:
         pool = MockPool.return_value
         pool.submit.side_effect = fake_submit
         out = mgr.handle({"action": "emanate", "max_turns": 50,
@@ -77,7 +77,7 @@ def test_emanate_caps_max_turns_at_ceiling(tmp_path):
     captured, fake_submit = _stub_emanate_internals(mgr)
 
     # ceiling is 1000; ask for 9999
-    with patch("lingtai.core.daemon.ThreadPoolExecutor") as MockPool:
+    with patch("tools.daemon.ThreadPoolExecutor") as MockPool:
         pool = MockPool.return_value
         pool.submit.side_effect = fake_submit
         out = mgr.handle({"action": "emanate", "max_turns": 9999,
@@ -93,7 +93,7 @@ def test_emanate_allows_new_1000_turn_ceiling(tmp_path):
     mgr = agent.get_capability("daemon")
     captured, fake_submit = _stub_emanate_internals(mgr)
 
-    with patch("lingtai.core.daemon.ThreadPoolExecutor") as MockPool:
+    with patch("tools.daemon.ThreadPoolExecutor") as MockPool:
         pool = MockPool.return_value
         pool.submit.side_effect = fake_submit
         out = mgr.handle({"action": "emanate", "max_turns": 1000,
@@ -133,8 +133,8 @@ def test_emanate_respects_per_batch_timeout(tmp_path):
         m.start = MagicMock()
         return m
 
-    with patch("lingtai.core.daemon.ThreadPoolExecutor") as MockPool, \
-         patch("lingtai.core.daemon.threading.Thread", side_effect=fake_thread_init), \
+    with patch("tools.daemon.ThreadPoolExecutor") as MockPool, \
+         patch("tools.daemon.threading.Thread", side_effect=fake_thread_init), \
          patch.object(mgr, "_connect_task_mcp_registrations",
                       return_value=({}, {}, [])):
         pool = MockPool.return_value
@@ -162,8 +162,8 @@ def test_emanate_caps_timeout_at_ceiling(tmp_path):
         m.start = MagicMock()
         return m
 
-    with patch("lingtai.core.daemon.ThreadPoolExecutor") as MockPool, \
-         patch("lingtai.core.daemon.threading.Thread", side_effect=fake_thread_init), \
+    with patch("tools.daemon.ThreadPoolExecutor") as MockPool, \
+         patch("tools.daemon.threading.Thread", side_effect=fake_thread_init), \
          patch.object(mgr, "_connect_task_mcp_registrations",
                       return_value=({}, {}, [])):
         pool = MockPool.return_value

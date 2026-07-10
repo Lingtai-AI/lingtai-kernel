@@ -19,13 +19,12 @@ import queue
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from ..config import AgentConfig
 from ..state import AgentState
 from ..workdir import WorkingDir
 from ..message import Message
-from ..intrinsics import ALL_INTRINSICS
 from ..prompt import SystemPromptManager
 from ..llm import (
     FunctionSchema,
@@ -280,6 +279,7 @@ class BaseAgent:
         *,
         agent_name: str | None = None,
         working_dir: str | Path,
+        intrinsics: "Mapping[str, Mapping[str, Any]] | None" = None,
         file_io: Any | None = None,
         mail_service: Any | None = None,
         config: AgentConfig | None = None,
@@ -468,6 +468,15 @@ class BaseAgent:
         self._tool_schemas: list[FunctionSchema] = []
 
         # --- Wire intrinsic tools ---
+        # Intrinsics are injected by the composing layer (``lingtai.Agent``
+        # passes ``tools.registry.INTRINSICS``). The kernel owns the tool
+        # machinery, not the concrete tools: a bare ``BaseAgent`` with no
+        # intrinsics is legal and intentional — it is pure machinery with an
+        # empty tool surface. ``_intrinsic_modules`` maps name → the intrinsic
+        # module (used by schema build / dispatch / boot / kernel hook lookup);
+        # ``_intrinsics`` maps name → the bound handler closure.
+        self._intrinsic_registry: Mapping[str, Mapping[str, Any]] = intrinsics or {}
+        self._intrinsic_modules: dict[str, Any] = {}
         self._intrinsics: dict[str, Callable[[dict], dict]] = {}
         self._wire_intrinsics()
 
@@ -665,23 +674,52 @@ class BaseAgent:
             tool_result_recovery_lookup_fn=self._recover_pending_tool_result,
         )
 
-        # Boot the psyche intrinsic
-        from ..intrinsics import psyche as _psyche
-        _psyche.boot(self)
-
-        # Boot the email intrinsic
-        from ..intrinsics import email as _email
-        _email.boot(self)
+        # Boot intrinsics that define an optional ``boot(agent)`` hook. Order
+        # follows the injected registry; the two intrinsics that historically
+        # booted (psyche, email) both define ``boot`` and run here without
+        # name special-casing. Absent-intrinsic = nothing to boot.
+        for name in self._intrinsics:
+            module = self._intrinsic_modules.get(name)
+            boot_fn = getattr(module, "boot", None) if module is not None else None
+            if boot_fn is not None:
+                boot_fn(self)
 
     # ------------------------------------------------------------------
     # Intrinsic wiring
     # ------------------------------------------------------------------
 
     def _wire_intrinsics(self) -> None:
-        """Wire kernel intrinsic tool handlers."""
-        for name, info in ALL_INTRINSICS.items():
-            handle_fn = info["module"].handle
+        """Wire injected intrinsic tool handlers onto the tool surface.
+
+        Iterates the registry injected at construction (``intrinsics=`` — the
+        composing layer passes ``tools.registry.INTRINSICS``). Each value has
+        the shape ``{"module": <module>}``. ``_intrinsic_modules`` keeps the
+        module for schema/description/boot/kernel-hook lookup; ``_intrinsics``
+        holds the bound handler closure the dispatcher calls.
+        """
+        for name, info in self._intrinsic_registry.items():
+            module = info["module"]
+            self._intrinsic_modules[name] = module
+            handle_fn = module.handle
             self._intrinsics[name] = lambda args, fn=handle_fn: fn(self, args)
+
+    def _intrinsic_hook(self, intrinsic: str, name: str):
+        """Resolve a kernel-facing hook function from an injected intrinsic.
+
+        The kernel used to reach into intrinsic modules by import (e.g.
+        ``from ..intrinsics.soul.flow import _start_soul_timer``). After the
+        tools consolidation the kernel cannot import ``tools``, so every such
+        touchpoint resolves through the injected registry instead: the
+        intrinsic package re-exports its kernel-facing functions from its
+        package ``__init__`` as its documented hook surface.
+
+        Returns the bound function, or ``None`` when the intrinsic is absent
+        (bare ``BaseAgent``) or does not export the hook — callers no-op.
+        """
+        module = self._intrinsic_modules.get(intrinsic)
+        if module is None:
+            return None
+        return getattr(module, name, None)
 
     # ------------------------------------------------------------------
     # Properties
@@ -790,7 +828,8 @@ class BaseAgent:
         cancels it.  The timer does NOT reschedule itself after firing —
         the next IDLE transition starts a fresh countdown.
         """
-        from ..intrinsics.soul.flow import _start_soul_timer, _cancel_soul_timer
+        _start_soul_timer = self._intrinsic_hook("soul", "_start_soul_timer")
+        _cancel_soul_timer = self._intrinsic_hook("soul", "_cancel_soul_timer")
 
         old = self._state
         if old == new_state:
@@ -802,13 +841,15 @@ class BaseAgent:
             self._idle.set()
 
         # Soul timer + hidden idle-timeout bookkeeping: IDLE-only.  Start on
-        # entering IDLE, cancel/clear on leaving.
+        # entering IDLE, cancel/clear on leaving. No-op when soul is absent.
         if new_state == AgentState.IDLE:
             self._idle_since_monotonic = time.monotonic()
-            _start_soul_timer(self)
+            if _start_soul_timer is not None:
+                _start_soul_timer(self)
         elif old == AgentState.IDLE:
             self._idle_since_monotonic = None
-            _cancel_soul_timer(self)
+            if _cancel_soul_timer is not None:
+                _cancel_soul_timer(self)
 
         # Issue #164 — watchdog bookkeeping. A state transition is itself
         # forward progress, so reset the no-progress clock. The
@@ -966,16 +1007,19 @@ class BaseAgent:
     # ------------------------------------------------------------------
 
     def _start_soul_timer(self) -> None:
-        from ..intrinsics.soul.flow import _start_soul_timer
-        _start_soul_timer(self)
+        fn = self._intrinsic_hook("soul", "_start_soul_timer")
+        if fn is not None:
+            fn(self)
 
     def _cancel_soul_timer(self) -> None:
-        from ..intrinsics.soul.flow import _cancel_soul_timer
-        _cancel_soul_timer(self)
+        fn = self._intrinsic_hook("soul", "_cancel_soul_timer")
+        if fn is not None:
+            fn(self)
 
     def _soul_whisper(self) -> None:
-        from ..intrinsics.soul.flow import _soul_whisper
-        _soul_whisper(self)
+        fn = self._intrinsic_hook("soul", "_soul_whisper")
+        if fn is not None:
+            fn(self)
 
     def _drain_tc_inbox(self) -> None:
         """Splice queued involuntary tool-call pairs at a safe boundary.
@@ -1752,28 +1796,35 @@ class BaseAgent:
             pass
 
     def _persist_soul_entry(self, result: dict, mode: str = "flow", source: str = "agent") -> None:
-        from ..intrinsics.soul.flow import _persist_soul_entry
-        _persist_soul_entry(self, result, mode=mode, source=source)
+        fn = self._intrinsic_hook("soul", "_persist_soul_entry")
+        if fn is not None:
+            fn(self, result, mode=mode, source=source)
 
     def _append_soul_flow_record(self, record: dict) -> None:
-        from ..intrinsics.soul.flow import _append_soul_flow_record
-        _append_soul_flow_record(self, record)
+        fn = self._intrinsic_hook("soul", "_append_soul_flow_record")
+        if fn is not None:
+            fn(self, record)
 
     def _run_inquiry(self, question: str, source: str = "agent") -> None:
-        from ..intrinsics.soul.inquiry import _run_inquiry
-        _run_inquiry(self, question, source=source)
+        fn = self._intrinsic_hook("soul", "_run_inquiry")
+        if fn is not None:
+            fn(self, question, source=source)
 
     def _flatten_v3_for_pair(self, voice: dict) -> dict:
-        from ..intrinsics.soul.flow import _flatten_v3_for_pair
-        return _flatten_v3_for_pair(self, voice)
+        fn = self._intrinsic_hook("soul", "_flatten_v3_for_pair")
+        if fn is None:
+            return voice
+        return fn(self, voice)
 
     def _run_consultation_fire(self) -> None:
-        from ..intrinsics.soul.flow import _run_consultation_fire
-        _run_consultation_fire(self)
+        fn = self._intrinsic_hook("soul", "_run_consultation_fire")
+        if fn is not None:
+            fn(self)
 
     def _rehydrate_appendix_tracking(self) -> None:
-        from ..intrinsics.soul.flow import _rehydrate_appendix_tracking
-        _rehydrate_appendix_tracking(self)
+        fn = self._intrinsic_hook("soul", "_rehydrate_appendix_tracking")
+        if fn is not None:
+            fn(self)
 
     # ------------------------------------------------------------------
     # Heartbeat (pass-throughs to lifecycle.py)

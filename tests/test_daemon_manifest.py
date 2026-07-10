@@ -12,7 +12,7 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from lingtai.core.daemon.run_dir import DaemonRunDir
+from tools.daemon.run_dir import DaemonRunDir
 
 
 def _make_run_dir(tmp_path: Path, **overrides) -> DaemonRunDir:

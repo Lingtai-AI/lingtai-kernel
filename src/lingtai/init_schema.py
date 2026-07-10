@@ -19,7 +19,7 @@ TOP_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     # catalog and decompressed into mcp_registry.jsonl by the `mcp`
     # capability on agent boot.
     "addons": list,
-    # mcp is the per-MCP activation map — see core/mcp/manual/SKILL.md.
+    # mcp is the per-MCP activation map — see tools/mcp/manual/SKILL.md.
     # Keys must match registered names; values are subprocess specs.
     "mcp": dict,
     # base_prompt is the third-party (application / recipe / preset) system-

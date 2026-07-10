@@ -1,4 +1,4 @@
-"""Tests for the client-side LICC writer (``lingtai.core.mcp.licc``).
+"""Tests for the client-side LICC writer (``lingtai.services.mcp_licc``).
 
 ``inbox.py`` is the kernel-side *consumer* of LICC v1 — it polls
 ``.mcp_inbox/<mcp>/*.json``, validates, dispatches, and deletes. This
@@ -29,8 +29,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.agent import Agent
-from lingtai.core.mcp import licc
-from lingtai.core.mcp.inbox import (
+from lingtai.services import mcp_licc as licc
+from lingtai.services.mcp_inbox import (
     EVENT_SUFFIX,
     INBOX_DIRNAME,
     LICC_VERSION,

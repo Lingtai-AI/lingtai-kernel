@@ -21,7 +21,7 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-from lingtai.core.daemon import DaemonManager, _classify_terminal_state
+from tools.daemon import DaemonManager, _classify_terminal_state
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +216,7 @@ def _make_agent(tmp_path):
 
 
 def _real_run_dir(agent, em_id, task="test task"):
-    from lingtai.core.daemon.run_dir import DaemonRunDir
+    from tools.daemon.run_dir import DaemonRunDir
     return DaemonRunDir(
         parent_working_dir=agent._working_dir,
         handle=em_id,

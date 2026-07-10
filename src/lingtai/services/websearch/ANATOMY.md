@@ -1,6 +1,6 @@
 ---
 related_files:
-  - src/lingtai/capabilities/web_search/ANATOMY.md
+  - src/tools/web_search/ANATOMY.md
   - src/lingtai/services/ANATOMY.md
   - src/lingtai/services/websearch/__init__.py
   - src/lingtai/services/websearch/anthropic.py

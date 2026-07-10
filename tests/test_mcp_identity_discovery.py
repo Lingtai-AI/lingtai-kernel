@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from lingtai.agent import Agent
-from lingtai.core.mcp import (
+from lingtai.services.mcp_registry import (
     IDENTITY_SAFE_ACCOUNT_KEYS,
     read_identities,
 )

@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 
 def test_daemon_shutdown_for_agent_stop_reclaims_pools_and_cli_processes(tmp_path, monkeypatch):
-    from lingtai.core import daemon as daemon_module
+    from tools import daemon as daemon_module
 
     agent = SimpleNamespace(
         service=SimpleNamespace(model="mock-model"),
@@ -73,7 +73,7 @@ def test_daemon_shutdown_for_agent_stop_reclaims_pools_and_cli_processes(tmp_pat
 
 def test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock(monkeypatch):
     from lingtai_kernel.base_agent import lifecycle
-    import lingtai_kernel.intrinsics.soul.flow as soul_flow
+    import tools.soul.flow as soul_flow
 
     order = []
 
@@ -99,6 +99,9 @@ def test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock(monkeypatch):
         _build_manifest=lambda: {"agent": "test"},
         get_capability=lambda name: FakeDaemon() if name == "daemon" else None,
     )
+    # _stop() now calls agent._cancel_soul_timer() (BaseAgent delegates to the
+    # soul flow hook); mirror that so the monkeypatched cancel still records.
+    agent._cancel_soul_timer = lambda: soul_flow._cancel_soul_timer(agent)
 
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda a: order.append(("soul", None)))
     monkeypatch.setattr(lifecycle, "_stop_heartbeat", lambda a: order.append(("heartbeat", None)))
@@ -112,7 +115,7 @@ def test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock(monkeypatch):
 
 
 def test_daemon_shutdown_waits_for_cli_ask_future_before_releasing_liveness(tmp_path, monkeypatch):
-    from lingtai.core import daemon as daemon_module
+    from tools import daemon as daemon_module
 
     agent = SimpleNamespace(
         service=SimpleNamespace(model="mock-model"),

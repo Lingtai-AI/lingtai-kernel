@@ -26,6 +26,22 @@ from ..handshake import is_agent, is_alive, manifest, resolve_address
 logger = logging.getLogger(__name__)
 
 
+def _new_mailbox_id() -> str:
+    """Build a sortable, human-scannable mailbox id.
+
+    Format: ``<YYYYMMDDTHHMMSS>-<4 hex>`` — 20 chars total.
+
+    This is the canonical generator for mailbox message ids. It lives in the
+    kernel mail service (the generic filesystem mailbox owner) so that
+    ``send()`` does not depend on the email tool; the email tool
+    (``tools/email/primitives.py``) imports it from here.
+    """
+    from datetime import datetime, timezone
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    return f"{ts}-{uuid.uuid4().hex[:4]}"
+
+
 class MailService(ABC):
     """Abstract message transport service.
 
@@ -162,7 +178,6 @@ class FilesystemMailService(MailService):
             return f"Agent at {address} is not running"
 
         # --- create inbox entry ---------------------------------------
-        from ..intrinsics.email import _new_mailbox_id
         msg_id = _new_mailbox_id()
         inbox_dir = recipient_dir / self._mailbox_rel / "inbox"
         msg_dir = inbox_dir / msg_id

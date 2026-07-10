@@ -17,25 +17,42 @@ from pathlib import Path
 
 _DIR = Path(__file__).parent
 _CACHE: dict[str, dict[str, str]] = {}
+# Languages whose on-disk kernel catalog has already been merged into _CACHE.
+# Tracked separately from _CACHE membership so that a language pre-populated by
+# ``register_strings`` (e.g. the tools string catalog registering on import,
+# before any kernel t() call) does NOT suppress the disk load of the kernel's
+# own machinery strings. Cache-presence is not "fully loaded"; disk-loaded is.
+_DISK_LOADED: set[str] = set()
 
 
 def _load(lang: str) -> dict[str, str]:
-    """Load and cache a language file. Returns empty dict if not found."""
-    if lang not in _CACHE:
+    """Load the kernel catalog for *lang* (once) and return the merged table.
+
+    The disk file is merged under any already-registered keys — registered
+    strings (translations/tool catalogs injected via ``register_strings``) win
+    over the kernel's on-disk defaults for the same key, matching the prior
+    "register overrides disk" semantics. Returns the (possibly empty) table.
+    """
+    table = _CACHE.setdefault(lang, {})
+    if lang not in _DISK_LOADED:
+        _DISK_LOADED.add(lang)
         path = _DIR / f"{lang}.json"
         if path.is_file():
-            _CACHE[lang] = json.loads(path.read_text(encoding="utf-8"))
-        else:
-            _CACHE[lang] = {}
-    return _CACHE[lang]
+            disk = json.loads(path.read_text(encoding="utf-8"))
+            # Registered keys take precedence: only fill in keys not already set.
+            for k, v in disk.items():
+                table.setdefault(k, v)
+    return table
 
 
 def register_strings(lang: str, strings: dict[str, str]) -> None:
     """Register (or extend) a language's string table.
 
-    Called by lingtai to inject non-English translations into the
-    kernel's cache so that kernel-level t() calls resolve correctly.
-    Merges into any existing entries for the language.
+    Called by the tools string catalog and by lingtai to inject strings (tool
+    catalogs, non-English translations) into the kernel's cache so that
+    kernel-level ``t()`` calls resolve them. Merges into any existing entries
+    for the language; registered strings override on-disk kernel defaults for
+    the same key.
     """
     table = _CACHE.setdefault(lang, {})
     table.update(strings)

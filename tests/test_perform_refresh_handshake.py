@@ -14,6 +14,7 @@ so the lock-release phase completes regardless of caller. These tests
 exercise that contract without spawning a real subprocess.
 """
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import json
 import subprocess
@@ -39,6 +40,7 @@ def _make_agent_with_launch_cmd(tmp_path, agent_name="alice", launch_cmd=None):
     wd = tmp_path / "test"
     wd.mkdir(exist_ok=True)
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(),
         agent_name=agent_name,
         working_dir=wd,
@@ -247,6 +249,7 @@ def test_perform_refresh_no_launch_cmd_skips_handshake(tmp_path):
     wd = tmp_path / "test"
     wd.mkdir(exist_ok=True)
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(),
         agent_name="alice",
         working_dir=wd,

@@ -1,5 +1,6 @@
 """Regression tests for app-level Agent prompt meta_guidance refresh."""
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 from types import SimpleNamespace
 
@@ -239,6 +240,7 @@ def test_base_agent_seeds_body_only_from_frontmatter_mirror(tmp_path):
     )
 
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(),
         agent_name="ba-test",
         working_dir=workdir,

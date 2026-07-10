@@ -5,7 +5,7 @@ import json
 import subprocess
 import sys
 
-from lingtai.capabilities import get_all_providers
+from tools.registry import get_all_providers
 
 
 def test_get_all_providers_returns_all_capabilities():

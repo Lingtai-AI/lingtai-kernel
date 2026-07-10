@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from lingtai_kernel.intrinsics.email.primitives import EMAIL_BODY_CHAR_LIMIT
+from tools.email.primitives import EMAIL_BODY_CHAR_LIMIT
 from uuid import uuid4
 
 from lingtai.agent import Agent
@@ -811,7 +811,7 @@ def test_email_archive_already_archived(tmp_path):
 
 def test_email_schedule_removed_from_schema(tmp_path):
     """The built-in recurring-send scheduler was removed in favor of host cron."""
-    from lingtai_kernel.intrinsics.email import get_schema
+    from tools.email import get_schema
     schema = get_schema("en")
     assert "schedule" not in schema["properties"]
 
@@ -828,7 +828,7 @@ def test_email_schedule_payload_is_not_routed(tmp_path):
 # _coerce_address_list — normalize LLM-quirky address args to list[str]
 # ---------------------------------------------------------------------------
 
-from lingtai_kernel.intrinsics.email import _coerce_address_list
+from tools.email import _coerce_address_list
 
 
 def test_coerce_address_list_empty_string():
@@ -995,7 +995,7 @@ def test_email_dismiss_rerenders_notification(tmp_path):
     eid_a = _make_inbox_email(agent.working_dir, message="a")
     eid_b = _make_inbox_email(agent.working_dir, message="b")
 
-    from lingtai_kernel.base_agent.messaging import _rerender_unread_digest
+    from tools.email import _rerender_unread_digest
     _rerender_unread_digest(agent)
 
     notif_path = agent.working_dir / ".notification" / "email.json"
@@ -1018,7 +1018,7 @@ def test_email_dismiss_carries_instructions_in_envelope(tmp_path):
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     _make_inbox_email(agent.working_dir, message="m")
 
-    from lingtai_kernel.base_agent.messaging import _rerender_unread_digest
+    from tools.email import _rerender_unread_digest
     _rerender_unread_digest(agent)
 
     payload = json.loads((agent.working_dir / ".notification" / "email.json").read_text())
@@ -1040,7 +1040,7 @@ def test_email_read_rerenders_notification(tmp_path):
     mgr = agent._email_manager
     eid = _make_inbox_email(agent.working_dir, message="m")
 
-    from lingtai_kernel.base_agent.messaging import _rerender_unread_digest
+    from tools.email import _rerender_unread_digest
     _rerender_unread_digest(agent)
 
     notif_path = agent.working_dir / ".notification" / "email.json"
@@ -1055,7 +1055,7 @@ def test_email_archive_rerenders_notification(tmp_path):
     mgr = agent._email_manager
     eid = _make_inbox_email(agent.working_dir, message="m")
 
-    from lingtai_kernel.base_agent.messaging import _rerender_unread_digest
+    from tools.email import _rerender_unread_digest
     _rerender_unread_digest(agent)
 
     notif_path = agent.working_dir / ".notification" / "email.json"

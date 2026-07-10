@@ -923,7 +923,7 @@ def test_request_history_rebuild_records_manual_reconstruction_event(monkeypatch
 def _add_pending_marker(iface, tool_call_id, *, original=4000, summary=10):
     """Append a status: pending summarize marker to a session interface."""
     from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
-    from lingtai_kernel.intrinsics.system.summarize import (
+    from tools.system.summarize import (
         SUMMARIZE_MARKER,
         SUMMARY_STATUS_PENDING,
     )

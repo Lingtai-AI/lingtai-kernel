@@ -196,7 +196,7 @@ def _publish_tool_loop_guard_notification(
     workdir = getattr(agent, "_working_dir", None)
     try:
         from pathlib import Path
-        from ..intrinsics.system import publish_notification
+        from ..notifications import submit as publish_notification
 
         publish_notification(
             Path(workdir),
@@ -540,13 +540,12 @@ def _close_pending_tool_calls_after_poll_backoff(
 def _run_loop(agent) -> None:
     """Wait for messages, process them. Agent persists between messages."""
     from ..state import AgentState
-    from ..intrinsics.soul.flow import _cancel_soul_timer
 
     while True:
         while not agent._shutdown.is_set():
             # --- Asleep: soul off, wait for inbox message ---
             if agent._asleep.is_set():
-                _cancel_soul_timer(agent)
+                agent._cancel_soul_timer()
                 # Heal any dangling tool_calls on the wire BEFORE going to
                 # sleep. If we sleep with an unanswered tool_call, the next
                 # mail's _inject_notification_pair refuses to append (would
@@ -845,9 +844,7 @@ def _run_loop(agent) -> None:
                 if agent._insight_turn_counter >= agent._config.insights_interval:
                     agent._insight_turn_counter = 0
                     from ..i18n import t as _ti
-                    from ..intrinsics.soul.inquiry import _run_inquiry
-                    _run_inquiry(
-                        agent,
+                    agent._run_inquiry(
                         _ti(agent._config.language, "insight.auto_question"),
                         source="auto",
                     )
@@ -927,7 +924,7 @@ def _check_molt_pressure(agent) -> None:
     """
     if "psyche" not in agent._intrinsics:
         return
-    from ..intrinsics.system import clear_notification
+    from ..notifications import clear as clear_notification
 
     clear_notification(agent._working_dir, "molt")
 

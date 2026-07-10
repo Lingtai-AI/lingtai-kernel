@@ -5,6 +5,7 @@ Note: ``init_git()`` only fires when snapshots are enabled
 agent with a snapshot interval set so the git path is exercised.
 """
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import subprocess
 from unittest.mock import MagicMock
@@ -25,7 +26,7 @@ def _git_enabled_config() -> AgentConfig:
 
 def test_start_creates_git_repo(tmp_path):
     """agent.start() should git init the working directory."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test",
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test",
                        working_dir=tmp_path / "test",
                        config=_git_enabled_config())
     agent.start()
@@ -38,7 +39,7 @@ def test_start_creates_git_repo(tmp_path):
 
 def test_start_creates_gitignore(tmp_path):
     """agent.start() should create a .gitignore protecting local secrets."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test",
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test",
                        working_dir=tmp_path / "test",
                        config=_git_enabled_config())
     agent.start()
@@ -62,7 +63,7 @@ def test_start_creates_gitignore(tmp_path):
 
 def test_start_creates_system_dir(tmp_path):
     """agent.start() should create system/ directory with covenant.md and pad.md."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test",
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test",
                        working_dir=tmp_path / "test",
                        config=_git_enabled_config())
     agent.start()
@@ -77,7 +78,7 @@ def test_start_creates_system_dir(tmp_path):
 
 def test_start_makes_initial_commit(tmp_path):
     """agent.start() should make an initial git commit."""
-    agent = BaseAgent(service=make_mock_service(), agent_name="test",
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test",
                        working_dir=tmp_path / "test",
                        config=_git_enabled_config())
     agent.start()
@@ -101,7 +102,7 @@ def test_start_skips_git_init_if_git_exists(tmp_path):
     multiple starts. (Periodic Time Machine snapshots may add other
     commits; those are unrelated to the init-git skip semantics.)
     """
-    agent = BaseAgent(service=make_mock_service(), agent_name="test",
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test",
                        working_dir=tmp_path / "test",
                        config=_git_enabled_config())
     agent.start()

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 # The validator lives outside the package tree; import it directly.
-_SCRIPTS = Path(__file__).resolve().parents[1] / "src" / "lingtai" / "core" / "skills" / "manual" / "scripts"
+_SCRIPTS = Path(__file__).resolve().parents[1] / "src" / "tools" / "skills" / "manual" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 from validate import _parse_frontmatter, validate_frontmatter  # noqa: E402
 

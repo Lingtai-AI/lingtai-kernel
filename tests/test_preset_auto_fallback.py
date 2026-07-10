@@ -1,5 +1,6 @@
 """Tests for auto-fallback to default preset on AED exhaustion."""
 import json
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -35,7 +36,7 @@ def _make_test_agent(tmp_path):
         "soul": "",
     }
     (wd / "init.json").write_text(json.dumps(init))
-    return BaseAgent(service=svc, agent_name="alice", working_dir=wd)
+    return BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="alice", working_dir=wd)
 
 
 def test_can_fallback_preset_true_when_active_differs_from_default(tmp_path):
@@ -73,7 +74,7 @@ def test_can_fallback_preset_false_when_no_preset_block(tmp_path):
         "principle": "p", "covenant": "c", "pad": "", "lingtai": "", "soul": "",
     }
     (wd / "init.json").write_text(json.dumps(init))
-    agent = BaseAgent(service=svc, agent_name="alice", working_dir=wd)
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="alice", working_dir=wd)
     assert agent._can_fallback_preset() is False
 
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import json
 from pathlib import Path
@@ -70,6 +71,7 @@ def test_bare_agent_config_and_base_agent_defaults(tmp_path):
     assert cfg.molt_pressure == MOLT_PRESSURE_THRESHOLD
 
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=_service(),
         agent_name="bare-agent",
         working_dir=tmp_path / "bare-agent",
@@ -88,6 +90,7 @@ def test_bare_agent_config_and_base_agent_defaults(tmp_path):
 
 def test_hidden_idle_timeout_moves_idle_agent_to_asleep(tmp_path, monkeypatch):
     agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
         service=_service(),
         agent_name="idle-timeout-agent",
         working_dir=tmp_path / "idle-timeout-agent",

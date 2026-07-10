@@ -108,7 +108,7 @@ def test_lingtai_owned_skill_frontmatter_has_last_changed_at():
 
 def test_skills_validator_can_require_last_changed_at(tmp_path):
     root = Path(__file__).resolve().parents[1]
-    validator_path = root / "src" / "lingtai" / "core" / "skills" / "manual" / "scripts" / "validate.py"
+    validator_path = root / "src" / "tools" / "skills" / "manual" / "scripts" / "validate.py"
     spec = importlib.util.spec_from_file_location("skill_validate", validator_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -744,7 +744,7 @@ def test_custom_skills_appear_in_catalog(tmp_path):
 
 
 
-# NOTE: `knowledge` and `skills` are now default-on (the `lingtai.core.*` floor
+# NOTE: `knowledge` and `skills` are now default-on (the always-on tool floor
 # boots on every Agent). The tests below preserve the breaking-rename guarantee
 # at its remaining surface: legacy `library` / `codex` capability NAMES must not
 # themselves produce tool handlers. Whether `knowledge`/`skills` are present is
@@ -880,7 +880,7 @@ def test_resident_prompts_route_to_system_manual_nested_references():
 def test_skills_manual_documents_external_skill_intake_default():
     manual = (
         Path(__file__).resolve().parents[1]
-        / "src/lingtai/core/skills/manual/SKILL.md"
+        / "src/tools/skills/manual/SKILL.md"
     ).read_text(encoding="utf-8")
     required = [
         "## External skill intake (default flow)",

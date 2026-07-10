@@ -1,4 +1,4 @@
-"""Tests for lingtai_kernel.intrinsics.soul.
+"""Tests for tools.soul.
 
 After the past-self-consultation refactor, this file covers only:
 - The agent-callable surface (``handle``): inquiry action, flow rejection,
@@ -14,6 +14,7 @@ it are gone with it. The new mechanism is covered in
 ``tests/test_soul_consultation.py``.
 """
 from __future__ import annotations
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import threading
 import time
@@ -22,7 +23,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai_kernel.config import AgentConfig
-from lingtai_kernel.intrinsics import soul
+from tools import soul
 
 
 def _make_mock_agent():
@@ -112,7 +113,7 @@ class TestSoulHandle:
             fire_called.set()
 
         monkeypatch.setattr(
-            "lingtai_kernel.intrinsics.soul.flow._run_consultation_fire",
+            "tools.soul.flow._run_consultation_fire",
             tracking_fire,
         )
 
@@ -141,7 +142,7 @@ class TestSoulHandle:
             fire_called.set()
 
         monkeypatch.setattr(
-            "lingtai_kernel.intrinsics.soul.flow._run_consultation_fire",
+            "tools.soul.flow._run_consultation_fire",
             tracking_fire,
         )
 
@@ -222,6 +223,7 @@ class TestSoulTimer:
         """BaseAgent with default config has soul_delay=999999999."""
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -237,6 +239,7 @@ class TestSoulTimer:
         """
         from lingtai_kernel import AgentState, BaseAgent
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -260,6 +263,7 @@ class TestSoulTimer:
         """_start_soul_timer is a no-op when _shutdown is set."""
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -273,6 +277,7 @@ class TestSoulTimer:
         """soul_delay in config sets initial _soul_delay."""
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
             agent_name="test",
             config=AgentConfig(soul_delay=60.0),
@@ -284,6 +289,7 @@ class TestSoulTimer:
         """soul_delay below 1 is clamped to 1."""
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
             agent_name="test",
             config=AgentConfig(soul_delay=-10.0),
@@ -294,6 +300,7 @@ class TestSoulTimer:
     def test_stop_cancels_soul_timer(self, tmp_path):
         from lingtai_kernel import BaseAgent
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -309,14 +316,14 @@ class TestSoulFireAllowed:
     """_soul_fire_allowed compares by string value, not enum identity."""
 
     def test_allows_idle_state(self):
-        from lingtai_kernel.intrinsics.soul.flow import _soul_fire_allowed
+        from tools.soul.flow import _soul_fire_allowed
         from lingtai_kernel.state import AgentState
         agent = MagicMock()
         agent._state = AgentState.IDLE
         assert _soul_fire_allowed(agent) is True
 
     def test_rejects_active_state(self):
-        from lingtai_kernel.intrinsics.soul.flow import _soul_fire_allowed
+        from tools.soul.flow import _soul_fire_allowed
         from lingtai_kernel.state import AgentState
         agent = MagicMock()
         agent._state = AgentState.ACTIVE
@@ -326,7 +333,7 @@ class TestSoulFireAllowed:
         """Simulates stale-enum mismatch: a different Enum class whose
         .value is 'idle' should still be accepted."""
         import enum
-        from lingtai_kernel.intrinsics.soul.flow import _soul_fire_allowed
+        from tools.soul.flow import _soul_fire_allowed
 
         class ForeignState(enum.Enum):
             IDLE = "idle"
@@ -337,7 +344,7 @@ class TestSoulFireAllowed:
 
     def test_rejects_foreign_enum_with_active_value(self):
         import enum
-        from lingtai_kernel.intrinsics.soul.flow import _soul_fire_allowed
+        from tools.soul.flow import _soul_fire_allowed
 
         class ForeignState(enum.Enum):
             ACTIVE = "active"
@@ -356,18 +363,18 @@ class TestSoulFlowEnvParsing:
     """_soul_flow_enabled parses the env var truthy/falsey, default off."""
 
     def test_unset_is_disabled(self, monkeypatch):
-        from lingtai_kernel.intrinsics.soul.flow import _soul_flow_enabled
+        from tools.soul.flow import _soul_flow_enabled
         monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
         assert _soul_flow_enabled() is False
 
     def test_truthy_values_enable(self, monkeypatch):
-        from lingtai_kernel.intrinsics.soul.flow import _soul_flow_enabled
+        from tools.soul.flow import _soul_flow_enabled
         for val in ("1", "true", "TRUE", "Yes", "on", " on ", "ON"):
             monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", val)
             assert _soul_flow_enabled() is True, f"{val!r} should enable"
 
     def test_falsey_values_disable(self, monkeypatch):
-        from lingtai_kernel.intrinsics.soul.flow import _soul_flow_enabled
+        from tools.soul.flow import _soul_flow_enabled
         for val in ("0", "", "false", "no", "off", "disabled", "2", "  "):
             monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", val)
             assert _soul_flow_enabled() is False, f"{val!r} should disable"
@@ -380,6 +387,7 @@ class TestSoulTimerOptIn:
         from lingtai_kernel import BaseAgent
         monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -392,6 +400,7 @@ class TestSoulTimerOptIn:
         from lingtai_kernel import BaseAgent
         monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -409,6 +418,7 @@ class TestSoulTimerOptIn:
         from lingtai_kernel import AgentState, BaseAgent
         monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -427,7 +437,7 @@ class TestVoluntaryFlowOptIn:
         """Disabled voluntary flow returns a stable disabled payload and
         does NOT spawn the fire thread or touch the lock."""
         import threading as _threading
-        from lingtai_kernel.intrinsics.soul.flow import SOUL_FLOW_ENABLED_ENV
+        from tools.soul.flow import SOUL_FLOW_ENABLED_ENV
         monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
         agent = _make_mock_agent()
         # A live lock — the gate must return BEFORE any lock interaction.
@@ -464,7 +474,7 @@ class TestConsultationFireOptIn:
     """_run_consultation_fire defensively no-ops when disabled."""
 
     def test_fire_noops_when_disabled(self, monkeypatch):
-        from lingtai_kernel.intrinsics.soul import flow
+        from tools.soul import flow
         from lingtai_kernel.state import AgentState
         monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
 
@@ -475,7 +485,7 @@ class TestConsultationFireOptIn:
 
         publish = MagicMock()
         monkeypatch.setattr(
-            "lingtai_kernel.intrinsics.system.publish_notification",
+            "tools.system.publish_notification",
             publish,
             raising=False,
         )
@@ -491,7 +501,7 @@ class TestConsultationFireOptIn:
     def test_fire_runs_when_enabled(self, monkeypatch):
         """Sanity: with env enabled the fire proceeds past the env gate to
         the existing state/lock gates (reaches soul_fire_gate_check)."""
-        from lingtai_kernel.intrinsics.soul import flow
+        from tools.soul import flow
         from lingtai_kernel.state import AgentState
         monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
 
@@ -524,9 +534,10 @@ class TestNonFlowActionsUnaffectedByOptIn:
     def test_config_works_when_flow_disabled_and_notes_state(self, tmp_path, monkeypatch):
         """config succeeds when flow is disabled and appends a disabled note."""
         from lingtai_kernel import BaseAgent
-        from lingtai_kernel.intrinsics.soul.flow import SOUL_FLOW_ENABLED_ENV
+        from tools.soul.flow import SOUL_FLOW_ENABLED_ENV
         monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -547,6 +558,7 @@ class TestNonFlowActionsUnaffectedByOptIn:
         from lingtai_kernel import BaseAgent
         monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
         agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
@@ -568,7 +580,7 @@ def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
     transitions the agent to STUCK mid-flight — the post-batch state
     check must discard the result.
     """
-    from lingtai_kernel.intrinsics.soul import flow
+    from tools.soul import flow
     from lingtai_kernel.llm.interface import TextBlock
     from lingtai_kernel.state import AgentState
 
@@ -592,15 +604,15 @@ def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
         return [{"source": "insights", "blocks": [TextBlock(text="late")]}]
 
     monkeypatch.setattr(
-        "lingtai_kernel.intrinsics.soul.consultation._render_current_diary",
+        "tools.soul.consultation._render_current_diary",
         lambda _agent: "diary",
     )
     monkeypatch.setattr(
-        "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
+        "tools.soul.consultation._run_consultation_batch",
         fake_batch,
     )
     monkeypatch.setattr(
-        "lingtai_kernel.intrinsics.soul.consultation.build_consultation_pair",
+        "tools.soul.consultation.build_consultation_pair",
         MagicMock(),
     )
 

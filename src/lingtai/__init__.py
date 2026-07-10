@@ -11,12 +11,12 @@ from .agent import Agent
 from lingtai_kernel.state import AgentState
 from lingtai_kernel.message import Message, MSG_REQUEST, MSG_USER_INPUT
 
-# Capabilities
-from .capabilities import setup_capability
-from .core.bash import BashManager
-from .core.avatar import AvatarManager
-# EmailManager is now exported by the kernel intrinsic; re-export for backwards compat.
-from lingtai_kernel.intrinsics.email import EmailManager
+# Tools — public manager re-exports (stable names; sources re-pointed to the
+# consolidated ``tools`` package, no compatibility shims for old deep paths).
+from tools.registry import setup_capability
+from tools.bash import BashManager
+from tools.avatar import AvatarManager
+from tools.email import EmailManager
 
 # Services
 from .services.file_io import FileIOBackend, FileIOService, GrepMatch, LocalFileIOBackend, LocalFileIOService

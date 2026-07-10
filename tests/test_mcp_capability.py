@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.agent import Agent
-from lingtai.core.mcp import (
+from lingtai.services.mcp_registry import (
     REGISTRY_FILENAME,
     decompress_addons,
     read_registry,

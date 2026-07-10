@@ -55,7 +55,7 @@ def _drive_print_runner(mgr, run_dir, final_text, monkeypatch):
         returncode=0,
         pid=4321,
     )
-    import lingtai.core.daemon as daemon_mod
+    import tools.daemon as daemon_mod
 
     monkeypatch.setattr(
         daemon_mod.subprocess, "Popen", lambda *a, **k: fake,

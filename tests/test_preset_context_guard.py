@@ -4,6 +4,7 @@ When swapping to a preset with a smaller context_limit than the agent's
 current context usage, the swap must be refused with a clear error
 message asking the agent to molt first."""
 import json
+from tools.registry import INTRINSICS as _TEST_INTRINSICS
 from pathlib import Path
 
 import pytest
@@ -82,7 +83,7 @@ def _make_test_agent(tmp_path):
     _build_lib(plib)
     wd = tmp_path / "test"
     _build_workdir(wd, plib, active=str(plib / "big.json"))
-    agent = BaseAgent(service=svc, agent_name="test", working_dir=wd)
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=wd)
     return agent, plib
 
 
