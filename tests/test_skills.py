@@ -253,6 +253,9 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert "name: nokv-workbench" in nokv_body
         assert "workbench_find" in nokv_body
         assert "workbench_commit" in nokv_body
+        assert "version: 0.4.0" in nokv_body
+        assert "workbench_restore" in nokv_body
+        assert "restore-to-fork" in nokv_body
         assert "metadata/run_manifest.json" in nokv_body
         assert (
             nokv_md.parent / "assets" / "mcp_registry.example.jsonl"
