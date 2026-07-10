@@ -5,13 +5,17 @@ Proves the optimized rebuild (Tier 1, indexed ``log.sqlite`` query) avoids a
 full ``events.jsonl`` scan (Tier 3) and is dramatically faster on a large,
 many-molt trajectory. Also times Tier 2 (bounded reverse scan) for reference.
 
+Run from the kernel repo root (cwd). This script ships with the
+``lingtai-kernel-anatomy`` intrinsic skill, so its in-tree path is
+``src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/bench_agent_session_rebuild.py``.
+
 Usage:
 
     # Synthetic source (default): N total events, a molt boundary every K events.
-    python scripts/bench_agent_session_rebuild.py --events 200000 --molt-every 4000
+    python src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/bench_agent_session_rebuild.py --events 200000 --molt-every 4000
 
     # Against a real agent dir (uses its existing logs/events.jsonl + log.sqlite):
-    python scripts/bench_agent_session_rebuild.py --agent-dir /path/to/agent
+    python src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/bench_agent_session_rebuild.py --agent-dir /path/to/agent
 
 The synthetic generator writes a temp agent dir with ``logs/events.jsonl`` and a
 matching ``logs/log.sqlite`` built via the kernel's own SQLiteEventIndex, so the
@@ -30,9 +34,21 @@ import tempfile
 import time
 from pathlib import Path
 
-# Ensure the in-tree kernel is importable when run from the repo root.
-_REPO_SRC = Path(__file__).resolve().parents[1] / "src"
-if _REPO_SRC.is_dir():
+# Locate the in-tree kernel ``src`` without hard-coding a path: prefer a
+# kernel-repo cwd, then search this script's ancestors. If neither is found
+# (e.g. a normally installed/importable kernel), leave sys.path alone so the
+# packaged import still resolves.
+def _find_repo_src() -> Path | None:
+    if (Path.cwd() / "src" / "lingtai_kernel").is_dir():
+        return Path.cwd() / "src"
+    for ancestor in Path(__file__).resolve().parents:
+        if (ancestor / "src" / "lingtai_kernel").is_dir():
+            return ancestor / "src"
+    return None
+
+
+_REPO_SRC = _find_repo_src()
+if _REPO_SRC is not None:
     sys.path.insert(0, str(_REPO_SRC))
 
 from lingtai_kernel.agent_session import (  # noqa: E402

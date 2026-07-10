@@ -287,8 +287,9 @@ class Agent(BaseAgent):
             """Install standalone skill bundles (no companion code, no manual/ wrapper).
 
             Each ``<pkg>/<entry>/`` directory IS the skill — copied verbatim into
-            ``intrinsic/<subdir>/<entry>/``. Used for documentation-only skills
-            like ``lingtai-kernel-anatomy`` that don't belong to any single tool.
+            ``intrinsic/<subdir>/<entry>/`` (manuals plus any sidecar scripts/assets,
+            e.g. the ``lingtai-kernel-anatomy`` checker and benchmark). Used for
+            skills that don't belong to any single tool.
             """
             pkg_file = getattr(pkg, "__file__", None)
             if not pkg_file:
