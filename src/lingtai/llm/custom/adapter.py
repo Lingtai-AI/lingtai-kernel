@@ -72,4 +72,5 @@ def create_custom_adapter(
             oa_kwargs["use_responses"] = use_responses
         if force_responses is not None:
             oa_kwargs["force_responses"] = force_responses
+        oa_kwargs["responses_stateless_replay"] = True
         return OpenAIAdapter(api_key=api_key, base_url=base_url, **oa_kwargs)
