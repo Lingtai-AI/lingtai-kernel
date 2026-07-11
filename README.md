@@ -50,9 +50,16 @@ uv pip install -e . pytest
 
 ## Architecture / developer entry points
 
+Before changing anything, a coding agent first finds and reads this
+repository’s local dev guide skill; it owns the workflow and routes each task
+onward through the linked entry points below without duplicating the Anatomy or
+Contract systems.
+
 | Entry point | What it covers |
 |---|---|
+| [`dev-guide-skill/SKILL.md`](dev-guide-skill/SKILL.md) | The mandatory repository-local dev guide skill: the development workflow a coding agent must follow before editing. |
 | [`ANATOMY.md`](ANATOMY.md) | Repository map — top-level layout and where each subsystem's anatomy begins. |
+| [`CONTRACT.md`](CONTRACT.md) | The distributed interface-and-behavior contract — what interfaces and expected agent behavior promise. |
 | [`src/lingtai/kernel/ANATOMY.md`](src/lingtai/kernel/ANATOMY.md) | The core runtime: `BaseAgent`, turn/lifecycle, tool machinery, mail, LLM protocol. |
 | [`src/lingtai/ANATOMY.md`](src/lingtai/ANATOMY.md) | The `lingtai` package: `Agent(BaseAgent)`, capabilities, presets, CLI, public re-exports. |
 | [`src/lingtai/tools/ANATOMY.md`](src/lingtai/tools/ANATOMY.md) | The concrete built-in tools and the registry that composes them. |

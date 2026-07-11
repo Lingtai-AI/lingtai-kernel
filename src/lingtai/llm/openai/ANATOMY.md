@@ -38,10 +38,10 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | Class | Lines | Role |
 |-------|-------|------|
 | `OpenAIChatSession` | `adapter.py:1210` | Chat Completions session with context overflow auto-recovery; sends optional `prompt_cache_key` |
-| `OpenAIResponsesSession` | `adapter.py:1725` | Responses API session. Official OpenAI mode is server-stateful via `previous_response_id`; custom/OpenAI-compatible mode can be internally stateless (`stateless_replay=True`) and replays full canonical history via `to_responses_input` while recording assistant turns and exposing no resume id (`adapter.py:1749-1751`, `adapter.py:1858-1863`, `adapter.py:1894-1908`, `adapter.py:2005-2016`). |
-| `OpenAIAdapter` | `adapter.py:2039` | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key`; carries the internal `_responses_stateless_replay` constructor mode into Responses sessions (`adapter.py:2062`, `adapter.py:2096-2097`, `adapter.py:2234-2246`). |
-| `CodexResponsesSession` | `adapter.py:2462` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include/replay, encrypted-reasoning self-heal, cache-affinity headers, honest client/account identity, and honest Codex metadata envelope. |
-| `CodexOpenAIAdapter` | `adapter.py:4159` | Codex provider specialization: forces Responses mode, derives stable per-agent cache/session ids plus a LingTai installation id from the configured anchor, and wires account/metadata hints into Codex sessions. Maps an omitted/`default` thinking level to an explicit `reasoning.effort = "xhigh"` in its `_create_responses_session` (Codex-only default — omitting the field would fall back to the backend's lower default; explicit levels pass through unchanged, and the generic `OpenAIAdapter` keeps omit-on-default). `codex-pool` reuses this adapter, so it inherits the same default. |
+| `OpenAIResponsesSession` | `adapter.py:1725` | Responses API session. Official OpenAI mode is server-stateful via `previous_response_id`; custom/OpenAI-compatible mode can be internally stateless (`stateless_replay=True`) and replays full canonical history via `to_responses_input` while recording assistant turns and exposing no resume id (`adapter.py:1749-1750`, `adapter.py:1881-1886`, `adapter.py:1917-1918`, `adapter.py:1928-1929`, `adapter.py:2028-2039`). |
+| `OpenAIAdapter` | `adapter.py:2062` | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key`; carries the internal `_responses_stateless_replay` constructor mode into Responses sessions (`adapter.py:2085`, `adapter.py:2120`, `adapter.py:2257-2270`). |
+| `CodexResponsesSession` | `adapter.py:2485` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include/replay, encrypted-reasoning self-heal, cache-affinity headers, honest client/account identity, and honest Codex metadata envelope. |
+| `CodexOpenAIAdapter` | `adapter.py:4182` | Codex provider specialization: forces Responses mode, derives stable per-agent cache/session ids plus a LingTai installation id from the configured anchor, and wires account/metadata hints into Codex sessions. Maps an omitted/`default` thinking level to an explicit `reasoning.effort = "xhigh"` in its `_create_responses_session` (Codex-only default — omitting the field would fall back to the backend's lower default; explicit levels pass through unchanged, and the generic `OpenAIAdapter` keeps omit-on-default). `codex-pool` reuses this adapter, so it inherits the same default. |
 
 ### adapter.py helpers
 
@@ -67,19 +67,19 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 - **Interface converters** — imports `to_openai` and `to_responses_input` from `lingtai.llm.interface_converters` (`adapter.py:31`).
 - **Streaming** — imports `StreamingAccumulator` from `lingtai.kernel.llm.streaming` (`adapter.py:32`).
 - **HTTP client** — imports `httpx` for timeout construction (`adapter.py:16`); `openai` SDK for all API calls (`adapter.py:17`).
-- **Subclass hooks** — `_session_class` (`adapter.py:2047`) for Completions path; `_adapter_extra_body()` (`adapter.py:2308`) for provider-specific `extra_body`; `_default_prompt_cache_key()` (`adapter.py:2109`) for the provider-namespaced cache key.
+- **Subclass hooks** — `_session_class` (`adapter.py:2070`) for Completions path; `_adapter_extra_body()` (`adapter.py:2331`) for provider-specific `extra_body`; `_default_prompt_cache_key()` (`adapter.py:2132`) for the provider-namespaced cache key.
 
 ## Composition
 
 ### Two session paths
 
-The adapter forks at `create_chat()` (`adapter.py:2156`) via `_should_use_responses()` (`adapter.py:2137`):
-1. **Responses API** (`_create_responses_session`, `adapter.py:2195`) — when canonical `wire_api="responses"`, or when `wire_api="auto"` and legacy `use_responses=True` AND (`base_url` is None OR `force_responses=True`). Builds `OpenAIResponsesSession`.
-2. **Chat Completions** (`_create_completions_session`, `adapter.py:2249`) — fallback for compatible providers and when `wire_api="chat_completions"`. Builds `self._session_class` (subclass-overridable).
+The adapter forks at `create_chat()` (`adapter.py:2179`) via `_should_use_responses()` (`adapter.py:2160`):
+1. **Responses API** (`_create_responses_session`, `adapter.py:2218`) — when canonical `wire_api="responses"`, or when `wire_api="auto"` and legacy `use_responses=True` AND (`base_url` is None OR `force_responses=True`). Builds `OpenAIResponsesSession`, threading the adapter's `_responses_stateless_replay` into its `stateless_replay` kwarg (`adapter.py:2269`) — so a custom/OpenAI-compatible Responses adapter builds a stateless-replay session while official OpenAI stays stateful.
+2. **Chat Completions** (`_create_completions_session`, `adapter.py:2272`) — fallback for compatible providers and when `wire_api="chat_completions"`. Builds `self._session_class` (subclass-overridable).
 
 Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting. Canonical `wire_api` wins over legacy `use_responses`/`force_responses`; when `wire_api` is absent/`auto`, existing behavior is preserved.
 
-### One-shot generation (`OpenAIAdapter.generate`, `adapter.py:2317`)
+### One-shot generation (`OpenAIAdapter.generate`, `adapter.py:2340`)
 
 `generate()` follows the same wire selection as `create_chat()` via `_should_use_responses()`: Chat Completions by default/legacy, or Responses API when `wire_api="responses"` (or legacy `use_responses=True` without a custom base URL / with `force_responses=True`). This keeps service-level one-shot calls consistent with multi-turn sessions.
 
@@ -90,11 +90,11 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting. Ca
 3. `_run_with_overflow_recovery(_do_call)` — retries with context trimming on 400 context-length errors
 4. On success: record assistant response into interface via `_record_assistant_response()`
 
-### Responses API session flow (`OpenAIResponsesSession.send`, `adapter.py:1859`)
+### Responses API session flow (`OpenAIResponsesSession.send`, `adapter.py:1888`)
 
 Two modes share one session class:
-1. **Official/stateful** — `_convert_input(message)` builds only the new Responses input items (`adapter.py:1772-1804`), `previous_response_id` is sent when available (`adapter.py:1894-1895`, `adapter.py:1947-1948`), and the returned id becomes the next resume id (`adapter.py:1907-1908`, `adapter.py:1997-1998`).
-2. **Custom/stateless** — `_snapshot_interface` captures the pre-stage snapshot before `_stage_input`, `_request_input` records string/tool-result input (or leaves `send(None)` pre-staged entries alone), enforces tool pairing, and serializes full canonical history through `to_responses_input`; no `previous_response_id` is sent (`adapter.py:1806-1820`, `adapter.py:1858-1863`, `adapter.py:1869-1871`, `adapter.py:1894-1895`). On success `_record_assistant_response` persists reasoning/text/tool calls plus usage, including cached tokens, into canonical history (`adapter.py:1835-1856`, `adapter.py:1903-1906`, `adapter.py:1994-1996`). On transport/stream/enforce/serialization/parse/finalize/callback/record failure, `_rollback_staged` restores the pre-send canonical snapshot in place while preserving the recovery lookup (`adapter.py:1822-1833`, `adapter.py:1910-1913`, `adapter.py:2000-2003`).
+1. **Official/stateful** — `_convert_input(message)` builds only the new Responses input items (`adapter.py:1772-1827`), `previous_response_id` is sent when available (`adapter.py:1917-1918`, `adapter.py:1970-1971`), and the returned id becomes the next resume id (`adapter.py:1931`, `adapter.py:2021`). `_convert_input` maps a canonical `ToolResultBlock` continuation to the `function_call_output` wire item (`adapter.py:1812-1822`) using the same shape as `to_responses_input`, so a plain (non-Codex) Responses session serializes tool-result turns correctly instead of forwarding the dataclass unconverted; prebuilt Responses-wire `function_call_output` dicts pass through unchanged, while legacy `role=tool` dicts are converted to the same Responses shape (`adapter.py:1799-1811`).
+2. **Custom/stateless** — `_snapshot_interface` captures the pre-stage snapshot before `_stage_input`, `_request_input` records string/tool-result input (or leaves `send(None)` pre-staged entries alone), enforces tool pairing, and serializes full canonical history through `to_responses_input`; no `previous_response_id` is sent (`adapter.py:1829-1832`, `adapter.py:1834-1843`, `adapter.py:1881-1886`, `adapter.py:1917-1918`). On success `_record_assistant_response` persists reasoning/text/tool calls plus usage, including cached tokens, into canonical history (`adapter.py:1858-1879`, `adapter.py:1928-1929`, `adapter.py:2018-2019`). On transport/stream/enforce/serialization/parse/finalize/callback/record failure, `_rollback_staged` restores the pre-send canonical snapshot in place while preserving the recovery lookup (`adapter.py:1845-1856`, `adapter.py:1933-1935`, `adapter.py:2023-2025`).
 
 ### Codex continuation flow (`CodexResponsesSession.send_stream`)
 
@@ -142,11 +142,11 @@ Flow:
      strict-additive delta plus `previous_response_id`.
 5. If Codex rejects a full replay with `The encrypted content for item ... could
    not be verified`, treat it as stale raw reasoning state: `_strip_codex_encrypted_reasoning_items`
-   (`adapter.py:3552`) removes replay-only `encrypted_content` anchors from
-   `ThinkingBlock.provider_data`, `_reset_ws_epoch` (`adapter.py:3110`) clears
+   (`adapter.py:3575`) removes replay-only `encrypted_content` anchors from
+   `ThinkingBlock.provider_data`, `_reset_ws_epoch` (`adapter.py:3133`) clears
    stale baselines/response-id state, and the adapter retries the same visible
    transcript once as `rest_full_self_heal` / `stateless_full_self_heal`
-   (`adapter.py:3643`). Summary text, assistant text, and tool calls remain
+   (`adapter.py:3906-3925`). Summary text, assistant text, and tool calls remain
    in the canonical interface; only the opaque provider blob is dropped.
 6. After success: record the assistant response into the interface and recompute
    the converter-stable delta baseline (`_ws_record_baseline_from_interface`) so the
@@ -202,19 +202,19 @@ The default request identity is explicit LingTai: `_CODEX_ORIGINATOR = "lingtai"
 
 See `docs/references/codex-http-anatomy-investigation.md` for the capture history, Codex CLI comparison, and the safety rationale behind which metadata LingTai does and does not send.
 
-When a Codex session has a stable LingTai session/thread identity, `CodexResponsesSession` adds an honest metadata envelope alongside the cache-affinity headers (`adapter.py:2634` and the Codex send path at `adapter.py:3643`). Each request gets a fresh `x-client-request-id`; `x-codex-window-id` is the LingTai window id `<session_id>:0`; `x-codex-turn-metadata` is compact JSON carrying `session_id`, `thread_id`, a generated `turn_id`, a truthful LingTai `sandbox` label, and `turn_started_at_unix_ms`; and body `client_metadata.x-codex-installation-id` is carried through `extra_body` because the OpenAI Python SDK has no typed `client_metadata` argument. This is compatibility metadata, not CLI impersonation: LingTai keeps `originator: lingtai` / `User-Agent: LingTai/<version>`, does not send `x-codex-beta-features`, and derives its installation id from LingTai state rather than from the official Codex CLI installation file.
+When a Codex session has a stable LingTai session/thread identity, `CodexResponsesSession` adds an honest metadata envelope alongside the cache-affinity headers (`adapter.py:2657` and the Codex send path at `adapter.py:3666`). Each request gets a fresh `x-client-request-id`; `x-codex-window-id` is the LingTai window id `<session_id>:0`; `x-codex-turn-metadata` is compact JSON carrying `session_id`, `thread_id`, a generated `turn_id`, a truthful LingTai `sandbox` label, and `turn_started_at_unix_ms`; and body `client_metadata.x-codex-installation-id` is carried through `extra_body` because the OpenAI Python SDK has no typed `client_metadata` argument. This is compatibility metadata, not CLI impersonation: LingTai keeps `originator: lingtai` / `User-Agent: LingTai/<version>`, does not send `x-codex-beta-features`, and derives its installation id from LingTai state rather than from the official Codex CLI installation file.
 
 ## State
 
 - `CodexResponsesSession._installation_id` / `_metadata_sandbox`: optional honest Codex metadata state used to build `client_metadata.x-codex-installation-id` and turn metadata without leaking local paths or claiming official CLI features.
 
 - **`OpenAIChatSession._interface`** — canonical `ChatInterface`, single source of truth. Mutated in-place: `add_user_message`, `add_tool_results`, `add_assistant_message`, `drop_trailing`.
-- **`OpenAIChatSession._request_timeout`** — per-request HTTP timeout set by caller before dispatch (`adapter.py:1235`). Prevents race between watchdog and SDK.
-- **`OpenAIResponsesSession._response_id` / `_stateless_replay`** — in official/stateful mode `_response_id` is the server-side chain pointer and `session_resume_id`; in custom/stateless mode `_stateless_replay=True`, `_response_id` is not advanced, `session_resume_id` returns `None`, and `get_history()` returns full canonical `ChatInterface` history for durable restart (`adapter.py:1749-1751`, `adapter.py:2005-2016`).
-- **`CodexResponsesSession._response_id`** — transient debug aid only; never threaded into next request (`adapter.py:2462`).
+- **`OpenAIChatSession._request_timeout`** — per-request HTTP timeout set by caller before dispatch (`adapter.py:1248`). Prevents race between watchdog and SDK.
+- **`OpenAIResponsesSession._response_id` / `_stateless_replay`** — in official/stateful mode `_response_id` is the server-side chain pointer and `session_resume_id`; in custom/stateless mode `_stateless_replay=True`, `_response_id` is not advanced, `session_resume_id` returns `None`, and `get_history()` returns full canonical `ChatInterface` history for durable restart (`adapter.py:1749-1750`, `adapter.py:2028-2039`).
+- **`CodexResponsesSession._response_id`** — transient debug aid only; never threaded into next request (`adapter.py:2485`).
 - **`CodexResponsesSession._current_id`** — the single per-agent affinity id (the hash of the agent path + current molt count) handed to this session, used byte-identically for `_prompt_cache_key` / `_session_id` / `_thread_id`. Set once per session at construction — a NEW session is built for each `create_chat`, and the adapter resolves the molt-current id at that point, so a molt-advanced id reaches the next session without any in-session mutation (no rotation, no epoch, no clock).
 - **Codex Responses trace** — opt-in diagnostics write JSONL metadata to `logs/codex_responses_trace.jsonl` when `LINGTAI_CODEX_RESPONSES_TRACE=1` (override path with `LINGTAI_CODEX_RESPONSES_TRACE_PATH`). Default off; stores event/item shapes, lengths/hashes, usage, and accumulator counts, not raw content.
-- **`OpenAIAdapter._client`** — shared `openai.OpenAI` instance. `_client_kwargs` stored for session `reset()`. Constructor passes `default_headers=merge_lingtai_identity_headers(...)` (`adapter.py:2102`), so OpenAI-compatible HTTP requests carry non-secret LingTai identity/version headers unless a caller/provider header overrides them case-insensitively.
+- **`OpenAIAdapter._client`** — shared `openai.OpenAI` instance. `_client_kwargs` stored for session `reset()`. Constructor passes `default_headers=merge_lingtai_identity_headers(...)` (`adapter.py:2125`), so OpenAI-compatible HTTP requests carry non-secret LingTai identity/version headers unless a caller/provider header overrides them case-insensitively.
 - **`OpenAIAdapter._session_class`** — class var, subclasses override (e.g. DeepSeek and MiMo inject `reasoning_content` round-trip fallbacks).
 
 ## Notes
@@ -241,27 +241,27 @@ When a Codex session has a stable LingTai session/thread identity, `CodexRespons
 
 The Codex / Responses path has the same invariant: `to_responses_input` ends with `_pair_responses_orphan_function_calls` (`../interface_converters.py:190-250`) which synthesizes a `function_call_output` for any `function_call` without a matching output anywhere in the items list. Same placeholder string, same non-mutating semantics. Without this guard the provider returns `400 No tool output found for function call …` when a continuation request is built from a half-committed tool loop (issue #170).
 
-**Placeholders go at the TAIL, not interleaved.** The guard appends its synthesized placeholders as one contiguous block at the end of the items list, in `function_call` order — it does **not** insert each placeholder immediately after its call. This is a continuation-stability fix: `to_responses_input` always emits an assistant entry's `function_call`s contiguously and all real `function_call_output`s afterwards, so interleaving a placeholder right after each call made placeholder positions drift relative to where the real outputs land. A multi-call turn resolving incrementally then broke the Codex strict-prefix continuation and forced a `*_full` request every turn — the logged `prefix_mismatch` with `mismatch_prev_type=function_call_output` vs `mismatch_cur_type=function_call`. The baseline recorder reinforces this: `_ws_record_baseline_from_interface` strips **all** synthesized placeholders (not just trailing ones) from the recorded baseline via `_strip_synthesized_orphan_outputs` (`adapter.py:539`, `adapter.py:3042`), so the real, position-stable items are the only load-bearing prefix and the real tool result strictly extends the baseline. Fix applies to BOTH transports (shared converter + shared baseline recorder).
+**Placeholders go at the TAIL, not interleaved.** The guard appends its synthesized placeholders as one contiguous block at the end of the items list, in `function_call` order — it does **not** insert each placeholder immediately after its call. This is a continuation-stability fix: `to_responses_input` always emits an assistant entry's `function_call`s contiguously and all real `function_call_output`s afterwards, so interleaving a placeholder right after each call made placeholder positions drift relative to where the real outputs land. A multi-call turn resolving incrementally then broke the Codex strict-prefix continuation and forced a `*_full` request every turn — the logged `prefix_mismatch` with `mismatch_prev_type=function_call_output` vs `mismatch_cur_type=function_call`. The baseline recorder reinforces this: `_ws_record_baseline_from_interface` strips **all** synthesized placeholders (not just trailing ones) from the recorded baseline via `_strip_synthesized_orphan_outputs` (`adapter.py:539`, `adapter.py:3065`), so the real, position-stable items are the only load-bearing prefix and the real tool result strictly extends the baseline. Fix applies to BOTH transports (shared converter + shared baseline recorder).
 
 ### System prompt is `instructions`, frozen per session (Responses/Codex)
 
 On the Responses/Codex path the system prompt is **not** an `input` item — it rides in the top-level `instructions` kwarg. `to_responses_input` deliberately skips system entries (`../interface_converters.py:280-281`, documented `../interface_converters.py:256-257`); the prompt is carried separately as `instructions`.
 
-That `instructions` value is **frozen at session construction** for official/stateful Responses and Codex: `OpenAIResponsesSession.__init__` captures `self._instructions = instructions` (`adapter.py:1745`) and every send replays that value (`adapter.py:1888-1889`, `adapter.py:1941-1942`; Codex sends its own instructions in its subclass path). There is no re-read from the interface in stateful mode.
+That `instructions` value is **frozen at session construction** for official/stateful Responses and Codex: `OpenAIResponsesSession.__init__` captures `self._instructions = instructions` (`adapter.py:1745`) and every send replays that value (`adapter.py:1911-1912`, `adapter.py:1964-1965`; Codex sends its own instructions in its subclass path). There is no re-read from the interface in stateful mode.
 
-In-flight official/stateful Responses and Codex sessions keep no-op prompt/tool update behavior for continuation stability. Custom/stateless `OpenAIResponsesSession` is different: because every request is a full canonical replay, `update_system_prompt` updates both `_instructions` and the interface, and `update_tools` rebuilds the Responses tool payload and appends a system/tool snapshot (`adapter.py:2018-2031`).
+In-flight official/stateful Responses and Codex sessions keep no-op prompt/tool update behavior for continuation stability. Custom/stateless `OpenAIResponsesSession` is different: because every request is a full canonical replay, `update_system_prompt` updates both `_instructions` and the interface, and `update_tools` rebuilds the Responses tool payload and appends a system/tool snapshot (`adapter.py:2041-2054`).
 
 **Behavior-code contract:** for stateful official Responses/Codex, a pad / system-prompt edit mid-session changes nothing on the wire and does not break warm continuation; a changed system prompt takes effect when a new session is constructed. For custom/stateless Responses, prompt/tool edits are part of the next full replay and do not require a server-side continuation reset.
 
 ### Streaming
 
 - **CC streaming** (`adapter.py:1555`) — `stream=True, stream_options={include_usage: True}`. Uses `StreamingAccumulator` for text + tool deltas. Reasoning deltas captured from `delta.reasoning` or `delta.reasoning_content`. Overflow recovery wraps stream open + first chunk in the Chat Completions send-stream path.
-- **Responses streaming** (`adapter.py:1915`) — event types: `response.reasoning_summary_text.delta/done` (summary thoughts only), `response.output_text.delta`, `response.function_call_arguments.delta`, `response.output_item.added/done`, `response.completed`. Custom/stateless mode snapshots before staging, replays full canonical history, records the finalized assistant turn, and restores the pre-send snapshot on enforce, serialization, stream-open, iteration, callback, finalize, or record failure (`adapter.py:1922-2003`).
+- **Responses streaming** (`adapter.py:1938`) — event types: `response.reasoning_summary_text.delta/done` (summary thoughts only), `response.output_text.delta`, `response.function_call_arguments.delta`, `response.output_item.added/done`, `response.completed`. Custom/stateless mode snapshots before staging, replays full canonical history, records the finalized assistant turn, and restores the pre-send snapshot on enforce, serialization, stream-open, iteration, callback, finalize, or record failure (`adapter.py:1945-2026`).
 - **Codex streaming** — forces `stream=True` even on `send()`. Runs the `full`/`incremental` planner per request over the selected transport (REST default / WebSocket opt-in): REST carries the whole converted interface in both modes; WebSocket carries the whole interface for `full` and delta + `previous_response_id` for `incremental`. Captured summary thoughts and raw encrypted reasoning items are persisted as ThinkingBlocks so `to_responses_input` replays reasoning items before function calls; if Codex later rejects a raw encrypted item as unverifiable, the adapter strips only that opaque replay state and retries once with summary/plain transcript. Optional diagnostics (`LINGTAI_CODEX_RESPONSES_TRACE=1`) append safe per-event metadata to `logs/codex_responses_trace.jsonl` without changing accumulator/persistence behavior.
 
 ### Authentication paths
 
-- **Standard** — `api_key` passed to `openai.OpenAI(api_key=...)` at construction (`adapter.py:2098-2104`).
+- **Standard** — `api_key` passed to `openai.OpenAI(api_key=...)` at construction (`adapter.py:2121-2127`).
 - **Codex OAuth** — `CodexOpenAIAdapter` built by `../_register.py:54` with `CodexTokenManager.get_access_token()`. Token refreshed by monkey-patching `create_chat` and `generate` to update `adapter._client.api_key` in-place before each call.
 
 ### Tool schema conversion
@@ -278,22 +278,22 @@ In-flight official/stateful Responses and Codex sessions keep no-op prompt/tool 
 
 ### Subclass hooks
 
-- `_session_class` (`adapter.py:2047`) — override to inject provider-specific session behavior on the CC path.
-- `_adapter_extra_body()` (`adapter.py:2308`) — override to add `extra_body` JSON fields (e.g. OpenRouter `reasoning: {include: true}`).
-- `_default_prompt_cache_key(model)` (`adapter.py:2109`) — override to give a provider a clean cache namespace (DeepSeek/Zhipu/MiMo/Codex do).
+- `_session_class` (`adapter.py:2070`) — override to inject provider-specific session behavior on the CC path.
+- `_adapter_extra_body()` (`adapter.py:2331`) — override to add `extra_body` JSON fields (e.g. OpenRouter `reasoning: {include: true}`).
+- `_default_prompt_cache_key(model)` (`adapter.py:2132`) — override to give a provider a clean cache namespace (DeepSeek/Zhipu/MiMo/Codex do).
 
 ### `send(None)` contract — continue from wire
 
 All four `send` / `send_stream` paths in this file accept `None` as the "the caller has already staged the canonical interface; just talk to the LLM" signal. This is what `base_agent/turn.py:_handle_tc_wake` calls when `_sync_notifications` has spliced a synthesized `(ToolCallBlock, ToolResultBlock)` pair into the wire — from the LLM's viewpoint the agent appears to have voluntarily called `notification(action="check")` and is now responding to the result, no fake user message and no meta prefix.
 
-Implementation: the input-dispatch ladder at the top of each canonical-replay method treats `None` as "no adapter-owned input to append." In custom/stateless Responses `_snapshot_interface(None)` returns no rollback snapshot and `_request_input` serializes the already-staged interface through `to_responses_input`, so notification-style `(ToolCallBlock, ToolResultBlock)` pairs ride on the same request and are not removed on failure (`adapter.py:1806-1814`, `adapter.py:1858-1863`). In official/stateful Responses `_convert_input(None)` remains `[]`, so the existing `previous_response_id` chain continues with no new input items (`adapter.py:1772-1779`).
+Implementation: the input-dispatch ladder at the top of each canonical-replay method treats `None` as "no adapter-owned input to append." In custom/stateless Responses `_snapshot_interface(None)` returns no rollback snapshot and `_request_input` serializes the already-staged interface through `to_responses_input`, so notification-style `(ToolCallBlock, ToolResultBlock)` pairs ride on the same request and are not removed on failure (`adapter.py:1829-1832`, `adapter.py:1881-1886`). In official/stateful Responses `_convert_input(None)` remains `[]`, so the existing `previous_response_id` chain continues with no new input items (`adapter.py:1790-1791`).
 
 ### Pre-request hook (mid-turn tc_inbox drain — dormant)
 
 All four `send` / `send_stream` paths in this file fire `self.pre_request_hook(self._interface)` after committing the message to the canonical interface but before the API call. Historically the kernel installed `BaseAgent._drain_tc_inbox_for_hook` here so involuntary tool-call pairs (mail notifications, soul.flow voices) spliced into the wire chat mid-turn. After the `.notification/` redesign (`fadbabf`/`d2da97e`) the hook is still installed but the queue is always empty in production; ACTIVE notifications now defer to the post-turn IDLE synthetic-pair path rather than mutating tool results at send time. Phase 3 will remove the hook entirely. Three regimes (preserved for historical context and future re-use):
 
 - **`OpenAIChatSession.send` / `send_stream`** — canonical-interface; the hook splices into the same interface that's about to be serialized via `_build_messages()`. Spliced pair appears in this same API request. Same-turn delivery.
-- **`OpenAIResponsesSession.send` / `send_stream`** — official/stateful mode keeps server-state via `previous_response_id`; the hook splices into `self._interface` but the wire payload remains the new delta input. Custom/stateless mode reserializes `to_responses_input(self._interface)` after the hook, so hook-spliced pairs ride on the same request (`adapter.py:1873-1881`, `adapter.py:1928-1933`).
+- **`OpenAIResponsesSession.send` / `send_stream`** — official/stateful mode keeps server-state via `previous_response_id`; the hook splices into `self._interface` but the wire payload remains the new delta input. Custom/stateless mode reserializes `to_responses_input(self._interface)` after the hook, so hook-spliced pairs ride on the same request (`adapter.py:1900-1904`, `adapter.py:1952-1956`).
 - **`CodexResponsesSession.send_stream`** — Codex's stateless backend replays the full canonical interface on every request (`to_responses_input(self._interface)`), so the hook delivers same-turn just like the CC path.
 
 ### Git history

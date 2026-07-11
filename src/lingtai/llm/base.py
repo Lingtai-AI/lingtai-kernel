@@ -37,6 +37,20 @@ class _GatedSession:
     def interface(self):
         return self._inner.interface
 
+    @property
+    def pre_request_hook(self):
+        # Named getter/setter so the hook lives on the inner adapter — the
+        # object whose send() reads ``self.pre_request_hook`` before the API
+        # call. A plain write would land in the proxy __dict__ and leave the
+        # inner's hook None, so the kernel drain hook would silently never
+        # fire under rate gating. The proxy never invokes the hook itself;
+        # the inner adapter continues to own request timing.
+        return self._inner.pre_request_hook
+
+    @pre_request_hook.setter
+    def pre_request_hook(self, hook):
+        self._inner.pre_request_hook = hook
+
     def send(self, message):
         return self._gate.submit(lambda: self._inner.send(message))
 
