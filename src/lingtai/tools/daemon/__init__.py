@@ -2083,6 +2083,7 @@ class DaemonManager:
                 cached=u.cached_tokens,
                 model=effective_model,
                 endpoint=endpoint,
+                usage_extra=getattr(u, "extra", None),
             )
 
         try:

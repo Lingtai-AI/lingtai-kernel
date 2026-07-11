@@ -16,7 +16,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from lingtai.kernel._fsutil import append_jsonl, atomic_write_json
-from lingtai.kernel.token_ledger import append_token_entry
+from lingtai.kernel.token_ledger import (
+    append_token_entry,
+    safe_codex_pool_usage_extra,
+)
 
 
 class DaemonRunDir:
@@ -438,7 +441,8 @@ class DaemonRunDir:
     def append_tokens(self, *, input: int, output: int,
                      thinking: int, cached: int,
                      model: str | None = None,
-                     endpoint: str | None = None) -> None:
+                     endpoint: str | None = None,
+                     usage_extra: object = None) -> None:
         """Record per-call token usage to both ledgers.
 
         Both the daemon's own logs/token_ledger.jsonl and the parent's
@@ -452,7 +456,9 @@ class DaemonRunDir:
         ``model`` and ``endpoint`` (if provided) are written as first-class
         attribution fields on both ledgers — the daemon may use a different
         model/provider than the parent, so per-entry tagging is required for
-        multi-provider cost analytics.
+        multi-provider cost analytics. ``usage_extra`` is projected once onto
+        the five safe codex-pool attribution fields; arbitrary provider metadata
+        is never copied into either ledger.
 
         Skips both writes if all four values are zero — avoids ledger noise
         from LLM calls that returned no usage.
@@ -472,6 +478,16 @@ class DaemonRunDir:
             self._atomic_write_json(self.daemon_json_path, self._state)
         self._safe("append_tokens.state", _update_state)
 
+        # Sanitize once, then mirror the same safe pool-attribution subset
+        # into both ledgers.  Arbitrary UsageMetadata.extra fields never cross
+        # this helper-writer boundary.
+        ledger_extra = {
+            "source": "daemon",
+            "em_id": self._handle,
+            "run_id": self._run_id,
+            **safe_codex_pool_usage_extra(usage_extra),
+        }
+
         # Daemon's own ledger — tagged source=daemon for uniformity with
         # parent's ledger and main/soul writes (every entry self-describes).
         self._safe(
@@ -481,8 +497,7 @@ class DaemonRunDir:
                 input=input, output=output,
                 thinking=thinking, cached=cached,
                 model=model, endpoint=endpoint,
-                extra={"source": "daemon", "em_id": self._handle,
-                       "run_id": self._run_id},
+                extra=ledger_extra,
             ),
         )
 
@@ -495,8 +510,7 @@ class DaemonRunDir:
                 input=input, output=output,
                 thinking=thinking, cached=cached,
                 model=model, endpoint=endpoint,
-                extra={"source": "daemon", "em_id": self._handle,
-                       "run_id": self._run_id},
+                extra=ledger_extra,
             ),
         )
 

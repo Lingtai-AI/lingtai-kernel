@@ -2153,8 +2153,18 @@ def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
     resp1 = MagicMock()
     resp1.text = "Checking..."
     resp1.tool_calls = [tc]
+    pool_usage_extra = {
+        "codex_auth_path_sha8": "a1b2c3d4",
+        "codex_pool_source_index": 1,
+        "codex_pool_size": 2,
+        "codex_pool_weight": 1,
+        "codex_pool_model_scope": "gpt-5.6",
+        "codex_pool_source_ref": "must-not-copy",
+        "unsafe": "secret",
+    }
     resp1.usage = MagicMock(input_tokens=100, output_tokens=20,
-                             thinking_tokens=5, cached_tokens=10)
+                             thinking_tokens=5, cached_tokens=10,
+                             extra=pool_usage_extra)
     finish_tc = ToolCall(
         name="finish",
         args={"status": "done", "summary": "Found 3 TODOs."},
@@ -2168,7 +2178,8 @@ def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
     resp3.text = "Task done. Found 3 TODOs."
     resp3.tool_calls = []
     resp3.usage = MagicMock(input_tokens=80, output_tokens=15,
-                             thinking_tokens=3, cached_tokens=5)
+                             thinking_tokens=3, cached_tokens=5,
+                             extra=pool_usage_extra)
 
     mock_session = MagicMock()
     mock_session.send = MagicMock(side_effect=[resp1, resp2, resp3])
@@ -2228,6 +2239,13 @@ def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
                      if json.loads(line).get("source") == "daemon"]
     assert len(daemon_tagged) == 2
     assert all(e["em_id"] == em_id for e in daemon_tagged)
+    assert all(e["codex_auth_path_sha8"] == "a1b2c3d4" for e in daemon_tagged)
+    assert all(e["codex_pool_source_index"] == 1 for e in daemon_tagged)
+    assert all(e["codex_pool_size"] == 2 for e in daemon_tagged)
+    assert all(e["codex_pool_weight"] == 1 for e in daemon_tagged)
+    assert all(e["codex_pool_model_scope"] == "gpt-5.6" for e in daemon_tagged)
+    assert all("codex_pool_source_ref" not in e for e in daemon_tagged)
+    assert all("unsafe" not in e for e in daemon_tagged)
 
     # Reclaim does not touch folder
     mgr.handle({"action": "reclaim"})

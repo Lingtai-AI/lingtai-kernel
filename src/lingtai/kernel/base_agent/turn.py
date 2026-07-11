@@ -26,7 +26,7 @@ from ..meta_block import (
 )
 from ..sent_message_tracker import SEND_TOOLS, SEND_ACTIONS, CHECK_ACTIONS
 from ..time_veil import now_iso
-from ..token_ledger import append_token_entry
+from ..token_ledger import append_token_entry, safe_codex_pool_usage_extra
 from .worker_recovery import is_worker_interface_poisoned
 
 logger = get_logger()
@@ -1297,7 +1297,9 @@ def _record_apriori_summary_usage(agent, response, tool_name, tool_call_id) -> N
     Fail-open on *accounting*: a ledger write failure must never break the
     summary path (content-side fail-closed is handled by the orchestrator),
     so all of this is wrapped in try/except — mirroring the main-loop hook in
-    ``base_agent/__init__.py``.
+    ``base_agent/__init__.py``. Only the five safe codex-pool attribution
+    fields are projected from ``usage.extra``; arbitrary provider metadata is
+    omitted.
     """
     try:
         usage = getattr(response, "usage", None)
@@ -1323,6 +1325,7 @@ def _record_apriori_summary_usage(agent, response, tool_name, tool_call_id) -> N
                 "tool_name": tool_name,
                 "tool_call_id": tool_call_id,
                 "apriori_tool_result_summary": True,
+                **safe_codex_pool_usage_extra(getattr(usage, "extra", None)),
             },
         )
     except Exception as e:  # accounting must never break the summary path

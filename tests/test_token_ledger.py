@@ -15,8 +15,32 @@ from lingtai.kernel.token_ledger import (
     append_token_entry,
     count_main_api_calls,
     is_daemon_entry,
+    safe_codex_pool_usage_extra,
     sum_token_ledger,
 )
+
+
+def test_safe_codex_pool_usage_extra_is_narrow_and_type_preserving():
+    source = {
+        "codex_auth_path_sha8": "a1b2c3d4",
+        "codex_pool_source_index": 1,
+        "codex_pool_size": 2,
+        "codex_pool_weight": 1.5,
+        "codex_pool_model_scope": "gpt-5.6",
+        "codex_pool_source_ref": "must-not-copy",
+        "codex_account_id_sha8": "not-needed",
+        "unsafe": "secret",
+    }
+    assert safe_codex_pool_usage_extra(source) == {
+        "codex_auth_path_sha8": "a1b2c3d4",
+        "codex_pool_source_index": 1,
+        "codex_pool_size": 2,
+        "codex_pool_weight": 1.5,
+        "codex_pool_model_scope": "gpt-5.6",
+    }
+    assert safe_codex_pool_usage_extra({"codex_pool_weight": None}) == {}
+    assert safe_codex_pool_usage_extra({"codex_pool_size": [2]}) == {}
+    assert safe_codex_pool_usage_extra(None) == {}
 
 
 def test_sum_empty_ledger(tmp_path):

@@ -303,11 +303,13 @@ def test_model_visible_event_raw_kind_when_no_summary(tmp_path):
 # --- factory: degrades to None without a one-shot session gateway ------------
 
 class _Usage:
-    def __init__(self, input_tokens, output_tokens, thinking_tokens=0, cached_tokens=0):
+    def __init__(self, input_tokens, output_tokens, thinking_tokens=0, cached_tokens=0,
+                 extra=None):
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
         self.thinking_tokens = thinking_tokens
         self.cached_tokens = cached_tokens
+        self.extra = extra or {}
 
 
 class _NoSessionService:
@@ -436,7 +438,19 @@ def test_apriori_summary_writes_main_ledger_row(tmp_path):
     correlatable by tool_call_id, and NOT a daemon row."""
     from lingtai.kernel.token_ledger import is_daemon_entry
 
-    agent = _AgentStub(_SessionService(), working_dir=tmp_path)
+    usage = _Usage(
+        123, 45, 6, 7,
+        extra={
+            "codex_auth_path_sha8": "a1b2c3d4",
+            "codex_pool_source_index": 1,
+            "codex_pool_size": 2,
+            "codex_pool_weight": 1,
+            "codex_pool_model_scope": "gpt-5.6",
+            "codex_pool_source_ref": "must-not-copy",
+            "unsafe": "secret",
+        },
+    )
+    agent = _AgentStub(_SessionService(_Resp(usage=usage)), working_dir=tmp_path)
     fn = turn._build_apriori_summarizer_fn(agent)
     assert fn is not None
 
@@ -455,6 +469,13 @@ def test_apriori_summary_writes_main_ledger_row(tmp_path):
     assert row["tool_name"] == "grep"
     assert row["tool_call_id"] == "toolu_ledger"
     assert row.get("model") == "m"
+    assert row["codex_auth_path_sha8"] == "a1b2c3d4"
+    assert row["codex_pool_source_index"] == 1
+    assert row["codex_pool_size"] == 2
+    assert row["codex_pool_weight"] == 1
+    assert row["codex_pool_model_scope"] == "gpt-5.6"
+    assert "codex_pool_source_ref" not in row
+    assert "unsafe" not in row
     # It lands in the MAIN agent ledger, not a daemon ledger.
     assert not is_daemon_entry(row)
 
