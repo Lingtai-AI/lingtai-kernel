@@ -220,32 +220,47 @@ def check(agent) -> None:
 def _runtime_info() -> _RuntimeInfo:
     from importlib import metadata
 
-    import lingtai
+    # The kernel must not import the lingtai wrapper. When the wrapper is
+    # already loaded (the normal Agent path), read its in-memory __version__
+    # and __file__ so we can distinguish the *running* code from the
+    # *installed* distribution metadata on disk. This detects in-place upgrades
+    # that happened after the current process started.
+    import sys
 
-    running = str(getattr(lingtai, "__version__", "unknown"))
+    wrapper = sys.modules.get("lingtai")
     try:
         dist = metadata.distribution("lingtai")
         installed = str(dist.version)
     except metadata.PackageNotFoundError:
         return _RuntimeInfo(
-            running_version=running,
-            installed_version=running,
+            running_version=getattr(wrapper, "__version__", "unknown"),
+            installed_version="unknown",
             dev_reason="no-installed-distribution",
         )
+
+    if wrapper is not None:
+        running = str(getattr(wrapper, "__version__", installed))
+        module_file = str(getattr(wrapper, "__file__", ""))
+    else:
+        # Wrapper not loaded: fall back to distribution metadata. In this path
+        # running and installed are identical, so only dev/editable detection
+        # can produce a nudge; no runtime-upgrade nudge is possible.
+        running = installed
+        module_file = str(dist.locate_file("lingtai/__init__.py"))
 
     return _RuntimeInfo(
         running_version=running,
         installed_version=installed,
-        dev_reason=_dev_install_reason(dist, lingtai, running, installed),
+        dev_reason=_dev_install_reason(dist, module_file, running, installed),
     )
 
 
-def _dev_install_reason(dist: Any, module: Any, running: str, installed: str) -> str | None:
+def _dev_install_reason(dist: Any, module_file: str, running: str, installed: str) -> str | None:
     if _direct_url_is_editable(dist):
         return "editable-install"
     if _looks_like_dev_version(running) or _looks_like_dev_version(installed):
         return "dev-version"
-    if _module_from_source_checkout(module):
+    if _module_from_source_checkout(module_file):
         return "source-checkout"
     return None
 
@@ -269,12 +284,11 @@ def _looks_like_dev_version(version: str) -> bool:
     return ".dev" in v or "+" in v or "editable" in v
 
 
-def _module_from_source_checkout(module: Any) -> bool:
-    raw = getattr(module, "__file__", None)
-    if not raw:
+def _module_from_source_checkout(module_file: str) -> bool:
+    if not module_file:
         return False
     try:
-        path = Path(raw).resolve()
+        path = Path(module_file).resolve()
     except Exception:
         return False
     if any(part in {"site-packages", "dist-packages"} for part in path.parts):

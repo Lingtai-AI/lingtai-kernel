@@ -1,37 +1,117 @@
-"""lingtai — generic AI agent framework with intrinsic tools, composable capabilities, and pluggable services."""
+"""lingtai — generic AI agent framework with intrinsic tools, composable capabilities, and pluggable services.
+
+This top-level module is a lightweight, lazy facade. ``import lingtai`` loads
+only the stdlib and the package version; every public name in ``__all__`` is
+resolved on first access via :pep:`562` ``__getattr__`` from its canonical
+source module. This keeps the wrapper import cheap and avoids pulling in
+heavy provider SDKs, MCP servers, or the kernel until they are actually used.
+"""
+from __future__ import annotations
 
 from importlib.metadata import version as _pkg_version
+from typing import TYPE_CHECKING
 
 __version__ = _pkg_version("lingtai")
 
-from lingtai_kernel.types import UnknownToolError
-from lingtai_kernel.config import AgentConfig
-from lingtai_kernel.base_agent import BaseAgent
-from .agent import Agent
-from lingtai_kernel.state import AgentState
-from lingtai_kernel.message import Message, MSG_REQUEST, MSG_USER_INPUT
+# PEP 562 lazy facade mapping: public name -> (canonical module, attribute).
+# A None attribute means the public name is used as the attribute name.
+_LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
+    # Core kernel re-exports
+    "BaseAgent": ("lingtai_kernel.base_agent", "BaseAgent"),
+    "Agent": ("lingtai.agent", "Agent"),
+    "AgentConfig": ("lingtai_kernel.config", "AgentConfig"),
+    "AgentState": ("lingtai_kernel.state", "AgentState"),
+    "Message": ("lingtai_kernel.message", "Message"),
+    "MSG_REQUEST": ("lingtai_kernel.message", "MSG_REQUEST"),
+    "MSG_USER_INPUT": ("lingtai_kernel.message", "MSG_USER_INPUT"),
+    "UnknownToolError": ("lingtai_kernel.types", "UnknownToolError"),
+    # Tools
+    "setup_capability": ("tools.registry", "setup_capability"),
+    "BashManager": ("tools.bash", "BashManager"),
+    "AvatarManager": ("tools.avatar", "AvatarManager"),
+    "EmailManager": ("tools.email", "EmailManager"),
+    # Services
+    "FileIOBackend": ("lingtai.services.file_io", "FileIOBackend"),
+    "FileIOService": ("lingtai.services.file_io", "FileIOService"),
+    "GrepMatch": ("lingtai.services.file_io", "GrepMatch"),
+    "LocalFileIOBackend": ("lingtai.services.file_io", "LocalFileIOBackend"),
+    "LocalFileIOService": ("lingtai.services.file_io", "LocalFileIOService"),
+    "BACKEND_ENV_VAR": ("lingtai.services.file_io_sidecar", "BACKEND_ENV_VAR"),
+    "RustFileIOBackend": ("lingtai.services.file_io_sidecar", "RustFileIOBackend"),
+    "SidecarAdapter": ("lingtai.services.file_io_sidecar", "SidecarAdapter"),
+    "SidecarError": ("lingtai.services.file_io_sidecar", "SidecarError"),
+    "default_file_io_service": (
+        "lingtai.services.file_io_sidecar",
+        "default_file_io_service",
+    ),
+    "resolve_sidecar_binary": (
+        "lingtai.services.file_io_sidecar",
+        "resolve_sidecar_binary",
+    ),
+    "MailService": ("lingtai_kernel.services.mail", "MailService"),
+    "FilesystemMailService": (
+        "lingtai_kernel.services.mail",
+        "FilesystemMailService",
+    ),
+    "LoggingService": ("lingtai_kernel.services.logging", "LoggingService"),
+    "JSONLLoggingService": ("lingtai_kernel.services.logging", "JSONLLoggingService"),
+    "VisionService": ("lingtai.services.vision", "VisionService"),
+    "create_vision_service": ("lingtai.services.vision", "create_vision_service"),
+    "SearchService": ("lingtai.services.websearch", "SearchService"),
+    "SearchResult": ("lingtai.services.websearch", "SearchResult"),
+    "create_search_service": ("lingtai.services.websearch", "create_search_service"),
+}
 
-# Tools — public manager re-exports (stable names; sources re-pointed to the
-# consolidated ``tools`` package, no compatibility shims for old deep paths).
-from tools.registry import setup_capability
-from tools.bash import BashManager
-from tools.avatar import AvatarManager
-from tools.email import EmailManager
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.config import AgentConfig
+    from lingtai_kernel.message import MSG_REQUEST, MSG_USER_INPUT, Message
+    from lingtai_kernel.state import AgentState
+    from lingtai_kernel.types import UnknownToolError
+    from tools.avatar import AvatarManager
+    from tools.bash import BashManager
+    from tools.email import EmailManager
+    from tools.registry import setup_capability
 
-# Services
-from .services.file_io import FileIOBackend, FileIOService, GrepMatch, LocalFileIOBackend, LocalFileIOService
-from .services.file_io_sidecar import (
-    BACKEND_ENV_VAR,
-    RustFileIOBackend,
-    SidecarAdapter,
-    SidecarError,
-    default_file_io_service,
-    resolve_sidecar_binary,
-)
-from lingtai_kernel.services.mail import MailService, FilesystemMailService
-from lingtai_kernel.services.logging import LoggingService, JSONLLoggingService
-from .services.vision import VisionService, create_vision_service
-from .services.websearch import SearchService, SearchResult, create_search_service
+    from .agent import Agent
+    from .services.file_io import (
+        FileIOBackend,
+        FileIOService,
+        GrepMatch,
+        LocalFileIOBackend,
+        LocalFileIOService,
+    )
+    from .services.file_io_sidecar import (
+        BACKEND_ENV_VAR,
+        RustFileIOBackend,
+        SidecarAdapter,
+        SidecarError,
+        default_file_io_service,
+        resolve_sidecar_binary,
+    )
+    from .services.vision import VisionService, create_vision_service
+    from .services.websearch import SearchResult, SearchService, create_search_service
+    from lingtai_kernel.services.logging import JSONLLoggingService, LoggingService
+    from lingtai_kernel.services.mail import FilesystemMailService, MailService
+
+
+def __getattr__(name: str) -> object:
+    """Resolve a public facade name lazily from its canonical source module."""
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+
+    module_path, attr_name = target
+    module = importlib.import_module(module_path)
+    value = getattr(module, attr_name or name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))
+
 
 __all__ = [
     "__version__",
