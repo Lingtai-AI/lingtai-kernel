@@ -14,7 +14,7 @@ import datetime as _dt
 import json as _json
 from typing import Any
 
-from lingtai_kernel.meta_block import formal_tool_result_visible_len
+from lingtai.kernel.meta_block import formal_tool_result_visible_len
 
 
 # Stable marker stamped on every summarized replacement block so future
@@ -41,7 +41,7 @@ def _is_already_summarized(content: Any) -> bool:
 
 def _iter_summarize_marker_blocks(iface):
     """Yield every SUMMARIZE_MARKER ToolResultBlock in an interface's history."""
-    from lingtai_kernel.llm.interface import ToolResultBlock  # local import — no circular dep
+    from lingtai.kernel.llm.interface import ToolResultBlock  # local import — no circular dep
 
     if iface is None:
         return
@@ -83,7 +83,7 @@ def _find_tool_result_block(agent, tool_call_id: str):
     Returns ``(entry, block_index, block)`` or ``(None, -1, None)`` when not found.
     Excludes blocks already carrying a synthesized heal placeholder.
     """
-    from lingtai_kernel.llm.interface import ToolResultBlock  # local import — no circular dep
+    from lingtai.kernel.llm.interface import ToolResultBlock  # local import — no circular dep
 
     chat = getattr(agent, "_chat", None)
     if chat is None:
@@ -182,7 +182,7 @@ def _current_context_snapshot(agent) -> dict:
     Reuses the same meta_block sources the tool-meta token_usage block uses so the
     figures reported here match ``_meta.tool_meta.token_usage.session``.
     """
-    from lingtai_kernel.meta_block import _current_context_usage, _session_context_window
+    from lingtai.kernel.meta_block import _current_context_usage, _session_context_window
 
     usage = None
     tokens = None
@@ -626,7 +626,7 @@ def _summarize(agent, args: dict) -> dict:
     cleared_reminder_ref_ids: list[str] = []
     if summarized_ids and getattr(agent, "_working_dir", None) is not None:
         try:
-            from lingtai_kernel.notifications import clear_large_result_reminders
+            from lingtai.kernel.notifications import clear_large_result_reminders
             cleared_reminder_ref_ids = clear_large_result_reminders(
                 agent, summarized_ids
             )

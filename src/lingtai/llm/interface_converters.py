@@ -11,7 +11,7 @@ import copy
 import json
 from typing import Any
 
-from lingtai_kernel.llm.interface import (
+from lingtai.kernel.llm.interface import (
     ContentBlock,
     ChatInterface,
     TextBlock,
@@ -27,7 +27,7 @@ from lingtai_kernel.llm.interface import (
 
 
 # The four timely transient ``_meta`` blocks (kernel names, see
-# ``lingtai_kernel.meta_block``), grouped by the family that moves together:
+# ``lingtai.kernel.meta_block``), grouped by the family that moves together:
 # sparse/update-driven current-state hints whose old copies are historical
 # traces, not current state. Canonical history keeps them (no retroactive
 # strip — Jason #4307); model-facing full-history serialization instead

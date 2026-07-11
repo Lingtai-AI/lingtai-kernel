@@ -17,7 +17,7 @@ Import discipline: capability modules are resolved with ``importlib`` *inside*
 capability tools that lazily import ``lingtai`` services, does not pull
 ``lingtai``). The five intrinsic modules ARE imported statically below because
 they are mandatory and cheap; they live under ``tools`` and import only
-``lingtai_kernel``.
+``lingtai.kernel``.
 """
 from __future__ import annotations
 
@@ -26,11 +26,11 @@ from typing import TYPE_CHECKING, Any
 
 # Register the tool string catalogs into the kernel i18n cache. Importing the
 # registry is the canonical "tools are in play" signal, so this is where the
-# en/zh/wen tool strings get injected via lingtai_kernel.i18n.register_strings.
+# en/zh/wen tool strings get injected via lingtai.kernel.i18n.register_strings.
 from . import i18n as _i18n  # noqa: F401  (import side effect: register_strings)
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
 
 # ---------------------------------------------------------------------------

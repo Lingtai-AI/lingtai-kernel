@@ -15,7 +15,7 @@ from .config import (
     AgentConfig,
     # Re-exported for backward compatibility: the streak logic now lives in
     # ``ContextPressureReminder`` and reads these off ``config`` directly, but
-    # ``from lingtai_kernel.session import CONTEXT_PRESSURE_*`` remains a public
+    # ``from lingtai.kernel.session import CONTEXT_PRESSURE_*`` remains a public
     # import path (see tests/test_context_pressure_streak.py).
     CONTEXT_PRESSURE_FORCED_REBUILD_RATIO,
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,  # back-compat alias for the above

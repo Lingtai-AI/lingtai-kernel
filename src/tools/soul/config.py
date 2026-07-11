@@ -370,7 +370,7 @@ def _build_soul_system_prompt(agent, kind: str = "inquiry") -> str:
       - any other profile name    → look up ``soul.voice.<name>.prompt`` from i18n
       - missing/empty profile     → fall back to "inner"
     """
-    from lingtai_kernel.i18n import t
+    from lingtai.kernel.i18n import t
     if kind == "inquiry":
         return t(agent._config.language, "soul.system_prompt")
 

@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from lingtai_kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
-from lingtai_kernel.tool_result_artifacts import ARTIFACT_MARKER, PREVENTIVE_MAX_CHARS
-from lingtai_kernel.tool_result_recovery import recover_tool_result_block_from_events
+from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
+from lingtai.kernel.tool_result_artifacts import ARTIFACT_MARKER, PREVENTIVE_MAX_CHARS
+from lingtai.kernel.tool_result_recovery import recover_tool_result_block_from_events
 
 
 def _write_events(workdir: Path, events: list[dict]) -> None:

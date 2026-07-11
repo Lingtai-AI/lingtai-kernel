@@ -37,17 +37,17 @@ _FP_KEY_FILES: list[str] = [
 
 
 def _capture_runtime_fingerprint() -> dict:
-    """Capture a dual fingerprint of the running lingtai_kernel source.
+    """Capture a dual fingerprint of the running lingtai.kernel source.
 
     Returns a dict with:
       - ``git_rev``: short git HEAD hash, or ``None`` if unavailable
       - ``source_digest``: SHA-256 hex prefix (12 chars) of key source files
       - ``captured_at``: ISO-8601 timestamp
     """
-    # Resolve the lingtai_kernel package source directory
+    # Resolve the lingtai.kernel package source directory
     try:
-        import lingtai_kernel
-        pkg_dir = Path(lingtai_kernel.__file__).resolve().parent  # type: ignore[arg-type]
+        import lingtai.kernel
+        pkg_dir = Path(lingtai.kernel.__file__).resolve().parent  # type: ignore[arg-type]
     except Exception:
         pkg_dir = None
 
@@ -791,14 +791,14 @@ def _perform_refresh(
         # never crashes over redaction, but record a non-secret marker so the
         # degradation is diagnosable rather than silent.
         "try:\n"
-        "    from lingtai_kernel.trace_redaction import redact_for_trajectory as _redact_for_trajectory\n"
+        "    from lingtai.kernel.trace_redaction import redact_for_trajectory as _redact_for_trajectory\n"
         "    _REDACTOR_IMPORT_OK = True\n"
         "except Exception:\n"
         "    def _redact_for_trajectory(value):\n"
         "        return value\n"
         "    _REDACTOR_IMPORT_OK = False\n"
         "try:\n"
-        "    from lingtai_kernel.runtime_identity import runtime_identity_event_fields as _runtime_identity_event_fields\n"
+        "    from lingtai.kernel.runtime_identity import runtime_identity_event_fields as _runtime_identity_event_fields\n"
         "except Exception:\n"
         "    def _runtime_identity_event_fields():\n"
         "        return {}\n"

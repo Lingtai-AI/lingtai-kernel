@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.agent import Agent
-from lingtai_kernel.base_agent import BaseAgent
+from lingtai.kernel.base_agent import BaseAgent
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
@@ -248,7 +248,7 @@ def test_molt_returns_faint_memory(tmp_path):
     """psyche(context, molt, summary) replays the molt's own ToolCallBlock as
     the opening assistant entry of the fresh session, and returns a faint-
     memory result dict."""
-    from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
+    from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
 
     svc = make_mock_service()
 
@@ -308,7 +308,7 @@ def test_context_forget_still_works(tmp_path):
     """System-initiated molt (base_agent calls this when the warning ladder
     is exhausted) uses the localized default summary and succeeds without
     any agent-provided summary."""
-    from lingtai_kernel.llm.interface import ChatInterface, TextBlock
+    from lingtai.kernel.llm.interface import ChatInterface, TextBlock
     from tools.psyche import context_forget
 
     svc = make_mock_service()
@@ -423,7 +423,7 @@ def test_stop_does_not_overwrite_pad_md(tmp_path):
 
 def test_molt_writes_summary_file_for_agent_path(tmp_path):
     """Agent-initiated molt persists summary to system/summaries/ with source=agent."""
-    from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
+    from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
 
     svc = make_mock_service()
 
@@ -485,7 +485,7 @@ def test_molt_writes_summary_file_for_agent_path(tmp_path):
 
 def test_context_forget_writes_summary_file_for_system_path(tmp_path):
     """System-initiated molt also persists summary; source field reflects trigger."""
-    from lingtai_kernel.llm.interface import ChatInterface, TextBlock
+    from lingtai.kernel.llm.interface import ChatInterface, TextBlock
     from tools.psyche import context_forget
 
     svc = make_mock_service()
@@ -522,7 +522,7 @@ def test_context_forget_writes_summary_file_for_system_path(tmp_path):
 
 def test_summary_write_failure_does_not_block_molt(tmp_path, monkeypatch):
     """If summary write fails, molt still completes; summary_path is None."""
-    from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
+    from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
     from tools import psyche as psyche_mod
 
     monkeypatch.setattr(psyche_mod, "_write_molt_summary", lambda *a, **kw: None)

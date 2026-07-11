@@ -10,9 +10,9 @@ Each test is written so it would have FAILED under the pre-wiring behavior
 
 See:
 - docs/references/runtime-vs-agent-session-objects.md
-- src/lingtai_kernel/agent_session.py
-- src/lingtai_kernel/base_agent/lifecycle.py::_start (rebuild + seed)
-- src/lingtai_kernel/meta_block.py::_build_session_token_economy
+- src/lingtai/kernel/agent_session.py
+- src/lingtai/kernel/base_agent/lifecycle.py::_start (rebuild + seed)
+- src/lingtai/kernel/meta_block.py::_build_session_token_economy
 """
 from __future__ import annotations
 
@@ -20,16 +20,16 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from lingtai_kernel.agent_session import (
+from lingtai.kernel.agent_session import (
     MOLT_BOUNDARY_EVENT,
     TOKEN_EVENT,
     AgentSession,
     RuntimeSession,
     rebuild_agent_session_from_events,
 )
-from lingtai_kernel.meta_block import _build_session_token_economy
-from lingtai_kernel.session import SessionManager
-from lingtai_kernel.config import AgentConfig
+from lingtai.kernel.meta_block import _build_session_token_economy
+from lingtai.kernel.session import SessionManager
+from lingtai.kernel.config import AgentConfig
 from unittest.mock import MagicMock
 
 

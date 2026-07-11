@@ -141,7 +141,7 @@ def test_materialize_no_preset_field_unchanged(tmp_path):
 def test_refresh_preset_thinking_reaches_session_path(tmp_path):
     from unittest.mock import MagicMock
     from lingtai.agent import Agent
-    from lingtai_kernel.config import AgentConfig
+    from lingtai.kernel.config import AgentConfig
 
     plib = _make_preset_lib(tmp_path, {
         "codex": {
@@ -195,7 +195,7 @@ def test_refresh_preset_omitted_thinking_defaults_to_xhigh(tmp_path, monkeypatch
     """
     from unittest.mock import MagicMock
     from lingtai.agent import Agent
-    from lingtai_kernel.config import AgentConfig
+    from lingtai.kernel.config import AgentConfig
 
     tui = tmp_path / "tui"
     tui.mkdir()
@@ -390,7 +390,7 @@ def test_materialize_picks_up_context_limit_from_legacy_layout(tmp_path, monkeyp
     reads the preset. The materializer then writes it into init.json's
     manifest root (init.json's schema is unchanged).
     """
-    from lingtai_kernel.migrate.migrate import reset_process_cache
+    from lingtai.kernel.migrate.migrate import reset_process_cache
     reset_process_cache()
     plib = _make_preset_lib(tmp_path, {
         "narrow": {
@@ -591,7 +591,7 @@ def test_refresh_preset_omitting_daemon_keeps_override_in_manager(tmp_path, monk
     sets daemon.max_emanations=30 → live DaemonManager ceiling is 30."""
     from unittest.mock import MagicMock
     from lingtai.agent import Agent
-    from lingtai_kernel.config import AgentConfig
+    from lingtai.kernel.config import AgentConfig
 
     plib = _make_preset_lib(tmp_path, {
         "codex": {
@@ -635,7 +635,7 @@ def test_refresh_preset_keeps_daemon_override_in_manager(tmp_path, monkeypatch):
     """
     from unittest.mock import MagicMock
     from lingtai.agent import Agent
-    from lingtai_kernel.config import AgentConfig
+    from lingtai.kernel.config import AgentConfig
 
     plib = _make_preset_lib(tmp_path, {
         "smart": {
@@ -685,7 +685,7 @@ def test_refresh_preset_omitting_mcp_keeps_channel_reply_surface(tmp_path, monke
     from unittest.mock import MagicMock
 
     from lingtai.agent import Agent
-    from lingtai_kernel.config import AgentConfig
+    from lingtai.kernel.config import AgentConfig
 
     plib = _make_preset_lib(tmp_path, {
         "codex": {

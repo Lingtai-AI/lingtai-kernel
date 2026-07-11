@@ -13,7 +13,7 @@ def soul_inquiry(agent, question: str) -> dict | None:
     Clones the agent's conversation (thinking + diary only, no tool
     calls/results), sends the question. Fresh session each time.
     """
-    from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock
+    from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock
     from .config import _build_soul_system_prompt
     from .consultation import _send_with_timeout, _write_soul_tokens
 
@@ -72,7 +72,7 @@ def _publish_human_inquiry_notification(agent, result: dict, question: str) -> N
     what answer came back, without treating the exchange as a normal
     user request.
     """
-    from lingtai_kernel.notifications import submit
+    from lingtai.kernel.notifications import submit
 
     answer = str(result.get("voice") or "")
     submit(

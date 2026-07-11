@@ -34,7 +34,7 @@ related_files:
       Owns the concrete boot/refresh injection rule: _reload_prompt_sections() sources
       rules solely from system/rules.md (deleting the section when absent/empty). Crawl
       here for where the injected content actually comes from.
-  - path: src/lingtai_kernel/base_agent/lifecycle.py
+  - path: src/lingtai/kernel/base_agent/lifecycle.py
     why: >
       Owns the live rules-update rule: on a rules signal it persists system/rules.md,
       rewrites the `rules` section, and flushes the prompt. Crawl here for how a

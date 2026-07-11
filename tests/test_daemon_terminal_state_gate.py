@@ -201,7 +201,7 @@ class TestClassifyFallbackSignals:
 
 def _make_agent(tmp_path):
     from lingtai.agent import Agent
-    from lingtai_kernel.config import AgentConfig
+    from lingtai.kernel.config import AgentConfig
     svc = MagicMock()
     svc.provider = "mock"
     svc.model = "mock-model"
@@ -241,7 +241,7 @@ class TestOnEmanationDoneIntegration:
         run_dir never recorded 'timeout' (e.g. crash before mark_timeout) still
         notifies with the correct terminal label because timeout_event is set.
         """
-        from lingtai_kernel.notifications import collect_notifications
+        from lingtai.kernel.notifications import collect_notifications
 
         agent = _make_agent(tmp_path)
         agent.inbox = queue.Queue()
@@ -268,7 +268,7 @@ class TestOnEmanationDoneIntegration:
         assert "timeout" in events[0]["body"].lower()
 
     def test_cancel_event_notifies_without_run_dir_state(self, tmp_path):
-        from lingtai_kernel.notifications import collect_notifications
+        from lingtai.kernel.notifications import collect_notifications
 
         agent = _make_agent(tmp_path)
         agent.inbox = queue.Queue()
@@ -297,7 +297,7 @@ class TestOnEmanationDoneIntegration:
         """Even a tiny successful result must wake the parent: the daemon
         terminal notification is the completion signal, not a long-output echo.
         """
-        from lingtai_kernel.notifications import collect_notifications
+        from lingtai.kernel.notifications import collect_notifications
 
         agent = _make_agent(tmp_path)
         agent.inbox = queue.Queue()
@@ -328,7 +328,7 @@ class TestOnEmanationDoneIntegration:
     def test_timeout_terminal_notified_only_once(self, tmp_path):
         """Dedupe preservation: a timeout surfaced via the event fallback is
         still delivered exactly once across duplicate done-callbacks."""
-        from lingtai_kernel.notifications import collect_notifications
+        from lingtai.kernel.notifications import collect_notifications
 
         agent = _make_agent(tmp_path)
         agent.inbox = queue.Queue()

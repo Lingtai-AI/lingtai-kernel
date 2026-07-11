@@ -12,12 +12,12 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from lingtai_kernel.i18n import t
+from lingtai.kernel.i18n import t
 # ``_new_mailbox_id`` is owned by the kernel mail service (the generic
 # filesystem mailbox), which uses it in ``send()`` without depending on this
 # tool. The email tool imports it from there and re-exports it (via the package
 # ``__init__``) so existing ``tools.email._new_mailbox_id`` importers still work.
-from lingtai_kernel.services.mail import _new_mailbox_id  # noqa: F401
+from lingtai.kernel.services.mail import _new_mailbox_id  # noqa: F401
 
 
 # Internal email bodies are injected in full into the persistent notification
@@ -413,8 +413,8 @@ def _render_unread_digest(agent, *, max_entries: int = 10, preview_chars: int = 
     Caller uses ``count`` to short-circuit (don't enqueue when 0) and
     ``newest_received_at`` for the call_block args.
     """
-    from lingtai_kernel.i18n import t as _t
-    from lingtai_kernel.time_veil import veil
+    from lingtai.kernel.i18n import t as _t
+    from lingtai.kernel.time_veil import veil
 
     read_ids = _read_ids(agent)
     inbox = _list_inbox(agent)  # already newest-first per existing semantics
@@ -489,8 +489,8 @@ def _rerender_unread_digest(agent) -> str | None:
     "_rerender_unread_digest")``) on mail arrival, and ``EmailManager`` calls it
     directly after read-state mutations.
     """
-    from lingtai_kernel.notifications import submit as publish_notification
-    from lingtai_kernel.notifications import clear as clear_notification
+    from lingtai.kernel.notifications import submit as publish_notification
+    from lingtai.kernel.notifications import clear as clear_notification
 
     body, count, newest_ts = _render_unread_digest(agent)
 

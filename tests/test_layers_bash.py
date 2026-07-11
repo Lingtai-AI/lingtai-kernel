@@ -155,7 +155,7 @@ class TestBashManager:
     def test_missing_module_is_detected(self):
         mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
         result = mgr.handle(
-            {"command": "python3 -c 'import lingtai_kernel_does_not_exist_xyz'"}
+            {"command": "python3 -c 'import lingtai.kernel_does_not_exist_xyz'"}
         )
         assert result["ok"] is False
         assert "missing_module" in result["warning"]
@@ -352,7 +352,7 @@ class TestRedactWarningTail:
         real_import = builtins.__import__
 
         def boom(name, *args, **kwargs):
-            if name == "lingtai_kernel.trace_redaction":
+            if name == "lingtai.kernel.trace_redaction":
                 raise ImportError("simulated missing redactor")
             return real_import(name, *args, **kwargs)
 

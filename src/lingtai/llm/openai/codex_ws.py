@@ -38,7 +38,7 @@ import json
 from types import SimpleNamespace
 from typing import Any, Iterator
 
-from lingtai_kernel.logging import get_logger
+from lingtai.kernel.logging import get_logger
 
 logger = get_logger()
 

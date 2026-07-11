@@ -15,7 +15,7 @@ import mcp.types as types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
-from lingtai_kernel._fsutil import atomic_write_json
+from lingtai.kernel._fsutil import atomic_write_json
 
 STATUSES = {"done", "failed", "incomplete"}
 

@@ -31,12 +31,12 @@ from typing import TYPE_CHECKING, Callable
 if TYPE_CHECKING:
     from lingtai.agent import Agent
 
-from lingtai_kernel._fsutil import atomic_write_json
-from lingtai_kernel.llm.base import FunctionSchema
-from lingtai_kernel.tool_glossary import append_tool_glossary
-from lingtai_kernel.loop_guard import LoopGuard
-from lingtai_kernel.meta_block import build_meta
-from lingtai_kernel.tool_executor import ToolExecutor
+from lingtai.kernel._fsutil import atomic_write_json
+from lingtai.kernel.llm.base import FunctionSchema
+from lingtai.kernel.tool_glossary import append_tool_glossary
+from lingtai.kernel.loop_guard import LoopGuard
+from lingtai.kernel.meta_block import build_meta
+from lingtai.kernel.tool_executor import ToolExecutor
 from .run_dir import DaemonRunDir
 from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
 from .runtime import (
@@ -1985,7 +1985,7 @@ class DaemonManager:
         effective_preset_llm = preset_llm or self._implicit_parent_preset_llm()
 
         from lingtai.llm.service import LLMService
-        from lingtai_kernel.config_resolve import resolve_env
+        from lingtai.kernel.config_resolve import resolve_env
 
         provider = effective_preset_llm["provider"]
         effective_model = effective_preset_llm["model"]
@@ -2037,7 +2037,7 @@ class DaemonManager:
         def _dispatch_daemon_tool(tc):
             handler = dispatch.get(tc.name)
             if handler is None:
-                from lingtai_kernel.types import UnknownToolError
+                from lingtai.kernel.types import UnknownToolError
                 raise UnknownToolError(tc.name)
             args = dict(tc.args or {})
             if tc.name in intrinsic_tool_names:
@@ -2889,7 +2889,7 @@ class DaemonManager:
         # If any preset is invalid, refuse the whole batch. Presets are
         # identified by path (~/foo.json, ./foo.json, or absolute).
         from lingtai.presets import load_preset
-        from lingtai_kernel.preset_connectivity import check_connectivity
+        from lingtai.kernel.preset_connectivity import check_connectivity
 
         resolved_presets: list[dict | None] = []  # one entry per task — None means inherit
         for spec in tasks:

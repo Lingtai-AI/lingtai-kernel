@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from lingtai_kernel.workdir import WorkingDir, WorkdirLayout, workdir_layout
+from lingtai.kernel.workdir import WorkingDir, WorkdirLayout, workdir_layout
 
 
 class TestWorkdirLayout:

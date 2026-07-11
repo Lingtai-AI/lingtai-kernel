@@ -468,7 +468,7 @@ def test_generate_chat_completions_json_schema_keeps_response_format():
 def test_safe_llm_from_service_does_not_surface_wire_api():
     """wire_api is an init/provider concern, not a public identity surface; it
     must never reach ``.agent.json`` or the identity prompt section."""
-    from lingtai_kernel.base_agent.identity import _safe_llm_from_service
+    from lingtai.kernel.base_agent.identity import _safe_llm_from_service
 
     class FakeService:
         provider = "openai"

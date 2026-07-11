@@ -39,12 +39,12 @@ related_files:
       The owning prompt-source anatomy: it records that meta_guidance is generated from
       meta_guidance/catalog/, not a single body. Read it before looking for a
       meta_guidance.md.
-  - path: src/lingtai_kernel/prompt_catalog.py
+  - path: src/lingtai/kernel/prompt_catalog.py
     why: >
       Owns the concrete catalog-assembly rule: load_guidance_catalog() reads
       meta_guidance/catalog/ (INDEX.md + <id>.md) and the code-owned GUIDANCE_SECTION_ORDER.
       Crawl here for the exact loading/ordering mechanics this contract only summarizes.
-  - path: src/lingtai_kernel/meta_block.py
+  - path: src/lingtai/kernel/meta_block.py
     why: >
       Owns how the meta_guidance section body is built and spliced: build_meta_guidance()
       renders the loaded catalog alongside the `_meta` readme and adapter static rules.

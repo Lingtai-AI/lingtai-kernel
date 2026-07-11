@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
+from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
 
 
 # Channel name for the post-molt reminder notification. Context-pressure
@@ -483,7 +483,7 @@ def _context_molt(agent, args: dict) -> dict:
     )
 
     # The faint-memory result.
-    from lingtai_kernel.i18n import t
+    from lingtai.kernel.i18n import t
     lang = agent._config.language
     return {
         "status": "ok",
@@ -555,7 +555,7 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
     the pre-molt interface into the fresh session, giving the post-molt
     self recent conversational context without relying on pad.md.
     """
-    from lingtai_kernel.i18n import t
+    from lingtai.kernel.i18n import t
 
     lang = agent._config.language
     if source == "warning_ladder":

@@ -1,13 +1,13 @@
 """Compatibility shim — preset library moved into the kernel.
 
-The implementation now lives at ``lingtai_kernel.presets``. New code should
+The implementation now lives at ``lingtai.kernel.presets``. New code should
 import from there directly. This shim re-exports the public surface so older
 wrapper-side callers keep working unchanged.
 """
 from __future__ import annotations
 
-from lingtai_kernel.presets import *  # noqa: F401,F403
-from lingtai_kernel.presets import (  # noqa: F401
+from lingtai.kernel.presets import *  # noqa: F401,F403
+from lingtai.kernel.presets import (  # noqa: F401
     default_presets_path,
     home_shortened,
     resolve_preset_name,

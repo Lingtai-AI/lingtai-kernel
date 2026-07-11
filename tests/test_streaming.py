@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from lingtai_kernel.llm.streaming import StreamingAccumulator
-from lingtai_kernel.llm.base import ToolCall, UsageMetadata
+from lingtai.kernel.llm.streaming import StreamingAccumulator
+from lingtai.kernel.llm.base import ToolCall, UsageMetadata
 
 
 # -- Text accumulation ------------------------------------------------------
@@ -70,7 +70,7 @@ def test_finalize_auto_closes_pending_sequential_tool(caplog):
     acc.start_tool(id="toolu_1", name="read_file")
     acc.add_tool_args(args_json)
 
-    with caplog.at_level("WARNING", logger="lingtai_kernel.llm.streaming"):
+    with caplog.at_level("WARNING", logger="lingtai.kernel.llm.streaming"):
         result = acc.finalize()
 
     assert len(result.tool_calls) == 1
@@ -91,7 +91,7 @@ def test_finalize_auto_closes_pending_sequential_tool_with_malformed_json(caplog
     acc.start_tool(id="toolu_bad", name="read_file")
     acc.add_tool_args(args_json)
 
-    with caplog.at_level("WARNING", logger="lingtai_kernel.llm.streaming"):
+    with caplog.at_level("WARNING", logger="lingtai.kernel.llm.streaming"):
         result = acc.finalize()
 
     assert len(result.tool_calls) == 1
@@ -114,7 +114,7 @@ def test_finalize_after_finished_sequential_tool_emits_no_pending_warning(caplog
     acc.add_tool_args('{"path": "foo.py"}')
     acc.finish_tool()
 
-    with caplog.at_level("WARNING", logger="lingtai_kernel.llm.streaming"):
+    with caplog.at_level("WARNING", logger="lingtai.kernel.llm.streaming"):
         result = acc.finalize()
 
     assert len(result.tool_calls) == 1
@@ -129,7 +129,7 @@ def test_finalize_preserves_finished_then_pending_tool_order_and_is_idempotent(c
     acc.start_tool(id="toolu_2", name="write_file")
     acc.add_tool_args('{"path": "bar.py"}')
 
-    with caplog.at_level("WARNING", logger="lingtai_kernel.llm.streaming"):
+    with caplog.at_level("WARNING", logger="lingtai.kernel.llm.streaming"):
         first_result = acc.finalize()
 
     assert [tc.id for tc in first_result.tool_calls] == ["toolu_1", "toolu_2"]
@@ -138,7 +138,7 @@ def test_finalize_preserves_finished_then_pending_tool_order_and_is_idempotent(c
     assert "toolu_2" in caplog.text
 
     caplog.clear()
-    with caplog.at_level("WARNING", logger="lingtai_kernel.llm.streaming"):
+    with caplog.at_level("WARNING", logger="lingtai.kernel.llm.streaming"):
         second_result = acc.finalize()
 
     assert [tc.id for tc in second_result.tool_calls] == ["toolu_1", "toolu_2"]
@@ -150,7 +150,7 @@ def test_sequential_tool_malformed_json(caplog):
     args_json = "{not valid json"
     acc.start_tool(id="t1", name="broken")
     acc.add_tool_args(args_json)
-    with caplog.at_level("WARNING", logger="lingtai_kernel.llm.streaming"):
+    with caplog.at_level("WARNING", logger="lingtai.kernel.llm.streaming"):
         acc.finish_tool()
     result = acc.finalize()
     assert result.tool_calls[0].args == {}

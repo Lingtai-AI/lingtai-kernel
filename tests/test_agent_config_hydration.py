@@ -8,14 +8,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.agent import Agent, build_agent_config
-from lingtai_kernel.base_agent import BaseAgent
-from lingtai_kernel.config import (
+from lingtai.kernel.base_agent import BaseAgent
+from lingtai.kernel.config import (
     AgentConfig,
     IDLE_SLEEP_TIMEOUT_SECONDS,
     MOLT_PRESSURE_THRESHOLD,
 )
-from lingtai_kernel.base_agent.lifecycle import _maybe_sleep_after_idle_timeout
-from lingtai_kernel.state import AgentState
+from lingtai.kernel.base_agent.lifecycle import _maybe_sleep_after_idle_timeout
+from lingtai.kernel.state import AgentState
 
 
 def _service():

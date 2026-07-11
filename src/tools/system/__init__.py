@@ -55,10 +55,10 @@ from .summarize import _summarize, SUMMARIZE_MARKER  # noqa: F401
 # import ``publish_notification`` / ``clear_notification`` from here.  The
 # agent-facing notification *verbs* (check/dismiss) now live exclusively on the
 # standalone ``notification`` tool; ``system`` exposes none of them.  The
-# functions live in ``lingtai_kernel.notifications`` (single source of truth,
+# functions live in ``lingtai.kernel.notifications`` (single source of truth,
 # accessible to non-intrinsic call sites and external producers that import the
 # module directly).
-from lingtai_kernel.notifications import (  # noqa: F401
+from lingtai.kernel.notifications import (  # noqa: F401
     submit as publish_notification,
     clear as clear_notification,
 )

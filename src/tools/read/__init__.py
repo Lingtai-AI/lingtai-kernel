@@ -7,12 +7,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from lingtai_kernel.tool_result_artifacts import PREVENTIVE_MAX_CHARS
+from lingtai.kernel.tool_result_artifacts import PREVENTIVE_MAX_CHARS
 
 from .._file_paths import resolve_workdir_path
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 

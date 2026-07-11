@@ -166,7 +166,7 @@ common way agents corrupt their own downstream work.
   `warning`; the raw `stderr` field is unchanged. If `warning` is present, stop
   and read it before acting on the output.
 - **Use the venv interpreter for project code.** Bare `python3` lacks
-  third-party packages and LingTai's own modules (`lingtai`, `lingtai_kernel`).
+  third-party packages and LingTai's own modules (`lingtai`, `lingtai.kernel`).
   A `No module named …` / `missing_module` warning usually means you ran the
   wrong interpreter — invoke the project's virtualenv `python`, not the system
   one.

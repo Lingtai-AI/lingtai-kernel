@@ -226,7 +226,7 @@ def test_web_search_setup_passes_zhipu_mode_without_api_host():
 
 def test_inherited_web_search_env_key_registers(tmp_path, monkeypatch):
     """A provider:inherit web_search with env-only credentials boots."""
-    from lingtai_kernel.presets import expand_inherit
+    from lingtai.kernel.presets import expand_inherit
 
     monkeypatch.setenv("WEB_SEARCH_TEST_API_KEY", "sk-from-env")
     capabilities = {"web_search": {"provider": "inherit"}}

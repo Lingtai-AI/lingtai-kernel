@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from lingtai_kernel.notifications import notification_fingerprint, publish
+from lingtai.kernel.notifications import notification_fingerprint, publish
 
 
 @dataclass

@@ -7,7 +7,7 @@ from typing import Any
 
 from lingtai.services import mcp_inbox as inbox
 from lingtai.mcp_servers.telegram.manager import TelegramManager
-from lingtai_kernel.notifications import submit
+from lingtai.kernel.notifications import submit
 
 
 class _FakeAccount:

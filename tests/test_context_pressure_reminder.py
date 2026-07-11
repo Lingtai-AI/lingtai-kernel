@@ -1,6 +1,6 @@
 """Tests for the unified molt/context-pressure reminder abstraction.
 
-``ContextPressureReminder`` (``lingtai_kernel/reminders/context_pressure.py``)
+``ContextPressureReminder`` (``lingtai/kernel/reminders/context_pressure.py``)
 owns the whole molt/context-pressure reminder that used to be split between
 ``SessionManager`` (raw streak counters) and ``meta_block`` (warning decision +
 prose). These tests exercise the abstraction directly, plus the compatibility
@@ -12,14 +12,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from lingtai_kernel.config import (
+from lingtai.kernel.config import (
     CONTEXT_PRESSURE_HIGH_RATIO,
     CONTEXT_PRESSURE_FORCED_REBUILD_RATIO,
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
     CONTEXT_PRESSURE_RECOVERY_TARGET,
     CONTEXT_PRESSURE_WARN_AFTER_ROUNDS,
 )
-from lingtai_kernel.reminders.context_pressure import (
+from lingtai.kernel.reminders.context_pressure import (
     ContextPressureReminder,
     CURRENT_MOLT_EVENT,
     CURRENT_MOLT_TARGET_PATH,
@@ -279,8 +279,8 @@ def test_render_reconstruction_molt_unparseable_returns_none():
 def _make_session_manager():
     from unittest.mock import MagicMock
 
-    from lingtai_kernel.config import AgentConfig
-    from lingtai_kernel.session import SessionManager
+    from lingtai.kernel.config import AgentConfig
+    from lingtai.kernel.session import SessionManager
 
     svc = MagicMock()
     svc.model = "test-model"
@@ -337,7 +337,7 @@ def _agent_with_compat_attrs(*, active, streak):
 
 
 def test_meta_block_build_molt_context_uses_reminder():
-    from lingtai_kernel.meta_block import build_molt_context
+    from lingtai.kernel.meta_block import build_molt_context
 
     r = ContextPressureReminder()
     for rid in (1, 2, 3):
@@ -348,7 +348,7 @@ def test_meta_block_build_molt_context_uses_reminder():
 
 
 def test_meta_block_build_molt_context_compat_fallback_matches_reminder():
-    from lingtai_kernel.meta_block import build_molt_context
+    from lingtai.kernel.meta_block import build_molt_context
 
     via_reminder = ContextPressureReminder()
     for rid in (1, 2, 3):

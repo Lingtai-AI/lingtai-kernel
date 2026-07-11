@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 def test_resolve_env_fields_resolves_env_var(monkeypatch):
     """_resolve_env_fields replaces *_env keys with env var values."""
-    from lingtai_kernel.config_resolve import _resolve_env_fields
+    from lingtai.kernel.config_resolve import _resolve_env_fields
 
     monkeypatch.setenv("TEST_SECRET", "hunter2")
     result = _resolve_env_fields({"api_key": None, "api_key_env": "TEST_SECRET"})
@@ -21,7 +21,7 @@ def test_resolve_env_fields_resolves_env_var(monkeypatch):
 
 def test_resolve_capabilities_resolves_env():
     """_resolve_capabilities applies _resolve_env_fields to each capability."""
-    from lingtai_kernel.config_resolve import _resolve_capabilities
+    from lingtai.kernel.config_resolve import _resolve_capabilities
 
     caps = {"bash": {"policy_file": "p.json"}, "vision": {}}
     result = _resolve_capabilities(caps)
@@ -81,7 +81,7 @@ def _make_init(
 def _make_agent(tmp_path: Path, init_data: dict | None = None):
     """Create a bare Agent with a mock LLM service in a temp working dir."""
     from lingtai.agent import Agent
-    from lingtai_kernel.config import AgentConfig
+    from lingtai.kernel.config import AgentConfig
 
     init = init_data or _make_init()
     (tmp_path / "init.json").write_text(json.dumps(init))
@@ -113,7 +113,7 @@ def _packaged_procedures_file() -> str:
 
 def _packaged_procedures() -> str:
     """Rendered procedures body (frontmatter stripped) — what reaches the prompt."""
-    from lingtai_kernel._frontmatter import strip_frontmatter
+    from lingtai.kernel._frontmatter import strip_frontmatter
 
     return strip_frontmatter(_packaged_procedures_file())
 
@@ -124,7 +124,7 @@ def _packaged_guidance() -> dict:
     The kernel no longer ships guidance.json; runtime guidance is authored as
     `lingtai/prompts/meta_guidance/catalog/INDEX.md` + `<id>.md` and assembled into this dict
     shape. The derived `system/guidance.json` mirror is serialized from it."""
-    from lingtai_kernel.prompt_catalog import load_guidance_catalog
+    from lingtai.kernel.prompt_catalog import load_guidance_catalog
 
     return load_guidance_catalog()
 
@@ -437,7 +437,7 @@ def _packaged_substrate_file() -> str:
 
 def _packaged_substrate() -> str:
     """Rendered substrate body (frontmatter stripped) — what reaches the prompt."""
-    from lingtai_kernel._frontmatter import strip_frontmatter
+    from lingtai.kernel._frontmatter import strip_frontmatter
 
     return strip_frontmatter(_packaged_substrate_file())
 
@@ -692,7 +692,7 @@ def _codex_agent(tmp_path: Path, epoch: float):
         LLMService,
         build_provider_defaults_from_manifest_llm,
     )
-    from lingtai_kernel.config import AgentConfig
+    from lingtai.kernel.config import AgentConfig
     import lingtai  # noqa: F401  (registers the codex adapter factory)
 
     init = _make_init(provider="codex", model="gpt-5.5")

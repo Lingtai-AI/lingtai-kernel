@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from lingtai_kernel.tool_result_summary import (
+from lingtai.kernel.tool_result_summary import (
     APRIORI_SUMMARY_CAP,
     APRIORI_SUMMARY_MARKER,
     EVENTS_LOG_RELPATH,
@@ -483,7 +483,7 @@ def test_summarizer_exception_error_text_is_bounded_and_sanitized():
     the full HTML or ballooning the context. Regression for the live PR #586
     observation (visible error ~23k–35k chars of provider HTML).
     """
-    from lingtai_kernel.tool_result_summary import APRIORI_SUMMARY_ERROR_MAX_CHARS
+    from lingtai.kernel.tool_result_summary import APRIORI_SUMMARY_ERROR_MAX_CHARS
 
     # A challenge page is a huge run of repeated tokens — the live shape.
     html_blob = "<html>" + ("CLOUDFLARE-CHALLENGE " * 5000) + "</html>"

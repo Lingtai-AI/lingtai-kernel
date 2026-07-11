@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from lingtai_kernel.agent_session import (
+from lingtai.kernel.agent_session import (
     MOLT_BOUNDARY_EVENT,
     TOKEN_EVENT,
     AgentSession,
@@ -165,7 +165,7 @@ def test_system_forced_molt_boundary_source(tmp_path):
 
 def _build_sqlite(agent_dir: Path, events: list[dict]) -> None:
     """Build logs/log.sqlite from the events, matching production wiring."""
-    from lingtai_kernel.services.logging import SQLiteEventIndex
+    from lingtai.kernel.services.logging import SQLiteEventIndex
 
     events_path = agent_dir / "logs" / "events.jsonl"
     sqlite_path = agent_dir / "logs" / "log.sqlite"

@@ -24,8 +24,8 @@ from lingtai.llm.openai.adapter import (
     OpenAIResponsesSession,
     _lingtai_user_agent,
 )
-from lingtai_kernel.llm.base import FunctionSchema
-from lingtai_kernel.llm.interface import TextBlock, ThinkingBlock
+from lingtai.kernel.llm.base import FunctionSchema
+from lingtai.kernel.llm.interface import TextBlock, ThinkingBlock
 
 
 # NOTE: these HTTP-path prompt-cache tests build Codex sessions WITHOUT an
@@ -1299,8 +1299,8 @@ def test_token_ledger_entry_merges_usage_extra(tmp_path):
     """BaseAgent token-ledger writes preserve safe provider metadata."""
     from types import SimpleNamespace as _SimpleNamespace
 
-    from lingtai_kernel.base_agent import BaseAgent
-    from lingtai_kernel.llm.base import UsageMetadata
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.llm.base import UsageMetadata
 
     class _Workdir:
         def write_manifest(self, manifest):

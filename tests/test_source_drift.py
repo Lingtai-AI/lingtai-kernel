@@ -19,7 +19,7 @@ class TestCaptureRuntimeFingerprint:
     """Unit tests for _capture_runtime_fingerprint()."""
 
     def test_returns_expected_keys(self):
-        from lingtai_kernel.base_agent.lifecycle import _capture_runtime_fingerprint
+        from lingtai.kernel.base_agent.lifecycle import _capture_runtime_fingerprint
 
         fp = _capture_runtime_fingerprint()
         assert "git_rev" in fp
@@ -27,7 +27,7 @@ class TestCaptureRuntimeFingerprint:
         assert "captured_at" in fp
 
     def test_source_digest_is_12_hex_chars(self):
-        from lingtai_kernel.base_agent.lifecycle import _capture_runtime_fingerprint
+        from lingtai.kernel.base_agent.lifecycle import _capture_runtime_fingerprint
 
         fp = _capture_runtime_fingerprint()
         digest = fp["source_digest"]
@@ -36,7 +36,7 @@ class TestCaptureRuntimeFingerprint:
         int(digest, 16)  # should not raise
 
     def test_captured_at_is_iso8601(self):
-        from lingtai_kernel.base_agent.lifecycle import _capture_runtime_fingerprint
+        from lingtai.kernel.base_agent.lifecycle import _capture_runtime_fingerprint
 
         fp = _capture_runtime_fingerprint()
         ts = fp["captured_at"]
@@ -46,9 +46,9 @@ class TestCaptureRuntimeFingerprint:
         datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
     def test_git_rev_null_when_not_in_repo(self):
-        from lingtai_kernel.base_agent.lifecycle import _capture_runtime_fingerprint
+        from lingtai.kernel.base_agent.lifecycle import _capture_runtime_fingerprint
 
-        with patch("lingtai_kernel.base_agent.lifecycle.subprocess") as mock_sub:
+        with patch("lingtai.kernel.base_agent.lifecycle.subprocess") as mock_sub:
             mock_sub.run.side_effect = FileNotFoundError
             mock_sub.TimeoutExpired = subprocess.TimeoutExpired
             fp = _capture_runtime_fingerprint()
@@ -58,9 +58,9 @@ class TestCaptureRuntimeFingerprint:
     def test_git_rev_null_on_timeout(self):
         import subprocess as _sp
 
-        from lingtai_kernel.base_agent.lifecycle import _capture_runtime_fingerprint
+        from lingtai.kernel.base_agent.lifecycle import _capture_runtime_fingerprint
 
-        with patch("lingtai_kernel.base_agent.lifecycle.subprocess") as mock_sub:
+        with patch("lingtai.kernel.base_agent.lifecycle.subprocess") as mock_sub:
             mock_sub.run.side_effect = _sp.TimeoutExpired(cmd="git", timeout=2)
             mock_sub.TimeoutExpired = _sp.TimeoutExpired
             mock_sub.CalledProcessError = _sp.CalledProcessError
@@ -71,13 +71,13 @@ class TestCaptureRuntimeFingerprint:
 
     def test_source_digest_changes_on_file_change(self, tmp_path):
         """Simulate source file change and verify digest changes."""
-        import lingtai_kernel
-        from lingtai_kernel.base_agent.lifecycle import _capture_runtime_fingerprint, _FP_KEY_FILES
+        import lingtai.kernel
+        from lingtai.kernel.base_agent.lifecycle import _capture_runtime_fingerprint, _FP_KEY_FILES
 
         fp1 = _capture_runtime_fingerprint()
 
         # Modify one of the key files temporarily
-        pkg_dir = Path(lingtai_kernel.__file__).resolve().parent
+        pkg_dir = Path(lingtai.kernel.__file__).resolve().parent
         target = pkg_dir / _FP_KEY_FILES[0]
         original = target.read_bytes()
         try:
@@ -102,7 +102,7 @@ class TestStatusJsonRuntime:
 
     def test_status_includes_fingerprint_fields(self):
         """Test via the _status function with a mock agent."""
-        from lingtai_kernel.base_agent.identity import _status
+        from lingtai.kernel.base_agent.identity import _status
 
         agent = MagicMock()
         agent._working_dir = Path("/tmp/test")
@@ -148,7 +148,7 @@ class TestStatusJsonRuntime:
 
     def test_status_fingerprint_none_when_missing(self):
         """When _runtime_fingerprint is not set, fingerprint should be None."""
-        from lingtai_kernel.base_agent.identity import _status
+        from lingtai.kernel.base_agent.identity import _status
 
         agent = MagicMock()
         agent._working_dir = Path("/tmp/test")
@@ -208,8 +208,8 @@ class TestSourceDriftNudge:
 
     # Patch target: _capture_runtime_fingerprint is imported locally inside
     # source_drift.check(), so we must patch it at its definition site.
-    _PATCH_TARGET = "lingtai_kernel.base_agent.lifecycle._capture_runtime_fingerprint"
-    _DEV_RUNTIME_TARGET = "lingtai_kernel.nudge.source_drift._dev_runtime_reason"
+    _PATCH_TARGET = "lingtai.kernel.base_agent.lifecycle._capture_runtime_fingerprint"
+    _DEV_RUNTIME_TARGET = "lingtai.kernel.nudge.source_drift._dev_runtime_reason"
 
     @pytest.fixture(autouse=True)
     def _packaged_runtime(self):
@@ -219,7 +219,7 @@ class TestSourceDriftNudge:
 
     def test_no_drift_removes_prior_nudge(self):
         """When startup and disk fingerprints match, no nudge emitted."""
-        from lingtai_kernel.nudge.source_drift import check
+        from lingtai.kernel.nudge.source_drift import check
 
         fp = {
             "git_rev": "abc1234",
@@ -231,13 +231,13 @@ class TestSourceDriftNudge:
         with patch(self._PATCH_TARGET, return_value=fp):
             check(agent)
 
-        from lingtai_kernel.nudge import source_drift
+        from lingtai.kernel.nudge import source_drift
         state = source_drift._state(agent)
         assert not state.get("emitted", False)
 
     def test_drift_detected_emits_nudge(self):
         """When fingerprints differ, nudge is emitted."""
-        from lingtai_kernel.nudge.source_drift import check
+        from lingtai.kernel.nudge.source_drift import check
 
         startup_fp = {
             "git_rev": "abc1234",
@@ -253,12 +253,12 @@ class TestSourceDriftNudge:
 
         with (
             patch(self._PATCH_TARGET, return_value=disk_fp),
-            patch("lingtai_kernel.nudge.upsert") as mock_upsert,
+            patch("lingtai.kernel.nudge.upsert") as mock_upsert,
         ):
             check(agent)
             mock_upsert.assert_called_once()
 
-        from lingtai_kernel.nudge import source_drift
+        from lingtai.kernel.nudge import source_drift
         state = source_drift._state(agent)
         assert state.get("emitted") is True
         assert "abc1234" in state.get("emitted_for", "")
@@ -266,7 +266,7 @@ class TestSourceDriftNudge:
 
     def test_throttle_skips_within_interval(self):
         """Second call within 60s should be a no-op."""
-        from lingtai_kernel.nudge.source_drift import check, _state
+        from lingtai.kernel.nudge.source_drift import check, _state
 
         startup_fp = {"git_rev": "aaa", "source_digest": "bbb", "captured_at": "t1"}
         disk_fp = {"git_rev": "ccc", "source_digest": "ddd", "captured_at": "t2"}
@@ -284,7 +284,7 @@ class TestSourceDriftNudge:
 
     def test_throttle_allows_after_interval(self):
         """After 60s, check should run again."""
-        from lingtai_kernel.nudge.source_drift import check, _state
+        from lingtai.kernel.nudge.source_drift import check, _state
 
         startup_fp = {"git_rev": "aaa", "source_digest": "bbb", "captured_at": "t1"}
         disk_fp = {"git_rev": "aaa", "source_digest": "bbb", "captured_at": "t2"}
@@ -301,7 +301,7 @@ class TestSourceDriftNudge:
 
     def test_no_startup_fingerprint_is_noop(self):
         """If agent has no startup fingerprint, check is a no-op."""
-        from lingtai_kernel.nudge.source_drift import check
+        from lingtai.kernel.nudge.source_drift import check
 
         agent = self._make_agent(startup_fp=None)
         # Should not raise
@@ -309,7 +309,7 @@ class TestSourceDriftNudge:
 
     def test_dev_runtime_skips_and_clears_prior_nudge(self):
         """Editable/source/dev installs should not prompt source drift refresh."""
-        from lingtai_kernel.nudge.source_drift import check, _state
+        from lingtai.kernel.nudge.source_drift import check, _state
 
         startup_fp = {"git_rev": "aaa1111", "source_digest": "bbb2222", "captured_at": "t1"}
         disk_fp = {"git_rev": "ccc3333", "source_digest": "ddd4444", "captured_at": "t2"}
@@ -321,8 +321,8 @@ class TestSourceDriftNudge:
         with (
             patch(self._DEV_RUNTIME_TARGET, return_value="source-checkout"),
             patch(self._PATCH_TARGET, return_value=disk_fp) as mock_capture,
-            patch("lingtai_kernel.nudge.remove") as mock_remove,
-            patch("lingtai_kernel.nudge.upsert") as mock_upsert,
+            patch("lingtai.kernel.nudge.remove") as mock_remove,
+            patch("lingtai.kernel.nudge.upsert") as mock_upsert,
         ):
             check(agent)
 
@@ -335,7 +335,7 @@ class TestSourceDriftNudge:
 
     def test_dev_runtime_clears_stale_channel_even_without_local_state(self):
         """A fresh dev process should clear a source_drift nudge from an older run."""
-        from lingtai_kernel.nudge.source_drift import check, _state
+        from lingtai.kernel.nudge.source_drift import check, _state
 
         startup_fp = {"git_rev": "aaa1111", "source_digest": "bbb2222", "captured_at": "t1"}
         disk_fp = {"git_rev": "ccc3333", "source_digest": "ddd4444", "captured_at": "t2"}
@@ -344,8 +344,8 @@ class TestSourceDriftNudge:
         with (
             patch(self._DEV_RUNTIME_TARGET, return_value="editable-install"),
             patch(self._PATCH_TARGET, return_value=disk_fp) as mock_capture,
-            patch("lingtai_kernel.nudge.remove") as mock_remove,
-            patch("lingtai_kernel.nudge.upsert") as mock_upsert,
+            patch("lingtai.kernel.nudge.remove") as mock_remove,
+            patch("lingtai.kernel.nudge.upsert") as mock_upsert,
         ):
             check(agent)
 
@@ -359,7 +359,7 @@ class TestSourceDriftNudge:
 
     def test_partial_drift_git_only(self):
         """Only git_rev differs → still detected as drift."""
-        from lingtai_kernel.nudge.source_drift import check, _state
+        from lingtai.kernel.nudge.source_drift import check, _state
 
         startup_fp = {"git_rev": "aaa1111", "source_digest": "bbb2222", "captured_at": "t1"}
         disk_fp = {"git_rev": "ccc3333", "source_digest": "bbb2222", "captured_at": "t2"}
@@ -367,7 +367,7 @@ class TestSourceDriftNudge:
 
         with (
             patch(self._PATCH_TARGET, return_value=disk_fp),
-            patch("lingtai_kernel.nudge.upsert"),
+            patch("lingtai.kernel.nudge.upsert"),
         ):
             check(agent)
 
@@ -376,7 +376,7 @@ class TestSourceDriftNudge:
 
     def test_partial_drift_digest_only(self):
         """Only source_digest differs → still detected as drift."""
-        from lingtai_kernel.nudge.source_drift import check, _state
+        from lingtai.kernel.nudge.source_drift import check, _state
 
         startup_fp = {"git_rev": "aaa1111", "source_digest": "bbb2222", "captured_at": "t1"}
         disk_fp = {"git_rev": "aaa1111", "source_digest": "xxx9999", "captured_at": "t2"}
@@ -384,7 +384,7 @@ class TestSourceDriftNudge:
 
         with (
             patch(self._PATCH_TARGET, return_value=disk_fp),
-            patch("lingtai_kernel.nudge.upsert"),
+            patch("lingtai.kernel.nudge.upsert"),
         ):
             check(agent)
 
@@ -393,7 +393,7 @@ class TestSourceDriftNudge:
 
     def test_null_git_rev_not_counted_as_drift(self):
         """When startup git_rev is None, git drift should not be flagged."""
-        from lingtai_kernel.nudge.source_drift import check, _state
+        from lingtai.kernel.nudge.source_drift import check, _state
 
         startup_fp = {"git_rev": None, "source_digest": "bbb2222", "captured_at": "t1"}
         disk_fp = {"git_rev": "ccc3333", "source_digest": "bbb2222", "captured_at": "t2"}
@@ -549,12 +549,12 @@ class TestSourceDriftRegistered:
     """Verify that source_drift.check is wired into run_checks."""
 
     def test_source_drift_imported_in_nudge_init(self):
-        import lingtai_kernel.nudge as nudge_mod
+        import lingtai.kernel.nudge as nudge_mod
         assert hasattr(nudge_mod, "source_drift")
 
     def test_run_checks_calls_source_drift(self):
         """run_checks should dispatch to source_drift.check."""
-        import lingtai_kernel.nudge as nudge_mod
+        import lingtai.kernel.nudge as nudge_mod
 
         agent = MagicMock()
         agent._working_dir = Path("/tmp/test")

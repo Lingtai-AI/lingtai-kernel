@@ -86,7 +86,7 @@ init.json                   — manifest.soul persistence for config (delay_seco
   (`manifest.soul`); `config` also restarts the wall-clock timer when
   `delay_seconds` changes.
 - `dismiss` clears `.notification/soul.json` through
-  `lingtai_kernel.notifications.dismiss_channel(agent, "soul", invoked_by="soul")`.
+  `lingtai.kernel.notifications.dismiss_channel(agent, "soul", invoked_by="soul")`.
 
 ## Cross-platform invariants
 

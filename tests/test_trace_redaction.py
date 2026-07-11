@@ -2,9 +2,9 @@ import json
 from tools.registry import INTRINSICS as _TEST_INTRINSICS
 from unittest.mock import MagicMock
 
-from lingtai_kernel.base_agent import BaseAgent
-from lingtai_kernel.services.logging import CompositeLoggingService, JSONLLoggingService
-from lingtai_kernel.trace_redaction import redact_for_trajectory, redact_text
+from lingtai.kernel.base_agent import BaseAgent
+from lingtai.kernel.services.logging import CompositeLoggingService, JSONLLoggingService
+from lingtai.kernel.trace_redaction import redact_for_trajectory, redact_text
 
 
 def test_redact_text_common_secret_shapes():

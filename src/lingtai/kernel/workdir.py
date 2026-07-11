@@ -57,8 +57,8 @@ class WorkdirLayout:
     ``.notification/<channel>.json``, ``tmp/tool-results/``, …) so the same
     relative names are not retyped across runtime modules and tests.
 
-    Internal by convention: import from ``lingtai_kernel.workdir``; not
-    re-exported from ``lingtai_kernel.__init__``.
+    Internal by convention: import from ``lingtai.kernel.workdir``; not
+    re-exported from ``lingtai.kernel.__init__``.
     """
 
     root: Path

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from tools.registry import INTRINSICS as ALL_INTRINSICS
-from lingtai_kernel.base_agent import BaseAgent
+from lingtai.kernel.base_agent import BaseAgent
 
 
 def make_mock_service():

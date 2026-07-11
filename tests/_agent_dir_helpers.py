@@ -7,7 +7,7 @@ definition; modules import it directly or via the ``make_agent_dir`` fixture in
 
 Deliberately raw: the protocol filenames (``.agent.json``,
 ``.agent.heartbeat``) are spelled out here rather than routed through
-``lingtai_kernel.workdir.workdir_layout`` so the factory stays an independent
+``lingtai.kernel.workdir.workdir_layout`` so the factory stays an independent
 oracle — a drift in the layout helper is caught by the exact-path assertions in
 ``test_workdir.py`` instead of being papered over by a shared constant.
 """

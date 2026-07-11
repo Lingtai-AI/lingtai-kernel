@@ -26,7 +26,7 @@ class TestProgressBookkeeping:
     and refine the active-turn block surfaced in ``.status.json``."""
 
     def test_state_change_bumps_progress_and_state_change_clocks(self, tmp_path):
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -40,7 +40,7 @@ class TestProgressBookkeeping:
         assert agent._state_changed_at > before
 
     def test_active_seeds_pending_turn_kind(self, tmp_path):
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -52,7 +52,7 @@ class TestProgressBookkeeping:
         assert agent._active_turn_started_at is not None
 
     def test_llm_call_event_refines_turn_kind(self, tmp_path):
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -64,7 +64,7 @@ class TestProgressBookkeeping:
         assert agent._active_turn_kind == "llm_call"
 
     def test_tool_call_event_refines_turn_kind_and_records_id(self, tmp_path):
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -77,7 +77,7 @@ class TestProgressBookkeeping:
         assert agent._active_turn_id == "call_abc123"
 
     def test_leaving_active_clears_turn_block_and_latch(self, tmp_path):
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -99,7 +99,7 @@ class TestDeferredNotificationsCounter:
     storm without scanning ``events.jsonl``."""
 
     def test_counter_increments(self, tmp_path):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -114,7 +114,7 @@ class TestDeferredNotificationsCounter:
         assert agent._deferred_notifications_oldest_at is not None
 
     def test_state_change_resets_counter(self, tmp_path):
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -134,7 +134,7 @@ class TestStatusJsonExposesActiveTurn:
     from "wedged ACTIVE."""
 
     def test_status_has_state_changed_at_and_last_progress_at(self, tmp_path):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -151,7 +151,7 @@ class TestStatusJsonExposesActiveTurn:
         assert runtime["no_progress_seconds"] >= 0
 
     def test_status_active_turn_block_present_only_in_active(self, tmp_path):
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -171,7 +171,7 @@ class TestStatusJsonExposesActiveTurn:
         assert "active_turn" not in agent.status()
 
     def test_status_deferred_notifications_block(self, tmp_path):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -195,7 +195,7 @@ class TestWatchdogFires:
         # Force a 0-second threshold so the watchdog trips immediately.
         monkeypatch.setenv("LINGTAI_ACTIVE_STUCK_THRESHOLD_S", "30")
 
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -237,7 +237,7 @@ class TestWatchdogFires:
     def test_watchdog_writes_fresh_status_json_when_active_stuck(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LINGTAI_ACTIVE_STUCK_THRESHOLD_S", "30")
 
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -267,7 +267,7 @@ class TestWatchdogFires:
     def test_watchdog_only_fires_once_per_stuck_episode(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LINGTAI_ACTIVE_STUCK_THRESHOLD_S", "30")
 
-        from lingtai_kernel import BaseAgent, AgentState
+        from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -301,7 +301,7 @@ class TestWatchdogFires:
     def test_watchdog_does_not_fire_when_idle(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LINGTAI_ACTIVE_STUCK_THRESHOLD_S", "30")
 
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),

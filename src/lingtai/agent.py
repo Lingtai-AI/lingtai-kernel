@@ -17,12 +17,12 @@ from typing import Any
 
 from pathlib import Path
 
-from lingtai_kernel.base_agent import BaseAgent
-from lingtai_kernel.base_agent.prompt import _refresh_meta_guidance_section
-from lingtai_kernel._frontmatter import strip_frontmatter as _strip_frontmatter
-from lingtai_kernel.config import AgentConfig, THINKING_PROVIDERS
+from lingtai.kernel.base_agent import BaseAgent
+from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
+from lingtai.kernel._frontmatter import strip_frontmatter as _strip_frontmatter
+from lingtai.kernel.config import AgentConfig, THINKING_PROVIDERS
 from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
-from lingtai_kernel.prompt import build_system_prompt
+from lingtai.kernel.prompt import build_system_prompt
 
 
 def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig:
@@ -40,7 +40,7 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
         soul_voice_prompt=soul.get("voice_prompt", defaults.soul_voice_prompt),
         # ``manifest.max_turns`` is a legacy/resolved-manifest field and is no
         # longer the authoritative tool-loop guard source. ACTIVE-turn
-        # tool-call safety is kernel-owned in ``lingtai_kernel.safety_limits``.
+        # tool-call safety is kernel-owned in ``lingtai.kernel.safety_limits``.
         # Keep AgentConfig.max_turns at its default for API compatibility, but
         # deliberately ignore stale init.json values here.
         language=manifest.get("language", defaults.language),
@@ -444,7 +444,7 @@ class Agent(BaseAgent):
 
     def _build_system_prompt_batches(self) -> list[str]:
         """Override kernel's batched builder to inject app tool descriptions."""
-        from lingtai_kernel.prompt import build_system_prompt_batches
+        from lingtai.kernel.prompt import build_system_prompt_batches
         self._refresh_tool_inventory_section()
         _refresh_meta_guidance_section(self)
         return build_system_prompt_batches(
@@ -487,7 +487,7 @@ class Agent(BaseAgent):
         """
         import json
 
-        from lingtai_kernel.logging import get_logger
+        from lingtai.kernel.logging import get_logger
         logger = get_logger()
 
         # Per-name tracking of init.json MCP launches. Populated below and
@@ -627,7 +627,7 @@ class Agent(BaseAgent):
         returns False when the background loop has exited (which happens
         when the stdio transport closes due to subprocess death).
         """
-        from lingtai_kernel.logging import get_logger
+        from lingtai.kernel.logging import get_logger
         logger = get_logger()
 
         specs = getattr(self, "_mcp_init_specs", None)
@@ -743,7 +743,7 @@ class Agent(BaseAgent):
         import shlex
         import subprocess
         import time
-        from lingtai_kernel.handshake import is_agent, is_alive, resolve_address
+        from lingtai.kernel.handshake import is_agent, is_alive, resolve_address
         from lingtai.venv_resolve import resolve_venv, venv_python
 
         base_dir = self._working_dir.parent
@@ -1013,12 +1013,12 @@ class Agent(BaseAgent):
 
         On success, the resolved (secret-redacted) manifest is also published
         to ``system/manifest.resolved.json`` via
-        ``lingtai_kernel.workdir.write_resolved_manifest`` (issue #259).
+        ``lingtai.kernel.workdir.write_resolved_manifest`` (issue #259).
         """
         import json
         from .init_schema import strip_deprecated, validate_init
-        from lingtai_kernel.config_resolve import resolve_paths
-        from lingtai_kernel.migrate import run_agent_migrations
+        from lingtai.kernel.config_resolve import resolve_paths
+        from lingtai.kernel.migrate import run_agent_migrations
         from .presets import expand_inherit, materialize_active_preset
         from tools.registry import CORE_DEFAULTS
 
@@ -1082,7 +1082,7 @@ class Agent(BaseAgent):
         # config the agent actually runs on — consumers read it instead of
         # re-implementing preset materialization over the raw init.json
         # snapshot. init.json itself stays user-owned input.
-        from lingtai_kernel.workdir import write_resolved_manifest
+        from lingtai.kernel.workdir import write_resolved_manifest
         if write_resolved_manifest(self._working_dir, data) is None:
             self._log("resolved_manifest_write_failed")
 
@@ -1174,7 +1174,7 @@ class Agent(BaseAgent):
             self._log("refresh_skipped", reason="no valid init.json")
             return
 
-        from lingtai_kernel.config_resolve import (
+        from lingtai.kernel.config_resolve import (
             load_env_file,
             resolve_env,
             resolve_file,
@@ -1439,7 +1439,7 @@ class Agent(BaseAgent):
             # Resolve active *_file fields (covenant_file, base_prompt_file,
             # lingtai_file, comment_file). Retired prompt-override `_file` fields
             # are legacy-known and not resolved — see _setup_from_init.
-            from lingtai_kernel.config_resolve import resolve_file
+            from lingtai.kernel.config_resolve import resolve_file
             for key in ("covenant", "base_prompt", "pad", "lingtai", "comment"):
                 file_key = f"{key}_file"
                 if file_key in data:
@@ -1454,7 +1454,7 @@ class Agent(BaseAgent):
         # externally changeable prompt surfaces (with `covenant` and `comment`).
         # It is NOT a prompt-manager section: the kernel builder renders it right
         # after the raw kernel-owned `principle` section and before the rest of
-        # Batch 1 (see lingtai_kernel.prompt.build_system_prompt_batches), so it
+        # Batch 1 (see lingtai.kernel.prompt.build_system_prompt_batches), so it
         # is threaded through `self._base_prompt` and passed to the builder by
         # `_build_system_prompt` / `_build_system_prompt_batches`.
         #
@@ -1627,8 +1627,8 @@ class Agent(BaseAgent):
         # with TUI/Portal consumers (schema_version is an int; ids are stable).
         guidance_file = system_dir / "guidance.json"
         try:
-            from lingtai_kernel.meta_block import validate_runtime_guidance
-            from lingtai_kernel.prompt_catalog import load_guidance_catalog
+            from lingtai.kernel.meta_block import validate_runtime_guidance
+            from lingtai.kernel.prompt_catalog import load_guidance_catalog
 
             guidance_payload = load_guidance_catalog()
             validate_runtime_guidance(guidance_payload)

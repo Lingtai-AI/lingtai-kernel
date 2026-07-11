@@ -17,12 +17,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from lingtai_kernel.base_agent import turn
-from lingtai_kernel.llm import LLMResponse
-from lingtai_kernel.llm.base import UsageMetadata
-from lingtai_kernel.llm_utils import WorkerStillRunningError
-from lingtai_kernel.message import _make_message, MSG_REQUEST
-from lingtai_kernel.state import AgentState
+from lingtai.kernel.base_agent import turn
+from lingtai.kernel.llm import LLMResponse
+from lingtai.kernel.llm.base import UsageMetadata
+from lingtai.kernel.llm_utils import WorkerStillRunningError
+from lingtai.kernel.message import _make_message, MSG_REQUEST
+from lingtai.kernel.state import AgentState
 
 
 @dataclass
@@ -137,7 +137,7 @@ def test_run_loop_skips_chat_history_save_after_worker_still_running(tmp_path, m
 def test_worker_hang_request_artifact_is_bounded_and_redacted(tmp_path):
     """The recovery artifact must bound and redact the request body — no
     secrets, no unbounded prompt, and explicit privacy flags."""
-    from lingtai_kernel.base_agent.worker_recovery import (
+    from lingtai.kernel.base_agent.worker_recovery import (
         build_worker_hang_context,
         write_worker_hang_artifact,
     )
@@ -378,8 +378,8 @@ def test_empty_llm_response_allows_missing_usage_metadata():
     ]
 
 def test_tc_wake_error_logs_empty_response_diagnostics(tmp_path):
-    from lingtai_kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
-    from lingtai_kernel.message import _make_message, MSG_TC_WAKE
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
+    from lingtai.kernel.message import _make_message, MSG_TC_WAKE
 
     iface = ChatInterface()
     iface.add_assistant_message([ToolCallBlock(id="call_notification", name="system", args={})])

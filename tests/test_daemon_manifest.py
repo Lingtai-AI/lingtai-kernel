@@ -174,7 +174,7 @@ def test_build_manifest_missing_daemon_json_is_graceful(tmp_path):
 
 def _make_agent(tmp_path):
     from lingtai.agent import Agent
-    from lingtai_kernel.config import AgentConfig
+    from lingtai.kernel.config import AgentConfig
     svc = MagicMock()
     svc.provider = "mock"
     svc.model = "mock-model"

@@ -13,7 +13,7 @@ import pytest
 
 from lingtai.llm.claude_code.adapter import ClaudeCodeAdapter
 from lingtai.llm.service import LLMService
-from lingtai_kernel.llm.base import FunctionSchema
+from lingtai.kernel.llm.base import FunctionSchema
 
 pytestmark = pytest.mark.skipif(
     shutil.which("claude") is None, reason="claude CLI not installed / not on PATH"

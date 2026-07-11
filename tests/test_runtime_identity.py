@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from lingtai_kernel.runtime_identity import runtime_identity, runtime_identity_event_fields
+from lingtai.kernel.runtime_identity import runtime_identity, runtime_identity_event_fields
 
 
 def test_runtime_identity_event_fields_are_json_serializable():

@@ -93,7 +93,7 @@ index. Diagnose with:
 - the Python executable used by the agent runtime — prefer the platform-neutral
   `LINGTAI_RUNTIME_PYTHON` environment variable when available, and otherwise
   trust the live process over a convenient shell `python` or conda env;
-- `lingtai.__version__`, `lingtai.__file__`, and `lingtai_kernel.__file__`;
+- `lingtai.__version__`, `lingtai.__file__`, and `lingtai.kernel.__file__`;
 - installed distribution metadata, especially `direct_url.json` with
   `dir_info.editable: true`;
 - the nearest git checkout, branch, HEAD, dirty state, and relation to remote;
@@ -116,12 +116,12 @@ PYTHON=${LINGTAI_RUNTIME_PYTHON:-$HOME/.lingtai-tui/runtime/venv/bin/python}
 "$PYTHON" - <<'PY'
 import importlib.metadata as md
 import sys
-import lingtai, lingtai_kernel
+import lingtai, lingtai.kernel
 print('python=', sys.executable)
 print('lingtai_version=', getattr(lingtai, '__version__', 'unknown'))
 print('lingtai_dist=', md.version('lingtai'))
 print('lingtai_file=', getattr(lingtai, '__file__', 'unknown'))
-print('lingtai_kernel_file=', getattr(lingtai_kernel, '__file__', 'unknown'))
+print('lingtai.kernel_file=', getattr(lingtai.kernel, '__file__', 'unknown'))
 try:
     dist = md.distribution('lingtai')
     print('direct_url=', dist.read_text('direct_url.json'))

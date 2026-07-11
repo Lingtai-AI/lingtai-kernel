@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.base_agent import BaseAgent
+from lingtai.kernel.base_agent import BaseAgent
 from tools.registry import INTRINSICS as ALL_INTRINSICS
 
 
@@ -16,7 +16,7 @@ from tools.registry import INTRINSICS as ALL_INTRINSICS
 def _stub_preset_connectivity(monkeypatch):
     """Auto-mock network probes in test_system.py so _presets tests don't
     actually open sockets. Returns a fixed 42ms latency."""
-    from lingtai_kernel import preset_connectivity
+    from lingtai.kernel import preset_connectivity
     monkeypatch.setattr(preset_connectivity, "_probe_host",
                         lambda host, port, timeout: 42)
     yield
@@ -657,7 +657,7 @@ def test_refresh_revert_preset_when_no_preset_configured_errors(tmp_path, monkey
     init.json directly, finds no manifest.preset.default, and returns
     the error before any activation path runs."""
     # Build an agent without a preset block
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
     from unittest.mock import MagicMock
     import json
     svc = MagicMock()
@@ -806,7 +806,7 @@ def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch
         },
     }))
     monkeypatch.setenv("BROKEN_KEY", "sk-test")
-    from lingtai_kernel import preset_connectivity
+    from lingtai.kernel import preset_connectivity
     # Override the autouse fixture's stub for this test
     monkeypatch.setattr(preset_connectivity, "_probe_host",
                         lambda host, port, timeout: (_ for _ in ()).throw(OSError("DNS fail")))

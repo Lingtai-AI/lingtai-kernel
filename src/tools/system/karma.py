@@ -1,7 +1,7 @@
 """Karma-gated lifecycle actions — sleep, lull, suspend, cpr, interrupt, clear, nirvana."""
 from __future__ import annotations
 
-from lingtai_kernel.handshake import resolve_address
+from lingtai.kernel.handshake import resolve_address
 
 
 # ---------------------------------------------------------------------------
@@ -13,7 +13,7 @@ _NIRVANA_ACTIONS = {"nirvana"}
 
 
 def _check_karma_gate(agent, action: str, args: dict) -> dict | None:
-    from lingtai_kernel.handshake import is_agent
+    from lingtai.kernel.handshake import is_agent
     if action in _KARMA_ACTIONS and not agent._admin.get("karma"):
         return {"error": True, "message": f"Not authorized for {action} (requires admin.karma=True)"}
     if action in _NIRVANA_ACTIONS and not (agent._admin.get("karma") and agent._admin.get("nirvana")):
@@ -49,9 +49,9 @@ def _sleep(agent, args: dict) -> dict:
     `force=True` overrides the guard — escape hatch for the rare case
     where the agent explicitly wants to sleep anyway.
     """
-    from lingtai_kernel.i18n import t
-    from lingtai_kernel.state import AgentState
-    from lingtai_kernel.notifications import notification_fingerprint
+    from lingtai.kernel.i18n import t
+    from lingtai.kernel.state import AgentState
+    from lingtai.kernel.notifications import notification_fingerprint
 
     reason = args.get("reason", "")
     force = bool(args.get("force", False))
@@ -93,7 +93,7 @@ def _sleep(agent, args: dict) -> dict:
 
 def _lull(agent, args: dict) -> dict:
     """Lull another agent to sleep — karma-gated."""
-    from lingtai_kernel.handshake import is_alive
+    from lingtai.kernel.handshake import is_alive
     err = _check_karma_gate(agent, "lull", args)
     if err:
         return err
@@ -108,7 +108,7 @@ def _lull(agent, args: dict) -> dict:
 
 def _suspend(agent, args: dict) -> dict:
     """Suspend another agent — karma-gated."""
-    from lingtai_kernel.handshake import is_alive
+    from lingtai.kernel.handshake import is_alive
     err = _check_karma_gate(agent, "suspend", args)
     if err:
         return err
@@ -122,7 +122,7 @@ def _suspend(agent, args: dict) -> dict:
 
 
 def _cpr(agent, args: dict) -> dict:
-    from lingtai_kernel.handshake import is_alive
+    from lingtai.kernel.handshake import is_alive
     err = _check_karma_gate(agent, "cpr", args)
     if err:
         return err
@@ -144,7 +144,7 @@ def _cpr(agent, args: dict) -> dict:
 
 
 def _interrupt(agent, args: dict) -> dict:
-    from lingtai_kernel.handshake import is_alive
+    from lingtai.kernel.handshake import is_alive
     err = _check_karma_gate(agent, "interrupt", args)
     if err:
         return err
@@ -164,7 +164,7 @@ def _clear(agent, args: dict) -> dict:
     invokes psyche.context_forget, which archives chat history and injects
     a system-authored recovery summary pointing at pad/knowledge/inbox.
     """
-    from lingtai_kernel.handshake import is_alive
+    from lingtai.kernel.handshake import is_alive
     err = _check_karma_gate(agent, "clear", args)
     if err:
         return err
@@ -182,7 +182,7 @@ def _clear(agent, args: dict) -> dict:
 
 def _nirvana(agent, args: dict) -> dict:
     import shutil
-    from lingtai_kernel.handshake import is_alive
+    from lingtai.kernel.handshake import is_alive
     err = _check_karma_gate(agent, "nirvana", args)
     if err:
         return err

@@ -1,31 +1,43 @@
-"""Test that lingtai_kernel has no dependencies on the lingtai package.
+"""Test that lingtai.kernel has no dependencies on the lingtai package.
 
 This test ensures the architectural constraint holds:
-  - lingtai_kernel can be used standalone (zero hard dependencies)
-  - lingtai_kernel never accidentally pulls in lingtai (capabilities, addons, adapters)
+  - lingtai.kernel can be used standalone (zero hard dependencies)
+  - lingtai.kernel never accidentally pulls in lingtai (capabilities, addons, adapters)
 
 The constraint is enforced two ways:
-  1. Runtime assert in src/lingtai_kernel/__init__.py
-  2. This test: import lingtai_kernel in a subprocess with a clean sys.modules,
+  1. Runtime assert in src/lingtai/kernel/__init__.py
+  2. This test: import lingtai.kernel in a subprocess with a clean sys.modules,
      then assert no 'lingtai' package modules leaked in.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _env_with_src_path() -> dict[str, str]:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(_repo_root() / "src") + os.pathsep + env.get("PYTHONPATH", "")
+    return env
+
+
 def test_kernel_import_is_clean():
-    """Import lingtai_kernel in a fresh subprocess; verify 'lingtai' is not loaded."""
+    """Import lingtai.kernel in a fresh subprocess; verify 'lingtai' is not loaded."""
     result = subprocess.run(
-        [sys.executable, "-c", "import lingtai_kernel; print('OK')"],
+        [sys.executable, "-c", "import lingtai.kernel; print('OK')"],
         capture_output=True,
         text=True,
-        cwd=str(Path(__file__).resolve().parents[1]),
+        cwd=str(_repo_root()),
+        env=_env_with_src_path(),
     )
     assert result.returncode == 0, (
-        f"lingtai_kernel failed to import.\n"
+        f"lingtai.kernel failed to import.\n"
         f"stdout: {result.stdout}\n"
         f"stderr: {result.stderr}"
     )
@@ -33,18 +45,18 @@ def test_kernel_import_is_clean():
         "Test harness output should not mention 'lingtai'"
     )
     assert "OK" in result.stdout, (
-        f"lingtai_kernel import did not print confirmation.\n"
+        f"lingtai.kernel import did not print confirmation.\n"
         f"stdout: {result.stdout}\n"
         f"stderr: {result.stderr}"
     )
 
 
 def test_kernel_has_no_lingtai_submodules():
-    """Verify lingtai_kernel's own package tree has no imports of the 'lingtai' package."""
+    """Verify lingtai.kernel's own package tree has no imports of the 'lingtai' package."""
     import ast
     from pathlib import Path
 
-    kernel_src = Path(__file__).parent.parent / "src" / "lingtai_kernel"
+    kernel_src = Path(__file__).parent.parent / "src" / "lingtai/kernel"
     violations: list[str] = []
 
     for py_file in kernel_src.rglob("*.py"):
@@ -64,7 +76,8 @@ def test_kernel_has_no_lingtai_submodules():
                 if node.level == 0 and node.module and (
                     (
                         node.module.startswith("lingtai.")
-                        and not node.module.startswith("lingtai_kernel.")
+                        and node.module != "lingtai.kernel"
+                        and not node.module.startswith("lingtai.kernel.")
                     )
                     or node.module == "tools"
                     or node.module.startswith("tools.")
@@ -76,7 +89,8 @@ def test_kernel_has_no_lingtai_submodules():
                         alias.name == "lingtai"
                         or (
                             alias.name.startswith("lingtai.")
-                            and not alias.name.startswith("lingtai_kernel.")
+                            and alias.name != "lingtai.kernel"
+                            and not alias.name.startswith("lingtai.kernel.")
                         )
                         or alias.name == "tools"
                         or alias.name.startswith("tools.")
@@ -84,9 +98,9 @@ def test_kernel_has_no_lingtai_submodules():
                         violations.append(f"{py_file.relative_to(kernel_src)}: import {alias.name}")
 
     assert not violations, (
-        "lingtai_kernel contains imports of the 'lingtai' or 'tools' packages. "
+        "lingtai.kernel contains imports of the 'lingtai' or 'tools' packages. "
         "This violates the architectural constraint that the kernel must never "
-        "depend on lingtai or tools (the DAG is lingtai → tools → lingtai_kernel).\n"
+        "depend on lingtai or tools (the DAG is lingtai → tools → lingtai.kernel).\n"
         + "\n".join(violations)
     )
 
@@ -100,18 +114,19 @@ def test_kernel_isolation_scanner_catches_bare_lingtai_import():
 """Synthetic kernel module."""
 import lingtai
 from .tools import add_tool
-from lingtai_kernel.message import Message
+from lingtai.kernel.message import Message
 '''
     tree = ast.parse(source)
     violations = []
-    kernel_src = Path(__file__).parent.parent / "src" / "lingtai_kernel"
+    kernel_src = Path(__file__).parent.parent / "src" / "lingtai/kernel"
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             if node.level == 0 and node.module and (
                 (
                     node.module.startswith("lingtai.")
-                    and not node.module.startswith("lingtai_kernel.")
+                    and node.module != "lingtai.kernel"
+                    and not node.module.startswith("lingtai.kernel.")
                 )
                 or node.module == "tools"
                 or node.module.startswith("tools.")
@@ -123,7 +138,8 @@ from lingtai_kernel.message import Message
                     alias.name == "lingtai"
                     or (
                         alias.name.startswith("lingtai.")
-                        and not alias.name.startswith("lingtai_kernel.")
+                        and alias.name != "lingtai.kernel"
+                        and not alias.name.startswith("lingtai.kernel.")
                     )
                     or alias.name == "tools"
                     or alias.name.startswith("tools.")
@@ -131,31 +147,32 @@ from lingtai_kernel.message import Message
                     violations.append(f"import {alias.name}")
 
     assert "import lingtai" in violations
-    assert "from lingtai_kernel.message ..." not in violations
+    assert "from lingtai.kernel.message ..." not in violations
     assert "from .tools ..." not in violations
 
 
-def test_kernel_import_does_not_pull_lingtai():
-    """Confirm that importing lingtai_kernel does NOT make 'lingtai' appear in sys.modules."""
+def test_kernel_import_only_loads_parent_and_kernel():
+    """Importing lingtai.kernel may load the parent ``lingtai`` and kernel submodules only."""
     result = subprocess.run(
         [
             sys.executable, "-c",
-            "import sys; import lingtai_kernel; "
-            "leaked = [k for k in sys.modules if (k == 'lingtai' or k.startswith('lingtai.') or k == 'tools' or k.startswith('tools.'))]; "
+            "import sys; import lingtai.kernel; "
+            "leaked = [k for k in sys.modules if (k.startswith('lingtai.') and k != 'lingtai.kernel' and not k.startswith('lingtai.kernel.')) or k == 'tools' or k.startswith('tools.')]; "
             "print('LEAKED:', leaked) if leaked else print('CLEAN')"
         ],
         capture_output=True,
         text=True,
-        cwd=str(Path(__file__).resolve().parents[1]),
+        cwd=str(_repo_root()),
+        env=_env_with_src_path(),
     )
     assert result.returncode == 0, f"Subprocess error:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     assert "CLEAN" in result.stdout, (
-        f"The 'lingtai' or 'tools' package leaked into sys.modules after importing lingtai_kernel.\n"
+        f"The 'lingtai' or 'tools' package leaked into sys.modules after importing lingtai.kernel.\n"
         f"stdout: {result.stdout}\n"
         f"stderr: {result.stderr}"
     )
     assert "LEAKED:" not in result.stdout, (
-        f"lingtai_kernel caused the following 'lingtai'/'tools' modules to be loaded:\n"
+        f"lingtai.kernel caused the following 'lingtai'/'tools' modules to be loaded:\n"
         f"{result.stdout}"
     )
 
@@ -163,7 +180,7 @@ def test_kernel_import_does_not_pull_lingtai():
 def test_import_tools_does_not_pull_lingtai():
     """`import tools` must not transitively import the `lingtai` package.
 
-    The DAG is `lingtai → tools → lingtai_kernel`; the only `tools → lingtai`
+    The DAG is `lingtai → tools → lingtai.kernel`; the only `tools → lingtai`
     edge is lazy (inside setup()/handlers), so importing `tools` (and even
     `tools.registry`, which imports the five intrinsic modules and the tool
     i18n catalog) must stay dependency-light and never eagerly pull `lingtai`.
@@ -179,7 +196,7 @@ def test_import_tools_does_not_pull_lingtai():
         [
             sys.executable, "-c",
             "import sys; import tools.registry; "
-            "leaked = [k for k in sys.modules if k == 'lingtai' or k.startswith('lingtai.')]; "
+            "leaked = [k for k in sys.modules if k.startswith('lingtai.') and k != 'lingtai.kernel' and not k.startswith('lingtai.kernel.')]; "
             "print('LEAKED:', leaked) if leaked else print('CLEAN')"
         ],
         capture_output=True,
@@ -189,7 +206,7 @@ def test_import_tools_does_not_pull_lingtai():
     )
     assert result.returncode == 0, f"Subprocess error:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     assert "CLEAN" in result.stdout, (
-        f"Importing tools.registry eagerly pulled the 'lingtai' package.\n"
+        f"Importing tools.registry eagerly pulled high-level 'lingtai.*' modules.\n"
         f"stdout: {result.stdout}\n"
         f"stderr: {result.stderr}"
     )

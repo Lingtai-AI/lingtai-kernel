@@ -95,7 +95,7 @@ def _close_orphan_tool_calls(iface) -> int:
 
     Returns the number of orphan calls closed.
     """
-    from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
+    from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
 
     if not iface.entries:
         return 0
@@ -116,7 +116,7 @@ def _close_orphan_tool_calls(iface) -> int:
     if not unanswered:
         return 0
 
-    from lingtai_kernel.llm.interface import _synthesized_abort_message
+    from lingtai.kernel.llm.interface import _synthesized_abort_message
 
     refusal_blocks = [
         ToolResultBlock(

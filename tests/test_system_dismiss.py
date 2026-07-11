@@ -23,7 +23,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 from tools import notification as notif_intrinsic
-from lingtai_kernel.notifications import (
+from lingtai.kernel.notifications import (
     collect_notifications,
     is_generic_dismiss_guarded,
     notification_fingerprint,
@@ -409,7 +409,7 @@ def test_system_event_dismiss_by_ref_id_clears_file_when_last_event(tmp_path: Pa
 
 def test_large_result_reminder_cleared_by_whole_channel_dismiss(tmp_path: Path) -> None:
     """Whole-channel system dismiss now acks and clears large-result reminders (escape hatch)."""
-    from lingtai_kernel.notifications import load_large_result_acks
+    from lingtai.kernel.notifications import load_large_result_acks
 
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path)
@@ -433,7 +433,7 @@ def test_large_result_reminder_cleared_by_whole_channel_dismiss(tmp_path: Path) 
 
 def test_large_result_reminder_cleared_by_force_whole_channel(tmp_path: Path) -> None:
     """force=true on a whole-channel system dismiss also acks large-result reminders."""
-    from lingtai_kernel.notifications import load_large_result_acks
+    from lingtai.kernel.notifications import load_large_result_acks
 
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path)
@@ -450,7 +450,7 @@ def test_large_result_reminder_cleared_by_force_whole_channel(tmp_path: Path) ->
 
 def test_large_result_reminder_cleared_by_event_id(tmp_path: Path) -> None:
     """Targeted event_id dismiss of a large-result reminder now acks and removes it."""
-    from lingtai_kernel.notifications import load_large_result_acks
+    from lingtai.kernel.notifications import load_large_result_acks
 
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path)
@@ -469,7 +469,7 @@ def test_large_result_reminder_cleared_by_event_id(tmp_path: Path) -> None:
 
 def test_large_result_reminder_cleared_by_ref_id(tmp_path: Path) -> None:
     """Targeted ref_id dismiss of a large-result reminder now acks and removes it."""
-    from lingtai_kernel.notifications import load_large_result_acks
+    from lingtai.kernel.notifications import load_large_result_acks
 
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path, tool_call_id="toolu_x")
@@ -486,7 +486,7 @@ def test_large_result_reminder_cleared_by_ref_id(tmp_path: Path) -> None:
 
 def test_large_result_reminder_cleared_by_force_ref_id(tmp_path: Path) -> None:
     """force=true on a targeted ref_id dismiss also acks the large-result reminder."""
-    from lingtai_kernel.notifications import load_large_result_acks
+    from lingtai.kernel.notifications import load_large_result_acks
 
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path, tool_call_id="toolu_x")
@@ -501,7 +501,7 @@ def test_large_result_reminder_cleared_by_force_ref_id(tmp_path: Path) -> None:
 
 def test_whole_channel_dismiss_with_large_result_and_other_events(tmp_path: Path) -> None:
     """Whole-channel dismiss acks large-result events and clears all events in the channel."""
-    from lingtai_kernel.notifications import load_large_result_acks
+    from lingtai.kernel.notifications import load_large_result_acks
 
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(

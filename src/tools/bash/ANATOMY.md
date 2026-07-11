@@ -50,13 +50,13 @@ The `bash` tool supports synchronous and asynchronous execution:
 
 - `ok` (bool) — `True` only when `exit_code == 0`.
 - `command_status` (str) — `"success"` or `"failed"`.
-- `warning` (str, present on failure or a suspicious zero-exit) — one-line summary: the nonzero exit code, any detected `python_traceback`/`missing_module` signature (`_detect_failure_signature`), and a bounded stderr tail. The hoisted tail is routed through `lingtai_kernel.trace_redaction.redact_text` (`_redact_warning_tail`, fail-open) so a secret-shaped error line is not made more prominent in the top-level `warning` than it already is in the raw `stderr` field; the raw `stderr`/`stdout` fields are never altered.
+- `warning` (str, present on failure or a suspicious zero-exit) — one-line summary: the nonzero exit code, any detected `python_traceback`/`missing_module` signature (`_detect_failure_signature`), and a bounded stderr tail. The hoisted tail is routed through `lingtai.kernel.trace_redaction.redact_text` (`_redact_warning_tail`, fail-open) so a secret-shaped error line is not made more prominent in the top-level `warning` than it already is in the raw `stderr` field; the raw `stderr`/`stdout` fields are never altered.
 
 On a still-running poll there is no `exit_code`, so no fidelity fields are added.
 
 **Timeout hint.** On a sync timeout whose command resembles a broad recursive scan (`find … -name/-path/-type`, `rglob(`, `os.walk(`, `glob('**…')` — `_broad_scan_hint`), the timeout `message` appends an `rg --files`-based recipe. The hint is advisory text only; it never blocks or rewrites the command.
 
-Job files are stored under `system/jobs/{job_id}/` (stdout.log, stderr.log, pid, status). Cleaned up automatically on poll-completion or cancel. The process-exit watcher still writes single-slot `.notification/bash.json` with a bounded command preview (`__init__.py:651-700`); the last-resort reminder uses `.notification/system.json` multi-event append with stable `ref_id="bash.reminder:<job_id>"` so close-due jobs do not overwrite one another (`__init__.py:531-649`, `src/lingtai_kernel/base_agent/messaging.py:66-180`).
+Job files are stored under `system/jobs/{job_id}/` (stdout.log, stderr.log, pid, status). Cleaned up automatically on poll-completion or cancel. The process-exit watcher still writes single-slot `.notification/bash.json` with a bounded command preview (`__init__.py:651-700`); the last-resort reminder uses `.notification/system.json` multi-event append with stable `ref_id="bash.reminder:<job_id>"` so close-due jobs do not overwrite one another (`__init__.py:531-649`, `src/lingtai/kernel/base_agent/messaging.py:66-180`).
 
 ## Internal Module Layout
 
@@ -107,10 +107,10 @@ bash/__init__.py
 ## Dependencies
 
 - `lingtai.i18n` — `t()` for localized strings
-- `lingtai_kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
-- `lingtai_kernel.base_agent.messaging._enqueue_system_notification` — canonical `.notification/system.json` multi-event append path when Bash is installed on an agent (`src/lingtai_kernel/base_agent/messaging.py:66-180`).
-- `lingtai_kernel.notifications.collect_notifications` / `submit` — direct-manager fallback for tests and programmatic BashManager use without a BaseAgent; protected by the agent's shared system lock when present, otherwise a module-global fallback lock (`__init__.py:605-649`).
-- `lingtai_kernel.trace_redaction.redact_text` — mechanical secret redaction for the stderr tail hoisted into `warning` (imported lazily inside `_redact_warning_tail`, fail-open).
+- `lingtai.kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
+- `lingtai.kernel.base_agent.messaging._enqueue_system_notification` — canonical `.notification/system.json` multi-event append path when Bash is installed on an agent (`src/lingtai/kernel/base_agent/messaging.py:66-180`).
+- `lingtai.kernel.notifications.collect_notifications` / `submit` — direct-manager fallback for tests and programmatic BashManager use without a BaseAgent; protected by the agent's shared system lock when present, otherwise a module-global fallback lock (`__init__.py:605-649`).
+- `lingtai.kernel.trace_redaction.redact_text` — mechanical secret redaction for the stderr tail hoisted into `warning` (imported lazily inside `_redact_warning_tail`, fail-open).
 
 ## Composition
 

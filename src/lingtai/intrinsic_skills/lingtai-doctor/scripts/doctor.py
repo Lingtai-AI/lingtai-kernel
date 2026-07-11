@@ -48,7 +48,7 @@ def match_agent_run(cmdline: str, working_dir: str) -> str | None:
     """Return the launch form if ``cmdline`` is an agent run for ``working_dir``.
 
     Keep this stdlib-only copy in sync with
-    ``lingtai_kernel.process_match.match_agent_run``. The doctor script is
+    ``lingtai.kernel.process_match.match_agent_run``. The doctor script is
     copied into agent skill bundles and cannot import kernel modules there.
 
     Residual limitation: ``ps command=`` is a flat string, not the original argv

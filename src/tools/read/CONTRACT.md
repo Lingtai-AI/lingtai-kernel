@@ -50,7 +50,7 @@ invariants.
 - Cap constants (source of truth is `src/tools/read/__init__.py`):
   - `DEFAULT_READ_CAP_CHARS = 100_000` — everyday per-call page budget.
   - `READ_HARD_CAP_CHARS = PREVENTIVE_MAX_CHARS` — non-configurable ceiling
-    (imported from `lingtai_kernel.tool_result_artifacts`).
+    (imported from `lingtai.kernel.tool_result_artifacts`).
   - The active runtime cap is `min(executor._max_result_chars, READ_HARD_CAP_CHARS)`
     when the executor exposes a positive cap, else `READ_HARD_CAP_CHARS`.
   - Per-call `max_chars` is clamped to that runtime cap; invalid values fall back

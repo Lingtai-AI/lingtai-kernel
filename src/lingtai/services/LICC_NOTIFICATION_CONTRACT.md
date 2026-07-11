@@ -15,15 +15,15 @@ related_files:
   - src/lingtai/mcp_servers/feishu/manager.py
   - src/lingtai/mcp_servers/wechat/manager.py
   - src/lingtai/mcp_servers/whatsapp/manager.py
-  - src/lingtai_kernel/ANATOMY.md
-  - src/lingtai_kernel/base_agent/ANATOMY.md
-  - src/lingtai_kernel/base_agent/__init__.py
-  - src/lingtai_kernel/base_agent/messaging.py
-  - src/lingtai_kernel/base_agent/turn.py
+  - src/lingtai/kernel/ANATOMY.md
+  - src/lingtai/kernel/base_agent/ANATOMY.md
+  - src/lingtai/kernel/base_agent/__init__.py
+  - src/lingtai/kernel/base_agent/messaging.py
+  - src/lingtai/kernel/base_agent/turn.py
   - src/tools/notification/ANATOMY.md
   - src/tools/notification/__init__.py
-  - src/lingtai_kernel/meta_block.py
-  - src/lingtai_kernel/notifications.py
+  - src/lingtai/kernel/meta_block.py
+  - src/lingtai/kernel/notifications.py
   - tests/test_licc_notification_contract_doc.py
   - tests/test_mcp_inbox.py
   - tests/test_meta_block.py
@@ -41,14 +41,14 @@ review_triggers:
   - src/lingtai/mcp_servers/wechat/manager.py
   - src/lingtai/mcp_servers/whatsapp/manager.py
   - src/lingtai/mcp_servers/cloud_mail/manager.py
-  - src/lingtai_kernel/base_agent/__init__.py
-  - src/lingtai_kernel/base_agent/messaging.py
-  - src/lingtai_kernel/base_agent/turn.py
+  - src/lingtai/kernel/base_agent/__init__.py
+  - src/lingtai/kernel/base_agent/messaging.py
+  - src/lingtai/kernel/base_agent/turn.py
   - src/tools/email/ANATOMY.md
   - src/tools/email/
   - src/tools/notification/
-  - src/lingtai_kernel/meta_block.py
-  - src/lingtai_kernel/notifications.py
+  - src/lingtai/kernel/meta_block.py
+  - src/lingtai/kernel/notifications.py
 maintenance: |
   Keep this file in the same maintenance graph as the ANATOMY.md files listed
   under related_files. If any review_triggers path changes notification event
@@ -101,12 +101,12 @@ where they share the `.notification/` filesystem protocol.
 3. **Notification filesystem envelope.** `notifications.submit` is the standard
    envelope builder (`header`, `icon`, `priority`, `published_at`, optional
    `instructions`, and producer-owned `data`) and `notifications.publish` writes
-   it atomically (`src/lingtai_kernel/notifications.py:260-275`,
-   `src/lingtai_kernel/notifications.py:1054-1087`).
+   it atomically (`src/lingtai/kernel/notifications.py:260-275`,
+   `src/lingtai/kernel/notifications.py:1054-1087`).
 4. **Model-visible transient hook.** `_meta.notifications` is sparse and
    update-driven. `attach_active_notifications` attaches or moves the canonical
    payload only on first appearance, material change, or deliberate
-   `notification(action="check")` (`src/lingtai_kernel/meta_block.py:2939`).
+   `notification(action="check")` (`src/lingtai/kernel/meta_block.py:2939`).
    For IM channels with a persistent lane (Telegram, WeChat, Feishu, WhatsApp),
    the shared
    `_sanitize_im_notification_after_persistent` (via the per-channel
@@ -116,9 +116,9 @@ where they share the `.notification/` filesystem protocol.
    `sanitize_whatsapp_notification_after_persistent` wrappers) reduces
    `_meta.notifications.mcp.<channel>.data` to stable `message_ids` only; content,
    sender/subject, routing details, counts, and summaries must not remain in the
-   transient lane (`src/lingtai_kernel/meta_block.py:2589-2655`).
+   transient lane (`src/lingtai/kernel/meta_block.py:2589-2655`).
 5. **Model-visible persistent communication context.** When structured IM metadata is available, `build_notification_persistent_payload` emits `_meta.notification_persistent.mcp.<channel>` with `messages`, `events`, and comments through the shared `_ImPersistentLane` machinery. Delta lanes (Telegram, WeChat, Feishu) also carry `previous_block`; WhatsApp is snapshot/no-previous-block because the producer sends the current bounded conversation window per event. Telegram additionally carries full out-of-window reply targets under `referenced_messages`. For built-in email it emits `_meta.notification_persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate)
-   (`src/lingtai_kernel/meta_block.py:1857-2489`). The Telegram MCP supplies the
+   (`src/lingtai/kernel/meta_block.py:1857-2489`). The Telegram MCP supplies the
    structured `recent_messages`, `latest_incoming`, and `referenced_messages`
    metadata (`src/lingtai/mcp_servers/telegram/manager.py:967-1007`,
    `src/lingtai/mcp_servers/telegram/manager.py:1063-1102`); the WeChat
@@ -131,7 +131,7 @@ where they share the `.notification/` filesystem protocol.
    its producer preview window (Telegram 20, WeChat 10, Feishu 10).
 6. **Producer source of truth.** Notification files are mirrors/hooks, not the
    authoritative mailbox/chat store. Producer tools own real state changes and
-   side effects. Email is the built-in mirror example: unread mail state is rendered into `.notification/email.json`, model-visible content is projected into `_meta.notification_persistent.email`, and read/dismiss/reply actions live on the email tool (`src/lingtai_kernel/base_agent/messaging.py:60-130`).
+   side effects. Email is the built-in mirror example: unread mail state is rendered into `.notification/email.json`, model-visible content is projected into `_meta.notification_persistent.email`, and read/dismiss/reply actions live on the email tool (`src/lingtai/kernel/base_agent/messaging.py:60-130`).
 
 ## Connections
 
@@ -304,14 +304,14 @@ Re-check this contract whenever a change touches any of these areas:
 - LICC schema, validation, atomic write, or dead-letter handling:
   `src/lingtai/services/mcp_inbox.py`, `src/lingtai/services/mcp_licc.py`.
 - `.notification` helper semantics, channel allowlists, publish/clear/dismiss,
-  or generic-dismiss guards: `src/lingtai_kernel/notifications.py` and
+  or generic-dismiss guards: `src/lingtai/kernel/notifications.py` and
   `src/tools/notification/`.
 - Notification injection, sparse live-holder movement, `notification_guidance`,
   `_meta.notifications`, `_meta.notification_persistent`, or sanitizer logic:
-  `src/lingtai_kernel/meta_block.py`, `src/lingtai_kernel/base_agent/__init__.py`,
-  and `src/lingtai_kernel/base_agent/turn.py`.
+  `src/lingtai/kernel/meta_block.py`, `src/lingtai/kernel/base_agent/__init__.py`,
+  and `src/lingtai/kernel/base_agent/turn.py`.
 - Built-in producers that create notification mirrors or human-message metadata:
-  `src/lingtai_kernel/base_agent/messaging.py`, `src/tools/email/`,
+  `src/lingtai/kernel/base_agent/messaging.py`, `src/tools/email/`,
   and curated messaging MCP managers under `src/lingtai/mcp_servers/`.
 - Tests that lock notification shape, curated IM persistent context, MCP inbox
   delivery, or email notification behavior.

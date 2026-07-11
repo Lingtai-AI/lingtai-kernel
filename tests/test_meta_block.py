@@ -6,9 +6,9 @@ import re
 from types import SimpleNamespace
 
 import pytest
-import lingtai_kernel.meta_block as meta_block
+import lingtai.kernel.meta_block as meta_block
 
-from lingtai_kernel.meta_block import (
+from lingtai.kernel.meta_block import (
     GUIDANCE_KEY,
     TOOL_META_TOKEN_USAGE_PENDING_KEY,
     GuidanceSchemaError,
@@ -34,7 +34,7 @@ from lingtai_kernel.meta_block import (
     dynamic_adapter_comment,
     validate_runtime_guidance,
 )
-from lingtai_kernel.llm.interface import ToolResultBlock
+from lingtai.kernel.llm.interface import ToolResultBlock
 
 
 def _fake_agent(*, time_awareness: bool = True, timezone_awareness: bool = True):
@@ -1082,8 +1082,8 @@ def test_injected_session_survives_refresh_baseline_reset():
     exercised, not a stub.
     """
     from unittest.mock import MagicMock
-    from lingtai_kernel.session import SessionManager
-    from lingtai_kernel.config import AgentConfig
+    from lingtai.kernel.session import SessionManager
+    from lingtai.kernel.config import AgentConfig
 
     svc = MagicMock()
     svc.model = "test-model"
@@ -1981,7 +1981,7 @@ def _write_telegram_notif(tmp_path, messages: list[dict]) -> None:
 
 
 def test_attach_active_notifications_first_payload_attaches(tmp_path):
-    from lingtai_kernel.notifications import notification_fingerprint
+    from lingtai.kernel.notifications import notification_fingerprint
 
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
@@ -2061,7 +2061,7 @@ def test_attach_active_notifications_changed_payload_reattaches_and_retains_prio
     # trace — notification payloads are timely transient state, and canonical
     # history is no longer retroactively stripped (Jason #4307); only the
     # newest emitted payload is current.
-    from lingtai_kernel.notifications import notification_fingerprint
+    from lingtai.kernel.notifications import notification_fingerprint
 
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
@@ -2105,7 +2105,7 @@ def test_attach_active_notifications_unchanged_commits_fp_to_avoid_retry(tmp_pat
     # Even when an unchanged payload is not restamped, the fingerprint is
     # committed so an equivalent rewrite / same-material payload does not retry
     # forever against the IDLE-path synthesized pair.
-    from lingtai_kernel.notifications import notification_fingerprint
+    from lingtai.kernel.notifications import notification_fingerprint
 
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
@@ -3568,7 +3568,7 @@ def _write_post_molt_notif(tmp_path):
 
 def test_attach_active_notifications_can_stamp_post_molt_after_molt_batch(tmp_path):
     """Post-molt is not globally idle-only; later ACTIVE batches may consume it."""
-    from lingtai_kernel.notifications import notification_fingerprint
+    from lingtai.kernel.notifications import notification_fingerprint
 
     _write_post_molt_notif(tmp_path)
     agent = _notif_agent(tmp_path)
@@ -3583,7 +3583,7 @@ def test_attach_active_notifications_can_stamp_post_molt_after_molt_batch(tmp_pa
 
 def test_attach_active_notifications_stamps_post_molt_with_other_channels(tmp_path):
     """Mixed ordinary channels and post-molt stamp together on non-molt batches."""
-    from lingtai_kernel.notifications import notification_fingerprint
+    from lingtai.kernel.notifications import notification_fingerprint
 
     _write_email_notif(tmp_path)
     _write_post_molt_notif(tmp_path)
@@ -3902,7 +3902,7 @@ def test_attach_active_runtime_new_large_result_is_material():
 
 def test_agent_meta_signature_ignores_volatile_bookkeeping():
     # The material signature must be identical when only volatile fields differ.
-    from lingtai_kernel.meta_block import agent_meta_signature
+    from lingtai.kernel.meta_block import agent_meta_signature
 
     base = {
         "elapsed_ms": 5,
@@ -4082,7 +4082,7 @@ def test_validate_runtime_guidance_rejects_non_dict():
 
 def test_attach_active_runtime_is_wired_into_turn_boundary():
     import inspect
-    from lingtai_kernel.base_agent import turn as _turn
+    from lingtai.kernel.base_agent import turn as _turn
 
     src = inspect.getsource(_turn)
     assert "attach_active_runtime(" in src, (
@@ -4255,7 +4255,7 @@ def _molt_agent_with_reminder(reminder):
 
 
 def test_build_meta_current_molt_carries_reminder_and_event_payload():
-    from lingtai_kernel.reminders.context_pressure import ContextPressureReminder
+    from lingtai.kernel.reminders.context_pressure import ContextPressureReminder
 
     reminder = ContextPressureReminder()
     for rid in (1, 2, 3):
@@ -4419,7 +4419,7 @@ def test_build_meta_preserves_both_warnings_when_context_pressure_also_active():
     warning are both active, both must survive in tool_meta.context.molt — the
     budget line is appended and the context-pressure prose is preserved — and the
     budget fields ride alongside."""
-    from lingtai_kernel.reminders.context_pressure import ContextPressureReminder
+    from lingtai.kernel.reminders.context_pressure import ContextPressureReminder
 
     # Drive a real context decomposition (usage 0.9) with an armed real reminder,
     # plus a cache-miss total over budget.
@@ -4451,7 +4451,7 @@ def test_build_meta_preserves_both_warnings_when_context_pressure_also_active():
     assert ctx["cache_miss_tokens"] == 1_200_000
     # The context-pressure emission event still hashes ONLY the pressure message,
     # not the combined text (channel-B dedup/logging semantics are unchanged).
-    from lingtai_kernel.reminders.context_pressure import reminder_message_hash
+    from lingtai.kernel.reminders.context_pressure import reminder_message_hash
     pressure_only = reminder.current_molt_context(0.9)
     payload = meta[meta_block.TOOL_META_CONTEXT_EVENT_PENDING_KEY]["payload"]
     assert payload["message_hash"] == reminder_message_hash(pressure_only)
@@ -4461,8 +4461,8 @@ def test_attach_tool_block_promotes_budget_context_and_pops_transit_key():
     """_attach_tool_block promotes the budget sub-object (molt + budget fields)
     into permanent tool_meta.context and pops the transit key from
     _runtime_pending so it never lands on the wire tool_meta."""
-    from lingtai_kernel.loop_guard import LoopGuard
-    from lingtai_kernel.tool_executor import _DEFAULT_MAX_RESULT_CHARS, ToolExecutor
+    from lingtai.kernel.loop_guard import LoopGuard
+    from lingtai.kernel.tool_executor import _DEFAULT_MAX_RESULT_CHARS, ToolExecutor
 
     agent = _budget_agent(budget=1_000_000, input_tokens=1_200_000, cached_tokens=0)
     meta = build_meta(agent)

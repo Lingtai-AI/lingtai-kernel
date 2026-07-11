@@ -2,10 +2,10 @@
 related_files:
   - src/lingtai/cli.py
   - src/lingtai/services/ANATOMY.md
-  - src/lingtai_kernel/ANATOMY.md
-  - src/lingtai_kernel/services/__init__.py
-  - src/lingtai_kernel/services/logging.py
-  - src/lingtai_kernel/services/mail.py
+  - src/lingtai/kernel/ANATOMY.md
+  - src/lingtai/kernel/services/__init__.py
+  - src/lingtai/kernel/services/logging.py
+  - src/lingtai/kernel/services/mail.py
   - tests/test_services_logging.py
   - tests/test_services_mail.py
 maintenance: |
@@ -46,7 +46,7 @@ Kernel-side service ABCs and implementations. Services back cross-cutting kernel
 
 ## Composition
 
-- **Parent:** `src/lingtai_kernel/` (see `ANATOMY.md`).
+- **Parent:** `src/lingtai/kernel/` (see `ANATOMY.md`).
 - **Subfolders:** none.
 - **Sibling consumers:** the `email` tool (`tools/email/`) owns mailbox tool behavior; `base_agent/` owns logging lifecycle; `src/lingtai/cli.py` exposes `lingtai-agent log {rebuild,doctor,query}` (`../lingtai/cli.py:294-305`).
 

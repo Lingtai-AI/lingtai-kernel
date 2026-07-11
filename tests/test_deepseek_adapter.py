@@ -21,7 +21,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from lingtai.llm.deepseek.adapter import DeepSeekAdapter, DeepSeekChatSession
-from lingtai_kernel.llm.interface import (
+from lingtai.kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ThinkingBlock,

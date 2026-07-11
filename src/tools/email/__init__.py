@@ -26,7 +26,7 @@ tool is now request/response only.
 from __future__ import annotations
 
 
-from lingtai_kernel.notifications import register_generic_dismiss_guard
+from lingtai.kernel.notifications import register_generic_dismiss_guard
 
 register_generic_dismiss_guard(
     "email",

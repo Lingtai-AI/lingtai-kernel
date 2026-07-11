@@ -161,8 +161,8 @@ mcp/licc.py  (client-side producer; mirrors inbox.py's consumer)
 
 - `yaml` (PyYAML) — used by the skills capability's frontmatter parser (imported transitively; not directly used here)
 - `lingtai.i18n` — `t()` for localized strings (imported but the description is hardcoded English)
-- `lingtai_kernel.notifications` — `submit` (as `publish_notification`) for `.notification/` dispatch (in `inbox.py`)
-- `lingtai_kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
+- `lingtai.kernel.notifications` — `submit` (as `publish_notification`) for `.notification/` dispatch (in `inbox.py`)
+- `lingtai.kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
 - `lingtai.mcp_catalog.json` — kernel-shipped MCP catalog file (read at runtime)
 - `lingtai.services.mcp_inbox` — `licc.py` imports the contract constants (`LICC_VERSION`, `INBOX_DIRNAME`, `TMP_SUFFIX`, `EVENT_SUFFIX`) from it; stdlib only otherwise (`json`, `os`, `uuid`, `datetime`, `pathlib`, `logging`)
 - env: `LINGTAI_AGENT_DIR` / `LINGTAI_MCP_NAME` — kernel-injected per spawned MCP (see `lingtai.agent`); the default source for `push_inbox_event`'s target

@@ -15,8 +15,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from lingtai_kernel._fsutil import append_jsonl, atomic_write_json
-from lingtai_kernel.token_ledger import append_token_entry
+from lingtai.kernel._fsutil import append_jsonl, atomic_write_json
+from lingtai.kernel.token_ledger import append_token_entry
 
 
 class DaemonRunDir:

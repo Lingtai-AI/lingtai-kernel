@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from lingtai_kernel.maintenance import RetentionOptions, TargetError, report_to_dict, scan_retention
+from lingtai.kernel.maintenance import RetentionOptions, TargetError, report_to_dict, scan_retention
 
 
 NOW = datetime(2026, 6, 27, 12, 0, 0, tzinfo=timezone.utc)

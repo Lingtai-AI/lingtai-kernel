@@ -26,7 +26,7 @@ Actions:
                      ``.notification/system.json``.
 
 All three dismiss verbs delegate to the single canonical
-:func:`lingtai_kernel.notifications.dismiss_channel` with
+:func:`lingtai.kernel.notifications.dismiss_channel` with
 ``invoked_by="notification"``.  The decision logic (allowlist, ``post-molt``
 ack-reason, protected channels, generic-dismiss guard, and stale-channel-version
 refusal) lives there, so every guard holds through this tool by construction.
@@ -44,7 +44,7 @@ from .schema import get_description, get_schema  # noqa: F401
 
 # Single-source delegate — the canonical dismissal helper.  No notification
 # logic is reimplemented here.
-from lingtai_kernel.notifications import dismiss_channel
+from lingtai.kernel.notifications import dismiss_channel
 
 
 # Placeholder returned by ``check`` — the live payload (``_meta.notifications``

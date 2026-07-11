@@ -136,7 +136,7 @@ def _render_current_diary(agent) -> str:
     """
     import json
     from datetime import datetime
-    from lingtai_kernel.token_counter import count_tokens
+    from lingtai.kernel.token_counter import count_tokens
 
     log_path = agent._working_dir / "logs" / "events.jsonl"
     if not log_path.is_file():
@@ -193,7 +193,7 @@ def _write_soul_tokens(agent, response) -> None:
     if not (u.input_tokens or u.output_tokens or u.thinking_tokens or u.cached_tokens):
         return
     try:
-        from lingtai_kernel.token_ledger import append_token_entry
+        from lingtai.kernel.token_ledger import append_token_entry
         ledger_path = agent._working_dir / "logs" / "token_ledger.jsonl"
         model = getattr(agent.service, "model", None)
         endpoint = getattr(agent.service, "_base_url", None)
@@ -220,7 +220,7 @@ def _load_snapshot_interface(path):
     """
     import json
     from pathlib import Path
-    from lingtai_kernel.llm.interface import ChatInterface
+    from lingtai.kernel.llm.interface import ChatInterface
 
     try:
         p = Path(path)
@@ -257,7 +257,7 @@ def _fit_interface_to_window(iface, target_tokens: int):
 
     Returns a fresh ChatInterface containing only the kept entries.
     """
-    from lingtai_kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
 
     if target_tokens <= 0:
         return ChatInterface.from_dict([])
@@ -363,7 +363,7 @@ def _build_consultation_cue(agent, kind: str, diary: str) -> str:
     (no diary entries logged yet), the cue still works — the placeholder
     becomes "(no diary yet)" for legibility.
     """
-    from lingtai_kernel.i18n import t
+    from lingtai.kernel.i18n import t
     key = (
         "soul.consultation_cue_insights"
         if kind == "insights"
@@ -451,7 +451,7 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
         return None
     spark = diary
 
-    from lingtai_kernel.llm.interface import ToolResultBlock
+    from lingtai.kernel.llm.interface import ToolResultBlock
 
     blocks_collected: list = []
     next_input: "str | list[ToolResultBlock]" = spark
@@ -521,7 +521,7 @@ def _run_consultation_batch(agent) -> list[dict]:
     if getattr(agent, "_chat", None) is not None:
         try:
             insights_iface = agent._chat.interface
-            from lingtai_kernel.llm.interface import ChatInterface
+            from lingtai.kernel.llm.interface import ChatInterface
             insights_iface = ChatInterface.from_dict(insights_iface.to_dict())
         except Exception:
             insights_iface = None
@@ -591,8 +591,8 @@ def build_consultation_pair(agent, voices: list[dict], tc_id: str | None = None)
     """
     import secrets
     import time
-    from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
-    from lingtai_kernel.i18n import t as _t
+    from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
+    from lingtai.kernel.i18n import t as _t
 
     if not tc_id:
         tc_id = f"tc_{int(time.time())}_{secrets.token_hex(2)}"

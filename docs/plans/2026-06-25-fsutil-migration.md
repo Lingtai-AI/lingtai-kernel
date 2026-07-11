@@ -1,6 +1,6 @@
 # `_fsutil` staged migration plan (issue #510)
 
-`src/lingtai_kernel/_fsutil.py` is the shared, stdlib-only foundation for
+`src/lingtai/kernel/_fsutil.py` is the shared, stdlib-only foundation for
 crash-atomic writes and JSON/JSONL/timestamp handling. It exists so future
 state-writing code stops re-solving atomicity, UTF-8 (`ensure_ascii`), and
 `read_json(default=...)` exception policy differently in each module.

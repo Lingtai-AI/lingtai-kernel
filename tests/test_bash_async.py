@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from lingtai_kernel.notifications import collect_notifications
+from lingtai.kernel.notifications import collect_notifications
 from tools.bash import BashManager, BashPolicy, get_schema
 
 

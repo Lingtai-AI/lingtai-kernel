@@ -271,7 +271,7 @@ def test_load_preset_relocates_legacy_root_context_limit(tmp_path):
 
 def test_load_preset_drops_duplicate_legacy_root_context_limit(tmp_path):
     """Both locations with the same value are accepted in memory."""
-    from lingtai_kernel.migrate.migrate import reset_process_cache
+    from lingtai.kernel.migrate.migrate import reset_process_cache
     reset_process_cache()
     p = {
         "name": "dup",
@@ -293,7 +293,7 @@ def test_load_preset_drops_duplicate_legacy_root_context_limit(tmp_path):
 
 def test_load_preset_conflicting_legacy_root_context_limit_preserves_llm(tmp_path):
     """When both locations disagree, canonical manifest.llm wins."""
-    from lingtai_kernel.migrate.migrate import reset_process_cache
+    from lingtai.kernel.migrate.migrate import reset_process_cache
     reset_process_cache()
     p = {
         "name": "dup",

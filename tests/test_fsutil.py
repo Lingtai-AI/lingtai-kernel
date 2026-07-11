@@ -6,7 +6,7 @@ import stat
 
 import pytest
 
-from lingtai_kernel import _fsutil
+from lingtai.kernel import _fsutil
 
 
 # --------------------------------------------------------------------------- #
@@ -314,7 +314,7 @@ def test_write_manifest_byte_identical_to_legacy_format(tmp_path):
     newline) via a temp file + os.replace.  After migrating ``write_manifest``
     to ``_fsutil.atomic_write_json`` the on-disk bytes must be unchanged.
     """
-    from lingtai_kernel.workdir import WorkingDir
+    from lingtai.kernel.workdir import WorkingDir
 
     manifest = {
         "name": "灵台",          # non-ASCII must be preserved, not escaped

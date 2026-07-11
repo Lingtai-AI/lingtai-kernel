@@ -61,7 +61,7 @@ def test_email_receive_notification(tmp_path):
     on tc_inbox — the kernel's notification sync mechanism reads the file on
     its next heartbeat tick and injects the wire pair/persistent lane.
     """
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     # Mail must be on disk before the notification renderer runs.
@@ -92,7 +92,7 @@ def test_email_receive_notification(tmp_path):
 
 def test_email_receive_fallback_id(tmp_path):
     """Digest should still publish even when arrival payload omits _mailbox_id."""
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     _make_inbox_email(agent.working_dir, sender="sender", subject="(no subj)", message="body")
@@ -105,7 +105,7 @@ def test_email_receive_fallback_id(tmp_path):
 def test_email_receive_via_agent(tmp_path):
     """After add_capability('email'), agent._on_mail_received publishes
     the unread email notification to ``.notification/email.json``."""
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     email_id = _make_inbox_email(agent.working_dir, sender="sender", subject="hi", message="body")
@@ -411,7 +411,7 @@ def test_email_send_with_attachments(tmp_path):
 
 def _setup_receiver(tmp_path, name, stop_event):
     """Create a receiver agent dir with heartbeat and FilesystemMailService."""
-    from lingtai_kernel.services.mail import FilesystemMailService
+    from lingtai.kernel.services.mail import FilesystemMailService
     d = tmp_path / name
     d.mkdir(parents=True, exist_ok=True)
     (d / ".agent.json").write_text(json.dumps({"agent_name": name}))
@@ -430,7 +430,7 @@ def _setup_receiver(tmp_path, name, stop_event):
 
 def test_email_send_multi_to(tmp_path):
     """email send should deliver to multiple addresses."""
-    from lingtai_kernel.services.mail import FilesystemMailService
+    from lingtai.kernel.services.mail import FilesystemMailService
 
     stop = threading.Event()
     received = {0: [], 1: []}
@@ -463,7 +463,7 @@ def test_email_send_multi_to(tmp_path):
 
 def test_email_send_cc_visible(tmp_path):
     """CC addresses should receive the email with cc field visible."""
-    from lingtai_kernel.services.mail import FilesystemMailService
+    from lingtai.kernel.services.mail import FilesystemMailService
 
     stop = threading.Event()
     received = {0: [], 1: []}
@@ -498,7 +498,7 @@ def test_email_send_cc_visible(tmp_path):
 
 def test_email_send_bcc_hidden(tmp_path):
     """BCC addresses should receive the email but bcc field should NOT be in payload."""
-    from lingtai_kernel.services.mail import FilesystemMailService
+    from lingtai.kernel.services.mail import FilesystemMailService
 
     stop = threading.Event()
     received = {0: [], 1: []}

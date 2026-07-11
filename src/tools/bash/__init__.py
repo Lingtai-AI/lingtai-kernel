@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 
 
 if TYPE_CHECKING:
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 
@@ -52,7 +52,7 @@ def _redact_warning_tail(text: str) -> str:
     already present in the result, so this introduces no new exposure beyond it.
     """
     try:
-        from lingtai_kernel.trace_redaction import redact_text
+        from lingtai.kernel.trace_redaction import redact_text
 
         return redact_text(text)
     except Exception:
@@ -615,8 +615,8 @@ class BashManager:
         import time
         from datetime import datetime, timezone
 
-        from lingtai_kernel.notifications import collect_notifications
-        from lingtai_kernel.notifications import submit as publish_notification
+        from lingtai.kernel.notifications import collect_notifications
+        from lingtai.kernel.notifications import submit as publish_notification
 
         event_id = f"evt_{int(time.time()*1000):x}_{secrets.token_hex(8)}"
         received_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

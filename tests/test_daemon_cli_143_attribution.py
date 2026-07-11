@@ -14,7 +14,7 @@ SIGTERM (no recorded reason) as the existing opaque failure.
 """
 from unittest.mock import MagicMock
 
-from lingtai_kernel.config import AgentConfig
+from lingtai.kernel.config import AgentConfig
 
 
 class _FakeProc:

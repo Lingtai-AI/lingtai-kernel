@@ -18,13 +18,13 @@ from pathlib import Path
 
 import pytest
 
-from lingtai_kernel._frontmatter import split_frontmatter, strip_frontmatter
-from lingtai_kernel.meta_block import (
+from lingtai.kernel._frontmatter import split_frontmatter, strip_frontmatter
+from lingtai.kernel.meta_block import (
     build_runtime_guidance,
     build_guidance_with_meta_readme,
     validate_runtime_guidance,
 )
-from lingtai_kernel.prompt_catalog import (
+from lingtai.kernel.prompt_catalog import (
     GUIDANCE_SECTION_ORDER,
     PromptCatalogError,
     load_guidance_catalog,
@@ -195,7 +195,7 @@ def test_strip_frontmatter_is_split_body():
 def test_wrapper_reexports_kernel_frontmatter():
     """mcp_servers/_skill.py must re-export the kernel primitive (one impl)."""
     from lingtai.mcp_servers import _skill
-    from lingtai_kernel import _frontmatter
+    from lingtai.kernel import _frontmatter
 
     assert _skill.split_frontmatter is _frontmatter.split_frontmatter
 
@@ -334,7 +334,7 @@ def test_prompt_related_files_form_bidirectional_inner_link_graph():
 
 
 def test_build_runtime_guidance_sources_from_catalog():
-    import lingtai_kernel.meta_block as mb
+    import lingtai.kernel.meta_block as mb
 
     mb._GUIDANCE_CACHE = None
     guidance = build_runtime_guidance()
@@ -352,7 +352,7 @@ def test_guidance_ids_referenced_by_runtime_code_exist():
     catalog_ids = {s["id"] for s in load_guidance_catalog()["sections"]}
 
     referenced: set[str] = set()
-    kernel_root = Path("src/lingtai_kernel")
+    kernel_root = Path("src/lingtai/kernel")
     for py in kernel_root.rglob("*.py"):
         referenced.update(re.findall(r"meta_guidance\.([a-z_]+)", py.read_text(encoding="utf-8")))
 

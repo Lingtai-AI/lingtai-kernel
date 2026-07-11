@@ -21,7 +21,7 @@ from typing import Any
 import anthropic
 import httpx
 
-from lingtai_kernel.logging import get_logger
+from lingtai.kernel.logging import get_logger
 
 logger = get_logger()
 
@@ -38,7 +38,7 @@ def _build_http_timeout(request_timeout: float | None):
     )
 
 
-from lingtai_kernel.llm.base import (
+from lingtai.kernel.llm.base import (
     WIRE_TOOL_DESCRIPTION,
     ChatSession,
     FunctionSchema,
@@ -46,11 +46,11 @@ from lingtai_kernel.llm.base import (
     ToolCall,
     UsageMetadata,
 )
-from lingtai_kernel.llm.interface import ToolResultBlock
+from lingtai.kernel.llm.interface import ToolResultBlock
 from lingtai.llm.base import LLMAdapter
-from lingtai_kernel.llm.interface import ChatInterface
+from lingtai.kernel.llm.interface import ChatInterface
 from ..interface_converters import to_anthropic
-from lingtai_kernel.llm.streaming import StreamingAccumulator
+from lingtai.kernel.llm.streaming import StreamingAccumulator
 from lingtai.llm.identity_headers import merge_lingtai_identity_headers
 
 
@@ -412,7 +412,7 @@ class AnthropicChatSession(ChatSession):
         # Parse response and add to interface
         response = _parse_response(raw)
         # Record assistant response from raw API object (preserves thinking signatures)
-        from lingtai_kernel.llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
+        from lingtai.kernel.llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
         assistant_blocks = []
         for block in raw.content:
             if block.type == "thinking":
@@ -450,7 +450,7 @@ class AnthropicChatSession(ChatSession):
         on_chunk: Callable[[str], None] | None = None,
     ) -> LLMResponse:
         """Streaming send. User message committed to history only after success."""
-        from lingtai_kernel.llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
+        from lingtai.kernel.llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
 
         # Record user input into interface first.  ``None`` means the
         # caller pre-staged the wire (see send() docstring).

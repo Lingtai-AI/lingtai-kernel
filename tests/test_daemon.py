@@ -8,9 +8,9 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-from lingtai_kernel.config import AgentConfig
-from lingtai_kernel.llm.base import FunctionSchema, ToolCall
-from lingtai_kernel.tool_call_guard import GuardDecision, ToolCallGuard
+from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.llm.base import FunctionSchema, ToolCall
+from lingtai.kernel.tool_call_guard import GuardDecision, ToolCallGuard
 
 from tests._daemon_helpers import make_daemon_agent as _make_agent
 from tests._daemon_helpers import make_daemon_run_dir as _make_run_dir
@@ -1108,7 +1108,7 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
 
     time.sleep(1)
 
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     assert agent.inbox.empty()
     events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
@@ -1499,7 +1499,7 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
     statuses = {e["id"]: e["status"] for e in list_result["emanations"]}
     assert statuses.get(em_id) == "done"
 
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     assert agent.inbox.empty()
     events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
@@ -1514,7 +1514,7 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
 
 
 def test_on_emanation_done_publishes_system_notification_not_request(tmp_path):
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1546,7 +1546,7 @@ def test_on_emanation_done_publishes_system_notification_not_request(tmp_path):
 
 
 def test_on_emanation_done_failure_always_notifies(tmp_path):
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1575,7 +1575,7 @@ def test_on_emanation_done_failure_always_notifies(tmp_path):
 
 
 def test_on_emanation_done_short_success_notifies(tmp_path):
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1606,7 +1606,7 @@ def test_on_emanation_done_cancelled_notifies_despite_short_text(tmp_path):
     """A cancelled run returns the short ``[cancelled]`` sentinel but its
     run_dir state is authoritative. The parent must always learn the daemon
     terminated, with the correct terminal label."""
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1636,7 +1636,7 @@ def test_on_emanation_done_cancelled_notifies_despite_short_text(tmp_path):
 def test_on_emanation_done_timeout_notifies_despite_short_text(tmp_path):
     """A timed-out run also returns the short sentinel; its terminal state is
     ``timeout`` and must be reported with that label."""
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1666,7 +1666,7 @@ def test_on_emanation_done_notifies_terminal_only_once(tmp_path):
     """A daemon run's terminal notification is delivered exactly once even if
     the done-callback fires more than once for the same run (e.g. a racing
     reclaim or a duplicated callback). Dedup is keyed on the run's ref_id."""
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1692,7 +1692,7 @@ def test_on_emanation_done_notifies_terminal_only_once(tmp_path):
 
 
 def test_terminal_notification_enqueue_failure_leaves_retryable_state(tmp_path):
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
@@ -1736,7 +1736,7 @@ def test_terminal_notification_enqueue_failure_leaves_retryable_state(tmp_path):
 
 
 def test_daemon_startup_retries_unpublished_terminal_notification(tmp_path):
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     daemon_json = _write_daemon_json(
         tmp_path,
@@ -1764,7 +1764,7 @@ def test_daemon_startup_retries_unpublished_terminal_notification(tmp_path):
 
 
 def test_concurrent_terminal_callbacks_publish_once(tmp_path):
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
@@ -1802,7 +1802,7 @@ def test_concurrent_terminal_callbacks_publish_once(tmp_path):
 
 
 def test_crash_after_publish_before_receipt_retry_is_idempotent(tmp_path):
-    from lingtai_kernel.notifications import collect_notifications, submit
+    from lingtai.kernel.notifications import collect_notifications, submit
 
     daemon_json = _write_daemon_json(
         tmp_path,
@@ -1845,7 +1845,7 @@ def test_crash_after_publish_before_receipt_retry_is_idempotent(tmp_path):
 
 
 def test_legacy_terminal_notified_true_is_not_republished(tmp_path):
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     _write_daemon_json(
         tmp_path,
@@ -1862,7 +1862,7 @@ def test_legacy_terminal_notified_true_is_not_republished(tmp_path):
 
 
 def test_legacy_missing_terminal_notified_key_is_not_republished_or_mutated(tmp_path):
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     daemon_json = _write_daemon_json(
         tmp_path,
@@ -1928,7 +1928,7 @@ def test_daemon_schema_has_no_terminal_notification_toggle():
 def test_on_emanation_done_notification_includes_task_summary(tmp_path):
     """The terminal notification carries a bounded task summary so the parent
     can recognize which dispatched daemon ended without opening the run dir."""
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1960,7 +1960,7 @@ def test_terminal_notification_not_blocked_by_prior_followup(tmp_path):
     the run is still alive. The terminal notification must still be delivered
     afterward — the once-only guard is scoped to the terminal event, not to any
     event carrying the same ref_id."""
-    from lingtai_kernel.notifications import collect_notifications
+    from lingtai.kernel.notifications import collect_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -2400,7 +2400,7 @@ def test_emanate_with_preset_validates_preset_exists(tmp_path, monkeypatch):
 def test_emanate_with_preset_unreachable_refuses(tmp_path, monkeypatch):
     """If the requested preset has connectivity 'unreachable', refuse the emanation."""
     from unittest.mock import patch
-    import lingtai_kernel.preset_connectivity as preset_connectivity
+    import lingtai.kernel.preset_connectivity as preset_connectivity
 
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
@@ -2449,7 +2449,7 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
     """When preset is valid and reachable, emanation is scheduled and
     daemon.json records the preset name + provider + model."""
     from unittest.mock import patch
-    import lingtai_kernel.preset_connectivity as preset_connectivity
+    import lingtai.kernel.preset_connectivity as preset_connectivity
 
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()

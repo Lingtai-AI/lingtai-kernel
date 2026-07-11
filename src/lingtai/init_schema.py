@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from lingtai_kernel.config import THINKING_LEVELS, THINKING_PROVIDERS
+from lingtai.kernel.config import THINKING_LEVELS, THINKING_PROVIDERS
 
 log = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ TOP_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     # prompt injection point — one of the three externally changeable prompt
     # surfaces (with `covenant` and `comment`). It renders right after the raw
     # kernel-owned `principle` section and before the rest of Batch 1 (see
-    # lingtai_kernel.prompt.build_system_prompt_batches). Inline value or
+    # lingtai.kernel.prompt.build_system_prompt_batches). Inline value or
     # `base_prompt_file` path; type-checked alongside the other optional text
     # fields in validate_init().
     "base_prompt": str,
@@ -36,7 +36,7 @@ TOP_OPTIONAL: dict[str, type | tuple[type, ...]] = {
 # Top-level fields that were retired in past versions and still have simple
 # shape-only cleanup semantics. strip_deprecated() removes them from the data
 # dict (and optionally from disk) so they never reach validate_init(). Fields
-# that need archive/event/version tracking belong in lingtai_kernel.migrate
+# that need archive/event/version tracking belong in lingtai.kernel.migrate
 # agent-domain migrations instead.
 DEPRECATED_TOP_FIELDS: set[str] = {
     # "soul" / "soul_file" — retired in v0.7.6. The soul-flow voice is
@@ -235,7 +235,7 @@ def validate_init(data: dict) -> list[str]:
     #   - `base_prompt` — the third-party (application / recipe / preset) system-
     #                     prompt injection point. Renders right after the raw
     #                     kernel-owned `principle` section and before the rest of
-    #                     Batch 1 (lingtai_kernel.prompt.build_system_prompt_batches).
+    #                     Batch 1 (lingtai.kernel.prompt.build_system_prompt_batches).
     # `substrate` and `brief` were retired as external overrides (kernel-owned /
     # secretary-disk-only respectively) — see LEGACY_MIGRATED_TOP_FIELDS.
     for key in ("lingtai", "comment", "base_prompt"):

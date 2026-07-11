@@ -269,7 +269,7 @@ def test_validate_rejects_non_knowledge_md_filename(tmp_path):
 
 
 def _molt_setup(tmp_path):
-    from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
+    from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
 
     svc = make_mock_service()
 

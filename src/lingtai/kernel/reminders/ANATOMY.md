@@ -1,13 +1,13 @@
 ---
 related_files:
   - CLAUDE.md
-  - src/lingtai_kernel/ANATOMY.md
-  - src/lingtai_kernel/reminders/__init__.py
-  - src/lingtai_kernel/reminders/context_pressure.py
-  - src/lingtai_kernel/config.py
-  - src/lingtai_kernel/session.py
-  - src/lingtai_kernel/meta_block.py
-  - src/lingtai_kernel/tool_executor.py
+  - src/lingtai/kernel/ANATOMY.md
+  - src/lingtai/kernel/reminders/__init__.py
+  - src/lingtai/kernel/reminders/context_pressure.py
+  - src/lingtai/kernel/config.py
+  - src/lingtai/kernel/session.py
+  - src/lingtai/kernel/meta_block.py
+  - src/lingtai/kernel/tool_executor.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

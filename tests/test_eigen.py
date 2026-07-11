@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.base_agent import BaseAgent
+from lingtai.kernel.base_agent import BaseAgent
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 from tests._molt_helpers import write_session_journal as _write_session_journal
 
@@ -94,7 +94,7 @@ def test_psyche_pad_load_empty(tmp_path):
 
 def test_psyche_molt_uses_summary(tmp_path):
     """molt wipes context and re-injects agent's summary."""
-    from lingtai_kernel.llm.interface import ChatInterface, TextBlock
+    from lingtai.kernel.llm.interface import ChatInterface, TextBlock
 
     svc = make_mock_service()
 
@@ -114,7 +114,7 @@ def test_psyche_molt_uses_summary(tmp_path):
     )
     agent.start()
     try:
-        from lingtai_kernel.llm.interface import ToolCallBlock
+        from lingtai.kernel.llm.interface import ToolCallBlock
 
         agent._session.ensure_session()
         agent._session._chat.interface.add_user_message("Hello")
@@ -217,7 +217,7 @@ def test_psyche_rejects_invalid_object_action_pair(tmp_path):
 
 def test_eigen_forget_wipes_context(tmp_path):
     """context_forget nuclear wipes the session."""
-    from lingtai_kernel.llm.interface import ChatInterface, TextBlock
+    from lingtai.kernel.llm.interface import ChatInterface, TextBlock
     from tools.psyche import context_forget
 
     svc = make_mock_service()
@@ -329,7 +329,7 @@ def _agent_with_session(tmp_path):
     """Build a BaseAgent with a mock session that uses a real ChatInterface
     so molt code can actually walk and serialize entries. Returns the agent;
     caller is responsible for stop()."""
-    from lingtai_kernel.llm.interface import ChatInterface
+    from lingtai.kernel.llm.interface import ChatInterface
 
     svc = make_mock_service()
 
@@ -354,7 +354,7 @@ def _agent_with_session(tmp_path):
 def test_snapshot_written_on_agent_molt(tmp_path):
     """Agent-initiated molt drops a discrete snapshot file under history/snapshots/."""
     import json
-    from lingtai_kernel.llm.interface import TextBlock, ToolCallBlock
+    from lingtai.kernel.llm.interface import TextBlock, ToolCallBlock
 
     agent = _agent_with_session(tmp_path)
     try:
@@ -423,7 +423,7 @@ def test_snapshot_written_on_agent_molt(tmp_path):
 def test_snapshot_written_on_system_forget(tmp_path):
     """System-initiated context_forget also writes a snapshot, source != 'agent'."""
     import json
-    from lingtai_kernel.llm.interface import TextBlock
+    from lingtai.kernel.llm.interface import TextBlock
     from tools.psyche import context_forget
 
     agent = _agent_with_session(tmp_path)

@@ -17,14 +17,14 @@ __version__ = _pkg_version("lingtai")
 # A None attribute means the public name is used as the attribute name.
 _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
     # Core kernel re-exports
-    "BaseAgent": ("lingtai_kernel.base_agent", "BaseAgent"),
+    "BaseAgent": ("lingtai.kernel.base_agent", "BaseAgent"),
     "Agent": ("lingtai.agent", "Agent"),
-    "AgentConfig": ("lingtai_kernel.config", "AgentConfig"),
-    "AgentState": ("lingtai_kernel.state", "AgentState"),
-    "Message": ("lingtai_kernel.message", "Message"),
-    "MSG_REQUEST": ("lingtai_kernel.message", "MSG_REQUEST"),
-    "MSG_USER_INPUT": ("lingtai_kernel.message", "MSG_USER_INPUT"),
-    "UnknownToolError": ("lingtai_kernel.types", "UnknownToolError"),
+    "AgentConfig": ("lingtai.kernel.config", "AgentConfig"),
+    "AgentState": ("lingtai.kernel.state", "AgentState"),
+    "Message": ("lingtai.kernel.message", "Message"),
+    "MSG_REQUEST": ("lingtai.kernel.message", "MSG_REQUEST"),
+    "MSG_USER_INPUT": ("lingtai.kernel.message", "MSG_USER_INPUT"),
+    "UnknownToolError": ("lingtai.kernel.types", "UnknownToolError"),
     # Tools
     "setup_capability": ("tools.registry", "setup_capability"),
     "BashManager": ("tools.bash", "BashManager"),
@@ -48,13 +48,13 @@ _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
         "lingtai.services.file_io_sidecar",
         "resolve_sidecar_binary",
     ),
-    "MailService": ("lingtai_kernel.services.mail", "MailService"),
+    "MailService": ("lingtai.kernel.services.mail", "MailService"),
     "FilesystemMailService": (
-        "lingtai_kernel.services.mail",
+        "lingtai.kernel.services.mail",
         "FilesystemMailService",
     ),
-    "LoggingService": ("lingtai_kernel.services.logging", "LoggingService"),
-    "JSONLLoggingService": ("lingtai_kernel.services.logging", "JSONLLoggingService"),
+    "LoggingService": ("lingtai.kernel.services.logging", "LoggingService"),
+    "JSONLLoggingService": ("lingtai.kernel.services.logging", "JSONLLoggingService"),
     "VisionService": ("lingtai.services.vision", "VisionService"),
     "create_vision_service": ("lingtai.services.vision", "create_vision_service"),
     "SearchService": ("lingtai.services.websearch", "SearchService"),
@@ -63,11 +63,11 @@ _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
 }
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from lingtai_kernel.base_agent import BaseAgent
-    from lingtai_kernel.config import AgentConfig
-    from lingtai_kernel.message import MSG_REQUEST, MSG_USER_INPUT, Message
-    from lingtai_kernel.state import AgentState
-    from lingtai_kernel.types import UnknownToolError
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.config import AgentConfig
+    from lingtai.kernel.message import MSG_REQUEST, MSG_USER_INPUT, Message
+    from lingtai.kernel.state import AgentState
+    from lingtai.kernel.types import UnknownToolError
     from tools.avatar import AvatarManager
     from tools.bash import BashManager
     from tools.email import EmailManager
@@ -91,8 +91,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     )
     from .services.vision import VisionService, create_vision_service
     from .services.websearch import SearchResult, SearchService, create_search_service
-    from lingtai_kernel.services.logging import JSONLLoggingService, LoggingService
-    from lingtai_kernel.services.mail import FilesystemMailService, MailService
+    from lingtai.kernel.services.logging import JSONLLoggingService, LoggingService
+    from lingtai.kernel.services.mail import FilesystemMailService, MailService
 
 
 def __getattr__(name: str) -> object:

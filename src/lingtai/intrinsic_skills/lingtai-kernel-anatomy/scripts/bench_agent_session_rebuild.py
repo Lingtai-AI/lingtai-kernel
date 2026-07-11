@@ -39,10 +39,10 @@ from pathlib import Path
 # (e.g. a normally installed/importable kernel), leave sys.path alone so the
 # packaged import still resolves.
 def _find_repo_src() -> Path | None:
-    if (Path.cwd() / "src" / "lingtai_kernel").is_dir():
+    if (Path.cwd() / "src" / "lingtai/kernel").is_dir():
         return Path.cwd() / "src"
     for ancestor in Path(__file__).resolve().parents:
-        if (ancestor / "src" / "lingtai_kernel").is_dir():
+        if (ancestor / "src" / "lingtai/kernel").is_dir():
             return ancestor / "src"
     return None
 
@@ -51,7 +51,7 @@ _REPO_SRC = _find_repo_src()
 if _REPO_SRC is not None:
     sys.path.insert(0, str(_REPO_SRC))
 
-from lingtai_kernel.agent_session import (  # noqa: E402
+from lingtai.kernel.agent_session import (  # noqa: E402
     MOLT_BOUNDARY_EVENT,
     TOKEN_EVENT,
     _rebuild_via_full_scan,
@@ -64,7 +64,7 @@ def _gen_synthetic_agent_dir(
     dest: Path, *, total_events: int, molt_every: int
 ) -> tuple[int, int]:
     """Write logs/events.jsonl and logs/log.sqlite. Returns (molt_count, boundary_line)."""
-    from lingtai_kernel.services.logging import SQLiteEventIndex
+    from lingtai.kernel.services.logging import SQLiteEventIndex
 
     logs = dest / "logs"
     logs.mkdir(parents=True, exist_ok=True)

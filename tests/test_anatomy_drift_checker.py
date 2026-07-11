@@ -107,12 +107,12 @@ def test_bench_finds_repo_src_from_repo_root(monkeypatch):
     bench = _load_bench()
     monkeypatch.chdir(ROOT)
     src = bench._find_repo_src()
-    assert src is not None and (src / "lingtai_kernel").is_dir()
+    assert src is not None and (src / "lingtai/kernel").is_dir()
 
 
 def test_bench_finds_repo_src_via_ancestor_search(tmp_path, monkeypatch):
     """Even away from the repo root, the ancestor walk still locates in-tree src."""
     bench = _load_bench()
-    monkeypatch.chdir(tmp_path)  # no src/lingtai_kernel here
+    monkeypatch.chdir(tmp_path)  # no src/lingtai/kernel here
     src = bench._find_repo_src()
-    assert src is not None and (src / "lingtai_kernel").is_dir()
+    assert src is not None and (src / "lingtai/kernel").is_dir()

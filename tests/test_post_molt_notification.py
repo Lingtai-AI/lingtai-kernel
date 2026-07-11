@@ -74,7 +74,7 @@ def _setup_mock_chat(agent):
 
 
 def _build_molt_call_entry(mock_interface, tc_id, summary, reasoning=None):
-    from lingtai_kernel.llm.interface import ToolCallBlock
+    from lingtai.kernel.llm.interface import ToolCallBlock
 
     args = {"object": "context", "action": "molt", "summary": summary}
     if reasoning is not None:
@@ -396,7 +396,7 @@ class TestPostMoltChannelIsolation:
         """Cleaning stale `.notification/molt.json` must
         leaves `.notification/post-molt.json` intact — they are separate
         producer channels."""
-        from lingtai_kernel.notifications import publish, clear
+        from lingtai.kernel.notifications import publish, clear
 
         # Use a bare workdir; this exercises only the file-channel contract.
         workdir = tmp_path / "agent"

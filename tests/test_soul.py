@@ -22,7 +22,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai_kernel.config import AgentConfig
+from lingtai.kernel.config import AgentConfig
 from tools import soul
 
 
@@ -221,7 +221,7 @@ class TestSoulTimer:
 
     def test_soul_attributes_initialized_default(self, tmp_path):
         """BaseAgent with default config has soul_delay=999999999."""
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
@@ -237,7 +237,7 @@ class TestSoulTimer:
         _set_state starts a soul timer when entering IDLE and cancels it
         when leaving IDLE (to ACTIVE, STUCK, etc.).
         """
-        from lingtai_kernel import AgentState, BaseAgent
+        from lingtai.kernel import AgentState, BaseAgent
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
@@ -261,7 +261,7 @@ class TestSoulTimer:
 
     def test_soul_timer_not_started_when_shutdown(self, tmp_path):
         """_start_soul_timer is a no-op when _shutdown is set."""
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
@@ -275,7 +275,7 @@ class TestSoulTimer:
 
     def test_soul_delay_from_config(self, tmp_path):
         """soul_delay in config sets initial _soul_delay."""
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
@@ -287,7 +287,7 @@ class TestSoulTimer:
 
     def test_soul_delay_clamped_to_min(self, tmp_path):
         """soul_delay below 1 is clamped to 1."""
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
@@ -298,7 +298,7 @@ class TestSoulTimer:
         assert agent._soul_delay == 1.0
 
     def test_stop_cancels_soul_timer(self, tmp_path):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=_make_mock_service(),
@@ -317,14 +317,14 @@ class TestSoulFireAllowed:
 
     def test_allows_idle_state(self):
         from tools.soul.flow import _soul_fire_allowed
-        from lingtai_kernel.state import AgentState
+        from lingtai.kernel.state import AgentState
         agent = MagicMock()
         agent._state = AgentState.IDLE
         assert _soul_fire_allowed(agent) is True
 
     def test_rejects_active_state(self):
         from tools.soul.flow import _soul_fire_allowed
-        from lingtai_kernel.state import AgentState
+        from lingtai.kernel.state import AgentState
         agent = MagicMock()
         agent._state = AgentState.ACTIVE
         assert _soul_fire_allowed(agent) is False
@@ -384,7 +384,7 @@ class TestSoulTimerOptIn:
     """The wall-clock timer arms only when soul flow is opted in."""
 
     def test_timer_not_armed_when_disabled(self, tmp_path, monkeypatch):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
@@ -397,7 +397,7 @@ class TestSoulTimerOptIn:
         assert agent._soul_timer is None
 
     def test_timer_armed_when_enabled(self, tmp_path, monkeypatch):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
@@ -415,7 +415,7 @@ class TestSoulTimerOptIn:
 
     def test_timer_follows_idle_only_when_enabled(self, tmp_path, monkeypatch):
         """_set_state IDLE entry does not arm the timer while disabled."""
-        from lingtai_kernel import AgentState, BaseAgent
+        from lingtai.kernel import AgentState, BaseAgent
         monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
@@ -475,7 +475,7 @@ class TestConsultationFireOptIn:
 
     def test_fire_noops_when_disabled(self, monkeypatch):
         from tools.soul import flow
-        from lingtai_kernel.state import AgentState
+        from lingtai.kernel.state import AgentState
         monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
 
         agent = MagicMock()
@@ -502,7 +502,7 @@ class TestConsultationFireOptIn:
         """Sanity: with env enabled the fire proceeds past the env gate to
         the existing state/lock gates (reaches soul_fire_gate_check)."""
         from tools.soul import flow
-        from lingtai_kernel.state import AgentState
+        from lingtai.kernel.state import AgentState
         monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
 
         agent = MagicMock()
@@ -533,7 +533,7 @@ class TestNonFlowActionsUnaffectedByOptIn:
 
     def test_config_works_when_flow_disabled_and_notes_state(self, tmp_path, monkeypatch):
         """config succeeds when flow is disabled and appends a disabled note."""
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         from tools.soul.flow import SOUL_FLOW_ENABLED_ENV
         monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
         agent = BaseAgent(
@@ -555,7 +555,7 @@ class TestNonFlowActionsUnaffectedByOptIn:
             agent.stop(timeout=1.0)
 
     def test_config_no_note_when_flow_enabled(self, tmp_path, monkeypatch):
-        from lingtai_kernel import BaseAgent
+        from lingtai.kernel import BaseAgent
         monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
@@ -581,8 +581,8 @@ def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
     check must discard the result.
     """
     from tools.soul import flow
-    from lingtai_kernel.llm.interface import TextBlock
-    from lingtai_kernel.state import AgentState
+    from lingtai.kernel.llm.interface import TextBlock
+    from lingtai.kernel.state import AgentState
 
     # Soul flow is opt-in / disabled by default — enable it so this test
     # exercises the fire path past the env gate.

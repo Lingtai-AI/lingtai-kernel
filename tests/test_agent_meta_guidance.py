@@ -82,7 +82,7 @@ def test_agent_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_path):
 
 
 def test_agent_loads_kernel_owned_principle_prompt(tmp_path):
-    from lingtai_kernel._frontmatter import split_frontmatter
+    from lingtai.kernel._frontmatter import split_frontmatter
 
     agent = _agent_with_static_comment(tmp_path)
     agent._reload_prompt_sections({"principle": "operator supplied principle override"})
@@ -161,7 +161,7 @@ def test_init_substrate_override_is_not_honored(tmp_path):
     """`substrate` is kernel-owned: an init.json substrate value is ignored at the
     builder level; the packaged default renders instead."""
     from importlib.resources import files
-    from lingtai_kernel._frontmatter import strip_frontmatter
+    from lingtai.kernel._frontmatter import strip_frontmatter
 
     packaged = files("lingtai.prompts").joinpath("substrate/substrate.md").read_text(encoding="utf-8")
 
@@ -193,7 +193,7 @@ def test_section_mirrors_keep_frontmatter_but_prompt_is_body_only(tmp_path):
     """Jason's contract: `system/*.md` section mirrors may carry frontmatter, but
     the rendered LLM prompt and the final `system/system.md` must be body-only.
     """
-    from lingtai_kernel._frontmatter import split_frontmatter
+    from lingtai.kernel._frontmatter import split_frontmatter
 
     agent = _agent_with_static_comment(tmp_path)
     agent._reload_prompt_sections({})
@@ -215,7 +215,7 @@ def test_section_mirrors_keep_frontmatter_but_prompt_is_body_only(tmp_path):
     assert "kind: prompt-section" not in prompt
 
     # The final rendered system.md is body-only too.
-    from lingtai_kernel.base_agent.prompt import _flush_system_prompt
+    from lingtai.kernel.base_agent.prompt import _flush_system_prompt
 
     _flush_system_prompt(agent)
     system_md = (system_dir / "system.md").read_text(encoding="utf-8")
@@ -227,7 +227,7 @@ def test_section_mirrors_keep_frontmatter_but_prompt_is_body_only(tmp_path):
 def test_base_agent_seeds_body_only_from_frontmatter_mirror(tmp_path):
     """T6 — a `system/*.md` mirror that carries frontmatter must seed a body-only
     section when read directly by the lower-level BaseAgent constructor path."""
-    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent import BaseAgent
     from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
     workdir = tmp_path / "ba"

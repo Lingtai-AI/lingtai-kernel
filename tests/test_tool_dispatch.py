@@ -1,7 +1,7 @@
 """Unit tests for the tiny action-router helper (issue #513)."""
 from __future__ import annotations
 
-from lingtai_kernel.tool_dispatch import dispatch_action
+from lingtai.kernel.tool_dispatch import dispatch_action
 
 
 def test_dispatch_calls_matching_handler():

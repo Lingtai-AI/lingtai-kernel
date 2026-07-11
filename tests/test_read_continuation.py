@@ -26,7 +26,7 @@ from tools.read import (
     _apply_cap,
     _resolve_call_cap,
 )
-from lingtai_kernel.tool_result_artifacts import PREVENTIVE_MAX_CHARS
+from lingtai.kernel.tool_result_artifacts import PREVENTIVE_MAX_CHARS
 
 
 # ---------------------------------------------------------------------------

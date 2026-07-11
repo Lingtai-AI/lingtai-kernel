@@ -1,13 +1,13 @@
 ---
 related_files:
-  - src/lingtai_kernel/ANATOMY.md
-  - src/lingtai_kernel/migrate/__init__.py
-  - src/lingtai_kernel/migrate/agent_m001_init_procedures_override.py
-  - src/lingtai_kernel/migrate/agent_m002_mcp_launch_args_rewrite.py
-  - src/lingtai_kernel/migrate/agent_m003_init_prompt_contract.py
-  - src/lingtai_kernel/migrate/m001_context_limit_relocation.py
-  - src/lingtai_kernel/migrate/m002_description_object.py
-  - src/lingtai_kernel/migrate/migrate.py
+  - src/lingtai/kernel/ANATOMY.md
+  - src/lingtai/kernel/migrate/__init__.py
+  - src/lingtai/kernel/migrate/agent_m001_init_procedures_override.py
+  - src/lingtai/kernel/migrate/agent_m002_mcp_launch_args_rewrite.py
+  - src/lingtai/kernel/migrate/agent_m003_init_prompt_contract.py
+  - src/lingtai/kernel/migrate/m001_context_limit_relocation.py
+  - src/lingtai/kernel/migrate/m002_description_object.py
+  - src/lingtai/kernel/migrate/migrate.py
   - tests/test_cli.py
   - tests/test_deep_refresh.py
   - tests/test_kernel_migrate.py
@@ -55,11 +55,11 @@ Versioned, append-only, forward-only migrations for kernel-managed on-disk state
 - **Inbound — agent domain:** `lingtai.cli.load_init` calls `run_agent_migrations(working_dir)` before it reads `init.json` for process boot (`../lingtai/cli.py:32-39`). `lingtai.Agent._read_init` calls the same entry before live refresh/setup reads `init.json` (`../lingtai/agent.py:920-924`). This keeps boot and refresh on one migration path.
 - **Outbound — preset migrations:** Rewrite preset files in the target directory. Each migration uses atomic tmp + `os.replace` and the shared kernel JSONC parser; no imports from the wrapper package.
 - **Outbound — agent migrations:** Rewrite files under one agent workdir, including `init.json` and archive artifacts under `system/migrations/`. Agent migrations may best-effort append events to `logs/events.jsonl` because they run before `Agent` / `BaseAgent._log` may exist.
-- **Boundary contract:** Public imports come from `lingtai_kernel.migrate`: use `run_migrations` only for preset-library directories; use `run_agent_migrations` for per-agent workdirs/init migrations. Do not add one-off init cleanup in `Agent._read_init()` unless it is merely invoking this versioned runner.
+- **Boundary contract:** Public imports come from `lingtai.kernel.migrate`: use `run_migrations` only for preset-library directories; use `run_agent_migrations` for per-agent workdirs/init migrations. Do not add one-off init cleanup in `Agent._read_init()` unless it is merely invoking this versioned runner.
 
 ## Composition
 
-- **Parent:** `src/lingtai_kernel/` (see `src/lingtai_kernel/ANATOMY.md`).
+- **Parent:** `src/lingtai/kernel/` (see `src/lingtai/kernel/ANATOMY.md`).
 - **Subfolders:** none.
 
 ## State

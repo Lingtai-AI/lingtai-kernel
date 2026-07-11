@@ -9,8 +9,8 @@ factory) and honors the supplied guard.
 
 from pathlib import Path
 
-from lingtai_kernel.base_agent import turn
-from lingtai_kernel.loop_guard import LoopGuard
+from lingtai.kernel.base_agent import turn
+from lingtai.kernel.loop_guard import LoopGuard
 
 
 class _FakeService:
