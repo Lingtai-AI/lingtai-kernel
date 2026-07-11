@@ -62,6 +62,21 @@ Agent(BaseAgent)       — kernel + capabilities + domain tools
 CustomAgent(Agent)     — your domain logic
 ```
 
+## Develop this repository
+
+Use these linked entry points as a progressive-disclosure network rather than
+one central manual:
+
+| Question | Start here |
+|----------|------------|
+| What workflow must a coding agent follow? | Find and read this repository’s local dev guide skill |
+| Where is the code and how is it connected? | [`ANATOMY.md`](ANATOMY.md) |
+| What do interfaces and expected behavior promise? | [`CONTRACT.md`](CONTRACT.md) |
+| How do contributors prepare and validate a change? | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+
+Coding agents first find and read the repository-local dev guide skill; it
+routes the task onward without duplicating the Anatomy or Contract systems.
+
 ## Capabilities
 
 <table>
@@ -132,7 +147,7 @@ Read the full manifesto at [lingtai.ai](https://lingtai.ai).
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and repository navigation entry points. For responsible disclosure, read [SECURITY.md](SECURITY.md); for help, read [SUPPORT.md](SUPPORT.md).
+First find and read this repository’s local dev guide skill, then use [CONTRIBUTING.md](CONTRIBUTING.md) for the public contribution workflow. For responsible disclosure, read [SECURITY.md](SECURITY.md); for help, read [SUPPORT.md](SUPPORT.md).
 
 ## Acknowledgements
 
