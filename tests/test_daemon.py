@@ -1691,6 +1691,240 @@ def test_on_emanation_done_notifies_terminal_only_once(tmp_path):
     assert len(daemon_events) == 1
 
 
+def test_terminal_notification_enqueue_failure_leaves_retryable_state(tmp_path):
+    from lingtai_kernel.notifications import collect_notifications
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    rd = _make_run_dir(agent, em_id="em-retry")
+    rd.mark_done("retryable terminal result")
+
+    future = MagicMock()
+    future.result.return_value = "retryable terminal result"
+    mgr._emanations["em-retry"] = {
+        "future": future,
+        "task": "test task",
+        "start_time": time.time(),
+        "run_dir": rd,
+    }
+
+    original_enqueue = agent._enqueue_system_notification
+
+    def fail_enqueue(**kwargs):
+        raise OSError("notification write failed")
+
+    agent._enqueue_system_notification = fail_enqueue
+    mgr._on_emanation_done("em-retry", "test task", future)
+
+    state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    assert state["terminal_notified"] is False
+    assert state["terminal_notification_claim"] is None
+    assert "system" not in collect_notifications(agent._working_dir)
+
+    agent._enqueue_system_notification = original_enqueue
+    mgr._on_emanation_done("em-retry", "test task", future)
+
+    state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    assert state["terminal_notified"] is True
+    assert state["terminal_notification_claim"] is None
+    assert state["terminal_notification_receipt"]["idempotency_key"] == (
+        f"daemon-terminal:{rd.run_id}"
+    )
+    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    daemon_events = [e for e in events if e["ref_id"] == "em-retry"]
+    assert len(daemon_events) == 1
+
+
+def test_daemon_startup_retries_unpublished_terminal_notification(tmp_path):
+    from lingtai_kernel.notifications import collect_notifications
+
+    daemon_json = _write_daemon_json(
+        tmp_path,
+        "em-restart",
+        state="done",
+        finished_at="2026-07-10T10:00:00Z",
+        result_preview="finished while parent was down",
+        terminal_notified=False,
+        terminal_notification_claim={
+            "status": "pending",
+            "idempotency_key": "daemon-terminal:em-restart",
+        },
+    )
+
+    agent = _make_agent(tmp_path, ["daemon"])
+
+    state = json.loads(daemon_json.read_text(encoding="utf-8"))
+    assert state["terminal_notified"] is True
+    assert state["terminal_notification_claim"] is None
+    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    daemon_events = [e for e in events if e["ref_id"] == "em-restart"]
+    assert len(daemon_events) == 1
+    assert daemon_events[0]["idempotency_key"] == "daemon-terminal:em-restart"
+    assert "finished while parent was down" in daemon_events[0]["body"]
+
+
+def test_concurrent_terminal_callbacks_publish_once(tmp_path):
+    from lingtai_kernel.notifications import collect_notifications
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    rd = _make_run_dir(agent, em_id="em-race")
+    rd.mark_done("race result")
+
+    future = MagicMock()
+    future.result.return_value = "race result"
+    mgr._emanations["em-race"] = {
+        "future": future,
+        "task": "test task",
+        "start_time": time.time(),
+        "run_dir": rd,
+    }
+
+    start = threading.Barrier(3)
+
+    def callback():
+        start.wait(timeout=5)
+        mgr._on_emanation_done("em-race", "test task", future)
+
+    threads = [threading.Thread(target=callback) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait(timeout=5)
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    daemon_events = [e for e in events if e["ref_id"] == "em-race"]
+    assert len(daemon_events) == 1
+    state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    assert state["terminal_notified"] is True
+
+
+def test_crash_after_publish_before_receipt_retry_is_idempotent(tmp_path):
+    from lingtai_kernel.notifications import collect_notifications, submit
+
+    daemon_json = _write_daemon_json(
+        tmp_path,
+        "em-crash",
+        state="failed",
+        finished_at="2026-07-10T10:00:00Z",
+        error={"type": "RuntimeError", "message": "boom"},
+        terminal_notified=False,
+    )
+    workdir = tmp_path / "daemon-agent"
+    submit(
+        workdir,
+        "system",
+        header="1 system notification",
+        icon="🔔",
+        priority="normal",
+        data={
+            "events": [{
+                "event_id": "evt_existing",
+                "source": "daemon",
+                "ref_id": "em-crash",
+                "idempotency_key": "daemon-terminal:em-crash",
+                "body": "already published before receipt write",
+                "at": "2026-07-10T10:00:00Z",
+            }],
+        },
+    )
+
+    agent = _make_agent(tmp_path, ["daemon"])
+
+    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    daemon_events = [e for e in events if e.get("idempotency_key") == "daemon-terminal:em-crash"]
+    assert len(daemon_events) == 1
+    assert daemon_events[0]["event_id"] == "evt_existing"
+    state = json.loads(daemon_json.read_text(encoding="utf-8"))
+    assert state["terminal_notified"] is True
+    assert state["terminal_notification_receipt"]["idempotency_key"] == (
+        "daemon-terminal:em-crash"
+    )
+
+
+def test_legacy_terminal_notified_true_is_not_republished(tmp_path):
+    from lingtai_kernel.notifications import collect_notifications
+
+    _write_daemon_json(
+        tmp_path,
+        "em-legacy",
+        state="done",
+        finished_at="2026-07-10T10:00:00Z",
+        result_preview="legacy result",
+        terminal_notified=True,
+    )
+
+    agent = _make_agent(tmp_path, ["daemon"])
+
+    assert "system" not in collect_notifications(agent._working_dir)
+
+
+def test_legacy_missing_terminal_notified_key_is_not_republished_or_mutated(tmp_path):
+    from lingtai_kernel.notifications import collect_notifications
+
+    daemon_json = _write_daemon_json(
+        tmp_path,
+        "em-legacy-missing",
+        state="done",
+        finished_at="2026-07-10T10:00:00Z",
+        result_preview="legacy missing-key result",
+    )
+    before = json.loads(daemon_json.read_text(encoding="utf-8"))
+    assert "terminal_notified" not in before
+
+    agent = _make_agent(tmp_path, ["daemon"])
+
+    after = json.loads(daemon_json.read_text(encoding="utf-8"))
+    assert "system" not in collect_notifications(agent._working_dir)
+    assert "terminal_notified" not in after
+    assert "terminal_notification_receipt" not in after
+
+
+def test_terminal_reconciliation_preview_reads_are_bounded(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    result_file = tmp_path / "large-result.txt"
+    result_file.write_text("x" * 5000, encoding="utf-8")
+    fallback_dir = tmp_path / "fallback-run"
+    fallback_dir.mkdir()
+    (fallback_dir / "result.txt").write_text("y" * 5000, encoding="utf-8")
+
+    def forbidden_read_text(self, *args, **kwargs):
+        raise AssertionError(f"unbounded Path.read_text used for {self}")
+
+    monkeypatch.setattr(Path, "read_text", forbidden_read_text)
+
+    assert mgr._terminal_notification_text_from_state(
+        {"result_path": str(result_file)}, tmp_path,
+    ) == "x" * 2000
+    assert mgr._terminal_notification_text_from_state(
+        {}, fallback_dir,
+    ) == "y" * 2000
+
+
+def test_daemon_schema_has_no_terminal_notification_toggle():
+    from tools.daemon import get_schema
+
+    def walk_properties(schema):
+        if isinstance(schema, dict):
+            for name, value in schema.get("properties", {}).items():
+                yield name, value
+                yield from walk_properties(value)
+            if "items" in schema:
+                yield from walk_properties(schema["items"])
+
+    toggles = [
+        name for name, value in walk_properties(get_schema("en"))
+        if value.get("type") == "boolean"
+        and ("notify" in name.lower() or "notification" in name.lower())
+    ]
+    assert toggles == []
+
+
 def test_on_emanation_done_notification_includes_task_summary(tmp_path):
     """The terminal notification carries a bounded task summary so the parent
     can recognize which dispatched daemon ended without opening the run dir."""

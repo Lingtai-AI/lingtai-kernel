@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -67,6 +68,7 @@ class DaemonRunDir:
         # When None, _safe stays silent (preserves prior behavior for tests).
         self._log_callback = log_callback
         self._started_monotonic = time.monotonic()
+        self._terminal_notification_lock = threading.Lock()
         started_at_iso = self._now_iso()
 
         # New daemon-manager callers pass a compact id as ``run_id`` so the
@@ -119,6 +121,9 @@ class DaemonRunDir:
             "last_output": None,
             "last_output_at": None,
             "error": None,
+            "terminal_notified": False,
+            "terminal_notification_claim": None,
+            "terminal_notification_receipt": None,
             "preset_name": preset_name,
             "preset_provider": preset_provider,
             "preset_model": preset_model,
@@ -232,6 +237,10 @@ class DaemonRunDir:
     @staticmethod
     def _now_iso() -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    @staticmethod
+    def terminal_notification_idempotency_key(run_id: str) -> str:
+        return f"daemon-terminal:{run_id}"
 
     def _now_secs(self) -> float:
         return round(time.monotonic() - self._started_monotonic, 3)
@@ -875,25 +884,81 @@ class DaemonRunDir:
         """Watchdog timeout. Sets state=timeout."""
         self._mark_terminal("timeout", "daemon_timeout")
 
-    def claim_terminal_notification(self) -> bool:
-        """Atomically claim the once-only terminal-notification slot for this run.
+    def claim_terminal_notification(self, status: str) -> str | None:
+        """Claim a temporary terminal-notification attempt for this run.
 
-        Returns True the first time it is called for a given run and False on
-        every subsequent call, so the parent's terminal-completion notification
-        is delivered exactly once even if the future done-callback fires more
-        than once (racing reclaim, re-entrant callbacks). The claim is persisted
-        to daemon.json so it also survives a process restart that re-reaps the
-        same run directory. Decoupled from the system notification channel's
-        ref_id dedup so an earlier follow-up (``ask``) event sharing the run's
-        ref_id cannot suppress the terminal notification.
+        ``terminal_notified`` is a durable published receipt only. A separate
+        pending claim prevents concurrent callbacks from publishing at the same
+        time; failed enqueue clears the claim so the terminal notification
+        remains retryable. A crash with only a pending claim is intentionally
+        treated as unpublished by startup reconciliation.
         """
-        if self._state.get("terminal_notified"):
+        with self._terminal_notification_lock:
+            if self._state.get("terminal_notified") is True:
+                return None
+            if isinstance(self._state.get("terminal_notification_claim"), dict):
+                return None
+            key = self.terminal_notification_idempotency_key(self._run_id)
+            self._state["terminal_notification_claim"] = {
+                "status": "pending",
+                "terminal_status": status,
+                "idempotency_key": key,
+                "claimed_at": self._now_iso(),
+            }
+            self._safe(
+                "claim_terminal_notification",
+                lambda: self._atomic_write_json(self.daemon_json_path, self._state),
+            )
+            return key
+
+    def clear_terminal_notification_claim(self) -> None:
+        """Clear a failed pending terminal-notification attempt."""
+        with self._terminal_notification_lock:
+            if self._state.get("terminal_notified") is True:
+                return
+            self._state["terminal_notification_claim"] = None
+            self._safe(
+                "clear_terminal_notification_claim",
+                lambda: self._atomic_write_json(self.daemon_json_path, self._state),
+            )
+
+    def mark_terminal_notification_published(self, idempotency_key: str) -> None:
+        """Persist the durable terminal-notification receipt after publication."""
+        with self._terminal_notification_lock:
+            self._state["terminal_notified"] = True
+            self._state["terminal_notification_claim"] = None
+            self._state["terminal_notification_receipt"] = {
+                "idempotency_key": idempotency_key,
+                "published_at": self._now_iso(),
+            }
+            self._safe(
+                "mark_terminal_notification_published",
+                lambda: self._atomic_write_json(self.daemon_json_path, self._state),
+            )
+
+    @classmethod
+    def mark_terminal_notification_published_on_disk(
+        cls, daemon_json_path: Path, *, idempotency_key: str
+    ) -> bool:
+        """Persist a terminal-notification receipt for an existing run dir."""
+        try:
+            state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             return False
-        self._state["terminal_notified"] = True
-        self._safe(
-            "claim_terminal_notification",
-            lambda: self._atomic_write_json(self.daemon_json_path, self._state),
-        )
+        if not isinstance(state, dict):
+            return False
+        if state.get("terminal_notified") is True:
+            return False
+        state["terminal_notified"] = True
+        state["terminal_notification_claim"] = None
+        state["terminal_notification_receipt"] = {
+            "idempotency_key": idempotency_key,
+            "published_at": cls._now_iso(),
+        }
+        try:
+            atomic_write_json(daemon_json_path, state, ensure_ascii=False, indent=2)
+        except OSError:
+            return False
         return True
 
     def _mark_terminal(self, state: str, event: str) -> None:
