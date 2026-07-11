@@ -39,6 +39,8 @@ from lingtai.kernel.llm.interface import (
     ToolResultBlock,
 )
 from lingtai.kernel.tc_inbox import InvoluntaryToolCall, TCInbox
+from lingtai.llm.api_gate import APICallGate
+from lingtai.llm.base import _GatedSession
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +309,38 @@ class TestInstallDrainHook:
         # be callable.
         assert callable(first)
         assert callable(second)
+
+    def test_install_through_gate_proxy_drains_at_inner_send(self, tmp_path):
+        """Composition: install on a real _GatedSession, then a gated send.
+        The hook must reach the inner (which reads it at send), so the mid-turn
+        drain fires under rate gating instead of landing dead on the proxy."""
+        agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
+            service=make_mock_service(),
+            agent_name="gate-hook-test",
+            working_dir=tmp_path / "gate-hook-test",
+        )
+        iface = ChatInterface()
+        iface.add_user_message("hello")
+        inner = MagicMock(spec_set=["pre_request_hook", "interface", "send"])
+        inner.pre_request_hook = None
+        inner.interface = iface
+        inner.send.side_effect = lambda m: (
+            inner.pre_request_hook(inner.interface), "response")[1]
+        gate = APICallGate(60)
+        agent._chat = _GatedSession(inner, gate)
+
+        agent._tc_inbox.enqueue(_mail_pair("gated1"))
+        agent._install_drain_hook()
+        assert agent._chat.send([]) == "response"  # drive the real gate
+        inner.send.assert_called_once_with([])
+        assert len(agent._tc_inbox) == 0
+        drained = [
+            b.id for e in iface.entries for b in e.content
+            if isinstance(b, ToolCallBlock) and b.name == "system"
+        ]
+        assert drained == ["sn_gated1"]
+        gate.shutdown()
 
 
 # ---------------------------------------------------------------------------
