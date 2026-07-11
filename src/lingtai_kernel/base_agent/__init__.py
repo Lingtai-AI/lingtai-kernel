@@ -50,7 +50,7 @@ from ..meta_block import (
 from ..session import SessionManager
 from ..tc_inbox import TCInbox
 from ..token_ledger import append_token_entry
-from .._fsutil import atomic_write_text
+from .._fsutil import atomic_write_json, atomic_write_text
 from ..trace_redaction import redact_for_trajectory
 from ..runtime_identity import runtime_identity_event_fields
 
@@ -2002,9 +2002,10 @@ class BaseAgent:
     def _write_status_snapshot(self) -> None:
         """Write .status.json — live runtime snapshot consumed by TUI/portal."""
         try:
-            (self._working_dir / ".status.json").write_text(
-                json.dumps(self.status(), ensure_ascii=False, indent=2),
-                encoding="utf-8",
+            atomic_write_json(
+                self._working_dir / ".status.json",
+                self.status(),
+                preserve_existing_mode=True,
             )
         except Exception as e:
             logger.warning(f"[{self.agent_name}] Failed to write .status.json: {e}")
