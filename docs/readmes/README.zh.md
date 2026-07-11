@@ -1,85 +1,72 @@
+<div align="center">
+
 # lingtai-kernel 灵台内核
 
-> [English](../../README.md) | [中文](README.zh.md) | [文言](README.wen.md) | [贡献](../../CONTRIBUTING.md) | [安全](../../SECURITY.md) | [支持](../../SUPPORT.md)
+**驱动 LingTai 智能体的 Python 运行时与 SDK。**
 
-> *灵台者有持，而不知其所持，而不可持者也。*
-> — 庄子·庚桑楚
+[![PyPI](https://img.shields.io/pypi/v/lingtai?color=%237dab8f)](https://pypi.org/project/lingtai/)
+[![License](https://img.shields.io/github/license/Lingtai-AI/lingtai-kernel?color=%237dab8f)](../../LICENSE)
+[![Blog](https://img.shields.io/badge/blog-lingtai.ai-%23d4a853)](https://lingtai.ai)
 
-最小智能体内核 — 思考、通信、手记、承载工具。
+[English](../../README.md) · [简体中文](README.zh.md) · [文言](README.wen.md) · [贡献](../../CONTRIBUTING.md) · [安全](../../SECURITY.md) · [支持](../../SUPPORT.md)
 
-## 设计哲学
+</div>
 
-**灵台，心也。** 在庄子笔下，灵台是意识栖居之所：自然地承载灵魂所需的一切，却不自知其所承载，也无法被刻意掌控。
+---
 
-在本框架中，智能体的灵台就是它的**工作目录**——磁盘上的一个文件夹，手记、盟约、身份、信箱都在其中。目录即智能体。给内核一个文件夹和一个 LLM 服务，它便赋予智能体生命。拿走文件夹，智能体便不复存在。内核承载智能体的一切，但不解读其内容——正如庄子的灵台，有持而不知其所持。
+这个仓库是产品之下的引擎，而非产品本身。
 
-本内核遵循 Unix 设计哲学：
+**想要 LingTai 产品？** [`Lingtai-AI/lingtai`](https://github.com/Lingtai-AI/lingtai)
+仓库是「数字科学家」——那个终身、自我生长的智能体——的唯一叙事来源，包含引导式安装器、
+TUI/Portal 以及日常工作流。普通用户应从那里开始，让安装器为你管理本运行时。本仓库面向在
+内核之上构建或为内核贡献代码的开发者；请勿把这里的裸 `pip install` 当作常规安装路径。
 
-- **一切皆文件。** 智能体的身份就是其目录路径。没有抽象 ID——路径即地址、即锁、即真实。
-- **内核只定义协议，不定义实现。** `LLMService` 和 `ChatSession` 是抽象接口。如何实现——适配器、API 密钥、速率限制——是调用者的事。
-- **每个智能体都是独立进程。** 独立的目录、独立的 LLM 服务、独立的信箱、独立的日志。智能体之间通过文件系统信件通信，而非共享内存。
-- **内核是最小的。** 思考（LLM）、通信（信件）、手记（手记）、承载工具。能力、文件读写、编排——这些在 [lingtai](https://github.com/Lingtai-AI/lingtai) 中。
+## 本仓库所辖
 
-## 安装
+- **智能体运行时** —— 让智能体得以运转的核心轮次循环、生命周期、工具派发、信箱、
+  soul（内心之声）、molt 与通知机制。
+- **两个 Python 界面** —— `lingtai.kernel`，最小运行时（`BaseAgent`、内置固有能力、
+  LLM 协议、信件、日志）；以及 `lingtai`，开箱即用的运行时、CLI 与服务，在其之上构建
+  `Agent(BaseAgent)` 并重新导出内核的公开 API。
+- **配套组件** —— 捆绑的内置工具、LLM 适配器、精选的 MCP 服务器实现，以及打包
+  （Python 发行版与随附的 Rust 搜索 sidecar）。这些是所辖边界，而非功能清单。
+
+## 开发者快速开始
+
+用于**内核开发**，而非常规 LingTai 用户安装路径。需要 Python >= 3.11；请使用本地 `.venv`。
 
 ```bash
-pip install lingtai-kernel
+git clone https://github.com/Lingtai-AI/lingtai-kernel.git
+cd lingtai-kernel
+uv venv --python 3.11
+uv pip install -e . pytest
+.venv/bin/python -m pytest
 ```
 
-## 内核所含
+## 架构 / 开发者入口
 
-| 组件 | 用途 |
-|------|------|
-| **BaseAgent** | 内核调度器——生命周期、消息循环、工具派发 |
-| **四种内置工具** | mail（进程间通信）、system（生命周期）、psyche（手记/身份）、soul（内心声音） |
-| **LLM 协议** | `LLMService` 抽象基类、`ChatSession` 抽象基类、供应商无关类型 |
-| **服务** | 文件系统信件传输、JSONL 结构化日志 |
-| **WorkingDir** | 目录管理——锁、git、清单 |
+| 入口 | 涵盖内容 |
+|---|---|
+| [`ANATOMY.md`](../../ANATOMY.md) | 仓库地图——顶层布局，以及各子系统的解剖从何处开始。 |
+| [`src/lingtai/kernel/ANATOMY.md`](../../src/lingtai/kernel/ANATOMY.md) | 核心运行时：`BaseAgent`、轮次/生命周期、工具机制、信件、LLM 协议。 |
+| [`src/lingtai/ANATOMY.md`](../../src/lingtai/ANATOMY.md) | `lingtai` 包：`Agent(BaseAgent)`、能力、预设、CLI、公开重导出。 |
+| [`src/lingtai/tools/ANATOMY.md`](../../src/lingtai/tools/ANATOMY.md) | 具体的内置工具，以及组合它们的注册表。 |
+| [`src/lingtai/mcp_servers/ANATOMY.md`](../../src/lingtai/mcp_servers/ANATOMY.md) | 随附的 MCP 服务器实现。 |
+| [`CONTRIBUTING.md`](../../CONTRIBUTING.md) | 贡献流程与仓库导航。 |
+| [`docs/references/claude-code-guide.md`](../references/claude-code-guide.md) | 完整仓库指南——测试命令、架构说明与约定。 |
 
-## 内核不含
+## 安全 · 支持 · 致谢
 
-能力、文件读写、MCP、视觉、搜索、bash、化身、LLM 适配器、速率限制——这些在 `lingtai` 中。
-
-## 快速开始
-
-```python
-from lingtai.kernel import BaseAgent
-
-# 调用者提供 LLM 服务（抽象基类的任意实现）
-agent = BaseAgent(
-    service=my_llm_service,
-    working_dir="/agents/alice",    # 灵台——灵魂栖居之所
-    agent_name="alice",             # 可选的显示名称
-)
-
-agent.add_tool("hello", schema={...}, handler=lambda args: {"msg": "hi"})
-agent.start()
-agent.send("Say hello")
-agent.stop()
-```
-
-内核接收一个目录路径和一个服务，不关心它们如何创建。
-
-## 灵台之结构
-
-```
-/agents/alice/              ← 此路径即智能体
-  .agent.lock               ← 独占锁（每个目录只能运行一个进程）
-  .agent.heartbeat          ← 存活证明（定期更新）
-  .agent.json               ← 清单（名称、地址、配置）
-  system/
-    covenant.md             ← 受保护的指令（盟约）
-    pad.md                  ← 工作笔记（手记）
-  mailbox/
-    inbox/                  ← 收到的信件
-    outbox/                 ← 待发送
-    sent/                   ← 发送记录
-  logs/
-    events.jsonl            ← 结构化事件日志
-```
-
-无需 `agent_id`。路径即身份。心跳证明存活。锁证明独占。
+负责任披露请阅读 [SECURITY.md](../../SECURITY.md)；求助请阅读
+[SUPPORT.md](../../SUPPORT.md)；致谢请阅读
+[docs/references/acknowledgements.md](../references/acknowledgements.md)。
 
 ## 许可
 
-Apache-2.0
+Apache-2.0 —— [Zesen Huang](https://github.com/huangzesen)，2025–2026
+
+<div align="center">
+
+[lingtai.ai](https://lingtai.ai) · [LingTai（产品）](https://github.com/Lingtai-AI/lingtai) · [贡献](../../CONTRIBUTING.md) · [安全](../../SECURITY.md) · [支持](../../SUPPORT.md)
+
+</div>
