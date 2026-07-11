@@ -701,6 +701,25 @@ def get_schema(lang: str = "en") -> dict:
                         },
                         "backend_options": {
                             "type": "object",
+                            "additionalProperties": {
+                                "anyOf": [
+                                    {"type": "boolean"},
+                                    {"type": "string"},
+                                    {"type": "integer"},
+                                    {"type": "number"},
+                                    {"type": "null"},
+                                    {
+                                        "type": "array",
+                                        "items": {
+                                            "anyOf": [
+                                                {"type": "string"},
+                                                {"type": "integer"},
+                                                {"type": "number"},
+                                            ],
+                                        },
+                                    },
+                                ],
+                            },
                             "description": 'Optional free-form CLI options for \'claude-code\' / \'codex\' / \'opencode\' / \'mimocode\' / \'qwen-code\' / \'oh-my-pi\' / \'kimicode\' / \'cursor\' backends ONLY (ignored by lingtai). JSON object mapping flag names to values: true → flag only (e.g. {"search": true} → --search); string/int/float → \'--flag <value>\'; list of scalars → \'--flag <v1> --flag <v2>\'; false/null omits the flag. Underscores in keys become dashes; nested objects and unsafe keys are rejected. Applies only when starting the emanation (not to `ask`). Discover supported flags by running \'claude --help\', \'codex exec --help\', \'opencode run --help\', \'mimo run --help\', \'qwen --help\', \'omp --help\', \'kimi --help\', or \'agent --help\' in bash — the CLI\'s flag list changes between versions; this field is intentionally a passthrough rather than a fixed list. See daemon-manual.',
                         },
                         "system_prompt": {
