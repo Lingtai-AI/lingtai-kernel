@@ -22,7 +22,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 from lingtai.kernel.agent_presence import (
     is_agent as _presence_is_agent,
@@ -78,6 +78,13 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         self._poll_thread: threading.Thread | None = None
         self._poll_stop = threading.Event()
         self._seen: set[str] = set()
+        # Own-inbox scans can be expensive on large/slow external-volume
+        # mailboxes. Keep iterator progress across poll ticks so Phase 2 can
+        # be sliced instead of restarting from the first historical entry.
+        self._own_inbox_iter: Iterator[Path] | None = None
+        self._own_inbox_slice_seconds = 0.05
+        self._own_inbox_slice_entries = 200
+        self._mail_poll_slow_seconds = 1.0
 
     # ------------------------------------------------------------------
     # address
@@ -203,39 +210,138 @@ class PosixFilesystemMailAdapter(MailTransportPort):
             while not self._poll_stop.is_set():
                 # Phase 1 — subscribed pseudo-agent outboxes. Poll these
                 # before historical own-inbox scans so urgent human/TUI
-                # wake mail cannot starve behind old inbox entries. Isolated
-                # from Phase 2 so a persistent OSError here cannot skip the
-                # same tick's own-inbox scan.
-                try:
-                    for pseudo_dir in self._pseudo_agent_dirs:
-                        self._poll_pseudo_outbox(pseudo_dir, on_message)
-                except OSError:
-                    pass
+                # wake mail cannot starve behind old inbox entries.
+                self._poll_pseudo_outboxes(on_message)
 
-                # Phase 2 — own inbox.
-                try:
-                    if self._inbox_dir.is_dir():
-                        for entry in self._inbox_dir.iterdir():
-                            # _seen only holds handled directory names or
-                            # pseudo-claim UUIDs, so skip before the stat.
-                            if entry.name in self._seen:
-                                continue
-                            if not entry.is_dir():
-                                continue
-                            msg_file = entry / "message.json"
-                            if msg_file.is_file():
-                                try:
-                                    payload = json.loads(msg_file.read_text(encoding="utf-8"))
-                                    on_message(payload)
-                                except (json.JSONDecodeError, OSError):
-                                    pass
-                                self._seen.add(entry.name)
-                except OSError:
-                    pass
+                # Phase 2 — own inbox, sliced. A large historical inbox on a
+                # slow external volume must not monopolize the poll thread for
+                # minutes; after every bounded slice we immediately check
+                # pseudo outboxes again before sleeping.
+                self._poll_own_inbox_slice(on_message)
+                self._poll_pseudo_outboxes(on_message)
+
                 self._poll_stop.wait(0.5)
 
         self._poll_thread = threading.Thread(target=_poll_loop, daemon=True)
         self._poll_thread.start()
+
+    def _poll_pseudo_outboxes(self, on_message: Callable[[dict], None]) -> None:
+        """Poll subscribed pseudo-agent outboxes, isolating per-dir errors."""
+        start = time.monotonic()
+        dirs = 0
+        for pseudo_dir in self._pseudo_agent_dirs:
+            dirs += 1
+            try:
+                self._poll_pseudo_outbox(pseudo_dir, on_message)
+            except OSError:
+                logger.debug(
+                    "pseudo-agent outbox poll failed for %s",
+                    pseudo_dir,
+                    exc_info=True,
+                )
+        self._log_slow_mail_phase(
+            "pseudo_outboxes",
+            start,
+            dirs=dirs,
+        )
+
+    def _poll_own_inbox_slice(
+        self,
+        on_message: Callable[[dict], None],
+        *,
+        budget_seconds: float | None = None,
+        max_entries: int | None = None,
+    ) -> bool:
+        """Poll a bounded slice of own inbox entries.
+
+        Returns True when there is more iterator work to continue in a later
+        poll tick. Keeping iterator progress turns the historical own-inbox
+        scan into small slices, letting pseudo-agent outboxes be checked
+        between chunks.
+        """
+        budget = self._own_inbox_slice_seconds if budget_seconds is None else budget_seconds
+        limit = self._own_inbox_slice_entries if max_entries is None else max_entries
+        if budget <= 0:
+            budget = self._own_inbox_slice_seconds
+        if limit <= 0:
+            limit = self._own_inbox_slice_entries
+
+        start = time.monotonic()
+        deadline = start + budget
+        visited = 0
+        skipped_seen = 0
+        dispatched = 0
+
+        try:
+            if not self._inbox_dir.is_dir():
+                self._reset_own_inbox_iter()
+                return False
+            if self._own_inbox_iter is None:
+                self._own_inbox_iter = iter(self._inbox_dir.iterdir())
+
+            while not self._poll_stop.is_set() and visited < limit:
+                try:
+                    entry = next(self._own_inbox_iter)
+                except StopIteration:
+                    self._reset_own_inbox_iter()
+                    return False
+
+                visited += 1
+                # _seen only holds handled directory names or pseudo-claim
+                # UUIDs, so skip before the stat.
+                if entry.name in self._seen:
+                    skipped_seen += 1
+                    continue
+                if not entry.is_dir():
+                    continue
+                msg_file = entry / "message.json"
+                if msg_file.is_file():
+                    try:
+                        payload = json.loads(msg_file.read_text(encoding="utf-8"))
+                        on_message(payload)
+                        dispatched += 1
+                    except (json.JSONDecodeError, OSError):
+                        pass
+                    self._seen.add(entry.name)
+
+                if time.monotonic() >= deadline:
+                    break
+        except OSError:
+            self._reset_own_inbox_iter()
+            return False
+        finally:
+            self._log_slow_mail_phase(
+                "own_inbox_slice",
+                start,
+                visited=visited,
+                skipped_seen=skipped_seen,
+                dispatched=dispatched,
+                has_more=self._own_inbox_iter is not None,
+            )
+
+        return self._own_inbox_iter is not None
+
+    def _reset_own_inbox_iter(self) -> None:
+        iterator = self._own_inbox_iter
+        self._own_inbox_iter = None
+        close = getattr(iterator, "close", None)
+        if callable(close):
+            close()
+
+    def _log_slow_mail_phase(self, phase: str, start: float, **fields: object) -> None:
+        elapsed = time.monotonic() - start
+        if elapsed < self._mail_poll_slow_seconds:
+            return
+        redacted_keys = {"message", "body", "content", "subject", "attachments"}
+        safe_fields = {key: value for key, value in fields.items() if key not in redacted_keys}
+        details = " ".join(f"{key}={value}" for key, value in sorted(safe_fields.items()))
+        logger.warning(
+            "filesystem mail poll phase slow phase=%s elapsed_ms=%.1f agent=%s %s",
+            phase,
+            elapsed * 1000,
+            self.address,
+            details,
+        )
 
     def _poll_pseudo_outbox(
         self,
@@ -448,6 +554,7 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         if self._poll_thread is not None:
             self._poll_thread.join(timeout=3.0)
         self._poll_thread = None
+        self._reset_own_inbox_iter()
 
 
 def _runtime_probe_payload(payload: dict) -> dict | None:

@@ -796,3 +796,99 @@ def test_pseudo_agent_outbox_skips_non_matching_to(tmp_path):
     )
     assert received == []
     assert received == [], f"on_message must not fire for non-matching To: got {received}"
+
+
+def test_own_inbox_slice_rechecks_pseudo_outbox_between_chunks(tmp_path):
+    """A long own-inbox pass must not hide new human pseudo-mail until exhaustion."""
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    inbox = agent_dir / "mailbox" / "inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+
+    human_dir = tmp_path / "human"
+    human_dir.mkdir()
+    (human_dir / ".agent.json").write_text(json.dumps({
+        "agent_name": "human",
+        "admin": None,
+    }))
+    for folder in ["outbox", "sent"]:
+        (human_dir / "mailbox" / folder).mkdir(parents=True, exist_ok=True)
+
+    def write_entry(folder, entry_id, payload):
+        entry = folder / entry_id
+        entry.mkdir(parents=True, exist_ok=True)
+        (entry / "message.json").write_text(json.dumps(payload), encoding="utf-8")
+        return entry
+
+    own_1 = write_entry(inbox, "own-1", {"message": "own-1"})
+    own_2 = write_entry(inbox, "own-2", {"message": "own-2"})
+
+    svc = PosixFilesystemMailAdapter(
+        agent_dir,
+        mailbox_rel="mailbox",
+        pseudo_agent_subscriptions=[str(human_dir)],
+    )
+    svc._own_inbox_slice_entries = 1
+    svc._own_inbox_slice_seconds = 60.0
+    # Make the slice order deterministic and avoid relying on filesystem order.
+    svc._own_inbox_iter = iter([own_1, own_2])
+
+    received = []
+
+    def on_message(payload):
+        received.append(payload["message"])
+        if payload["message"] == "own-1":
+            write_entry(
+                human_dir / "mailbox" / "outbox",
+                "human-between-slices",
+                {
+                    "from": "human",
+                    "to": ["agent01"],
+                    "message": "human-between-slices",
+                },
+            )
+
+    assert svc._poll_own_inbox_slice(on_message) is True
+    assert received == ["own-1"]
+
+    # This is what the listen loop does after each bounded slice. The pseudo
+    # mail created while own-inbox work remained should be delivered before the
+    # next own-inbox entry is processed.
+    svc._poll_pseudo_outboxes(on_message)
+    assert received == ["own-1", "human-between-slices"]
+    assert not (human_dir / "mailbox" / "outbox" / "human-between-slices").exists()
+    assert (human_dir / "mailbox" / "sent" / "human-between-slices" / "message.json").exists()
+    assert (inbox / "human-between-slices" / "message.json").exists()
+
+    assert svc._poll_own_inbox_slice(on_message) is True
+    assert received == ["own-1", "human-between-slices", "own-2"]
+    # One more slice observes iterator exhaustion and resets the cursor.
+    assert svc._poll_own_inbox_slice(on_message) is False
+    assert received == ["own-1", "human-between-slices", "own-2"]
+
+
+def test_mail_poll_slow_phase_telemetry_is_body_free(tmp_path, caplog):
+    """Slow mail-poll telemetry should identify phase/agent without body text."""
+    import logging
+    import time
+
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc._mail_poll_slow_seconds = 0.0
+
+    caplog.set_level(logging.WARNING)
+    svc._log_slow_mail_phase(
+        "own_inbox_slice",
+        time.monotonic(),
+        visited=1,
+        dispatched=1,
+        message="do-not-log-body",
+    )
+
+    assert "filesystem mail poll phase slow" in caplog.text
+    assert "phase=own_inbox_slice" in caplog.text
+    assert "agent=agent01" in caplog.text
+    assert "do-not-log-body" not in caplog.text
