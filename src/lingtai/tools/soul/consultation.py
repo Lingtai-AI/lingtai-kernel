@@ -187,13 +187,17 @@ def _render_current_diary(agent) -> str:
 
 def _write_soul_tokens(agent, response) -> None:
     """Append a soul-tagged token-ledger entry for a consultation or
-    inquiry LLM call. Best-effort — failures are silently swallowed so
-    a ledger hiccup does not break the cadence."""
+    inquiry LLM call. Only the five safe codex-pool attribution fields are
+    projected from ``usage.extra``. Best-effort — failures are silently
+    swallowed so a ledger hiccup does not break the cadence."""
     u = response.usage
     if not (u.input_tokens or u.output_tokens or u.thinking_tokens or u.cached_tokens):
         return
     try:
-        from lingtai.kernel.token_ledger import append_token_entry
+        from lingtai.kernel.token_ledger import (
+            append_token_entry,
+            safe_codex_pool_usage_extra,
+        )
         ledger_path = agent._working_dir / "logs" / "token_ledger.jsonl"
         model = getattr(agent.service, "model", None)
         endpoint = getattr(agent.service, "_base_url", None)
@@ -202,7 +206,10 @@ def _write_soul_tokens(agent, response) -> None:
             input=u.input_tokens, output=u.output_tokens,
             thinking=u.thinking_tokens, cached=u.cached_tokens,
             model=model, endpoint=endpoint,
-            extra={"source": "soul"},
+            extra={
+                "source": "soul",
+                **safe_codex_pool_usage_extra(getattr(u, "extra", None)),
+            },
         )
     except Exception:
         pass

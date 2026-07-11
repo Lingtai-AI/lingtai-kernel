@@ -22,6 +22,7 @@ from lingtai.tools.soul import (
     _render_current_diary,
     _run_consultation,
     _run_consultation_batch,
+    _write_soul_tokens,
     build_consultation_pair,
 )
 from lingtai.kernel.llm.interface import (
@@ -89,6 +90,40 @@ class _FakeAgent:
 
     def _log(self, event: str, **kw) -> None:
         self.logged.append((event, kw))
+
+
+def test_write_soul_tokens_keeps_only_safe_pool_usage_extra(tmp_path):
+    agent = _FakeAgent(tmp_path)
+    agent.service._base_url = "https://example.test"
+    response = MagicMock()
+    response.usage.input_tokens = 10
+    response.usage.output_tokens = 4
+    response.usage.thinking_tokens = 2
+    response.usage.cached_tokens = 3
+    response.usage.extra = {
+        "codex_auth_path_sha8": "a1b2c3d4",
+        "codex_pool_source_index": 1,
+        "codex_pool_size": 2,
+        "codex_pool_weight": 1,
+        "codex_pool_model_scope": "gpt-5.6",
+        "codex_pool_source_ref": "must-not-copy",
+        "unsafe": "secret",
+        "codex_account_id_sha8": None,
+    }
+
+    _write_soul_tokens(agent, response)
+
+    ledger = tmp_path / "logs" / "token_ledger.jsonl"
+    row = json.loads(ledger.read_text(encoding="utf-8").splitlines()[0])
+    assert row["source"] == "soul"
+    assert row["codex_auth_path_sha8"] == "a1b2c3d4"
+    assert row["codex_pool_source_index"] == 1
+    assert row["codex_pool_size"] == 2
+    assert row["codex_pool_weight"] == 1
+    assert row["codex_pool_model_scope"] == "gpt-5.6"
+    assert "codex_pool_source_ref" not in row
+    assert "codex_account_id_sha8" not in row
+    assert "unsafe" not in row
 
 
 def _write_snapshot(workdir: Path, *, molt_count: int, unix_ts: int,
