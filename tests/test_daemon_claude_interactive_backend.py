@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
-from tools.daemon import get_schema
-from tools.daemon.claude_interactive import ClaudeInteractiveError, run_claude_interactive
+from lingtai.tools.daemon import get_schema
+from lingtai.tools.daemon.claude_interactive import ClaudeInteractiveError, run_claude_interactive
 from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir
 
 

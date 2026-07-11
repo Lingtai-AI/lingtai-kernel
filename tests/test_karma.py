@@ -1,6 +1,6 @@
 """Tests for karma/nirvana lifecycle control via system intrinsic."""
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import threading
 import time
@@ -55,7 +55,7 @@ class TestSystemIntrinsicKarma:
 
     def test_interrupt_requires_karma_admin(self, tmp_path):
         agent = _make_agent(tmp_path, admin={})
-        from tools.system import handle
+        from lingtai.tools.system import handle
         result = handle(agent, {"action": "interrupt", "address": "/some/path"})
         assert "error" in result
 
@@ -68,7 +68,7 @@ class TestSystemIntrinsicKarma:
         sender_base = tmp_path / "sender"
         sender_base.mkdir()
         agent = _make_agent(sender_base, admin={"karma": True})
-        from tools.system import handle
+        from lingtai.tools.system import handle
         result = handle(agent, {"action": "interrupt", "address": str(target_dir)})
         assert result["status"] == "interrupted"
         assert (target_dir / ".interrupt").is_file()
@@ -82,7 +82,7 @@ class TestSystemIntrinsicKarma:
         sender_base = tmp_path / "sender"
         sender_base.mkdir()
         agent = _make_agent(sender_base, admin={"karma": True})
-        from tools.system import handle
+        from lingtai.tools.system import handle
         result = handle(agent, {"action": "lull", "address": str(target_dir)})
         assert result["status"] == "asleep"
         assert (target_dir / ".sleep").is_file()
@@ -98,13 +98,13 @@ class TestSystemIntrinsicKarma:
         sender_base = tmp_path / "sender"
         sender_base.mkdir()
         agent = _make_agent(sender_base, admin={"karma": True})
-        from tools.system import handle
+        from lingtai.tools.system import handle
         result = handle(agent, {"action": "lull", "address": str(target_dir)})
         assert "error" in result
 
     def test_interrupt_self_rejected(self, tmp_path):
         agent = _make_agent(tmp_path, admin={"karma": True})
-        from tools.system import handle
+        from lingtai.tools.system import handle
         result = handle(agent, {"action": "interrupt", "address": str(agent.working_dir)})
         assert "error" in result
 
@@ -112,7 +112,7 @@ class TestSystemIntrinsicKarma:
         sender_base = tmp_path / "sender"
         sender_base.mkdir()
         agent = _make_agent(sender_base, admin={"karma": True})
-        from tools.system import handle
+        from lingtai.tools.system import handle
         result = handle(agent, {"action": "nirvana", "address": "/some/path"})
         assert "error" in result
 
@@ -125,14 +125,14 @@ class TestSystemIntrinsicKarma:
         sender_base = tmp_path / "sender"
         sender_base.mkdir()
         agent = _make_agent(sender_base, admin={"karma": True, "nirvana": True})
-        from tools.system import handle
+        from lingtai.tools.system import handle
         result = handle(agent, {"action": "nirvana", "address": str(target_dir)})
         assert result["status"] == "nirvana"
         assert not target_dir.exists()
 
     def test_nirvana_self_rejected(self, tmp_path):
         agent = _make_agent(tmp_path, admin={"karma": True, "nirvana": True})
-        from tools.system import handle
+        from lingtai.tools.system import handle
         result = handle(agent, {"action": "nirvana", "address": str(agent.working_dir)})
         assert "error" in result
 
@@ -145,7 +145,7 @@ class TestSystemIntrinsicKarma:
         sender_base = tmp_path / "sender"
         sender_base.mkdir()
         agent = _make_agent(sender_base, admin={"karma": True})
-        from tools.system import handle
+        from lingtai.tools.system import handle
         result = handle(agent, {"action": "cpr", "address": str(target_dir)})
         assert "error" in result
         assert "already running" in result["message"]
@@ -159,7 +159,7 @@ class TestSystemIntrinsicKarma:
         sender_base = tmp_path / "sender"
         sender_base.mkdir()
         agent = _make_agent(sender_base, admin={"karma": True})
-        from tools.system import handle
+        from lingtai.tools.system import handle
         result = handle(agent, {"action": "cpr", "address": str(target_dir)})
         assert "error" in result
         assert "not supported" in result["message"].lower()
@@ -265,7 +265,7 @@ class TestSelfSleepPendingNotificationsGuard:
         return path
 
     def test_sleep_refused_when_notification_pending(self, tmp_path):
-        from tools.system import handle
+        from lingtai.tools.system import handle
         agent = _make_agent(tmp_path)
         # Simulate the pre-turn baseline: no notifications observed yet.
         agent._notification_fp = ()
@@ -291,7 +291,7 @@ class TestSelfSleepPendingNotificationsGuard:
         at the start of the turn, mail arrived during the LLM call, and
         the agent then calls system(sleep). _notification_fp is still ()
         from the pre-turn baseline; the on-disk fp is non-empty."""
-        from tools.system import handle
+        from lingtai.tools.system import handle
         agent = _make_agent(tmp_path)
         agent._notification_fp = ()  # baseline: queue was empty
 
@@ -309,7 +309,7 @@ class TestSelfSleepPendingNotificationsGuard:
         assert "refused" in result.get("message", "").lower()
 
     def test_sleep_force_true_overrides_pending_guard(self, tmp_path):
-        from tools.system import handle
+        from lingtai.tools.system import handle
         agent = _make_agent(tmp_path)
         agent._notification_fp = ()
         self._write_notification(agent, "email.json", {
@@ -327,7 +327,7 @@ class TestSelfSleepPendingNotificationsGuard:
 
     def test_sleep_proceeds_when_queue_empty(self, tmp_path):
         """No notifications on disk — sleep should behave as before."""
-        from tools.system import handle
+        from lingtai.tools.system import handle
         agent = _make_agent(tmp_path)
         agent._notification_fp = ()
 
@@ -340,7 +340,7 @@ class TestSelfSleepPendingNotificationsGuard:
     def test_sleep_proceeds_when_fingerprint_already_committed(self, tmp_path):
         """A notification on disk whose fingerprint matches the agent's
         last-committed fingerprint = already processed. Sleep is fine."""
-        from tools.system import handle
+        from lingtai.tools.system import handle
         from lingtai.kernel.notifications import notification_fingerprint
         agent = _make_agent(tmp_path)
 

@@ -5,7 +5,7 @@ Note: ``init_git()`` only fires when snapshots are enabled
 agent with a snapshot interval set so the git path is exercised.
 """
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import subprocess
 from unittest.mock import MagicMock

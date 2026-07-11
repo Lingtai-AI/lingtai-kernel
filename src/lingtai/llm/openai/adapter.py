@@ -3028,7 +3028,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
             # ``_meta`` copies. Kept tiny and defensive — never let bookkeeping
             # abort the rebuild.
             try:
-                from tools.system.summarize import (
+                from lingtai.tools.system.summarize import (
                     mark_pending_summaries_done,
                 )
 

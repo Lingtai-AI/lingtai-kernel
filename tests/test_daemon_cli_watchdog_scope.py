@@ -48,7 +48,7 @@ def test_watchdog_only_kills_its_own_group(tmp_path, monkeypatch):
 
     killed: list = []
     monkeypatch.setattr(
-        "tools.daemon._kill_process_group",
+        "lingtai.tools.daemon._kill_process_group",
         lambda proc: killed.append(proc),
     )
 
@@ -76,7 +76,7 @@ def test_reclaim_all_kills_every_tracked_proc(tmp_path, monkeypatch):
 
     killed: list = []
     monkeypatch.setattr(
-        "tools.daemon._kill_process_group",
+        "lingtai.tools.daemon._kill_process_group",
         lambda proc: killed.append(proc),
     )
 
@@ -130,7 +130,7 @@ def test_completed_batch_watchdog_cancels_when_all_futures_done(tmp_path):
     cancel.set()
 
     killed: list = []
-    import tools.daemon as daemon_mod
+    import lingtai.tools.daemon as daemon_mod
 
     orig = daemon_mod._kill_process_group
     daemon_mod._kill_process_group = lambda proc: killed.append(proc)

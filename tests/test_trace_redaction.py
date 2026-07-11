@@ -1,5 +1,5 @@
 import json
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 from unittest.mock import MagicMock
 
 from lingtai.kernel.base_agent import BaseAgent

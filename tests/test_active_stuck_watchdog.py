@@ -13,7 +13,7 @@ The watchdog protects against two real-world failure modes documented in
 Both cases used to be invisible to the heartbeat-only liveness check.
 """
 import json
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 import time
 from unittest.mock import MagicMock
 from tests._service_helpers import make_tool_result_mock_service as make_mock_service

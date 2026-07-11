@@ -212,7 +212,7 @@ def test_generic_missing_file_still_generic(tmp_path):
     """A missing file NOT under ``tmp/tool-results/`` must produce the
     standard ``File not found`` message, not the spill-aware one."""
     # We test the read handler indirectly by calling it in isolation
-    from tools.read import setup as read_setup
+    from lingtai.tools.read import setup as read_setup
 
     mock_agent = MagicMock()
     mock_agent._working_dir = tmp_path
@@ -486,7 +486,7 @@ def test_read_tool_path_traversal_not_classified_as_spill(tmp_path):
     """A path like ``tmp/tool-results/../not-a-spill.txt`` must NOT be
     classified as a spill artifact — the ``..`` escapes the spill
     directory.  The read handler must return the generic File not found."""
-    from tools.read import setup as read_setup
+    from lingtai.tools.read import setup as read_setup
 
     mock_agent = MagicMock()
     mock_agent._working_dir = tmp_path

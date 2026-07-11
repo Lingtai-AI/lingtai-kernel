@@ -537,7 +537,7 @@ def test_custom_adapter_rejects_non_auto_wire_api_for_gemini():
 
 
 def test_daemon_llm_defaults_from_manifest_retains_wire_api():
-    from tools.daemon import DaemonManager
+    from lingtai.tools.daemon import DaemonManager
 
     # _llm_defaults_from_manifest is a static method; no instance needed.
     llm = {

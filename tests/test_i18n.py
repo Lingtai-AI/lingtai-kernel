@@ -60,7 +60,7 @@ class TestOperationalFallbackToEnglish:
 
     Model-facing schema/description keys were removed from the centralized
     i18n catalog and inlined as canonical English constants in each tool
-    module (see ``src/tools/<pkg>/__init__.py``). Only operational keys
+    module (see ``src/lingtai/tools/<pkg>/__init__.py``). Only operational keys
     (result prose, preambles, runtime prompts) remain — these still use the
     ``t()`` fallback chain.
     """

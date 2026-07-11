@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools._catalog import (
+from lingtai.tools._catalog import (
     build_catalog_yaml,
     parse_frontmatter,
     parse_markdown_catalog_file,

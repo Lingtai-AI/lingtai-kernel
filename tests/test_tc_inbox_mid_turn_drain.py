@@ -22,7 +22,7 @@ These tests verify:
 7. Hook fires unconditionally per the proposal §8.3 (text + tool sends).
 """
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import threading
 import time

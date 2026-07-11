@@ -24,7 +24,7 @@ def _make_completed_run_dir(agent, em_id="em-5", result="final report text", run
     is expected NOT to register it in any manager's ``_emanations`` — this is
     a historical, completed run only present on disk.
     """
-    from tools.daemon.run_dir import DaemonRunDir
+    from lingtai.tools.daemon.run_dir import DaemonRunDir
     rd = DaemonRunDir(
         parent_working_dir=agent._working_dir,
         handle=em_id,
@@ -165,5 +165,5 @@ def test_check_truly_unknown_id_still_errors(tmp_path):
 
 
 def _current_data_version():
-    from tools.daemon.run_dir import DaemonRunDir
+    from lingtai.tools.daemon.run_dir import DaemonRunDir
     return getattr(DaemonRunDir, "DATA_VERSION", 1)

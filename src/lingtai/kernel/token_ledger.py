@@ -15,7 +15,7 @@ the ``summary=true`` tool option — written from
 ``tool_call_id``), legacy untagged rows, and — on a *parent* agent's ledger —
 rows emitted by
 the daemons it spawned (``source="daemon"`` plus ``em_id``/``run_id``;
-written by ``tools.daemon.run_dir.RunDir.append_tokens``). The daemon
+written by ``lingtai.tools.daemon.run_dir.RunDir.append_tokens``). The daemon
 rows in a parent ledger are **intentionally retained**: the parent paid for
 that spend, so its lifetime totals must include it. Nothing in this module
 removes, strips, or relocates them.
@@ -203,7 +203,7 @@ def sum_token_ledger(path: Path | str, *, scope: str = "all") -> dict:
       agent's** ledger (a mixed stream of main + daemon rows); applied to a
       **daemon-local** ledger — every row of which is daemon-attributed
       (``source="daemon"`` + ``em_id``/``run_id``; see
-      ``tools.daemon.run_dir.RunDir.append_tokens``) — it correctly
+      ``lingtai.tools.daemon.run_dir.RunDir.append_tokens``) — it correctly
       excludes all rows and returns zero. Use ``"all"`` to total a daemon-local
       ledger.
 

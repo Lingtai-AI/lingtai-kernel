@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.bash import BashManager
-from tools.avatar import AvatarManager, setup as setup_avatar
+from lingtai.tools.bash import BashManager
+from lingtai.tools.avatar import AvatarManager, setup as setup_avatar
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
@@ -196,27 +196,27 @@ class TestMissionQualityGate:
         )
 
     def test_helper_rejects_empty(self):
-        from tools.avatar import _mission_looks_unsafe
+        from lingtai.tools.avatar import _mission_looks_unsafe
         unsafe, reason = _mission_looks_unsafe("")
         assert unsafe and "empty" in reason
 
     def test_helper_rejects_short(self):
-        from tools.avatar import _mission_looks_unsafe
+        from lingtai.tools.avatar import _mission_looks_unsafe
         unsafe, reason = _mission_looks_unsafe("too short")
         assert unsafe and "short" in reason
 
     def test_helper_rejects_test_word(self):
-        from tools.avatar import _mission_looks_unsafe
+        from lingtai.tools.avatar import _mission_looks_unsafe
         unsafe, reason = _mission_looks_unsafe("test")
         assert unsafe
 
     def test_helper_rejects_test_prefix(self):
-        from tools.avatar import _mission_looks_unsafe
+        from lingtai.tools.avatar import _mission_looks_unsafe
         unsafe, reason = _mission_looks_unsafe("debug something something something")
         assert unsafe and "placeholder" in reason
 
     def test_helper_accepts_real_mission(self):
-        from tools.avatar import _mission_looks_unsafe
+        from lingtai.tools.avatar import _mission_looks_unsafe
         unsafe, reason = _mission_looks_unsafe(
             "Investigate the heartbeat regression in the kernel and report findings"
         )
@@ -296,7 +296,7 @@ class TestMissionQualityGate:
         assert result["preview"]["mission_reason"] == ""
 
     def test_schema_exposes_dry_run_and_confirm(self):
-        from tools.avatar import get_rules_schema, get_schema
+        from lingtai.tools.avatar import get_rules_schema, get_schema
         sch = get_schema("en")
         assert "dry_run" in sch["properties"]
         assert sch["properties"]["dry_run"]["type"] == "boolean"
@@ -319,7 +319,7 @@ class TestMissionQualityGate:
         in the schema gates (dry_run/confirm) plus the manual pointer, not in a
         long description string.
         """
-        from tools.avatar import get_description, get_schema
+        from lingtai.tools.avatar import get_description, get_schema
         desc = get_description("en")
         schema = get_schema("en")
         assert "avatar-manual" in desc

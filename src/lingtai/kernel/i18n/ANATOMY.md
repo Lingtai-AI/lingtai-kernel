@@ -39,12 +39,12 @@ The kernel's message catalog — a flat key-value string table covering system n
 | Caller | Citation | Typical keys |
 |---|---|---|
 | `meta_block.py` | `meta_block.py:151-176` | `system.current_time`, context fragments |
-| `tools/system/` | `src/tools/system/preset.py:223`, `src/tools/system/karma.py:71`, `src/tools/system/karma.py:90` | `system_tool.*` runtime manager prose |
-| `tools/psyche/` | `src/tools/psyche/_molt.py:490`, `src/tools/psyche/_molt.py:562-566`, `src/tools/psyche/_molt.py:708` | `psyche.*` runtime manager prose |
-| `tools/soul/` | `src/tools/soul/config.py:375`, `src/tools/soul/config.py:385`, `src/tools/soul/consultation.py:372` | `soul.*` runtime manager prose |
-| `tools/email/` | `src/tools/email/primitives.py:288` | `email.*` runtime manager prose |
+| `lingtai/tools/system/` | `src/lingtai/tools/system/preset.py:223`, `src/lingtai/tools/system/karma.py:71`, `src/lingtai/tools/system/karma.py:90` | `system_tool.*` runtime manager prose |
+| `lingtai/tools/psyche/` | `src/lingtai/tools/psyche/_molt.py:490`, `src/lingtai/tools/psyche/_molt.py:562-566`, `src/lingtai/tools/psyche/_molt.py:708` | `psyche.*` runtime manager prose |
+| `lingtai/tools/soul/` | `src/lingtai/tools/soul/config.py:375`, `src/lingtai/tools/soul/config.py:385`, `src/lingtai/tools/soul/consultation.py:372` | `soul.*` runtime manager prose |
+| `lingtai/tools/email/` | `src/lingtai/tools/email/primitives.py:288` | `email.*` runtime manager prose |
 
-**Inbound — tools bridge.** The tools string catalog `src/tools/i18n/__init__.py` loads every locale table (`src/tools/i18n/__init__.py:31`) and pushes all keys into the kernel cache via `register_strings()` (`_register_all` at `src/tools/i18n/__init__.py:38`, calling `register_strings` at `src/tools/i18n/__init__.py:45`), triggered on import of `tools.registry`. The kernel side is only the additive merge hook (`i18n/__init__.py:33-41`).
+**Inbound — tools bridge.** The tools string catalog `src/lingtai/tools/i18n/__init__.py` loads every locale table (`src/lingtai/tools/i18n/__init__.py:31`) and pushes all keys into the kernel cache via `register_strings()` (`_register_all` at `src/lingtai/tools/i18n/__init__.py:38`, calling `register_strings` at `src/lingtai/tools/i18n/__init__.py:45`), triggered on import of `lingtai.tools.registry`. The kernel side is only the additive merge hook (`i18n/__init__.py:33-41`).
 
 **Outbound — none.** This module has no imports beyond `json`, `pathlib`, and `collections.defaultdict` (`i18n/__init__.py:15-16`, `i18n/__init__.py:50`). It is a leaf dependency.
 
@@ -64,4 +64,4 @@ The kernel's message catalog — a flat key-value string table covering system n
 - **Fallback chain:** `t("zh", "foo")` → check `zh.json["foo"]` → check `en.json["foo"]` → return `"foo"` (`i18n/__init__.py:52-57`). The key-as-fallback behavior makes missing translations visible rather than fatal.
 - **Template vars:** `format_map(defaultdict(str, ...))` means missing placeholder values render as empty strings instead of raising (`i18n/__init__.py:47-59`).
 - **No pluralisation or ICU.** The system is flat key-value with Python `str.format`. Complex linguistic features (plural forms, gendered agreement) are handled by having per-locale templates that embed the logic, not by the engine.
-- **The tools bridge is one-directional.** The tools catalog calls `register_strings()` into the kernel cache; this folder never imports tool code (`src/tools/i18n/__init__.py:38`, `i18n/__init__.py:33-41`).
+- **The tools bridge is one-directional.** The tools catalog calls `register_strings()` into the kernel cache; this folder never imports tool code (`src/lingtai/tools/i18n/__init__.py:38`, `i18n/__init__.py:33-41`).

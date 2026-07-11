@@ -1,6 +1,6 @@
 ---
 related_files:
-  - src/tools/vision/ANATOMY.md
+  - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/services/ANATOMY.md
   - src/lingtai/services/vision/__init__.py
   - src/lingtai/services/vision/anthropic.py

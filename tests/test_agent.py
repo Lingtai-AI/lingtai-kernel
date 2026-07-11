@@ -1,6 +1,6 @@
 """Tests for BaseAgent lifecycle and tool dispatch."""
 import time
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 import threading
 from unittest.mock import MagicMock
 
@@ -197,7 +197,7 @@ def test_mail_inbox_wiring(tmp_path):
     from lingtai.kernel.notifications import collect_notifications
 
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="receiver", working_dir=tmp_path / "test")
-    from tools.email.primitives import _persist_to_inbox
+    from lingtai.tools.email.primitives import _persist_to_inbox
     msg_id = _persist_to_inbox(agent, {
         "from": "127.0.0.1:9999",
         "to": "127.0.0.1:8301",
@@ -292,7 +292,7 @@ def test_mail_received_full_content_in_notification(tmp_path):
     from lingtai.kernel.notifications import collect_notifications
 
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    from tools.email.primitives import _persist_to_inbox
+    from lingtai.tools.email.primitives import _persist_to_inbox
     email_id = _persist_to_inbox(agent, {
         "from": "sender",
         "subject": "test subject",

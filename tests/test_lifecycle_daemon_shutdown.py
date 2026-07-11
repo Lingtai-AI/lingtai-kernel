@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 
 def test_daemon_shutdown_for_agent_stop_reclaims_pools_and_cli_processes(tmp_path, monkeypatch):
-    from tools import daemon as daemon_module
+    from lingtai.tools import daemon as daemon_module
 
     agent = SimpleNamespace(
         service=SimpleNamespace(model="mock-model"),
@@ -73,7 +73,7 @@ def test_daemon_shutdown_for_agent_stop_reclaims_pools_and_cli_processes(tmp_pat
 
 def test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock(monkeypatch):
     from lingtai.kernel.base_agent import lifecycle
-    import tools.soul.flow as soul_flow
+    import lingtai.tools.soul.flow as soul_flow
 
     order = []
 
@@ -115,7 +115,7 @@ def test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock(monkeypatch):
 
 
 def test_daemon_shutdown_waits_for_cli_ask_future_before_releasing_liveness(tmp_path, monkeypatch):
-    from tools import daemon as daemon_module
+    from lingtai.tools import daemon as daemon_module
 
     agent = SimpleNamespace(
         service=SimpleNamespace(model="mock-model"),

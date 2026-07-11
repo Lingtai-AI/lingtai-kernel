@@ -43,7 +43,7 @@ __all__ = [
 ]
 
 # The event type both molt paths emit at a molt boundary, carrying ``molt_count``
-# (post-increment). See src/tools/psyche/_molt.py:434,702.
+# (post-increment). See src/lingtai/tools/psyche/_molt.py:434,702.
 MOLT_BOUNDARY_EVENT = "psyche_molt"
 
 # The event type carrying per-provider-round token usage. See

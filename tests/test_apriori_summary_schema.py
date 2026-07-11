@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from tools.daemon import get_schema as daemon_schema
-from tools.glob import get_schema as glob_schema
+from lingtai.tools.daemon import get_schema as daemon_schema
+from lingtai.tools.glob import get_schema as glob_schema
 
 
 def _assert_summary_option(schema: dict) -> None:

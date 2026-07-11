@@ -42,13 +42,13 @@ Kernel-side service ABCs and implementations. Services back cross-cutting kernel
 - `BaseAgent.__init__` creates a `CompositeLoggingService` over `logs/events.jsonl` plus additive `logs/log.sqlite` (`base_agent/__init__.py:273-285`).
 - `BaseAgent` receives a `MailService | None` constructor argument (`base_agent/__init__.py:230`); missing mail service disables the email intrinsic (`base_agent/__init__.py:158`).
 - Email boot wires `FilesystemMailService.listen(on_message=agent._on_mail)` through the email intrinsic (`base_agent/__init__.py:441-442`).
-- `services/mail.py` imports `handshake.{is_agent,is_alive,resolve_address}` for routing/liveness (`services/mail.py:24`) and owns `_new_mailbox_id` at module top (`services/mail.py`) — it moved here from the email tool so `send()` no longer depends on `tools`; `tools/email/primitives.py` imports it from here.
+- `services/mail.py` imports `handshake.{is_agent,is_alive,resolve_address}` for routing/liveness (`services/mail.py:24`) and owns `_new_mailbox_id` at module top (`services/mail.py`) — it moved here from the email tool so `send()` no longer depends on `tools`; `lingtai/tools/email/primitives.py` imports it from here.
 
 ## Composition
 
 - **Parent:** `src/lingtai/kernel/` (see `ANATOMY.md`).
 - **Subfolders:** none.
-- **Sibling consumers:** the `email` tool (`tools/email/`) owns mailbox tool behavior; `base_agent/` owns logging lifecycle; `src/lingtai/cli.py` exposes `lingtai-agent log {rebuild,doctor,query}` (`../lingtai/cli.py:294-305`).
+- **Sibling consumers:** the `email` tool (`lingtai/tools/email/`) owns mailbox tool behavior; `base_agent/` owns logging lifecycle; `src/lingtai/cli.py` exposes `lingtai-agent log {rebuild,doctor,query}` (`../lingtai/cli.py:294-305`).
 
 ## State
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from tools import notification as notif_intrinsic
+from lingtai.tools import notification as notif_intrinsic
 from lingtai.kernel.notifications import collect_notifications, notification_fingerprint, publish
 from lingtai.kernel.nudge.goal import check as check_goal
 from lingtai.kernel.state import AgentState

@@ -74,7 +74,7 @@ def _write_preset(presets_dir, name, capabilities, provider="deepseek",
 # ---------------------------------------------------------------------------
 
 def test_collector_captures_add_tool_calls():
-    from tools.daemon import _ToolCollector
+    from lingtai.tools.daemon import _ToolCollector
 
     parent = MagicMock()
     collector = _ToolCollector(parent)
@@ -92,7 +92,7 @@ def test_collector_captures_add_tool_calls():
 
 
 def test_collector_forwards_unknown_attrs_to_parent():
-    from tools.daemon import _ToolCollector
+    from lingtai.tools.daemon import _ToolCollector
 
     parent = MagicMock()
     parent._working_dir = "/tmp/x"
@@ -108,7 +108,7 @@ def test_collector_forwards_unknown_attrs_to_parent():
 def test_collector_does_not_pollute_parent_tool_registry():
     """Most important property: the parent's _tool_handlers / _tool_schemas
     must remain unchanged after collector add_tool calls."""
-    from tools.daemon import _ToolCollector
+    from lingtai.tools.daemon import _ToolCollector
 
     parent = MagicMock()
     parent._tool_handlers = {}
@@ -196,7 +196,7 @@ def test_instantiate_still_raises_on_broken_known_capability(tmp_path, monkeypat
     def boom(target, name, **kwargs):
         raise ValueError("simulated broken setup")
 
-    monkeypatch.setattr("tools.registry.setup_capability", boom)
+    monkeypatch.setattr("lingtai.tools.registry.setup_capability", boom)
     try:
         mgr._instantiate_preset_capabilities(
             {"read": {}},  # known capability — should propagate the failure
@@ -216,7 +216,7 @@ def test_instantiate_skips_broken_unused_known_capability(tmp_path, monkeypatch)
     mgr = agent.get_capability("daemon")
 
     original_setup = __import__(
-        "tools.registry", fromlist=["setup_capability"]
+        "lingtai.tools.registry", fromlist=["setup_capability"]
     ).setup_capability
 
     def boom_for_vision(target, name, **kwargs):
@@ -224,7 +224,7 @@ def test_instantiate_skips_broken_unused_known_capability(tmp_path, monkeypatch)
             raise ValueError("simulated broken vision")
         return original_setup(target, name, **kwargs)
 
-    monkeypatch.setattr("tools.registry.setup_capability", boom_for_vision)
+    monkeypatch.setattr("lingtai.tools.registry.setup_capability", boom_for_vision)
 
     schemas, handlers = mgr._instantiate_preset_capabilities(
         {"file": {}, "vision": {"provider": "codex", "api_key_env": "IGNORED"}},
@@ -244,7 +244,7 @@ def test_instantiate_raises_for_broken_required_known_capability(tmp_path, monke
     def boom(target, name, **kwargs):
         raise ValueError("simulated broken vision")
 
-    monkeypatch.setattr("tools.registry.setup_capability", boom)
+    monkeypatch.setattr("lingtai.tools.registry.setup_capability", boom)
 
     try:
         mgr._instantiate_preset_capabilities(
@@ -288,7 +288,7 @@ def test_instantiate_resolves_inherit_against_preset_llm(tmp_path):
     def fake_setup(target, name, **kwargs):
         captured[name] = kwargs
 
-    with patch("tools.registry.setup_capability", side_effect=fake_setup):
+    with patch("lingtai.tools.registry.setup_capability", side_effect=fake_setup):
         mgr._instantiate_preset_capabilities(
             {"web_search": {"provider": "inherit"}},
             {"provider": "gemini", "model": "gemini-pro",
@@ -490,7 +490,7 @@ def test_emanate_preset_does_not_pollute_parent_tool_registry(tmp_path,
 def test_emanate_preset_broken_unused_vision_dispatches(tmp_path, monkeypatch):
     """File-only daemon dispatch is not blocked by broken unused vision."""
     import lingtai.kernel.preset_connectivity as preset_connectivity
-    import tools.registry as capabilities
+    import lingtai.tools.registry as capabilities
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     original_setup = capabilities.setup_capability
@@ -530,7 +530,7 @@ def test_emanate_preset_broken_unused_vision_dispatches(tmp_path, monkeypatch):
 def test_emanate_preset_broken_requested_vision_fails(tmp_path, monkeypatch):
     """Requested capability setup failures remain hard errors."""
     import lingtai.kernel.preset_connectivity as preset_connectivity
-    import tools.registry as capabilities
+    import lingtai.tools.registry as capabilities
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     original_setup = capabilities.setup_capability
@@ -758,7 +758,7 @@ def test_parent_host_tool_floor_is_exactly_bash_and_file(tmp_path):
     CORE_DEFAULTS minus EMANATION_BLACKLIST minus mcp, it must equal exactly
     {bash, read, write, edit, glob, grep} — no intrinsics, no mcp, no optional
     provider caps."""
-    from tools.daemon import _parent_host_tool_floor
+    from lingtai.tools.daemon import _parent_host_tool_floor
     assert _parent_host_tool_floor() == frozenset(
         {"bash", "read", "write", "edit", "glob", "grep"}
     )
@@ -771,7 +771,7 @@ def test_emanate_preset_skipped_provider_cap_still_runs_host_tools(
     unknown. With only host tools requested, the skipped capability is logged
     and the daemon still dispatches."""
     import lingtai.kernel.preset_connectivity as preset_connectivity
-    import tools.registry as capabilities
+    import lingtai.tools.registry as capabilities
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     original_setup = capabilities.setup_capability

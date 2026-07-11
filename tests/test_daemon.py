@@ -77,7 +77,7 @@ def test_daemon_max_emanations_override_reaches_manager(tmp_path):
 
 def test_daemon_setup_reaps_dead_parent_running_record(tmp_path, monkeypatch):
     """Startup marks stale running daemon.json records failed."""
-    from tools import daemon as daemon_mod
+    from lingtai.tools import daemon as daemon_mod
 
     stale_pid = 987654
     daemon_json = _write_daemon_json(
@@ -116,7 +116,7 @@ def test_daemon_setup_reaps_dead_parent_running_record(tmp_path, monkeypatch):
 
 def test_daemon_setup_keeps_current_and_live_parent_records(tmp_path, monkeypatch):
     """Startup skips current PID and records whose parent PID is still alive."""
-    from tools import daemon as daemon_mod
+    from lingtai.tools import daemon as daemon_mod
 
     current_pid = os.getpid()
     live_pid = current_pid + 100000
@@ -352,7 +352,7 @@ def test_connect_task_mcp_registrations_builds_surface_and_closes(tmp_path, monk
 
 def test_daemon_schema_accepts_task_system_prompt_and_skills():
     """Task items expose current oneshot system_prompt, skills, and MCP registrations."""
-    from tools.daemon import get_schema
+    from lingtai.tools.daemon import get_schema
 
     task_props = get_schema("en")["properties"]["tasks"]["items"]["properties"]
     assert "system_prompt" in task_props
@@ -1221,7 +1221,7 @@ def test_daemon_run_dir_writes_current_data_version(tmp_path):
     agent = _make_agent(tmp_path, ["file", "daemon"])
     rd = _make_run_dir(agent, em_id="em-version")
     state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
-    from tools.daemon.run_dir import DaemonRunDir
+    from lingtai.tools.daemon.run_dir import DaemonRunDir
     assert state["data_version"] == DaemonRunDir.DATA_VERSION
 
 
@@ -1254,7 +1254,7 @@ def test_handle_list_rebuilds_missing_daemon_json_best_effort(tmp_path):
     assert "recovered result" in em["result_preview"]
 
     rebuilt = json.loads((run_path / "daemon.json").read_text(encoding="utf-8"))
-    from tools.daemon.run_dir import DaemonRunDir
+    from lingtai.tools.daemon.run_dir import DaemonRunDir
     assert rebuilt["data_version"] == DaemonRunDir.DATA_VERSION
     assert rebuilt["migration"]["reason"] == "daemon_json_missing"
     assert rebuilt["task"] == "recover missing daemon json task"
@@ -1346,7 +1346,7 @@ def test_handle_list_rebuilds_stale_daemon_json_version(tmp_path):
     assert em["status"] == "done"
 
     rebuilt = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
-    from tools.daemon.run_dir import DaemonRunDir
+    from lingtai.tools.daemon.run_dir import DaemonRunDir
     assert rebuilt["data_version"] == DaemonRunDir.DATA_VERSION
     assert rebuilt["migration"]["reason"] == "daemon_json_data_version_mismatch"
     assert rebuilt["backend_options"] == {"search": True}
@@ -1907,7 +1907,7 @@ def test_terminal_reconciliation_preview_reads_are_bounded(tmp_path, monkeypatch
 
 
 def test_daemon_schema_has_no_terminal_notification_toggle():
-    from tools.daemon import get_schema
+    from lingtai.tools.daemon import get_schema
 
     def walk_properties(schema):
         if isinstance(schema, dict):
@@ -2563,7 +2563,7 @@ def test_claude_code_env_strips_auth_overrides(monkeypatch):
     API billing (GH #107); a stale CLAUDE_CODE_OAUTH_TOKEN can override a
     refreshed credentials.json and look like a false weekly limit (GH #189).
     """
-    from tools.daemon import _claude_code_env, _CLAUDE_CODE_STRIP_ENV
+    from lingtai.tools.daemon import _claude_code_env, _CLAUDE_CODE_STRIP_ENV
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-leaked")
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "oauth-leaked")
@@ -2584,7 +2584,7 @@ def test_claude_code_env_strips_auth_overrides(monkeypatch):
 def test_claude_code_env_noop_when_unset(monkeypatch):
     """When no Claude auth override vars are set, sanitized env equals os.environ."""
     import os
-    from tools.daemon import _claude_code_env, _CLAUDE_CODE_STRIP_ENV
+    from lingtai.tools.daemon import _claude_code_env, _CLAUDE_CODE_STRIP_ENV
 
     for key in _CLAUDE_CODE_STRIP_ENV:
         monkeypatch.delenv(key, raising=False)
@@ -2662,7 +2662,7 @@ def _install_fake_popen(monkeypatch, proc: _FakeProc):
     returns `proc` on next call, and neutralize _kill_process_group so it
     doesn't try to signal pid 0.
     """
-    from tools import daemon as daemon_mod
+    from lingtai.tools import daemon as daemon_mod
 
     def fake_popen(cmd, **kwargs):
         return proc
@@ -3022,7 +3022,7 @@ def test_ask_stream_workers_reuse_shared_stderr_drainer(tmp_path, monkeypatch):
     the worker still joins the drain handle, and failure messages still use
     the captured stderr tail.
     """
-    from tools import daemon as daemon_mod
+    from lingtai.tools import daemon as daemon_mod
 
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
@@ -3191,7 +3191,7 @@ def test_ask_worker_exception_is_logged(tmp_path, monkeypatch):
 
 def test_daemon_llm_defaults_carries_codex_auth_path():
     """The preset manifest.llm allowlist includes ``codex_auth_path``."""
-    from tools.daemon import DaemonManager
+    from lingtai.tools.daemon import DaemonManager
 
     defaults = DaemonManager._llm_defaults_from_manifest(
         {
@@ -3215,7 +3215,7 @@ def test_daemon_provider_defaults_preserves_codex_auth_path(tmp_path):
     """
     from types import SimpleNamespace
 
-    from tools.daemon import DaemonManager
+    from lingtai.tools.daemon import DaemonManager
 
     run_dir = SimpleNamespace(path=tmp_path / "run")
     mgr = DaemonManager.__new__(DaemonManager)
@@ -3245,7 +3245,7 @@ def _assert_codex_pool_daemon_defaults(provider, tmp_path):
     """
     from types import SimpleNamespace
 
-    from tools.daemon import DaemonManager
+    from lingtai.tools.daemon import DaemonManager
 
     run_dir = SimpleNamespace(path=tmp_path / "run")
     mgr = DaemonManager.__new__(DaemonManager)

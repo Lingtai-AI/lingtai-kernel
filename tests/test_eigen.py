@@ -1,6 +1,6 @@
 """Tests for psyche intrinsic — core self-management (pad + context)."""
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 from unittest.mock import MagicMock
 
@@ -188,7 +188,7 @@ def test_psyche_molt_rejects_missing_summary(tmp_path):
 
 def test_eigen_schema_has_context_molt(tmp_path):
     """Schema exposes context/summary without strict-incompatible combinators."""
-    from tools.psyche import get_schema
+    from lingtai.tools.psyche import get_schema
     s = get_schema("en")
     assert "context" in s["properties"]["object"]["enum"]
     assert "summary" in s["properties"]
@@ -218,7 +218,7 @@ def test_psyche_rejects_invalid_object_action_pair(tmp_path):
 def test_eigen_forget_wipes_context(tmp_path):
     """context_forget nuclear wipes the session."""
     from lingtai.kernel.llm.interface import ChatInterface, TextBlock
-    from tools.psyche import context_forget
+    from lingtai.tools.psyche import context_forget
 
     svc = make_mock_service()
 
@@ -424,7 +424,7 @@ def test_snapshot_written_on_system_forget(tmp_path):
     """System-initiated context_forget also writes a snapshot, source != 'agent'."""
     import json
     from lingtai.kernel.llm.interface import TextBlock
-    from tools.psyche import context_forget
+    from lingtai.tools.psyche import context_forget
 
     agent = _agent_with_session(tmp_path)
     try:
@@ -454,7 +454,7 @@ def test_snapshot_written_on_system_forget(tmp_path):
 
 def test_snapshot_filename_uses_molt_count(tmp_path):
     """Successive molts produce successive molt_count values in filenames."""
-    from tools.psyche import context_forget
+    from lingtai.tools.psyche import context_forget
 
     agent = _agent_with_session(tmp_path)
     try:
@@ -479,7 +479,7 @@ def test_snapshot_filename_uses_molt_count(tmp_path):
 def test_snapshot_helper_swallows_failures(tmp_path):
     """_write_molt_snapshot is best-effort — it returns None on any failure
     rather than propagating, so a broken disk can't block a molt."""
-    from tools import psyche
+    from lingtai.tools import psyche
 
     # Block the snapshots dir by planting a file where its parent should be.
     (tmp_path / "history").write_text("blocker — not a directory")

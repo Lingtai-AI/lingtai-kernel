@@ -14,7 +14,7 @@ Signal file detection and karma system intrinsic actions are tested in
 test_karma.py.
 """
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import json
 import threading

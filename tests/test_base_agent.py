@@ -1,6 +1,6 @@
 """Tests for BaseAgent — true name (immutable) and nickname (mutable), messages."""
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 from unittest.mock import MagicMock, patch
 

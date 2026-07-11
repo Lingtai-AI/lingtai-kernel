@@ -17,7 +17,7 @@ This file pins what survives that removal:
 4. ToolExecutor metadata stamping (``tool_meta``) is unaffected.
 """
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import threading
 from pathlib import Path
@@ -275,7 +275,7 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
         notification_fingerprint,
         publish,
     )
-    from tools import notification as notif_intrinsic
+    from lingtai.tools import notification as notif_intrinsic
 
     @dataclass
     class _StubAgent:

@@ -28,7 +28,7 @@ related_files:
     why: >
       The owning prompt-source anatomy: it records skills as a generated catalog. Read
       it before looking for a skills.md body.
-  - path: src/tools/skills/__init__.py
+  - path: src/lingtai/tools/skills/__init__.py
     why: >
       Owns the concrete skills-section build rule: it scans the skill catalog and calls
       build_catalog_yaml(), then update_system_prompt("skills", ...) to inject the

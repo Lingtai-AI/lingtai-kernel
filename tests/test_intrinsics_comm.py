@@ -1,5 +1,5 @@
 from lingtai.kernel.prompt import SystemPromptManager
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 
 def test_system_prompt_manager():

@@ -9,8 +9,8 @@ DOC_REL = "src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md"
 REQUIRED_ANATOMIES = [
     "src/lingtai/kernel/ANATOMY.md",
     "src/lingtai/kernel/base_agent/ANATOMY.md",
-    "src/tools/notification/ANATOMY.md",
-    "src/tools/mcp/ANATOMY.md",
+    "src/lingtai/tools/notification/ANATOMY.md",
+    "src/lingtai/tools/mcp/ANATOMY.md",
     "src/lingtai/mcp_servers/ANATOMY.md",
 ]
 REQUIRED_TRIGGERS = [
@@ -25,8 +25,8 @@ REQUIRED_TRIGGERS = [
     "src/lingtai/mcp_servers/feishu/manager.py",
     "src/lingtai/mcp_servers/wechat/manager.py",
     "src/lingtai/mcp_servers/whatsapp/manager.py",
-    "src/tools/email/",
-    "src/tools/notification/",
+    "src/lingtai/tools/email/",
+    "src/lingtai/tools/notification/",
 ]
 
 

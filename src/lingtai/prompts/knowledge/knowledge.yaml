@@ -28,7 +28,7 @@ related_files:
     why: >
       The owning prompt-source anatomy: it records knowledge as a generated index. Read
       it before looking for a knowledge.md body.
-  - path: src/tools/knowledge/__init__.py
+  - path: src/lingtai/tools/knowledge/__init__.py
     why: >
       Owns the concrete knowledge-section build rule: it scans the KNOWLEDGE.md catalog
       and calls build_catalog_yaml(), then update_system_prompt("knowledge", ...) to

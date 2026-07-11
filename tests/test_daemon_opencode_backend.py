@@ -26,7 +26,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tools.daemon import DaemonManager
+from lingtai.tools.daemon import DaemonManager
 from tests._daemon_helpers import (
     FiniteFakeProc,
     completed_future,
@@ -63,7 +63,7 @@ def _make_run_dir(agent, *, handle="em-test"):
 
 
 def test_schema_enum_includes_opencode():
-    from tools.daemon import get_schema
+    from lingtai.tools.daemon import get_schema
     schema = get_schema("en")
     backend = schema["properties"]["backend"]
     assert "opencode" in backend["enum"]
@@ -71,7 +71,7 @@ def test_schema_enum_includes_opencode():
 
 
 def test_schema_backend_options_description_mentions_opencode():
-    from tools.daemon import get_schema
+    from lingtai.tools.daemon import get_schema
     schema = get_schema("en")
     bo = schema["properties"]["tasks"]["items"]["properties"]["backend_options"]
     assert "opencode" in bo["description"]
@@ -145,7 +145,7 @@ def test_opencode_emanate_cmd_includes_run_and_format_json(tmp_path):
     cancel = threading.Event()
     timeout = threading.Event()
 
-    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         mgr._run_opencode_emanation(
             "em-oc", run_dir, "Refactor the auth module.",
             cancel, timeout,
@@ -181,7 +181,7 @@ def test_opencode_emanate_appends_backend_argv_before_prompt(tmp_path):
     cancel = threading.Event()
     timeout = threading.Event()
 
-    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         mgr._run_opencode_emanation(
             "em-oc-opts", run_dir, "Find the bug.",
             cancel, timeout,
@@ -222,7 +222,7 @@ def test_opencode_emanate_persists_session_id_from_first_event(tmp_path):
     cancel = threading.Event()
     timeout = threading.Event()
 
-    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         result = mgr._run_opencode_emanation(
             "em-oc-sid", run_dir, "What is the answer?",
             cancel, timeout,
@@ -256,7 +256,7 @@ def test_opencode_emanate_handles_non_json_lines_gracefully(tmp_path):
     cancel = threading.Event()
     timeout = threading.Event()
 
-    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         result = mgr._run_opencode_emanation(
             "em-oc-mixed", run_dir, "task",
             cancel, timeout,
@@ -281,7 +281,7 @@ def test_opencode_emanate_uses_no_output_sentinel_when_silent(tmp_path):
     cancel = threading.Event()
     timeout = threading.Event()
 
-    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         result = mgr._run_opencode_emanation(
             "em-oc-silent", run_dir, "task",
             cancel, timeout,
@@ -308,7 +308,7 @@ def test_opencode_emanate_raises_when_returncode_nonzero(tmp_path):
     cancel = threading.Event()
     timeout = threading.Event()
 
-    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         with pytest.raises(RuntimeError, match="opencode CLI exited with code 1"):
             mgr._run_opencode_emanation(
                 "em-oc-fail", run_dir, "task",
@@ -328,7 +328,7 @@ def test_opencode_emanate_missing_cli_raises_runtime_error(tmp_path):
     cancel = threading.Event()
     timeout = threading.Event()
 
-    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         with pytest.raises(RuntimeError, match="'opencode' CLI not found on PATH"):
             mgr._run_opencode_emanation(
                 "em-oc-missing", run_dir, "task",
@@ -450,7 +450,7 @@ def test_ask_opencode_resumes_with_captured_session_id(tmp_path):
         ask_in_flight=False,
     )
 
-    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         result = mgr.handle({
             "action": "ask",
             "id": "em-oc-resume",

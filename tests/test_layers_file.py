@@ -1,6 +1,6 @@
 """Tests for file I/O capabilities (read, write, edit, glob, grep)."""
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 from pathlib import Path
 from unittest.mock import MagicMock

@@ -22,8 +22,10 @@ def _repo_root() -> Path:
 
 
 def _env_with_src_path() -> dict[str, str]:
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(_repo_root() / "src") + os.pathsep + env.get("PYTHONPATH", "")
+    # Drop any inherited PYTHONPATH (e.g. another worktree's src) so the
+    # subprocess resolves only this worktree's source tree.
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["PYTHONPATH"] = str(_repo_root() / "src")
     return env
 
 
@@ -177,26 +179,24 @@ def test_kernel_import_only_loads_parent_and_kernel():
     )
 
 
-def test_import_tools_does_not_pull_lingtai():
-    """`import tools` must not transitively import the `lingtai` package.
+def test_import_lingtai_tools_does_not_pull_high_level_lingtai():
+    """``import lingtai.tools.registry`` must not eagerly load high-level ``lingtai.*``.
 
-    The DAG is `lingtai → tools → lingtai.kernel`; the only `tools → lingtai`
-    edge is lazy (inside setup()/handlers), so importing `tools` (and even
-    `tools.registry`, which imports the five intrinsic modules and the tool
-    i18n catalog) must stay dependency-light and never eagerly pull `lingtai`.
+    The DAG is ``lingtai → lingtai.tools → lingtai.kernel``; the only
+    ``lingtai.tools → lingtai`` edge is lazy (inside setup()/handlers), so
+    importing ``lingtai.tools.registry`` (which imports the five intrinsic
+    modules and the tool i18n catalog) must stay dependency-light and never
+    eagerly pull ``lingtai.agent``, providers, services or MCP servers.
     """
-    import os
-
     repo_root = Path(__file__).resolve().parents[1]
-    env = dict(os.environ)
-    # Ensure this worktree's src wins over any editable-install .pth that points
-    # at a different checkout — otherwise the subprocess may import a stale tree.
-    env["PYTHONPATH"] = str(repo_root / "src") + os.pathsep + env.get("PYTHONPATH", "")
+    # Drop inherited PYTHONPATH so only this worktree's src is visible.
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["PYTHONPATH"] = str(repo_root / "src")
     result = subprocess.run(
         [
             sys.executable, "-c",
-            "import sys; import tools.registry; "
-            "leaked = [k for k in sys.modules if k.startswith('lingtai.') and k != 'lingtai.kernel' and not k.startswith('lingtai.kernel.')]; "
+            "import sys; import lingtai.tools.registry; "
+            "leaked = [k for k in sys.modules if k.startswith('lingtai.') and k != 'lingtai.kernel' and not k.startswith('lingtai.kernel.') and k != 'lingtai.tools' and not k.startswith('lingtai.tools.')]; "
             "print('LEAKED:', leaked) if leaked else print('CLEAN')"
         ],
         capture_output=True,
@@ -206,7 +206,27 @@ def test_import_tools_does_not_pull_lingtai():
     )
     assert result.returncode == 0, f"Subprocess error:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     assert "CLEAN" in result.stdout, (
-        f"Importing tools.registry eagerly pulled high-level 'lingtai.*' modules.\n"
+        f"Importing lingtai.tools.registry eagerly pulled high-level 'lingtai.*' modules.\n"
         f"stdout: {result.stdout}\n"
         f"stderr: {result.stderr}"
+    )
+
+
+def test_import_kernel_does_not_load_lingtai_tools():
+    """``import lingtai.kernel`` must not pull in ``lingtai.tools`` (kernel isolation)."""
+    result = subprocess.run(
+        [
+            sys.executable, "-c",
+            "import sys; import lingtai.kernel; "
+            "leaked = [k for k in sys.modules if k == 'lingtai.tools' or k.startswith('lingtai.tools.')]; "
+            "print('LEAKED:', leaked) if leaked else print('CLEAN')"
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(_repo_root()),
+        env=_env_with_src_path(),
+    )
+    assert result.returncode == 0, f"Subprocess error:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    assert "CLEAN" in result.stdout, (
+        f"lingtai.kernel eagerly loaded lingtai.tools:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )

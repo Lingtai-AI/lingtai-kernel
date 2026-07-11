@@ -13,7 +13,7 @@ import json
 import threading
 from unittest.mock import patch
 
-from tools.daemon import DaemonManager
+from lingtai.tools.daemon import DaemonManager
 from tests._daemon_helpers import (
     FiniteFakeProc,
     completed_future,
@@ -50,7 +50,7 @@ def _make_run_dir(agent, *, handle="em-cursor"):
 
 
 def test_schema_enum_includes_cursor():
-    from tools.daemon import get_schema
+    from lingtai.tools.daemon import get_schema
 
     schema = get_schema("en")
     backend = schema["properties"]["backend"]
@@ -59,7 +59,7 @@ def test_schema_enum_includes_cursor():
 
 
 def test_schema_backend_options_description_mentions_cursor():
-    from tools.daemon import get_schema
+    from lingtai.tools.daemon import get_schema
 
     schema = get_schema("en")
     bo = schema["properties"]["tasks"]["items"]["properties"]["backend_options"]
@@ -102,7 +102,7 @@ def test_cursor_emanate_cmd_uses_agent_print_stream_json(tmp_path):
     cancel = threading.Event()
     timeout = threading.Event()
 
-    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         mgr._run_cursor_emanation(
             "em-cur-cmd", run_dir, "Refactor the auth module.",
             cancel, timeout,
@@ -128,7 +128,7 @@ def test_cursor_emanate_appends_backend_argv_before_prompt(tmp_path):
     cancel = threading.Event()
     timeout = threading.Event()
 
-    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         mgr._run_cursor_emanation(
             "em-cur-opts", run_dir, "Find the bug.",
             cancel, timeout,
@@ -159,7 +159,7 @@ def test_cursor_emanate_persists_session_id_and_final_result(tmp_path):
     cancel = threading.Event()
     timeout = threading.Event()
 
-    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         result = mgr._run_cursor_emanation(
             "em-cur-sid", run_dir, "What is the answer?",
             cancel, timeout,
@@ -185,7 +185,7 @@ def test_cursor_emanate_marks_error_result_failed(tmp_path):
     cancel = threading.Event()
     timeout = threading.Event()
 
-    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         try:
             mgr._run_cursor_emanation(
                 "em-cur-error", run_dir, "Please fail", cancel, timeout,
@@ -286,7 +286,7 @@ def test_ask_cursor_resumes_with_captured_session_id(tmp_path):
     run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
     _register_cursor_entry(mgr, run_dir, em_id="em-cur-resume")
 
-    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         result = mgr.handle({
             "action": "ask",
             "id": "em-cur-resume",
@@ -323,7 +323,7 @@ def test_ask_cursor_error_result_publishes_failure(tmp_path):
     run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
     _register_cursor_entry(mgr, run_dir, em_id="em-cur-resume-error")
 
-    with patch("tools.daemon.subprocess.Popen", side_effect=fake_popen):
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         result = mgr.handle({
             "action": "ask",
             "id": "em-cur-resume-error",

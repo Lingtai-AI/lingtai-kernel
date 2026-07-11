@@ -25,9 +25,9 @@ def test_kernel_moved_under_lingtai_namespace():
 
 
 def test_pyproject_discovers_kernel_via_lingtai_prefix():
-    """pyproject.toml includes lingtai* and tools* but not the old root."""
+    """pyproject.toml discovers only the lingtai* namespace (no old roots)."""
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'include = ["lingtai*", "tools*"]' in pyproject
+    assert 'include = ["lingtai*"]' in pyproject
     assert "lingtai_kernel*" not in pyproject
     assert '"lingtai.kernel" = ["i18n/*.json"]' in pyproject
 
@@ -84,8 +84,9 @@ def test_kernel_i18n_files_present():
 
 def test_kernel_import_does_not_load_high_level_modules():
     """import lingtai.kernel in a fresh process loads only the parent and kernel."""
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(SRC) + os.pathsep + env.get("PYTHONPATH", "")
+    # Drop inherited PYTHONPATH so only this worktree's src is visible.
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["PYTHONPATH"] = str(SRC)
     code = (
         "import sys; import lingtai.kernel; "
         "leaked = [k for k in sys.modules "
@@ -106,13 +107,15 @@ def test_kernel_import_does_not_load_high_level_modules():
 
 
 def test_tools_import_does_not_load_high_level_lingtai():
-    """Importing ``tools`` may load ``lingtai.kernel`` but no high-level ``lingtai.*``."""
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(SRC) + os.pathsep + env.get("PYTHONPATH", "")
+    """Importing ``lingtai.tools`` may load ``lingtai.kernel`` but no high-level ``lingtai.*``."""
+    # Drop inherited PYTHONPATH so only this worktree's src is visible.
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["PYTHONPATH"] = str(SRC)
     code = (
-        "import sys; import tools.registry; "
+        "import sys; import lingtai.tools.registry; "
         "leaked = [k for k in sys.modules "
-        "if k.startswith('lingtai.') and k != 'lingtai.kernel' and not k.startswith('lingtai.kernel.')]; "
+        "if k.startswith('lingtai.') and k != 'lingtai.kernel' and not k.startswith('lingtai.kernel.') "
+        "and k != 'lingtai.tools' and not k.startswith('lingtai.tools.')]; "
         "print('LEAKED:', leaked) if leaked else print('CLEAN')"
     )
     result = subprocess.run(
@@ -124,5 +127,5 @@ def test_tools_import_does_not_load_high_level_lingtai():
     )
     assert result.returncode == 0, f"subprocess failed:\n{result.stdout}\n{result.stderr}"
     assert "CLEAN" in result.stdout, (
-        f"tools.registry pulled high-level lingtai modules:\n{result.stdout}"
+        f"lingtai.tools.registry pulled high-level lingtai modules:\n{result.stdout}"
     )
