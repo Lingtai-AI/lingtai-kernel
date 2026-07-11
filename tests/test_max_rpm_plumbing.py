@@ -154,11 +154,28 @@ def test_gated_session_routes_send_through_gate():
     a = _StubAdapter()
     a._setup_gate(60)
     inner = MagicMock()
-    inner.send.return_value = "response"
+    inner.pre_request_hook = None
+    inner.session_id = "inner-sess"
+    # Model a real adapter: read the (inner) hook and fire it once at send.
+    inner.send.side_effect = lambda m: (
+        inner.pre_request_hook(inner.interface), "response")[1]
     wrapped = a._wrap_with_gate(inner)
-    result = wrapped.send("hi")
+
+    fired = []
+    wrapped.pre_request_hook = lambda iface: fired.append(iface)
+    # The named slot delegates to the inner (the object whose send reads it),
+    # never landing in the proxy __dict__.
+    assert wrapped.pre_request_hook is inner.pre_request_hook
+    assert "pre_request_hook" not in wrapped.__dict__
+    # Unrelated metadata writes stay proxy-local; inner identity is untouched.
+    wrapped.session_id = "proxy-sess"
+
+    result = wrapped.send("hi")  # drive the real gate
     assert result == "response"
     inner.send.assert_called_once_with("hi")
+    assert fired == [inner.interface]
+    assert wrapped.session_id == "proxy-sess"
+    assert inner.session_id == "inner-sess"
     a._gate.shutdown()
 
 

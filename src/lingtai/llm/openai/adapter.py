@@ -1774,6 +1774,18 @@ class OpenAIResponsesSession(ChatSession):
 
         ``None`` yields ``[]`` — caller wants the existing
         ``previous_response_id`` chain to continue with no new input.
+
+        A list may carry the canonical kernel shape (``ToolResultBlock``
+        instances built by :meth:`OpenAIAdapter.make_tool_result_message` and
+        handed down by ``SessionManager.send``) or one of two dictionary shapes:
+        a prebuilt Responses ``function_call_output`` item, or a legacy
+        Chat-Completions ``{"role": "tool", ...}`` item. Canonical blocks and
+        legacy role-tool dictionaries are converted to the Responses
+        ``function_call_output`` wire shape here — the same mapping the
+        full-replay converter uses (``interface_converters.to_responses_input``)
+        — so a plain (non-Codex) Responses session serializes tool-result
+        continuations correctly. Prebuilt Responses ``function_call_output``
+        dictionaries pass through unchanged.
         """
         if message is None:
             return []
@@ -1795,6 +1807,17 @@ class OpenAIResponsesSession(ChatSession):
                             "type": "function_call_output",
                             "call_id": item["tool_call_id"],
                             "output": item["content"],
+                        }
+                    )
+                elif isinstance(item, ToolResultBlock):
+                    content = item.content
+                    items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": item.id,
+                            "output": content
+                            if isinstance(content, str)
+                            else json.dumps(content, default=str),
                         }
                     )
                 else:
