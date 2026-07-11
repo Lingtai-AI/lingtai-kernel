@@ -54,15 +54,20 @@ does not stream output incrementally (async jobs are polled, not streamed).
 
 ## Tool surface
 
-`get_schema` requires nothing at the schema level (`required: []`); the handler
-enforces per-action requirements. `action` defaults to `run`.
+`get_schema` marks `reminder` required at the top schema level to satisfy the
+provider-facing required-option contract. Provider-validated sync `run`,
+`poll`, and `cancel` calls therefore also carry `reminder` on the wire, but the
+handler consumes and validates it only for async `run`; sync `run`, `poll`, and
+`cancel` ignore it. Direct async runtime calls that omit it still default to
+1800 seconds for compatibility. The handler enforces per-action requirements
+for `command` and `job_id`. `action` defaults to `run`.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
-| `run` (sync) | `command` | `working_dir`, `timeout` (default 30), `summary` | `{status: "ok", exit_code, stdout, stderr, ok, command_status, warning?}` | `{status: "error", message}` — empty command, policy-denied, cwd outside sandbox, timeout (with broad-scan hint), or spawn failure |
-| `run` (async) | `command`, `async: true` | `working_dir`, `summary` | `{status: "ok", job_id, pid, message}` | `{status: "error", message}` — same validation errors, plus `Failed to start async job: ...` |
-| `poll` | `job_id` | — | running: `{status: "running", job_id, pid}`; finished: `{status: "done", exit_code, stdout, stderr, ok, command_status, warning?}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or `Job already finished (...)` |
-| `cancel` | `job_id` | — | `{status: "cancelled", job_id}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or `Job already finished (...)` |
+| `run` (sync) | Provider schema: `command`, `reminder`; runtime consumes `command` only | `working_dir`, `timeout` (default 30), `summary` | `{status: "ok", exit_code, stdout, stderr, ok, command_status, warning?}` | `{status: "error", message}` — empty command, policy-denied, cwd outside sandbox, timeout (with broad-scan hint), or spawn failure |
+| `run` (async) | Provider/runtime: `command`, `async: true`, `reminder` | `working_dir`, `summary` | `{status: "ok", job_id, pid, message}` | `{status: "error", message}` — same validation errors, invalid boolean/non-numeric/non-finite/negative/too-large `reminder`, plus `Failed to start async job: ...` |
+| `poll` | Provider schema: `job_id`, `reminder`; runtime consumes `job_id` only | — | running: `{status: "running", job_id, pid}`; finished: `{status: "done", exit_code, stdout, stderr, ok, command_status, warning?}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or `Job already finished (...)` |
+| `cancel` | Provider schema: `job_id`, `reminder`; runtime consumes `job_id` only | — | `{status: "cancelled", job_id}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or `Job already finished (...)` |
 
 Fidelity fields are additive and keyed off `exit_code`: `ok` is `True` only when
 `exit_code == 0`; `command_status` is `"success"`/`"failed"`; `warning` is
@@ -73,6 +78,13 @@ inner failure is surfaced through the additive fields, not by changing `status`.
 
 Unknown/invalid `job_id` values containing `/`, `\`, or `..` are rejected before
 any filesystem access (path-traversal guard).
+
+`reminder` is a finite non-negative number of seconds used only for async
+`run`; booleans, non-numeric values, non-finite values (`NaN`, `Infinity`),
+negative values, and values larger than `threading.TIMEOUT_MAX` are rejected
+because the timer backend cannot accept them safely. The schema default is 1800
+seconds. Direct runtime calls that omit it still get 1800 seconds, so older
+callers keep working even though providers see the field as required.
 
 ## State & storage
 
@@ -86,6 +98,7 @@ All paths are relative to the agent working directory (`<agent>/`):
   stdout.log    # streamed child stdout
   stderr.log    # streamed child stderr
 <agent>/.notification/bash.json   # written by the async watcher on job exit
+<agent>/.notification/system.json # appended by the last-resort async reminder
 ```
 
 `job_id` is `job-<8 hex>`. On `poll`-to-completion or `cancel`, the job
@@ -94,6 +107,17 @@ watcher thread writes `.notification/bash.json` atomically (`.tmp` + rename) whe
 the process exits, so completion reaches the agent through the same notification
 channel as email/soul/molt. `stdout`/`stderr` are truncated to `max_output`
 (default 50_000 chars) with a trailing `... (truncated, N chars total)` marker.
+
+Async run also arms a daemon-threaded last-resort reminder. When `reminder`
+seconds elapse, the deadline path atomically claims the job under the same
+reminder lock used by terminal handling. If terminal `poll -> done` or
+successful `cancel` popped the job first, the reminder is suppressed; if the
+deadline claims first, the reminder legitimately wins and Bash appends one
+`bash.reminder` event to `.notification/system.json` with stable
+`ref_id="bash.reminder:<job_id>"` and a poll instruction. The reminder is
+intentionally **not** cancelled just because the process exits or the normal
+`.notification/bash.json` completion notification was written: an unpolled
+completed job still needs the fallback.
 
 ## Cross-platform invariants
 
@@ -126,6 +150,11 @@ for cancellation correctness.
 | Warning-tail redaction fails open when the redactor is unavailable | `src/tools/bash/__init__.py` | `tests/test_bash_async.py::test_fail_open_returns_input_when_redactor_unavailable` |
 | Allowlist mode permits only listed commands; denylist blocks listed ones | `src/tools/bash/__init__.py` | `tests/test_layers_bash.py::test_allow_only`, `::test_deny_only`, `::test_pipe_awareness` |
 | Policy is enforced on async runs too | `src/tools/bash/__init__.py` | `tests/test_bash_async.py::test_policy_applies_to_async` |
+| Async `reminder` defaults to 1800 for omitted direct calls while schema marks it required | `src/tools/bash/__init__.py` | `tests/test_bash_async.py::test_schema_requires_reminder_with_runtime_default` |
+| Last-resort reminders survive process exit until terminal poll/cancel and append without overwriting close due jobs | `src/tools/bash/__init__.py` | `tests/test_bash_async.py::test_async_reminder_publishes_after_delay_even_if_process_exited_unpolled`, `::test_async_reminder_does_not_overwrite_close_due_jobs`, `::test_terminal_poll_suppresses_async_reminder`, `::test_successful_cancel_suppresses_async_reminder` |
+| Reminder validation rejects non-finite and backend-unsafe delays | `src/tools/bash/__init__.py` | `tests/test_bash_async.py::test_async_reminder_rejects_invalid_values` |
+| Deadline claim and terminal handling have deterministic lock-owned ordering | `src/tools/bash/__init__.py` | `tests/test_bash_async.py::test_terminal_pop_before_deadline_claim_suppresses_reminder`, `::test_deadline_claim_before_terminal_pop_publishes_once` |
+| Direct-manager fallback appends remain multi-event safe across managers | `src/tools/bash/__init__.py` | `tests/test_bash_async.py::test_direct_manager_fallback_is_shared_across_managers` |
 | `yolo=True` allows all commands | `src/tools/bash/__init__.py` | `tests/test_layers_bash.py::test_add_capability_bash_yolo` |
 
 ## Verification matrix
@@ -133,6 +162,7 @@ for cancellation correctness.
 | Invariant | Automated test | Manual check | Risk if broken |
 |---|---|---|---|
 | Async job lifecycle (start/poll/cancel) is correct | `tests/test_bash_async.py` | Run a `sleep 30` async job, poll it, then cancel it | Orphaned processes / zombies; agent cannot stop background work |
+| Async reminder does not overwrite a sibling reminder | `tests/test_bash_async.py::test_async_reminder_does_not_overwrite_close_due_jobs` | Start two async `sleep` jobs with short reminders and inspect `.notification/system.json` | Close-due fallback reminders are lost instead of being preserved as separate system events |
 | Cancel kills the whole process group | `tests/test_bash_async.py::test_cancel_kills_process` | Start a job that forks children, cancel it, confirm all die | Runaway child processes survive cancellation |
 | Policy allow/deny (incl. pipes/chains) is enforced | `tests/test_layers_bash.py` | Configure an allowlist, try a denied command, confirm refusal | Sandbox escape via unlisted or piped commands |
 | Inner command failure is surfaced despite `status: ok` | `tests/test_bash_async.py::test_nonzero_exit_is_flagged_failed_with_warning` | Run `python -c 'import nope'`, confirm `ok=false` + `warning` | Agents proceed on silent inner failures |

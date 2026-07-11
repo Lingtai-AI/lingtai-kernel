@@ -368,6 +368,30 @@ def test_system_publish_appends_event(tmp_path: Path) -> None:
     assert events[0]["event_id"] != events[1]["event_id"]
 
 
+def test_system_event_ids_keep_entropy_with_fixed_millisecond(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Same-millisecond events keep enough random suffix to avoid collisions."""
+    from lingtai_kernel.base_agent import messaging
+
+    suffixes = iter(("0" * 16, "1" * 16))
+    monkeypatch.setattr("time.time", lambda: 1234.567)
+    monkeypatch.setattr("secrets.token_hex", lambda n: next(suffixes))
+
+    agent = _ProducerStubAgent(_working_dir=tmp_path)
+    first = messaging._enqueue_system_notification(
+        agent, source="daemon", ref_id="ref_1", body="event 1"
+    )
+    second = messaging._enqueue_system_notification(
+        agent, source="daemon", ref_id="ref_2", body="event 2"
+    )
+
+    assert first.startswith("evt_")
+    assert second.startswith("evt_")
+    assert first != second
+    assert [len(event_id.rsplit("_", 1)[1]) for event_id in (first, second)] == [16, 16]
+
+
 def test_system_publish_caps_at_20(tmp_path: Path) -> None:
     """25 sequential calls keep only the 20 most recent events."""
     from lingtai_kernel.base_agent import messaging
