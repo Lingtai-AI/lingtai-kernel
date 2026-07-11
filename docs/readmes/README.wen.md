@@ -1,85 +1,72 @@
-# 灵台内核
+<div align="center">
 
-> [English](../../README.md) | [中文](README.zh.md) | [文言](README.wen.md) | [贡献](../../CONTRIBUTING.md) | [安全](../../SECURITY.md) | [支持](../../SUPPORT.md)
+# lingtai-kernel 灵台内核
 
-> *灵台者有持，而不知其所持，而不可持者也。*
-> — 庄子·庚桑楚
+**驱 LingTai 器灵之 Python 运行时与 SDK。**
 
-器灵之最小内核 — 思、通、简、承器。
+[![PyPI](https://img.shields.io/pypi/v/lingtai?color=%237dab8f)](https://pypi.org/project/lingtai/)
+[![License](https://img.shields.io/github/license/Lingtai-AI/lingtai-kernel?color=%237dab8f)](../../LICENSE)
+[![Blog](https://img.shields.io/badge/blog-lingtai.ai-%23d4a853)](https://lingtai.ai)
 
-## 道
+[English](../../README.md) · [简体中文](README.zh.md) · [文言](README.wen.md) · [贡献](../../CONTRIBUTING.md) · [安全](../../SECURITY.md) · [支持](../../SUPPORT.md)
 
-**灵台，心也。** 庄子言灵台，谓其自然持守灵魂所需之一切，不自知其所持，亦不可强持之。
+</div>
 
-此框架中，器灵之灵台即其**工作目录**——磁盘之上一隅，简牍、盟约、名号、书信皆寄于此。目录即器灵。予内核以一目录、一语言服务，器灵即生；去其目录，器灵即灭。内核承载器灵之一切而不解其意——有持而不知其所持。
+---
 
-内核循 Unix 之道：
+此仓乃器物之下之枢机，非器物本身也。
 
-- **万物皆文卷。** 器灵之身份即其目录路径。无抽象之号——路径即地址、即锁、即真。
-- **内核定规矩，不定实现。** `LLMService` 与 `ChatSession` 皆抽象之约。何以实现——适配之器、密钥、流量之限——皆调用者之事。
-- **一灵一进程。** 独立之目录、独立之语言服务、独立之书信、独立之日志。器灵之间以文件系统传书通信，非共享内存。
-- **内核至简。** 思（LLM）、通（传书）、简（手简）、承器。能力、文卷读写、编排——皆在 [lingtai](https://github.com/Lingtai-AI/lingtai) 中。
+**欲得 LingTai 之器物者？** [`Lingtai-AI/lingtai`](https://github.com/Lingtai-AI/lingtai)
+一仓，乃「数字科学家」——终身而自长之器灵——叙事之所本，引导之装置、TUI/Portal 及日用诸流皆在焉。
+凡常之用者，宜自彼而始，任装置为汝掌此运行时。此仓所向，乃于内核之上有所构、或为内核效力之开发者也；
+勿以此间裸 `pip install` 为寻常安装之途。
 
-## 安装
+## 本仓所辖
+
+- **器灵之运行时** —— 使器灵得以运转之核心轮次之环、生灭、工具之派发、信箱、
+  soul（内心之声）、molt 与通知诸机也。
+- **两 Python 之面** —— 其一 `lingtai.kernel`，至简之运行时（`BaseAgent`、固有之能、
+  LLM 之约、书信、日志）；其二 `lingtai`，具足之运行时、CLI 与服务，于其上构
+  `Agent(BaseAgent)`，且重导内核公开之 API。
+- **配属之物** —— 所捆之内置工具、LLM 适配之器、精择之 MCP 服务器诸实现，暨其打包
+  （Python 发行之物与随附之 Rust 搜索 sidecar）。此皆所辖之界，非罗列之能也。
+
+## 开发者速启
+
+为**内核之开发**，非寻常 LingTai 用者安装之途也。须 Python >= 3.11；宜用本地之 `.venv`。
 
 ```bash
-pip install lingtai-kernel
+git clone https://github.com/Lingtai-AI/lingtai-kernel.git
+cd lingtai-kernel
+uv venv --python 3.11
+uv pip install -e . pytest
+.venv/bin/python -m pytest
 ```
 
-## 内核所含
+## 架构与开发者门径
 
-| 器 | 用 |
-|------|------|
-| **BaseAgent** | 内核之主——生灭、消息循环、器之派发 |
-| **四固有之器** | 传书（通信）、观己（生灭）、核心自治（简/名号）、灵魂（内心之声） |
-| **LLM 之约** | `LLMService` 抽象之约、`ChatSession` 抽象之约 |
-| **服务** | 文件系统传书、JSONL 日志 |
-| **工作目录** | 目录管理——锁、git、清单 |
+| 门径 | 所涵 |
+|---|---|
+| [`ANATOMY.md`](../../ANATOMY.md) | 仓之舆图——顶层之布局，暨各子系统解剖所始之处。 |
+| [`src/lingtai/kernel/ANATOMY.md`](../../src/lingtai/kernel/ANATOMY.md) | 核心之运行时：`BaseAgent`、轮次与生灭、工具之机、书信、LLM 之约。 |
+| [`src/lingtai/ANATOMY.md`](../../src/lingtai/ANATOMY.md) | `lingtai` 之包：`Agent(BaseAgent)`、诸能、预设、CLI、公开之重导。 |
+| [`src/lingtai/tools/ANATOMY.md`](../../src/lingtai/tools/ANATOMY.md) | 具体之内置工具，暨组合诸工具之注册表。 |
+| [`src/lingtai/mcp_servers/ANATOMY.md`](../../src/lingtai/mcp_servers/ANATOMY.md) | 随附之 MCP 服务器诸实现。 |
+| [`CONTRIBUTING.md`](../../CONTRIBUTING.md) | 效力之流程与仓之导览。 |
+| [`docs/references/claude-code-guide.md`](../references/claude-code-guide.md) | 全仓之指要——测试之命、架构之注与规约。 |
 
-## 内核不含
+## 安全 · 支持 · 谢忱
 
-能力、文卷读写、MCP、观象、游历、bash、化身、LLM 适配之器、流量之限——皆在 `lingtai` 中。
-
-## 速启
-
-```python
-from lingtai.kernel import BaseAgent
-
-# 调用者供语言服务（抽象之约的任何实现）
-agent = BaseAgent(
-    service=my_llm_service,
-    working_dir="/agents/alice",    # 灵台——灵魂所居
-    agent_name="alice",             # 真名（可不设）
-)
-
-agent.add_tool("hello", schema={...}, handler=lambda args: {"msg": "hi"})
-agent.start()
-agent.send("Say hello")
-agent.stop()
-```
-
-内核受一目录路径与一服务，不问其从何而来。
-
-## 灵台之制
-
-```
-/agents/alice/              ← 此路径即器灵
-  .agent.lock               ← 独占之锁
-  .agent.heartbeat          ← 存活之证
-  .agent.json               ← 清单
-  system/
-    covenant.md             ← 盟约
-    pad.md                  ← 简
-  mailbox/
-    inbox/                  ← 所收之书信
-    outbox/                 ← 待发之书信
-    sent/                   ← 已发之记录
-  logs/
-    events.jsonl            ← 事件日志
-```
-
-无需 `agent_id`。路径即身份。心跳证存活。锁证独占。
+责任之披露，阅 [SECURITY.md](../../SECURITY.md)；求助，阅
+[SUPPORT.md](../../SUPPORT.md)；谢忱，阅
+[docs/references/acknowledgements.md](../references/acknowledgements.md)。
 
 ## 许可
 
-Apache-2.0
+Apache-2.0 —— [Zesen Huang](https://github.com/huangzesen)，2025–2026
+
+<div align="center">
+
+[lingtai.ai](https://lingtai.ai) · [LingTai（器物）](https://github.com/Lingtai-AI/lingtai) · [贡献](../../CONTRIBUTING.md) · [安全](../../SECURITY.md) · [支持](../../SUPPORT.md)
+
+</div>
