@@ -1,15 +1,16 @@
 """Regression test: built wheels must ship every built-in tool contract.
 
-The consolidated ``tools`` package ships one ``CONTRACT.md`` per built-in tool
-plus the daemon's extended ``DAEMON_CONTRACT.md``, alongside its manual trees.
-These reach the wheel only through the ``[tool.setuptools.package-data] tools``
-globs in ``pyproject.toml``; a missing glob silently drops the contract while
-the tool code still installs (the consolidation blocker this test guards).
+The consolidated ``lingtai.tools`` package ships one ``CONTRACT.md`` per
+built-in tool plus the daemon's extended ``DAEMON_CONTRACT.md``, alongside its
+manual trees. These reach the wheel only through the ``"lingtai.tools"`` entry
+in ``[tool.setuptools.package-data]`` in ``pyproject.toml``; a missing glob
+silently drops the contract while the tool code still installs (the
+consolidation blocker this test guards).
 
 Rather than grepping the config text, this test builds a real wheel and inspects
 the distribution manifest at the correct boundary — the archive that pip
 actually installs. Both the pure-Python wheel (built here) and the native
-sidecar wheel place packages at the archive root (``tools/...``): the native
+sidecar wheel place packages at the archive root (``lingtai/tools/...``): the native
 wheel is platlib-compliant, so it does *not* bury packages under
 ``<name>-<ver>.data/purelib/`` — that placement was the auditwheel release
 blocker fixed in ``setup.py`` and is guarded by
@@ -64,7 +65,7 @@ _DAEMON_BACKENDS = [
 ]
 
 _BACKEND_MANUAL = (
-    "tools/daemon/manual/reference/cli-backends/reference/backends/{backend}/SKILL.md"
+    "lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/{backend}/SKILL.md"
 )
 
 # The three per-tool glossary languages that each package must ship.
@@ -76,7 +77,7 @@ def _build_wheel(dest: Path) -> Path:
 
     ``LINGTAI_SKIP_RUST_BUILD=1`` keeps the build fast and Rust-independent:
     the package-data globs are identical with or without the sidecar, and a
-    pure wheel exercises the root ``tools/...`` layout. Build isolation lets
+    pure wheel exercises the root ``lingtai/tools/...`` layout. Build isolation lets
     pip pick a setuptools that understands the PEP 639 license expression.
     """
     env = dict(os.environ)
@@ -108,14 +109,15 @@ def _build_wheel(dest: Path) -> Path:
 
 
 def _logical(path: str) -> str:
-    """Return a wheel archive entry's logical package path.
+    """Return an archive entry rooted at the canonical ``lingtai/tools`` path.
 
-    Both pure and native wheels now place packages at the archive root, so this
-    is effectively identity for ``tools/...`` entries. A ``*.data/{purelib,
-    platlib}/`` prefix is *not* normalized away — it is the auditwheel-rejected
-    layout the packaging fix eliminated. If one ever reappears it must surface as
-    a broken path, not be silently accepted; ``test_wheel_platlib_layout.py``
-    asserts the native wheel never produces one.
+    Wheel entries already start with ``lingtai/tools``. Sdist entries add the
+    distribution root plus ``src/``; those prefixes are stripped only after the
+    exact ``lingtai`` / ``tools`` pair is found. A ``*.data/{purelib,platlib}/``
+    prefix is *not* normalized away — it is the auditwheel-rejected layout the
+    packaging fix eliminated. If one ever reappears it must surface as a broken
+    path, not be silently accepted; ``test_wheel_platlib_layout.py`` asserts the
+    native wheel never produces one.
     """
     parts = path.split("/")
     for i, segment in enumerate(parts):
@@ -126,7 +128,8 @@ def _logical(path: str) -> str:
                 "wheel entry under *.data/%s is the auditwheel-rejected layout: %r"
                 % (parts[i + 1], path)
             )
-        if segment == "tools":
+    for i in range(len(parts) - 1):
+        if parts[i : i + 2] == ["lingtai", "tools"]:
             return "/".join(parts[i:])
     return path
 
@@ -146,9 +149,9 @@ def wheel_entries(wheel_archive: Path) -> set[str]:
 
 def test_wheel_ships_every_tool_contract(wheel_entries: set[str]):
     missing = [
-        f"tools/{tool}/CONTRACT.md"
+        f"lingtai/tools/{tool}/CONTRACT.md"
         for tool in _BUILTIN_TOOLS
-        if f"tools/{tool}/CONTRACT.md" not in wheel_entries
+        if f"lingtai/tools/{tool}/CONTRACT.md" not in wheel_entries
     ]
     assert not missing, "tool contracts missing from wheel: %r" % missing
 
@@ -159,7 +162,7 @@ def test_wheel_ships_exactly_eighteen_tool_contracts(wheel_entries: set[str]):
     contracts = {
         e
         for e in wheel_entries
-        if e.endswith("/CONTRACT.md") and e.startswith("tools/")
+        if e.endswith("/CONTRACT.md") and e.startswith("lingtai/tools/")
     }
     assert len(contracts) == len(_BUILTIN_TOOLS), (
         "expected exactly %d tool contracts, wheel has %d: %r"
@@ -168,7 +171,7 @@ def test_wheel_ships_exactly_eighteen_tool_contracts(wheel_entries: set[str]):
 
 
 def test_wheel_ships_daemon_contract(wheel_entries: set[str]):
-    assert "tools/daemon/DAEMON_CONTRACT.md" in wheel_entries
+    assert "lingtai/tools/daemon/DAEMON_CONTRACT.md" in wheel_entries
 
 
 def test_wheel_keeps_daemon_backend_manuals(wheel_entries: set[str]):
@@ -189,7 +192,7 @@ def test_wheel_ships_every_glossary_resource(wheel_entries: set[str]):
     missing = []
     for tool in _BUILTIN_TOOLS:
         for lang in _GLOSSARY_LANGS:
-            path = f"tools/{tool}/glossary-{lang}.md"
+            path = f"lingtai/tools/{tool}/glossary-{lang}.md"
             if path not in wheel_entries:
                 missing.append(path)
     assert not missing, "glossary resources missing from wheel: %r" % missing
@@ -202,7 +205,7 @@ def test_wheel_ships_exactly_54_glossary_resources(wheel_entries: set[str]):
     glossary_files = {
         e
         for e in wheel_entries
-        if e.startswith("tools/") and "/glossary-" in e and e.endswith(".md")
+        if e.startswith("lingtai/tools/") and "/glossary-" in e and e.endswith(".md")
     }
     assert len(glossary_files) == 54, (
         "expected exactly 54 glossary resources, wheel has %d: %r"
@@ -238,7 +241,7 @@ def test_installed_wheel_validator_reads_package_resources(
     env = dict(os.environ)
     env["PYTHONPATH"] = str(target)
     result = subprocess.run(
-        [sys.executable, "-m", "tools.glossary_validator", "--check"],
+        [sys.executable, "-m", "lingtai.tools.glossary_validator", "--check"],
         cwd=tmp_path,
         env=env,
         capture_output=True,
@@ -287,7 +290,7 @@ def test_sdist_ships_every_glossary_resource(sdist_entries: set[str]):
     missing = []
     for tool in _BUILTIN_TOOLS:
         for lang in _GLOSSARY_LANGS:
-            path = f"tools/{tool}/glossary-{lang}.md"
+            path = f"lingtai/tools/{tool}/glossary-{lang}.md"
             if path not in sdist_entries:
                 missing.append(path)
     assert not missing, "glossary resources missing from sdist: %r" % missing
@@ -297,7 +300,7 @@ def test_sdist_ships_exactly_54_glossary_resources(sdist_entries: set[str]):
     glossary_files = {
         e
         for e in sdist_entries
-        if e.startswith("tools/") and "/glossary-" in e and e.endswith(".md")
+        if e.startswith("lingtai/tools/") and "/glossary-" in e and e.endswith(".md")
     }
     assert len(glossary_files) == 54, (
         "expected exactly 54 glossary resources in sdist, got %d" % len(glossary_files)

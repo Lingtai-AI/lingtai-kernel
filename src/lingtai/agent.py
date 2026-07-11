@@ -109,7 +109,7 @@ class Agent(BaseAgent):
         # and a bare BaseAgent has none. lingtai.Agent is the composing layer, so
         # it supplies the five mandatory intrinsics here. ``setdefault`` lets a
         # host override (e.g. a test injecting a subset).
-        from tools.registry import INTRINSICS
+        from lingtai.tools.registry import INTRINSICS
         kwargs.setdefault("intrinsics", INTRINSICS)
 
         # Store combo name before super().__init__ (not forwarded to BaseAgent)
@@ -131,11 +131,11 @@ class Agent(BaseAgent):
 
         # Expand groups and normalize to dict
         if isinstance(capabilities, list):
-            from tools.registry import expand_groups, normalize_capabilities
+            from lingtai.tools.registry import expand_groups, normalize_capabilities
             expanded = expand_groups(capabilities)
             capabilities = normalize_capabilities({name: {} for name in expanded})
         elif isinstance(capabilities, dict):
-            from tools.registry import _GROUPS, normalize_capabilities
+            from lingtai.tools.registry import _GROUPS, normalize_capabilities
             expanded_dict: dict[str, dict] = {}
             for name, cap_kwargs in capabilities.items():
                 if name in _GROUPS:
@@ -156,7 +156,7 @@ class Agent(BaseAgent):
         # Apply core defaults — the always-on tool floor boots on every agent
         # unless explicitly disabled via `disable=[...]` or `"name": null` in
         # the capabilities dict. init.json kwargs override default kwargs.
-        from tools.registry import apply_core_defaults
+        from lingtai.tools.registry import apply_core_defaults
         capabilities = apply_core_defaults(capabilities, disable=disable)
 
         # Track for avatar replay
@@ -234,7 +234,7 @@ class Agent(BaseAgent):
         Not directly sealed — but setup() calls add_tool() which checks the seal.
         Must only be called from __init__ (before start()).
         """
-        from tools.registry import CAPABILITY_UNAVAILABLE, setup_capability
+        from lingtai.tools.registry import CAPABILITY_UNAVAILABLE, setup_capability
 
         serializable_kw = {
             k: v for k, v in kwargs.items()
@@ -266,7 +266,7 @@ class Agent(BaseAgent):
         Never touches ``.library/custom/``. That is the agent's territory.
         """
         import shutil
-        import tools as tools_pkg
+        import lingtai.tools as tools_pkg
         import lingtai.intrinsic_skills as skills_pkg
 
         library_dir = self._working_dir / ".library"
@@ -309,7 +309,7 @@ class Agent(BaseAgent):
 
         # Every tool package with a manual/ installs into
         # intrinsic/capabilities/<name>/ — agents see one flat capability
-        # namespace. Scanning the consolidated ``tools`` package replaces the
+        # namespace. Scanning the consolidated ``lingtai.tools`` package replaces the
         # former core/ + capabilities/ dual scan; tools without a manual/ (the
         # file tools, the non-email intrinsics whose manuals ship as
         # intrinsic_skills bundles below) are simply skipped.
@@ -323,7 +323,7 @@ class Agent(BaseAgent):
         for cap_name, cap_kwargs in self._capabilities:
             if cap_name == "skills":
                 try:
-                    from tools import skills as skillsmod
+                    from lingtai.tools import skills as skillsmod
                     skillsmod._reconcile(self, list(cap_kwargs.get("paths", []) or []))
                 except Exception as e:
                     self._log("skills_reconcile_failed", reason=str(e))
@@ -1020,7 +1020,7 @@ class Agent(BaseAgent):
         from lingtai.kernel.config_resolve import resolve_paths
         from lingtai.kernel.migrate import run_agent_migrations
         from .presets import expand_inherit, materialize_active_preset
-        from tools.registry import CORE_DEFAULTS
+        from lingtai.tools.registry import CORE_DEFAULTS
 
         run_agent_migrations(self._working_dir)
 
@@ -1329,7 +1329,7 @@ class Agent(BaseAgent):
         # `_reload_prompt_sections` now route through the same canonical
         # composers (`_lingtai_load`, `_pad_load`), so they produce identical
         # content and the result is independent of which runs last.
-        from tools import psyche as _psyche
+        from lingtai.tools import psyche as _psyche
         _psyche.boot(self)
 
         # Re-boot email so a fresh EmailManager + scheduler thread are wired.
@@ -1337,7 +1337,7 @@ class Agent(BaseAgent):
         # starting a new one — without that, the prior daemon thread keeps
         # polling ``mailbox/schedules/*/schedule.json`` and races the new
         # thread, double-sending the same due tick (issue #154).
-        from tools import email as _email
+        from lingtai.tools import email as _email
         _email.boot(self)
 
         # Decompress addons BEFORE capability setup so the `mcp` capability
@@ -1360,7 +1360,7 @@ class Agent(BaseAgent):
         # Preserve null sentinels through env-resolution (it converts None to {}).
         null_outs = {n for n, v in raw_caps.items() if v is None}
 
-        from tools.registry import (
+        from lingtai.tools.registry import (
             _GROUPS,
             apply_core_defaults,
             normalize_capabilities,
@@ -1501,7 +1501,7 @@ class Agent(BaseAgent):
         # Delegate to the single canonical composer so boot/refresh/molt all
         # produce byte-identical `character` content and no longer depend on
         # post-molt hook ordering.
-        from tools.psyche import _lingtai_load
+        from lingtai.tools.psyche import _lingtai_load
         _lingtai_load(self, {})
 
         # --- Substrate (kernel-owned, cross-app stable; #39) ---
@@ -1562,7 +1562,7 @@ class Agent(BaseAgent):
         # Delegate to the single canonical composer rather than re-reading
         # pad.md alone — otherwise the post-molt hook ordering silently drops
         # the pinned append references. `_pad_load` composes both.
-        from tools.psyche import _pad_load
+        from lingtai.tools.psyche import _pad_load
         _pad_load(self, {})
 
         # --- Principle (kernel-owned top-level progressive-disclosure contract) ---

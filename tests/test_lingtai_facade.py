@@ -20,7 +20,7 @@ _FORBIDDEN_AFTER_BARE_IMPORT: frozenset[str] = frozenset(
     {
         "lingtai.agent",
         "lingtai.kernel",
-        "tools",
+        "lingtai.tools",
         "lingtai.llm",
         "lingtai.services.file_io",
         "lingtai.services.file_io_sidecar",
@@ -50,8 +50,10 @@ _FORBIDDEN_AFTER_BARE_IMPORT: frozenset[str] = frozenset(
 def _run_in_subprocess(code: str) -> subprocess.CompletedProcess[str]:
     """Run Python code in a fresh subprocess with this worktree's src on PYTHONPATH."""
     repo_root = Path(__file__).resolve().parents[1]
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(repo_root / "src") + os.pathsep + env.get("PYTHONPATH", "")
+    # Drop inherited PYTHONPATH (e.g. another worktree's src) so the subprocess
+    # resolves only this worktree's source tree.
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["PYTHONPATH"] = str(repo_root / "src")
     return subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
@@ -68,7 +70,7 @@ def test_bare_import_lingtai_is_lightweight():
         "import lingtai; "
         "loaded = set(sys.modules); "
         f"exact = {_FORBIDDEN_AFTER_BARE_IMPORT!r}; "
-        "prefixes = ('lingtai.kernel.', 'tools.', 'lingtai.services.', 'lingtai.llm.', 'lingtai.mcp_servers.'); "
+        "prefixes = ('lingtai.kernel.', 'lingtai.tools.', 'lingtai.services.', 'lingtai.llm.', 'lingtai.mcp_servers.'); "
         "forbidden = sorted((loaded & exact) | {m for m in loaded if any(m.startswith(p) for p in prefixes)}); "
         "print('FORBIDDEN:', forbidden) if forbidden else print('LIGHTWEIGHT')"
     )
@@ -98,10 +100,10 @@ def test_facade_names_match_canonical_objects():
     import lingtai.services.file_io_sidecar
     import lingtai.services.vision
     import lingtai.services.websearch
-    import tools.avatar
-    import tools.bash
-    import tools.email
-    import tools.registry
+    import lingtai.tools.avatar
+    import lingtai.tools.bash
+    import lingtai.tools.email
+    import lingtai.tools.registry
 
     assert lingtai.Agent is lingtai.agent.Agent
     assert lingtai.BaseAgent is lingtai.kernel.base_agent.BaseAgent
@@ -112,10 +114,10 @@ def test_facade_names_match_canonical_objects():
     assert lingtai.MSG_USER_INPUT is lingtai.kernel.message.MSG_USER_INPUT
     assert lingtai.UnknownToolError is lingtai.kernel.types.UnknownToolError
 
-    assert lingtai.setup_capability is tools.registry.setup_capability
-    assert lingtai.BashManager is tools.bash.BashManager
-    assert lingtai.AvatarManager is tools.avatar.AvatarManager
-    assert lingtai.EmailManager is tools.email.EmailManager
+    assert lingtai.setup_capability is lingtai.tools.registry.setup_capability
+    assert lingtai.BashManager is lingtai.tools.bash.BashManager
+    assert lingtai.AvatarManager is lingtai.tools.avatar.AvatarManager
+    assert lingtai.EmailManager is lingtai.tools.email.EmailManager
 
     assert lingtai.FileIOBackend is lingtai.services.file_io.FileIOBackend
     assert lingtai.FileIOService is lingtai.services.file_io.FileIOService

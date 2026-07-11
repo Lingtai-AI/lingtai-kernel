@@ -3,13 +3,13 @@
 Migrated from memory intrinsic tests. Tests the pad object within psyche.
 """
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 from unittest.mock import MagicMock
 
 import pytest
 
-from tools.registry import INTRINSICS as ALL_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as ALL_INTRINSICS
 from lingtai.kernel.base_agent import BaseAgent
 
 

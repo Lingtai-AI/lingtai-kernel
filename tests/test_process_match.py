@@ -1,6 +1,6 @@
 """Tests for LingTai agent process-command matching."""
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import importlib.util
 import sys

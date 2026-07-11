@@ -2,7 +2,7 @@
 
 This is the non-tool MCP registry machinery — a *service*, not an agent-callable
 tool. The agent-facing ``mcp`` signpost tool (which renders this data into the
-system prompt) lives at ``tools/mcp/`` and imports these helpers lazily. Other
+system prompt) lives at ``lingtai/tools/mcp/`` and imports these helpers lazily. Other
 callers (the Agent initializer's addon decompression, the mcp inbox poller)
 import from here directly.
 

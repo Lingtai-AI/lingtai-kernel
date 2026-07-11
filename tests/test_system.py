@@ -1,6 +1,6 @@
 """Tests for system intrinsic — runtime, lifecycle, and synchronization."""
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import threading
 import time
@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.kernel.base_agent import BaseAgent
-from tools.registry import INTRINSICS as ALL_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as ALL_INTRINSICS
 
 
 @pytest.fixture(autouse=True)
@@ -345,7 +345,7 @@ def test_preset_ref_in_normalizes_tilde_and_absolute(tmp_path, monkeypatch):
     path as the same preset, in both directions — otherwise the
     allowed-gate refuses legitimate swaps when path forms diverge."""
     from pathlib import Path
-    from tools.system import _preset_ref_in
+    from lingtai.tools.system import _preset_ref_in
     # Path.expanduser() reads $HOME — point it at a tempdir we can resolve.
     home = tmp_path / "home"
     home.mkdir()
@@ -827,7 +827,7 @@ def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch
 
 def test_cpr_propagates_launch_failure_instead_of_resuscitated(tmp_path):
     """A failed CPR launch must not be reported as resuscitated."""
-    from tools.system.karma import _cpr
+    from lingtai.tools.system.karma import _cpr
 
     target = tmp_path / "target"
     target.mkdir()

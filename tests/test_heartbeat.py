@@ -1,6 +1,6 @@
 """Tests for heartbeat — always-on agent health monitor with AED timeout."""
 import time
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 from unittest.mock import MagicMock
 from tests._service_helpers import make_tool_result_mock_service as make_mock_service
 
@@ -261,7 +261,7 @@ class TestSelfSleep:
     def test_self_sleep_no_karma_required(self, tmp_path):
         """Any agent can self-sleep to ASLEEP without admin.karma."""
         from lingtai.kernel import BaseAgent, AgentState
-        from tools.system import handle
+        from lingtai.tools.system import handle
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),

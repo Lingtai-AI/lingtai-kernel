@@ -82,7 +82,7 @@ When you write or update an `ANATOMY.md`, every one of these must be true before
 - **Every named symbol in Components has a `file:line` citation.** "loads snapshots (`_load_snapshot_interface`)" is not enough; "loads snapshots (`consultation.py:147`)" is. Without citations, the next agent grepping for the symbol gains nothing from the anatomy.
 - **Citations are line ranges, not paragraphs.** Prefer `file.py:123-156` over a vague "see file.py". Prefer single-line citations only for one-line landmarks (constants, single-line helpers).
 - **Every citation has been verified.** Open the cited line. Confirm it still says what the anatomy claims. Citations rot fastest after refactors.
-- **Cross-references between anatomies use kernel-root-relative paths.** `src/tools/soul/ANATOMY.md`, not `./ANATOMY.md` or `intrinsics/soul/ANATOMY.md`. The root is the only stable reference frame.
+- **Cross-references between anatomies use kernel-root-relative paths.** `src/lingtai/tools/soul/ANATOMY.md`, not `./ANATOMY.md` or `intrinsics/soul/ANATOMY.md`. The root is the only stable reference frame.
 - **Cross-references are sparse and one-directional.** Cite parent and structural neighbors only — do not enumerate downstream callers (that's a grep question).
 - **No leaf stubs.** Empty placeholder anatomies are clutter. A missing `ANATOMY.md` is an honest signal that the folder hasn't been mapped yet.
 - **No paraphrase.** Anatomy adds shape and connections, not summary. If the code's good naming already says what you're about to write, don't write it.

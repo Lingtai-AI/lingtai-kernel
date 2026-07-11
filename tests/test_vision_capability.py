@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.registry import CAPABILITY_UNAVAILABLE
-from tools.vision import VisionManager, setup
+from lingtai.tools.registry import CAPABILITY_UNAVAILABLE
+from lingtai.tools.vision import VisionManager, setup
 from lingtai.services.vision import VisionService, create_vision_service
 
 

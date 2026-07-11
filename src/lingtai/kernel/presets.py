@@ -385,7 +385,7 @@ def materialize_active_preset(
       carried — that omission is the swap.
 
     ``core_defaults`` is the set/dict/list of always-on capability names; pass
-    ``tools.registry.CORE_DEFAULTS`` from the wrapper. It lives in
+    ``lingtai.tools.registry.CORE_DEFAULTS`` from the wrapper. It lives in
     ``lingtai`` (not the kernel), so it is injected rather than imported —
     the kernel must not depend on the wrapper. When ``None`` (legacy callers
     and the no-core tests), only the per-key override layer runs.

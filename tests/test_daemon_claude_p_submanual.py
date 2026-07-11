@@ -19,10 +19,10 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-ROUTER = ROOT / "src/tools/daemon/manual/reference/cli-backends/SKILL.md"
+ROUTER = ROOT / "src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md"
 CHILD = (
     ROOT
-    / "src/tools/daemon/manual/reference/cli-backends"
+    / "src/lingtai/tools/daemon/manual/reference/cli-backends"
     / "reference/backends/claude-p/SKILL.md"
 )
 CHILD_LOCATION = "reference/backends/claude-p/SKILL.md"

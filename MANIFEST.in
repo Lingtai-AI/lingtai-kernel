@@ -40,26 +40,26 @@ recursive-include src/lingtai/kernel/i18n *.json
 # policy/data files, and manual trees). pyproject.toml owns the wheel
 # package-data globs; mirror them here so source releases carry the same tool
 # assets. ``graft`` pulls the manual trees (arbitrary file types) wholesale.
-recursive-include src/tools *.json
-# Per-tool contracts (src/tools/<tool>/CONTRACT.md) and the daemon extension
-# contract (tools/daemon/DAEMON_CONTRACT.md) — mirror the package-data globs
+recursive-include src/lingtai/tools *.json
+# Per-tool contracts (src/lingtai/tools/<tool>/CONTRACT.md) and the daemon extension
+# contract (lingtai/tools/daemon/DAEMON_CONTRACT.md) — mirror the package-data globs
 # in pyproject.toml so source releases carry the same tool contracts.
-recursive-include src/tools CONTRACT.md
-recursive-include src/tools DAEMON_CONTRACT.md
+recursive-include src/lingtai/tools CONTRACT.md
+recursive-include src/lingtai/tools DAEMON_CONTRACT.md
 # Per-tool glossary resources — mirror the package-data globs in
 # pyproject.toml so source releases carry the 54 files (exact filenames,
 # not a wildcard, to prevent accidental inclusion of extra files).
-recursive-include src/tools glossary-en.md
-recursive-include src/tools glossary-zh.md
-recursive-include src/tools glossary-wen.md
-graft src/tools/email/manual
-graft src/tools/system/manual
-graft src/tools/psyche/manual
-graft src/tools/soul/manual
-graft src/tools/notification/manual
-graft src/tools/knowledge/manual
-graft src/tools/skills/manual
-graft src/tools/bash/manual
-graft src/tools/avatar/manual
-graft src/tools/daemon/manual
-graft src/tools/mcp/manual
+recursive-include src/lingtai/tools glossary-en.md
+recursive-include src/lingtai/tools glossary-zh.md
+recursive-include src/lingtai/tools glossary-wen.md
+graft src/lingtai/tools/email/manual
+graft src/lingtai/tools/system/manual
+graft src/lingtai/tools/psyche/manual
+graft src/lingtai/tools/soul/manual
+graft src/lingtai/tools/notification/manual
+graft src/lingtai/tools/knowledge/manual
+graft src/lingtai/tools/skills/manual
+graft src/lingtai/tools/bash/manual
+graft src/lingtai/tools/avatar/manual
+graft src/lingtai/tools/daemon/manual
+graft src/lingtai/tools/mcp/manual

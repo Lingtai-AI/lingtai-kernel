@@ -29,8 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from tools.registry import INTRINSICS as ALL_INTRINSICS
-from tools import (
+from lingtai.tools.registry import INTRINSICS as ALL_INTRINSICS
+from lingtai.tools import (
     notification as notif_intrinsic,
     system as sys_intrinsic,
 )
@@ -64,7 +64,7 @@ def test_notification_wired_into_every_agent() -> None:
     """_wire_intrinsics iterates the injected registry unconditionally → mandatory.
 
     There is no manifest gate: every key in the injected intrinsic registry
-    (``tools.registry.INTRINSICS``) is wired into ``agent._intrinsics``. Proving
+    (``lingtai.tools.registry.INTRINSICS``) is wired into ``agent._intrinsics``. Proving
     'notification' lands there alongside 'system' is the mandatory-include proof.
     """
     from lingtai.kernel.base_agent import BaseAgent
@@ -448,7 +448,7 @@ def test_system_summarize_failure_does_not_clear_reminder(tmp_path: Path) -> Non
 
 
 def test_guarded_channel_refuses_without_force(tmp_path: Path) -> None:
-    import tools.email  # noqa: F401 — registers the guard
+    import lingtai.tools.email  # noqa: F401 — registers the guard
 
     agent = _StubAgent(tmp_path)
     publish(tmp_path, "email", {"header": "1 unread"})

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from lingtai.kernel.notifications import collect_notifications
-from tools.bash import BashManager, BashPolicy, get_schema
+from lingtai.tools.bash import BashManager, BashPolicy, get_schema
 
 
 class TestBashAsync:

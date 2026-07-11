@@ -18,10 +18,10 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-ROUTER = ROOT / "src/tools/daemon/manual/reference/cli-backends/SKILL.md"
+ROUTER = ROOT / "src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md"
 CHILD = (
     ROOT
-    / "src/tools/daemon/manual/reference/cli-backends"
+    / "src/lingtai/tools/daemon/manual/reference/cli-backends"
     / "reference/backends/mimocode/SKILL.md"
 )
 CHILD_LOCATION = "reference/backends/mimocode/SKILL.md"
@@ -91,7 +91,7 @@ def test_mimocode_child_routes_to_live_help_and_generic_backend_options():
 def test_mimocode_child_states_verified_backend_contract():
     body = _body(CHILD)
     # Canonical name / alias, exact spawn shape, reserved harness flag, and
-    # current MCP status — all verified against src/tools/daemon.
+    # current MCP status — all verified against src/lingtai/tools/daemon.
     assert "canonicalizes it to `mimocode`" in body
     assert "mimo run --format json <prompt>" in body
     assert "`--format`" in body

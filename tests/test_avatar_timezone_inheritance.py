@@ -1,5 +1,5 @@
 """Confirm avatars inherit manifest.timezone_awareness from their parent."""
-from tools.avatar import AvatarManager
+from lingtai.tools.avatar import AvatarManager
 
 
 def test_avatar_inherits_timezone_awareness_true():

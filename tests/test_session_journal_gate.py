@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.agent import Agent
-from tools.psyche._session_journal import (
+from lingtai.tools.psyche._session_journal import (
     validate_session_journal_path,
 )
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
@@ -454,7 +454,7 @@ def test_molt_initiator_system_arg_cannot_bypass_gate(tmp_path):
 def test_system_forget_does_not_require_journal(tmp_path):
     """System-initiated molt (context_forget) must NOT require a journal —
     there is no agent turn to write one."""
-    from tools.psyche import context_forget
+    from lingtai.tools.psyche import context_forget
 
     agent, _ = _molt_setup(tmp_path)
     try:

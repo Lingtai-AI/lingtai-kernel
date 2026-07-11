@@ -19,16 +19,16 @@ from pathlib import Path
 
 import yaml
 
-from tools.daemon import (
+from lingtai.tools.daemon import (
     _BACKEND_ALIASES,
     _KIMICODE_RESERVED_BACKEND_FLAGS,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-ROUTER = ROOT / "src/tools/daemon/manual/reference/cli-backends/SKILL.md"
+ROUTER = ROOT / "src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md"
 CHILD = (
     ROOT
-    / "src/tools/daemon/manual/reference/cli-backends"
+    / "src/lingtai/tools/daemon/manual/reference/cli-backends"
     / "reference/backends/kimicode/SKILL.md"
 )
 CHILD_LOCATION = "reference/backends/kimicode/SKILL.md"

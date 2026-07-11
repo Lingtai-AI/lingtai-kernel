@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from tools.knowledge import get_description as knowledge_description
-from tools.mcp import get_description as mcp_description
-from tools.mcp import get_schema as mcp_schema
-from tools.skills import get_description as skills_description
+from lingtai.tools.knowledge import get_description as knowledge_description
+from lingtai.tools.mcp import get_description as mcp_description
+from lingtai.tools.mcp import get_schema as mcp_schema
+from lingtai.tools.skills import get_description as skills_description
 
 
 def test_skills_and_knowledge_descriptions_are_explicit_signposts() -> None:

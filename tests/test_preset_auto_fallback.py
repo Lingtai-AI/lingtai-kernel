@@ -1,6 +1,6 @@
 """Tests for auto-fallback to default preset on AED exhaustion."""
 import json
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 from pathlib import Path
 from unittest.mock import MagicMock
 

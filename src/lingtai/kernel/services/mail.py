@@ -34,7 +34,7 @@ def _new_mailbox_id() -> str:
     This is the canonical generator for mailbox message ids. It lives in the
     kernel mail service (the generic filesystem mailbox owner) so that
     ``send()`` does not depend on the email tool; the email tool
-    (``tools/email/primitives.py``) imports it from here.
+    (``lingtai/tools/email/primitives.py``) imports it from here.
     """
     from datetime import datetime, timezone
 

@@ -44,9 +44,9 @@ class _FakeAgent:
 
     def _cancel_soul_timer(self):
         # Mirror BaseAgent._cancel_soul_timer's delegation to the soul flow hook.
-        # These tests monkeypatch ``tools.soul.flow._cancel_soul_timer`` (e.g. to
+        # These tests monkeypatch ``lingtai.tools.soul.flow._cancel_soul_timer`` (e.g. to
         # use it as a shutdown signal), so route through that module attribute.
-        import tools.soul.flow as soul_flow
+        import lingtai.tools.soul.flow as soul_flow
         soul_flow._cancel_soul_timer(self)
 
     def _set_state(self, new_state: AgentState, reason: str = ""):
@@ -100,7 +100,7 @@ def test_run_loop_skips_chat_history_save_after_worker_still_running(tmp_path, m
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
 
-    import tools.soul.flow as soul_flow
+    import lingtai.tools.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
 
     turn._run_loop(agent)
@@ -224,7 +224,7 @@ def test_transient_provider_error_retries_before_aed_count(tmp_path, monkeypatch
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
 
-    import tools.soul.flow as soul_flow
+    import lingtai.tools.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
@@ -248,7 +248,7 @@ def test_transient_provider_error_counts_as_aed_after_retry_budget(tmp_path, mon
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
 
-    import tools.soul.flow as soul_flow
+    import lingtai.tools.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
 
     turn._run_loop(agent)
@@ -270,7 +270,7 @@ def test_structural_error_skips_transient_retry(tmp_path, monkeypatch):
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
 
-    import tools.soul.flow as soul_flow
+    import lingtai.tools.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
 
     turn._run_loop(agent)

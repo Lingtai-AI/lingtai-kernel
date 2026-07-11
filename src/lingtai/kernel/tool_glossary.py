@@ -159,7 +159,7 @@ def parse_glossary(
 
     This is the single shared grammar used by **both** the runtime loader
     (:func:`load_tool_glossary`) and the owning-package validator
-    (``tools.glossary_validator``). Raises :class:`GlossaryValidationError`
+    (``lingtai.tools.glossary_validator``). Raises :class:`GlossaryValidationError`
     on any violation.
 
     Frontmatter must be exactly::

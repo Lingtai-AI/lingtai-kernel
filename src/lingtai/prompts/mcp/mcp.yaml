@@ -29,7 +29,7 @@ related_files:
     why: >
       The owning prompt-source anatomy: it records mcp as a generated, optional section.
       Read it before looking for an mcp.md body.
-  - path: src/tools/mcp/__init__.py
+  - path: src/lingtai/tools/mcp/__init__.py
     why: >
       Owns the concrete mcp-section build rule: _reconcile() reads the MCP registry and
       _build_registry_xml() renders it, then update_system_prompt("mcp", ...) injects the

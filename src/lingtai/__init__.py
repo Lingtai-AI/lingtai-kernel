@@ -26,10 +26,10 @@ _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
     "MSG_USER_INPUT": ("lingtai.kernel.message", "MSG_USER_INPUT"),
     "UnknownToolError": ("lingtai.kernel.types", "UnknownToolError"),
     # Tools
-    "setup_capability": ("tools.registry", "setup_capability"),
-    "BashManager": ("tools.bash", "BashManager"),
-    "AvatarManager": ("tools.avatar", "AvatarManager"),
-    "EmailManager": ("tools.email", "EmailManager"),
+    "setup_capability": ("lingtai.tools.registry", "setup_capability"),
+    "BashManager": ("lingtai.tools.bash", "BashManager"),
+    "AvatarManager": ("lingtai.tools.avatar", "AvatarManager"),
+    "EmailManager": ("lingtai.tools.email", "EmailManager"),
     # Services
     "FileIOBackend": ("lingtai.services.file_io", "FileIOBackend"),
     "FileIOService": ("lingtai.services.file_io", "FileIOService"),
@@ -68,10 +68,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from lingtai.kernel.message import MSG_REQUEST, MSG_USER_INPUT, Message
     from lingtai.kernel.state import AgentState
     from lingtai.kernel.types import UnknownToolError
-    from tools.avatar import AvatarManager
-    from tools.bash import BashManager
-    from tools.email import EmailManager
-    from tools.registry import setup_capability
+    from lingtai.tools.avatar import AvatarManager
+    from lingtai.tools.bash import BashManager
+    from lingtai.tools.email import EmailManager
+    from lingtai.tools.registry import setup_capability
 
     from .agent import Agent
     from .services.file_io import (

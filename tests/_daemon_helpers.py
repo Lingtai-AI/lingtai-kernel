@@ -14,7 +14,7 @@ from typing import Any, Iterable
 from unittest.mock import MagicMock
 
 from lingtai.agent import Agent
-from tools.daemon.run_dir import DaemonRunDir
+from lingtai.tools.daemon.run_dir import DaemonRunDir
 from lingtai.kernel.config import AgentConfig
 
 

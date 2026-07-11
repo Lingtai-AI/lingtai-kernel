@@ -14,7 +14,7 @@ so the lock-release phase completes regardless of caller. These tests
 exercise that contract without spawning a real subprocess.
 """
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import json
 import subprocess

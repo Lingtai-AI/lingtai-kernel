@@ -16,17 +16,17 @@ from pathlib import Path
 
 import yaml
 
-from tools.daemon import (
+from lingtai.tools.daemon import (
     _BACKEND_ALIASES,
     _OH_MY_PI_RESERVED_BACKEND_FLAGS,
     _cli_backend_loads_common_mcp,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-ROUTER = ROOT / "src/tools/daemon/manual/reference/cli-backends/SKILL.md"
+ROUTER = ROOT / "src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md"
 CHILD = (
     ROOT
-    / "src/tools/daemon/manual/reference/cli-backends"
+    / "src/lingtai/tools/daemon/manual/reference/cli-backends"
     / "reference/backends/oh-my-pi/SKILL.md"
 )
 CHILD_LOCATION = "reference/backends/oh-my-pi/SKILL.md"

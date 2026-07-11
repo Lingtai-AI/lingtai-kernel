@@ -32,7 +32,7 @@ related_files:
     why: >
       The owning prompt-source anatomy: it records pad as the persistent current-work
       section. Read it before confusing pad with durable identity or briefing.
-  - path: src/tools/psyche/_pad.py
+  - path: src/lingtai/tools/psyche/_pad.py
     why: >
       Owns the concrete pad-section injection rule: it reads system/pad.md and layers
       pinned pad_append references onto it, writing the composed `pad` section. Crawl

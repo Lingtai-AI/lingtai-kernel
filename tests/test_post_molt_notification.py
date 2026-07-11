@@ -113,7 +113,7 @@ class TestPostMoltNotificationAgentMolt:
             )
 
             journal_path = _write_session_journal(agent)
-            from tools.psyche._molt import _context_molt
+            from lingtai.tools.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "finish the foo feature",
                 "_reasoning": "context full; want to resume foo cleanly",
@@ -161,7 +161,7 @@ class TestPostMoltNotificationAgentMolt:
             )
 
             journal_path = _write_session_journal(agent)
-            from tools.psyche._molt import _context_molt
+            from lingtai.tools.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "first line: keep going on the parser bug\nsecond line",
                 "_tc_id": tc_id,
@@ -195,7 +195,7 @@ class TestPostMoltNotificationAgentMolt:
             )
 
             journal_path = _write_session_journal(agent)
-            from tools.psyche._molt import _context_molt
+            from lingtai.tools.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "continue work",
                 "reasoning": "plain-key reasoning",
@@ -223,7 +223,7 @@ class TestPostMoltNotificationSystemForget:
         try:
             _setup_mock_chat(agent)
 
-            from tools.psyche._molt import context_forget
+            from lingtai.tools.psyche._molt import context_forget
             result = context_forget(agent, source="warning_ladder")
             assert result.get("status") == "ok"
 
@@ -246,7 +246,7 @@ class TestPostMoltNotificationSystemForget:
         agent.start()
         try:
             _setup_mock_chat(agent)
-            from tools.psyche._molt import context_forget
+            from lingtai.tools.psyche._molt import context_forget
             result = context_forget(agent, source="aed", attempts=2)
             assert result.get("status") == "ok"
 
@@ -286,7 +286,7 @@ class TestPostMoltContinuationSignal:
             _build_molt_call_entry(mock_interface, tc_id, summary=summary)
 
             journal_path = _write_session_journal(agent)
-            from tools.psyche._molt import _context_molt
+            from lingtai.tools.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": summary, "_tc_id": tc_id,
                 "session_journal_path": journal_path,
@@ -319,7 +319,7 @@ class TestPostMoltContinuationSignal:
             _build_molt_call_entry(mock_interface, tc_id, summary="keep going")
 
             journal_path = _write_session_journal(agent)
-            from tools.psyche._molt import _context_molt
+            from lingtai.tools.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "keep going", "_tc_id": tc_id,
                 "session_journal_path": journal_path,
@@ -358,7 +358,7 @@ class TestPostMoltContinuationSignal:
             _build_molt_call_entry(mock_interface, tc_id, summary=summary)
 
             journal_path = _write_session_journal(agent)
-            from tools.psyche._molt import _context_molt
+            from lingtai.tools.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": summary, "_tc_id": tc_id,
                 "session_journal_path": journal_path,
@@ -376,7 +376,7 @@ class TestPostMoltContinuationSignal:
         agent.start()
         try:
             _setup_mock_chat(agent)
-            from tools.psyche._molt import context_forget
+            from lingtai.tools.psyche._molt import context_forget
             result = context_forget(agent, source="warning_ladder")
             assert result.get("status") == "ok"
 

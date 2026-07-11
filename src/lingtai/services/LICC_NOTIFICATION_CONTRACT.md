@@ -7,7 +7,7 @@ status: active
 contract_version: 1
 last_changed_at: "2026-07-06"
 related_files:
-  - src/tools/mcp/ANATOMY.md
+  - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/services/mcp_inbox.py
   - src/lingtai/services/mcp_licc.py
   - src/lingtai/mcp_servers/ANATOMY.md
@@ -20,8 +20,8 @@ related_files:
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/messaging.py
   - src/lingtai/kernel/base_agent/turn.py
-  - src/tools/notification/ANATOMY.md
-  - src/tools/notification/__init__.py
+  - src/lingtai/tools/notification/ANATOMY.md
+  - src/lingtai/tools/notification/__init__.py
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/kernel/notifications.py
   - tests/test_licc_notification_contract_doc.py
@@ -44,9 +44,9 @@ review_triggers:
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/messaging.py
   - src/lingtai/kernel/base_agent/turn.py
-  - src/tools/email/ANATOMY.md
-  - src/tools/email/
-  - src/tools/notification/
+  - src/lingtai/tools/email/ANATOMY.md
+  - src/lingtai/tools/email/
+  - src/lingtai/tools/notification/
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/kernel/notifications.py
 maintenance: |
@@ -305,13 +305,13 @@ Re-check this contract whenever a change touches any of these areas:
   `src/lingtai/services/mcp_inbox.py`, `src/lingtai/services/mcp_licc.py`.
 - `.notification` helper semantics, channel allowlists, publish/clear/dismiss,
   or generic-dismiss guards: `src/lingtai/kernel/notifications.py` and
-  `src/tools/notification/`.
+  `src/lingtai/tools/notification/`.
 - Notification injection, sparse live-holder movement, `notification_guidance`,
   `_meta.notifications`, `_meta.notification_persistent`, or sanitizer logic:
   `src/lingtai/kernel/meta_block.py`, `src/lingtai/kernel/base_agent/__init__.py`,
   and `src/lingtai/kernel/base_agent/turn.py`.
 - Built-in producers that create notification mirrors or human-message metadata:
-  `src/lingtai/kernel/base_agent/messaging.py`, `src/tools/email/`,
+  `src/lingtai/kernel/base_agent/messaging.py`, `src/lingtai/tools/email/`,
   and curated messaging MCP managers under `src/lingtai/mcp_servers/`.
 - Tests that lock notification shape, curated IM persistent context, MCP inbox
   delivery, or email notification behavior.

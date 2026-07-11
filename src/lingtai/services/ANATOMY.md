@@ -37,7 +37,7 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 | `file_io_sidecar.py` | 698 | Rust-backed grep/glob: `RustFileIOBackend`, `SidecarAdapter`, `SidecarError`, plus the `resolve_sidecar_binary` resolver and the `default_file_io_service` factory used by `Agent.__init__`. `grep`'s `glob_filter` is applied as a Python-side basename post-filter (the sidecar wire protocol carries no glob field yet) |
 | `mail.py` | 4 | Re-exports `MailService`, `FilesystemMailService` from `lingtai.kernel.services.mail` |
 | `mcp.py` | 510 | `MCPClient` (stdio) + `HTTPMCPClient` (streamable HTTP) — async-to-sync MCP bridges |
-| `mcp_registry.py` | — | MCP registry infrastructure (the non-tool half of the `tools/mcp` capability): record schema (`validate_record`), JSONL registry I/O (`read_registry`, `_append_record`), catalog loader (`_load_catalog`, path constant recomputed for this location), secret-safe identity projection (`read_identities`, `IDENTITY_SAFE_ACCOUNT_KEYS`), boot-time addon decompression (`decompress_addons`), and the system-prompt XML renderer (`_build_registry_xml`). Consumed by the `tools/mcp` tool slice (lazy import) and `agent.py` |
+| `mcp_registry.py` | — | MCP registry infrastructure (the non-tool half of the `lingtai/tools/mcp` capability): record schema (`validate_record`), JSONL registry I/O (`read_registry`, `_append_record`), catalog loader (`_load_catalog`, path constant recomputed for this location), secret-safe identity projection (`read_identities`, `IDENTITY_SAFE_ACCOUNT_KEYS`), boot-time addon decompression (`decompress_addons`), and the system-prompt XML renderer (`_build_registry_xml`). Consumed by the `lingtai/tools/mcp` tool slice (lazy import) and `agent.py` |
 | `mcp_inbox.py` | — | LICC v1 filesystem inbox poller (`MCPInboxPoller`, the consumer half) + shared contract constants |
 | `mcp_licc.py` | — | LICC v1 client producer (`push_inbox_event`); imports contract constants from `mcp_inbox.py` |
 | `LICC_NOTIFICATION_CONTRACT.md` | — | The LICC notification two-lane projection contract governing curated IM producers |
@@ -50,8 +50,8 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 - **→ `lingtai.kernel.logging.get_logger`** (mcp.py:16) — structured logging.
 - **→ `lingtai.kernel.services.mail`** (mail.py:2) — pure re-export of kernel mail types.
 - **→ `mcp.client.stdio`**, **`mcp.client.streamable_http`**, **`mcp.client.session`** (mcp.py:224, 406-407) — third-party MCP SDK. Imported lazily inside async connect methods.
-- **← `tools.vision`** — uses `services.vision.VisionService`.
-- **← `tools.web_search`** — uses `services.websearch.SearchService`.
+- **← `lingtai.tools.vision`** — uses `services.vision.VisionService`.
+- **← `lingtai.tools.web_search`** — uses `services.websearch.SearchService`.
 - **← `tools.{read,write,edit,glob,grep}`** — the file tools use `FileIOService` (injected as `agent._file_io`).
 
 ## Composition

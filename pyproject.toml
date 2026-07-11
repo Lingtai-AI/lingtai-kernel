@@ -50,7 +50,7 @@ lingtai-cloud-mail = "lingtai.mcp_servers.cloud_mail.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["lingtai*", "tools*"]
+include = ["lingtai*"]
 exclude = [
     "lingtai_imap*",
     "lingtai_telegram*",
@@ -63,15 +63,15 @@ exclude = [
 [tool.setuptools.package-data]
 "lingtai.kernel" = ["i18n/*.json"]
 # Consolidated tool packages: i18n catalogs, per-tool JSON policy/data files
-# (e.g. tools/bash/bash_policy.json), and every tool manual tree. Without these
-# the wheel installs the tool code but silently drops its data assets.
-tools = [
+# (e.g. lingtai/tools/bash/bash_policy.json), and every tool manual tree. Without
+# these the wheel installs the tool code but silently drops its data assets.
+"lingtai.tools" = [
     "i18n/*.json",
     "*/*.json",
     "*/manual/**/*",
-    # Per-tool contract documents — one src/tools/<tool>/CONTRACT.md per
-    # built-in tool plus tools/daemon/DAEMON_CONTRACT.md. The runtime loads
-    # these to surface each tool's invariants; omitting the glob ships the
+    # Per-tool contract documents — one src/lingtai/tools/<tool>/CONTRACT.md per
+    # built-in tool plus lingtai/tools/daemon/DAEMON_CONTRACT.md. The runtime
+    # loads these to surface each tool's invariants; omitting the glob ships the
     # tool code while silently dropping all 18 contracts (plus the daemon
     # extension contract) from the wheel.
     "*/CONTRACT.md",

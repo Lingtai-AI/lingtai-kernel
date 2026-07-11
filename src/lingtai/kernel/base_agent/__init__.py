@@ -469,7 +469,7 @@ class BaseAgent:
 
         # --- Wire intrinsic tools ---
         # Intrinsics are injected by the composing layer (``lingtai.Agent``
-        # passes ``tools.registry.INTRINSICS``). The kernel owns the tool
+        # passes ``lingtai.tools.registry.INTRINSICS``). The kernel owns the tool
         # machinery, not the concrete tools: a bare ``BaseAgent`` with no
         # intrinsics is legal and intentional — it is pure machinery with an
         # empty tool surface. ``_intrinsic_modules`` maps name → the intrinsic
@@ -692,7 +692,7 @@ class BaseAgent:
         """Wire injected intrinsic tool handlers onto the tool surface.
 
         Iterates the registry injected at construction (``intrinsics=`` — the
-        composing layer passes ``tools.registry.INTRINSICS``). Each value has
+        composing layer passes ``lingtai.tools.registry.INTRINSICS``). Each value has
         the shape ``{"module": <module>}``. ``_intrinsic_modules`` keeps the
         module for schema/description/boot/kernel-hook lookup; ``_intrinsics``
         holds the bound handler closure the dispatcher calls.

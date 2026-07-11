@@ -1,6 +1,6 @@
 """Tests for lingtai.kernel.tc_inbox — the involuntary tool-call inbox."""
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import threading
 import time

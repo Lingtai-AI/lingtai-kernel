@@ -31,7 +31,7 @@ related_files:
     why: >
       The owning prompt-source anatomy: it records character as the self-authored,
       injected identity. Read it before confusing character with mechanical identity.
-  - path: src/tools/psyche/_lingtai.py
+  - path: src/lingtai/tools/psyche/_lingtai.py
     why: >
       Owns the concrete character-section injection rule: it reads system/lingtai.md and
       writes the `character` section (deleting it when the file is empty/missing). Crawl

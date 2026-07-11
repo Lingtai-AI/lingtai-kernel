@@ -1,6 +1,6 @@
 """Tests for lingtai.services.logging."""
 import json
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 import sqlite3
 import threading
 from pathlib import Path

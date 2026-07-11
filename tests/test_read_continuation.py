@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.agent import Agent
-from tools.read import (
+from lingtai.tools.read import (
     DEFAULT_READ_CAP_CHARS,
     READ_HARD_CAP_CHARS,
     _apply_cap,
@@ -261,7 +261,7 @@ def test_read_handler_uses_per_call_max_chars(tmp_path):
 
 def test_read_schema_description_warns_about_cap():
     """en description must mention read-manual, max_chars, 100k default, and 200k hard cap."""
-    from tools.read import get_description
+    from lingtai.tools.read import get_description
     desc = get_description("en")
     assert "100 000" in desc or "100000" in desc or "100_000" in desc, \
         "description should mention the 100 000 char read default"

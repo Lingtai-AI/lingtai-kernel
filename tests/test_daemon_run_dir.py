@@ -5,7 +5,7 @@ import re
 import time
 from pathlib import Path
 
-from tools.daemon.run_dir import DaemonRunDir
+from lingtai.tools.daemon.run_dir import DaemonRunDir
 
 
 def _make_run_dir(tmp_path: Path, **overrides) -> DaemonRunDir:

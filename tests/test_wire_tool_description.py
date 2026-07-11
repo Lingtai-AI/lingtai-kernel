@@ -88,7 +88,7 @@ def test_main_and_daemon_tools_sections_render_full_prose():
     assert WIRE_TOOL_DESCRIPTION not in sections["tools"]
 
     # Daemon emanations build their own resident ``## tools`` section.
-    from tools.daemon import DaemonManager
+    from lingtai.tools.daemon import DaemonManager
 
     daemon_prompt = DaemonManager._build_emanation_prompt(
         SimpleNamespace(_agent=agent), "Inspect the repository", _schemas()
@@ -134,7 +134,7 @@ def test_openai_responses_wire_description():
 
 def test_openai_responses_preserves_daemon_backend_options_passthrough_schema():
     from lingtai.llm.openai.adapter import _build_responses_tools
-    from tools.daemon import get_schema
+    from lingtai.tools.daemon import get_schema
 
     tools = _build_responses_tools([
         FunctionSchema(name="daemon", description="daemon", parameters=get_schema())

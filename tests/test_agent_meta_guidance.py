@@ -1,6 +1,6 @@
 """Regression tests for app-level Agent prompt meta_guidance refresh."""
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 from types import SimpleNamespace
 

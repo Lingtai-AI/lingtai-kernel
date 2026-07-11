@@ -170,7 +170,7 @@ def test_unknown_action_returns_error(tmp_path):
 
 
 def test_schema_has_info_and_manual_actions():
-    from tools.knowledge import get_schema
+    from lingtai.tools.knowledge import get_schema
     SCHEMA = get_schema("en")
     actions = SCHEMA["properties"]["action"]["enum"]
     assert actions == ["info", "manual"]

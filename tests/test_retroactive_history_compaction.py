@@ -463,9 +463,9 @@ def _make_run_loop_agent_with_oversized_history(tmp_path, big_payload):
 
         def _cancel_soul_timer(self):
             # Mirror BaseAgent._cancel_soul_timer's delegation to the soul flow
-            # hook so tests monkeypatching tools.soul.flow._cancel_soul_timer
+            # hook so tests monkeypatching lingtai.tools.soul.flow._cancel_soul_timer
             # still intercept the run-loop's sleep-time cancel.
-            import tools.soul.flow as soul_flow
+            import lingtai.tools.soul.flow as soul_flow
             soul_flow._cancel_soul_timer(self)
 
         def _set_state(self, new_state, reason=""):
@@ -534,7 +534,7 @@ def test_aed_deterministic_retry_compacts_history_before_rebuild(tmp_path, monke
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
-    import tools.soul.flow as soul_flow
+    import lingtai.tools.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
@@ -591,7 +591,7 @@ def test_aed_transient_retry_compacts_history_before_backoff(tmp_path, monkeypat
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn.time, "sleep", watched_sleep)
-    import tools.soul.flow as soul_flow
+    import lingtai.tools.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
@@ -716,7 +716,7 @@ def test_aed_over_window_takes_deterministic_branch_not_transient(tmp_path, monk
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
-    import tools.soul.flow as soul_flow
+    import lingtai.tools.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
@@ -769,7 +769,7 @@ def test_aed_over_window_compacts_before_rebuild_session(tmp_path, monkeypatch):
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
-    import tools.soul.flow as soul_flow
+    import lingtai.tools.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
@@ -796,7 +796,7 @@ def test_worker_still_running_does_not_invoke_compaction(tmp_path, monkeypatch):
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
-    import tools.soul.flow as soul_flow
+    import lingtai.tools.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer",
                         lambda _a: _a._shutdown.set())
 

@@ -296,7 +296,7 @@ class TestGrepGlobFilter:
         svc.write("good.py", "needle\n")
         svc.write("noisy.log", "needle\n")
 
-        from tools.grep import setup as grep_setup
+        from lingtai.tools.grep import setup as grep_setup
 
         class _StubConfig:
             language = "en"

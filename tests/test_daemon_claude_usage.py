@@ -1,5 +1,5 @@
 """Unit tests for claude-p result usage normalization (no external `claude`)."""
-from tools.daemon import _normalize_claude_usage
+from lingtai.tools.daemon import _normalize_claude_usage
 
 
 def test_normalize_claude_usage_combines_cached_inputs():

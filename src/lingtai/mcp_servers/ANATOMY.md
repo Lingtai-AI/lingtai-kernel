@@ -3,7 +3,7 @@ related_files:
   - src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md
   - pyproject.toml
   - src/lingtai/ANATOMY.md
-  - src/tools/mcp/ANATOMY.md
+  - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/mcp_catalog.json
   - src/lingtai/mcp_servers/__init__.py
   - src/lingtai/mcp_servers/_identity.py
@@ -42,7 +42,7 @@ Curated and built-in MCP server package implementations shipped inside the `ling
 
 ## Connections
 
-- Catalog/script launchers (`pyproject.toml:43-49`) start these servers as subprocess MCPs; agents activate them through the generic MCP capability (`src/tools/mcp/ANATOMY.md`).
+- Catalog/script launchers (`pyproject.toml:43-49`) start these servers as subprocess MCPs; agents activate them through the generic MCP capability (`src/lingtai/tools/mcp/ANATOMY.md`).
 - Manager schemas include `manual` in each action enum and use `_skill.manual_action_description()` to advertise the bundled skill without loading the full body into the resident schema.
 - Tests pin the manual contract, package-data sidecar support, and Telegram parity in `tests/test_mcp_skill_manuals.py` and `tests/test_telegram_rich_formatting.py`.
 

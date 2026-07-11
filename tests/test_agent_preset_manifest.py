@@ -8,7 +8,7 @@ which model/backend it is currently running. **No API keys, no env-var
 names, no secrets** must ever appear in either surface.
 """
 from __future__ import annotations
-from tools.registry import INTRINSICS as _TEST_INTRINSICS
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import json
 from pathlib import Path

@@ -73,8 +73,8 @@ Properties (contract):
 - **Identity = `molt_count`.** Do **not** introduce a new agent-session id. The
   existing `molt_count` *is* the agent-session key.
 - **Boundary:** a successful molt. Each molt increments `molt_count`
-  (`src/tools/psyche/_molt.py:356`,
-  `src/tools/psyche/_molt.py:595`) and starts a new agent
+  (`src/lingtai/tools/psyche/_molt.py:356`,
+  `src/lingtai/tools/psyche/_molt.py:595`) and starts a new agent
   session.
 - **Survives refresh/restart.** On refresh/restart the kernel **rebuilds** the
   current agent session object for the current `molt_count` from
@@ -86,7 +86,7 @@ Properties (contract):
 (`self._molt_count = existing.get("molt_count", 0)`,
 `src/lingtai/kernel/base_agent/__init__.py:427`), written back into the manifest
 (`src/lingtai/kernel/base_agent/identity.py:81`), incremented only inside molt
-(`src/tools/psyche/_molt.py:356,595`), and even read live off
+(`src/lingtai/tools/psyche/_molt.py:356,595`), and even read live off
 disk by the Codex adapter for its per-molt cache key
 (`src/lingtai/llm/openai/adapter.py:747 _read_molt_count`). It is already the de
 facto agent-session key; this spec makes that role explicit.
@@ -136,11 +136,11 @@ named objects anywhere else would fork the source of these numbers.
 The canonical agent-session boundary marker in `events.jsonl` is the
 **`psyche_molt`** event. Both molt paths emit it with `molt_count`:
 
-- agent-initiated molt: `src/tools/psyche/_molt.py:434-441`
+- agent-initiated molt: `src/lingtai/tools/psyche/_molt.py:434-441`
   (`type="psyche_molt"`, `molt_count`, `before_tokens`, `after_tokens`,
   `kept_tool_calls`, `kept_last`).
 - system-forced molt (`context_forget`):
-  `src/tools/psyche/_molt.py:702-711` (same `type`, plus
+  `src/lingtai/tools/psyche/_molt.py:702-711` (same `type`, plus
   `initiator="system"`, `source`).
 
 The `molt_count` recorded on a `psyche_molt` event is the value **after** the

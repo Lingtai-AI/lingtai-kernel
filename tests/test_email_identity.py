@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from lingtai.agent import Agent
-from tools import email as email_mod
+from lingtai.tools import email as email_mod
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
@@ -296,7 +296,7 @@ def test_check_no_disambiguation_without_identity(tmp_path):
 # Disambiguation in _message_summary (unit-level)
 # ---------------------------------------------------------------------------
 
-from tools.email.primitives import _message_summary
+from lingtai.tools.email.primitives import _message_summary
 
 
 def test_message_summary_disambiguates_with_recipient_id():
