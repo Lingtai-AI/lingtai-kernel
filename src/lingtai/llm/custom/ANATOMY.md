@@ -22,7 +22,7 @@ Custom adapter — factory for named provider aliases routing to OpenAI, Anthrop
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `create_custom_adapter`, `DEFAULTS` |
-| `adapter.py` | 51 | `create_custom_adapter()` factory function |
+| `adapter.py` | 76 | `create_custom_adapter()` factory function |
 | `defaults.py` | 6 | `DEFAULTS` dict: `api_compat=openai`, `base_url=None`, `api_key_env=CUSTOM_API_KEY`, `model=""` |
 
 ## Connections
@@ -41,7 +41,7 @@ Factory function (not a class). Returns an `LLMAdapter` instance:
 |---|---|---|
 | `"gemini"` | `GeminiAdapter(api_key=..., **kwargs)` | `api_key` required, `base_url` ignored |
 | `"anthropic"` | `AnthropicAdapter(api_key=..., base_url=..., **kwargs)` | `base_url` required (raises `ValueError` if missing) |
-| `"openai"` (default) | `OpenAIAdapter(api_key=..., base_url=..., **kwargs)` | `base_url` required (raises `ValueError` if missing) |
+| `"openai"` (default) | `OpenAIAdapter(api_key=..., base_url=..., responses_stateless_replay=True, **kwargs)` | `base_url` required (raises `ValueError` if missing); any selected Responses session is stateless full-replay |
 
 Parameters:
 - `api_key: str | None` — passed through to chosen adapter.
@@ -51,9 +51,11 @@ Parameters:
 - `wire_api: str | None` — scoped to `api_compat="openai"`; selects the OpenAI wire path (`auto`/`chat_completions`/`responses`). Explicit non-`auto` values raise for non-OpenAI backends; `auto` is ignored there.
 - `**kwargs` — forwarded to adapter constructor (`timeout_ms`, `max_rpm`, etc.).
 
+For `api_compat="openai"`, the factory always injects the internal `responses_stateless_replay=True` adapter mode (`adapter.py:65-76`). This does not force Responses by itself: `wire_api` / legacy `use_responses` + `force_responses` still decide whether the Responses path is used. When it is used, the resulting `OpenAIResponsesSession` replays full canonical history and never relies on provider-side `previous_response_id` chaining; official `openai` and Codex factories do not receive this mode.
+
 ### No class of its own
 
-`custom` does **not** define its own `Adapter` or `ChatSession` subclass. The returned object is a plain instance of whichever built-in adapter matched `api_compat`.
+`custom` does **not** define its own `Adapter` or `ChatSession` subclass. The returned object is a plain instance of whichever built-in adapter matched `api_compat`; the OpenAI-compatible case is distinguished only by the internal constructor mode above.
 
 ## State
 

@@ -1738,6 +1738,7 @@ class OpenAIResponsesSession(ChatSession):
         interface: ChatInterface | None = None,
         prompt_cache_key: str | None = None,
         context_window: int = 0,
+        stateless_replay: bool = False,
     ):
         self._client = client
         self._model = model
@@ -1746,6 +1747,7 @@ class OpenAIResponsesSession(ChatSession):
         self._tool_choice = tool_choice
         self._extra_kwargs = extra_kwargs
         self._response_id: str | None = previous_response_id
+        self._stateless_replay = bool(stateless_replay)
         self._compact_threshold = _validate_compact_threshold(compact_threshold)
         self._interface = interface or ChatInterface()
         # Optional OpenAI Responses ``prompt_cache_key`` — opts the request
@@ -1801,129 +1803,232 @@ class OpenAIResponsesSession(ChatSession):
         else:
             raise TypeError(f"Unsupported message type: {type(message)}")
 
+    def _snapshot_interface(self, message) -> list[dict] | None:
+        if message is None:
+            return None
+        return self._interface.to_dict()
+
+    def _stage_input(self, message) -> None:
+        """Record caller input in canonical history for stateless full replay."""
+        if message is None:
+            return
+        if isinstance(message, str):
+            self._interface.add_user_message(message)
+        elif isinstance(message, list):
+            self._interface.add_tool_results(message)
+        else:
+            raise TypeError(f"Unsupported message type: {type(message)}")
+
+    def _rollback_staged(self, rollback_snapshot: list[dict] | None) -> None:
+        if rollback_snapshot is None:
+            return
+        restored = ChatInterface.from_dict(rollback_snapshot)
+        recovery_lookup = self._interface.tool_result_recovery_lookup
+        self._interface._entries.clear()
+        self._interface._entries.extend(restored._entries)
+        self._interface._next_id = restored._next_id
+        self._interface._current_system_text = restored._current_system_text
+        self._interface._current_tools = restored._current_tools
+        self._interface._pending_system = restored._pending_system
+        self._interface.tool_result_recovery_lookup = recovery_lookup
+
+    def _record_assistant_response(self, response: LLMResponse) -> None:
+        blocks: list = []
+        for thought in response.thoughts:
+            if thought:
+                blocks.append(ThinkingBlock(text=thought))
+        if response.text:
+            blocks.append(TextBlock(text=response.text))
+        for tc in response.tool_calls:
+            blocks.append(ToolCallBlock(id=tc.id or "", name=tc.name, args=tc.args))
+        if not blocks:
+            blocks.append(TextBlock(text=""))
+        self._interface.add_assistant_message(
+            blocks,
+            model=self._model,
+            provider="openai",
+            usage={
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "thinking_tokens": response.usage.thinking_tokens,
+                "cached_tokens": response.usage.cached_tokens,
+            },
+        )
+
+    def _request_input(self, message) -> list[dict]:
+        if not self._stateless_replay:
+            return self._convert_input(message)
+        self._stage_input(message)
+        self._interface.enforce_tool_pairing()
+        return to_responses_input(self._interface)
+
     def send(self, message) -> LLMResponse:
         """Send a user message (str) or tool results (list of dicts)."""
-        # Pre-request hook — fired for the kernel-side drain. NOTE: this
-        # session uses server-side state (previous_response_id) and does
-        # NOT commit message content to the canonical ChatInterface, so a
-        # pair the hook splices is only visible to the LLM on the *next*
-        # turn (when the interface re-syncs). This is acceptable because
-        # the agent's local view is updated immediately for persistence
-        # and inspection. Most agents using this session use it via Codex
-        # OAuth (CodexResponsesSession), which DOES replay the full
-        # interface and gets same-turn delivery.
-        if self.pre_request_hook is not None:
-            self.pre_request_hook(self._interface)
+        rollback_snapshot: list[dict] | None = None
+        try:
+            if self._stateless_replay:
+                rollback_snapshot = self._snapshot_interface(message)
+            input_items = self._request_input(message)
 
-        input_items = self._convert_input(message)
+            # Pre-request hook — in stateless mode the hook mutates the same
+            # canonical interface that is serialized below, so spliced entries
+            # ride on this request. Stateful mode preserves the historical
+            # delta-only behavior.
+            if self.pre_request_hook is not None:
+                self.pre_request_hook(self._interface)
+                if self._stateless_replay:
+                    self._interface.enforce_tool_pairing()
+                    input_items = to_responses_input(self._interface)
 
-        kwargs: dict[str, Any] = {
-            "model": self._model,
-            "input": input_items,
-            **self._extra_kwargs,
-        }
-        if self._instructions:
-            kwargs["instructions"] = self._instructions
-        if self._tools:
-            kwargs["tools"] = self._tools
-            if self._tool_choice:
-                kwargs["tool_choice"] = self._tool_choice
-        if self._response_id:
-            kwargs["previous_response_id"] = self._response_id
-        if self._compact_threshold:
-            kwargs["context_management"] = [
-                {"type": "compaction", "compact_threshold": self._compact_threshold}
-            ]
-        if self._prompt_cache_key:
-            kwargs["prompt_cache_key"] = self._prompt_cache_key
+            kwargs: dict[str, Any] = {
+                "model": self._model,
+                "input": input_items,
+                **self._extra_kwargs,
+            }
+            if self._instructions:
+                kwargs["instructions"] = self._instructions
+            if self._tools:
+                kwargs["tools"] = self._tools
+                if self._tool_choice:
+                    kwargs["tool_choice"] = self._tool_choice
+            if self._response_id and not self._stateless_replay:
+                kwargs["previous_response_id"] = self._response_id
+            if self._compact_threshold:
+                kwargs["context_management"] = [
+                    {"type": "compaction", "compact_threshold": self._compact_threshold}
+                ]
+            if self._prompt_cache_key:
+                kwargs["prompt_cache_key"] = self._prompt_cache_key
 
-        raw = self._client.responses.create(**kwargs)
-        self._response_id = raw.id
-        return _parse_responses_api_response(raw)
+            raw = self._client.responses.create(**kwargs)
+            response = _parse_responses_api_response(raw)
+            if self._stateless_replay:
+                self._record_assistant_response(response)
+            else:
+                self._response_id = raw.id
+            return response
+        except Exception:
+            if self._stateless_replay:
+                self._rollback_staged(rollback_snapshot)
+            raise
 
     def send_stream(self, message, on_chunk=None) -> LLMResponse:
         """Send a streaming request."""
-        # Pre-request hook — see send() above for contract + caveat.
-        if self.pre_request_hook is not None:
-            self.pre_request_hook(self._interface)
-
-        input_items = self._convert_input(message)
-
-        kwargs: dict[str, Any] = {
-            "model": self._model,
-            "input": input_items,
-            "stream": True,
-            **self._extra_kwargs,
-        }
-        if self._instructions:
-            kwargs["instructions"] = self._instructions
-        if self._tools:
-            kwargs["tools"] = self._tools
-            if self._tool_choice:
-                kwargs["tool_choice"] = self._tool_choice
-        if self._response_id:
-            kwargs["previous_response_id"] = self._response_id
-        if self._compact_threshold:
-            kwargs["context_management"] = [
-                {"type": "compaction", "compact_threshold": self._compact_threshold}
-            ]
-        if self._prompt_cache_key:
-            kwargs["prompt_cache_key"] = self._prompt_cache_key
-
         acc = StreamingAccumulator()
         response_id = None
         usage = UsageMetadata()
         seen_reasoning_summary_items: set[str] = set()
 
-        stream = self._client.responses.create(**kwargs)
-        for event in stream:
-            if _handle_responses_reasoning_event(event, acc, seen_reasoning_summary_items):
-                continue
-            if event.type == "response.output_text.delta":
-                acc.add_text(event.delta)
-                if on_chunk:
-                    on_chunk(event.delta)
-            elif event.type == "response.function_call_arguments.delta":
-                acc.add_tool_args(event.delta)
-            elif event.type == "response.output_item.added":
-                if getattr(event.item, "type", None) == "function_call":
-                    acc.start_tool(id=event.item.call_id, name=event.item.name)
-            elif event.type == "response.output_item.done":
-                if getattr(event.item, "type", None) == "function_call":
-                    acc.finish_tool()
-            elif event.type == "response.completed":
-                response_id = event.response.id
-                if event.response.usage:
-                    cached = getattr(event.response.usage, "input_tokens_details", None)
-                    cached_tokens = (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
-                    usage = UsageMetadata(
-                        input_tokens=getattr(event.response.usage, "input_tokens", 0)
-                        or 0,
-                        output_tokens=getattr(event.response.usage, "output_tokens", 0)
-                        or 0,
-                        thinking_tokens=getattr(
-                            event.response.usage, "output_tokens_details", None
-                        )
-                        and getattr(
-                            event.response.usage.output_tokens_details,
-                            "reasoning_tokens",
-                            0,
-                        )
-                        or 0,
-                        cached_tokens=cached_tokens,
-                    )
+        rollback_snapshot: list[dict] | None = None
+        try:
+            if self._stateless_replay:
+                rollback_snapshot = self._snapshot_interface(message)
+            input_items = self._request_input(message)
 
-        self._response_id = response_id
-        return acc.finalize(usage=usage)
+            # Pre-request hook — see send() above for stateless/stateful split.
+            if self.pre_request_hook is not None:
+                self.pre_request_hook(self._interface)
+                if self._stateless_replay:
+                    self._interface.enforce_tool_pairing()
+                    input_items = to_responses_input(self._interface)
+
+            kwargs: dict[str, Any] = {
+                "model": self._model,
+                "input": input_items,
+                "stream": True,
+                **self._extra_kwargs,
+            }
+            if self._instructions:
+                kwargs["instructions"] = self._instructions
+            if self._tools:
+                kwargs["tools"] = self._tools
+                if self._tool_choice:
+                    kwargs["tool_choice"] = self._tool_choice
+            if self._response_id and not self._stateless_replay:
+                kwargs["previous_response_id"] = self._response_id
+            if self._compact_threshold:
+                kwargs["context_management"] = [
+                    {"type": "compaction", "compact_threshold": self._compact_threshold}
+                ]
+            if self._prompt_cache_key:
+                kwargs["prompt_cache_key"] = self._prompt_cache_key
+
+            stream = self._client.responses.create(**kwargs)
+            for event in stream:
+                if _handle_responses_reasoning_event(event, acc, seen_reasoning_summary_items):
+                    continue
+                if event.type == "response.output_text.delta":
+                    acc.add_text(event.delta)
+                    if on_chunk:
+                        on_chunk(event.delta)
+                elif event.type == "response.function_call_arguments.delta":
+                    acc.add_tool_args(event.delta)
+                elif event.type == "response.output_item.added":
+                    if getattr(event.item, "type", None) == "function_call":
+                        acc.start_tool(id=event.item.call_id, name=event.item.name)
+                elif event.type == "response.output_item.done":
+                    if getattr(event.item, "type", None) == "function_call":
+                        acc.finish_tool()
+                elif event.type == "response.completed":
+                    response_id = event.response.id
+                    if event.response.usage:
+                        cached = getattr(event.response.usage, "input_tokens_details", None)
+                        cached_tokens = (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
+                        usage = UsageMetadata(
+                            input_tokens=getattr(event.response.usage, "input_tokens", 0)
+                            or 0,
+                            output_tokens=getattr(event.response.usage, "output_tokens", 0)
+                            or 0,
+                            thinking_tokens=getattr(
+                                event.response.usage, "output_tokens_details", None
+                            )
+                            and getattr(
+                                event.response.usage.output_tokens_details,
+                                "reasoning_tokens",
+                                0,
+                            )
+                            or 0,
+                            cached_tokens=cached_tokens,
+                        )
+
+            response = acc.finalize(usage=usage)
+            if self._stateless_replay:
+                self._record_assistant_response(response)
+            else:
+                self._response_id = response_id
+            return response
+        except Exception:
+            if self._stateless_replay:
+                self._rollback_staged(rollback_snapshot)
+            raise
 
     def get_history(self) -> list[dict]:
         """Return minimal state for session persistence (server-side)."""
+        if self._stateless_replay:
+            return self._interface.to_dict()
         return [{"_response_id": self._response_id}]
 
     @property
     def session_resume_id(self) -> str | None:
         """Return the response ID for session resumption."""
+        if self._stateless_replay:
+            return None
         return self._response_id
+
+    def update_tools(self, tools: list[FunctionSchema] | None) -> None:
+        if not self._stateless_replay:
+            return
+        self._tools = _build_responses_tools(tools)
+        self._interface.add_system(
+            self._interface.current_system_prompt or "",
+            tools=FunctionSchema.list_to_dicts(tools),
+        )
+
+    def update_system_prompt(self, system_prompt: str) -> None:
+        if not self._stateless_replay:
+            return
+        self._instructions = system_prompt
+        self._interface.add_system(system_prompt, tools=self._interface.current_tools)
 
 
 # ---------------------------------------------------------------------------
@@ -1954,6 +2059,7 @@ class OpenAIAdapter(LLMAdapter):
         default_headers: dict | None = None,
         compact_threshold: int | None = 100_000,
         prompt_cache_key: str | bool | None = None,
+        responses_stateless_replay: bool = False,
     ):
         self.base_url = base_url
         self._use_responses = use_responses
@@ -1988,6 +2094,7 @@ class OpenAIAdapter(LLMAdapter):
         # compaction entirely. Config is injected at construction here, never
         # read from a global module — see lingtai.kernel.config's contract.
         self._compact_threshold = _validate_compact_threshold(compact_threshold)
+        self._responses_stateless_replay = bool(responses_stateless_replay)
         kwargs: dict[str, Any] = {"api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
@@ -2136,6 +2243,7 @@ class OpenAIAdapter(LLMAdapter):
             interface=interface,
             prompt_cache_key=self._resolve_prompt_cache_key(model),
             context_window=context_window,
+            stateless_replay=self._responses_stateless_replay,
         )
 
     def _create_completions_session(
