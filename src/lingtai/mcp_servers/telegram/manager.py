@@ -59,6 +59,15 @@ _STRUCTURED_MESSAGE_TEXT_CAP = 500
 _DOCUMENT_DOWNLOAD_REASON_CAP = 200
 _TELEGRAM_API_ERROR_PREFIX = "Telegram API error: "
 
+# Fixed human warning shown on every Task Card render (running and frozen
+# last-behavior).  Jason: the card is progress-only; the human must reply to the
+# normal conversation/final result, never to this card.  Kept short so it always
+# fits under the Telegram message-size bound even under multi-row length pressure.
+_TASK_CARD_FOOTER = (
+    "⚠️ Progress only — don't reply to this Task Card. "
+    "Reply in the normal chat to the final result instead."
+)
+
 
 def _safe_document_download_reason(exc: Exception) -> str:
     """Return a bounded provider reason without retaining arbitrary exception text."""
@@ -1350,6 +1359,10 @@ class TelegramManager:
 
     # Reasoning cap (Unicode code points) after secret redaction.
     _TASK_CARD_REASONING_CAP = 500
+    # Overall render ceiling, safely below Telegram's 4096-char message limit.
+    _TASK_CARD_TEXT_LIMIT = 3500
+    # Header shown at the top of every card.
+    _TASK_CARD_HEADER = "📋 TASK CARD"
 
     def _handle_task_card_update(self, args: dict) -> dict:
         """Private internal action — kernel-driven Task Card projection.
@@ -1377,49 +1390,143 @@ class TelegramManager:
             return {"status": "error", "error": str(e)}
 
     def _task_card_create(self, args: dict) -> dict:
+        """Create the resident Task Card for (account, chat), singleton per chat.
+
+        Ordering matches Jason #6667 exactly: read the previously persisted card
+        id, send the NEW card first, and only after a successful send persist the
+        new id and best-effort delete the prior one.  If the new send fails, the
+        old card and its persisted id are left untouched and nothing is deleted.
+        The prior-card delete is fail-open: a failure never rolls the new id back
+        nor blocks the turn.
+        """
         account = args["account"]
         chat_id = args["chat_id"]
         text = self._format_task_card_text(
-            args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""))
+            args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""),
+            rows=args.get("rows"))
+
+        previous_id = self._get_resident_task_card(account, chat_id)
+
         result = self.send_progress_message(account, chat_id, text)
         if result is None:
+            # New send failed: preserve the old card + its id, delete nothing.
             return {"status": "error", "error": "Failed to send task card"}
-        return {"status": "ok", "message_id": result["message_id"]}
+
+        new_id = result["message_id"]
+        # Persist the new id as current BEFORE deleting the old one, so a crash
+        # between send and delete still leaves the new (visible) card tracked.
+        self._set_resident_task_card(account, chat_id, new_id)
+
+        if previous_id and previous_id != new_id:
+            self._delete_task_card_message(previous_id)
+
+        return {"status": "ok", "message_id": new_id}
+
+    def _get_resident_task_card(self, account: str, chat_id: int) -> str | None:
+        """Read the persisted resident card id for (account, chat); fail-open."""
+        try:
+            return self._service.get_account(account).get_task_card(chat_id)
+        except Exception as e:
+            log.debug("Failed to read resident task card: %s", e)
+            return None
+
+    def _set_resident_task_card(self, account: str, chat_id: int, compound_id: str) -> None:
+        """Persist the resident card id for (account, chat); fail-open.
+
+        A persistence failure must not fail the turn — the new card is already
+        sent and visible — but is logged content-free for observability.
+        """
+        try:
+            self._service.get_account(account).set_task_card(chat_id, compound_id)
+        except Exception as e:
+            log.warning("Failed to persist resident task card id: %s", e)
+
+    def _delete_task_card_message(self, compound_id: str) -> None:
+        """Best-effort delete of the specifically tracked prior card message.
+
+        Only ever deletes the exact ``account:chat:message`` this id names — it
+        never crosses chats/accounts and never touches an untracked message.  A
+        failure is swallowed (logged content-free): the new card is already the
+        current resident, so a stale prior card is a cosmetic leftover, not a
+        correctness problem, and must not block or roll back the turn.
+        """
+        try:
+            account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
+            acct = self._service.get_account(account)
+            acct.delete_message(chat_id=chat_id, message_id=tg_msg_id)
+        except Exception as e:
+            log.debug("Failed to delete prior task card message: %s", e)
 
     def _task_card_update(self, args: dict) -> dict:
         card_message_id = args["card_message_id"]
         text = self._format_task_card_text(
-            args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""))
+            args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""),
+            rows=args.get("rows"))
         if not self.update_progress_message(card_message_id, text):
-            # Card may have been deleted — best-effort re-create.
+            # Card may have been deleted — best-effort re-create.  The recovered
+            # card becomes the resident one for this chat, so persist and retire
+            # the replaced id consistently (same create-then-delete discipline).
             account, chat_id, _ = self._parse_compound_id(card_message_id)
             result = self.send_progress_message(account, chat_id, text)
             if result is None:
                 return {"status": "error", "error": "Failed to recover task card"}
-            return {"status": "ok", "message_id": result["message_id"]}
+            new_id = result["message_id"]
+            if new_id != card_message_id:
+                self._set_resident_task_card(account, chat_id, new_id)
+                self._delete_task_card_message(card_message_id)
+            return {"status": "ok", "message_id": new_id}
         return {"status": "ok", "message_id": card_message_id}
 
     def _task_card_finalize(self, args: dict) -> dict:
+        """Freeze the resident card on its last behavior.
+
+        With ``rows`` (the batched form) the card keeps its concrete last batch —
+        tool rows, completed markers, and final elapsed — as a last-behavior
+        record; there is intentionally no generic overall ``DONE`` subject.  The
+        legacy scalar form (no rows) retains the historical ``✅ TASK CARD · DONE``
+        marker for backward compatibility with single-step callers.
+        """
         card_message_id = args.get("card_message_id")
         if card_message_id:
-            tool = args.get("tool", "")
-            if tool:
-                text = self._format_task_card_text(
-                    tool, args.get("tool_action", ""), args.get("reasoning", ""))
-                text += "\n\n✅ TASK CARD · DONE"
+            rows = args.get("rows")
+            if rows is not None:
+                text = self._format_task_card_text("", "", "", rows=rows)
             else:
-                text = "✅ TASK CARD · DONE"
+                tool = args.get("tool", "")
+                if tool:
+                    text = self._format_task_card_text(
+                        tool, args.get("tool_action", ""), args.get("reasoning", ""))
+                    text += "\n\n✅ TASK CARD · DONE"
+                else:
+                    text = "✅ TASK CARD · DONE"
             self.update_progress_message(card_message_id, text)
         return {"status": "ok"}
 
     @classmethod
-    def _format_task_card_text(cls, tool: str, action: str, reasoning: str) -> str:
-        """Build a single transient Task Card: 📋 TASK CARD header + one tool line.
+    def _format_task_card_text(
+        cls, tool: str, action: str, reasoning: str,
+        *, rows: list | None = None,
+    ) -> str:
+        """Render a Task Card: header, one line per tool row, fixed footer.
 
-        Reasoning is redacted first (full text), then excerpted to
-        _TASK_CARD_REASONING_CAP code points.  If longer, «…» is appended
-        as UI metadata outside the excerpt.
+        When ``rows`` is supplied (the batched multi-row form) each parallel or
+        sequential call renders as its own row showing ``tool.action``, its
+        redacted reasoning excerpt, its own whole-second elapsed, and a
+        ``✓`` marker once it has completed.  The scalar ``tool``/``action``/``reasoning``
+        path is retained for backward-compatible single-tool callers and does
+        not render the footer (it is the legacy transient-step form).
+
+        Secret redaction always runs on each row's reasoning *before* any
+        excerpt or length trim, so a secret can never survive truncation, and
+        every row is always represented even under length pressure — rows are
+        never dropped to fit; only per-row excerpts shrink.
         """
+        if rows is None:
+            return cls._format_scalar_task_card_text(tool, action, reasoning)
+        return cls._format_rows_task_card_text(rows)
+
+    @classmethod
+    def _format_scalar_task_card_text(cls, tool: str, action: str, reasoning: str) -> str:
         from lingtai.kernel.trace_redaction import redact_text
 
         redacted = redact_text(reasoning)
@@ -1429,8 +1536,131 @@ class TelegramManager:
             excerpt = redacted
         label = f"{tool}.{action}" if action else tool
         if label:
-            return f"📋 TASK CARD\n{label}: {excerpt}"
-        return f"📋 TASK CARD\n{excerpt}" if excerpt else "📋 TASK CARD"
+            return f"{cls._TASK_CARD_HEADER}\n{label}: {excerpt}"
+        return f"{cls._TASK_CARD_HEADER}\n{excerpt}" if excerpt else cls._TASK_CARD_HEADER
+
+    @classmethod
+    def _format_rows_task_card_text(cls, rows: list) -> str:
+        from lingtai.kernel.trace_redaction import redact_text
+
+        # Split tool rows (redacted, capped reasoning) from sanitized API-error
+        # rows (fixed machine summary, no reasoning to redact).  Redact every tool
+        # row's reasoning up front (before any excerpt/trim) and compute the
+        # per-row budget so the whole render stays under the limit while keeping
+        # every row visible.
+        tool_prepared: list[tuple[int, str, str, str, bool, str]] = []
+        api_prepared: list[tuple[int, str]] = []
+        for idx, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            if row.get("kind") == "api_error":
+                api_prepared.append((idx, cls._format_api_error_line(row)))
+                continue
+            tool = str(row.get("tool", ""))
+            action = str(row.get("tool_action", ""))
+            label = f"{tool}.{action}" if action else tool
+            redacted = redact_text(str(row.get("reasoning", "")))
+            elapsed = cls._format_elapsed(row.get("elapsed_s", 0))
+            done = bool(row.get("done", False))
+            started_at = row.get("started_at", "")
+            started_at = started_at if isinstance(started_at, str) else ""
+            tool_prepared.append((idx, label, redacted, elapsed, done, started_at))
+
+        if not tool_prepared and not api_prepared:
+            return f"{cls._TASK_CARD_HEADER}\n\n{_TASK_CARD_FOOTER}"
+
+        # Budget the reasoning excerpts against the render ceiling.  The fixed
+        # cost is the header + footer + their newlines plus the *actual*
+        # non-reasoning scaffolding of every row (marker, label, elapsed suffix,
+        # the standalone timestamp, and each row's newline) — measured, not a
+        # flat estimate, so a long label or the ~16-char timestamp cannot push a
+        # timestamped many-row card past ``_TASK_CARD_TEXT_LIMIT``.  What remains
+        # is shared evenly across tool rows so no single row crowds the others
+        # out; reasoning shrinks but a row is never dropped.
+        api_scaffold = sum(len(line) + 1 for _, line in api_prepared)
+        tool_scaffold = 0
+        for _, label, _redacted, elapsed, done, started_at in tool_prepared:
+            marker = "✓ " if done else "• "
+            prefix = f"{marker}{label}: " if label else marker
+            stamp = f" {started_at}" if started_at else ""
+            # +1 newline, +1 for a possible truncation ellipsis (conservative).
+            tool_scaffold += len(prefix) + len(f" ({elapsed}s)") + len(stamp) + 2
+        fixed = (
+            len(cls._TASK_CARD_HEADER) + 1  # header + newline
+            + 1                              # blank line before footer
+            + len(_TASK_CARD_FOOTER)
+            + api_scaffold + tool_scaffold
+        )
+        budget = cls._TASK_CARD_TEXT_LIMIT - fixed
+        divisor = max(1, len(tool_prepared))
+        # Floor at 0 (not 16) so a degenerate over-budget batch still trims to
+        # empty excerpts rather than blowing the ceiling; a healthy card keeps a
+        # generous per-row excerpt.
+        per_row_cap = max(0, min(cls._TASK_CARD_REASONING_CAP, budget // divisor))
+
+        # Render in original row order so tool and API rows interleave correctly.
+        by_idx: dict[int, str] = {}
+        for idx, label, redacted, elapsed, done, started_at in tool_prepared:
+            excerpt = redacted[:per_row_cap] + "…" if len(redacted) > per_row_cap else redacted
+            marker = "✓ " if done else "• "
+            prefix = f"{marker}{label}: " if label else marker
+            # Standalone immutable start stamp (omitted when not captured).
+            stamp = f" {started_at}" if started_at else ""
+            by_idx[idx] = f"{prefix}{excerpt} ({elapsed}s){stamp}"
+        for idx, line in api_prepared:
+            by_idx[idx] = line
+
+        lines = [cls._TASK_CARD_HEADER]
+        lines.extend(by_idx[i] for i in sorted(by_idx))
+        lines.append("")
+        lines.append(_TASK_CARD_FOOTER)
+        return "\n".join(lines)
+
+    @classmethod
+    def _format_api_error_line(cls, row: dict) -> str:
+        """Render a sanitized LLM/provider API-error row.
+
+        Shows only the numeric status and an already-allow-listed machine code
+        (both supplied pre-sanitized by the kernel), plus the lifecycle state
+        (retrying n/N, recovered, error).  Never renders any raw exception text —
+        there is no free-form field on an API-error row to leak.
+        """
+        state = row.get("state")
+        parts = ["API error"]
+        status = row.get("status")
+        if isinstance(status, int):
+            parts.append(str(status))
+        code = row.get("code")
+        if isinstance(code, str) and code:
+            parts.append(code)
+        summary = " · ".join(parts)
+
+        if state == "recovered":
+            return f"✓ {summary} · recovered"
+        if state == "error":
+            return f"⚠️ {summary} · failed"
+        # retrying (default)
+        attempt = row.get("attempt")
+        max_attempts = row.get("max_attempts")
+        if isinstance(attempt, int) and isinstance(max_attempts, int):
+            return f"⚠️ {summary} · retrying {attempt}/{max_attempts}"
+        if isinstance(attempt, int):
+            return f"⚠️ {summary} · retrying (attempt {attempt})"
+        return f"⚠️ {summary} · retrying"
+
+    @staticmethod
+    def _format_elapsed(value: object) -> str:
+        """Render a row's elapsed seconds as whole seconds (no decimal point).
+
+        The heartbeat still ticks every 0.5s, but elapsed is floored to whole
+        seconds by the kernel, so half-second frames read ``0s, 0s, 1s, 1s, 2s``.
+        This coerces + floors defensively (a float payload is floored, junk
+        degrades to ``0``) so the render never raises.
+        """
+        try:
+            return str(max(0, int(float(value))))
+        except (TypeError, ValueError):
+            return "0"
 
     # ------------------------------------------------------------------
     # Actions
