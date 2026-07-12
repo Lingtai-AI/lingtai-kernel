@@ -22,6 +22,7 @@ def _maybe_install_codex_pool_failover(
     model,
     base_defaults,
     selected_auth_path,
+    selected_source_index,
     build_isolated_adapter,
     create_chat_args,
     create_chat_kwargs,
@@ -30,18 +31,25 @@ def _maybe_install_codex_pool_failover(
 
     Codex-pool only. When (and only when) a provider send fails with a structural
     ``429`` whose structured error code is exactly ``usage_limit_reached``, switch
-    to the next DISTINCT eligible Codex account (validated pool order anchored to
-    the selected account, deduped by resolved identity, ≤ 5 switches) and retry
-    within this same call, then re-raise the terminal provider error on
-    exhaustion. Everything else (ordinary 429s, network errors, timeouts, other
-    errors) propagates unchanged.
+    to the next Codex account in the pool candidate SEQUENCE (validated pool order
+    anchored to the ACTUAL selected occurrence via ``selected_source_index`` — the
+    exact index weighted selection chose, so duplicate/aliased entries anchor to
+    the picked occurrence, not merely the first path match; walked verbatim with
+    NO realpath/alias dedup — repeated entries, aliases, and revisits/wraps to the
+    same credential are each attempted, since a usage limit may be transient/soft)
+    and retry within this same call, up to 10 ACTUAL switches, then re-raise the
+    terminal provider error on exhaustion. The budget is a switch/retry budget, not a
+    distinct-account budget: the primary attempt is not a switch, so the primary
+    plus up to 10 switched alternates run; the 10th switched attempt runs and only
+    ITS qualifying failure exhausts. Everything else (ordinary 429s, network
+    errors, timeouts, other errors) propagates unchanged.
 
     **Single leaf drive (no nested double-drive).** The real
     ``CodexResponsesSession.send`` delegates to ``self.send_stream``. Both wrapper
     entrypoints route through ONE ``_drive`` that invokes the LEAF the session
     actually dispatches through, captured as the ORIGINAL bound method, so a
     ``chat.send(...)`` can never re-enter the wrapped ``send_stream`` and run a
-    second failover pass (which would exceed the 5-switch cap and reuse accounts).
+    second failover pass (which would exceed the 10-switch budget).
 
     **Exact dual-snapshot ownership (S0 / H).** The canonical
     ``ChatInterface`` is shared across the primary and every alternate. Before the
@@ -81,7 +89,7 @@ def _maybe_install_codex_pool_failover(
     account's own non-secret selection (``source_ref`` redacted if absolute).
 
     A no-op (send path byte-identical to plain ``codex``) when the pool did not
-    select a real account or there is no distinct eligible sibling.
+    select a real account (legacy fallback / unusable pool).
     """
     from lingtai.auth.codex_pool import (
         _codex_pool_failover_candidates,
@@ -91,10 +99,10 @@ def _maybe_install_codex_pool_failover(
     if not selected_auth_path:
         return  # legacy fallback — nothing to fail over to
     candidates = _codex_pool_failover_candidates(
-        base_defaults, model, selected_auth_path
+        base_defaults, model, selected_auth_path, selected_source_index
     )
     if not candidates:
-        return  # single-account / unclassified / only-aliases — no distinct sibling
+        return  # empty/unusable pool — nothing to fail over through
 
     # The live canonical interface shared by the primary and every alternate.
     shared_interface = getattr(chat, "interface", None)
@@ -437,10 +445,11 @@ def register_all_adapters() -> None:
             chat = _orig_pool_create_chat(*a, **kwa)
             chat.codex_pool_selection = selection
             # Request-scoped usage-limit account failover (codex-pool only).
-            # Installed only when the pool actually selected an account with at
-            # least one other eligible sibling; a legacy fallback or a
-            # single-account/unclassified pool has nothing to fail over TO, so
-            # the chat's send path stays byte-identical to plain ``codex``.
+            # Installed only when the pool actually selected a real account; a
+            # legacy fallback / unusable pool has nothing to fail over through, so
+            # the chat's send path stays byte-identical to plain ``codex``. When
+            # installed, the candidate SEQUENCE is walked verbatim (no realpath/
+            # alias dedup, revisits/wraps permitted) for up to 10 actual switches.
             #
             # Alternates are built by the SAME ``_codex`` builder with the SAME
             # ``**kw`` as the primary — so they add no adapter resources the
@@ -455,6 +464,12 @@ def register_all_adapters() -> None:
                 model=model,
                 base_defaults=base_defaults,
                 selected_auth_path=selected_auth_path,
+                # The AUTHORITATIVE anchor: the exact occurrence weighted
+                # selection chose (``selection["source_index"]``). Read safely —
+                # the legacy-fallback ``selection`` dict has no ``source_index``,
+                # so ``.get`` yields ``None`` and the helper uses its path-scan
+                # fallback (moot there, since ``selected_auth_path`` is also None).
+                selected_source_index=selection.get("source_index"),
                 build_isolated_adapter=lambda auth_path: _codex(
                     model=model,
                     defaults={**(base_defaults or {}), "codex_auth_path": auth_path},

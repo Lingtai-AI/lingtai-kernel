@@ -1018,8 +1018,11 @@ def test_recognizer_bool_status_code_rejected():
 
 
 # --------------------------------------------------------------------------
-# Failover candidate list — request-scoped, DISTINCT-BY-IDENTITY, anchored,
-# redacted, capped. Anchored to the SELECTED auth path (not a stale index).
+# Failover candidate SEQUENCE — request-scoped, anchored to the SELECTED auth
+# path, walked VERBATIM with NO realpath/alias dedup and NO suppression by
+# resolved identity. This is a switch/retry budget (10 actual switches), not a
+# distinct-account budget: repeated entries, aliases, and revisits/wraps back to
+# the selected account are all emitted in order. Redaction is preserved.
 # --------------------------------------------------------------------------
 
 
@@ -1030,7 +1033,8 @@ def _selected_path(tui_dir, tmp_path, model="gpt-5.5"):
 
 
 def test_failover_candidates_anchor_to_selected_path(tui_dir, tmp_path):
-    """Candidates start AFTER the SELECTED account (by resolved identity), wrapping."""
+    """The sequence starts AFTER the SELECTED account, walking the validated pool
+    order and wrapping — the selected account IS revisited on wrap (no dedup)."""
     _write_pool(tui_dir, [
         {"path": "a.json", "weight": 1},
         {"path": "b.json", "weight": 1},
@@ -1040,41 +1044,157 @@ def test_failover_candidates_anchor_to_selected_path(tui_dir, tmp_path):
     cands = codex_pool._codex_pool_failover_candidates(
         {"codex_session_anchor": anchor}, model=None, selected_auth_path=sel_path,
     )
-    # The selected account is never a candidate; the rest appear exactly once.
-    resolved = {c["auth_path"] for c in cands}
-    assert sel_path not in resolved
-    all_paths = {str(tui_dir / n) for n in ("a.json", "b.json", "c.json")}
-    assert resolved == all_paths - {sel_path}
-    assert len(cands) == 2
+    # Exactly MAX_FAILOVER_SWITCHES candidates, walking as many wraps as needed.
+    assert len(cands) == codex_pool.MAX_FAILOVER_SWITCHES == 10
+    # The FIRST candidate is the pool entry immediately after the selected one
+    # (validated order, wrapping) — never the selected account itself first.
+    names = ["a.json", "b.json", "c.json"]
+    sel_idx = next(i for i, n in enumerate(names) if str(tui_dir / n) == sel_path)
+    expected_first = names[(sel_idx + 1) % 3]
+    assert Path(cands[0]["auth_path"]).name == expected_first
+    # The selected account IS reached again on wrap (revisit allowed, not suppressed).
+    assert any(c["auth_path"] == sel_path for c in cands)
+    # The full first-lap order after the anchor matches the pool sequence.
+    lap = [Path(c["auth_path"]).name for c in cands[:3]]
+    assert lap == [names[(sel_idx + 1) % 3], names[(sel_idx + 2) % 3], names[(sel_idx + 3) % 3]]
 
 
-def test_failover_candidates_dedup_aliased_paths(tui_dir, tmp_path):
-    """Aliased refs to the SAME file are collapsed to one distinct candidate."""
+def test_failover_candidates_anchor_to_authoritative_source_index(tui_dir, tmp_path):
+    """B1 regression (candidate-order correctness, HAND-AUTHORED oracle): when the
+    same resolved path appears at MULTIPLE occurrences and weighted selection chose
+    a LATER one, ``selected_source_index`` is authoritative — the sequence begins
+    with the siblings configured right AFTER that occurrence, not after the first
+    path match.
+
+    Pool (15 entries):  idx 0:S, 1..7:a1..a7, idx 8:S (the SELECTED occurrence),
+    9..14:b1..b6. With source_index=8 the ten-switch walk is, verbatim,
+    b1,b2,b3,b4,b5,b6, then wrap S,a1,a2,a3 — NOT the first-match walk a1..a7,S,b1,b2
+    that anchoring to idx 0 would (wrongly) produce, which omits b3-b6 from budget.
+    """
+    accounts = [{"path": "S.json", "weight": 1}]
+    accounts += [{"path": f"a{i}.json", "weight": 1} for i in range(1, 8)]  # idx 1..7
+    accounts += [{"path": "S.json", "weight": 1}]                            # idx 8 (selected)
+    accounts += [{"path": f"b{i}.json", "weight": 1} for i in range(1, 7)]   # idx 9..14
+    _write_pool(tui_dir, accounts)
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    selected_path = str(tui_dir / "S.json")
+
+    cands = codex_pool._codex_pool_failover_candidates(
+        {"codex_session_anchor": anchor}, model=None,
+        selected_auth_path=selected_path, selected_source_index=8,
+    )
+    got = [Path(c["auth_path"]).name for c in cands]
+
+    # Hand-authored expected order (NOT derived from the helper).
+    expected = [
+        "b1.json", "b2.json", "b3.json", "b4.json", "b5.json", "b6.json",
+        "S.json", "a1.json", "a2.json", "a3.json",
+    ]
+    assert got == expected
+    # b3..b6 (the later configured siblings) are inside the 10-switch budget.
+    for i in (3, 4, 5, 6):
+        assert f"b{i}.json" in got
+    # The old first-match (anchor=idx 0) sequence is NOT produced.
+    old_first_match = [
+        "a1.json", "a2.json", "a3.json", "a4.json", "a5.json", "a6.json",
+        "a7.json", "S.json", "b1.json", "b2.json",
+    ]
+    assert got != old_first_match
+    # The first switch is index 9 (b1) — the sibling right after the actual pick.
+    assert cands[0]["source_index"] == 9
+
+
+def test_failover_candidates_source_index_absent_uses_path_scan_fallback(tui_dir, tmp_path):
+    """When ``selected_source_index`` is absent/invalid (a direct/internal caller
+    that did not thread it), the DEFENSIVE path-scan fallback is preserved: anchor
+    to the FIRST resolved-path match. For the duplicate-S pool that first match is
+    idx 0, so the fallback walk is a1..a7,S,b1,b2 (the pre-index behavior)."""
+    accounts = [{"path": "S.json", "weight": 1}]
+    accounts += [{"path": f"a{i}.json", "weight": 1} for i in range(1, 8)]
+    accounts += [{"path": "S.json", "weight": 1}]
+    accounts += [{"path": f"b{i}.json", "weight": 1} for i in range(1, 7)]
+    _write_pool(tui_dir, accounts)
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    selected_path = str(tui_dir / "S.json")
+
+    expected_pathscan = [
+        "a1.json", "a2.json", "a3.json", "a4.json", "a5.json", "a6.json",
+        "a7.json", "S.json", "b1.json", "b2.json",
+    ]
+    # index=None -> path-scan fallback.
+    none_seq = [
+        Path(c["auth_path"]).name
+        for c in codex_pool._codex_pool_failover_candidates(
+            {"codex_session_anchor": anchor}, model=None,
+            selected_auth_path=selected_path, selected_source_index=None,
+        )
+    ]
+    assert none_seq == expected_pathscan
+    # Out-of-range index -> same defensive fallback.
+    oor_seq = [
+        Path(c["auth_path"]).name
+        for c in codex_pool._codex_pool_failover_candidates(
+            {"codex_session_anchor": anchor}, model=None,
+            selected_auth_path=selected_path, selected_source_index=999,
+        )
+    ]
+    assert oor_seq == expected_pathscan
+    # A bool (int subclass) is rejected as a non-index -> defensive fallback.
+    bool_seq = [
+        Path(c["auth_path"]).name
+        for c in codex_pool._codex_pool_failover_candidates(
+            {"codex_session_anchor": anchor}, model=None,
+            selected_auth_path=selected_path, selected_source_index=True,
+        )
+    ]
+    assert bool_seq == expected_pathscan
+    # Default (param omitted entirely) also uses the path-scan fallback.
+    default_seq = [
+        Path(c["auth_path"]).name
+        for c in codex_pool._codex_pool_failover_candidates(
+            {"codex_session_anchor": anchor}, model=None,
+            selected_auth_path=selected_path,
+        )
+    ]
+    assert default_seq == expected_pathscan
+
+
+def test_failover_candidates_no_dedup_aliased_paths(tui_dir, tmp_path):
+    """Aliased refs to the SAME file are NOT collapsed — each alias entry is walked
+    in order as its own candidate (a usage limit may be soft; retry each ref)."""
     _write_pool(tui_dir, [
-        {"path": "primary.json", "weight": 1},
+        {"path": "primary.json", "weight": 100},   # weight makes it the near-certain primary
         {"path": "same.json", "weight": 1},
         {"path": "./same.json", "weight": 1},          # alias of same.json
         {"path": str(tui_dir / "same.json"), "weight": 1},  # absolute alias
         {"path": "other.json", "weight": 1},
     ])
-    # Force primary = primary.json by seeding; if not, still assert dedup holds.
     anchor, sel_path = _selected_path(tui_dir, tmp_path)
     cands = codex_pool._codex_pool_failover_candidates(
         {"codex_session_anchor": anchor}, model=None, selected_auth_path=sel_path,
     )
     resolved = [c["auth_path"] for c in cands]
-    # No resolved path repeats, and the selected one is absent.
-    assert len(resolved) == len(set(resolved))
-    assert sel_path not in resolved
-    # same.json (whatever alias) appears at most once across the candidate list.
-    same_resolved = str((tui_dir / "same.json"))
-    assert resolved.count(same_resolved) <= 1
+    same_resolved = str(tui_dir / "same.json")
+    # The three same.json aliases each appear (once per lap), so at least the
+    # first lap contributes 3 same.json entries — never deduped to one.
+    assert resolved[:4].count(same_resolved) == 3
+    # Source refs preserve each alias exactly as configured — relative refs stay
+    # verbatim, and the ABSOLUTE alias is redacted (the preserved redaction
+    # invariant), all pointing at the same resolved auth_path.
+    first_lap_same_refs = [
+        c["source_ref"] for c in cands[:4] if c["auth_path"] == same_resolved
+    ]
+    assert first_lap_same_refs == [
+        "same.json", "./same.json", codex_pool.ABSOLUTE_REF_REDACTED,
+    ]
 
 
-def test_failover_candidates_dedup_symlink_aliases(tui_dir, tmp_path):
-    """A symlink and its target are the SAME account: only ONE distinct candidate.
+def test_failover_candidates_no_dedup_symlink_aliases(tui_dir, tmp_path):
+    """A symlink and its target are NOT collapsed: both are walked as separate
+    candidates (no realpath dedup). Skipped where symlinks are unavailable.
 
-    Skipped on platforms/filesystems where symlink creation is unavailable."""
+    Uses an additive temp symlink under the temp TUI dir; no shared path is
+    created, deleted, or overwritten."""
     target = tui_dir / "target.json"
     target.write_text("{}", encoding="utf-8")
     link = tui_dir / "link.json"
@@ -1085,7 +1205,7 @@ def test_failover_candidates_dedup_symlink_aliases(tui_dir, tmp_path):
         _pytest.skip("symlinks unavailable in this environment")
 
     _write_pool(tui_dir, [
-        {"path": "primary.json", "weight": 50},
+        {"path": "primary.json", "weight": 100},
         {"path": "target.json", "weight": 1},
         {"path": "link.json", "weight": 1},   # symlink alias of target.json
     ])
@@ -1093,20 +1213,18 @@ def test_failover_candidates_dedup_symlink_aliases(tui_dir, tmp_path):
     cands = codex_pool._codex_pool_failover_candidates(
         {"codex_session_anchor": anchor}, model=None, selected_auth_path=sel_path,
     )
-    # The symlink and its target collapse to one distinct identity: at most one
-    # of the two appears as a candidate (never both).
-    identities = {codex_pool._resolved_identity(c["auth_path"]) for c in cands}
-    target_id = codex_pool._resolved_identity(str(target))
-    link_id = codex_pool._resolved_identity(str(link))
-    assert target_id == link_id
-    assert sum(1 for c in cands if codex_pool._resolved_identity(c["auth_path"]) == target_id) <= 1
+    # BOTH the link and its target appear as candidates by their own configured
+    # (unresolved) path — realpath is NOT applied, so they are not merged.
+    first_lap_names = [Path(c["auth_path"]).name for c in cands[:2]]
+    assert set(first_lap_names) == {"target.json", "link.json"}
 
 
-def test_failover_candidates_never_include_selected_even_when_aliased(tui_dir, tmp_path):
-    """If the selected account is also present under an alias, no alias of it is a candidate."""
+def test_failover_candidates_include_selected_on_wrap_even_when_aliased(tui_dir, tmp_path):
+    """The selected account (and its aliases) ARE reached on wrap — never
+    suppressed by resolved identity."""
     _write_pool(tui_dir, [
-        {"path": "dup.json", "weight": 5},
-        {"path": "./dup.json", "weight": 5},   # alias of the (likely) selected file
+        {"path": "dup.json", "weight": 100},   # near-certain selected primary
+        {"path": "./dup.json", "weight": 1},   # alias of the selected file
         {"path": "real-other.json", "weight": 1},
     ])
     anchor, sel_path = _selected_path(tui_dir, tmp_path)
@@ -1114,43 +1232,58 @@ def test_failover_candidates_never_include_selected_even_when_aliased(tui_dir, t
         {"codex_session_anchor": anchor}, model=None, selected_auth_path=sel_path,
     )
     resolved = [c["auth_path"] for c in cands]
-    # The selected file's resolved identity never appears among candidates.
-    assert all(r != sel_path for r in resolved)
+    # The selected file's resolved path DOES appear among candidates (via its
+    # own entry reached on wrap and/or its ./dup.json alias — both resolve to it).
+    assert sel_path in resolved
 
 
-def test_failover_candidates_cap_at_five(tui_dir, tmp_path):
-    """At most MAX_FAILOVER_SWITCHES (=5) distinct candidates."""
-    _write_pool(tui_dir, [{"path": f"a{i}.json", "weight": 1} for i in range(10)])
+def test_failover_candidates_cap_at_ten_switches(tui_dir, tmp_path):
+    """Exactly MAX_FAILOVER_SWITCHES (=10) candidates — the switch/retry budget —
+    regardless of how many distinct accounts exist."""
+    _write_pool(tui_dir, [{"path": f"a{i}.json", "weight": 1} for i in range(25)])
     anchor, sel_path = _selected_path(tui_dir, tmp_path)
     cands = codex_pool._codex_pool_failover_candidates(
         {"codex_session_anchor": anchor}, model=None, selected_auth_path=sel_path,
     )
-    assert len(cands) == codex_pool.MAX_FAILOVER_SWITCHES == 5
-    # All distinct, none is the selected account.
-    resolved = [c["auth_path"] for c in cands]
-    assert len(resolved) == len(set(resolved))
-    assert sel_path not in resolved
+    assert len(cands) == codex_pool.MAX_FAILOVER_SWITCHES == 10
 
 
-def test_failover_candidates_empty_when_single_account(tui_dir, tmp_path):
-    """A one-account pool has no failover target -> empty."""
+def test_failover_candidates_single_account_revisits(tui_dir, tmp_path):
+    """A one-account pool yields the SAME credential MAX_FAILOVER_SWITCHES times
+    (revisit/wrap allowed — a usage limit may clear on a later attempt)."""
     _write_pool(tui_dir, [{"path": "solo.json", "weight": 1}])
     anchor, sel_path = _selected_path(tui_dir, tmp_path)
-    assert codex_pool._codex_pool_failover_candidates(
+    cands = codex_pool._codex_pool_failover_candidates(
         {"codex_session_anchor": anchor}, model=None, selected_auth_path=sel_path,
-    ) == []
+    )
+    assert len(cands) == codex_pool.MAX_FAILOVER_SWITCHES == 10
+    assert all(Path(c["auth_path"]).name == "solo.json" for c in cands)
 
 
-def test_failover_candidates_empty_when_only_aliases_of_selected(tui_dir, tmp_path):
-    """A pool that is only the selected file under aliases has NO distinct sibling."""
+def test_failover_candidates_only_aliases_of_selected_still_revisit(tui_dir, tmp_path):
+    """A pool that is only the selected file under aliases still produces a full
+    switch sequence (each alias/revisit attempted — NOT collapsed to empty)."""
     _write_pool(tui_dir, [
         {"path": "solo.json", "weight": 1},
         {"path": "./solo.json", "weight": 1},
         {"path": str(tui_dir / "solo.json"), "weight": 1},
     ])
     anchor, sel_path = _selected_path(tui_dir, tmp_path)
-    assert codex_pool._codex_pool_failover_candidates(
+    cands = codex_pool._codex_pool_failover_candidates(
         {"codex_session_anchor": anchor}, model=None, selected_auth_path=sel_path,
+    )
+    # All three aliases resolve to the one file; none are suppressed.
+    assert len(cands) == codex_pool.MAX_FAILOVER_SWITCHES == 10
+    solo_resolved = str(tui_dir / "solo.json")
+    assert all(c["auth_path"] == solo_resolved for c in cands)
+
+
+def test_failover_candidates_empty_pool_is_empty(tui_dir, tmp_path):
+    """An unusable/empty pool yields no candidates (caller fails loud)."""
+    _write_pool(tui_dir, [])
+    anchor, _ = _selected_path(tui_dir, tmp_path)
+    assert codex_pool._codex_pool_failover_candidates(
+        {"codex_session_anchor": anchor}, model=None, selected_auth_path=None,
     ) == []
 
 
@@ -1176,6 +1309,8 @@ def test_failover_candidates_v2_stays_in_category(tui_dir, tmp_path):
     resolved = {c["auth_path"] for c in cands}
     assert resolved <= sol_paths  # never leaks into gpt-5.5's category
     assert str(tui_dir / "old.json") not in resolved
+    # The full 10-switch budget is drawn entirely from the model's category.
+    assert len(cands) == codex_pool.MAX_FAILOVER_SWITCHES == 10
 
 
 def test_failover_candidates_redact_absolute_source_ref(tui_dir, tmp_path):
@@ -1396,8 +1531,9 @@ def test_failover_switches_on_usage_limit_and_succeeds(tui_dir, tmp_path):
 def test_failover_send_entrypoint_no_nested_double_drive(tui_dir, tmp_path):
     """Real CodexResponsesSession.send delegates to send_stream. The wrapper must
     NOT nest send→send_stream into two failover passes: a 3-account all-limited
-    pool driven via ``chat.send`` makes EXACTLY 3 provider calls (primary + 2),
-    each account once, never reused/cycled — not 5 (the double-drive bug)."""
+    pool driven via ``chat.send`` makes EXACTLY 1 + MAX_FAILOVER_SWITCHES == 11
+    provider calls (primary + 10 switches, wrapping the 3-account sequence),
+    never MORE — a nested double-drive would explode far past the budget."""
     from lingtai.kernel.llm.interface import ChatInterface
     accounts = [
         {"path": "a.json", "weight": 1},
@@ -1415,10 +1551,9 @@ def test_failover_send_entrypoint_no_nested_double_drive(tui_dir, tmp_path):
         chat = adapter.create_chat(model="gpt-5.5", system_prompt="s", interface=interface)
         with pytest.raises(_FakeUsageLimitError):
             chat.send("hello")  # the DEFAULT (non-streaming) entrypoint
-        # Exactly one provider call per distinct account — no double-drive.
-        assert len(_PROVIDER_CALLS) == 3
-        assert sorted(_PROVIDER_CALLS) == ["a.json", "b.json", "c.json"]
-        assert len(_PROVIDER_CALLS) == len(set(_PROVIDER_CALLS))  # no reuse/cycle
+        # Exactly primary + 10 switches == 11 provider calls — no double-drive
+        # (which would nest and produce far more than the flat budget).
+        assert len(_PROVIDER_CALLS) == 1 + codex_pool.MAX_FAILOVER_SWITCHES == 11
     finally:
         harness.__exit__()
 
@@ -1463,8 +1598,10 @@ def test_failover_network_error_does_not_switch(tui_dir, tmp_path):
 
 
 def test_failover_exhaustion_reraises_terminal_error(tui_dir, tmp_path):
-    """When every eligible account hits the usage limit, the terminal provider
-    error is re-raised (no fake success, no infinite loop). Driven via send_stream."""
+    """When every attempt hits the usage limit, the terminal provider error from
+    the LAST (10th) switched attempt is re-raised (no fake success, no infinite
+    loop). Driven via send_stream. Also proves the 10th switch RUNS and only its
+    failure exhausts."""
     from lingtai.kernel.llm.interface import ChatInterface
     accounts = [
         {"path": "a.json", "weight": 1},
@@ -1474,32 +1611,39 @@ def test_failover_exhaustion_reraises_terminal_error(tui_dir, tmp_path):
     _write_pool(tui_dir, accounts)
     anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
     interface = ChatInterface()
-    terminal = _FakeUsageLimitError("c")
-    # Script so the LAST-tried account raises the identifiable terminal error.
-    script = {n: _FakeUsageLimitError(n) for n in ("a.json", "b.json", "c.json")}
-    harness = _FailoverHarness(script, interface)
+    # Distinct error object per account so we can assert WHICH one is terminal.
+    errs = {n: _FakeUsageLimitError(n) for n in ("a.json", "b.json", "c.json")}
+    # The last switched candidate is candidates[-1]; its error is the terminal one.
+    sel = codex_pool.select_codex_pool_auth({"codex_session_anchor": anchor}, model="gpt-5.5")
+    cands = codex_pool._codex_pool_failover_candidates(
+        {"codex_session_anchor": anchor}, model=None, selected_auth_path=sel["auth_path"],
+    )
+    last_name = Path(cands[-1]["auth_path"]).name
+    harness = _FailoverHarness(errs, interface)
     harness.__enter__()
     try:
         adapter = _pool_svc(anchor).get_adapter("codex-pool")
         chat = adapter.create_chat(model="gpt-5.5", system_prompt="s", interface=interface)
-        with pytest.raises(_FakeUsageLimitError):
+        with pytest.raises(_FakeUsageLimitError) as ei:
             chat.send_stream("hello")
-        # Exactly 3 distinct provider calls (primary + 2 switches).
-        assert len(_PROVIDER_CALLS) == 3
-        assert sorted(_PROVIDER_CALLS) == ["a.json", "b.json", "c.json"]
+        # The re-raised error is the LAST switched attempt's error object.
+        assert ei.value is errs[last_name]
+        # Primary + 10 switches == 11 provider calls; the 10th switch ran.
+        assert len(_PROVIDER_CALLS) == 1 + codex_pool.MAX_FAILOVER_SWITCHES == 11
     finally:
         harness.__exit__()
 
 
-def test_failover_caps_at_five_switches(tui_dir, tmp_path):
-    """With a big all-limited pool, EXACTLY initial + 5 switches (6 provider calls),
-    all distinct, never more (the cap) — regardless of entrypoint."""
+def test_failover_caps_at_ten_switches(tui_dir, tmp_path):
+    """With a big all-limited pool of DISTINCT accounts, EXACTLY initial + 10
+    switches (11 provider calls), never more (the switch budget) — regardless of
+    entrypoint. The 11th switch is NOT attempted."""
     from lingtai.kernel.llm.interface import ChatInterface
-    accounts = [{"path": f"a{i}.json", "weight": 1} for i in range(10)]
+    accounts = [{"path": f"a{i}.json", "weight": 1} for i in range(25)]
     _write_pool(tui_dir, accounts)
     anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
     interface = ChatInterface()
-    script = {f"a{i}.json": _FakeUsageLimitError(str(i)) for i in range(10)}
+    script = {f"a{i}.json": _FakeUsageLimitError(str(i)) for i in range(25)}
     harness = _FailoverHarness(script, interface)
     harness.__enter__()
     try:
@@ -1507,8 +1651,238 @@ def test_failover_caps_at_five_switches(tui_dir, tmp_path):
         chat = adapter.create_chat(model="gpt-5.5", system_prompt="s", interface=interface)
         with pytest.raises(_FakeUsageLimitError):
             chat.send("hello")
-        assert len(_PROVIDER_CALLS) == 6          # initial + 5 switches
-        assert len(_PROVIDER_CALLS) == len(set(_PROVIDER_CALLS))  # all distinct
+        assert len(_PROVIDER_CALLS) == 1 + codex_pool.MAX_FAILOVER_SWITCHES == 11
+    finally:
+        harness.__exit__()
+
+
+# --------------------------------------------------------------------------
+# No-dedup / revisit / sequence — BEHAVIORAL proof through the wired driver
+# (not just candidate-helper counts): the exact provider-call order is observed.
+# --------------------------------------------------------------------------
+
+
+def _ordered_pool_names(tui_dir, tmp_path, accounts):
+    """Write the pool, return (anchor, selected_basename, candidate switch order).
+
+    IMPORTANT — SCOPE: this derives the expected order by CALLING
+    ``_codex_pool_failover_candidates`` itself, so tests built on it prove only
+    that the DRIVER faithfully REPLAYS the candidate list (order + revisits) the
+    helper produced — they do NOT independently verify the helper's candidate
+    ORDER is correct (that would be tautological on the anchor axis). Candidate-
+    ORDER correctness (e.g. anchoring to the actual weighted occurrence with
+    duplicate entries) is proved separately with HAND-AUTHORED expected sequences
+    (see ``test_failover_candidates_anchor_to_authoritative_source_index`` and
+    ``test_failover_driver_anchors_to_later_duplicate_primary_occurrence``)."""
+    _write_pool(tui_dir, accounts)
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    sel = codex_pool.select_codex_pool_auth({"codex_session_anchor": anchor}, model="gpt-5.5")
+    cands = codex_pool._codex_pool_failover_candidates(
+        {"codex_session_anchor": anchor}, model=None,
+        selected_auth_path=sel["auth_path"],
+        selected_source_index=sel["selection"]["source_index"],
+    )
+    switch_names = [Path(c["auth_path"]).name for c in cands]
+    return anchor, Path(sel["auth_path"]).name, switch_names
+
+
+def test_failover_repeated_path_entries_attempted_independently_in_order(tui_dir, tmp_path):
+    """Duplicate/aliased pool entries are each attempted in order through the
+    driver (behavioral): a pool whose siblings repeat produces provider calls in
+    the exact validated-sequence order, aliases included, none suppressed."""
+    from lingtai.kernel.llm.interface import ChatInterface
+    # 'dup.json' appears twice (two literal entries) + one alias — all distinct
+    # entries in the validated order, all must be attempted.
+    accounts = [
+        {"path": "primary.json", "weight": 100},   # near-certain primary
+        {"path": "dup.json", "weight": 1},
+        {"path": "dup.json", "weight": 1},          # literal repeat
+        {"path": "./dup.json", "weight": 1},        # alias
+        {"path": "tail.json", "weight": 1},
+    ]
+    anchor, primary_name, switch_names = _ordered_pool_names(tui_dir, tmp_path, accounts)
+    interface = ChatInterface()
+    # Everything usage-limits, so every scheduled switch is attempted in order.
+    script = {n: _FakeUsageLimitError(n) for n in {"primary.json", "dup.json", "tail.json"}}
+    harness = _FailoverHarness(script, interface)
+    harness.__enter__()
+    try:
+        adapter = _pool_svc(anchor).get_adapter("codex-pool")
+        chat = adapter.create_chat(model="gpt-5.5", system_prompt="s", interface=interface)
+        with pytest.raises(_FakeUsageLimitError):
+            chat.send("hello")
+        # Provider calls == primary then the exact candidate sequence (dup.json
+        # attempted repeatedly across its two entries + alias + wraps, never deduped).
+        assert _PROVIDER_CALLS == [primary_name] + switch_names
+        # dup.json is attempted more than once (repeat + alias + wrap), proving no dedup.
+        assert _PROVIDER_CALLS.count("dup.json") >= 2
+    finally:
+        harness.__exit__()
+
+
+def test_failover_driver_anchors_to_later_duplicate_primary_occurrence(tui_dir, tmp_path):
+    """B1 regression through the REAL driver (HAND-AUTHORED oracle, not the helper):
+    when weighted selection picks a LATER duplicate occurrence of the same resolved
+    path, the FIRST provider switch is the sibling configured right after THAT
+    occurrence, and the full switch prefix follows configured order.
+
+    Pool: idx 0:S, 1..7:a1..a7, idx 8:S (weighted pick forced here), 9..14:b1..b6.
+    The factory threads ``selection["source_index"]`` (== 8) as the authoritative
+    anchor, so the driver's provider calls are:
+        S (primary) , b1,b2,b3,b4,b5,b6, S, a1,a2,a3
+    — first switch b1 (idx 9), NEVER a1 (which anchoring to idx 0 would give)."""
+    from lingtai.kernel.llm.interface import ChatInterface
+    accounts = [{"path": "S.json", "weight": 1}]
+    accounts += [{"path": f"a{i}.json", "weight": 1} for i in range(1, 8)]
+    accounts += [{"path": "S.json", "weight": 1}]                            # idx 8
+    accounts += [{"path": f"b{i}.json", "weight": 1} for i in range(1, 7)]   # idx 9..14
+    _write_pool(tui_dir, accounts)
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    interface = ChatInterface()
+    # Everything usage-limits so the whole 10-switch sequence is walked in order.
+    names = ["S.json"] + [f"a{i}.json" for i in range(1, 8)] + [f"b{i}.json" for i in range(1, 7)]
+    script = {n: _FakeUsageLimitError(n) for n in set(names)}
+
+    # Force weighted selection to choose the SECOND S occurrence (index 8).
+    real_pick = codex_pool._weighted_pick
+
+    def _forced_pick(accts, seed):
+        # Only override for the real pool (len 15); leave any other call intact.
+        if len(accts) == len(accounts):
+            return 8, accts[8]
+        return real_pick(accts, seed)
+
+    harness = _FailoverHarness(script, interface)
+    harness.__enter__()
+    try:
+        with mock.patch.object(codex_pool, "_weighted_pick", _forced_pick):
+            adapter = _pool_svc(anchor).get_adapter("codex-pool")
+            # Sanity: the selection recorded the actual later occurrence (index 8).
+            assert adapter.codex_pool_selection["source_index"] == 8
+            chat = adapter.create_chat(model="gpt-5.5", system_prompt="s", interface=interface)
+            with pytest.raises(_FakeUsageLimitError):
+                chat.send("hello")
+        # HAND-AUTHORED expected provider-call order (primary + 10 switches).
+        expected_calls = [
+            "S.json",                                             # primary (idx 8)
+            "b1.json", "b2.json", "b3.json", "b4.json", "b5.json", "b6.json",  # idx 9..14
+            "S.json", "a1.json", "a2.json", "a3.json",            # wrap idx 0,1,2,3
+        ]
+        assert _PROVIDER_CALLS == expected_calls
+        # The very first SWITCH is b1 (the configured sibling after the actual pick),
+        # never a1 (what anchoring to the first S occurrence, idx 0, would produce).
+        assert _PROVIDER_CALLS[1] == "b1.json"
+        assert _PROVIDER_CALLS[1] != "a1.json"
+    finally:
+        harness.__exit__()
+
+
+class _SequencedFakeChat(_FakeChat):
+    """A fake chat whose action is drawn from a PER-ACCOUNT queue consumed in
+    order, so the SAME credential can fail on early attempts and succeed on a
+    later revisit. ``script[account]`` is a list of actions (exception or 'ok');
+    once exhausted, the last action repeats."""
+
+    def send_stream(self, message, on_chunk=None):
+        _PROVIDER_CALLS.append(self.account)
+        if self._emit_chunk and on_chunk is not None:
+            on_chunk(f"partial:{self.account}")
+        queue = self._script.get(self.account)
+        if isinstance(queue, list):
+            action = queue.pop(0) if len(queue) > 1 else (queue[0] if queue else "ok")
+        else:
+            action = queue
+        if isinstance(action, BaseException):
+            raise action
+        from lingtai.kernel.llm.base import LLMResponse
+        return LLMResponse(text=f"ok:{self.account}")
+
+
+class _SequencedHarness(_FailoverHarness):
+    """_FailoverHarness that yields _SequencedFakeChat instances."""
+
+    def __enter__(self):
+        from lingtai.llm.openai.adapter import CodexOpenAIAdapter
+        _PROVIDER_CALLS.clear()
+        self._patchers.append(_start_codex_mgr_mock())
+        harness = self
+
+        def _fake_create_chat(self_adapter, *a, **kw):
+            token_path = getattr(getattr(self_adapter, "_codex_token_mgr", None), "_path", None)
+            account = Path(str(token_path)).name if token_path else "unknown"
+            harness.built_accounts.append(account)
+            return _SequencedFakeChat(
+                account, harness._interface, harness._script,
+                emit_chunk=harness._emit_chunk,
+            )
+
+        cc_patcher = mock.patch.object(CodexOpenAIAdapter, "create_chat", _fake_create_chat)
+        cc_patcher.start()
+        self._patchers.append(cc_patcher)
+        return self
+
+
+def test_failover_revisit_same_credential_succeeds_after_earlier_usage_limit(tui_dir, tmp_path):
+    """A usage limit can be transient/soft: the SAME credential usage-limits on
+    its first attempt but SUCCEEDS when the pool wraps back to it later. The
+    driver must attempt the revisit and accept its success (no suppression)."""
+    from lingtai.kernel.llm.interface import ChatInterface
+    # Two accounts; both usage-limit on their FIRST attempt, but the sibling
+    # 'other' succeeds on its SECOND attempt (reached on wrap). This proves a
+    # revisit to a previously-usage-limited credential is attempted and accepted.
+    accounts = [{"path": "a.json", "weight": 1}, {"path": "b.json", "weight": 1}]
+    anchor, primary_name, switch_names = _ordered_pool_names(tui_dir, tmp_path, accounts)
+    other_name = "b.json" if primary_name == "a.json" else "a.json"
+    interface = ChatInterface()
+    # 'other' fails once, then succeeds on the revisit; primary always fails.
+    script = {
+        primary_name: [_FakeUsageLimitError(primary_name)],
+        other_name: [_FakeUsageLimitError(other_name), "ok"],
+    }
+    harness = _SequencedHarness(script, interface)
+    harness.__enter__()
+    try:
+        adapter = _pool_svc(anchor).get_adapter("codex-pool")
+        chat = adapter.create_chat(model="gpt-5.5", system_prompt="s", interface=interface)
+        resp = chat.send("hello")
+        # Succeeded on the REVISIT of 'other' (its 2nd attempt), after both its
+        # first attempt AND the primary usage-limited.
+        assert resp.text == f"ok:{other_name}"
+        # Sequence: primary(fail), other(fail, 1st switch), primary(fail, 2nd
+        # switch, wrap), other(OK, 3rd switch, revisit).
+        assert _PROVIDER_CALLS == [primary_name] + switch_names[:3]
+        assert _PROVIDER_CALLS.count(other_name) == 2   # revisited and succeeded
+    finally:
+        harness.__exit__()
+
+
+def test_failover_success_on_tenth_switched_attempt_is_accepted(tui_dir, tmp_path):
+    """The 10th (last budgeted) switched attempt RUNS and its success is accepted:
+    primary + 9 switches usage-limit, the 10th switch succeeds."""
+    from lingtai.kernel.llm.interface import ChatInterface
+    # Enough distinct accounts that the 10th switch lands on a fresh basename we
+    # can single out as the success case.
+    accounts = [{"path": f"s{i}.json", "weight": 1} for i in range(11)]
+    anchor, primary_name, switch_names = _ordered_pool_names(tui_dir, tmp_path, accounts)
+    assert len(switch_names) == codex_pool.MAX_FAILOVER_SWITCHES == 10
+    tenth_name = switch_names[9]           # the 10th switched attempt's account
+    interface = ChatInterface()
+    # Everything usage-limits EXCEPT the account served on the 10th switch.
+    script = {f"s{i}.json": _FakeUsageLimitError(str(i)) for i in range(11)}
+    script[tenth_name] = "ok"
+    # If tenth_name also appears earlier in the sequence (wrap), it would succeed
+    # early; guard the test to the distinct-account case where it appears once.
+    assert switch_names.count(tenth_name) == 1, "10th account must be first seen at the 10th switch"
+    harness = _FailoverHarness(script, interface)
+    harness.__enter__()
+    try:
+        adapter = _pool_svc(anchor).get_adapter("codex-pool")
+        chat = adapter.create_chat(model="gpt-5.5", system_prompt="s", interface=interface)
+        resp = chat.send("hello")
+        assert resp.text == f"ok:{tenth_name}"
+        # Primary + 10 switches ran; the 10th switch is where success landed.
+        assert len(_PROVIDER_CALLS) == 1 + codex_pool.MAX_FAILOVER_SWITCHES == 11
+        assert _PROVIDER_CALLS[-1] == tenth_name
     finally:
         harness.__exit__()
 
@@ -1657,9 +2031,11 @@ def test_failover_switched_attribution_redacts_absolute_ref(tui_dir, tmp_path):
         harness.__exit__()
 
 
-def test_failover_not_installed_for_single_account_pool(tui_dir, tmp_path):
-    """A single-account pool cannot fail over; the usage-limit error propagates
-    unchanged (no wrapper swallow, no rebuild loop)."""
+def test_failover_single_account_pool_revisits_same_credential(tui_dir, tmp_path):
+    """A single-account pool REVISITS its one credential across the switch budget
+    (a usage limit may be transient/soft — retrying the same account can clear it).
+    When every attempt still fails, the terminal error propagates after primary +
+    10 switched revisits; no distinct-account requirement suppresses the revisits."""
     from lingtai.kernel.llm.interface import ChatInterface
     _write_pool(tui_dir, [{"path": "solo.json", "weight": 1}])
     anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
@@ -1676,9 +2052,40 @@ def test_failover_not_installed_for_single_account_pool(tui_dir, tmp_path):
         chat = adapter.create_chat(model="gpt-5.5", system_prompt="s", interface=interface)
         with pytest.raises(_FakeUsageLimitError):
             chat.send("hello")
-        # Only the primary was ever built — no switch attempts.
-        assert harness.built_accounts.count("solo.json") == 1
-        assert len(harness.built_accounts) == 1
+        # The one credential is revisited across the full budget: primary + 10
+        # switched revisits == 11 fresh isolated builds, all of the same account.
+        assert harness.built_accounts.count("solo.json") == 1 + codex_pool.MAX_FAILOVER_SWITCHES == 11
+        assert set(harness.built_accounts) == {"solo.json"}
+        assert _PROVIDER_CALLS == ["solo.json"] * 11
+    finally:
+        harness.__exit__()
+
+
+def test_failover_single_account_pool_revisit_succeeds_when_limit_clears(tui_dir, tmp_path):
+    """The soft-limit case for a single-account pool: the sole credential
+    usage-limits on its first attempts but SUCCEEDS on a later revisit — the
+    driver must accept that success rather than suppressing the revisit."""
+    from lingtai.kernel.llm.interface import ChatInterface
+    _write_pool(tui_dir, [{"path": "solo.json", "weight": 1}])
+    anchor = _anchor_with_started_at(tmp_path / "agent", "t0")
+    interface = ChatInterface()
+    # Fail on the primary + first two switched revisits, succeed on the third.
+    script = {"solo.json": [
+        _FakeUsageLimitError(), _FakeUsageLimitError(), _FakeUsageLimitError(), "ok",
+    ]}
+    harness = _SequencedHarness(script, interface)
+    harness.__enter__()
+    try:
+        svc = LLMService(
+            provider="codex-pool", model="gpt-5.5",
+            provider_defaults={"codex-pool": {"codex_session_anchor": anchor}},
+        )
+        adapter = svc.get_adapter("codex-pool")
+        chat = adapter.create_chat(model="gpt-5.5", system_prompt="s", interface=interface)
+        resp = chat.send("hello")
+        assert resp.text == "ok:solo.json"
+        # Primary(fail) + 3 switched revisits (2 fail, 3rd OK) == 4 attempts total.
+        assert _PROVIDER_CALLS == ["solo.json"] * 4
     finally:
         harness.__exit__()
 
@@ -1885,15 +2292,18 @@ def test_failover_send_none_terminal_restores_prestaged_history(tui_dir, tmp_pat
         # Interface restored to exactly the pre-staged pair — no dangling call, no loss.
         roles = [e.role for e in interface.entries]
         assert roles == ["assistant", "user"]
-        # All three distinct accounts tried once.
-        assert sorted(_PROVIDER_CALLS) == ["a.json", "b.json", "c.json"]
+        # Primary + 10 switches ran (the 3-account sequence wrapped); every call
+        # hit one of the three accounts, and the restore held across all of them.
+        assert len(_PROVIDER_CALLS) == 1 + codex_pool.MAX_FAILOVER_SWITCHES == 11
+        assert set(_PROVIDER_CALLS) == {"a.json", "b.json", "c.json"}
     finally:
         _stop(patchers)
 
 
 def test_failover_alternate_on_alternate_failure_restores_before_each(tui_dir, tmp_path):
-    """Primary + first alternate both usage-limit; second alternate succeeds. Each
-    attempt starts from the restored snapshot (no accumulated corruption)."""
+    """Primary usage-limits, then a first alternate succeeds. Each attempt starts
+    from the restored snapshot (no accumulated corruption): the single staged user
+    turn survives every restore and exactly one assistant reply is appended."""
     from lingtai.kernel.llm.interface import ChatInterface
     accounts = [
         {"path": "a.json", "weight": 1},
@@ -1907,21 +2317,21 @@ def test_failover_alternate_on_alternate_failure_restores_before_each(tui_dir, t
     interface = ChatInterface()
     interface.add_user_message("hi")  # a normal user turn as the staged entry
 
-    # Everything usage-limits except the LAST-tried account. Build order is
-    # deterministic (candidate order), so script the primary + all-but-last to fail.
+    # The FIRST switched candidate succeeds; the primary usage-limits. (The other
+    # accounts are irrelevant — the driver stops at the first success.)
     cands = codex_pool._codex_pool_failover_candidates(
         {"codex_session_anchor": anchor}, model=None, selected_auth_path=sel["auth_path"],
     )
-    last_name = Path(cands[-1]["auth_path"]).name
-    script = {n: _FakeUsageLimitError(n) for n in ("a.json", "b.json", "c.json") if n != last_name}
-    script[last_name] = "ok"
+    first_switch_name = Path(cands[0]["auth_path"]).name
+    script = {n: _FakeUsageLimitError(n) for n in ("a.json", "b.json", "c.json")}
+    script[first_switch_name] = "ok"
     patchers = _install_history_mutating_harness(script, interface)
     try:
         adapter = _pool_svc(anchor).get_adapter("codex-pool")
         chat = adapter.create_chat(model="gpt-5.5", system_prompt="s", interface=interface)
         resp = chat.send_stream("hi")
-        assert resp.text == f"ok:{last_name}"
-        # The single user turn survived every restore; exactly one assistant appended.
+        assert resp.text == f"ok:{first_switch_name}"
+        # The single user turn survived the restore; exactly one assistant appended.
         roles = [e.role for e in interface.entries]
         assert roles.count("user") == 1
         assert roles.count("assistant") == 1

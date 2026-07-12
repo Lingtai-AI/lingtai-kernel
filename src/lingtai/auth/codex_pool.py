@@ -56,10 +56,14 @@ _DEFAULT_POOL_FILENAME = "codex-auth-pool.json"
 # account switch. Recognized STRUCTURALLY only (never from the message string).
 _USAGE_LIMIT_CODE = "usage_limit_reached"
 
-# Maximum number of account SWITCHES within a single request/turn. The initial
-# attempt is not a switch, so at most ``MAX_FAILOVER_SWITCHES + 1`` attempts run
-# when enough distinct accounts exist.
-MAX_FAILOVER_SWITCHES = 5
+# Maximum number of account SWITCHES within a single request/turn. This is a
+# SWITCH/RETRY budget, not a distinct-account budget: the candidate sequence is
+# walked verbatim (no realpath/alias dedup, revisits and wraps permitted), so a
+# repeated path, an alias, or the originally-selected account reached again on
+# wrap each consume one switch. The initial attempt is not a switch, so up to
+# ``MAX_FAILOVER_SWITCHES + 1`` attempts run: the primary, then up to 10 switched
+# alternates. The 10th switched attempt runs; only ITS qualifying failure exhausts.
+MAX_FAILOVER_SWITCHES = 10
 
 # Legacy single-token default, used as the fallback when the pool is unusable.
 _LEGACY_TOKEN_FILENAME = "codex-auth.json"
@@ -412,29 +416,6 @@ def _is_usage_limit_reached_error(exc: BaseException) -> bool:
 ABSOLUTE_REF_REDACTED = "<absolute-path-redacted>"
 
 
-def _resolved_identity(auth_path: str) -> str:
-    """A normalized, alias-collapsing identity for a resolved token-file path.
-
-    Two configured refs that name the SAME file must map to ONE identity so
-    failover never retries the same account or counts an alias as a distinct
-    switch. This collapses:
-      * ``.``/``..``/duplicate-separator variants (``same.json`` vs ``./same.json``
-        vs an absolute path to it), and
-      * SYMLINK aliases when the link (and the components along the path) exist —
-        via ``os.path.realpath``, which follows symlinks and normalizes without
-        ever reading the file's CONTENTS and without requiring the final target to
-        exist (a missing tail is normalized in place, deterministically).
-    ``os.path.normcase`` is then applied for platform path-casing normalization.
-
-    This is a path-identity check only — no token file is opened, no secret is
-    read. On a case-insensitive filesystem whose OS is POSIX (e.g. default macOS),
-    ``normcase`` does not case-fold, so two refs differing only in letter case are
-    NOT treated as the same account; that boundary is intentional and conservative
-    (never MERGE two refs that the OS might keep distinct).
-    """
-    return os.path.normcase(os.path.realpath(auth_path))
-
-
 def _safe_source_ref(raw_ref: str) -> str:
     """Return a non-secret ``source_ref``: the raw ref if relative, else redacted.
 
@@ -453,25 +434,41 @@ def _codex_pool_failover_candidates(
     defaults: dict | None,
     model: str | None,
     selected_auth_path: str | None,
+    selected_source_index: int | None = None,
 ) -> list[dict]:
-    """Return the request-scoped, DISTINCT-BY-IDENTITY list of accounts to fail
-    over to after ``selected_auth_path`` (the account the primary attempt used).
+    """Return the request-scoped SWITCH SEQUENCE to fail over through after the
+    account the primary attempt used.
 
     Reads the SAME non-secret pool snapshot and the SAME validated account order
     as the initial selection (:func:`_load_pool_entries`, model-category-relative
-    for a v2 pool). Ordering is ANCHORED to the actual selected account — walk the
-    validated order starting after the FIRST entry whose resolved identity matches
-    ``selected_auth_path``, wrapping around — so a changed pool order can never
-    cycle back to the selected account via a stale index. Falls back to the pool
-    head when the selected path is unknown/absent.
+    for a v2 pool). Ordering is ANCHORED to the ACTUAL selected occurrence so the
+    sequence follows the configured order of siblings right after it:
 
-    Distinctness is by RESOLVED IDENTITY (:func:`_resolved_identity`), not list
-    index: aliased duplicates (``same.json`` / ``./same.json`` / an absolute path
-    to the same file) and any alias of the selected account are skipped, so no
-    token file is retried and an alias never counts as a switch. Weights govern
-    only the initial pick; failover order is deterministic next-in-order. Capped
-    at :data:`MAX_FAILOVER_SWITCHES` distinct accounts. A pool with no distinct
-    sibling yields ``[]`` so the caller fails loud rather than looping.
+      * ``selected_source_index`` — the AUTHORITATIVE anchor. It is the exact
+        occurrence :func:`select_codex_pool_auth` chose via weighted selection
+        (its ``selection["source_index"]``). When it is a valid in-range integer
+        it is used verbatim, so a pool with duplicate/aliased entries resolving to
+        one file anchors to the occurrence weighted selection actually picked (not
+        merely the first path match) and the sequence begins with the siblings
+        that configuredly follow THAT occurrence.
+      * ``selected_auth_path`` — a DEFENSIVE FALLBACK used only when the index is
+        absent/out-of-range (e.g. a direct/internal caller that did not thread the
+        index): walk to the FIRST entry whose resolved path equals it (exact string
+        match on the same relative-to-TUI resolution the selection used; NO
+        ``realpath``, no alias dedup). Falls back to the pool head when the path is
+        unknown/absent too.
+
+    This is a SWITCH/RETRY budget, NOT a distinct-account budget. The sequence is
+    walked VERBATIM with NO realpath/alias dedup and NO suppression by resolved
+    auth identity: a ``usage_limit_reached`` can be transient/soft, so after the
+    pool wraps the same underlying credential may work again. Repeated path
+    entries, aliases resolving to the same file, and revisits/wraps back to the
+    originally-selected account are therefore ALL emitted in order, each counting
+    as one switch. Exactly :data:`MAX_FAILOVER_SWITCHES` (10) candidates are
+    returned whenever the pool has at least one account (walking as many wraps as
+    needed); an empty pool yields ``[]`` so the caller fails loud rather than
+    looping. Weights govern only the initial pick; failover order is deterministic
+    next-in-order.
 
     Each entry is a non-secret dict::
 
@@ -489,45 +486,42 @@ def _codex_pool_failover_candidates(
     pool_path = resolve_codex_pool_path(defaults)
     accounts, classified = _load_pool_entries(pool_path, model)
     pool_size = len(accounts)
-    if pool_size <= 1:
+    if pool_size == 0:
         return []
     model_scope = model if classified else None
 
     resolved = [
         str(_resolve_relative_to_tui(a["path"], tui_dir)) for a in accounts
     ]
-    identities = [_resolved_identity(r) for r in resolved]
 
-    # Anchor: the index of the first entry matching the selected account's
-    # identity (so ordering follows the ACTUAL selected account, not a stale
-    # index). In the real flow the primary is always selected FROM this pool, so
-    # a match is found; the head-anchor fallback below is defensive for the
-    # can't-happen-in-practice case where the selected path is absent.
+    # Anchor to the ACTUAL selected occurrence. The authoritative source is
+    # ``selected_source_index`` — the exact index weighted selection chose — so a
+    # pool with duplicate/aliased entries anchors to the occurrence that was
+    # actually picked (not merely the first resolved-path match, which would rotate
+    # the sequence and could omit the siblings configured right after the real
+    # occurrence). Only when the index is absent/out-of-range do we fall back to
+    # the resolved-path scan (exact string match, NO ``realpath``, no alias dedup),
+    # and finally to the pool head. In the real flow the index is always threaded,
+    # so the fallbacks are defensive for direct/internal callers.
     anchor = -1
-    if selected_auth_path:
-        selected_id = _resolved_identity(selected_auth_path)
-        for i, ident in enumerate(identities):
-            if ident == selected_id:
+    if isinstance(selected_source_index, int) and not isinstance(
+        selected_source_index, bool
+    ) and 0 <= selected_source_index < pool_size:
+        anchor = selected_source_index
+    elif selected_auth_path:
+        for i, path in enumerate(resolved):
+            if path == selected_auth_path:
                 anchor = i
                 break
-    else:
-        selected_id = None
-
-    # Never fail over TO the selected account (under any alias). When the
-    # selected path is absent from the pool, there is nothing to exclude and
-    # every entry (including index 0) is a valid candidate.
-    seen_ids: set[str] = set()
-    if selected_id is not None:
-        seen_ids.add(selected_id)
     start = anchor if anchor >= 0 else 0
 
+    # Walk the validated order verbatim from ``start + 1``, wrapping, emitting one
+    # candidate per step (NO dedup: aliases, repeated entries, and — on wrap — the
+    # originally-selected account are all attempted). Exactly MAX_FAILOVER_SWITCHES
+    # entries are produced, walking as many full wraps as the budget requires.
     out: list[dict] = []
-    for step in range(1, pool_size + 1):
+    for step in range(1, MAX_FAILOVER_SWITCHES + 1):
         idx = (start + step) % pool_size
-        ident = identities[idx]
-        if ident in seen_ids:
-            continue
-        seen_ids.add(ident)
         chosen = accounts[idx]
         auth_path = resolved[idx]
         out.append(
@@ -543,6 +537,4 @@ def _codex_pool_failover_candidates(
                 "model_scope": model_scope,
             }
         )
-        if len(out) >= MAX_FAILOVER_SWITCHES:
-            break
     return out
