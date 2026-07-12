@@ -278,10 +278,10 @@ def _stop(agent, timeout: float = 5.0) -> None:
         except Exception:
             pass
 
-    # Close LoggingService if configured
-    if agent._log_service is not None:
+    # Close the event journal if configured.
+    if agent._event_journal is not None:
         try:
-            agent._log_service.close()
+            agent._event_journal.close()
         except Exception:
             pass
 

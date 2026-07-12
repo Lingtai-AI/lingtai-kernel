@@ -112,10 +112,31 @@ class Agent(BaseAgent):
         from lingtai.tools.registry import INTRINSICS
         kwargs.setdefault("intrinsics", INTRINSICS)
 
+        # The outer wrapper is a composition root for direct ``lingtai.Agent``
+        # callers.  Explicit ``event_journal=None`` remains an honest opt-out.
+        owned_event_journal = None
+        if "event_journal" not in kwargs and "working_dir" in kwargs:
+            from lingtai.adapters.posix.event_journal import (
+                PosixJsonlEventJournalAdapter,
+            )
+
+            config = kwargs.get("config")
+            ensure_ascii = bool(getattr(config, "ensure_ascii", False))
+            owned_event_journal = PosixJsonlEventJournalAdapter(
+                kwargs["working_dir"],
+                ensure_ascii=ensure_ascii,
+            )
+            kwargs["event_journal"] = owned_event_journal
+
         # Store combo name before super().__init__ (not forwarded to BaseAgent)
         self._combo_name = combo_name
 
-        super().__init__(*args, **kwargs)
+        try:
+            super().__init__(*args, **kwargs)
+        except Exception:
+            if owned_event_journal is not None:
+                owned_event_journal.close()
+            raise
 
         # Persist LLM config for revive (self-sufficient agents contract)
         self._persist_llm_config()

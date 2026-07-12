@@ -94,7 +94,7 @@ def test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock(monkeypatch):
         _thread=None,
         _session=SimpleNamespace(close=lambda: order.append(("session", None))),
         _mail_service=None,
-        _log_service=None,
+        _event_journal=None,
         _workdir=FakeWorkdir(),
         _build_manifest=lambda: {"agent": "test"},
         get_capability=lambda name: FakeDaemon() if name == "daemon" else None,

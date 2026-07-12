@@ -7,7 +7,7 @@ Key concepts:
     - **2-layer tool dispatch**: intrinsics (built-in) + capability handlers.
     - **Opaque context**: the host app can pass any context object — the agent
       stores it but never introspects it.
-    - **4 optional services**: LLM, FileIO, Mail, Logging —
+    - **4 optional services**: LLM, FileIO, Mail, Event Journal —
       missing service auto-disables the intrinsics it backs.
 """
 
@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ..config import AgentConfig
+from ..event_journal import EventJournalPort
 from ..state import AgentState
 from ..workdir import WorkingDir
 from ..message import Message
@@ -254,6 +255,7 @@ class BaseAgent:
         - ``service`` (LLMService): The brain — thinking, generating text.
         - ``file_io`` (FileIOService): File access — backs read/edit/write/glob/grep.
         - ``mail_service`` (MailService): Message transport — backs mail intrinsic.
+        - ``event_journal`` (EventJournalPort): Durable structured event append.
 
     Missing service = intrinsics backed by it are auto-disabled.
 
@@ -282,6 +284,7 @@ class BaseAgent:
         intrinsics: "Mapping[str, Mapping[str, Any]] | None" = None,
         file_io: Any | None = None,
         mail_service: Any | None = None,
+        event_journal: EventJournalPort | None = None,
         config: AgentConfig | None = None,
         context: Any = None,
         admin: dict | None = None,
@@ -313,19 +316,8 @@ class BaseAgent:
         self._workdir = WorkingDir(working_dir)
         self._working_dir = self._workdir.path
 
-        # LoggingService: JSONL is the source of truth; SQLite is an additive,
-        # fail-open sidecar index for queryable history.
-        from ..services.logging import CompositeLoggingService, JSONLLoggingService, SQLiteEventIndex
-        log_dir = self._working_dir / "logs"
-        log_dir.mkdir(exist_ok=True)
-        jsonl_log_service = JSONLLoggingService(
-            log_dir / "events.jsonl",
-            ensure_ascii=self._config.ensure_ascii,
-        )
-        self._log_service = CompositeLoggingService(
-            jsonl_log_service,
-            sqlite_index=SQLiteEventIndex(log_dir / "log.sqlite", ensure=False, keep_open=False),
-        )
+        # Core receives the journal Port; concrete storage is composed outside.
+        self._event_journal = event_journal
 
         # Acquire working directory lock (10s grace for prior process cleanup)
         self._workdir.acquire_lock(timeout=10)
@@ -943,8 +935,8 @@ class BaseAgent:
                 self._deferred_notifications_count = 0
                 self._deferred_notifications_oldest_at = None
 
-        if self._log_service:
-            self._log_service.log({
+        if self._event_journal is not None:
+            self._event_journal.append({
                 "type": event_type,
                 "address": self._working_dir.name,
                 "agent_name": self.agent_name,
