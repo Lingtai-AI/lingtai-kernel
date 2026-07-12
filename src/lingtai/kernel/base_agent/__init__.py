@@ -17,6 +17,7 @@ import contextlib
 import copy
 import functools
 import json
+import os
 import queue
 import threading
 import time
@@ -68,6 +69,35 @@ logger = get_logger()
 # literal (not an import) because the kernel must not depend on ``mcp_servers``.
 # Keep the two in sync.
 _TASK_CARD_TOOL = "_lingtai_telegram_task_card"
+
+# Env var controlling how many ordinary tool rows the automatic Task Card shows
+# as a rolling window (Jason Telegram 7096).  Read from ``os.environ`` on each
+# call (no import-time caching), so it reflects the process's current
+# environment; changing an already-running agent's value still requires the
+# usual restart/re-exec that changes a process environment.  No config file,
+# flag, or persistent state.
+_TASK_CARD_MAX_TOOL_ROWS_ENV = "LINGTAI_TASK_CARD_MAX_TOOL_ROWS"
+_TASK_CARD_DEFAULT_MAX_TOOL_ROWS = 1
+
+
+def _task_card_max_tool_rows() -> int:
+    """Number of ordinary tool rows the Task Card displays (rolling window).
+
+    Reads ``LINGTAI_TASK_CARD_MAX_TOOL_ROWS`` from ``os.environ`` on each call
+    (not cached at import).  A positive integer N shows the latest N tool rows;
+    missing, empty, non-integer, zero, and negative values fail safely to the
+    default of 1.  Whitespace around an integer is tolerated.  N is not otherwise
+    clamped — a very large N renders that many rows and can exceed the render
+    budget / Telegram transport limit (see ``_format_rows_task_card_text``).
+    """
+    raw = os.environ.get(_TASK_CARD_MAX_TOOL_ROWS_ENV)
+    if raw is None:
+        return _TASK_CARD_DEFAULT_MAX_TOOL_ROWS
+    try:
+        value = int(raw.strip())
+    except (TypeError, ValueError):
+        return _TASK_CARD_DEFAULT_MAX_TOOL_ROWS
+    return value if value > 0 else _TASK_CARD_DEFAULT_MAX_TOOL_ROWS
 
 
 def _block_type_name(block: object) -> str:
@@ -2302,6 +2332,13 @@ class BaseAgent:
         except Exception:
             self._log_task_card_reverse_exception("freeze", tool_name="")
 
+    # Rolling window: the automatic card shows the latest N ordinary tool rows,
+    # where N comes from ``_task_card_max_tool_rows()`` (env-configurable, default
+    # 1).  Rows are appended in actual pre-dispatch order and the oldest displayed
+    # tool is dropped when a newer one enters, so sequential completed rows are
+    # NOT cleared down to only the current tool.  The cap is on ordinary tool rows
+    # only — the single API-error row keeps its own lifecycle.
+
     def _on_tool_pre_dispatch_hook(
         self,
         tool_name: str,
@@ -2309,15 +2346,18 @@ class BaseAgent:
         *,
         tool_call_id: str | None = None,
     ) -> None:
-        """Pre-dispatch hook: opens/extends the live Telegram Task Card batch.
+        """Pre-dispatch hook: appends to the live Telegram Task Card window.
 
-        One row per tool call.  Parallel pre-dispatch callbacks are serialized
-        by ToolExecutor before any future starts, so the first active row of a
-        batch resets the current batch (bumping the generation and starting the
-        heartbeat) and subsequent pre-hooks append while any row is still
-        active.  Sequential tools therefore replace the prior completed batch
-        instead of growing unbounded history.  The card is created lazily on the
-        first tool call; direct-answer turns produce no card.
+        One row per tool call, appended in actual pre-dispatch order (parallel
+        pre-dispatch callbacks are serialized by ToolExecutor before any future
+        starts).  The card keeps a rolling window of the newest
+        ``_task_card_max_tool_rows()`` tool rows (env-configurable, default 1):
+        once the window is full, a new tool drops the oldest displayed tool
+        rather than clearing the completed rows down to only the current tool.  A
+        new epoch (a tool arriving with no active tool predecessor) bumps the
+        generation so a stale heartbeat can't overwrite the window, and
+        (re)starts the heartbeat.  The card is created lazily on the first tool
+        call; direct-answer turns produce no card.
         """
         ctx = self._telegram_task_card_context
         if ctx is None:
@@ -2334,20 +2374,22 @@ class BaseAgent:
         action = tool_args.get("action", "")
         with ctx["_lock"]:
             rows = ctx.setdefault("rows", [])
-            # A batch is "active" while any *tool* row is not yet done.  The first
-            # tool that arrives with no active tool predecessor starts a fresh
-            # batch: reset rows, bump the generation (so a stale heartbeat from
-            # the previous batch can't overwrite this one), and (re)start the
-            # heartbeat.  API-error rows are excluded from this check — a new tool
-            # batch means the LLM has responded, so it supersedes any prior
-            # API-error row as the concrete last behavior (sequential-batch
-            # replacement), rather than accreting onto it.
+            # A batch is "active" while any *tool* row is not yet done.  A tool
+            # that arrives with no active tool predecessor opens a new epoch:
+            # bump the generation (so a stale heartbeat from the previous epoch
+            # can't overwrite this one) and (re)start the heartbeat.  API-error
+            # rows are excluded from this active check.  Unlike before, completed
+            # *tool* rows are NOT discarded — they stay in the rolling window and
+            # are only evicted by the newest-N cap below.  A lingering
+            # API-error row IS superseded when a new epoch opens, because a fresh
+            # tool batch means the LLM has responded past the error (its existing
+            # lifecycle); it is only ever dropped here, never by the tool cap.
             batch_active = any(
                 not r["done"] for r in rows if r.get("kind") != "api_error"
             )
             if not batch_active:
-                rows = []
-                ctx["rows"] = rows
+                if any(r.get("kind") == "api_error" for r in rows):
+                    rows[:] = [r for r in rows if r.get("kind") != "api_error"]
                 ctx["generation"] = ctx.get("generation", 0) + 1
                 self._start_task_card_heartbeat(ctx)
             rows.append({
@@ -2363,7 +2405,29 @@ class BaseAgent:
                 "elapsed_s": 0,
                 "done": False,
             })
+            self._cap_task_card_tool_rows(rows)
             self._render_task_card(ctx)
+
+    @staticmethod
+    def _cap_task_card_tool_rows(rows: list) -> None:
+        """Evict oldest tool rows in place, keeping the newest window.
+
+        Caps ordinary tool rows to ``_task_card_max_tool_rows()`` (env-configurable,
+        default 1) while retaining every API-error row (``kind='api_error'``) and
+        preserving relative order.  Only the oldest surplus *tool* rows are
+        removed; an API-error row is never discarded to satisfy the tool-row cap.
+        Mutates ``rows`` in place so the heartbeat/render always see the same list
+        object.  Caller holds the lock.
+        """
+        tool_indices = [
+            i for i, r in enumerate(rows) if r.get("kind") != "api_error"
+        ]
+        surplus = len(tool_indices) - _task_card_max_tool_rows()
+        if surplus <= 0:
+            return
+        # Drop the oldest surplus tool rows (lowest indices) in place.
+        drop = set(tool_indices[:surplus])
+        rows[:] = [r for i, r in enumerate(rows) if i not in drop]
 
     def _capture_task_card_started_at(self, ctx: dict) -> str:
         """Capture the local start instant as an immutable display string.

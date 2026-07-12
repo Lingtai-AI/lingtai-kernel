@@ -1,13 +1,17 @@
 """BaseAgent batch/rows/heartbeat orchestration for the Task Card.
 
-The pre-dispatch hook builds one row per tool call (the first active row of a
-batch resets the batch; later pre-hooks append while any row is active).  The
-result hook freezes a completed row (final whole-second elapsed + done marker)
-on the orchestrating thread while other rows keep ticking.  A 0.5s heartbeat
-edits the same card with fresh whole-second elapsed values (floor display, so
-half-second frames read 0s, 0s, 1s, 1s, 2s), never sends a new card per tick,
-uses a monotonic clock, and a stale timer can never overwrite a newer batch, a
-recreated card, or the frozen last-behavior state.
+The pre-dispatch hook builds one row per tool call and keeps a rolling window of
+the newest three tool rows in pre-dispatch order (Jason: append in actual order,
+drop the oldest displayed tool when a fourth enters — sequential completed rows
+are NOT cleared down to only the current tool).  The result hook freezes a
+completed row (final whole-second elapsed + done marker) on the orchestrating
+thread while other rows keep ticking; a row that has already scrolled out of the
+window can no longer mutate it.  A 0.5s heartbeat edits the same card with fresh
+whole-second elapsed values (floor display, so half-second frames read 0s, 0s,
+1s, 1s, 2s), never sends a new card per tick, uses a monotonic clock, and a stale
+timer can never overwrite a newer window, a recreated card, or the frozen
+last-behavior state.  The three-row cap applies to ordinary tool rows only; the
+single API-error row keeps its own lifecycle/visibility.
 
 Clock and sleep are injected so the tick logic is exercised without real time.
 """
@@ -17,7 +21,21 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timezone, timedelta
 
+import pytest
+
 from lingtai.kernel.base_agent import BaseAgent, _TASK_CARD_TOOL
+
+
+@pytest.fixture
+def roll3(monkeypatch):
+    """Set the rolling window to 3 ordinary tool rows for latest-three coverage.
+
+    The production default is 1 (single latest tool row); the multi-row window
+    tests opt into the configurable N=3 via ``LINGTAI_TASK_CARD_MAX_TOOL_ROWS``.
+    ``monkeypatch`` reverts the env var after each test, so there is no
+    process-global leakage across tests.
+    """
+    monkeypatch.setenv("LINGTAI_TASK_CARD_MAX_TOOL_ROWS", "3")
 
 
 class FakeClock:
@@ -77,7 +95,7 @@ def _rows_of(call):
 
 
 # ---------------------------------------------------------------------------
-# Batch: first active row resets, subsequent pre-hooks append
+# Batch: first tool creates the card, subsequent pre-hooks append (rolling)
 # ---------------------------------------------------------------------------
 
 def test_first_tool_creates_card_with_one_row():
@@ -99,7 +117,7 @@ def test_first_tool_creates_card_with_one_row():
     assert agent._telegram_task_card_context["card_message_id"] == "mybot:123:100"
 
 
-def test_parallel_pre_hooks_append_to_same_batch():
+def test_parallel_pre_hooks_append_to_same_batch(roll3):
     """Two pre-hooks while the first row is active → both rows on one card."""
     client = FakeMCPClient()
     clock = FakeClock()
@@ -118,9 +136,76 @@ def test_parallel_pre_hooks_append_to_same_batch():
     assert all(r["done"] is False for r in rows)
 
 
-def test_next_batch_after_completion_replaces_prior_rows():
-    """A new active row after the batch fully completed resets to a fresh batch
-    (sequential tools don't accumulate unbounded history)."""
+def _last_rows(client):
+    # Rows of the most recent reverse call (create or update), whichever is last.
+    return _rows_of(client.calls[-1]) if client.calls else []
+
+
+def test_sequential_completed_tools_accumulate_up_to_three(roll3):
+    """Sequential tools are NOT cleared to just the current tool after each one
+    finishes — they accumulate as a rolling window (Jason #6894/#6899-followup)."""
+    client = FakeMCPClient()
+    clock = FakeClock()
+    agent = _agent(client, clock)
+
+    # Two sequential tools, each completing before the next starts.
+    agent._on_tool_pre_dispatch_hook("bash", {"_reasoning": "s1"}, tool_call_id="c1")
+    agent._on_tool_result_hook("bash", {}, {"ok": True}, tool_call_id="c1")
+    agent._on_tool_pre_dispatch_hook("read", {"_reasoning": "s2"}, tool_call_id="c2")
+
+    rows = _last_rows(client)
+    # The completed first row is retained beside the active second row.
+    assert [r["tool"] for r in rows] == ["bash", "read"]
+    by_tool = {r["tool"]: r for r in rows}
+    assert by_tool["bash"]["done"] is True
+    assert by_tool["read"]["done"] is False
+
+
+def test_four_sequential_completed_tools_render_latest_three_in_order(roll3):
+    """Four sequential tools → the card shows [2,3,4] in order, not just [4]."""
+    client = FakeMCPClient()
+    clock = FakeClock()
+    agent = _agent(client, clock)
+
+    for i in range(1, 5):
+        agent._on_tool_pre_dispatch_hook(
+            f"tool{i}", {"_reasoning": f"s{i}"}, tool_call_id=f"c{i}")
+        agent._on_tool_result_hook(f"tool{i}", {}, {"ok": True}, tool_call_id=f"c{i}")
+
+    rows = _last_rows(client)
+    assert [r["tool"] for r in rows] == ["tool2", "tool3", "tool4"]
+
+
+def test_dropped_row_stale_result_cannot_mutate_window(roll3):
+    """Once a tool has scrolled out of the newest-three window, its (late) result
+    hook must not resurrect it or otherwise change the visible rows."""
+    client = FakeMCPClient()
+    clock = FakeClock()
+    agent = _agent(client, clock)
+
+    # Four sequential tools push tool1 out of the window.
+    for i in range(1, 5):
+        agent._on_tool_pre_dispatch_hook(
+            f"tool{i}", {"_reasoning": f"s{i}"}, tool_call_id=f"c{i}")
+        if i < 4:
+            agent._on_tool_result_hook(f"tool{i}", {}, {"ok": True}, tool_call_id=f"c{i}")
+
+    window_before = [r["tool"] for r in _last_rows(client)]
+    calls_before = len(client.calls)
+    assert window_before == ["tool2", "tool3", "tool4"]
+
+    # A late/stale result for the already-dropped tool1 must be a no-op render.
+    agent._on_tool_result_hook("tool1", {}, {"ok": True}, tool_call_id="c1")
+
+    assert [r["tool"] for r in _last_rows(client)] == ["tool2", "tool3", "tool4"]
+    # No extra reverse call was made for the dropped row (nothing to freeze).
+    assert len(client.calls) == calls_before
+
+
+def test_completed_row_is_retained_not_cleared_when_next_tool_starts(roll3):
+    """Regression for the exact behavior Jason flagged: when the previous tool
+    finished and a new tool starts, the completed row must NOT be cleared down to
+    only the current tool — it stays in the rolling window (N=3 here)."""
     client = FakeMCPClient()
     clock = FakeClock()
     agent = _agent(client, clock)
@@ -130,19 +215,69 @@ def test_next_batch_after_completion_replaces_prior_rows():
     agent._on_tool_result_hook(
         "bash", {"_reasoning": "step1"}, {"ok": True}, tool_call_id="c1")
 
-    # Next tool → fresh batch, prior row replaced.
+    # Next tool → appended into the rolling window beside the completed one.
     agent._on_tool_pre_dispatch_hook(
         "read", {"_reasoning": "step2"}, tool_call_id="c2")
 
     rows = _rows_of(client.updates()[-1]) if client.updates() else _rows_of(client.creates()[-1])
-    assert [r["tool"] for r in rows] == ["read"]
+    assert [r["tool"] for r in rows] == ["bash", "read"]
+    # The retained first row keeps its completed marker.
+    assert {r["tool"]: r["done"] for r in rows} == {"bash": True, "read": False}
+
+
+# ---------------------------------------------------------------------------
+# Default (env unset): the window shows only the latest ONE ordinary tool row
+# ---------------------------------------------------------------------------
+
+def test_default_unset_sequential_shows_only_latest_one_tool(monkeypatch):
+    """With ``LINGTAI_TASK_CARD_MAX_TOOL_ROWS`` unset the default is 1: after a
+    prior tool completes and a new one starts, only the newest tool row shows."""
+    monkeypatch.delenv("LINGTAI_TASK_CARD_MAX_TOOL_ROWS", raising=False)
+    client = FakeMCPClient()
+    clock = FakeClock()
+    agent = _agent(client, clock)
+
+    agent._on_tool_pre_dispatch_hook("bash", {"_reasoning": "s1"}, tool_call_id="c1")
+    agent._on_tool_result_hook("bash", {}, {"ok": True}, tool_call_id="c1")
+    agent._on_tool_pre_dispatch_hook("read", {"_reasoning": "s2"}, tool_call_id="c2")
+
+    assert [r["tool"] for r in _last_rows(client)] == ["read"]
+
+
+def test_default_unset_parallel_keeps_only_latest_one_tool(monkeypatch):
+    """Default 1 also caps a parallel batch to the single newest pre-dispatch."""
+    monkeypatch.delenv("LINGTAI_TASK_CARD_MAX_TOOL_ROWS", raising=False)
+    client = FakeMCPClient()
+    clock = FakeClock()
+    agent = _agent(client, clock)
+
+    agent._on_tool_pre_dispatch_hook("bash", {"_reasoning": "a"}, tool_call_id="c1")
+    agent._on_tool_pre_dispatch_hook("read", {"_reasoning": "b"}, tool_call_id="c2")
+    agent._on_tool_pre_dispatch_hook("grep", {"_reasoning": "c"}, tool_call_id="c3")
+
+    assert [r["tool"] for r in _last_rows(client)] == ["grep"]
+
+
+def test_env_two_keeps_latest_two_tools(monkeypatch):
+    """A positive value other than 3 also works: N=2 keeps the newest two."""
+    monkeypatch.setenv("LINGTAI_TASK_CARD_MAX_TOOL_ROWS", "2")
+    client = FakeMCPClient()
+    clock = FakeClock()
+    agent = _agent(client, clock)
+
+    for i in range(1, 5):
+        agent._on_tool_pre_dispatch_hook(
+            f"tool{i}", {"_reasoning": f"s{i}"}, tool_call_id=f"c{i}")
+        agent._on_tool_result_hook(f"tool{i}", {}, {"ok": True}, tool_call_id=f"c{i}")
+
+    assert [r["tool"] for r in _last_rows(client)] == ["tool3", "tool4"]
 
 
 # ---------------------------------------------------------------------------
 # Freeze: completed row frozen while others keep ticking
 # ---------------------------------------------------------------------------
 
-def test_completed_row_freezes_final_elapsed_while_other_advances():
+def test_completed_row_freezes_final_elapsed_while_other_advances(roll3):
     client = FakeMCPClient()
     clock = FakeClock()
     agent = _agent(client, clock)
@@ -166,6 +301,213 @@ def test_completed_row_freezes_final_elapsed_while_other_advances():
     assert by_tool["bash"]["elapsed_s"] == 4
     assert by_tool["read"]["done"] is False
     assert by_tool["read"]["elapsed_s"] == 7
+
+
+# ---------------------------------------------------------------------------
+# Rolling newest-three window: parallel entry, retained-row liveness, freeze
+# ---------------------------------------------------------------------------
+
+def test_four_parallel_pre_dispatches_render_latest_three_in_order(roll3):
+    """Four parallel pre-dispatches (all serialized before any future starts)
+    render the newest three in pre-dispatch order; the oldest is dropped."""
+    client = FakeMCPClient()
+    clock = FakeClock()
+    agent = _agent(client, clock)
+
+    for i in range(1, 5):
+        agent._on_tool_pre_dispatch_hook(
+            f"tool{i}", {"_reasoning": f"p{i}"}, tool_call_id=f"c{i}")
+
+    rows = _last_rows(client)
+    assert [r["tool"] for r in rows] == ["tool2", "tool3", "tool4"]
+    assert all(r["done"] is False for r in rows)
+
+
+def test_retained_parallel_rows_keep_live_elapsed_and_freeze_on_own_result(roll3):
+    """Rows retained in the window keep ticking; each freezes on its OWN result,
+    and the dropped tool1's late result never re-enters the window."""
+    client = FakeMCPClient()
+    clock = FakeClock()
+    agent = _agent(client, clock)
+
+    # Four parallel tools, started together at t=1000; tool1 scrolls out.
+    for i in range(1, 5):
+        agent._on_tool_pre_dispatch_hook(
+            f"tool{i}", {"_reasoning": f"p{i}"}, tool_call_id=f"c{i}")
+    assert [r["tool"] for r in _last_rows(client)] == ["tool2", "tool3", "tool4"]
+
+    clock.advance(3)
+    # tool3 completes; tool2 and tool4 keep ticking.
+    agent._on_tool_result_hook("tool3", {}, {"ok": True}, tool_call_id="c3")
+    clock.advance(2)  # t=1005
+    agent._task_card_heartbeat_tick()
+
+    by_tool = {r["tool"]: r for r in _last_rows(client)}
+    assert by_tool["tool3"]["done"] is True
+    assert by_tool["tool3"]["elapsed_s"] == 3          # frozen at its result
+    assert by_tool["tool2"]["done"] is False
+    assert by_tool["tool2"]["elapsed_s"] == 5          # still live
+    assert by_tool["tool4"]["done"] is False
+    assert by_tool["tool4"]["elapsed_s"] == 5
+
+    # tool1 was dropped; its late result cannot bring it back into the window.
+    agent._on_tool_result_hook("tool1", {}, {"ok": True}, tool_call_id="c1")
+    assert [r["tool"] for r in _last_rows(client)] == ["tool2", "tool3", "tool4"]
+
+
+def test_stale_generation_tick_cannot_overwrite_rolling_window(roll3):
+    """A heartbeat tick carrying an OLD generation must not touch the rolling
+    window after the window has advanced to a newer epoch."""
+    client = FakeMCPClient()
+    clock = FakeClock()
+    agent = _agent(client, clock)
+
+    agent._on_tool_pre_dispatch_hook("bash", {"_reasoning": "b1"}, tool_call_id="c1")
+    gen1 = agent._telegram_task_card_context["generation"]
+    agent._on_tool_result_hook("bash", {}, {"ok": True}, tool_call_id="c1")
+
+    # A second sequential tool advances the epoch (new generation) while keeping
+    # the completed first row in the rolling window.
+    agent._on_tool_pre_dispatch_hook("read", {"_reasoning": "b2"}, tool_call_id="c2")
+    assert agent._telegram_task_card_context["generation"] != gen1
+    window = [r["tool"] for r in _last_rows(client)]
+    assert window == ["bash", "read"]
+
+    updates_before = len(client.updates())
+    clock.advance(5)
+    # A tick from the OLD generation must be a no-op — the window is preserved.
+    agent._task_card_heartbeat_tick(generation=gen1)
+    assert len(client.updates()) == updates_before
+    assert [r["tool"] for r in _last_rows(client)] == ["bash", "read"]
+
+
+# ---------------------------------------------------------------------------
+# API-error row coexists with the newest-three tool window
+# ---------------------------------------------------------------------------
+#
+# Lifecycle note (preserved from before the rolling window): a NEW epoch — a
+# tool arriving with no active tool predecessor — supersedes a lingering
+# API-error row, because a fresh tool batch means the LLM has responded past the
+# error.  An API error reported WHILE a tool batch is active instead coexists,
+# and there the newest-three *tool* cap must never evict the API-error row.
+
+def test_api_error_reported_mid_batch_survives_the_three_tool_cap(roll3):
+    """An API error surfaced while tools are active coexists with the tool rows,
+    and the newest-three cap evicts only TOOL rows — never the API-error row."""
+    client = FakeMCPClient()
+    clock = FakeClock()
+    agent = _agent(client, clock)
+
+    class Exc(Exception):
+        status_code = 429
+        code = "usage_limit_reached"
+
+    # Open the epoch with a live tool, surface an API error mid-batch, then let
+    # more tools arrive while the batch stays active (each still running).
+    agent._on_tool_pre_dispatch_hook("tool1", {"_reasoning": "s1"}, tool_call_id="c1")
+    agent._report_task_card_api_error(Exc(), attempt=1, max_attempts=3, terminal=False)
+    for i in range(2, 6):
+        agent._on_tool_pre_dispatch_hook(
+            f"tool{i}", {"_reasoning": f"s{i}"}, tool_call_id=f"c{i}")
+
+    rows = _last_rows(client)
+    tool_rows = [r for r in rows if r.get("kind") != "api_error"]
+    api_rows = [r for r in rows if r.get("kind") == "api_error"]
+    # Newest three TOOL rows, in order...
+    assert [r["tool"] for r in tool_rows] == ["tool3", "tool4", "tool5"]
+    # ...and the API-error row is still present (not dropped by the cap).
+    assert len(api_rows) == 1
+    assert api_rows[0]["status"] == 429
+
+
+def test_tool_cap_never_exceeds_three_while_api_error_coexists(roll3):
+    """Under sustained churn within one active batch the payload never carries
+    more than three tool rows; the coexisting API-error row is not counted."""
+    client = FakeMCPClient()
+    clock = FakeClock()
+    agent = _agent(client, clock)
+
+    class Exc(Exception):
+        status_code = 500
+        code = None
+
+    # First tool opens the epoch; the API error then coexists for the rest of the
+    # active batch (no tool ever completes, so no new epoch supersedes it).
+    agent._on_tool_pre_dispatch_hook("tool1", {"_reasoning": "s1"}, tool_call_id="c1")
+    agent._report_task_card_api_error(Exc(), attempt=1, max_attempts=3, terminal=False)
+    for i in range(2, 8):
+        agent._on_tool_pre_dispatch_hook(
+            f"tool{i}", {"_reasoning": f"s{i}"}, tool_call_id=f"c{i}")
+        rows = _last_rows(client)
+        tool_rows = [r for r in rows if r.get("kind") != "api_error"]
+        assert len(tool_rows) <= 3
+
+    rows = _last_rows(client)
+    assert [r["tool"] for r in rows if r.get("kind") != "api_error"] == [
+        "tool5", "tool6", "tool7"]
+    assert any(r.get("kind") == "api_error" for r in rows)
+
+
+def test_new_epoch_supersedes_lingering_api_error_row():
+    """Preserved lifecycle: when a completed batch is followed by a fresh tool
+    (new epoch), a lingering API-error row is superseded — but this is the epoch
+    transition, NOT the tool-row cap."""
+    client = FakeMCPClient()
+    clock = FakeClock()
+    agent = _agent(client, clock)
+
+    class Exc(Exception):
+        status_code = 429
+        code = "usage_limit_reached"
+
+    agent._report_task_card_api_error(Exc(), attempt=1, max_attempts=1, terminal=True)
+    # A brand-new tool batch (no active tool predecessor) opens a new epoch.
+    agent._on_tool_pre_dispatch_hook("read", {"_reasoning": "next"}, tool_call_id="c9")
+
+    rows = _last_rows(client)
+    assert not any(r.get("kind") == "api_error" for r in rows)
+    assert [r.get("tool") for r in rows] == ["read"]
+
+
+# ---------------------------------------------------------------------------
+# Env parser: LINGTAI_TASK_CARD_MAX_TOOL_ROWS positive-int / fail-safe-to-1
+# ---------------------------------------------------------------------------
+
+def _max_rows():
+    from lingtai.kernel.base_agent import _task_card_max_tool_rows
+    return _task_card_max_tool_rows()
+
+
+def test_env_parser_unset_defaults_to_one(monkeypatch):
+    monkeypatch.delenv("LINGTAI_TASK_CARD_MAX_TOOL_ROWS", raising=False)
+    assert _max_rows() == 1
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("1", 1),
+    ("2", 2),
+    ("3", 3),
+    ("10", 10),
+    ("  4  ", 4),   # surrounding whitespace tolerated
+])
+def test_env_parser_positive_integers(monkeypatch, value, expected):
+    monkeypatch.setenv("LINGTAI_TASK_CARD_MAX_TOOL_ROWS", value)
+    assert _max_rows() == expected
+
+
+@pytest.mark.parametrize("value", [
+    "",          # empty
+    "   ",       # blank
+    "abc",       # non-integer
+    "1.5",       # float text is not an int
+    "3x",        # trailing junk
+    "0",         # zero
+    "-1",        # negative
+    "-5",        # negative
+])
+def test_env_parser_invalid_or_nonpositive_falls_back_to_one(monkeypatch, value):
+    monkeypatch.setenv("LINGTAI_TASK_CARD_MAX_TOOL_ROWS", value)
+    assert _max_rows() == 1
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +650,27 @@ def test_teardown_finalizes_frozen_rows_not_generic_done():
         "elapsed_s": 3, "done": True, "started_at": _FIXED_STAMP,
     }]
     assert agent._telegram_task_card_context is None
+
+
+def test_teardown_keeps_latest_three_concrete_rows(roll3):
+    """Finalization freezes the newest-three rolling window (not just the last
+    tool), so the resident card's last-behavior record shows [2,3,4]."""
+    client = FakeMCPClient()
+    clock = FakeClock()
+    agent = _agent(client, clock)
+
+    for i in range(1, 5):
+        agent._on_tool_pre_dispatch_hook(
+            f"tool{i}", {"_reasoning": f"s{i}"}, tool_call_id=f"c{i}")
+        agent._on_tool_result_hook(f"tool{i}", {}, {"ok": True}, tool_call_id=f"c{i}")
+
+    agent._teardown_telegram_task_card()
+
+    finals = [c for c in client.calls if c[1].get("sub_action") == "finalize"]
+    assert len(finals) == 1
+    rows = finals[0][1]["rows"]
+    assert [r["tool"] for r in rows] == ["tool2", "tool3", "tool4"]
+    assert all(r["done"] is True for r in rows)
 
 
 def test_teardown_freezes_row_still_active_at_turn_end():
