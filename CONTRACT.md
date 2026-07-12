@@ -4,6 +4,7 @@ contract_version: 2
 related_files:
   - ANATOMY.md
   - src/lingtai/kernel/event_journal/CONTRACT.md
+  - src/lingtai/kernel/mail_transport/CONTRACT.md
   - CONTRIBUTING.md
   - README.md
   - dev-guide-skill/SKILL.md
@@ -102,6 +103,36 @@ Normative rules:
     ordinary code unless they own an independently meaningful promise, isolate
     a concrete mechanism or side effect, or require substitutable
     implementations.
+
+### Capability-native interfaces
+
+LingTai follows **semantic standardization, syntactic specialization**. A Port
+MUST use the smallest domain vocabulary that precisely expresses its capability;
+unrelated capabilities MUST NOT be forced into generic method names or one
+universal service shape merely for visual uniformity or human memorability.
+Uniform interface syntax is not itself an architectural virtue.
+
+The standardized surface is instead the system for understanding, proving, and
+evolving each interface:
+
+1. Every capability boundary MUST have one Core owner, one explicit Port, and an
+   adjacent normative component `CONTRACT.md` that defines semantics beyond the
+   type signature: units, ordering, errors, state/time and concurrency domains,
+   durability, unsupported capabilities, compatibility, and non-goals.
+2. Port vocabulary MAY differ across capabilities. Adapters for the same Port
+   MUST conform to the same Contract and shared contract tests; semantic
+   mismatch MUST fail loudly rather than be hidden behind superficially uniform
+   names.
+3. The Composition Root and the reciprocal Anatomy/Contract/code link graph
+   MUST make each specialized Port discoverable and its production Adapter
+   explicit. Coding agents may traverse heterogeneous interfaces quickly, but
+   context is finite, so Contracts MUST remain local, concise, and progressively
+   disclosed rather than becoming one global specification.
+4. At genuine cross-organization or ecosystem interoperability boundaries,
+   established standards such as HTTP, SQL, MCP, or POSIX SHOULD remain the
+   shared vocabulary. Capability-native specialization applies inside those
+   boundaries; it is not permission to replace useful external protocols with
+   private invention.
 
 Inbound ports versus outbound ports:
 

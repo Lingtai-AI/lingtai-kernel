@@ -410,8 +410,8 @@ def test_email_send_with_attachments(tmp_path):
 # ---------------------------------------------------------------------------
 
 def _setup_receiver(tmp_path, name, stop_event):
-    """Create a receiver agent dir with heartbeat and FilesystemMailService."""
-    from lingtai.kernel.services.mail import FilesystemMailService
+    """Create a receiver agent dir with heartbeat and PosixFilesystemMailAdapter."""
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
     d = tmp_path / name
     d.mkdir(parents=True, exist_ok=True)
     (d / ".agent.json").write_text(json.dumps({"agent_name": name}))
@@ -424,13 +424,13 @@ def _setup_receiver(tmp_path, name, stop_event):
                 pass
             stop_event.wait(0.5)
     threading.Thread(target=_hb, daemon=True).start()
-    svc = FilesystemMailService(working_dir=d)
+    svc = PosixFilesystemMailAdapter(working_dir=d)
     return d, svc
 
 
 def test_email_send_multi_to(tmp_path):
     """email send should deliver to multiple addresses."""
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
     stop = threading.Event()
     received = {0: [], 1: []}
@@ -446,7 +446,7 @@ def test_email_send_multi_to(tmp_path):
     try:
         sender_dir = tmp_path / "sender"
         sender_dir.mkdir()
-        sender_svc = FilesystemMailService(working_dir=sender_dir)
+        sender_svc = PosixFilesystemMailAdapter(working_dir=sender_dir)
         agent = Agent(service=make_mock_service(), agent_name="sender", working_dir=tmp_path / "test", mail_service=sender_svc)
         mgr = agent._email_manager
         result = mgr.handle({"action": "send", "address": addrs, "message": "multi-to"})
@@ -463,7 +463,7 @@ def test_email_send_multi_to(tmp_path):
 
 def test_email_send_cc_visible(tmp_path):
     """CC addresses should receive the email with cc field visible."""
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
     stop = threading.Event()
     received = {0: [], 1: []}
@@ -479,7 +479,7 @@ def test_email_send_cc_visible(tmp_path):
     try:
         sender_dir = tmp_path / "sender"
         sender_dir.mkdir()
-        sender_svc = FilesystemMailService(working_dir=sender_dir)
+        sender_svc = PosixFilesystemMailAdapter(working_dir=sender_dir)
         agent = Agent(service=make_mock_service(), agent_name="sender", working_dir=tmp_path / "test", mail_service=sender_svc)
         mgr = agent._email_manager
         to_addr = addrs[0]
@@ -498,7 +498,7 @@ def test_email_send_cc_visible(tmp_path):
 
 def test_email_send_bcc_hidden(tmp_path):
     """BCC addresses should receive the email but bcc field should NOT be in payload."""
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
     stop = threading.Event()
     received = {0: [], 1: []}
@@ -514,7 +514,7 @@ def test_email_send_bcc_hidden(tmp_path):
     try:
         sender_dir = tmp_path / "sender"
         sender_dir.mkdir()
-        sender_svc = FilesystemMailService(working_dir=sender_dir)
+        sender_svc = PosixFilesystemMailAdapter(working_dir=sender_dir)
         agent = Agent(service=make_mock_service(), agent_name="sender", working_dir=tmp_path / "test", mail_service=sender_svc)
         mgr = agent._email_manager
         to_addr = addrs[0]

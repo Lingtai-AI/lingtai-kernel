@@ -230,7 +230,7 @@ def test_cli_build_agent_explicitly_injects_production_adapter(tmp_path, monkeyp
 
     monkeypatch.setattr(cli, "Agent", FakeAgent)
     monkeypatch.setattr(cli, "LLMService", lambda **kwargs: object())
-    monkeypatch.setattr(cli, "FilesystemMailService", lambda **kwargs: object())
+    monkeypatch.setattr(cli, "PosixFilesystemMailAdapter", lambda **kwargs: object())
     monkeypatch.setattr(
         cli, "build_provider_defaults_from_manifest_llm", lambda *args, **kwargs: {}
     )

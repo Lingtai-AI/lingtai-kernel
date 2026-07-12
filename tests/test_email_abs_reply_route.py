@@ -25,7 +25,7 @@ from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
 def _seed_agent_dir(path: Path, *, agent_name: str = "mimo-1") -> None:
-    """Materialize the .agent.json + heartbeat that FilesystemMailService needs."""
+    """Materialize the .agent.json + heartbeat that PosixFilesystemMailAdapter needs."""
     path.mkdir(parents=True, exist_ok=True)
     (path / ".agent.json").write_text(json.dumps({"agent_name": agent_name, "admin": {}}))
     (path / ".agent.heartbeat").write_text(str(time.time()))
@@ -314,7 +314,7 @@ def test_abs_reply_lands_in_original_sender_inbox_not_self(tmp_path):
     to dev-1's reply. That third hop is where the bare-alias ``from`` made
     the message self-deliver inside dev-2's own network.
     """
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
     stop = threading.Event()
 
@@ -324,7 +324,7 @@ def test_abs_reply_lands_in_original_sender_inbox_not_self(tmp_path):
     _seed_agent_dir(dev1_dir)
     _seed_agent_dir(dev2_dir)
 
-    # Keep heartbeats fresh on both dirs (FilesystemMailService refuses
+    # Keep heartbeats fresh on both dirs (PosixFilesystemMailAdapter refuses
     # delivery when heartbeat is stale).
     def _hb(target: Path) -> None:
         while not stop.is_set():
@@ -341,14 +341,14 @@ def test_abs_reply_lands_in_original_sender_inbox_not_self(tmp_path):
     dev1_ev = threading.Event()
     dev2_ev = threading.Event()
 
-    dev1_svc = FilesystemMailService(working_dir=dev1_dir)
-    dev2_svc = FilesystemMailService(working_dir=dev2_dir)
+    dev1_svc = PosixFilesystemMailAdapter(working_dir=dev1_dir)
+    dev2_svc = PosixFilesystemMailAdapter(working_dir=dev2_dir)
     dev1_svc.listen(on_message=lambda m: (dev1_received.append(m), dev1_ev.set()))
     dev2_svc.listen(on_message=lambda m: (dev2_received.append(m), dev2_ev.set()))
 
     try:
         # Two Agents — one per network root, each backed by its own
-        # FilesystemMailService.
+        # PosixFilesystemMailAdapter.
         dev1 = Agent(
             service=make_mock_service(), agent_name="mimo-1",
             working_dir=dev1_dir, mail_service=dev1_svc,

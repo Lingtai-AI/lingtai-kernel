@@ -123,7 +123,7 @@ def test_mail_without_service(tmp_path):
 
 def test_mail_with_service(tmp_path):
     import json
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
     # Set up receiver agent dir with manifest and heartbeat
     receiver_dir = tmp_path / "receiver"
@@ -143,13 +143,13 @@ def test_mail_with_service(tmp_path):
     hb_thread = threading.Thread(target=_hb, daemon=True)
     hb_thread.start()
 
-    receiver_svc = FilesystemMailService(working_dir=receiver_dir)
+    receiver_svc = PosixFilesystemMailAdapter(working_dir=receiver_dir)
     receiver_svc.listen(on_message=lambda msg: (received.append(msg), event.set()))
 
     try:
         sender_dir = tmp_path / "sender"
         sender_dir.mkdir()
-        sender_svc = FilesystemMailService(working_dir=sender_dir)
+        sender_svc = PosixFilesystemMailAdapter(working_dir=sender_dir)
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(), agent_name="sender", working_dir=tmp_path / "test",
@@ -166,10 +166,10 @@ def test_mail_with_service(tmp_path):
 
 
 def test_mail_to_bad_address(tmp_path):
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
     sender_dir = tmp_path / "sender"
     sender_dir.mkdir()
-    sender_svc = FilesystemMailService(working_dir=sender_dir)
+    sender_svc = PosixFilesystemMailAdapter(working_dir=sender_dir)
     agent = BaseAgent(
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
@@ -230,12 +230,12 @@ def test_mail_inbox_wiring(tmp_path):
 def test_mail_start_wires_listener(tmp_path):
     """start() should call MailService.listen() when configured."""
     import json
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
     agent_dir = tmp_path / "test"
     agent_dir.mkdir()
 
-    agent_svc = FilesystemMailService(working_dir=agent_dir)
+    agent_svc = PosixFilesystemMailAdapter(working_dir=agent_dir)
     agent = BaseAgent(
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="receiver", working_dir=tmp_path / "test",
@@ -245,7 +245,7 @@ def test_mail_start_wires_listener(tmp_path):
     try:
         sender_dir = tmp_path / "sender"
         sender_dir.mkdir()
-        sender_svc = FilesystemMailService(working_dir=sender_dir)
+        sender_svc = PosixFilesystemMailAdapter(working_dir=sender_dir)
         result = sender_svc.send(
             str(agent_dir),
             {"from": "sender", "to": str(agent_dir), "message": "wired"},

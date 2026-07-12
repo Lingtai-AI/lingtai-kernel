@@ -1,4 +1,4 @@
-"""Tests for MailService and FilesystemMailService."""
+"""Tests for MailService and PosixFilesystemMailAdapter."""
 import json
 import threading
 import time
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from lingtai.kernel.services.mail import FilesystemMailService
+from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
 
 def _setup_agent_dir(path: Path) -> Path:
@@ -36,7 +36,7 @@ def _keep_heartbeat_alive(path: Path, stop_event: threading.Event) -> threading.
     return t
 
 
-class TestFilesystemMailService:
+class TestPosixFilesystemMailAdapter:
     def test_send_to_listener(self, tmp_path):
         """Test basic send/receive via filesystem."""
         sender_dir = _setup_agent_dir(tmp_path / "sender")
@@ -51,11 +51,11 @@ class TestFilesystemMailService:
             received.append(msg)
             event.set()
 
-        listener = FilesystemMailService(working_dir=receiver_dir)
+        listener = PosixFilesystemMailAdapter(working_dir=receiver_dir)
         listener.listen(on_message)
 
         try:
-            sender = FilesystemMailService(working_dir=sender_dir)
+            sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
             result = sender.send(
                 str(receiver_dir),
                 {"from": str(sender_dir), "to": str(receiver_dir), "message": "hello"},
@@ -72,7 +72,7 @@ class TestFilesystemMailService:
     def test_send_to_nonexistent_returns_error(self, tmp_path):
         """Sending to a non-existent agent directory should return an error string."""
         sender_dir = _setup_agent_dir(tmp_path / "sender")
-        sender = FilesystemMailService(working_dir=sender_dir)
+        sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
         result = sender.send(str(tmp_path / "nonexistent"), {"message": "hello"})
         assert isinstance(result, str)
         assert "No agent" in result
@@ -84,7 +84,7 @@ class TestFilesystemMailService:
         # Write a stale heartbeat (10 seconds old)
         (receiver_dir / ".agent.heartbeat").write_text(str(time.time() - 10))
 
-        sender = FilesystemMailService(working_dir=sender_dir)
+        sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
         result = sender.send(str(receiver_dir), {"message": "hello"})
         assert isinstance(result, str)
         assert "not running" in result
@@ -92,13 +92,13 @@ class TestFilesystemMailService:
     def test_address_property(self, tmp_path):
         """Address should be the working directory name (relative basename)."""
         agent_dir = _setup_agent_dir(tmp_path / "agent")
-        svc = FilesystemMailService(working_dir=agent_dir)
+        svc = PosixFilesystemMailAdapter(working_dir=agent_dir)
         assert svc.address == agent_dir.name
 
     def test_stop_is_idempotent(self, tmp_path):
         """Calling stop multiple times should not raise."""
         agent_dir = _setup_agent_dir(tmp_path / "agent")
-        svc = FilesystemMailService(working_dir=agent_dir)
+        svc = PosixFilesystemMailAdapter(working_dir=agent_dir)
         svc.stop()
         svc.stop()
 
@@ -117,11 +117,11 @@ class TestFilesystemMailService:
             if len(received) >= 3:
                 all_done.set()
 
-        listener = FilesystemMailService(working_dir=receiver_dir)
+        listener = PosixFilesystemMailAdapter(working_dir=receiver_dir)
         listener.listen(on_message)
 
         try:
-            sender = FilesystemMailService(working_dir=sender_dir)
+            sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
             for i in range(3):
                 sender.send(str(receiver_dir), {"message": f"msg-{i}"})
                 time.sleep(0.05)
@@ -155,11 +155,11 @@ class TestMailAttachments:
         attachment = sender_dir / "image.png"
         attachment.write_bytes(b"\x89PNG_TEST_DATA")
 
-        listener = FilesystemMailService(working_dir=receiver_dir)
+        listener = PosixFilesystemMailAdapter(working_dir=receiver_dir)
         listener.listen(on_message)
 
         try:
-            sender = FilesystemMailService(working_dir=sender_dir)
+            sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
             result = sender.send(
                 str(receiver_dir),
                 {
@@ -197,11 +197,11 @@ class TestMailAttachments:
             received.append(msg)
             event.set()
 
-        listener = FilesystemMailService(working_dir=receiver_dir)
+        listener = PosixFilesystemMailAdapter(working_dir=receiver_dir)
         listener.listen(on_message)
 
         try:
-            sender = FilesystemMailService(working_dir=sender_dir)
+            sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
             result = sender.send(
                 str(receiver_dir),
                 {"from": "sender", "to": str(receiver_dir), "message": "no attachments"},
@@ -221,7 +221,7 @@ class TestMailAttachments:
         _keep_heartbeat_alive(receiver_dir, stop)
 
         try:
-            sender = FilesystemMailService(working_dir=sender_dir)
+            sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
             result = sender.send(
                 str(receiver_dir),
                 {"from": "s", "to": "r", "message": "hi", "attachments": ["/nonexistent/file.png"]},
@@ -248,11 +248,11 @@ class TestMailAttachments:
         attachment = sender_dir / "song.mp3"
         attachment.write_bytes(b"MP3_DATA")
 
-        listener = FilesystemMailService(working_dir=receiver_dir)
+        listener = PosixFilesystemMailAdapter(working_dir=receiver_dir)
         listener.listen(on_message)
 
         try:
-            sender = FilesystemMailService(working_dir=sender_dir)
+            sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
             sender.send(
                 str(receiver_dir),
                 {"from": "s", "to": "r", "message": "music", "attachments": [str(attachment)]},
@@ -286,11 +286,11 @@ class TestMailAttachments:
             received.append(msg)
             event.set()
 
-        listener = FilesystemMailService(working_dir=receiver_dir)
+        listener = PosixFilesystemMailAdapter(working_dir=receiver_dir)
         listener.listen(on_message)
 
         try:
-            sender = FilesystemMailService(working_dir=sender_dir)
+            sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
             sender.send(str(receiver_dir), {"from": "s", "to": "r", "message": "plain"})
             assert event.wait(timeout=5.0)
 

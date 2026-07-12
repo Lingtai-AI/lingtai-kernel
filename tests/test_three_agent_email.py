@@ -1,7 +1,7 @@
 """Three-agent email integration test.
 
 Tests end-to-end email flows between three agents (Alice, Bob, Charlie)
-using real FilesystemMailService instances and the email capability.
+using real PosixFilesystemMailAdapter instances and the email capability.
 
 Scenarios:
 1. Alice sends to Bob and Charlie (multi-to)
@@ -21,7 +21,7 @@ from unittest.mock import MagicMock
 
 from lingtai.agent import Agent
 from lingtai.kernel.config import AgentConfig
-from lingtai.kernel.services.mail import FilesystemMailService
+from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 from tests._service_helpers import make_gemini_mock_service as _make_mock_service
 
 
@@ -38,14 +38,14 @@ def _setup_agent_dir(path: Path) -> None:
 
 
 def _make_agent(name: str, base_dir: Path):
-    """Create an agent with a real FilesystemMailService and email capability."""
+    """Create an agent with a real PosixFilesystemMailAdapter and email capability."""
     agent = Agent(
         service=_make_mock_service(),
         agent_name=name,
         working_dir=base_dir / name,
     )
     # Wire up mail service after construction (needs working_dir from agent)
-    mail_svc = FilesystemMailService(working_dir=agent.working_dir)
+    mail_svc = PosixFilesystemMailAdapter(working_dir=agent.working_dir)
     agent._mail_service = mail_svc
     mgr = agent._email_manager
     return agent, mgr

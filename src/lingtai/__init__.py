@@ -48,10 +48,15 @@ _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
         "lingtai.services.file_io_sidecar",
         "resolve_sidecar_binary",
     ),
-    "MailService": ("lingtai.kernel.services.mail", "MailService"),
+    "MailService": ("lingtai.kernel.mail_transport", "MailTransportPort"),
+    "MailTransportPort": ("lingtai.kernel.mail_transport", "MailTransportPort"),
     "FilesystemMailService": (
-        "lingtai.kernel.services.mail",
-        "FilesystemMailService",
+        "lingtai.adapters.posix.mail",
+        "PosixFilesystemMailAdapter",
+    ),
+    "PosixFilesystemMailAdapter": (
+        "lingtai.adapters.posix.mail",
+        "PosixFilesystemMailAdapter",
     ),
     "LoggingService": ("lingtai.kernel.services.logging", "LoggingService"),
     "JSONLLoggingService": ("lingtai.kernel.services.logging", "JSONLLoggingService"),
@@ -92,7 +97,14 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .services.vision import VisionService, create_vision_service
     from .services.websearch import SearchResult, SearchService, create_search_service
     from lingtai.kernel.services.logging import JSONLLoggingService, LoggingService
-    from lingtai.kernel.services.mail import FilesystemMailService, MailService
+    from lingtai.adapters.posix.mail import (
+        PosixFilesystemMailAdapter,
+        PosixFilesystemMailAdapter as FilesystemMailService,
+    )
+    from lingtai.kernel.mail_transport import (
+        MailTransportPort,
+        MailTransportPort as MailService,
+    )
 
 
 def __getattr__(name: str) -> object:
@@ -142,7 +154,9 @@ __all__ = [
     "resolve_sidecar_binary",
     "GrepMatch",
     "MailService",
+    "MailTransportPort",
     "FilesystemMailService",
+    "PosixFilesystemMailAdapter",
     "LoggingService",
     "JSONLLoggingService",
     "VisionService",

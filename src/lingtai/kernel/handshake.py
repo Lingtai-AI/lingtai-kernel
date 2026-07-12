@@ -1,6 +1,6 @@
 """Handshake utility — validate agent presence and liveness by working dir path.
 
-Used by FilesystemMailService (mail delivery), system intrinsic (karma/nirvana
+Used by PosixFilesystemMailAdapter (mail delivery), system intrinsic (karma/nirvana
 actions), and lingtai's cpr logic.
 
 Anatomy leaf: docs/plans/drafts/2026-04-30-anatomy-tree/leaves/core/network-discovery/

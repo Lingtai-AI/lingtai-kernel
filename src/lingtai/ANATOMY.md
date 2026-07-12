@@ -75,7 +75,9 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **Inbound:** `lingtai-tui` calls `cli.run()` to boot agents; imports `load_preset`, `discover_presets_in_dirs` for UI. Kernel's `BaseAgent` is the parent class.
 
-**Outbound — kernel:** `lingtai.kernel.base_agent.BaseAgent`, `.config.AgentConfig`, `.event_journal.EventJournalPort`, `.prompt.build_system_prompt`, `.handshake.resolve_address`, `lingtai.tools.{email,psyche}` (injected), `.services.mail.FilesystemMailService`, `.migrate.run_migrations` (preset libraries) and `.migrate.run_agent_migrations` (agent workdir/init migrations; see `../lingtai/kernel/migrate/ANATOMY.md`).
+**Outbound — kernel:** `lingtai.kernel.base_agent.BaseAgent`, `.config.AgentConfig`, `.event_journal.EventJournalPort`, `.mail_transport.MailTransportPort`, `.prompt.build_system_prompt`, `.handshake.resolve_address`, `lingtai.tools.{email,psyche}` (injected), `.migrate.run_migrations` (preset libraries) and `.migrate.run_agent_migrations` (agent workdir/init migrations; see `../lingtai/kernel/migrate/ANATOMY.md`).
+
+**Outbound — adapters:** the CLI composition root injects `lingtai.adapters.posix.mail.PosixFilesystemMailAdapter` (the production `MailTransportPort` implementation, back-compat public name `FilesystemMailService`) and `lingtai.adapters.posix.event_journal.PosixJsonlEventJournalAdapter`.
 
 **Cross-module:** `agent.py` → `lingtai.tools.registry.{setup_capability,INTRINSICS,CORE_DEFAULTS}`, `services.mcp_registry.{decompress_addons,read_registry}`, `services.mcp_inbox.MCPInboxPoller`, `services.mcp.{MCPClient,HTTPMCPClient}`, `llm.service.LLMService`, `presets`, `lingtai.kernel.config_resolve`, `init_schema`. `cli.py` → `agent.Agent`, `lingtai.tools.registry.{CORE_DEFAULTS,get_all_providers}`, `lingtai.kernel.config_resolve`, `presets`.
 
