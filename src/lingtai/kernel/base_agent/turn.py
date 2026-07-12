@@ -1041,7 +1041,9 @@ def _handle_request(agent, msg: Message) -> None:
         result = _process_response(agent, response)
         agent._post_request(msg, result)
     finally:
-        agent._teardown_telegram_task_card()
+        teardown = getattr(agent, "_teardown_telegram_task_card", None)
+        if teardown is not None:
+            teardown()
 
 
 def _handle_tc_wake(agent, msg: Message) -> None:
@@ -1248,7 +1250,9 @@ def _handle_tc_wake(agent, msg: Message) -> None:
             agent._log("tc_wake_error", **fields)
             raise
     finally:
-        agent._teardown_telegram_task_card()
+        teardown = getattr(agent, "_teardown_telegram_task_card", None)
+        if teardown is not None:
+            teardown()
 
 
 def _get_guard_limits(agent) -> tuple[int, int, int]:
