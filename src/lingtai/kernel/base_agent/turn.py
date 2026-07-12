@@ -1037,8 +1037,13 @@ def _handle_request(agent, msg: Message) -> None:
     response = agent._session.send(content)
     agent._last_usage = response.usage
     agent._save_chat_history()
-    result = _process_response(agent, response)
-    agent._post_request(msg, result)
+    try:
+        result = _process_response(agent, response)
+        agent._post_request(msg, result)
+    finally:
+        teardown = getattr(agent, "_teardown_telegram_task_card", None)
+        if teardown is not None:
+            teardown()
 
 
 def _handle_tc_wake(agent, msg: Message) -> None:
@@ -1060,189 +1065,194 @@ def _handle_tc_wake(agent, msg: Message) -> None:
     of no-op-and-return — the previous "tc_inbox_empty" silent
     no-op was the bug that left spliced notification pairs unread.
     """
-    if is_worker_interface_poisoned(agent):
-        from .worker_recovery import request_worker_hang_refresh
+    try:
+        if is_worker_interface_poisoned(agent):
+            from .worker_recovery import request_worker_hang_refresh
 
-        artifact = getattr(agent, "_llm_worker_poison_artifact", None)
-        agent._log("tc_wake_skipped_poisoned_interface", artifact=artifact)
-        request_worker_hang_refresh(
-            agent,
-            artifact_relpath=artifact,
-            source="tc_wake_poison_guard",
-        )
-        return
-
-    if agent._chat is None:
-        try:
-            agent._session.ensure_session()
-        except Exception as e:
-            agent._log(
-                "tc_wake_noop",
-                reason="ensure_session_failed",
-                error=str(e)[:300],
+            artifact = getattr(agent, "_llm_worker_poison_artifact", None)
+            agent._log("tc_wake_skipped_poisoned_interface", artifact=artifact)
+            request_worker_hang_refresh(
+                agent,
+                artifact_relpath=artifact,
+                source="tc_wake_poison_guard",
             )
             return
 
-    iface = agent._chat.interface
-    items = agent._tc_inbox.drain()
-
-    # Mid-pair tail — defer.  Re-enqueue any drained legacy items so
-    # the next wake retries them.
-    if iface.has_pending_tool_calls():
-        for item in items:
-            agent._tc_inbox.enqueue(item)
-        agent._log(
-            "tc_wake_noop",
-            reason="pending_tool_calls",
-            **_pending_tool_call_summary(iface),
-        )
-        return
-
-    agent._executor = _make_tool_executor(
-        agent,
-        LoopGuard(
-            max_total_calls=_get_guard_limits(agent)[0],
-            dup_free_passes=2,
-            dup_hard_block=8,
-        ),
-    )
-
-    # Legacy tc_inbox path — drained items get spliced and driven the
-    # old way (call appended here, result passed through send).  Empty
-    # in production post-redesign; preserved for back-compat.
-    for idx, item in enumerate(items):
-        try:
-            if getattr(item, "replace_in_history", False):
-                prior_id = agent._appendix_ids_by_source.get(item.source)
-                if prior_id is not None:
-                    iface.remove_pair_by_call_id(prior_id)
-                agent._appendix_ids_by_source.pop(item.source, None)
-            iface.add_assistant_message(content=[item.call])
-            if getattr(item, "replace_in_history", False):
-                agent._appendix_ids_by_source[item.source] = item.call.id
-            agent._save_chat_history()
-
-            agent._log("tc_wake_dispatch", source=item.source, call_id=item.call.id)
+        if agent._chat is None:
             try:
-                response = agent._session.send([item.result])
-            except Exception as send_err:
+                agent._session.ensure_session()
+            except Exception as e:
+                agent._log(
+                    "tc_wake_noop",
+                    reason="ensure_session_failed",
+                    error=str(e)[:300],
+                )
+                return
+
+        iface = agent._chat.interface
+        items = agent._tc_inbox.drain()
+
+        # Mid-pair tail — defer.  Re-enqueue any drained legacy items so
+        # the next wake retries them.
+        if iface.has_pending_tool_calls():
+            for item in items:
+                agent._tc_inbox.enqueue(item)
+            agent._log(
+                "tc_wake_noop",
+                reason="pending_tool_calls",
+                **_pending_tool_call_summary(iface),
+            )
+            return
+
+        agent._executor = _make_tool_executor(
+            agent,
+            LoopGuard(
+                max_total_calls=_get_guard_limits(agent)[0],
+                dup_free_passes=2,
+                dup_hard_block=8,
+            ),
+        )
+
+        # Legacy tc_inbox path — drained items get spliced and driven the
+        # old way (call appended here, result passed through send).  Empty
+        # in production post-redesign; preserved for back-compat.
+        for idx, item in enumerate(items):
+            try:
+                if getattr(item, "replace_in_history", False):
+                    prior_id = agent._appendix_ids_by_source.get(item.source)
+                    if prior_id is not None:
+                        iface.remove_pair_by_call_id(prior_id)
+                    agent._appendix_ids_by_source.pop(item.source, None)
+                iface.add_assistant_message(content=[item.call])
+                if getattr(item, "replace_in_history", False):
+                    agent._appendix_ids_by_source[item.source] = item.call.id
+                agent._save_chat_history()
+
+                agent._log("tc_wake_dispatch", source=item.source, call_id=item.call.id)
+                try:
+                    response = agent._session.send([item.result])
+                except Exception as send_err:
+                    from ..llm_utils import WorkerStillRunningError
+
+                    # Worker still alive — the interface is unsafe to touch.
+                    # Re-raise before the restore/heal path mutates it; the run
+                    # loop's central branch poisons and requests refresh.
+                    if isinstance(send_err, WorkerStillRunningError):
+                        raise
+                    # The spliced tool result was passed into send() and the
+                    # adapter rolled the user entry back when the API call
+                    # failed. Restore the real result before the catch-all
+                    # below synthesizes a placeholder — without this, the
+                    # original notification payload is permanently replaced by
+                    # the kernel notice and the agent has no way to recover
+                    # the message that was on the wire (issue #170).
+                    _restore_tool_results_after_continuation_failure(
+                        agent, [item.result], ledger_source="tc_wake",
+                    )
+                    raise
+                agent._last_usage = response.usage
+                agent._save_chat_history(ledger_source="tc_wake")
+                _process_response(agent, response, ledger_source="tc_wake")
+            except Exception as splice_err:
                 from ..llm_utils import WorkerStillRunningError
 
-                # Worker still alive — the interface is unsafe to touch.
-                # Re-raise before the restore/heal path mutates it; the run
-                # loop's central branch poisons and requests refresh.
-                if isinstance(send_err, WorkerStillRunningError):
+                if isinstance(splice_err, WorkerStillRunningError):
+                    # Interface poisoned — do not inspect/heal/save it. Re-queue
+                    # the remaining items and re-raise to the run loop.
+                    agent._log(
+                        "tc_wake_send_error",
+                        source=item.source,
+                        call_id=item.call.id,
+                        error=str(splice_err)[:300],
+                        worker_still_running=True,
+                    )
+                    for remaining in items[idx + 1:]:
+                        agent._tc_inbox.enqueue(remaining)
                     raise
-                # The spliced tool result was passed into send() and the
-                # adapter rolled the user entry back when the API call
-                # failed. Restore the real result before the catch-all
-                # below synthesizes a placeholder — without this, the
-                # original notification payload is permanently replaced by
-                # the kernel notice and the agent has no way to recover
-                # the message that was on the wire (issue #170).
-                _restore_tool_results_after_continuation_failure(
-                    agent, [item.result], ledger_source="tc_wake",
-                )
-                raise
-            agent._last_usage = response.usage
-            agent._save_chat_history(ledger_source="tc_wake")
-            _process_response(agent, response, ledger_source="tc_wake")
-        except Exception as splice_err:
-            from ..llm_utils import WorkerStillRunningError
-
-            if isinstance(splice_err, WorkerStillRunningError):
-                # Interface poisoned — do not inspect/heal/save it. Re-queue
-                # the remaining items and re-raise to the run loop.
+                if iface.has_pending_tool_calls():
+                    # tool_completed=True: the tool result was produced by the
+                    # notification system and passed in as item.result — the
+                    # failure is in the LLM round-trip that followed.
+                    iface.close_pending_tool_calls(
+                        reason=f"tc_wake splice failed: {str(splice_err)[:200]}",
+                        tool_completed=True,
+                    )
+                    agent._save_chat_history()
                 agent._log(
                     "tc_wake_send_error",
                     source=item.source,
                     call_id=item.call.id,
                     error=str(splice_err)[:300],
-                    worker_still_running=True,
                 )
                 for remaining in items[idx + 1:]:
                     agent._tc_inbox.enqueue(remaining)
                 raise
+
+        # Wire-drive path: notification sync (or anything else that
+        # appends a complete (call, result) pair before posting
+        # MSG_TC_WAKE) leaves the wire ready for inference.  Drive one
+        # round off the existing state — pass None as the message so the
+        # adapter knows to skip the input-append step.
+        #
+        # Guard against stale wakes: only drive the wire when the tail is
+        # a user entry carrying ToolResultBlock(s).  Anything else (empty
+        # interface, tail is assistant text, etc.) means there's nothing
+        # for the LLM to respond to — sending would either error or
+        # produce a redundant continuation.
+        from ..llm.interface import ToolResultBlock
+
+        entries = iface.entries
+        tail_is_tool_result = (
+            bool(entries)
+            and entries[-1].role == "user"
+            and any(isinstance(b, ToolResultBlock) for b in entries[-1].content)
+        )
+        if not tail_is_tool_result:
+            agent._log("tc_wake_noop", reason="wire_not_ready")
+            return
+
+        try:
+            agent._log("tc_wake_continue")
+            response = agent._session.send(None)
+            agent._last_usage = response.usage
+            agent._save_chat_history(ledger_source="tc_wake")
+            _process_response(agent, response, ledger_source="tc_wake")
+            # Notification-driven turns also run turn-boundary housekeeping so molt
+            # pressure / notification sync / large-result rescan fire even when the
+            # agent is woken by mail/soul (see _turn_boundary_housekeeping).
+            _turn_boundary_housekeeping(agent)
+        except Exception as e:
+            from ..llm_utils import WorkerStillRunningError
+
+            if isinstance(e, WorkerStillRunningError):
+                # Interface poisoned — the worker may still be mutating it. Do
+                # not inspect/heal/save; re-raise to the run loop's central
+                # WorkerStillRunning branch which poisons and requests refresh.
+                agent._log(
+                    "tc_wake_error",
+                    error=str(e)[:300],
+                    worker_still_running=True,
+                )
+                raise
             if iface.has_pending_tool_calls():
-                # tool_completed=True: the tool result was produced by the
-                # notification system and passed in as item.result — the
-                # failure is in the LLM round-trip that followed.
+                # tool_completed=True: the wire-drive path only fires when the
+                # tail is already user[ToolResultBlock] — the tool results
+                # were committed and the adapter reverted them after the
+                # LLM continuation failed.
                 iface.close_pending_tool_calls(
-                    reason=f"tc_wake splice failed: {str(splice_err)[:200]}",
+                    reason=f"tc_wake continue heal: {str(e)[:200]}",
                     tool_completed=True,
                 )
                 agent._save_chat_history()
-            agent._log(
-                "tc_wake_send_error",
-                source=item.source,
-                call_id=item.call.id,
-                error=str(splice_err)[:300],
-            )
-            for remaining in items[idx + 1:]:
-                agent._tc_inbox.enqueue(remaining)
+            fields = {"error": str(e)[:300]}
+            if isinstance(e, EmptyLLMResponseError):
+                fields.update(e.diagnostic_fields())
+            agent._log("tc_wake_error", **fields)
             raise
-
-    # Wire-drive path: notification sync (or anything else that
-    # appends a complete (call, result) pair before posting
-    # MSG_TC_WAKE) leaves the wire ready for inference.  Drive one
-    # round off the existing state — pass None as the message so the
-    # adapter knows to skip the input-append step.
-    #
-    # Guard against stale wakes: only drive the wire when the tail is
-    # a user entry carrying ToolResultBlock(s).  Anything else (empty
-    # interface, tail is assistant text, etc.) means there's nothing
-    # for the LLM to respond to — sending would either error or
-    # produce a redundant continuation.
-    from ..llm.interface import ToolResultBlock
-
-    entries = iface.entries
-    tail_is_tool_result = (
-        bool(entries)
-        and entries[-1].role == "user"
-        and any(isinstance(b, ToolResultBlock) for b in entries[-1].content)
-    )
-    if not tail_is_tool_result:
-        agent._log("tc_wake_noop", reason="wire_not_ready")
-        return
-
-    try:
-        agent._log("tc_wake_continue")
-        response = agent._session.send(None)
-        agent._last_usage = response.usage
-        agent._save_chat_history(ledger_source="tc_wake")
-        _process_response(agent, response, ledger_source="tc_wake")
-        # Notification-driven turns also run turn-boundary housekeeping so molt
-        # pressure / notification sync / large-result rescan fire even when the
-        # agent is woken by mail/soul (see _turn_boundary_housekeeping).
-        _turn_boundary_housekeeping(agent)
-    except Exception as e:
-        from ..llm_utils import WorkerStillRunningError
-
-        if isinstance(e, WorkerStillRunningError):
-            # Interface poisoned — the worker may still be mutating it. Do
-            # not inspect/heal/save; re-raise to the run loop's central
-            # WorkerStillRunning branch which poisons and requests refresh.
-            agent._log(
-                "tc_wake_error",
-                error=str(e)[:300],
-                worker_still_running=True,
-            )
-            raise
-        if iface.has_pending_tool_calls():
-            # tool_completed=True: the wire-drive path only fires when the
-            # tail is already user[ToolResultBlock] — the tool results
-            # were committed and the adapter reverted them after the
-            # LLM continuation failed.
-            iface.close_pending_tool_calls(
-                reason=f"tc_wake continue heal: {str(e)[:200]}",
-                tool_completed=True,
-            )
-            agent._save_chat_history()
-        fields = {"error": str(e)[:300]}
-        if isinstance(e, EmptyLLMResponseError):
-            fields.update(e.diagnostic_fields())
-        agent._log("tc_wake_error", **fields)
-        raise
+    finally:
+        teardown = getattr(agent, "_teardown_telegram_task_card", None)
+        if teardown is not None:
+            teardown()
 
 
 def _get_guard_limits(agent) -> tuple[int, int, int]:
@@ -1640,6 +1650,9 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 response.tool_calls,
                 api_call_id=getattr(response, "api_call_id", None),
                 on_result_hook=agent._on_tool_result_hook,
+                on_pre_dispatch_hook=getattr(
+                    agent, "_on_tool_pre_dispatch_hook", None
+                ),
                 cancel_event=agent._cancel_event,
                 collected_errors=collected_errors,
             )

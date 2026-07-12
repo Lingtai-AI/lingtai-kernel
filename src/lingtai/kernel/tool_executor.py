@@ -977,6 +977,7 @@ class ToolExecutor:
         tool_calls: list[ToolCall],
         *,
         on_result_hook: Callable | None = None,
+        on_pre_dispatch_hook: Callable | None = None,
         cancel_event: Any | None = None,
         collected_errors: list[str] | None = None,
         api_call_id: str | None = None,
@@ -986,6 +987,11 @@ class ToolExecutor:
         ``api_call_id`` identifies the LLM API response that produced this
         batch. When present it is stamped onto every tool lifecycle/result
         event for UI grouping and trace reconstruction.
+
+        ``on_pre_dispatch_hook`` fires just before each tool is dispatched,
+        after guard approval but before the handler runs.  Receives
+        (tool_name, tool_args, tool_call_id).  Best-effort — exceptions
+        are caught and logged, never propagated.
         """
         if collected_errors is None:
             collected_errors = []
@@ -997,6 +1003,7 @@ class ToolExecutor:
                 tool_calls,
                 collected_errors,
                 on_result_hook=on_result_hook,
+                on_pre_dispatch_hook=on_pre_dispatch_hook,
                 cancel_event=cancel_event,
             )
         finally:
@@ -1008,6 +1015,7 @@ class ToolExecutor:
         collected_errors: list[str],
         *,
         on_result_hook: Callable | None = None,
+        on_pre_dispatch_hook: Callable | None = None,
         cancel_event: Any | None = None,
     ) -> tuple[list, bool, str]:
         all_parallel_safe = (
@@ -1020,12 +1028,14 @@ class ToolExecutor:
             return self._execute_parallel(
                 tool_calls, collected_errors,
                 on_result_hook=on_result_hook,
+                on_pre_dispatch_hook=on_pre_dispatch_hook,
                 cancel_event=cancel_event,
             )
         else:
             return self._execute_sequential(
                 tool_calls, collected_errors,
                 on_result_hook=on_result_hook,
+                on_pre_dispatch_hook=on_pre_dispatch_hook,
                 cancel_event=cancel_event,
             )
 
@@ -1035,6 +1045,7 @@ class ToolExecutor:
         collected_errors: list[str],
         *,
         on_result_hook: Callable | None = None,
+        on_pre_dispatch_hook: Callable | None = None,
     ) -> tuple[Any, bool, str]:
         tc_id = getattr(tc, "id", None)
         trace_id = self._tool_trace_id(tc)
@@ -1116,6 +1127,14 @@ class ToolExecutor:
                 tool_trace_id=trace_id,
                 tool_args=args,
             )
+            # Best-effort pre-dispatch hook — fires before the handler,
+            # allows real-time progress projection. Exceptions are caught
+            # and logged; they never block or fail the tool.
+            if on_pre_dispatch_hook is not None:
+                try:
+                    on_pre_dispatch_hook(tc.name, args, tool_call_id=tc_id)
+                except Exception:
+                    pass
             with timer:
                 result = self._dispatch_fn(
                     ToolCall(name=tc.name, args=args, id=tc_id)
@@ -1241,6 +1260,7 @@ class ToolExecutor:
         collected_errors: list[str],
         *,
         on_result_hook: Callable | None = None,
+        on_pre_dispatch_hook: Callable | None = None,
         cancel_event: Any | None = None,
     ) -> tuple[list, bool, str]:
         tool_results = []
@@ -1249,6 +1269,7 @@ class ToolExecutor:
                 return [], False, ""
             result_msg, intercepted, intercept_text = self._execute_single(
                 tc, collected_errors, on_result_hook=on_result_hook,
+                on_pre_dispatch_hook=on_pre_dispatch_hook,
             )
             if result_msg is not None:
                 tool_results.append(result_msg)
@@ -1262,6 +1283,7 @@ class ToolExecutor:
         collected_errors: list[str],
         *,
         on_result_hook: Callable | None = None,
+        on_pre_dispatch_hook: Callable | None = None,
         cancel_event: Any | None = None,
     ) -> tuple[list, bool, str]:
         # Phase 1: Pre-check duplicates (sequential — guard not thread-safe)
@@ -1335,7 +1357,16 @@ class ToolExecutor:
             tool_results.sort(key=lambda x: x[0])
             return [r for _, r in tool_results], False, ""
 
-        # Phase 2: Execute in parallel
+        # Phase 2: Serial pre-dispatch hooks (deterministic order) then
+        # execute in parallel.
+        if on_pre_dispatch_hook is not None:
+            for _, tc, args, _trace_id, _verdict, _decision, _proposal in to_execute:
+                tc_id = getattr(tc, "id", None)
+                try:
+                    on_pre_dispatch_hook(tc.name, args, tool_call_id=tc_id)
+                except Exception:
+                    pass
+
         results_map: dict[int, Any] = {}
         errors_map: dict[int, dict] = {}
         elapsed_map: dict[int, int] = {}
