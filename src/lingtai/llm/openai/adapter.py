@@ -2779,6 +2779,10 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 # Exact category key of a model-classified pool (a non-secret
                 # manifest model string); None on flat v1 pools -> omitted.
                 "model_scope": "codex_pool_model_scope",
+                # Present only on a codex-pool request-scoped usage-limit switch:
+                # the value ``usage_limit_reached`` marks that THIS response was
+                # served by a switched-to account (not the initial primary).
+                "failover": "codex_pool_failover",
             }
             for source_key, ledger_key in pool_fields.items():
                 value = pool_selection.get(source_key)

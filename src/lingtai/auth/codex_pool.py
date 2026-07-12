@@ -52,6 +52,15 @@ POOL_PATH_KEY = "codex_auth_pool_path"
 # Default pool file name inside the TUI dir.
 _DEFAULT_POOL_FILENAME = "codex-auth-pool.json"
 
+# The exact structured provider error code that triggers a request-scoped Codex
+# account switch. Recognized STRUCTURALLY only (never from the message string).
+_USAGE_LIMIT_CODE = "usage_limit_reached"
+
+# Maximum number of account SWITCHES within a single request/turn. The initial
+# attempt is not a switch, so at most ``MAX_FAILOVER_SWITCHES + 1`` attempts run
+# when enough distinct accounts exist.
+MAX_FAILOVER_SWITCHES = 5
+
 # Legacy single-token default, used as the fallback when the pool is unusable.
 _LEGACY_TOKEN_FILENAME = "codex-auth.json"
 
@@ -297,7 +306,10 @@ def select_codex_pool_auth(
     return {
         "auth_path": auth_path,
         "selection": {
-            "source_ref": chosen["path"],
+            # Relative refs stay verbatim; an ABSOLUTE ref would leak a real
+            # token-file location, so it is redacted here too (consistent with the
+            # failover alternates). Stable identity travels in ``auth_path_sha8``.
+            "source_ref": _safe_source_ref(chosen["path"]),
             "source_index": idx,
             "pool_size": len(accounts),
             "weight": chosen["weight"],
@@ -323,3 +335,214 @@ def select_codex_pool_auth_path(
     """
     selected = select_codex_pool_auth(defaults, model)
     return selected["auth_path"] if selected else None
+
+
+def _structured_status_code(exc: BaseException) -> int | None:
+    """Best-effort STRUCTURAL HTTP status extraction, or ``None``.
+
+    Reads only integer status fields the provider SDK sets on the exception
+    object (``status_code`` / ``status``) or its ``response.status_code`` — never
+    parses the message string, so ``429`` appearing in free-form text can never
+    be mistaken for the real status. ``bool`` is rejected explicitly because it
+    is an ``int`` subclass in Python but not a meaningful HTTP status.
+    """
+    for attr in ("status_code", "status"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+    response = getattr(exc, "response", None)
+    if response is not None:
+        value = getattr(response, "status_code", None)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def _structured_error_codes(exc: BaseException) -> tuple[str, ...]:
+    """Collect the machine error codes from the structured locations the repo
+    already trusts — never from ``str(exc)`` / message substrings / URLs.
+
+    Mirrors the established ``_task_card_api_code`` idiom: the SDK populates
+    ``exc.code`` only from a TOP-LEVEL body key, while OpenAI-family bodies nest
+    the real code under ``body["error"]``. So gather, with dict guards:
+      * ``exc.code`` when it is a string;
+      * ``body["error"]["code"]`` and ``body["error"]["type"]``;
+      * top-level ``body["code"]``.
+    Returns the string-valued candidates found (possibly empty). Never raises.
+    """
+    candidates: list[object] = []
+    code_attr = getattr(exc, "code", None)
+    if isinstance(code_attr, str):
+        candidates.append(code_attr)
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            candidates.append(err.get("code"))
+            candidates.append(err.get("type"))
+        candidates.append(body.get("code"))
+    return tuple(c for c in candidates if isinstance(c, str) and c)
+
+
+def _is_usage_limit_reached_error(exc: BaseException) -> bool:
+    """Return ``True`` iff ``exc`` is structurally a ``429`` whose structured
+    error code is exactly ``usage_limit_reached``.
+
+    Both facts are extracted STRUCTURALLY:
+      * a numeric HTTP status of exactly ``429`` from an integer status field
+        (or ``response.status_code``) — see :func:`_structured_status_code`;
+      * the exact machine code ``usage_limit_reached`` in one of the structured
+        locations the repo already trusts — see :func:`_structured_error_codes`.
+
+    A string mention in the message alone is NOT sufficient, and the number 429
+    appearing only in free-form text is NOT read as the status. Ordinary 429s
+    with another/no code, non-429 statuses, network errors, timeouts, and
+    arbitrary exceptions all return ``False``. Never raises.
+    """
+    if _structured_status_code(exc) != 429:
+        return False
+    return _USAGE_LIMIT_CODE in _structured_error_codes(exc)
+
+
+# Sentinel emitted in place of an ABSOLUTE account ref so no absolute token-file
+# path ever reaches selection/usage/event metadata. Stable identity is carried by
+# ``auth_path_sha8`` instead. A relative ref is safe and kept verbatim.
+ABSOLUTE_REF_REDACTED = "<absolute-path-redacted>"
+
+
+def _resolved_identity(auth_path: str) -> str:
+    """A normalized, alias-collapsing identity for a resolved token-file path.
+
+    Two configured refs that name the SAME file must map to ONE identity so
+    failover never retries the same account or counts an alias as a distinct
+    switch. This collapses:
+      * ``.``/``..``/duplicate-separator variants (``same.json`` vs ``./same.json``
+        vs an absolute path to it), and
+      * SYMLINK aliases when the link (and the components along the path) exist —
+        via ``os.path.realpath``, which follows symlinks and normalizes without
+        ever reading the file's CONTENTS and without requiring the final target to
+        exist (a missing tail is normalized in place, deterministically).
+    ``os.path.normcase`` is then applied for platform path-casing normalization.
+
+    This is a path-identity check only — no token file is opened, no secret is
+    read. On a case-insensitive filesystem whose OS is POSIX (e.g. default macOS),
+    ``normcase`` does not case-fold, so two refs differing only in letter case are
+    NOT treated as the same account; that boundary is intentional and conservative
+    (never MERGE two refs that the OS might keep distinct).
+    """
+    return os.path.normcase(os.path.realpath(auth_path))
+
+
+def _safe_source_ref(raw_ref: str) -> str:
+    """Return a non-secret ``source_ref``: the raw ref if relative, else redacted.
+
+    A relative pool entry (``codex-auth/x.json``) is safe to surface verbatim. An
+    ABSOLUTE entry (or a ``~`` entry that expands to an absolute path) would leak a
+    real token-file location, so it is replaced by :data:`ABSOLUTE_REF_REDACTED`;
+    the stable non-secret identity travels in ``auth_path_sha8`` instead.
+    """
+    expanded = os.path.expanduser(raw_ref) if raw_ref.startswith("~") else raw_ref
+    if os.path.isabs(expanded):
+        return ABSOLUTE_REF_REDACTED
+    return raw_ref
+
+
+def _codex_pool_failover_candidates(
+    defaults: dict | None,
+    model: str | None,
+    selected_auth_path: str | None,
+) -> list[dict]:
+    """Return the request-scoped, DISTINCT-BY-IDENTITY list of accounts to fail
+    over to after ``selected_auth_path`` (the account the primary attempt used).
+
+    Reads the SAME non-secret pool snapshot and the SAME validated account order
+    as the initial selection (:func:`_load_pool_entries`, model-category-relative
+    for a v2 pool). Ordering is ANCHORED to the actual selected account — walk the
+    validated order starting after the FIRST entry whose resolved identity matches
+    ``selected_auth_path``, wrapping around — so a changed pool order can never
+    cycle back to the selected account via a stale index. Falls back to the pool
+    head when the selected path is unknown/absent.
+
+    Distinctness is by RESOLVED IDENTITY (:func:`_resolved_identity`), not list
+    index: aliased duplicates (``same.json`` / ``./same.json`` / an absolute path
+    to the same file) and any alias of the selected account are skipped, so no
+    token file is retried and an alias never counts as a switch. Weights govern
+    only the initial pick; failover order is deterministic next-in-order. Capped
+    at :data:`MAX_FAILOVER_SWITCHES` distinct accounts. A pool with no distinct
+    sibling yields ``[]`` so the caller fails loud rather than looping.
+
+    Each entry is a non-secret dict::
+
+        {"auth_path": <resolved token path str>,   # for injection as codex_auth_path
+         "source_ref": <relative ref, or ABSOLUTE_REF_REDACTED>,  # never an absolute path
+         "source_index": <index within the validated account list>,
+         "pool_size": <validated account count>,
+         "weight": <the account's weight>,
+         "auth_path_sha8": <sha256(resolved path)[:8]>,  # stable non-secret identity
+         "model_scope": <exact v2 category key, or None on a flat v1 pool>}
+
+    No token file is read; nothing secret is emitted.
+    """
+    tui_dir = resolve_codex_tui_dir()
+    pool_path = resolve_codex_pool_path(defaults)
+    accounts, classified = _load_pool_entries(pool_path, model)
+    pool_size = len(accounts)
+    if pool_size <= 1:
+        return []
+    model_scope = model if classified else None
+
+    resolved = [
+        str(_resolve_relative_to_tui(a["path"], tui_dir)) for a in accounts
+    ]
+    identities = [_resolved_identity(r) for r in resolved]
+
+    # Anchor: the index of the first entry matching the selected account's
+    # identity (so ordering follows the ACTUAL selected account, not a stale
+    # index). In the real flow the primary is always selected FROM this pool, so
+    # a match is found; the head-anchor fallback below is defensive for the
+    # can't-happen-in-practice case where the selected path is absent.
+    anchor = -1
+    if selected_auth_path:
+        selected_id = _resolved_identity(selected_auth_path)
+        for i, ident in enumerate(identities):
+            if ident == selected_id:
+                anchor = i
+                break
+    else:
+        selected_id = None
+
+    # Never fail over TO the selected account (under any alias). When the
+    # selected path is absent from the pool, there is nothing to exclude and
+    # every entry (including index 0) is a valid candidate.
+    seen_ids: set[str] = set()
+    if selected_id is not None:
+        seen_ids.add(selected_id)
+    start = anchor if anchor >= 0 else 0
+
+    out: list[dict] = []
+    for step in range(1, pool_size + 1):
+        idx = (start + step) % pool_size
+        ident = identities[idx]
+        if ident in seen_ids:
+            continue
+        seen_ids.add(ident)
+        chosen = accounts[idx]
+        auth_path = resolved[idx]
+        out.append(
+            {
+                "auth_path": auth_path,
+                "source_ref": _safe_source_ref(chosen["path"]),
+                "source_index": idx,
+                "pool_size": pool_size,
+                "weight": chosen["weight"],
+                "auth_path_sha8": hashlib.sha256(
+                    auth_path.encode("utf-8")
+                ).hexdigest()[:8],
+                "model_scope": model_scope,
+            }
+        )
+        if len(out) >= MAX_FAILOVER_SWITCHES:
+            break
+    return out
