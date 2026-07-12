@@ -5,6 +5,30 @@ import logging
 from pathlib import Path
 
 _logger: logging.Logger | None = None
+_HANDLER_OWNER_ATTR = "_lingtai_handler"
+_CONSOLE_HANDLER = "console"
+_FILE_HANDLER = "file"
+
+
+def _owned_handlers(logger: logging.Logger, kind: str) -> list[logging.Handler]:
+    return [
+        handler
+        for handler in logger.handlers
+        if getattr(handler, _HANDLER_OWNER_ATTR, None) == kind
+    ]
+
+
+def _replace_owned_handler(
+    logger: logging.Logger,
+    handlers: list[logging.Handler],
+    replacement: logging.Handler,
+) -> logging.Handler:
+    for handler in handlers:
+        logger.removeHandler(handler)
+        handler.close()
+    logger.addHandler(replacement)
+    return replacement
+
 
 def setup_logging(
     verbose: bool = False,
@@ -15,29 +39,56 @@ def setup_logging(
 
     Args:
         verbose: If True, set console to DEBUG; otherwise INFO.
-        log_dir: Directory for log files. None = no file logging.
+        log_dir: Directory for log files. None leaves file logging unchanged.
         logger_name: Logger name (default: "lingtai").
     """
     global _logger
     logger = logging.getLogger(logger_name)
     logger.setLevel(logging.DEBUG)
 
-    if not logger.handlers:
+    console_handlers = _owned_handlers(logger, _CONSOLE_HANDLER)
+    if console_handlers and isinstance(console_handlers[0], logging.StreamHandler):
+        ch = console_handlers[0]
+        for duplicate in console_handlers[1:]:
+            logger.removeHandler(duplicate)
+            duplicate.close()
+    else:
         ch = logging.StreamHandler()
-        ch.setLevel(logging.DEBUG if verbose else logging.INFO)
+        setattr(ch, _HANDLER_OWNER_ATTR, _CONSOLE_HANDLER)
+        ch = _replace_owned_handler(logger, console_handlers, ch)
+    ch.setLevel(logging.DEBUG if verbose else logging.INFO)
+    if ch.formatter is None:
         fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s",
                                 datefmt="%H:%M:%S")
         ch.setFormatter(fmt)
-        logger.addHandler(ch)
 
     if log_dir is not None:
         log_path = Path(log_dir)
         log_path.mkdir(parents=True, exist_ok=True)
-        fh = logging.FileHandler(log_path / "agent.log")
+        filename = (log_path / "agent.log").resolve()
+        file_handlers = _owned_handlers(logger, _FILE_HANDLER)
+        if file_handlers and isinstance(file_handlers[0], logging.FileHandler):
+            fh = file_handlers[0]
+            for duplicate in file_handlers[1:]:
+                logger.removeHandler(duplicate)
+                duplicate.close()
+            if Path(fh.baseFilename) != filename:
+                fh.acquire()
+                try:
+                    if fh.stream is not None:
+                        fh.stream.close()
+                    fh.baseFilename = str(filename)
+                    fh.stream = fh._open()
+                finally:
+                    fh.release()
+        else:
+            fh = logging.FileHandler(filename)
+            setattr(fh, _HANDLER_OWNER_ATTR, _FILE_HANDLER)
+            fh = _replace_owned_handler(logger, file_handlers, fh)
         fh.setLevel(logging.DEBUG)
-        fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-        fh.setFormatter(fmt)
-        logger.addHandler(fh)
+        if fh.formatter is None:
+            fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+            fh.setFormatter(fmt)
 
     _logger = logger
     return logger
