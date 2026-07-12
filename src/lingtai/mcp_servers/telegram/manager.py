@@ -347,6 +347,9 @@ def _transcribe_voice(audio_path: str, model_name: str = "base") -> dict:
         log.warning("Voice transcription failed: %s", e)
         return {"error": str(e)}
 
+SUPPORTED_SEND_MEDIA_TYPES = ("photo", "document")
+
+
 SCHEMA = {
     "type": "object",
     "properties": {
@@ -408,11 +411,11 @@ SCHEMA = {
         "media": {
             "type": "object",
             "properties": {
-                "type": {"type": "string", "enum": ["photo", "document", "voice", "audio"]},
+                "type": {"type": "string", "enum": list(SUPPORTED_SEND_MEDIA_TYPES)},
                 "path": {"type": "string"},
             },
             "description": (
-                "Media attachment: {type: 'photo'|'document'|'voice'|'audio', path: '/path/to/file'}. "
+                "Media attachment: {type: 'photo'|'document', path: '/path/to/file'}. "
                 "For charts, HTML/SVG/PNG reports, CSVs, PDFs, and other generated artifacts that should arrive as an intact file, use type='document'. "
                 "Use type='photo' only for native inline photo previews; Telegram photo delivery can crop, compress, thumbnail, or otherwise display text-heavy charts poorly. "
                 "Do not paste local file paths in message text as a substitute for attaching the file."
