@@ -11,6 +11,7 @@ import pytest
 
 from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.state import AgentState
+from tests._workdir_lease_helpers import make_test_lease
 
 
 def _make_agent(tmp_path, **kwargs):
@@ -18,7 +19,7 @@ def _make_agent(tmp_path, **kwargs):
     svc = MagicMock()
     svc.create_session.return_value = MagicMock()
     kwargs.setdefault("working_dir", str(tmp_path / "test000000ab"))
-    agent = BaseAgent(svc, intrinsics=_TEST_INTRINSICS, **kwargs)
+    agent = BaseAgent(svc, intrinsics=_TEST_INTRINSICS, **kwargs, workdir_lease=make_test_lease())
     return agent
 
 
@@ -224,7 +225,7 @@ class TestCPRLingtai:
         reviver = Agent(svc, working_dir=reviver_dir / "admin000001",
                         agent_name="admin", admin={"karma": True})
 
-        target._workdir.release_lock()
+        target._workdir_lease.release()
 
         # Stub Popen so no real subprocess is forked. Also short-circuit
         # the venv resolver, which otherwise probes the runtime via

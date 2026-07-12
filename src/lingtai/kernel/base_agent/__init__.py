@@ -13,7 +13,9 @@ Key concepts:
 
 from __future__ import annotations
 
+import contextlib
 import copy
+import functools
 import json
 import queue
 import threading
@@ -25,6 +27,7 @@ from ..config import AgentConfig
 from ..event_journal import EventJournalPort
 from ..state import AgentState
 from ..workdir import WorkingDir
+from ..workdir_lease import WorkdirLeasePort
 from ..message import Message
 from ..prompt import SystemPromptManager
 from ..llm import (
@@ -248,8 +251,30 @@ def _identity_scalar(value) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _release_acquired_workdir_lease_on_init_failure(initializer: Callable) -> Callable:
+    """Roll back a successfully acquired lease without hiding the boot error."""
+
+    @functools.wraps(initializer)
+    def guarded(self, *args, **kwargs):
+        try:
+            return initializer(self, *args, **kwargs)
+        except BaseException:
+            if getattr(self, "_workdir_lease_acquired", False):
+                with contextlib.suppress(Exception):
+                    self._workdir_lease.release()
+                self._workdir_lease_acquired = False
+            raise
+
+    return guarded
+
+
 class BaseAgent:
     """Generic research agent with intrinsic tools and MCP tool dispatch.
+
+    Required dependency:
+        - ``workdir_lease`` (WorkdirLeasePort): Exclusive claim on the working
+          directory, acquired at construction and released at teardown. It has no
+          unlocked/no-op form — omitting it fails loudly at construction.
 
     Services (all optional):
         - ``service`` (LLMService): The brain — thinking, generating text.
@@ -275,12 +300,14 @@ class BaseAgent:
     # Inbox polling interval (seconds)
     _inbox_timeout: float = 1.0
 
+    @_release_acquired_workdir_lease_on_init_failure
     def __init__(
         self,
         service: LLMService,
         *,
         agent_name: str | None = None,
         working_dir: str | Path,
+        workdir_lease: WorkdirLeasePort,
         intrinsics: "Mapping[str, Mapping[str, Any]] | None" = None,
         file_io: Any | None = None,
         mail_service: Any | None = None,
@@ -319,8 +346,16 @@ class BaseAgent:
         # Core receives the journal Port; concrete storage is composed outside.
         self._event_journal = event_journal
 
-        # Acquire working directory lock (10s grace for prior process cleanup)
-        self._workdir.acquire_lock(timeout=10)
+        # Core receives the workdir-lease Port; the concrete exclusion mechanism
+        # (a POSIX flock today) is composed outside. This is a required, explicit
+        # dependency: there is no unlocked or no-op fallback.
+        self._workdir_lease = workdir_lease
+
+        # Acquire the working-directory lease (10s grace for prior process
+        # cleanup) through the injected Port.
+        self._workdir_lease_acquired = False
+        self._workdir_lease.acquire(10)
+        self._workdir_lease_acquired = True
 
         # --- Wire services ---
         # FileIOService: optional, provided by Agent or host

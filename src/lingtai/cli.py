@@ -10,6 +10,7 @@ from pathlib import Path
 
 from lingtai.adapters.posix.event_journal import PosixJsonlEventJournalAdapter
 from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+from lingtai.adapters.workdir_lease import select_workdir_lease
 from lingtai.kernel.config_resolve import (
     resolve_env,
     load_env_file,
@@ -127,6 +128,7 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
         service,
         agent_name=m.get("agent_name"),
         working_dir=working_dir,
+        workdir_lease=select_workdir_lease(working_dir),
         mail_service=mail_service,
         # Config hydration follows construction on this boot path, so preserve
         # the existing constructor-time JSON serialization default (False).
@@ -283,7 +285,12 @@ def _handle_log_command(args) -> None:
 
     if args.log_command == "rebuild":
         try:
-            _emit_json(rebuild_sqlite_event_index(agent_dir))
+            _emit_json(
+                rebuild_sqlite_event_index(
+                    agent_dir,
+                    workdir_lease=select_workdir_lease(agent_dir),
+                )
+            )
         except Exception as e:
             print(f"error: failed to rebuild sqlite log index: {e}", file=sys.stderr)
             sys.exit(1)

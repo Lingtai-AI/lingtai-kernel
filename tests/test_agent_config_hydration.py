@@ -16,6 +16,7 @@ from lingtai.kernel.config import (
 )
 from lingtai.kernel.base_agent.lifecycle import _maybe_sleep_after_idle_timeout
 from lingtai.kernel.state import AgentState
+from tests._workdir_lease_helpers import make_test_lease
 
 
 def _service():
@@ -75,6 +76,7 @@ def test_bare_agent_config_and_base_agent_defaults(tmp_path):
         service=_service(),
         agent_name="bare-agent",
         working_dir=tmp_path / "bare-agent",
+        workdir_lease=make_test_lease(),
     )
 
     assert agent._config.stamina == 86400.0
@@ -94,6 +96,7 @@ def test_hidden_idle_timeout_moves_idle_agent_to_asleep(tmp_path, monkeypatch):
         service=_service(),
         agent_name="idle-timeout-agent",
         working_dir=tmp_path / "idle-timeout-agent",
+        workdir_lease=make_test_lease(),
     )
     saved: list[bool] = []
     monkeypatch.setattr(agent, "_save_chat_history", lambda: saved.append(True))

@@ -17,6 +17,7 @@ from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 import time
 from unittest.mock import MagicMock
 from tests._service_helpers import make_tool_result_mock_service as make_mock_service
+from tests._workdir_lease_helpers import make_test_lease
 
 
 class _RecordingEventJournal:
@@ -42,6 +43,7 @@ class TestProgressBookkeeping:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            workdir_lease=make_test_lease(),
         )
         before = agent._last_progress_at
         time.sleep(0.01)
@@ -56,6 +58,7 @@ class TestProgressBookkeeping:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            workdir_lease=make_test_lease(),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
         assert agent._active_turn_kind == "pending"
@@ -68,6 +71,7 @@ class TestProgressBookkeeping:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            workdir_lease=make_test_lease(),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
         agent._log("llm_call")
@@ -80,6 +84,7 @@ class TestProgressBookkeeping:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            workdir_lease=make_test_lease(),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
         agent._log("tool_call", tool_call_id="call_abc123")
@@ -93,6 +98,7 @@ class TestProgressBookkeeping:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            workdir_lease=make_test_lease(),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
         agent._log("tool_call", tool_call_id="call_abc")
@@ -115,6 +121,7 @@ class TestDeferredNotificationsCounter:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            workdir_lease=make_test_lease(),
         )
         assert agent._deferred_notifications_count == 0
         agent._log("notification_deferred_active", sources=["telegram"])
@@ -130,6 +137,7 @@ class TestDeferredNotificationsCounter:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            workdir_lease=make_test_lease(),
         )
         agent._log("notification_deferred_active", sources=["telegram"])
         agent._log("notification_deferred_active", sources=["telegram"])
@@ -150,6 +158,7 @@ class TestStatusJsonExposesActiveTurn:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            workdir_lease=make_test_lease(),
         )
         status = agent.status()
         runtime = status["runtime"]
@@ -167,6 +176,7 @@ class TestStatusJsonExposesActiveTurn:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            workdir_lease=make_test_lease(),
         )
         # IDLE — no active_turn block
         assert "active_turn" not in agent.status()
@@ -187,6 +197,7 @@ class TestStatusJsonExposesActiveTurn:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            workdir_lease=make_test_lease(),
         )
         assert "deferred_notifications" not in agent.status()
         agent._log("notification_deferred_active", sources=["telegram"])
@@ -213,6 +224,7 @@ class TestWatchdogFires:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             event_journal=journal,
+            workdir_lease=make_test_lease(),
         )
         # Simulate: agent is ACTIVE, no progress for >> threshold.
         # Use a low env threshold via clamp (min 30) and rewind the
@@ -246,6 +258,7 @@ class TestWatchdogFires:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            workdir_lease=make_test_lease(),
         )
         agent._write_status_snapshot()
         stale_status = json.loads((agent._working_dir / ".status.json").read_text())
@@ -278,6 +291,7 @@ class TestWatchdogFires:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             event_journal=journal,
+            workdir_lease=make_test_lease(),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
         agent._last_progress_at = time.time() - 120
@@ -305,6 +319,7 @@ class TestWatchdogFires:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             event_journal=journal,
+            workdir_lease=make_test_lease(),
         )
         agent._last_progress_at = time.time() - 120  # rewind
 

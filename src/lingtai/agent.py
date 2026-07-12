@@ -9,6 +9,7 @@ Capabilities are declared at construction and sealed before start().
 """
 from __future__ import annotations
 
+import contextlib
 import json
 
 import json
@@ -128,14 +129,23 @@ class Agent(BaseAgent):
             )
             kwargs["event_journal"] = owned_event_journal
 
-        # Store combo name before super().__init__ (not forwarded to BaseAgent)
-        self._combo_name = combo_name
-
         try:
+            # BaseAgent requires an explicit workdir lease. As the composition
+            # root for direct ``lingtai.Agent`` callers, select and construct the
+            # production adapter for the running platform (fail-loud on
+            # unsupported platforms). A caller may inject its own lease.
+            if "workdir_lease" not in kwargs and "working_dir" in kwargs:
+                from lingtai.adapters.workdir_lease import select_workdir_lease
+
+                kwargs["workdir_lease"] = select_workdir_lease(kwargs["working_dir"])
+
+            # Store combo name before super().__init__ (not forwarded to BaseAgent)
+            self._combo_name = combo_name
             super().__init__(*args, **kwargs)
         except Exception:
             if owned_event_journal is not None:
-                owned_event_journal.close()
+                with contextlib.suppress(Exception):
+                    owned_event_journal.close()
             raise
 
         # Persist LLM config for revive (self-sufficient agents contract)

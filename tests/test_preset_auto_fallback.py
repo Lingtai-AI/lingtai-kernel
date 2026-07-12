@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from tests._workdir_lease_helpers import make_test_lease
 
 
 def _make_test_agent(tmp_path):
@@ -36,7 +37,7 @@ def _make_test_agent(tmp_path):
         "soul": "",
     }
     (wd / "init.json").write_text(json.dumps(init))
-    return BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="alice", working_dir=wd)
+    return BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="alice", working_dir=wd, workdir_lease=make_test_lease())
 
 
 def test_can_fallback_preset_true_when_active_differs_from_default(tmp_path):
@@ -74,7 +75,7 @@ def test_can_fallback_preset_false_when_no_preset_block(tmp_path):
         "principle": "p", "covenant": "c", "pad": "", "lingtai": "", "soul": "",
     }
     (wd / "init.json").write_text(json.dumps(init))
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="alice", working_dir=wd)
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="alice", working_dir=wd, workdir_lease=make_test_lease())
     assert agent._can_fallback_preset() is False
 
 

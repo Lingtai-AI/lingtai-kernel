@@ -251,7 +251,7 @@ def _reset_uptime(agent) -> None:
 def _stop(agent, timeout: float = 5.0) -> None:
     """Signal shutdown and wait for the agent thread to exit.
 
-    Heartbeat is stopped LAST (just before `release_lock`) so external
+    Heartbeat is stopped LAST (just before the workdir-lease release) so external
     observers — TUI launcher, `lingtai-tui list`, `lingtai-tui purge` — see
     `.agent.heartbeat` as fresh and present for the entire teardown window.
     Otherwise the file vanishes seconds before the Python process actually
@@ -285,11 +285,11 @@ def _stop(agent, timeout: float = 5.0) -> None:
         except Exception:
             pass
 
-    # Persist final state, stop heartbeat, release lock — order matters.
-    # See docstring above; heartbeat must remain fresh until this point.
+    # Persist final state, stop heartbeat, release the workdir lease — order
+    # matters. See docstring above; heartbeat must remain fresh until this point.
     agent._workdir.write_manifest(agent._build_manifest())
     _stop_heartbeat(agent)
-    agent._workdir.release_lock()
+    agent._workdir_lease.release()
 
 
 def _shutdown_daemon_runtime(agent, *, reason: str) -> None:

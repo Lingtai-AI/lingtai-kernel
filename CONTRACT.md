@@ -5,6 +5,7 @@ related_files:
   - ANATOMY.md
   - src/lingtai/kernel/event_journal/CONTRACT.md
   - src/lingtai/kernel/mail_transport/CONTRACT.md
+  - src/lingtai/kernel/workdir_lease/CONTRACT.md
   - CONTRIBUTING.md
   - README.md
   - dev-guide-skill/SKILL.md

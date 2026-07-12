@@ -10,6 +10,7 @@ import pytest
 
 from lingtai.kernel.base_agent import BaseAgent
 from lingtai.tools.registry import INTRINSICS as ALL_INTRINSICS
+from tests._workdir_lease_helpers import make_test_lease
 
 
 @pytest.fixture(autouse=True)
@@ -46,7 +47,7 @@ def test_system_in_all_intrinsics():
 
 
 def test_system_wired_in_agent(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     assert "system" in agent._intrinsics
 
 
@@ -61,7 +62,7 @@ def test_system_wired_in_agent(tmp_path):
 
 
 def test_status_returns_identity(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="alice", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="alice", working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     agent.start()
     try:
         result = agent.status()
@@ -74,7 +75,7 @@ def test_status_returns_identity(tmp_path):
 
 
 def test_status_returns_runtime(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     agent.start()
     try:
         time.sleep(0.1)
@@ -88,7 +89,7 @@ def test_status_returns_runtime(tmp_path):
 
 def test_status_returns_state(tmp_path):
     """status() exposes runtime.state so the TUI knows the lifecycle phase."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     agent.start()
     try:
         result = agent.status()
@@ -102,7 +103,7 @@ def test_status_returns_state(tmp_path):
 
 def test_status_dict_state_matches_agent_state(tmp_path):
     """C1: agent.status() and agent._state agree."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     agent.start()
     try:
         result = agent.status()
@@ -112,7 +113,7 @@ def test_status_dict_state_matches_agent_state(tmp_path):
 
 
 def test_status_returns_tokens(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     agent.start()
     try:
         result = agent.status()
@@ -136,7 +137,7 @@ def test_status_with_mail_service(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         agent_name="test", working_dir=tmp_path / "test",
         service=make_mock_service(),
-        mail_service=mock_mail,
+        mail_service=mock_mail, workdir_lease=make_test_lease(),
     )
     agent.start()
     try:
@@ -147,7 +148,7 @@ def test_status_with_mail_service(tmp_path):
 
 
 def test_status_context_null_without_session(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     result = agent.status()
     ctx = result["tokens"]["context"]
     assert ctx["window_size"] is None
@@ -156,7 +157,7 @@ def test_status_context_null_without_session(tmp_path):
 
 def test_system_show_action_rejected(tmp_path):
     """system(action='show') was removed; calling it must error, not silently no-op."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     result = agent._intrinsics["system"]({"action": "show"})
     assert result["status"] == "error"
     assert "Unknown system action" in result["message"]
@@ -171,7 +172,7 @@ def test_system_show_action_rejected(tmp_path):
 
 def test_system_nap_returns_unknown_action(tmp_path):
     """nap is no longer a valid system action."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     result = agent._intrinsics["system"]({"action": "nap", "seconds": 1})
     assert result["status"] == "error"
     assert "Unknown system action" in result["message"]
@@ -183,7 +184,7 @@ def test_system_nap_returns_unknown_action(tmp_path):
 
 
 def test_system_self_sleep(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", admin={"karma": True})
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", admin={"karma": True}, workdir_lease=make_test_lease())
     result = agent._intrinsics["system"]({"action": "sleep", "reason": "need bash"})
     assert result["status"] == "ok"
     assert agent._asleep.is_set()
@@ -202,7 +203,7 @@ def test_system_refresh(tmp_path):
     ``agent._shutdown`` synchronously — both retired in favor of the
     signal-file + watcher-subprocess pattern.)
     """
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     result = agent._intrinsics["system"]({"action": "refresh", "reason": "new tools"})
     assert result["status"] == "ok"
     # The signal file is the contract; the heartbeat loop keys off it.
@@ -218,7 +219,7 @@ def test_system_refresh(tmp_path):
 
 
 def test_system_unknown_action(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     result = agent._intrinsics["system"]({"action": "bogus"})
     assert result["status"] == "error"
 
@@ -292,7 +293,7 @@ def _make_test_agent_for_presets(tmp_path, presets_path=None, active_preset=None
     }
     (wd / "init.json").write_text(json.dumps(init))
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="alice",
-                      working_dir=wd)
+                      working_dir=wd, workdir_lease=make_test_lease())
     return agent
 
 
@@ -677,7 +678,7 @@ def test_refresh_revert_preset_when_no_preset_configured_errors(tmp_path, monkey
         "principle": "p", "covenant": "c", "pad": "", "lingtai": "", "soul": "",
     }
     (wd / "init.json").write_text(json.dumps(init))
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="alice", working_dir=wd)
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="alice", working_dir=wd, workdir_lease=make_test_lease())
 
     # Don't actually relaunch on _perform_refresh
     monkeypatch.setattr(agent, "_perform_refresh", lambda: None)

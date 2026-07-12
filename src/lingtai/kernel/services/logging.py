@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ..trace_redaction import redact_for_trajectory
-from ..workdir import WorkingDir
+from ..workdir_lease import WorkdirLeasePort
 
 
 SCHEMA_VERSION = 3
@@ -851,10 +851,16 @@ def _import_token_source(
 def rebuild_sqlite_event_index(
     agent_dir: Path | str,
     *,
+    workdir_lease: WorkdirLeasePort,
     jsonl_path: Path | str | None = None,
     sqlite_path: Path | str | None = None,
 ) -> dict[str, Any]:
-    """Rebuild ``logs/log.sqlite`` from agent trace JSONL sources atomically."""
+    """Rebuild ``logs/log.sqlite`` from agent trace JSONL sources atomically.
+
+    ``workdir_lease`` is a required, explicit exclusion Port (composed and
+    injected by the CLI); the rebuild acquires it non-blocking so it fails
+    immediately when the agent is live, and always releases it in ``finally``.
+    """
     agent_dir = Path(agent_dir).resolve()
     logs_dir = agent_dir / "logs"
     explicit_source = Path(jsonl_path).resolve() if jsonl_path is not None else None
@@ -865,30 +871,35 @@ def rebuild_sqlite_event_index(
     if not sources:
         raise FileNotFoundError(f"no trace JSONL sources found under: {agent_dir}")
 
-    workdir_lock = None
-    lock_owner = agent_dir
+    lease_held = False
     try:
-        workdir_lock = WorkingDir(lock_owner)
-        workdir_lock.acquire_lock(timeout=0)
+        workdir_lease.acquire(0)
+        lease_held = True
     except Exception as exc:
         raise RuntimeError(
             "sqlite log rebuild requires the agent to be stopped/offline; "
-            f"could not acquire rebuild lock for {lock_owner}: {exc}"
+            f"could not acquire rebuild lock for {agent_dir}: {exc}"
         ) from exc
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp_dir = Path(tempfile.mkdtemp(prefix="log-sqlite-rebuild-", dir=str(target.parent)))
-    tmp_db = tmp_dir / target.name
-    event_count = 0
-    chat_entry_count = 0
-    token_entry_count = 0
-    cursor_count = 0
-    primary_source = explicit_source or (logs_dir / DEFAULT_JSONL_NAME).resolve()
-    primary_offset = 0
-    primary_line = 0
-    last_offset = 0
-    last_line = 0
+    # The lease is held. Every step from here on — directory/temp creation and
+    # the rebuild itself — runs under one outer ``finally`` so a failure in any
+    # of them (e.g. a full disk during ``mkdtemp``) still releases the lease
+    # instead of stranding a real injected production lease. Temp-directory
+    # cleanup is conditional on successful creation.
+    tmp_dir: Path | None = None
     try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp_dir = Path(tempfile.mkdtemp(prefix="log-sqlite-rebuild-", dir=str(target.parent)))
+        tmp_db = tmp_dir / target.name
+        event_count = 0
+        chat_entry_count = 0
+        token_entry_count = 0
+        cursor_count = 0
+        primary_source = explicit_source or (logs_dir / DEFAULT_JSONL_NAME).resolve()
+        primary_offset = 0
+        primary_line = 0
+        last_offset = 0
+        last_line = 0
         index = SQLiteEventIndex(tmp_db)
         conn = index._ensure_open()
         with index._lock:
@@ -959,10 +970,11 @@ def rebuild_sqlite_event_index(
             "byte_offset": primary_offset or last_offset,
         }
     finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        if workdir_lock is not None:
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        if lease_held:
             with contextlib.suppress(Exception):
-                workdir_lock.release_lock()
+                workdir_lease.release()
 
 
 def doctor_sqlite_event_index(agent_dir: Path | str, *, sqlite_path: Path | str | None = None) -> dict[str, Any]:

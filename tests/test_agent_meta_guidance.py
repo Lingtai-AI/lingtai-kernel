@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from lingtai.agent import Agent
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._workdir_lease_helpers import make_test_lease
 
 
 STATIC_CODEX_COMMENT = {
@@ -244,6 +245,7 @@ def test_base_agent_seeds_body_only_from_frontmatter_mirror(tmp_path):
         service=make_mock_service(),
         agent_name="ba-test",
         working_dir=workdir,
+        workdir_lease=make_test_lease(),
     )
     section = agent._prompt_manager.read_section("substrate")
     assert section == "SUBSTRATE-BODY-ONLY\n"

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.services.logging import CompositeLoggingService, JSONLLoggingService
 from lingtai.kernel.trace_redaction import redact_for_trajectory, redact_text
+from tests._workdir_lease_helpers import make_test_lease
 
 
 def test_redact_text_common_secret_shapes():
@@ -124,7 +125,7 @@ def test_save_chat_history_redacts_persisted_copy_without_mutation(tmp_path):
     svc.get_adapter.return_value = MagicMock()
     svc.provider = "test"
     svc.model = "test-model"
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="redactor", working_dir=tmp_path / "redactor")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="redactor", working_dir=tmp_path / "redactor", workdir_lease=make_test_lease())
 
     raw_secret = "plain-app-password-value"
     state = {

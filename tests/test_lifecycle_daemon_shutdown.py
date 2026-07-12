@@ -85,7 +85,8 @@ def test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock(monkeypatch):
         def write_manifest(self, manifest):
             order.append(("manifest", manifest))
 
-        def release_lock(self):
+    class FakeLease:
+        def release(self):
             order.append(("lock", None))
 
     agent = SimpleNamespace(
@@ -96,6 +97,7 @@ def test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock(monkeypatch):
         _mail_service=None,
         _event_journal=None,
         _workdir=FakeWorkdir(),
+        _workdir_lease=FakeLease(),
         _build_manifest=lambda: {"agent": "test"},
         get_capability=lambda name: FakeDaemon() if name == "daemon" else None,
     )
@@ -111,7 +113,16 @@ def test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock(monkeypatch):
     assert ("daemon", "agent_stop") in order
     assert order.index(("daemon", "agent_stop")) < order.index(("heartbeat", None))
     assert order.index(("daemon", "agent_stop")) < order.index(("lock", None))
-    assert order.index(("manifest", {"agent": "test"})) < order.index(("heartbeat", None))
+    # Full safety-critical teardown order: manifest → heartbeat → release. The
+    # heartbeat-before-release edge is asserted explicitly — without it, swapping
+    # the last two operations (release the lease before stopping the heartbeat)
+    # would still pass, yet a quick relaunch could race a still-fresh heartbeat
+    # into a directory whose lease was already dropped. See the Contract's
+    # manifest → heartbeat → release rule.
+    manifest_i = order.index(("manifest", {"agent": "test"}))
+    heartbeat_i = order.index(("heartbeat", None))
+    lock_i = order.index(("lock", None))
+    assert manifest_i < heartbeat_i < lock_i
 
 
 def test_daemon_shutdown_waits_for_cli_ask_future_before_releasing_liveness(tmp_path, monkeypatch):

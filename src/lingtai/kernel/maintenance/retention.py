@@ -924,6 +924,15 @@ def _contained(path: Path, root: Path) -> bool:
 
 
 def _lock_held(lock_path: Path) -> bool | None:
+    """Read-only observation of whether ``.agent.lock`` is held by a live agent.
+
+    This is a NON-AUTHORITATIVE diagnostic observer, not a lease consumer. It
+    probes the lock with a transient ``flock`` and immediately releases it to
+    answer a retention question — it never acquires the Core-owned
+    ``WorkdirLeasePort`` and never claims the directory. Lock *ownership*
+    (acquiring/holding the lease) lives behind that Port in
+    ``src/lingtai/adapters/posix/workdir_lease.py``; this function only looks.
+    """
     if not lock_path.is_file() or lock_path.is_symlink():
         return False
     try:

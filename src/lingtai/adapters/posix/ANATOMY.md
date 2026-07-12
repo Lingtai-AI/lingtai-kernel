@@ -9,6 +9,9 @@ related_files:
   - src/lingtai/adapters/posix/__init__.py
   - src/lingtai/adapters/posix/event_journal.py
   - src/lingtai/adapters/posix/mail.py
+  - src/lingtai/adapters/posix/workdir_lease.py
+  - src/lingtai/kernel/workdir_lease/ANATOMY.md
+  - src/lingtai/kernel/workdir_lease/CONTRACT.md
   - src/lingtai/kernel/services/logging.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
@@ -21,15 +24,17 @@ maintenance: |
 # POSIX Adapter Anatomy
 
 This narrow package contains production filesystem adapters for Core-owned Ports:
-the structured event journal and mail transport. It is an implementation-only
-Anatomy with no independent local Contract; for the Anatomy/Contract pairing rule
-its unique owning component Contract is
+the structured event journal, mail transport, and workdir lease. It is an
+implementation-only Anatomy with no independent local Contract; for the
+Anatomy/Contract pairing rule its unique owning component Contract is
 `src/lingtai/kernel/event_journal/CONTRACT.md` (this Anatomy is listed only in
 that Contract's `related_files`). Each adapter implements a Core Port rather than
 defining a separate behavioral promise; the mail adapter's promises are owned by
-`src/lingtai/kernel/mail_transport/CONTRACT.md`, which links the adapter code file
-directly, and its Port structure is navigated via
-`src/lingtai/kernel/mail_transport/ANATOMY.md`.
+`src/lingtai/kernel/mail_transport/CONTRACT.md` and the workdir-lease adapter's by
+`src/lingtai/kernel/workdir_lease/CONTRACT.md`, each of which links its adapter
+code file directly, and their Port structure is navigated via
+`src/lingtai/kernel/mail_transport/ANATOMY.md` and
+`src/lingtai/kernel/workdir_lease/ANATOMY.md`.
 
 ## Components
 
@@ -49,6 +54,13 @@ directly, and its Port structure is navigated via
   `listen()`/`stop()` own the 0.5-second daemon poll loop with pseudo-outbox
   priority and per-phase `OSError` isolation
   (`src/lingtai/adapters/posix/mail.py:168-219`, `src/lingtai/adapters/posix/mail.py:425-430`).
+- `PosixWorkdirLeaseAdapter` implements `WorkdirLeasePort` by holding an exclusive
+  non-blocking `fcntl.flock` on `<workdir>/.agent.lock`
+  (`src/lingtai/adapters/posix/workdir_lease.py:27-95`); `acquire()` polls at
+  250 ms to a monotonic deadline and raises the exact contention `RuntimeError`,
+  `release()` unlocks then guarantees the handle is closed in a `finally` (even if
+  the explicit `LOCK_UN` raises) before a best-effort unlink, swallows the
+  specified `OSError`s, resets its handle, and is idempotent.
 
 ## Connections
 
@@ -58,14 +70,19 @@ redaction, primary-first ordering, and SQLite fail-open behavior
 (`src/lingtai/adapters/posix/event_journal.py:7-12`). The mail adapter depends
 inward on `MailTransportPort`, kernel `handshake` liveness helpers, and the
 kernel-owned `_new_mailbox_id`
-(`src/lingtai/adapters/posix/mail.py:27-29`). Outer wrapper and CLI composition
-roots inject both; Core never imports this package.
+(`src/lingtai/adapters/posix/mail.py:27-29`). The workdir-lease adapter depends
+inward on the kernel-owned `workdir_layout` for the `.agent.lock` path and on
+`WorkdirLeasePort` (`src/lingtai/adapters/posix/workdir_lease.py:23-24`). It is
+exported lazily from this package's facade (`__getattr__`) so importing the
+package — or a portable sibling — never eagerly loads `fcntl`. Outer wrapper and
+CLI composition roots inject all three; Core never imports this package.
 
 ## Composition
 
 - **Parent wrapper:** `src/lingtai/ANATOMY.md`.
-- **Port components:** `src/lingtai/kernel/event_journal/ANATOMY.md` and
-  `src/lingtai/kernel/mail_transport/ANATOMY.md`.
+- **Port components:** `src/lingtai/kernel/event_journal/ANATOMY.md`,
+  `src/lingtai/kernel/mail_transport/ANATOMY.md`, and
+  `src/lingtai/kernel/workdir_lease/ANATOMY.md`.
 - **Storage primitives:** `src/lingtai/kernel/services/ANATOMY.md`.
 
 ## State
@@ -76,7 +93,11 @@ lifecycle through its composite
 `logs/events.jsonl` and the rebuildable `logs/log.sqlite` sidecar. The mail
 adapter owns the daemon poll thread and the in-memory `_seen` set, and writes
 `mailbox/{inbox,outbox,sent}/<id>/message.json` plus `attachments/`
-(`src/lingtai/adapters/posix/mail.py:67-69`).
+(`src/lingtai/adapters/posix/mail.py:67-69`). The workdir-lease adapter owns the
+open `.agent.lock` file handle while the lease is held; release resets adapter
+state, attempts unlock and close, and unlinks only after closure is confirmed so
+an uncertain live descriptor cannot create split-inode authority
+(`src/lingtai/adapters/posix/workdir_lease.py:38-96`).
 
 ## Notes
 
@@ -84,3 +105,7 @@ These are the only production adapters for their respective Ports. The package
 contains no adapter registry, default factory, query surface, rebuild policy, or
 network sink. The mail adapter is a faithful move of the former
 `kernel/services/mail.py` mechanism; no concrete mail transport remains in Core.
+The workdir-lease adapter is a faithful move of the former
+`WorkingDir.acquire_lock`/`release_lock` flock mechanism; no concrete lock
+authority remains in Core, and platform selection with fail-loud unsupported
+handling lives in `src/lingtai/adapters/workdir_lease.py`.

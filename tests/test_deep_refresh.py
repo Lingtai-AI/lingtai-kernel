@@ -227,7 +227,7 @@ def test_cli_build_agent_uses_refresh(tmp_path):
     assert "Be helpful" in covenant_content
 
     # Cleanup
-    agent._workdir.release_lock()
+    agent._workdir_lease.release()
 
 
 def test_deep_refresh_invalid_init_keeps_old_config(tmp_path):
@@ -463,7 +463,7 @@ def test_init_base_prompt_reaches_rendered_prompt_via_boot(tmp_path):
         assert "Recipe-injected base prompt." in prompt
         assert prompt.index("Recipe-injected base prompt.") < prompt.index("Be helpful.")
     finally:
-        agent._workdir.release_lock()
+        agent._workdir_lease.release()
 
 
 def test_init_base_prompt_file_reaches_rendered_prompt_via_boot(tmp_path):
@@ -485,7 +485,7 @@ def test_init_base_prompt_file_reaches_rendered_prompt_via_boot(tmp_path):
         assert "Recipe base prompt from file." in prompt
         assert prompt.index("Recipe base prompt from file.") < prompt.index("Be helpful.")
     finally:
-        agent._workdir.release_lock()
+        agent._workdir_lease.release()
 
 
 def test_init_base_prompt_post_molt_reload_keeps_injection(tmp_path):

@@ -3,6 +3,7 @@ import time
 from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 from unittest.mock import MagicMock
 from tests._service_helpers import make_tool_result_mock_service as make_mock_service
+from tests._workdir_lease_helpers import make_test_lease
 
 
 
@@ -15,7 +16,7 @@ class TestHeartbeatInit:
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
-            working_dir=tmp_path / "test_agent",
+            working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
         )
         assert agent._heartbeat == 0.0
         assert agent._heartbeat_thread is None
@@ -31,7 +32,7 @@ class TestHeartbeatInit:
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
-            working_dir=tmp_path / "test_agent",
+            working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
         )
         agent._heartbeat = 1234567890.123
         assert isinstance(agent._heartbeat, float)
@@ -51,7 +52,7 @@ class TestHeartbeatBeating:
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
-            working_dir=tmp_path / "test_agent",
+            working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
         )
         agent._start_heartbeat()
         time.sleep(2.5)
@@ -66,7 +67,7 @@ class TestHeartbeatBeating:
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
-            working_dir=tmp_path / "test_agent",
+            working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
         )
         agent._start_heartbeat()
         agent._set_state(AgentState.ACTIVE, reason="test")
@@ -86,7 +87,7 @@ class TestHeartbeatFile:
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
-            working_dir=tmp_path / "test_agent",
+            working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
         )
         hb_file = agent._working_dir / ".agent.heartbeat"
         agent._start_heartbeat()
@@ -105,7 +106,7 @@ class TestHeartbeatFile:
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
-            working_dir=tmp_path / "test_agent",
+            working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
         )
         hb_file = agent._working_dir / ".agent.heartbeat"
         agent._start_heartbeat()
@@ -127,7 +128,7 @@ class TestHeartbeatFile:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
-            config=AgentConfig(aed_timeout=1.0),  # very short timeout
+            config=AgentConfig(aed_timeout=1.0), workdir_lease=make_test_lease(),  # very short timeout
         )
         hb_file = agent._working_dir / ".agent.heartbeat"
         agent._start_heartbeat()
@@ -160,7 +161,7 @@ class TestHeartbeatAEDTimeout:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
-            config=AgentConfig(aed_timeout=1.0),  # 1 second timeout
+            config=AgentConfig(aed_timeout=1.0), workdir_lease=make_test_lease(),  # 1 second timeout
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
         agent._set_state(AgentState.STUCK)
@@ -180,7 +181,7 @@ class TestHeartbeatAEDTimeout:
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
-            working_dir=tmp_path / "test_agent",
+            working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
         )
         agent._aed_start = time.monotonic()
 
@@ -200,7 +201,7 @@ class TestHeartbeatAEDTimeout:
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
-            working_dir=tmp_path / "test_agent",
+            working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
         )
         agent._state = AgentState.ASLEEP
         status = agent.status()
@@ -218,7 +219,7 @@ class TestSleepFile:
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
-            working_dir=tmp_path / "test_agent",
+            working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
         )
         agent._start_heartbeat()
         agent._set_state(AgentState.ACTIVE, reason="test")
@@ -242,7 +243,7 @@ class TestSuspendFile:
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
-            working_dir=tmp_path / "test_agent",
+            working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
         )
         agent._start_heartbeat()
         agent._set_state(AgentState.ACTIVE, reason="test")
@@ -266,7 +267,7 @@ class TestSelfSleep:
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
-            working_dir=tmp_path / "test_agent",
+            working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
 

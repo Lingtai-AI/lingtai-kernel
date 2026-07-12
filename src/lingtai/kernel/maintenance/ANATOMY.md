@@ -43,7 +43,7 @@ This package owns no durable state. The retention reporter reads these existing 
 - `logs/log.sqlite` as a rebuildable report candidate only
 - `history/chat_history_archive.jsonl` and `history/snapshots/*.json` as history footprints only
 - `tmp/tool-results/` as protected artifact state
-- `.agent.lock`, `.agent.heartbeat`, `.status.json` as lifecycle protection signals
+- `.agent.lock`, `.agent.heartbeat`, `.status.json` as lifecycle protection signals. `_lock_held` (`retention.py:926`) probes `.agent.lock` with a transient `flock` purely to observe liveness — it is a NON-AUTHORITATIVE read-only observer, never a consumer of the Core-owned `WorkdirLeasePort` (see `src/lingtai/kernel/workdir_lease/ANATOMY.md`); lock *ownership* lives behind that Port, this only looks.
 
 ## Key Invariants
 

@@ -16,6 +16,7 @@ from lingtai.kernel.event_journal import EventJournalPort, JournalPosition
 from lingtai.kernel.services.logging import JSONLLoggingService, SQLiteEventIndex
 from lingtai.tools.registry import CORE_DEFAULTS, INTRINSICS as _TEST_INTRINSICS
 from tests._service_helpers import make_tool_result_mock_service as make_mock_service
+from tests._workdir_lease_helpers import make_test_lease
 
 
 PRODUCTION_ADAPTER_FACTORIES = [
@@ -157,13 +158,14 @@ def test_raw_base_agent_has_no_hidden_posix_journal(tmp_path):
         service=make_mock_service(),
         agent_name="core-only",
         working_dir=tmp_path,
+        workdir_lease=make_test_lease(),
     )
     try:
         assert agent._event_journal is None
         agent._log("core_event")
         assert not _events_path(tmp_path).exists()
     finally:
-        agent._workdir.release_lock()
+        agent._workdir_lease.release()
 
 
 def test_base_agent_uses_none_as_the_only_disabled_journal_sentinel(tmp_path):
@@ -187,13 +189,14 @@ def test_base_agent_uses_none_as_the_only_disabled_journal_sentinel(tmp_path):
         service=make_mock_service(),
         working_dir=tmp_path,
         event_journal=journal,
+        workdir_lease=make_test_lease(),
     )
     journal.events.clear()
     try:
         agent._log("falsey_journal")
         assert [event["type"] for event in journal.events] == ["falsey_journal"]
     finally:
-        agent._workdir.release_lock()
+        agent._workdir_lease.release()
 
 
 def test_outer_agent_composes_posix_journal_for_keyword_working_dir(tmp_path):
@@ -212,7 +215,7 @@ def test_outer_agent_composes_posix_journal_for_keyword_working_dir(tmp_path):
         assert "\\u96ea" in _events_path(tmp_path).read_text(encoding="utf-8")
     finally:
         agent._event_journal.close()
-        agent._workdir.release_lock()
+        agent._workdir_lease.release()
 
 
 def test_cli_build_agent_explicitly_injects_production_adapter(tmp_path, monkeypatch):
