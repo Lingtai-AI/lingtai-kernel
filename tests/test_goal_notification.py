@@ -55,6 +55,14 @@ class _GoalAgent:
         )
 
 
+@dataclass
+class _Clock:
+    now: float = 100.0
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 def test_goal_reminder_publishes_short_system_event_after_idle_delay(tmp_path: Path) -> None:
     agent = _GoalAgent(tmp_path)
     publish_test_payload(
@@ -87,6 +95,35 @@ def test_goal_reminder_does_not_duplicate_existing_event(tmp_path: Path) -> None
     assert len(snapshot_notifications(tmp_path)["system"]["data"]["events"]) == 1
 
 
+def test_goal_reminder_scans_disk_at_most_once_per_cadence(tmp_path: Path, monkeypatch) -> None:
+    from lingtai.kernel.nudge import goal as goal_mod
+
+    agent = _GoalAgent(tmp_path)
+    clock = _Clock()
+    snapshots = 0
+    real_snapshot = agent._notification_store.snapshot
+
+    def counted_snapshot(allow):
+        nonlocal snapshots
+        snapshots += 1
+        return real_snapshot(allow)
+
+    monkeypatch.setattr(goal_mod.time, "monotonic", lambda: clock.now)
+    monkeypatch.setattr(agent._notification_store, "snapshot", counted_snapshot)
+
+    check_goal(agent)
+    assert snapshots == 1
+
+    for _ in range(9):
+        clock.advance(1)
+        check_goal(agent)
+    assert snapshots == 1
+
+    clock.advance(1)
+    check_goal(agent)
+    assert snapshots == 2
+
+
 def test_goal_reminder_skips_completed_goal(tmp_path: Path) -> None:
     agent = _GoalAgent(tmp_path)
     publish_test_payload(tmp_path, "goal", {"data": {"id": "demo", "status": "done", "reminder_delay_seconds": 1}})
@@ -103,8 +140,12 @@ def test_goal_reminder_requires_goal_json(tmp_path: Path) -> None:
     assert not (tmp_path / ".notification" / "system.json").exists()
 
 
-def test_goal_reminder_republishes_after_whole_system_dismiss_and_fresh_delay(tmp_path: Path) -> None:
+def test_goal_reminder_republishes_after_whole_system_dismiss_and_fresh_delay(tmp_path: Path, monkeypatch) -> None:
+    from lingtai.kernel.nudge import goal as goal_mod
+
     agent = _GoalAgent(tmp_path)
+    clock = _Clock()
+    monkeypatch.setattr(goal_mod.time, "monotonic", lambda: clock.now)
     publish_test_payload(tmp_path, "goal", {"data": {"id": "demo", "status": "active", "reminder_delay_seconds": 1}})
     check_goal(agent)
     assert "system" in snapshot_notifications(tmp_path)
@@ -119,29 +160,46 @@ def test_goal_reminder_republishes_after_whole_system_dismiss_and_fresh_delay(tm
     assert "system" not in snapshot_notifications(tmp_path)
 
     agent._goal_reminder_last_dismissed_at = time.time() - 2
+    clock.advance(10)
     check_goal(agent)
     assert snapshot_notifications(tmp_path)["system"]["data"]["events"][0]["ref_id"] == "goal:demo"
 
 
-def test_goal_reminder_clears_when_goal_becomes_done(tmp_path: Path) -> None:
+def test_goal_reminder_clears_when_goal_becomes_done(tmp_path: Path, monkeypatch) -> None:
+    from lingtai.kernel.nudge import goal as goal_mod
+
     agent = _GoalAgent(tmp_path)
+    clock = _Clock()
+    monkeypatch.setattr(goal_mod.time, "monotonic", lambda: clock.now)
     publish_test_payload(tmp_path, "goal", {"data": {"id": "demo", "status": "active", "reminder_delay_seconds": 1}})
     check_goal(agent)
     assert "system" in snapshot_notifications(tmp_path)
 
     publish_test_payload(tmp_path, "goal", {"data": {"id": "demo", "status": "done", "reminder_delay_seconds": 1}})
+    clock.advance(10)
     check_goal(agent)
 
     assert "system" not in snapshot_notifications(tmp_path)
 
 
-def test_goal_reminder_clears_when_goal_json_is_deleted(tmp_path: Path) -> None:
+def test_goal_reminder_clears_when_goal_json_is_deleted(tmp_path: Path, monkeypatch) -> None:
+    from lingtai.kernel.nudge import goal as goal_mod
+
     agent = _GoalAgent(tmp_path)
+    clock = _Clock()
+    monkeypatch.setattr(goal_mod.time, "monotonic", lambda: clock.now)
     publish_test_payload(tmp_path, "goal", {"data": {"id": "demo", "status": "active", "reminder_delay_seconds": 1}})
     check_goal(agent)
     assert "system" in snapshot_notifications(tmp_path)
 
     assert agent._notification_store.clear("goal") is True
+    clock.advance(10)
     check_goal(agent)
 
     assert "system" not in snapshot_notifications(tmp_path)
+
+    publish_test_payload(tmp_path, "goal", {"data": {"id": "replacement", "status": "active", "reminder_delay_seconds": 1}})
+    clock.advance(10)
+    check_goal(agent)
+
+    assert snapshot_notifications(tmp_path)["system"]["data"]["events"][0]["ref_id"] == "goal:replacement"

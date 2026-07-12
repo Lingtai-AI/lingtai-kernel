@@ -19,6 +19,7 @@ from ..state import AgentState
 
 
 _DEFAULT_DELAY_SECONDS = 120.0
+_CHECK_INTERVAL_SECONDS = 10.0
 _REMINDER_BODY = "Goal reminder: read .notification/goal.json and follow its instructions; see the goal manual under system-manual."
 
 
@@ -27,6 +28,12 @@ def check(agent) -> None:
     # Cheap gate before touching disk: goal reminders are IDLE-only.
     if getattr(agent, "_state", None) != AgentState.IDLE:
         return
+
+    check_now = time.monotonic()
+    last_check = float(getattr(agent, "_goal_reminder_last_check_at", 0.0) or 0.0)
+    if last_check and check_now - last_check < _CHECK_INTERVAL_SECONDS:
+        return
+    agent._goal_reminder_last_check_at = check_now
 
     store = agent._notification_store
     allow = _get_allow_predicate()
