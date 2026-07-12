@@ -309,12 +309,16 @@ SCHEMA = {
         "placeholder": {
             "type": "boolean",
             "description": (
-                "send only — send 'text' as a placeholder message immediately "
-                "and return its compound message_id so the agent can call "
-                "edit later with the final result. Also fires a typing chat "
-                "action so the user sees 'is typing…' while the agent works. "
-                "Use for long-running responses (>5s) to avoid the perception "
-                "of silence."
+                "send only — send 'text' as a live-status placeholder message "
+                "immediately and return its compound message_id so the agent can "
+                "edit that same message later with updated status. Also fires a "
+                "typing chat action so the user sees 'is typing…' while the agent "
+                "works. Use for long-running responses (>5s) to avoid the "
+                "perception of silence. Edit the placeholder at meaningful phase "
+                "changes to show progress; the final answer must be sent as a "
+                "separate durable send/reply message — the placeholder is "
+                "progress-only. Automatic Task Card progress is separate from "
+                "these durable send/reply messages."
             ),
             "default": False,
         },
@@ -363,7 +367,10 @@ DESCRIPTION = (
     "'accounts' to list configured bot accounts. "
     "Voice messages are automatically transcribed using Whisper (local) and delivered as text. "
     "Rich feedback: automatic typing indicators, emoji reactions (👀 seen, ✅ done), "
-    "and progress messages for long-running tasks."
+    "and live-status messages for long-running tasks (placeholder + edit-in-place). "
+    "Automatic Task Card progress is separate: every tool call with an explicit "
+    "`reasoning` argument is automatically projected into a live task card "
+    "during Telegram-originated turns — the agent does not manage this card."
 )
 
 
@@ -440,6 +447,8 @@ class TelegramManager:
                 return self._accounts()
             elif action == "manual":
                 return self._manual()
+            elif action == "_task_card_update":
+                return self._handle_task_card_update(args)
             else:
                 return {"error": f"Unknown telegram action: {action}"}
         except Exception as e:
@@ -1336,6 +1345,94 @@ class TelegramManager:
             return False
 
     # ------------------------------------------------------------------
+    # Private Task Card helpers (kernel-driven, not LLM-exposed)
+    # ------------------------------------------------------------------
+
+    # Reasoning cap (Unicode code points) after secret redaction.
+    _TASK_CARD_REASONING_CAP = 500
+
+    def _handle_task_card_update(self, args: dict) -> dict:
+        """Private internal action — kernel-driven Task Card projection.
+
+        Sub-actions:
+          - create:  Send a fresh 📋 TASK CARD for the current tool.
+          - update:  Edit the same card to show only the current tool.
+          - finalize: Mark card as ✅ TASK CARD · DONE.
+
+        Single transient current-step card; no cumulative history,
+        no continuation/overflow.  Not in SCHEMA — LLM cannot call.
+        """
+        sub_action = args.get("sub_action", "update")
+        try:
+            if sub_action == "create":
+                return self._task_card_create(args)
+            elif sub_action == "update":
+                return self._task_card_update(args)
+            elif sub_action == "finalize":
+                return self._task_card_finalize(args)
+            else:
+                return {"status": "error", "error": f"Unknown sub_action: {sub_action}"}
+        except Exception as e:
+            log.debug("Task card update failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    def _task_card_create(self, args: dict) -> dict:
+        account = args["account"]
+        chat_id = args["chat_id"]
+        text = self._format_task_card_text(
+            args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""))
+        result = self.send_progress_message(account, chat_id, text)
+        if result is None:
+            return {"status": "error", "error": "Failed to send task card"}
+        return {"status": "ok", "message_id": result["message_id"]}
+
+    def _task_card_update(self, args: dict) -> dict:
+        card_message_id = args["card_message_id"]
+        text = self._format_task_card_text(
+            args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""))
+        if not self.update_progress_message(card_message_id, text):
+            # Card may have been deleted — best-effort re-create.
+            account, chat_id, _ = self._parse_compound_id(card_message_id)
+            result = self.send_progress_message(account, chat_id, text)
+            if result is None:
+                return {"status": "error", "error": "Failed to recover task card"}
+            return {"status": "ok", "message_id": result["message_id"]}
+        return {"status": "ok", "message_id": card_message_id}
+
+    def _task_card_finalize(self, args: dict) -> dict:
+        card_message_id = args.get("card_message_id")
+        if card_message_id:
+            tool = args.get("tool", "")
+            if tool:
+                text = self._format_task_card_text(
+                    tool, args.get("tool_action", ""), args.get("reasoning", ""))
+                text += "\n\n✅ TASK CARD · DONE"
+            else:
+                text = "✅ TASK CARD · DONE"
+            self.update_progress_message(card_message_id, text)
+        return {"status": "ok"}
+
+    @classmethod
+    def _format_task_card_text(cls, tool: str, action: str, reasoning: str) -> str:
+        """Build a single transient Task Card: 📋 TASK CARD header + one tool line.
+
+        Reasoning is redacted first (full text), then excerpted to
+        _TASK_CARD_REASONING_CAP code points.  If longer, «…» is appended
+        as UI metadata outside the excerpt.
+        """
+        from lingtai.kernel.trace_redaction import redact_text
+
+        redacted = redact_text(reasoning)
+        if len(redacted) > cls._TASK_CARD_REASONING_CAP:
+            excerpt = redacted[:cls._TASK_CARD_REASONING_CAP] + "…"
+        else:
+            excerpt = redacted
+        label = f"{tool}.{action}" if action else tool
+        if label:
+            return f"📋 TASK CARD\n{label}: {excerpt}"
+        return f"📋 TASK CARD\n{excerpt}" if excerpt else "📋 TASK CARD"
+
+    # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
 
@@ -1544,8 +1641,11 @@ class TelegramManager:
         if placeholder:
             response["placeholder"] = True
             response["hint"] = (
-                "Placeholder sent — call telegram(action='edit', "
-                f"message_id='{compound_id}', text=<final>) when ready."
+                "Live-status placeholder sent — edit it at "
+                "meaningful phase changes to show progress: "
+                f"telegram(action='edit', message_id='{compound_id}', "
+                "text=<updated status>). Send the final answer as a "
+                "separate durable `action='send'` or `action='reply'`."
             )
 
         # Issue #8: Add "done" reaction (✅) to the original message if reply_to

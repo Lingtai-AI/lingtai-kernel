@@ -929,6 +929,14 @@ class Agent(BaseAgent):
         if not hasattr(self, "_mcp_tool_names"):
             self._mcp_tool_names = set()
         self._mcp_tool_names.update(registered)
+
+        # Build stable tool-name -> MCP client mapping for kernel-driven
+        # reverse calls (e.g. Telegram Task Card update).
+        if not hasattr(self, "_mcp_clients_by_tool"):
+            self._mcp_clients_by_tool: dict[str, Any] = {}
+        for name in registered:
+            self._mcp_clients_by_tool[name] = client
+
         return registered
 
     def connect_mcp_http(
@@ -978,6 +986,14 @@ class Agent(BaseAgent):
         if not hasattr(self, "_mcp_tool_names"):
             self._mcp_tool_names = set()
         self._mcp_tool_names.update(registered)
+
+        # Build stable tool-name -> MCP client mapping for kernel-driven
+        # reverse calls (e.g. Telegram Task Card update).
+        if not hasattr(self, "_mcp_clients_by_tool"):
+            self._mcp_clients_by_tool: dict[str, Any] = {}
+        for name in registered:
+            self._mcp_clients_by_tool[name] = client
+
         return registered
 
     def stop(self, timeout: float = 5.0) -> None:

@@ -544,6 +544,9 @@ def _heartbeat_loop(agent) -> None:
         # the notification filesystem design rationale.
         try:
             agent._sync_notifications()
+            # After sync, if a Telegram notification just arrived, set up
+            # the automatic Task Card context for this turn.
+            agent._setup_telegram_task_card()
         except Exception as notif_err:
             from ..logging import get_logger
             get_logger().warning(

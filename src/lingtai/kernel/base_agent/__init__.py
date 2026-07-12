@@ -557,6 +557,11 @@ class BaseAgent:
         self._notification_persistent_feishu_message_ids: list[str] = []
         self._notification_persistent_feishu_last_tool_id: str | None = None
 
+        # Telegram Task Card turn-local context (kernel-driven route B).
+        # Set when a Telegram notification wakes the agent; cleared at turn end.
+        # None → no-op for non-Telegram turns.
+        self._telegram_task_card_context: dict | None = None
+
         # Provider-visible tool result currently carrying the live `_meta.agent_meta`
         # / `_meta.guidance` blocks (kernel runtime state + guidance ref).
         # `agent_meta` is SPARSE / update-driven, not latest-result-only: it is
@@ -2194,6 +2199,8 @@ class BaseAgent:
 
         Override in subclasses for post-processing.
         """
+        # Clean up turn-local Telegram Task Card context.
+        self._teardown_telegram_task_card()
 
     def _on_tool_result_hook(
         self,
@@ -2219,6 +2226,145 @@ class BaseAgent:
         reminder it once published has been removed.
         """
         return None
+
+    def _on_tool_pre_dispatch_hook(
+        self,
+        tool_name: str,
+        tool_args: dict,
+        *,
+        tool_call_id: str | None = None,
+    ) -> None:
+        """Pre-dispatch hook: updates live Telegram Task Card — current step only.
+
+        Single transient card shows only the current tool + capped reasoning.
+        Previous steps are replaced, not accumulated.  Card is created lazily
+        on the first tool call; direct-answer turns produce no card.
+        """
+        ctx = self._telegram_task_card_context
+        if ctx is None:
+            return
+        if tool_name == "telegram" and tool_args.get("action") == "_task_card_update":
+            return
+        reasoning = tool_args.get("_reasoning", "")
+        if not reasoning:
+            return
+
+        action = tool_args.get("action", "")
+        with ctx["_lock"]:
+            if ctx["card_message_id"] is None:
+                # Lazy create on first tool call.
+                try:
+                    result = ctx["mcp_client"].call_tool("telegram", {
+                        "action": "_task_card_update",
+                        "sub_action": "create",
+                        "account": ctx["account"],
+                        "chat_id": ctx["chat_id"],
+                        "tool": tool_name,
+                        "tool_action": action,
+                        "reasoning": reasoning,
+                    }, timeout=5.0)
+                    ctx["card_message_id"] = result.get("message_id")
+                except Exception:
+                    return
+            else:
+                # Edit same card — current step only.
+                try:
+                    result = ctx["mcp_client"].call_tool("telegram", {
+                        "action": "_task_card_update",
+                        "sub_action": "update",
+                        "card_message_id": ctx["card_message_id"],
+                        "tool": tool_name,
+                        "tool_action": action,
+                        "reasoning": reasoning,
+                    }, timeout=5.0)
+                    # If the edit-recovery path re-created the card, adopt
+                    # the new message_id so later updates/finalize target it.
+                    new_id = (
+                        result.get("message_id")
+                        if isinstance(result, dict)
+                        else None
+                    )
+                    if new_id and new_id != ctx["card_message_id"]:
+                        ctx["card_message_id"] = new_id
+                except Exception:
+                    pass  # Best-effort — never block the real tool.
+
+    def _setup_telegram_task_card(self) -> None:
+        """Capture current Telegram inbound route; card created lazily on first tool call.
+
+        Reads the high-attention notification payload, derives (account, chat_id)
+        from the first preview's message_ref compound id, looks up the Telegram
+        MCP client from ``_mcp_clients_by_tool``.  Dedup guard prevents re-arming
+        on subsequent heartbeats for the same fingerprint.
+        """
+        import threading
+
+        from ..notifications import collect_notifications, notification_fingerprint
+
+        fp = notification_fingerprint(self._working_dir)
+        last_fp = getattr(self, "_last_telegram_card_fingerprint", None)
+        if fp == last_fp:
+            return
+
+        notifications = collect_notifications(self._working_dir)
+        telegram_data = notifications.get("mcp.telegram")
+        if not telegram_data or not isinstance(telegram_data, dict):
+            return
+        data = telegram_data.get("data", {})
+        previews = data.get("previews", []) if isinstance(data, dict) else []
+        if not previews:
+            return
+        first = previews[0] if isinstance(previews, list) and previews else {}
+        if not isinstance(first, dict):
+            return
+        message_ref = first.get("message_ref", "")
+        if not message_ref or not isinstance(message_ref, str):
+            return
+        parts = message_ref.split(":", 2)
+        if len(parts) < 2:
+            return
+        account, chat_id_str = parts[0], parts[1]
+        try:
+            chat_id = int(chat_id_str)
+        except (ValueError, TypeError):
+            return
+
+        telegram_client = getattr(self, "_mcp_clients_by_tool", {}).get("telegram")
+        if telegram_client is None:
+            return
+
+        self._telegram_task_card_context = {
+            "mcp_client": telegram_client,
+            "account": account,
+            "chat_id": chat_id,
+            "card_message_id": None,
+            "_lock": threading.Lock(),
+        }
+        self._last_telegram_card_fingerprint = fp
+
+    def _teardown_telegram_task_card(self) -> None:
+        """Finalize and clear turn-local Task Card context.
+
+        Idempotent: safe to call multiple times.  If no card was ever
+        created (direct-answer turn), just clears the context silently.
+        """
+        ctx = self._telegram_task_card_context
+        if ctx is None:
+            return
+        try:
+            if ctx.get("card_message_id") is not None:
+                ctx["mcp_client"].call_tool("telegram", {
+                    "action": "_task_card_update",
+                    "sub_action": "finalize",
+                    "card_message_id": ctx["card_message_id"],
+                    "tool": "",
+                    "tool_action": "",
+                    "reasoning": "",
+                }, timeout=5.0)
+        except Exception:
+            pass
+        finally:
+            self._telegram_task_card_context = None
 
     def _maybe_notify_large_tool_result(
         self,

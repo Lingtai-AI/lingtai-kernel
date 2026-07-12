@@ -3,12 +3,12 @@ name: telegram-mcp-manual
 description: |
   Progressive-disclosure usage manual for the Telegram MCP tool. Read this when
   you need detail beyond the one-line action descriptions: media.type='document'
-  vs 'photo' for charts/reports/generated artifacts, placeholder/progress
+  vs 'photo' for charts/reports/generated artifacts, placeholder/live-status
   messages, reply vs send, read/check/search, parse_mode/entities, chat_action, dynamic slash commands,
   and error surfacing. Pulled on demand via action='manual'; you do not need to
   call it before every send.
-version: 1.1.1
-last_changed_at: "2026-07-10T14:24:00-07:00"
+version: 1.2.0
+last_changed_at: "2026-07-11T17:47:00-07:00"
 ---
 
 # Telegram MCP — usage manual (progressive disclosure)
@@ -29,14 +29,21 @@ descriptions; you do not need to call it before every send.
 - Do not paste a local file path into message text as a substitute for
   attaching the file; attach it with `media={type, path}`.
 
-## PLACEHOLDER / PROGRESS
+## PLACEHOLDER / LIVE-STATUS
 
 - For responses that take more than ~5s, send `action='send'` with
-  `placeholder=true` (and your interim text). This fires a typing indicator and
-  returns a compound `message_id`.
-- Update it later with `action='edit'`, `message_id=<that id>`, `text=<final>`
-  instead of sending a second message, so the user sees one evolving reply
-  rather than silence followed by a wall of text.
+  `placeholder=true` (and your interim text, e.g. "Looking into that…").
+  This fires a typing indicator and returns a compound `message_id`.
+- Edit that **same** message at meaningful phase changes with `action='edit'`,
+  `message_id=<that id>`, `text=<updated status>`. The user sees one evolving
+  reply — not silence followed by a wall of text.
+- The final answer must be a **separate durable message** using `action='send'`
+  or `action='reply'`. Do **not** edit the placeholder into the final answer;
+  the placeholder shows progress only (it may optionally be deleted).
+- An automatic Task Card updates separately during Telegram-originated turns
+  (you do not manage it; use send/reply for your own messages).
+- For very fast responses (under ~5s), native Telegram typing/👀 presence is
+  enough — skip the placeholder.
 
 ## REPLY vs SEND
 
