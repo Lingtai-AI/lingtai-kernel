@@ -8,6 +8,7 @@ from typing import Any
 from lingtai.services import mcp_inbox as inbox
 from lingtai.mcp_servers.telegram.manager import TelegramManager
 from lingtai.kernel.notifications import submit
+from tests._notification_store_helpers import notification_store_for, store_agent_for
 
 
 class _FakeAccount:
@@ -29,12 +30,16 @@ class _FakeService:
     def get_account(self, _alias: str) -> _FakeAccount:
         return self.default_account
 
+    def list_accounts(self) -> list[str]:
+        return ["main"]
+
 
 def _manager(workdir: Path) -> TelegramManager:
     return TelegramManager(
         _FakeService(),
         working_dir=workdir,
         on_inbound=lambda _event: None,
+        notification_store=notification_store_for(workdir),
     )
 
 
@@ -69,7 +74,7 @@ def _write_inbox_message(
 
 def _write_telegram_notification(workdir: Path, message_id: str, *, preview: str = "hello") -> None:
     submit(
-        workdir,
+        store_agent_for(workdir),
         "mcp.telegram",
         header="1 new event from MCP 'telegram'",
         icon="💬",
@@ -101,6 +106,7 @@ def test_incoming_event_populates_generic_notification_refs(tmp_path: Path) -> N
         _FakeService(),
         working_dir=workdir,
         on_inbound=inbound_events.append,
+        notification_store=notification_store_for(workdir),
     )
 
     manager.on_incoming(
@@ -161,6 +167,7 @@ def test_incoming_event_structures_last_20_messages(tmp_path: Path) -> None:
         _FakeService(),
         working_dir=workdir,
         on_inbound=inbound_events.append,
+        notification_store=notification_store_for(workdir),
     )
 
     for idx in range(1, 26):
@@ -197,6 +204,7 @@ def test_incoming_event_structured_last_20_survives_mcp_metadata_cap(
         _FakeService(),
         working_dir=workdir,
         on_inbound=inbound_events.append,
+        notification_store=notification_store_for(workdir),
     )
 
     long_text = "x" * 1400
@@ -234,6 +242,7 @@ def test_incoming_reply_to_old_target_carries_full_referenced_message(
         _FakeService(),
         working_dir=workdir,
         on_inbound=inbound_events.append,
+        notification_store=notification_store_for(workdir),
     )
 
     # Message 1 is the old target; it scrolls out of the last-20 window once
@@ -293,6 +302,7 @@ def test_incoming_reply_to_in_window_target_has_no_referenced_message(
         _FakeService(),
         working_dir=workdir,
         on_inbound=inbound_events.append,
+        notification_store=notification_store_for(workdir),
     )
 
     manager.on_incoming(
@@ -333,6 +343,7 @@ def test_callback_query_incoming_does_not_publish_non_unique_message_ref(tmp_pat
         _FakeService(),
         working_dir=workdir,
         on_inbound=inbound_events.append,
+        notification_store=notification_store_for(workdir),
     )
 
     manager.on_incoming(
@@ -362,7 +373,7 @@ def test_callback_query_notification_is_not_cleared_by_reused_message_anchor(
     workdir = tmp_path / "agent"
     compound_id = _write_inbox_message(workdir)
     submit(
-        workdir,
+        store_agent_for(workdir),
         "mcp.telegram",
         header="1 new event from MCP 'telegram'",
         icon="💬",
@@ -408,7 +419,7 @@ def test_read_keeps_notification_until_all_preview_messages_are_read(tmp_path: P
     read_id = _write_inbox_message(workdir, chat_id=123, message_id=53)
     other_id = _write_inbox_message(workdir, chat_id=456, message_id=54)
     submit(
-        workdir,
+        store_agent_for(workdir),
         "mcp.telegram",
         header="2 new events from MCP 'telegram'",
         icon="💬",
@@ -436,7 +447,7 @@ def test_read_keeps_notification_when_preview_has_no_message_identity(tmp_path: 
     workdir = tmp_path / "agent"
     _write_inbox_message(workdir)
     submit(
-        workdir,
+        store_agent_for(workdir),
         "mcp.telegram",
         header="1 new event from MCP 'telegram'",
         icon="💬",
@@ -481,7 +492,7 @@ def test_legacy_conversation_preview_ids_can_clear_old_notification(tmp_path: Pa
     workdir = tmp_path / "agent"
     compound_id = _write_inbox_message(workdir)
     submit(
-        workdir,
+        store_agent_for(workdir),
         "mcp.telegram",
         header="1 new event from MCP 'telegram'",
         icon="💬",
@@ -504,3 +515,21 @@ def test_legacy_conversation_preview_ids_can_clear_old_notification(tmp_path: Pa
     )
 
     assert not (workdir / ".notification" / "mcp.telegram.json").exists()
+
+
+def test_clear_decides_from_current_mirror_not_a_stale_handled_snapshot(
+    tmp_path: Path,
+) -> None:
+    workdir = tmp_path / "agent-current-mirror"
+    handled_id = "main:123:53"
+    newer_id = "main:123:54"
+    manager = _manager(workdir)
+    manager._mark_read("main", [handled_id])
+    _write_telegram_notification(workdir, newer_id, preview="newer unread")
+
+    manager._clear_notification_if_handled()
+
+    path = workdir / ".notification" / "mcp.telegram.json"
+    assert path.is_file()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["data"]["previews"][0]["message_ref"] == newer_id

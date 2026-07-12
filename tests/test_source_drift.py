@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests._notification_store_helpers import FakeNotificationStore
+
 
 # ---------------------------------------------------------------------------
 # 1. Fingerprint capture
@@ -203,7 +205,7 @@ class TestSourceDriftNudge:
         agent._working_dir = Path("/tmp/test-nudge")
         agent._runtime_fingerprint = startup_fp
         agent._nudge_source_drift_state = {}
-        agent._nudge_channel_lock = None
+        agent._notification_store = FakeNotificationStore()
         return agent
 
     # Patch target: _capture_runtime_fingerprint is imported locally inside
@@ -561,7 +563,7 @@ class TestSourceDriftRegistered:
         agent._nudge_kernel_version_state = {}
         agent._nudge_source_drift_state = {}
         agent._nudge_goal_state = {}
-        agent._nudge_channel_lock = None
+        agent._notification_store = FakeNotificationStore()
 
         with (
             patch.object(nudge_mod.kernel_version, "check") as mock_kv,

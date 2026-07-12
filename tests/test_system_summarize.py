@@ -38,6 +38,7 @@ from lingtai.kernel.llm.interface import (
     ToolResultBlock,
 )
 from tests._workdir_lease_helpers import make_test_lease
+from tests._notification_store_helpers import notification_store_for
 
 
 # ---------------------------------------------------------------------------
@@ -750,7 +751,7 @@ def test_handle_dispatches_summarize(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "ag"))
 
     result = agent._intrinsics["system"]({"action": "summarize", "items": []})
     # Empty items → error, but the dispatch must reach _summarize (not unknown action)
@@ -774,7 +775,7 @@ def _make_base_agent_for_notification(tmp_path):
     svc.get_adapter.return_value = MagicMock()
     svc.provider = "gemini"
     svc.model = "gemini-test"
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "ag"))
     return agent
 
 
@@ -983,7 +984,7 @@ def test_base_agent_threshold_init_from_config(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "ag"))
     assert agent._summarize_notification_threshold == 3000  # default
 
     # Simulate what _setup_from_init does after reading manifest.  An explicit
@@ -1013,7 +1014,7 @@ def test_base_agent_threshold_config_accepts_zero(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-zero", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-zero", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "ag"))
 
     manifest = {
         "llm": {"provider": "gemini", "model": "gemini-test"},
@@ -1038,7 +1039,7 @@ def test_base_agent_threshold_config_rejects_bool(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-bool", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-bool", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "ag"))
 
     manifest = {
         "llm": {"provider": "gemini", "model": "gemini-test"},
@@ -1063,7 +1064,7 @@ def test_base_agent_threshold_default_when_not_in_config(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="default-test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="default-test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "ag"))
     assert agent._summarize_notification_threshold == 3000
 
 
@@ -1082,7 +1083,7 @@ def _make_stub_agent_with_workdir(tmp_path, iface):
 
     agent = MagicMock()
     agent._working_dir = workdir
-    agent._system_notification_lock = threading.Lock()
+    agent._notification_store = notification_store_for(workdir)
     agent._chat = _StubChat()
     agent._chat.interface = iface
     agent._log = MagicMock()
@@ -1091,7 +1092,7 @@ def _make_stub_agent_with_workdir(tmp_path, iface):
 
 
 def _publish_large_result_event(workdir, tool_call_id, *, extra=None):
-    from lingtai.kernel.notifications import publish
+    from tests._notification_store_helpers import publish_test_payload
 
     events = []
     if extra:
@@ -1102,7 +1103,7 @@ def _publish_large_result_event(workdir, tool_call_id, *, extra=None):
         "ref_id": f"large_tool_result:{tool_call_id}",
         "body": "summarize me",
     })
-    publish(
+    publish_test_payload(
         workdir,
         "system",
         {
@@ -1113,7 +1114,7 @@ def _publish_large_result_event(workdir, tool_call_id, *, extra=None):
 
 
 def test_summarize_clears_matching_large_result_reminder(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     iface = ChatInterface()
     _add_tool_pair(iface, "toolu_big", "bash", "A" * 9000)
@@ -1128,11 +1129,11 @@ def test_summarize_clears_matching_large_result_reminder(tmp_path):
     assert result["status"] == "ok"
     assert result["cleared_reminders"] == ["large_tool_result:toolu_big"]
     # The reminder event is gone (file removed since it was the only event).
-    assert "system" not in collect_notifications(agent._working_dir)
+    assert "system" not in snapshot_notifications(agent._working_dir)
 
 
 def test_summarize_clears_only_matching_reminder_preserves_others(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     iface = ChatInterface()
     _add_tool_pair(iface, "toolu_big", "bash", "A" * 9000)
@@ -1158,7 +1159,7 @@ def test_summarize_clears_only_matching_reminder_preserves_others(tmp_path):
 
     assert result["status"] == "ok"
     assert result["cleared_reminders"] == ["large_tool_result:toolu_big"]
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     ref_ids = {ev["ref_id"] for ev in events}
     assert "large_tool_result:toolu_big" not in ref_ids
     # Other daemon event and the OTHER pending large-result reminder are kept.
@@ -1167,7 +1168,7 @@ def test_summarize_clears_only_matching_reminder_preserves_others(tmp_path):
 
 
 def test_summarize_batch_clears_each_matching_reminder(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     iface = ChatInterface()
     _add_tool_pair(iface, "tc-A", "bash", "A" * 9000)
@@ -1197,12 +1198,12 @@ def test_summarize_batch_clears_each_matching_reminder(tmp_path):
         "large_tool_result:tc-A",
         "large_tool_result:tc-B",
     }
-    assert "system" not in collect_notifications(agent._working_dir)
+    assert "system" not in snapshot_notifications(agent._working_dir)
 
 
 def test_summarize_failure_does_not_clear_reminder(tmp_path):
     """A failed (not_found) summarize must NOT clear any reminder."""
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     iface = ChatInterface()
     # No tool pair for toolu_big — summarize will fail with not_found.
@@ -1216,7 +1217,7 @@ def test_summarize_failure_does_not_clear_reminder(tmp_path):
 
     assert result["status"] == "error"
     assert result["cleared_reminders"] == []
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     assert any(ev["ref_id"] == "large_tool_result:toolu_big" for ev in events)
 
 
@@ -1241,13 +1242,13 @@ def test_summarize_then_dismiss_is_unnecessary_end_to_end(tmp_path):
     and system summarize also clears the reminder. Dismissal is an alternative
     to summarize, not blocked. Summarize stays on the system tool."""
     from lingtai.tools import notification as notif_intrinsic
-    from lingtai.kernel.notifications import collect_notifications, notification_fingerprint
+    from tests._notification_store_helpers import snapshot_notifications, fingerprint_notifications
 
     iface = ChatInterface()
     _add_tool_pair(iface, "toolu_big", "bash", "A" * 9000)
     agent = _make_stub_agent_with_workdir(tmp_path, iface)
     _publish_large_result_event(agent._working_dir, "toolu_big")
-    agent._notification_fp = notification_fingerprint(agent._working_dir)
+    agent._notification_fp = fingerprint_notifications(agent._working_dir)
 
     # Dismiss now succeeds — large_tool_result reminders are dismissable as escape hatch.
     dismissed = notif_intrinsic.handle(
@@ -1255,15 +1256,15 @@ def test_summarize_then_dismiss_is_unnecessary_end_to_end(tmp_path):
     )
     assert dismissed["status"] == "ok"
     assert "acked_large_result_refs" in dismissed
-    assert "system" not in collect_notifications(agent._working_dir)
+    assert "system" not in snapshot_notifications(agent._working_dir)
 
     # Re-publish the reminder and show summarize also clears it.
     _publish_large_result_event(agent._working_dir, "toolu_big")
-    agent._notification_fp = notification_fingerprint(agent._working_dir)
+    agent._notification_fp = fingerprint_notifications(agent._working_dir)
     result = _summarize(agent, {
         "action": "summarize",
         "items": [{"tool_call_id": "toolu_big", "summary": "digest"}],
     })
     assert result["status"] == "ok"
     assert result["cleared_reminders"] == ["large_tool_result:toolu_big"]
-    assert "system" not in collect_notifications(agent._working_dir)
+    assert "system" not in snapshot_notifications(agent._working_dir)

@@ -28,12 +28,9 @@ To add a new nudge: drop ``nudge/<name>.py`` exposing ``check(agent)``,
 then add an import + dispatch line to :func:`run_checks` below. No
 registry, no protocol — keep the surface flat.
 
-Concurrency: the RMW upsert/remove path holds a small per-agent lock
-because multiple checks running on the same heartbeat tick would
-otherwise lose entries. The lock is created lazily on first use.
+Concurrency: each RMW upsert/remove is one Store-owned atomic channel update.
 """
 from __future__ import annotations
-import threading
 
 from . import kernel_version, goal, source_drift
 
@@ -92,46 +89,39 @@ def _replace_kind(entries: list, kind: str, body: dict) -> list:
 
 
 def _modify(agent, mutate) -> None:
-    """Read `nudge.json`, apply ``mutate(entries) -> new_entries``, write.
+    """Apply one pure current-payload nudge mutation atomically."""
+    from datetime import datetime, timezone
+    from ..notification_store import UNCONDITIONAL
 
-    Clears the channel file entirely when the resulting list is empty so
-    the wire notification surface drops cleanly.
-    """
-    from ..notifications import collect_notifications, submit, clear
+    published_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    lock = getattr(agent, "_nudge_channel_lock", None)
-    if lock is None:
-        lock = threading.Lock()
-        agent._nudge_channel_lock = lock
-
-    with lock:
-        current = collect_notifications(agent._working_dir).get("nudge", {})
-        existing = current.get("data", {}).get("nudges", [])
-        if not isinstance(existing, list):
-            existing = []
+    def _mutator(current_payload: dict):
+        current = current_payload if isinstance(current_payload, dict) else {}
+        data = current.get("data")
+        existing = data.get("nudges", []) if isinstance(data, dict) else []
+        existing = existing if isinstance(existing, list) else []
         new_entries = mutate(list(existing))
-
+        if new_entries == existing:
+            return current_payload, False, None
         if not new_entries:
-            try:
-                clear(agent._working_dir, "nudge")
-            except Exception:
-                pass
-            return
-
-        submit(
-            agent._working_dir,
-            "nudge",
-            header=_render_header(new_entries),
-            icon="🔔",
-            priority="low",
-            instructions=(
+            return None, True, None
+        return {
+            "header": _render_header(new_entries),
+            "icon": "\U0001f514",
+            "priority": "low",
+            "published_at": published_at,
+            "instructions": (
                 "Call notification(action='dismiss_channel', channel='nudge') to "
-                "acknowledge and clear ALL nudges at once. Individual "
-                "nudges may also describe a specific action to take "
-                "(e.g. system(action='refresh') for a kernel upgrade)."
+                "acknowledge and clear ALL nudges at once. Individual nudges "
+                "may also describe a specific action to take (e.g. "
+                "system(action='refresh') for a kernel upgrade)."
             ),
-            data={"nudges": new_entries},
-        )
+            "data": {"nudges": new_entries},
+        }, True, None
+
+    agent._notification_store.compare_update_channel(
+        "nudge", UNCONDITIONAL, _mutator
+    )
 
 
 def _render_header(entries: list) -> str:

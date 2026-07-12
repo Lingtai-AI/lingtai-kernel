@@ -24,6 +24,7 @@ from lingtai.kernel.llm.interface import (
     ToolCallBlock,
     ToolResultBlock,
 )
+from tests._notification_store_helpers import notification_store_for
 
 
 class _FakeChat:
@@ -54,6 +55,7 @@ class _FakeAgent:
         self._working_dir = working_dir or Path(
             "/nonexistent/lingtai-test-tool-result-restore"
         )
+        self._notification_store = notification_store_for(self._working_dir)
         self.saved = 0
         self.save_sources: list[str | None] = []
         self.logs: list[tuple[str, dict]] = []

@@ -24,7 +24,6 @@ still auto-clears the matching reminder on success.
 from __future__ import annotations
 
 import json
-import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -34,10 +33,11 @@ from lingtai.tools import (
     notification as notif_intrinsic,
     system as sys_intrinsic,
 )
-from lingtai.kernel.notifications import (
-    collect_notifications,
-    notification_fingerprint,
-    publish,
+from tests._notification_store_helpers import (
+    fingerprint_notifications,
+    notification_store_for,
+    publish_test_payload,
+    snapshot_notifications,
 )
 
 # Shared with test_system_dismiss.py — see tests/_notification_helpers.py.
@@ -151,13 +151,13 @@ def test_system_rejects_notification_action(tmp_path: Path) -> None:
 
 def test_system_rejects_dismiss_action(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
     _mark_delivered(agent)
     res = sys_intrinsic.handle(agent, {"action": "dismiss", "channel": "soul"})
     assert res["status"] == "error"
     assert "Unknown system action" in res["message"]
     # The channel was NOT cleared — system can't dismiss anything.
-    assert "soul" in collect_notifications(tmp_path)
+    assert "soul" in snapshot_notifications(tmp_path)
 
 
 def test_system_module_has_no_dismiss_callable() -> None:
@@ -191,13 +191,13 @@ def test_unknown_action_errors(tmp_path: Path) -> None:
 
 def test_dismiss_channel_clears_surface(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
     _mark_delivered(agent)
 
     res = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "channel": "soul"})
 
     assert res == {"status": "ok", "channel": "soul", "cleared": True, "forced": False}
-    assert collect_notifications(tmp_path) == {}
+    assert snapshot_notifications(tmp_path) == {}
     # Provenance: invoked_by="notification"; no system_dismiss line.
     assert _events(agent, "notification_dismiss")[0]["invoked_by"] == "notification"
     assert _events(agent, "system_dismiss") == []
@@ -228,7 +228,7 @@ def test_dismiss_channel_rejects_event_target(tmp_path: Path) -> None:
 
 def test_dismiss_event_removes_one(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(
+    publish_test_payload(
         tmp_path,
         "system",
         {
@@ -249,7 +249,7 @@ def test_dismiss_event_removes_one(tmp_path: Path) -> None:
 
     assert res["status"] == "ok"
     assert res["removed"] == 1
-    events = collect_notifications(tmp_path)["system"]["data"]["events"]
+    events = snapshot_notifications(tmp_path)["system"]["data"]["events"]
     assert [e["event_id"] for e in events] == ["evt_a"]
 
 
@@ -263,7 +263,7 @@ def test_dismiss_event_missing_event_id(tmp_path: Path) -> None:
 def test_dismiss_event_defaults_to_system_channel(tmp_path: Path) -> None:
     """No channel given → operates on the 'system' channel."""
     agent = _StubAgent(tmp_path)
-    publish(
+    publish_test_payload(
         tmp_path,
         "system",
         {"data": {"events": [{"event_id": "evt_a", "source": "daemon", "ref_id": "a"}]}},
@@ -282,7 +282,7 @@ def test_dismiss_event_defaults_to_system_channel(tmp_path: Path) -> None:
 
 def test_dismiss_ref_removes_by_ref(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(
+    publish_test_payload(
         tmp_path,
         "system",
         {"data": {"events": [{"event_id": "evt_a", "source": "goal.reminder", "ref_id": "goal:current"}]}},
@@ -333,7 +333,7 @@ def test_large_result_guard_every_atomic_action(tmp_path: Path) -> None:
         res = notif_intrinsic.handle(agent, kwargs)
         assert res["status"] == "ok", (kwargs, res)
         assert "acked_large_result_refs" in res, (kwargs, res)
-        notifs = collect_notifications(agent._working_dir)
+        notifs = snapshot_notifications(agent._working_dir)
         events = notifs.get("system", {}).get("data", {}).get("events", [])
         assert not any(ev["source"] == "large_tool_result" for ev in events), kwargs
 
@@ -381,7 +381,10 @@ class _SummarizeAgent:
     _chat: Any = None
     _logs: list = field(default_factory=list)
     _summarize_notification_threshold: int = 3000
-    _system_notification_lock: threading.Lock = field(default_factory=threading.Lock)
+    _notification_store: object = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._notification_store = notification_store_for(self._working_dir)
 
     def _log(self, event_type: str, **fields: Any) -> None:
         self._logs.append((event_type, fields))
@@ -436,7 +439,7 @@ def test_system_summarize_failure_does_not_clear_reminder(tmp_path: Path) -> Non
     assert res["summarized"] == 0
     assert res["failed"] == 1
     assert res["cleared_reminders"] == []
-    events = collect_notifications(tmp_path)["system"]["data"]["events"]
+    events = snapshot_notifications(tmp_path)["system"]["data"]["events"]
     assert any(
         ev["ref_id"] == f"large_tool_result:{reminder_tcid}" for ev in events
     )
@@ -451,35 +454,35 @@ def test_guarded_channel_refuses_without_force(tmp_path: Path) -> None:
     import lingtai.tools.email  # noqa: F401 — registers the guard
 
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "email", {"header": "1 unread"})
+    publish_test_payload(tmp_path, "email", {"header": "1 unread"})
 
     res = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "channel": "email"})
 
     assert res["status"] == "error"
     assert res["reason"] == "guarded"
     # Producer surface untouched (canonical state separate from mirror).
-    assert "email" in collect_notifications(tmp_path)
+    assert "email" in snapshot_notifications(tmp_path)
     assert _events(agent, "notification_dismiss_guarded")[0]["invoked_by"] == "notification"
 
 
 def test_stale_channel_refused_without_force(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "system", {"header": "one", "data": {"events": ["old"]}})
+    publish_test_payload(tmp_path, "system", {"header": "one", "data": {"events": ["old"]}})
     _mark_delivered(agent)
-    publish(tmp_path, "system", {"header": "two", "data": {"events": ["old", "new"]}})
+    publish_test_payload(tmp_path, "system", {"header": "two", "data": {"events": ["old", "new"]}})
 
     res = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "channel": "system"})
 
     assert res["status"] == "error"
     assert res["reason"] == "stale_channel_version"
-    assert collect_notifications(tmp_path)["system"]["header"] == "two"
+    assert snapshot_notifications(tmp_path)["system"]["header"] == "two"
 
 
 def test_force_bypasses_stale_on_allowed_channel(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "system", {"header": "one", "data": {"events": ["old"]}})
+    publish_test_payload(tmp_path, "system", {"header": "one", "data": {"events": ["old"]}})
     _mark_delivered(agent)
-    publish(tmp_path, "system", {"header": "two", "data": {"events": ["old", "new"]}})
+    publish_test_payload(tmp_path, "system", {"header": "two", "data": {"events": ["old", "new"]}})
 
     res = notif_intrinsic.handle(
         agent, {"action": "dismiss_channel", "channel": "system", "force": True}
@@ -487,13 +490,13 @@ def test_force_bypasses_stale_on_allowed_channel(tmp_path: Path) -> None:
 
     assert res["status"] == "ok"
     assert res["forced"] is True
-    assert "system" not in collect_notifications(tmp_path)
+    assert "system" not in snapshot_notifications(tmp_path)
 
 
 def test_protected_goal_channel_refused(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "goal", {"data": {"status": "active"}})
-    agent._notification_fp = notification_fingerprint(tmp_path)
+    publish_test_payload(tmp_path, "goal", {"data": {"status": "active"}})
+    agent._notification_fp = fingerprint_notifications(tmp_path)
 
     res = notif_intrinsic.handle(
         agent, {"action": "dismiss_channel", "channel": "goal", "force": True}
@@ -506,7 +509,7 @@ def test_protected_goal_channel_refused(tmp_path: Path) -> None:
 
 def test_post_molt_dismiss_requires_reason(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "post-molt", {"header": "continue?"})
+    publish_test_payload(tmp_path, "post-molt", {"header": "continue?"})
     _mark_delivered(agent)
     res = notif_intrinsic.handle(
         agent, {"action": "dismiss_channel", "channel": "post-molt"}

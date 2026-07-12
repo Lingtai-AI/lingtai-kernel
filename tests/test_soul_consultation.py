@@ -33,6 +33,7 @@ from lingtai.kernel.llm.interface import (
     ToolResultBlock,
 )
 from tests._workdir_lease_helpers import make_test_lease
+from tests._notification_store_helpers import notification_store_for
 
 
 @pytest.fixture(autouse=True)
@@ -855,6 +856,7 @@ class TestRunConsultationFire:
             service=svc,
             agent_name="t",
             working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "agent"),
         )
         return agent
 
@@ -874,7 +876,7 @@ class TestRunConsultationFire:
         file and injects the wire pair (single-slot replace, by
         construction of the filesystem write).
         """
-        from lingtai.kernel.notifications import collect_notifications
+        from tests._notification_store_helpers import snapshot_notifications
 
         agent = self._make_real_agent(tmp_path)
         with patch(
@@ -885,7 +887,7 @@ class TestRunConsultationFire:
         # tc_inbox stays empty under the new path.
         assert len(agent._tc_inbox) == 0
         # The soul notification file is published.
-        out = collect_notifications(agent.working_dir)
+        out = snapshot_notifications(agent.working_dir)
         assert "soul" in out
         voices = out["soul"]["data"]["voices"]
         assert len(voices) == 1
@@ -928,6 +930,7 @@ class TestSoulFlowPersistenceSchema:
             service=svc,
             agent_name="t",
             working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "agent"),
         )
         return agent
 
@@ -1030,7 +1033,7 @@ class TestSoulFlowPersistenceSchema:
         fire_id are the same string, so cross-referencing between the
         wire and the soul-flow log stays trivial under the
         .notification/ redesign."""
-        from lingtai.kernel.notifications import collect_notifications
+        from tests._notification_store_helpers import snapshot_notifications
 
         agent = self._make_real_agent(tmp_path)
         self._seed_diary(agent, "diary text")
@@ -1047,7 +1050,7 @@ class TestSoulFlowPersistenceSchema:
         # tc_inbox stays empty — soul writes to the filesystem now.
         assert len(agent._tc_inbox) == 0
         # The published notification carries the same fire_id / tc_id.
-        out = collect_notifications(agent.working_dir)
+        out = snapshot_notifications(agent.working_dir)
         assert "soul" in out
         assert out["soul"]["data"]["fire_id"] == fire["fire_id"]
         assert out["soul"]["data"]["tc_id"] == fire["fire_id"]
@@ -1126,6 +1129,7 @@ class TestPersistSoulEntryUnchanged:
             service=svc,
             agent_name="t",
             working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "agent"),
         )
         return agent
 
@@ -1160,6 +1164,7 @@ class TestRehydrateAppendixTracking:
             service=svc,
             agent_name="t",
             working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "agent"),
         )
         return agent
 
@@ -1237,8 +1242,9 @@ class TestRehydrateAppendixTracking:
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=svc, agent_name="t", working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "agent"),
         )
-        with patch.object(agent, "_run_consultation_fire") as mock_fire, \
+        with patch.object(agent, "_run_consultation_fire") as mock_fire,\
              patch.object(agent, "_start_soul_timer") as mock_resched:
             agent._soul_whisper()
         assert mock_fire.call_count == 1
@@ -1254,9 +1260,10 @@ class TestRehydrateAppendixTracking:
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=svc, agent_name="t", working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "agent"),
         )
         with patch.object(agent, "_run_consultation_fire",
-                          side_effect=RuntimeError("boom")), \
+                          side_effect=RuntimeError("boom")),\
              patch.object(agent, "_start_soul_timer") as mock_resched:
             agent._soul_whisper()  # must not raise
         # Errors are swallowed, but cadence is still one-shot; no self-reschedule.
@@ -1983,6 +1990,7 @@ class TestSoulNotificationInstructions:
             service=svc,
             agent_name="t",
             working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "agent"),
         )
         return agent
 

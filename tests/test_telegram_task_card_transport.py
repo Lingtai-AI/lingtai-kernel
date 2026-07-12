@@ -21,6 +21,7 @@ import mcp.types as types
 from lingtai.kernel.base_agent import _TASK_CARD_TOOL
 from lingtai.mcp_servers.telegram.manager import TelegramManager
 from lingtai.mcp_servers.telegram.server import _PRIVATE_TASK_CARD_TOOL, build_server
+from tests._notification_store_helpers import FakeNotificationStore
 
 
 def test_private_task_card_tool_name_literals_are_in_sync():
@@ -60,7 +61,10 @@ class _FakeService:
 def _make_manager(tmp_path):
     service = _FakeService()
     manager = TelegramManager(
-        service, working_dir=Path(tmp_path), on_inbound=lambda _: None,
+        service,
+        working_dir=Path(tmp_path),
+        on_inbound=lambda _: None,
+        notification_store=FakeNotificationStore(),
     )
     return manager, service.default_account
 

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from lingtai.adapters.posix.event_journal import PosixJsonlEventJournalAdapter
 from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
 from lingtai.adapters.workdir_lease import select_workdir_lease
 from lingtai.kernel.config_resolve import (
     resolve_env,
@@ -129,6 +130,7 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
         agent_name=m.get("agent_name"),
         working_dir=working_dir,
         workdir_lease=select_workdir_lease(working_dir),
+        notification_store=PosixNotificationStoreAdapter(working_dir),
         mail_service=mail_service,
         # Config hydration follows construction on this boot path, so preserve
         # the existing constructor-time JSON serialization default (False).

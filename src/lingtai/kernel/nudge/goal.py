@@ -11,10 +11,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from ..notifications import (
-    _rewrite_system_events_locked,
-    collect_notifications,
-)
+from ..notifications import _get_allow_predicate
+from ..notification_store import UNCONDITIONAL
 from ..state import AgentState
 
 
@@ -28,7 +26,9 @@ def check(agent) -> None:
     if getattr(agent, "_state", None) != AgentState.IDLE:
         return
 
-    notifications = collect_notifications(agent._working_dir)
+    store = agent._notification_store
+    allow = _get_allow_predicate()
+    notifications = store.snapshot(allow)
     goal = notifications.get("goal")
     if not isinstance(goal, dict) or not _is_active(goal):
         _clear_goal_reminders(agent, keep_ref_id=None)
@@ -49,21 +49,18 @@ def check(agent) -> None:
     ref_id = f"goal:{goal_id}"
     _clear_goal_reminders(agent, keep_ref_id=ref_id)
 
-    # If the same goal reminder is already present, do not duplicate it.
-    system = collect_notifications(agent._working_dir).get("system", {})
-    for event in _system_events(system):
-        if isinstance(event, dict) and event.get("source") == "goal.reminder" and event.get("ref_id") == ref_id:
-            return
-
     last_dismissed = float(getattr(agent, "_goal_reminder_last_dismissed_at", 0.0) or 0.0)
     if last_dismissed and now - last_dismissed < delay:
         return
 
-    agent._enqueue_system_notification(
+    event_id = agent._enqueue_system_notification(
         source="goal.reminder",
         ref_id=ref_id,
         body=_REMINDER_BODY,
+        skip_if_ref_id_exists=True,
     )
+    if not event_id:
+        return
     agent._goal_reminder_last_goal_ref = ref_id
     agent._goal_reminder_last_published_ref = ref_id
     try:
@@ -120,50 +117,57 @@ def _is_goal_reminder_event(event: object) -> bool:
 def _clear_goal_reminders(agent, *, keep_ref_id: str | None) -> None:
     """Remove stale goal.reminder system events.
 
-    ``keep_ref_id`` is the currently active goal reminder ref. ``None`` means no
-    goal is active, so all goal reminder events are stale.
+    Uses the store's serialized compare_update_channel — no external lock needed.
     """
-    lock = getattr(agent, "_system_notification_lock", None)
-    if lock is None:
-        _clear_goal_reminders_locked(agent, keep_ref_id=keep_ref_id)
-    else:
-        with lock:
-            _clear_goal_reminders_locked(agent, keep_ref_id=keep_ref_id)
+    store = agent._notification_store
+    published_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
+    def _mutator(current_payload: dict) -> tuple[dict | None, bool, int]:
+        system = current_payload if isinstance(current_payload, dict) else {}
+        events = _system_events(system)
+        if not events:
+            return current_payload, False, 0
 
-def _clear_goal_reminders_locked(agent, *, keep_ref_id: str | None) -> None:
-    notifications = collect_notifications(agent._working_dir)
-    system = notifications.get("system", {})
-    events = _system_events(system)
-    if not events:
-        return
+        def _keep(event: object) -> bool:
+            if not _is_goal_reminder_event(event):
+                return True
+            if keep_ref_id is not None and isinstance(event, dict) and event.get("ref_id") == keep_ref_id:
+                return True
+            return False
 
-    def _keep(event: object) -> bool:
-        if not _is_goal_reminder_event(event):
-            return True
-        if keep_ref_id is not None and isinstance(event, dict) and event.get("ref_id") == keep_ref_id:
-            return True
-        return False
+        kept = [event for event in events if _keep(event)]
+        removed_count = len(events) - len(kept)
+        if not removed_count:
+            return current_payload, False, 0
 
-    kept = [event for event in events if _keep(event)]
-    if len(kept) == len(events):
-        return
+        if kept:
+            new_payload = dict(system)
+            new_data = dict(new_payload.get("data", {}))
+            new_data["events"] = kept
+            new_payload["data"] = new_data
+            new_payload["header"] = (
+                f"{len(kept)} system notification"
+                f"{'s' if len(kept) != 1 else ''}"
+            )
+            new_payload["published_at"] = published_at
+            return new_payload, True, removed_count
+        else:
+            return None, True, removed_count  # clear system channel
 
     try:
-        payload = dict(system) if isinstance(system, dict) else {}
-        _rewrite_system_events_locked(agent, kept, payload=payload)
+        result = store.compare_update_channel("system", UNCONDITIONAL, _mutator)
+        removed_count = result.value if isinstance(result.value, int) else 0
+        if result.applied and result.changed and removed_count:
+            try:
+                agent._log(
+                    "goal_reminder_cleared",
+                    keep_ref_id=keep_ref_id,
+                    removed=removed_count,
+                )
+            except Exception:
+                pass
     except Exception as e:
         try:
             agent._log("goal_reminder_clear_error", error=str(e)[:200])
         except Exception:
             pass
-        return
-
-    try:
-        agent._log(
-            "goal_reminder_cleared",
-            keep_ref_id=keep_ref_id,
-            removed=len(events) - len(kept),
-        )
-    except Exception:
-        pass

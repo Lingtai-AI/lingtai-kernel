@@ -62,6 +62,7 @@ class _FakeAgent:
         body: str,
         priority: str = "normal",
         extra: dict | None = None,
+        skip_if_ref_id_exists: bool = False,
     ):
         event_id = f"evt_{len(self._notifications) + 1}"
         self._notifications.append({

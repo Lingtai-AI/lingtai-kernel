@@ -223,13 +223,11 @@ def _publish_tool_loop_guard_notification(
     tool_call_fields: dict,
     closed_count: int,
 ) -> None:
-    workdir = getattr(agent, "_working_dir", None)
     try:
-        from pathlib import Path
-        from ..notifications import submit as publish_notification
+        from ..notifications import submit
 
-        publish_notification(
-            Path(workdir),
+        submit(
+            agent,
             "tool_loop_guard",
             header="tool loop guard interrupted work",
             icon="!",
@@ -898,10 +896,11 @@ def _run_loop(agent) -> None:
             # synthetic notification pair + MSG_TC_WAKE path.
             if sleep_state == AgentState.IDLE and not agent._asleep.is_set():
                 try:
-                    from ..notifications import notification_fingerprint, collect_notifications
-                    fp = notification_fingerprint(agent._working_dir)
+                    from ..notifications import is_channel_allowed
+                    store = agent._notification_store
+                    fp = store.fingerprint(is_channel_allowed)
                     if fp != agent._notification_fp:
-                        notifications = collect_notifications(agent._working_dir)
+                        notifications = store.snapshot(is_channel_allowed)
                         if notifications:
                             agent._log("idle_notification_check",
                                        sources=list(notifications.keys()))
@@ -1003,9 +1002,9 @@ def _check_molt_pressure(agent) -> None:
     """
     if "psyche" not in agent._intrinsics:
         return
-    from ..notifications import clear as clear_notification
+    from ..notifications import clear
 
-    clear_notification(agent._working_dir, "molt")
+    clear(agent, "molt")
 
 
 def _turn_boundary_housekeeping(agent) -> None:

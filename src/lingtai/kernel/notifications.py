@@ -1,9 +1,16 @@
-"""Notification filesystem — `.notification/` dropbox + sync primitives.
+"""Notification policy — channel allowlist, validation, dismiss authority,
+producer envelope, and sync-primitive helpers.
 
-Producers write JSON files; the kernel reads them and syncs the agent's
-wire context to match.  This module provides the file-level helpers
-(fingerprint, collect, publish, clear).  The sync-loop logic — strip +
-reinject into the wire — lives on :class:`BaseAgent`.
+Persistence (fingerprint, snapshot, publish, clear, atomic ack update,
+atomic channel mutation) is delegated to the ``NotificationStorePort``
+injected on ``BaseAgent``.  This module owns the Core policy layer:
+channel syntax / allowlist, guarded / protected dismiss rules,
+producer-owned stale decisions, wake / live-holder order, and
+model-visible representation.
+
+External producers (LICC inbox, direct ``mcp.*`` drops) use the
+POSIX adapter directly and remain compatible with the filesystem
+protocol.
 
 Naming convention:
 
@@ -13,21 +20,12 @@ Naming convention:
   ``mcp.imap.json``, ``mcp.telegram.json``).
 
 The basename is the *tool* whose namespace owns the notification.
-
-Notification-file design rationale and staged implementation notes are
-preserved in this module, its Git history, and related PR / issue records.
 """
+
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from datetime import datetime, timezone
-from pathlib import Path
-
-from ._fsutil import atomic_write_json
-from .workdir import workdir_layout
-
 
 _CHANNEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
@@ -67,10 +65,6 @@ _PROTECTED_GENERIC_DISMISS: dict[str, str] = {
 # unsafe generic clears and point the agent at the producer-specific verb.
 _GENERIC_DISMISS_GUARDED: dict[str, str] = {}
 
-# Acknowledgement file inside .notification/ where dismissed large-result ref_ids
-# are persisted so the rescan does not immediately recreate them.
-_LARGE_RESULT_ACK_FILE = ".notification/large_result_acks.json"
-
 # Agent-facing note included in the dismiss result to explain preferred path.
 _LARGE_RESULT_DISMISS_NOTE = (
     "large_tool_result reminder acknowledged and removed. "
@@ -87,56 +81,44 @@ def _is_large_result_event(ev: object) -> bool:
     return isinstance(ev, dict) and ev.get("source") == "large_tool_result"
 
 
-def load_large_result_acks(workdir: Path) -> set[str]:
-    """Load acknowledged large-result ref_ids from the ack file.
-
-    Returns an empty set when the file is absent or malformed.
-    """
-    ack_path = workdir / _LARGE_RESULT_ACK_FILE
-    try:
-        data = json.loads(ack_path.read_text(encoding="utf-8"))
-        if isinstance(data, list):
-            return {r for r in data if isinstance(r, str)}
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        pass
-    return set()
+# ---------------------------------------------------------------------------
+# Allow predicate for the store — built from Core policy constants.
+# The store receives this predicate so it never imports channel policy.
+# ---------------------------------------------------------------------------
 
 
-def save_large_result_acks(workdir: Path, ref_ids: set[str]) -> None:
-    """Persist the acknowledged large-result ref_ids to the ack file atomically.
+def _build_allow_predicate() -> callable:
+    """Return a closure that answers ``is_channel_allowed`` for the store."""
 
-    When *ref_ids* is empty the file is deleted (idempotent).
-    """
-    ack_path = workdir / _LARGE_RESULT_ACK_FILE
-    if not ref_ids:
+    def _allow(channel: str) -> bool:
         try:
-            ack_path.unlink()
-        except (FileNotFoundError, OSError):
-            pass
-        return
-    ack_path.parent.mkdir(exist_ok=True)
-    atomic_write_json(ack_path, sorted(ref_ids), ensure_ascii=False, indent=None)
+            validate_channel_name(channel)
+        except ValueError:
+            return False
+        if channel in _NOTIFICATION_CHANNEL_ALLOWLIST:
+            return True
+        return any(
+            channel.startswith(prefix)
+            for prefix in _NOTIFICATION_CHANNEL_PREFIX_ALLOWLIST
+        )
+
+    return _allow
 
 
-def ack_large_result_refs(workdir: Path, ref_ids: set[str]) -> None:
-    """Add *ref_ids* to the persistent acknowledgement store (union, not replace)."""
-    existing = load_large_result_acks(workdir)
-    save_large_result_acks(workdir, existing | ref_ids)
+# Cached allow predicate — rebuilt if the allowlist changes at runtime.
+_allow_predicate: callable | None = None
 
 
-def purge_stale_large_result_acks(workdir: Path, current_ref_ids: set[str]) -> None:
-    """Remove ack entries that are no longer part of the current large-result set.
+def _get_allow_predicate() -> callable:
+    global _allow_predicate
+    if _allow_predicate is None:
+        _allow_predicate = _build_allow_predicate()
+    return _allow_predicate
 
-    Called by the rescan path after it has determined the live set of pending
-    large-result ref_ids so stale acks do not accumulate without bound.
-    Only keeps acks whose ref_id is still in *current_ref_ids*.
-    """
-    existing = load_large_result_acks(workdir)
-    if not existing:
-        return
-    live = existing & current_ref_ids
-    if live != existing:
-        save_large_result_acks(workdir, live)
+
+# ---------------------------------------------------------------------------
+# Channel validation
+# ---------------------------------------------------------------------------
 
 
 def validate_channel_name(channel: str) -> None:
@@ -182,8 +164,10 @@ def validate_allowed_channel(channel: str) -> None:
 
 def register_notification_channel(channel: str) -> None:
     """Allow an in-process producer to register an exact notification channel."""
+    global _allow_predicate
     validate_channel_name(channel)
     _NOTIFICATION_CHANNEL_ALLOWLIST.add(channel)
+    _allow_predicate = None  # invalidate cache
 
 
 def register_generic_dismiss_guard(channel: str, suggested_verb: str) -> None:
@@ -202,151 +186,156 @@ def is_generic_dismiss_guarded(channel: str) -> str | None:
     return _GENERIC_DISMISS_GUARDED.get(channel)
 
 
-def notification_fingerprint(workdir: Path) -> tuple:
-    """Compute a content fingerprint of allowlisted `.notification/*.json`.
-
-    Returns a tuple of ``(name, size, sha256)`` triples sorted by name.  Empty
-    tuple if the directory is absent or empty.  Used to detect whether the
-    producer-visible notification payload changed since the last poll.
-
-    The fingerprint is intentionally byte-content-based rather than mtime-based:
-    some chat/MCP producers rewrite byte-identical notification JSON on every poll,
-    which used to create fresh mtimes and drive one notification injection per
-    heartbeat even when the model-visible notification was unchanged. Semantically
-    equivalent JSON with different whitespace or key order is still considered
-    changed.
-    """
-    notif_dir = workdir_layout(workdir).notification_dir
-    if not notif_dir.is_dir():
-        return ()
-    entries = []
-    for f in notif_dir.iterdir():
-        if not (f.is_file() and f.suffix == ".json" and is_channel_allowed(f.stem)):
-            continue
-        try:
-            data = f.read_bytes()
-        except OSError:
-            continue
-        entries.append((f.name, len(data), hashlib.sha256(data).hexdigest()))
-    return tuple(sorted(entries))
+# ---------------------------------------------------------------------------
+# Producer-facing submit — canonical "submit a notification" entry point
+# ---------------------------------------------------------------------------
 
 
-def collect_notifications(workdir: Path) -> dict:
-    """Read `.notification/*.json` and return a dict keyed by stem.
+def submit(
+    agent,
+    tool_name: str,
+    *,
+    data: dict,
+    header: str,
+    icon: str = "🔔",
+    priority: str = "normal",
+    instructions: str | None = None,
+) -> None:
+    """Submit a notification with the standard envelope.
 
-    Keys are filenames without extension (``email``, ``soul``,
-    ``mcp.telegram``, …).  Sorted iteration produces deterministic
-    ordering so the agent's mental model is stable across reads.
+    This is the canonical entry point for in-process producers.  It
+    wraps ``agent._notification_store.publish()`` with the envelope shape
+    documented in the design (``notification-filesystem-redesign.md`` §2.1.3)
+    and stamps ``published_at`` automatically.
 
-    Returns ``{}`` if the directory is absent, empty, or all files are
-    unparseable.  Malformed files are silently skipped — a buggy
-    producer should not break the agent.  (Producer authors see the
-    skip in their own logs and fix.)
-    """
-    notif_dir = workdir_layout(workdir).notification_dir
-    if not notif_dir.is_dir():
-        return {}
-    out = {}
-    for f in sorted(notif_dir.glob("*.json")):
-        if not is_channel_allowed(f.stem):
-            continue
-        try:
-            out[f.stem] = json.loads(f.read_bytes())
-        except (json.JSONDecodeError, OSError):
-            continue
-    return out
+    *agent* must have a ``_notification_store`` attribute.
 
-
-def publish(workdir: Path, tool_name: str, payload: dict) -> None:
-    """Write a notification file atomically (tmp + rename).
-
-    ``tool_name`` is the stem — ``email``, ``soul``, ``mcp.telegram``, etc.
-    Overwrites any prior content for that source.
-
-    The atomicity is important: a reader doing ``listdir`` + ``read_bytes``
-    while a producer is mid-write would see truncated JSON.  ``tmp +
-    rename`` makes the rename appear atomically to readers.
+    Args:
+        agent: The agent instance.
+        tool_name: The producer's namespace key — ``email``, ``soul``,
+            ``system``, ``mcp.<server>``, …  This becomes both the file
+            basename (``<tool_name>.json``) AND the dict key the agent
+            sees when it reads ``notification(action="check")``.
+        data: Structured payload the agent will read.  No restrictions
+            on shape — producers decide.
+        header: One-line glanceable summary used by frontends (TUI
+            status bar, portal cards) for compact rendering.
+        icon: Optional glyph for status indicators.  Defaults to 🔔;
+            common conventions: 📧 (mail), 🌊 (soul), 💬 (chat), …
+        priority: ``"low"``, ``"normal"``, or ``"high"``.  Frontends
+            may surface high-priority notifications more prominently.
+        instructions: Optional agent-facing directive describing how to
+            dismiss or act on this notification.
     """
     validate_allowed_channel(tool_name)
-    layout = workdir_layout(workdir)
-    notif_dir = layout.notification_dir
-    notif_dir.mkdir(exist_ok=True)
-    target = layout.notification_file(tool_name)
-    atomic_write_json(target, payload, ensure_ascii=False, indent=None)
+
+    payload = {
+        "header": header,
+        "icon": icon,
+        "priority": priority,
+        "published_at": datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        ),
+        "data": data,
+    }
+    if instructions is not None:
+        payload["instructions"] = instructions
+
+    store = agent._notification_store
+    store.publish(tool_name, payload)
 
 
-def clear(workdir: Path, tool_name: str) -> None:
-    """Delete a producer's notification file.  Idempotent.
+# ---------------------------------------------------------------------------
+# Producer-facing clear
+# ---------------------------------------------------------------------------
+
+
+def clear(agent, tool_name: str) -> None:
+    """Delete a producer's notification file.  Idempotent (best-effort).
 
     Producers call this when their state empties (e.g. mail's unread
     count drops to 0).  Deletion changes the directory fingerprint, so
     the kernel's next sync tick will strip the wire's notification block.
+
+    Errors other than FileNotFoundError are silently suppressed — this
+    is the existing best-effort contract for producers.
     """
     validate_allowed_channel(tool_name)
-    target = workdir_layout(workdir).notification_file(tool_name)
+    store = agent._notification_store
     try:
-        target.unlink()
-    except (FileNotFoundError, OSError):
+        store.clear(tool_name)
+    except OSError:
         pass
 
 
-def clear_with_result(workdir: Path, channel: str) -> bool:
+# Back-compat: clear_notification alias used by some external paths.
+clear_notification = clear
+
+
+def clear_with_result(agent, channel: str) -> bool:
     """Delete a notification file and report whether it existed.
 
-    Unlike :func:`clear`, this helper is strict: only a missing file is an
+    Unlike ``clear``, this helper is strict: only a missing file is an
     idempotent no-op. Other ``OSError`` subclasses propagate to the caller
     so agent-facing dismiss can surface honest failures.
     """
     validate_allowed_channel(channel)
-    target = workdir_layout(workdir).notification_file(channel)
-    try:
-        target.unlink()
-    except FileNotFoundError:
-        return False
-    return True
+    store = agent._notification_store
+    return store.clear(channel)
+
+
+# ---------------------------------------------------------------------------
+# Large-result ack helpers (Core policy on top of store)
+# ---------------------------------------------------------------------------
+
+
+def ack_large_result_refs(agent, ref_ids: set[str]) -> None:
+    """Atomically union *ref_ids* into persistent acknowledgements."""
+    def _union(current: set[str]) -> tuple[set[str], bool, None]:
+        updated = current | ref_ids
+        return updated, updated != current, None
+
+    agent._notification_store.update_ack_refs(_union)
+
+
+def purge_stale_large_result_acks(agent, current_ref_ids: set[str]) -> None:
+    """Atomically retain acknowledgements still present in the live ref set."""
+    def _purge(current: set[str]) -> tuple[set[str], bool, None]:
+        updated = current & current_ref_ids
+        return updated, updated != current, None
+
+    agent._notification_store.update_ack_refs(_purge)
+
+
+# ---------------------------------------------------------------------------
+# Core RMW helpers — atomic channel mutation via compare_update_channel
+# ---------------------------------------------------------------------------
 
 
 def clear_large_result_reminders(agent, tool_call_ids) -> list[str]:
     """Remove large-result reminder events for *tool_call_ids* from system.json.
 
-    This is the preferred discharge path: a *successful*
-    system(action="summarize") of a tool_call_id clears its matching
-    ``large_tool_result`` reminder automatically after recording an
-    agent-authored compact replacement in runtime history.
-
-    Generic notification dismiss (``dismiss_channel``/``dismiss_ref``) can also
-    acknowledge and clear large-result reminder mirrors as an escape hatch —
-    for stale or pre-molt refs that can no longer be summarized.  Dismissal
-    clears the notification surface only; it does not delete or mutate the
-    original tool result in chat history or events.jsonl.
-
-    Matches by the canonical ``ref_id`` (``large_tool_result:{tool_call_id}``)
-    AND ``source == "large_tool_result"`` so an unrelated event that happens to
-    reuse the ref_id string is never silently dropped. Returns the list of
-    ref_ids actually removed. Idempotent: missing file / no match is a no-op.
-
-    Runs under the agent's ``_system_notification_lock`` (when available) so it
-    does not race concurrent enqueues of new system events.
+    Uses the store's serialized compare_update_channel so no external lock is
+    needed.  The list of removed ref_ids is returned through the result's
+    policy value (``result.value``) — no impure side channels.
     """
+    from .notification_store import UNCONDITIONAL
+
     wanted_ref_ids = {
         f"large_tool_result:{tcid}" for tcid in tool_call_ids if tcid
     }
     if not wanted_ref_ids:
         return []
 
-    target = workdir_layout(agent._working_dir).notification_file("system")
+    store = agent._notification_store
+    published_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    def _do_clear() -> list[str]:
-        try:
-            payload = json.loads(target.read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return []
-        if not isinstance(payload, dict):
-            return []
-        data_obj = payload.get("data")
+    def _mutator(current_payload: dict) -> tuple[dict | None, bool, list[str]]:
+        system = current_payload if isinstance(current_payload, dict) else {}
+        data_obj = system.get("data")
         events = data_obj.get("events", []) if isinstance(data_obj, dict) else []
         if not isinstance(events, list):
-            return []
+            return current_payload, False, []
 
         def _is_target(ev: object) -> bool:
             return (
@@ -355,24 +344,28 @@ def clear_large_result_reminders(agent, tool_call_ids) -> list[str]:
                 and ev.get("ref_id") in wanted_ref_ids
             )
 
-        removed = [ev.get("ref_id") for ev in events if _is_target(ev)]
+        removed = [r for r in (ev.get("ref_id") for ev in events if _is_target(ev)) if r]
         if not removed:
-            return []
+            return current_payload, False, []
         kept = [ev for ev in events if not _is_target(ev)]
-        try:
-            _rewrite_system_events_locked(agent, kept, payload=payload)
-        except OSError:
-            return []
-        return [r for r in removed if r]
+        if kept:
+            new_payload = dict(system)
+            new_data = dict(new_payload.get("data", {}))
+            new_data["events"] = kept
+            new_payload["data"] = new_data
+            new_payload["header"] = (
+                f"{len(kept)} system notification"
+                f"{'s' if len(kept) != 1 else ''}"
+            )
+            new_payload["published_at"] = published_at
+            return new_payload, True, removed
+        else:
+            return None, True, removed  # clear channel
 
-    lock = getattr(agent, "_system_notification_lock", None)
-    if lock is not None:
-        with lock:
-            removed = _do_clear()
-    else:
-        removed = _do_clear()
+    result = store.compare_update_channel("system", UNCONDITIONAL, _mutator)
+    removed: list[str] = result.value if result.applied and isinstance(result.value, list) else []
 
-    if removed:
+    if removed and result.applied:
         _safe_log(
             agent,
             "large_result_reminder_cleared_by_summarize",
@@ -389,37 +382,25 @@ def _safe_log(agent, event_type: str, **fields) -> None:
         pass
 
 
-def _rewrite_system_events_locked(
-    agent,
-    events: list,
-    *,
-    payload: dict | None = None,
-) -> None:
-    """Rewrite or clear ``system.json`` with the provided retained events.
+def _system_events(payload: object) -> list:
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    events = data.get("events", []) if isinstance(data, dict) else []
+    return events if isinstance(events, list) else []
 
-    Caller owns any required ``_system_notification_lock``.  This helper is only
-    the shared file rewrite mechanic: it preserves the existing system envelope
-    fields, refreshes the count header/timestamp when events remain, and clears
-    the channel when the final event is removed.
-    """
-    if events:
-        if payload is None:
-            payload = {}
-        payload["header"] = (
-            f"{len(events)} system notification"
-            f"{'s' if len(events) != 1 else ''}"
-        )
-        payload["published_at"] = datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
-        data = payload.get("data")
-        if not isinstance(data, dict):
-            data = {}
-        data["events"] = events
-        payload["data"] = data
-        publish(agent._working_dir, "system", payload)
-    else:
-        clear_with_result(agent._working_dir, "system")
+
+def _system_payload_with_events(current: dict, events: list, published_at: str):
+    if not events:
+        return None
+    payload = dict(current)
+    data = payload.get("data")
+    data = dict(data) if isinstance(data, dict) else {}
+    data["events"] = events
+    payload["data"] = data
+    payload["header"] = f"{len(events)} system notification{'s' if len(events) != 1 else ''}"
+    payload["published_at"] = published_at
+    return payload
 
 
 def _channel_fingerprint_entry(fp: tuple | None, channel: str) -> tuple | None:
@@ -445,7 +426,7 @@ def _stale_channel_refusal(
     *,
     invoked_by: str,
     delivered: tuple | None,
-    current: tuple,
+    current: list | tuple | None,
 ) -> dict:
     delivered_version = _safe_version(delivered)
     current_version = _safe_version(current)
@@ -485,78 +466,6 @@ def _stale_channel_refusal(
     }
 
 
-def _ack_and_remove_large_result_events(
-    agent,
-    channel: str,
-    *,
-    invoked_by: str,
-    force: bool,
-    large_events: list,
-    all_events: list,
-    event_id: str | None,
-    ref_id: str | None,
-) -> dict:
-    """Acknowledge and remove large-result reminder events from system.json.
-
-    Called when dismiss would clear one or more large_tool_result events.
-    Persists an acknowledgement so the rescan does not immediately recreate
-    the same reminder for the same tool_call_ids. The original large result
-    remains in chat history and events.jsonl unchanged.
-    """
-    large_ref_ids: set[str] = set()
-    for ev in large_events:
-        r = ev.get("ref_id") if isinstance(ev, dict) else None
-        if r:
-            large_ref_ids.add(r)
-
-    # Persist the ack so rescan skips these ref_ids until they change.
-    try:
-        ack_and_remove = ack_large_result_refs
-        ack_and_remove(agent._working_dir, large_ref_ids)
-    except Exception:
-        pass
-
-    # Remove the large-result events (and any other matched events) from the list.
-    kept = [ev for ev in all_events if ev not in large_events]
-
-    try:
-        current_payload: dict = {}
-        if kept:
-            try:
-                target = workdir_layout(agent._working_dir).notification_file("system")
-                current_payload = json.loads(target.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        _rewrite_system_events_locked(agent, kept, payload=current_payload)
-    except OSError:
-        pass
-
-    _safe_log(
-        agent,
-        "large_result_reminder_dismissed",
-        channel=channel,
-        invoked_by=invoked_by,
-        forced=bool(force),
-        acked_ref_ids=sorted(large_ref_ids),
-        event_id=event_id,
-        ref_id=ref_id,
-    )
-
-    result = {
-        "status": "ok",
-        "channel": channel,
-        "cleared": True,
-        "forced": bool(force),
-        "acked_large_result_refs": sorted(large_ref_ids),
-        "note": _LARGE_RESULT_DISMISS_NOTE,
-    }
-    if event_id:
-        result["event_id"] = event_id
-    if ref_id:
-        result["ref_id"] = ref_id
-    return result
-
-
 def dismiss_channel(
     agent,
     channel: str,
@@ -572,14 +481,10 @@ def dismiss_channel(
     Used by the standalone ``notification`` tool's atomic dismiss verbs
     (``dismiss_channel``/``dismiss_event``/``dismiss_ref``, all with
     ``invoked_by="notification"``) and the ``soul(action="dismiss")``
-    convenience alias. The ``system`` tool no longer exposes any dismiss verb.
+    convenience alias.
+
     Generic dismiss clears only the notification surface; producer-owned state
     is untouched.
-
-    ``reason`` is optional for ordinary generic channels. For the kernel-owned
-    ``post-molt`` continuation channel it is required: clearing that reminder
-    is the explicit continue/defer/obsolete acknowledgement requested by
-    issue #184.
     """
     try:
         validate_allowed_channel(channel)
@@ -682,89 +587,32 @@ def dismiss_channel(
             ),
         }
 
+    from .notification_store import UNCONDITIONAL
+
+    store = agent._notification_store
+    delivered = _channel_fingerprint_entry(
+        getattr(agent, "_notification_fp", ()), channel
+    )
+    expected = UNCONDITIONAL if force else delivered
+    published_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     def _clear_current_channel() -> dict:
-        if not force:
-            fp = notification_fingerprint(agent._working_dir)
-            current = _channel_fingerprint_entry(fp, channel)
-            if current is not None:
-                delivered = _channel_fingerprint_entry(
-                    getattr(agent, "_notification_fp", ()),
-                    channel,
-                )
-                if delivered != current:
-                    return _stale_channel_refusal(
-                        agent,
-                        channel,
-                        invoked_by=invoked_by,
-                        delivered=delivered,
-                        current=current,
-                    )
-
-        goal_reminder_cleared_by_whole_system_dismiss = False
-        if channel == "system":
-            large_result_events: list = []
-            all_events: list = []
-            try:
-                payload = json.loads(workdir_layout(agent._working_dir).notification_file("system").read_text(encoding="utf-8"))
-                data_obj = payload.get("data") if isinstance(payload, dict) else {}
-                events = data_obj.get("events", []) if isinstance(data_obj, dict) else []
-                all_events = events if isinstance(events, list) else []
-                large_result_events = [
-                    ev for ev in all_events if _is_large_result_event(ev)
-                ]
-                goal_reminder_cleared_by_whole_system_dismiss = any(
-                    isinstance(ev, dict)
-                    and ev.get("source") == "goal.reminder"
-                    and str(ev.get("ref_id", "")).startswith("goal:")
-                    for ev in all_events
-                )
-            except Exception:
-                large_result_events = []
-                all_events = []
-                goal_reminder_cleared_by_whole_system_dismiss = False
-
-            # A whole-channel system clear that includes large-result reminders
-            # acks those reminders and removes them (rather than refusing).  The
-            # remaining non-large-result events are also cleared by the full
-            # channel dismiss below, but we handle the ack path here so the
-            # rescan does not immediately recreate them.
-            if large_result_events:
-                # Collect all events for the ack-and-remove helper; it removes
-                # only the large-result ones; remaining events follow normal path.
-                non_large = [ev for ev in all_events if not _is_large_result_event(ev)]
-                if not non_large:
-                    # All events were large-result: ack-and-remove handles everything.
-                    return _ack_and_remove_large_result_events(
-                        agent, channel,
-                        invoked_by=invoked_by, force=force,
-                        large_events=large_result_events, all_events=all_events,
-                        event_id=None, ref_id=None,
-                    )
-                # Mixed: ack large-result ones silently then continue to clear the whole channel.
-                try:
-                    ack_large_result_refs(
-                        agent._working_dir,
-                        {ev.get("ref_id") for ev in large_result_events if isinstance(ev, dict) and ev.get("ref_id")},
-                    )
-                    _safe_log(
-                        agent,
-                        "large_result_reminder_dismissed",
-                        channel=channel,
-                        invoked_by=invoked_by,
-                        forced=bool(force),
-                        acked_ref_ids=sorted(
-                            ev.get("ref_id") for ev in large_result_events
-                            if isinstance(ev, dict) and ev.get("ref_id")
-                        ),
-                        event_id=None,
-                        ref_id=None,
-                    )
-                except Exception:
-                    pass
-                # Fall through to clear the full channel (all events, including large-result).
+        def _mutator(current_payload: dict):
+            events = _system_events(current_payload) if channel == "system" else []
+            large_ref_ids = tuple(sorted({
+                str(ev.get("ref_id")) for ev in events
+                if _is_large_result_event(ev) and ev.get("ref_id")
+            }))
+            goal_removed = any(
+                isinstance(ev, dict)
+                and ev.get("source") == "goal.reminder"
+                and str(ev.get("ref_id", "")).startswith("goal:")
+                for ev in events
+            )
+            return None, True, (large_ref_ids, goal_removed)
 
         try:
-            existed = clear_with_result(agent._working_dir, channel)
+            update = store.compare_update_channel(channel, expected, _mutator)
         except OSError as e:
             try:
                 agent._log(
@@ -782,7 +630,27 @@ def dismiss_channel(
                 "channel": channel,
                 "message": str(e),
             }
+        if update.conflict:
+            return _stale_channel_refusal(
+                agent, channel, invoked_by=invoked_by, delivered=delivered,
+                current=update.current_version,
+            )
 
+        large_ref_ids, goal_reminder_cleared_by_whole_system_dismiss = (
+            update.value if isinstance(update.value, tuple) and len(update.value) == 2
+            else ((), False)
+        )
+        if large_ref_ids:
+            try:
+                ack_large_result_refs(agent, set(large_ref_ids))
+            except Exception:
+                pass
+            _safe_log(
+                agent, "large_result_reminder_dismissed", channel=channel,
+                invoked_by=invoked_by, forced=bool(force),
+                acked_ref_ids=list(large_ref_ids), event_id=None, ref_id=None,
+            )
+        existed = update.cleared
         if existed and goal_reminder_cleared_by_whole_system_dismiss:
             try:
                 import time as _time
@@ -820,67 +688,69 @@ def dismiss_channel(
         }
         if ack_reason:
             result["reason"] = ack_reason
+        if large_ref_ids:
+            result["acked_large_result_refs"] = list(large_ref_ids)
+            result["note"] = _LARGE_RESULT_DISMISS_NOTE
         return result
 
     def _dismiss_system_event() -> dict:
         if not (event_id or ref_id):
             return _clear_current_channel()
 
-        if not force:
-            fp = notification_fingerprint(agent._working_dir)
-            current = _channel_fingerprint_entry(fp, channel)
-            if current is not None:
-                delivered = _channel_fingerprint_entry(
-                    getattr(agent, "_notification_fp", ()),
-                    channel,
-                )
-                if delivered != current:
-                    return _stale_channel_refusal(
-                        agent,
-                        channel,
-                        invoked_by=invoked_by,
-                        delivered=delivered,
-                        current=current,
-                    )
-
-        target = workdir_layout(agent._working_dir).notification_file("system")
-        try:
-            payload = json.loads(target.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            payload = {}
-        except (json.JSONDecodeError, OSError) as e:
-            return {
-                "status": "error",
-                "reason": "read_failed",
-                "channel": channel,
-                "message": str(e),
-            }
-
-        data_obj = payload.get("data")
-        events = data_obj.get("events", []) if isinstance(data_obj, dict) else []
-        if not isinstance(events, list):
-            events = []
-
         def _match(ev: object) -> bool:
             if not isinstance(ev, dict):
                 return False
-            if event_id and ev.get("event_id") == event_id:
-                return True
-            if ref_id and ev.get("ref_id") == ref_id:
-                return True
-            return False
-        removed_events = [ev for ev in events if _match(ev)]
-        kept = [ev for ev in events if not _match(ev)]
-        removed = len(removed_events)
+            return bool(
+                (event_id and ev.get("event_id") == event_id)
+                or (ref_id and ev.get("ref_id") == ref_id)
+            )
 
-        # Targeted event_id/ref_id dismiss that matches large-result reminders:
-        # ack them and proceed with removal instead of refusing.
-        large_matched = [ev for ev in removed_events if _is_large_result_event(ev)]
-        if large_matched:
-            return _ack_and_remove_large_result_events(
-                agent, channel,
-                invoked_by=invoked_by, force=force,
-                large_events=large_matched, all_events=events,
+        def _mutator(current_payload: dict):
+            events = _system_events(current_payload)
+            removed_events = [ev for ev in events if _match(ev)]
+            kept = [ev for ev in events if not _match(ev)]
+            large_ref_ids = tuple(sorted({
+                str(ev.get("ref_id")) for ev in removed_events
+                if _is_large_result_event(ev) and ev.get("ref_id")
+            }))
+            goal_removed = any(
+                isinstance(ev, dict)
+                and ev.get("source") == "goal.reminder"
+                and str(ev.get("ref_id", "")).startswith("goal:")
+                for ev in removed_events
+            )
+            value = (len(removed_events), len(kept), large_ref_ids, goal_removed)
+            if not removed_events:
+                return current_payload, False, value
+            return _system_payload_with_events(
+                current_payload, kept, published_at
+            ), True, value
+
+        try:
+            update = store.compare_update_channel("system", expected, _mutator)
+        except OSError as e:
+            return {
+                "status": "error", "reason": "clear_failed",
+                "channel": channel, "message": str(e),
+            }
+        if update.conflict:
+            return _stale_channel_refusal(
+                agent, channel, invoked_by=invoked_by, delivered=delivered,
+                current=update.current_version,
+            )
+        removed, remaining, large_ref_ids, goal_removed = (
+            update.value if isinstance(update.value, tuple) and len(update.value) == 4
+            else (0, 0, (), False)
+        )
+        if large_ref_ids:
+            try:
+                ack_large_result_refs(agent, set(large_ref_ids))
+            except Exception:
+                pass
+            _safe_log(
+                agent, "large_result_reminder_dismissed", channel=channel,
+                invoked_by=invoked_by, forced=bool(force),
+                acked_ref_ids=list(large_ref_ids),
                 event_id=event_id, ref_id=ref_id,
             )
 
@@ -912,7 +782,7 @@ def dismiss_channel(
                 "channel": channel,
                 "cleared": False,
                 "removed": 0,
-                "remaining": len(kept),
+                "remaining": remaining,
                 "forced": bool(force),
             }
             if event_id:
@@ -923,27 +793,12 @@ def dismiss_channel(
                 result["reason"] = ack_reason
             return result
 
-        try:
-            _rewrite_system_events_locked(agent, kept, payload=payload)
-        except OSError as e:
-            return {
-                "status": "error",
-                "reason": "clear_failed",
-                "channel": channel,
-                "message": str(e),
-            }
-
-        try:
-            if any(
-                isinstance(ev, dict)
-                and ev.get("source") == "goal.reminder"
-                and str(ev.get("ref_id", "")).startswith("goal:")
-                for ev in removed_events
-            ):
+        if goal_removed:
+            try:
                 import time as _time
                 agent._goal_reminder_last_dismissed_at = _time.time()
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         try:
             agent._log(
@@ -973,7 +828,7 @@ def dismiss_channel(
             "channel": channel,
             "cleared": bool(removed),
             "removed": removed,
-            "remaining": len(kept),
+            "remaining": remaining,
             "forced": bool(force),
         }
         if event_id:
@@ -982,11 +837,14 @@ def dismiss_channel(
             result["ref_id"] = ref_id
         if ack_reason:
             result["reason"] = ack_reason
+        if large_ref_ids:
+            result["acked_large_result_refs"] = list(large_ref_ids)
+            result["note"] = _LARGE_RESULT_DISMISS_NOTE
         return result
 
+    # Store compare-update owns system-channel serialization.
     if channel == "system":
-        with agent._system_notification_lock:
-            result = _dismiss_system_event()
+        result = _dismiss_system_event()
     else:
         result = _clear_current_channel()
 
@@ -996,14 +854,7 @@ def dismiss_channel(
 
 
 def _dismiss_changed_surface(result: dict) -> bool:
-    """Return True iff a dismiss result reflects a real change to the surface.
-
-    A real change is what rewrites the resident ``_meta.notifications`` block on
-    older tool results and therefore breaks the Codex WS incremental chain. A
-    no-op (file already absent), a refusal (guarded/protected/stale/invalid), or
-    a zero-match event dismiss leaves the surface untouched and must NOT trigger
-    a fresh-epoch reset.
-    """
+    """Return True iff a dismiss result reflects a real change to the surface."""
     if not isinstance(result, dict) or result.get("status") != "ok":
         return False
     return bool(
@@ -1014,20 +865,7 @@ def _dismiss_changed_surface(result: dict) -> bool:
 
 
 def _signal_notification_dismissed(agent, channel: str) -> None:
-    """Signal a notification-surface dismiss to the chat session's adapter.
-
-    Best-effort and adapter-agnostic: forwards to ``on_notification_dismissed``
-    on the chat session if the hook exists. The Codex adapter INTENTIONALLY
-    treats this as a no-op (``CodexResponsesSession.on_notification_dismissed``):
-    a dismiss is high-frequency housekeeping, not context compaction, and must
-    NOT break the ``previous_response_id`` / strict-prefix continuation chain.
-    Only ``on_history_summarized`` rewrites old tool-result payloads enough to
-    require a fresh full epoch. (Earlier this hook was wired to force a fresh
-    ``ws_full`` epoch on every dismiss; that footgun is now neutralized at the
-    adapter — the ``_dismiss_changed_surface`` guard below is retained so the
-    signal stays meaningful if the hook is ever re-armed.) Adapters without the
-    hook treat the call as a no-op.
-    """
+    """Signal a notification-surface dismiss to the chat session's adapter."""
     chat = getattr(agent, "_chat", None)
     if chat is None:
         return
@@ -1044,81 +882,3 @@ def _signal_notification_dismissed(agent, channel: str) -> None:
             )
         except Exception:
             pass
-
-
-# ---------------------------------------------------------------------------
-# Producer-facing helper — the canonical "submit a notification" entry point
-# ---------------------------------------------------------------------------
-
-
-def submit(
-    workdir: Path,
-    tool_name: str,
-    *,
-    data: dict,
-    header: str,
-    icon: str = "🔔",
-    priority: str = "normal",
-    instructions: str | None = None,
-) -> None:
-    """Submit a notification with the standard envelope.
-
-    This is the canonical entry point for in-process producers.  It
-    wraps :func:`publish` with the envelope shape documented in the
-    design (``notification-filesystem-redesign.md`` §2.1.3) and stamps
-    ``published_at`` automatically.  Producers supply only what is
-    semantically theirs:
-
-    Args:
-        workdir: The agent's working directory.
-        tool_name: The producer's namespace key — ``email``, ``soul``,
-            ``system``, ``mcp.<server>``, …  This becomes both the file
-            basename (``<tool_name>.json``) AND the dict key the agent
-            sees when it reads ``notification(action="check")``.
-        data: Structured payload the agent will read.  No restrictions
-            on shape — producers decide.
-        header: One-line glanceable summary used by frontends (TUI
-            status bar, portal cards) for compact rendering.
-        icon: Optional glyph for status indicators.  Defaults to 🔔;
-            common conventions: 📧 (mail), 🌊 (soul), 💬 (chat), …
-        priority: ``"low"``, ``"normal"``, or ``"high"``.  Frontends
-            may surface high-priority notifications more prominently.
-        instructions: Optional agent-facing directive describing how to
-            dismiss or act on this notification.  Surfaces as a
-            top-level field in the wire JSON so the agent reads it
-            inline with the rest of the envelope.  Producers that
-            require an explicit dismissal action (e.g. email's
-            ``read``) put the instructions here so the directive lives
-            with the payload rather than in a static prompt.  Omit
-            when the notification is purely informational.
-
-    External producers that cannot import the kernel (e.g. MCP servers
-    over SSH) should use :func:`publish` directly with the same
-    envelope shape.  The contract is the filesystem layout; this
-    helper is a Python-side ergonomics layer.
-
-    Example::
-
-        submit(agent._working_dir, "email",
-               header=f"{n} unread",
-               icon="📧",
-               instructions="Call email(action='read', email_id=[...]) to dismiss handled mails.",
-               data={"count": n, "previews": [...]})
-
-    To clear a notification (e.g. when state empties) call
-    :func:`clear` — there is no separate "submit empty" path.
-    """
-    from datetime import datetime, timezone
-
-    payload = {
-        "header": header,
-        "icon": icon,
-        "priority": priority,
-        "published_at": datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        ),
-        "data": data,
-    }
-    if instructions is not None:
-        payload["instructions"] = instructions
-    publish(workdir, tool_name, payload)

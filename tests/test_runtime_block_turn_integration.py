@@ -32,6 +32,7 @@ from lingtai.kernel.llm.interface import (
     ToolResultBlock,
 )
 from lingtai.kernel.meta_block import stamp_meta
+from tests._notification_store_helpers import notification_store_for
 
 
 class _Guard:
@@ -107,6 +108,7 @@ class _Agent:
         self._runtime_live_holder = None
         self._intrinsics = {}
         self._working_dir = tmp_path
+        self._notification_store = notification_store_for(tmp_path)
         self._cancel_event = threading.Event()
         self._on_tool_result_hook = None
         self._intermediate_text_streamed = True

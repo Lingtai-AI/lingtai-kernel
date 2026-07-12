@@ -241,7 +241,7 @@ class TestOnEmanationDoneIntegration:
         run_dir never recorded 'timeout' (e.g. crash before mark_timeout) still
         notifies with the correct terminal label because timeout_event is set.
         """
-        from lingtai.kernel.notifications import collect_notifications
+        from tests._notification_store_helpers import snapshot_notifications
 
         agent = _make_agent(tmp_path)
         agent.inbox = queue.Queue()
@@ -263,12 +263,12 @@ class TestOnEmanationDoneIntegration:
         mgr._on_emanation_done("em-to-event", "test task", future)
 
         assert agent.inbox.empty()
-        events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+        events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
         assert len(events) == 1
         assert "timeout" in events[0]["body"].lower()
 
     def test_cancel_event_notifies_without_run_dir_state(self, tmp_path):
-        from lingtai.kernel.notifications import collect_notifications
+        from tests._notification_store_helpers import snapshot_notifications
 
         agent = _make_agent(tmp_path)
         agent.inbox = queue.Queue()
@@ -289,7 +289,7 @@ class TestOnEmanationDoneIntegration:
 
         mgr._on_emanation_done("em-cancel-event", "test task", future)
 
-        events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+        events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
         assert len(events) == 1
         assert "cancelled" in events[0]["body"].lower()
 
@@ -297,7 +297,7 @@ class TestOnEmanationDoneIntegration:
         """Even a tiny successful result must wake the parent: the daemon
         terminal notification is the completion signal, not a long-output echo.
         """
-        from lingtai.kernel.notifications import collect_notifications
+        from tests._notification_store_helpers import snapshot_notifications
 
         agent = _make_agent(tmp_path)
         agent.inbox = queue.Queue()
@@ -319,7 +319,7 @@ class TestOnEmanationDoneIntegration:
 
         mgr._on_emanation_done("em-short", "test task", future)
 
-        events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+        events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
         assert len(events) == 1
         assert events[0]["ref_id"] == "em-short"
         assert "Daemon em-short done." in events[0]["body"]
@@ -328,7 +328,7 @@ class TestOnEmanationDoneIntegration:
     def test_timeout_terminal_notified_only_once(self, tmp_path):
         """Dedupe preservation: a timeout surfaced via the event fallback is
         still delivered exactly once across duplicate done-callbacks."""
-        from lingtai.kernel.notifications import collect_notifications
+        from tests._notification_store_helpers import snapshot_notifications
 
         agent = _make_agent(tmp_path)
         agent.inbox = queue.Queue()
@@ -350,7 +350,7 @@ class TestOnEmanationDoneIntegration:
         mgr._on_emanation_done("em-once", "test task", future)
         mgr._on_emanation_done("em-once", "test task", future)
 
-        events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+        events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
         daemon_events = [e for e in events if e["ref_id"] == "em-once"]
         assert len(daemon_events) == 1
         assert "timeout" in daemon_events[0]["body"].lower()

@@ -13,6 +13,7 @@ from lingtai.mcp_servers.telegram.manager import (
     TelegramManager,
     _TASK_CARD_FOOTER,
 )
+from tests._notification_store_helpers import FakeNotificationStore
 
 
 def _fmt(rows):
@@ -238,7 +239,12 @@ def _integration_manager(tmp_path):
             return self.default_account
 
     svc = Svc()
-    mgr = TelegramManager(svc, working_dir=Path(tmp_path), on_inbound=lambda _: None)
+    mgr = TelegramManager(
+        svc,
+        working_dir=Path(tmp_path),
+        on_inbound=lambda _: None,
+        notification_store=FakeNotificationStore(),
+    )
     return mgr, svc.default_account
 
 

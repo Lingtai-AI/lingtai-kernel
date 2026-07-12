@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from lingtai.kernel.base_agent import BaseAgent, _TASK_CARD_TOOL
 from lingtai.mcp_servers.telegram.manager import TelegramManager, SCHEMA
+from tests._notification_store_helpers import notification_store_for
 
 # Fixed local instant so the immutable per-row start stamp is deterministic.
 _FIXED_LOCAL_DT = datetime(2026, 7, 12, 4, 8, 8, tzinfo=timezone(timedelta(hours=-7)))
@@ -59,7 +60,7 @@ class FakeService:
 
 def _manager(tmp_path):
     service = FakeService()
-    manager = TelegramManager(service, working_dir=Path(tmp_path), on_inbound=lambda _: None)
+    manager = TelegramManager(service, working_dir=Path(tmp_path), on_inbound=lambda _: None, notification_store=notification_store_for(Path(tmp_path)))
     return manager, service.default_account
 
 
@@ -715,7 +716,7 @@ def test_full_routing_chain_create_update_finalize(tmp_path):
     """
     service = FakeService()
     manager = TelegramManager(service, working_dir=Path(tmp_path),
-                              on_inbound=lambda _: None)
+                              on_inbound=lambda _: None, notification_store=notification_store_for(Path(tmp_path)))
     account = service.default_account
 
     # — Create via manager.handle (real dispatch) —
@@ -777,7 +778,7 @@ def test_routing_fails_if_action_overwritten(tmp_path):
     """Prove that if action were not _task_card_update, dispatch would fail."""
     service = FakeService()
     manager = TelegramManager(service, working_dir=Path(tmp_path),
-                              on_inbound=lambda _: None)
+                              on_inbound=lambda _: None, notification_store=notification_store_for(Path(tmp_path)))
 
     # This simulates what the old buggy code would have sent:
     # action = "run" (model tool action) overwrites "_task_card_update"

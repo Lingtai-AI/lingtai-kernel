@@ -17,6 +17,10 @@ from lingtai.tools.bash import (
 )
 
 
+class _SyncOnlyAgent:
+    """Strict stand-in for manager tests that exercise only synchronous runs."""
+
+
 # ---------------------------------------------------------------------------
 # BashPolicy
 # ---------------------------------------------------------------------------
@@ -99,14 +103,14 @@ class TestBashPolicy:
 
 class TestBashManager:
     def test_echo(self):
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir="/tmp")
         result = mgr.handle({"command": "echo hello"})
         assert result["status"] == "ok"
         assert result["exit_code"] == 0
         assert "hello" in result["stdout"]
 
     def test_nonexistent_command(self):
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir="/tmp")
         result = mgr.handle({"command": "definitely_not_a_real_command_xyz"})
         # status stays "ok" — it reflects that the shell spawned, not that the
         # inner command succeeded (preserving the existing executor contract).
@@ -116,7 +120,7 @@ class TestBashManager:
     # --- result fidelity: explicit pass/fail fields (T1a) ------------------
 
     def test_success_is_marked_ok(self):
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir="/tmp")
         result = mgr.handle({"command": "echo hi"})
         assert result["exit_code"] == 0
         assert result["ok"] is True
@@ -125,7 +129,7 @@ class TestBashManager:
         assert "warning" not in result
 
     def test_nonzero_exit_is_flagged_failed_with_warning(self):
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir="/tmp")
         result = mgr.handle({"command": "exit 3"})
         # status unchanged, but the failure is now impossible to miss.
         assert result["status"] == "ok"
@@ -135,7 +139,7 @@ class TestBashManager:
         assert "exited with code 3" in result["warning"]
 
     def test_warning_includes_stderr_tail(self):
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir="/tmp")
         result = mgr.handle(
             {"command": "echo boom-marker 1>&2; exit 1"}
         )
@@ -143,7 +147,7 @@ class TestBashManager:
         assert "boom-marker" in result["warning"]
 
     def test_python_traceback_is_detected(self):
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir="/tmp")
         # A real interpreter traceback exits nonzero and prints to stderr.
         result = mgr.handle(
             {"command": "python3 -c 'raise ValueError(\"x\")'"}
@@ -153,7 +157,7 @@ class TestBashManager:
         assert "python_traceback" in result["warning"]
 
     def test_missing_module_is_detected(self):
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir="/tmp")
         result = mgr.handle(
             {"command": "python3 -c 'import lingtai.kernel_does_not_exist_xyz'"}
         )
@@ -163,7 +167,7 @@ class TestBashManager:
     def test_zero_exit_with_traceback_in_output_is_flagged_without_failing(self):
         # A subshell swallows the nonzero exit but the traceback text leaks to
         # stdout — flag it as suspicious without claiming the command failed.
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir="/tmp")
         result = mgr.handle(
             {
                 "command": "python3 -c 'raise ValueError(1)' 2>&1 | cat; true"
@@ -176,12 +180,12 @@ class TestBashManager:
         assert "python_traceback" in result["warning"]
 
     def test_empty_command(self):
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir="/tmp")
         result = mgr.handle({"command": ""})
         assert result["status"] == "error"
 
     def test_timeout(self):
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir="/tmp")
         result = mgr.handle({"command": "sleep 10", "timeout": 0.5})
         assert result["status"] == "error"
         assert "timed out" in result["message"]
@@ -189,7 +193,7 @@ class TestBashManager:
         assert "rg --files" not in result["message"]
 
     def test_timeout_on_broad_find_appends_rg_hint(self):
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp")
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir="/tmp")
         result = mgr.handle(
             {
                 "command": (
@@ -206,7 +210,7 @@ class TestBashManager:
         policy_file = tmp_path / "policy.json"
         policy_file.write_text(json.dumps({"deny": ["rm"]}))
         policy = BashPolicy.from_file(str(policy_file))
-        mgr = BashManager(policy=policy, working_dir="/tmp")
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=policy, working_dir="/tmp")
         result = mgr.handle({"command": "rm -rf /"})
         assert result["status"] == "error"
         assert "not allowed" in result["message"]
@@ -215,12 +219,12 @@ class TestBashManager:
         policy_file = tmp_path / "policy.json"
         policy_file.write_text(json.dumps({"allow": ["echo", "ls"]}))
         policy = BashPolicy.from_file(str(policy_file))
-        mgr = BashManager(policy=policy, working_dir="/tmp")
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=policy, working_dir="/tmp")
         result = mgr.handle({"command": "echo ok"})
         assert result["status"] == "ok"
 
     def test_working_dir(self, tmp_path):
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir=str(tmp_path))
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir=str(tmp_path))
         result = mgr.handle({"command": "pwd"})
         assert result["status"] == "ok"
         assert str(tmp_path) in result["stdout"]
@@ -228,14 +232,14 @@ class TestBashManager:
     def test_working_dir_empty_string_defaults_to_agent_dir(self, tmp_path):
         # An empty-string working_dir is treated as unset and runs in the
         # agent working directory rather than failing the sandbox check.
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir=str(tmp_path))
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir=str(tmp_path))
         result = mgr.handle({"command": "pwd", "working_dir": ""})
         assert result["status"] == "ok"
         assert str(tmp_path) in result["stdout"]
 
     def test_working_dir_whitespace_only_defaults_to_agent_dir(self, tmp_path):
         # Whitespace-only working_dir is also treated as unset.
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir=str(tmp_path))
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir=str(tmp_path))
         result = mgr.handle({"command": "pwd", "working_dir": "   "})
         assert result["status"] == "ok"
         assert str(tmp_path) in result["stdout"]
@@ -245,7 +249,7 @@ class TestBashManager:
         external = tmp_path / "external"
         sandbox.mkdir()
         external.mkdir()
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir=str(sandbox))
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir=str(sandbox))
 
         result = mgr.handle({"command": "pwd", "working_dir": str(external)})
 
@@ -262,7 +266,7 @@ class TestBashManager:
         assert "cd /absolute/path &&" in desc
 
     def test_output_truncation(self):
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp", max_output=20)
+        mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir="/tmp", max_output=20)
         result = mgr.handle({"command": "echo 'a very long output string that exceeds the limit'"})
         assert "truncated" in result["stdout"]
 

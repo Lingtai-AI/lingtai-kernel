@@ -28,6 +28,7 @@ from ..event_journal import EventJournalPort
 from ..state import AgentState
 from ..workdir import WorkingDir
 from ..workdir_lease import WorkdirLeasePort
+from ..notification_store import NotificationStorePort
 from ..message import Message
 from ..prompt import SystemPromptManager
 from ..llm import (
@@ -280,10 +281,13 @@ def _release_acquired_workdir_lease_on_init_failure(initializer: Callable) -> Ca
 class BaseAgent:
     """Generic research agent with intrinsic tools and MCP tool dispatch.
 
-    Required dependency:
+    Required dependencies:
         - ``workdir_lease`` (WorkdirLeasePort): Exclusive claim on the working
           directory, acquired at construction and released at teardown. It has no
           unlocked/no-op form — omitting it fails loudly at construction.
+        - ``notification_store`` (NotificationStorePort): Persistence for
+          ``.notification/`` channel mirrors. Required on every supported
+          agent; there is no nullable/no-op path.
 
     Services (all optional):
         - ``service`` (LLMService): The brain — thinking, generating text.
@@ -317,6 +321,7 @@ class BaseAgent:
         agent_name: str | None = None,
         working_dir: str | Path,
         workdir_lease: WorkdirLeasePort,
+        notification_store: "NotificationStorePort",
         intrinsics: "Mapping[str, Mapping[str, Any]] | None" = None,
         file_io: Any | None = None,
         mail_service: Any | None = None,
@@ -365,6 +370,11 @@ class BaseAgent:
         self._workdir_lease_acquired = False
         self._workdir_lease.acquire(10)
         self._workdir_lease_acquired = True
+
+        # Core receives the notification-store Port; the concrete persistence
+        # mechanism (a POSIX filesystem adapter today) is composed outside.
+        # This is a required, explicit dependency: there is no no-op fallback.
+        self._notification_store = notification_store
 
         # --- Wire services ---
         # FileIOService: optional, provided by Agent or host
@@ -550,9 +560,8 @@ class BaseAgent:
         #   skeletonized in-place, not deleted).
         # See notifications.py and notification-filesystem-redesign.md.
         self._notification_fp: tuple = ()
-        # Protects read-modify-write updates and guarded clears for the
-        # shared `.notification/system.json` channel.
-        self._system_notification_lock: threading.Lock = threading.Lock()
+        # System-channel RMW serialization is owned by the injected
+        # NotificationStorePort through compare_update_channel.
         # Last ACTIVE-state notification fingerprint that has already emitted
         # ``notification_deferred_active``.  This is intentionally separate
         # from ``_notification_fp``: ACTIVE must keep the delivery fingerprint
@@ -1238,7 +1247,7 @@ class BaseAgent:
         the fingerprint stays at its prior value and the next heartbeat
         tick retries.
         """
-        from ..notifications import notification_fingerprint, collect_notifications
+        from ..notifications import is_channel_allowed
         from ..meta_block import skeletonize_notification_holder
         from .worker_recovery import (
             is_worker_interface_poisoned,
@@ -1263,14 +1272,19 @@ class BaseAgent:
             )
             return True
 
-        fp = notification_fingerprint(self._working_dir)
+        store = self._notification_store
+
+        def _allow(channel: str) -> bool:
+            return is_channel_allowed(channel)
+
+        fp = store.fingerprint(_allow)
         if fp == self._notification_fp:
             return
 
         if _skip_poisoned_sync(phase="before_collect"):
             return
 
-        notifications = collect_notifications(self._working_dir)
+        notifications = store.snapshot(_allow)
 
         if not notifications:
             if _skip_poisoned_sync(phase="before_empty_skeletonize"):
@@ -2813,14 +2827,15 @@ class BaseAgent:
         """
         import threading
 
-        from ..notifications import collect_notifications, notification_fingerprint
+        from ..notifications import is_channel_allowed
 
-        fp = notification_fingerprint(self._working_dir)
+        store = self._notification_store
+        fp = store.fingerprint(is_channel_allowed)
         last_fp = getattr(self, "_last_telegram_card_fingerprint", None)
         if fp == last_fp:
             return
 
-        notifications = collect_notifications(self._working_dir)
+        notifications = store.snapshot(is_channel_allowed)
         telegram_data = notifications.get("mcp.telegram")
         if not telegram_data or not isinstance(telegram_data, dict):
             return
