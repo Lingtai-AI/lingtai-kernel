@@ -2227,7 +2227,7 @@ class BaseAgent:
         ``tool_call_id`` is the provider-assigned id for this tool call,
         passed directly by ToolExecutor so no heuristic scan is needed.
 
-        For the live Task Card this freezes the matching row (final whole-second
+        For the live Task Card this freezes the matching row (final one-decimal
         elapsed + done marker) while other active rows keep ticking.  It runs on
         the orchestrating thread in input order in both the sequential and
         parallel paths, so it never touches a tool result — it only observes
@@ -2244,7 +2244,7 @@ class BaseAgent:
     def _freeze_task_card_row(self, tool_call_id: str | None) -> None:
         """Freeze the completed row for ``tool_call_id`` (best-effort, fail-open).
 
-        Records the row's final whole-second elapsed and marks it done, then
+        Records the row's final one-decimal elapsed and marks it done, then
         re-renders so the completed row shows its frozen value while any still
         -active parallel rows keep ticking.  Never raises into tool execution.
         """
@@ -2258,7 +2258,7 @@ class BaseAgent:
                 frozen = False
                 for r in rows:
                     if r["call_id"] == tool_call_id and not r["done"]:
-                        r["elapsed_s"] = max(0, int(now - r["started"]))
+                        r["elapsed_s"] = self._task_card_elapsed(now, r["started"])
                         r["done"] = True
                         frozen = True
                         break
@@ -2374,6 +2374,16 @@ class BaseAgent:
         return time.monotonic
 
     @staticmethod
+    def _task_card_elapsed(now: float, started: float) -> float:
+        """Monotonic elapsed seconds, clamped to >=0 and quantized to one decimal.
+
+        Rounding to 0.1 pairs with the 0.5s heartbeat so live and frozen frames
+        are stable one-decimal values (``0.5``, ``1.0``, ``1.5``) rather than raw
+        floats; the manager formats the value with ``:.1f`` for display.
+        """
+        return round(max(0.0, now - started), 1)
+
+    @staticmethod
     def _task_card_payload_rows(rows: list) -> list:
         """Project internal row state into the manager's render payload.
 
@@ -2411,14 +2421,16 @@ class BaseAgent:
             now = self._task_card_clock(ctx)()
             for r in rows:
                 if not r["done"]:
-                    r["elapsed_s"] = max(0, int(now - r["started"]))
+                    r["elapsed_s"] = self._task_card_elapsed(now, r["started"])
             self._render_task_card(ctx)
 
-    # Mechanical heartbeat cadence (whole seconds) while any tool row is active.
-    _TASK_CARD_HEARTBEAT_INTERVAL = 1.0
+    # Mechanical heartbeat cadence (seconds) while any tool row is active. 0.5s
+    # so visible frames advance 0.5 → 1.0 → 1.5 instead of duplicate integer
+    # seconds; elapsed is quantized to one decimal by ``_task_card_elapsed``.
+    _TASK_CARD_HEARTBEAT_INTERVAL = 0.5
 
     def _start_task_card_heartbeat(self, ctx: dict) -> None:
-        """Start the once-per-second heartbeat (one thread for the whole turn).
+        """Start the half-second heartbeat (one thread for the whole turn).
 
         Idempotent: a single turn-scoped thread is reused across batches — each
         tick reads the *current* generation/rows, so a new batch is picked up
@@ -2614,7 +2626,7 @@ class BaseAgent:
                     now = self._task_card_clock(ctx)()
                     for r in ctx.get("rows", []):
                         if not r["done"]:
-                            r["elapsed_s"] = max(0, int(now - r["started"]))
+                            r["elapsed_s"] = self._task_card_elapsed(now, r["started"])
                             r["done"] = True
                     payload_rows = self._task_card_payload_rows(ctx.get("rows", []))
                 # Reverse-call the private tool name (no ``action`` — the server

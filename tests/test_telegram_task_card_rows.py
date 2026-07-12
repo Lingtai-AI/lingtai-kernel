@@ -57,7 +57,8 @@ def test_single_row_shows_tool_action_reasoning_elapsed():
     ])
     assert "bash.run" in text
     assert "compile project" in text
-    assert "3s" in text
+    # Elapsed renders to one decimal place.
+    assert "3.0s" in text
 
 
 def test_parallel_rows_all_represented_with_independent_elapsed():
@@ -69,13 +70,61 @@ def test_parallel_rows_all_represented_with_independent_elapsed():
         {"tool": "grep", "tool_action": "", "reasoning": "scan",
          "elapsed_s": 8, "done": True},
     ])
-    # Each row present with its own tool + elapsed.
+    # Each row present with its own tool + one-decimal elapsed.
     assert "bash.run" in text
     assert "read" in text
     assert "grep" in text
-    assert "5s" in text
-    assert "2s" in text
-    assert "8s" in text
+    assert "5.0s" in text
+    assert "2.0s" in text
+    assert "8.0s" in text
+
+
+# ---------------------------------------------------------------------------
+# One-decimal elapsed formatting rule (stable, no float-repr surprises)
+# ---------------------------------------------------------------------------
+
+def test_fractional_half_second_renders_one_decimal():
+    text = _fmt([
+        {"tool": "bash", "tool_action": "run", "reasoning": "x",
+         "elapsed_s": 0.5, "done": False},
+    ])
+    assert "0.5s" in text
+
+
+def test_one_and_a_half_second_renders_one_decimal():
+    text = _fmt([
+        {"tool": "bash", "tool_action": "run", "reasoning": "x",
+         "elapsed_s": 1.5, "done": False},
+    ])
+    assert "1.5s" in text
+
+
+def test_float_repr_noise_is_formatted_to_one_decimal():
+    """A raw float carrying repr noise (0.1+0.2 == 0.30000000000000004) must
+    render as a clean single decimal, never leak extra digits."""
+    text = _fmt([
+        {"tool": "bash", "tool_action": "run", "reasoning": "x",
+         "elapsed_s": 0.1 + 0.2, "done": False},
+    ])
+    assert "0.3s" in text
+    assert "0.30000" not in text
+
+
+def test_zero_elapsed_renders_one_decimal():
+    text = _fmt([
+        {"tool": "bash", "tool_action": "run", "reasoning": "x",
+         "elapsed_s": 0, "done": False},
+    ])
+    assert "0.0s" in text
+
+
+def test_done_row_elapsed_is_one_decimal():
+    text = _fmt([
+        {"tool": "bash", "tool_action": "run", "reasoning": "x",
+         "elapsed_s": 7.0, "done": True},
+    ])
+    # Frozen/completed rows are one-decimal too.
+    assert "7.0s" in text
 
 
 def test_done_row_has_marker_and_active_row_does_not():

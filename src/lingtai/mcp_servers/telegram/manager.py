@@ -1511,8 +1511,8 @@ class TelegramManager:
 
         When ``rows`` is supplied (the batched multi-row form) each parallel or
         sequential call renders as its own row showing ``tool.action``, its
-        redacted reasoning excerpt, its own whole-second elapsed, and a ``✓``
-        marker once it has completed.  The scalar ``tool``/``action``/``reasoning``
+        redacted reasoning excerpt, its own one-decimal elapsed seconds, and a
+        ``✓`` marker once it has completed.  The scalar ``tool``/``action``/``reasoning``
         path is retained for backward-compatible single-tool callers and does
         not render the footer (it is the legacy transient-step form).
 
@@ -1546,7 +1546,7 @@ class TelegramManager:
         # Redact every row's reasoning up front (before any excerpt/trim), and
         # compute the per-row budget so the whole render stays under the limit
         # while keeping every row visible.
-        prepared: list[tuple[str, str, int, bool]] = []
+        prepared: list[tuple[str, str, str, bool]] = []
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -1554,10 +1554,7 @@ class TelegramManager:
             action = str(row.get("tool_action", ""))
             label = f"{tool}.{action}" if action else tool
             redacted = redact_text(str(row.get("reasoning", "")))
-            try:
-                elapsed = int(row.get("elapsed_s", 0))
-            except (TypeError, ValueError):
-                elapsed = 0
+            elapsed = cls._format_elapsed(row.get("elapsed_s", 0))
             done = bool(row.get("done", False))
             prepared.append((label, redacted, elapsed, done))
 
@@ -1584,6 +1581,22 @@ class TelegramManager:
         lines.append("")
         lines.append(_TASK_CARD_FOOTER)
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_elapsed(value: object) -> str:
+        """Render a row's elapsed seconds to exactly one decimal place.
+
+        The heartbeat ticks every 0.5s and the kernel quantizes elapsed to one
+        decimal, so frames advance ``0.5 → 1.0 → 1.5`` rather than duplicating
+        integer seconds.  ``:.1f`` gives a stable single-decimal string with no
+        float-repr noise (``0.30000000000000004`` → ``0.3``) and coerces ints
+        (``3`` → ``3.0``); a non-numeric value degrades to ``0.0`` rather than
+        raising into the render.
+        """
+        try:
+            return f"{float(value):.1f}"
+        except (TypeError, ValueError):
+            return "0.0"
 
     # ------------------------------------------------------------------
     # Actions

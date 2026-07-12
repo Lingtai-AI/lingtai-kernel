@@ -2,11 +2,12 @@
 
 The pre-dispatch hook builds one row per tool call (the first active row of a
 batch resets the batch; later pre-hooks append while any row is active).  The
-result hook freezes a completed row (final whole-second elapsed + done marker)
-on the orchestrating thread while other rows keep ticking.  A 1s heartbeat edits
-the same card with fresh elapsed values, never sends a new card per tick, uses a
-monotonic clock, and a stale timer can never overwrite a newer batch, a
-recreated card, or the frozen last-behavior state.
+result hook freezes a completed row (final one-decimal elapsed + done marker)
+on the orchestrating thread while other rows keep ticking.  A 0.5s heartbeat
+edits the same card with fresh one-decimal elapsed values (frames advance
+0.5 → 1.0 → 1.5), never sends a new card per tick, uses a monotonic clock, and a
+stale timer can never overwrite a newer batch, a recreated card, or the frozen
+last-behavior state.
 
 Clock and sleep are injected so the tick logic is exercised without real time.
 """
@@ -144,20 +145,20 @@ def test_completed_row_freezes_final_elapsed_while_other_advances():
     agent._on_tool_pre_dispatch_hook(
         "read", {"_reasoning": "open"}, tool_call_id="c2")   # started t=1000
 
-    clock.advance(4)  # now t=1004
-    # c1 completes at 4s elapsed and freezes.
+    clock.advance(4.5)  # now t=1004.5
+    # c1 completes at 4.5s elapsed and freezes to one decimal (not truncated).
     agent._on_tool_result_hook("bash", {}, {"ok": True}, tool_call_id="c1")
 
-    clock.advance(3)  # now t=1007
-    # Heartbeat tick: c2 should read 7s, c1 stays frozen at 4s.
+    clock.advance(3)  # now t=1007.5
+    # Heartbeat tick: c2 should read 7.5s, c1 stays frozen at 4.5s.
     agent._task_card_heartbeat_tick()
 
     rows = _rows_of(client.updates()[-1])
     by_tool = {r["tool"]: r for r in rows}
     assert by_tool["bash"]["done"] is True
-    assert by_tool["bash"]["elapsed_s"] == 4
+    assert by_tool["bash"]["elapsed_s"] == 4.5
     assert by_tool["read"]["done"] is False
-    assert by_tool["read"]["elapsed_s"] == 7
+    assert by_tool["read"]["elapsed_s"] == 7.5
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +171,7 @@ def test_heartbeat_edits_same_card_never_sends_new():
     agent = _agent(client, clock)
 
     agent._on_tool_pre_dispatch_hook("bash", {"_reasoning": "x"}, tool_call_id="c1")
-    for step in (1, 2, 3):
+    for _ in range(3):
         clock.advance(1)
         agent._task_card_heartbeat_tick()
 
@@ -181,6 +182,29 @@ def test_heartbeat_edits_same_card_never_sends_new():
     elapsed_seq = [_rows_of(u)[0]["elapsed_s"] for u in client.updates()]
     assert elapsed_seq == sorted(elapsed_seq)
     assert elapsed_seq[-1] == 3
+
+
+def test_heartbeat_half_second_cadence_advances_frames():
+    """At the 0.5s cadence, successive ticks yield distinct one-decimal frames
+    0.5 → 1.0 → 1.5 rather than duplicate integer seconds."""
+    client = FakeMCPClient()
+    clock = FakeClock()
+    agent = _agent(client, clock)
+
+    agent._on_tool_pre_dispatch_hook("bash", {"_reasoning": "x"}, tool_call_id="c1")
+    frames = []
+    for _ in range(3):
+        clock.advance(0.5)
+        agent._task_card_heartbeat_tick()
+        frames.append(_rows_of(client.updates()[-1])[0]["elapsed_s"])
+
+    assert frames == [0.5, 1.0, 1.5]
+
+
+def test_heartbeat_interval_is_half_second():
+    """The mechanical cadence constant is 0.5s (Jason's live-validated request)."""
+    from lingtai.kernel.base_agent import BaseAgent
+    assert BaseAgent._TASK_CARD_HEARTBEAT_INTERVAL == 0.5
 
 
 def test_heartbeat_after_all_done_does_not_tick():
@@ -279,13 +303,14 @@ def test_teardown_freezes_row_still_active_at_turn_end():
     agent = _agent(client, clock)
 
     agent._on_tool_pre_dispatch_hook("bash", {"_reasoning": "x"}, tool_call_id="c1")
-    clock.advance(6)
+    clock.advance(6.5)
     agent._teardown_telegram_task_card()  # never got a result hook
 
     finals = [c for c in client.calls if c[1].get("sub_action") == "finalize"]
     rows = finals[0][1]["rows"]
     assert rows[0]["done"] is True
-    assert rows[0]["elapsed_s"] == 6
+    # Frozen to one decimal (the old int() truncation would have dropped .5).
+    assert rows[0]["elapsed_s"] == 6.5
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +319,7 @@ def test_teardown_freezes_row_still_active_at_turn_end():
 
 def test_real_heartbeat_thread_stops_on_teardown():
     """A real heartbeat thread (deterministic sleep gate) ticks the active card
-    and stops promptly when the turn tears down — no real 1s sleeps."""
+    and stops promptly when the turn tears down — no real 0.5s sleeps."""
     import threading
 
     client = FakeMCPClient()
