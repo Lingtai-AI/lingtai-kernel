@@ -1,6 +1,8 @@
 ---
 related_files:
   - src/lingtai/cli.py
+  - src/lingtai/adapters/posix/ANATOMY.md
+  - src/lingtai/kernel/event_journal/ANATOMY.md
   - src/lingtai/services/ANATOMY.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/services/__init__.py
@@ -39,7 +41,7 @@ Kernel-side service ABCs and implementations. Services back cross-cutting kernel
 
 ## Connections
 
-- `BaseAgent.__init__` creates a `CompositeLoggingService` over `logs/events.jsonl` plus additive `logs/log.sqlite` (`base_agent/__init__.py:273-285`).
+- `PosixJsonlEventJournalAdapter` composes `JSONLLoggingService`, `SQLiteEventIndex`, and `CompositeLoggingService` for the Core-owned journal Port (`src/lingtai/adapters/posix/event_journal.py:15-48`). `BaseAgent` no longer imports or constructs these concrete services.
 - `BaseAgent` receives a `MailService | None` constructor argument (`base_agent/__init__.py:230`); missing mail service disables the email intrinsic (`base_agent/__init__.py:158`).
 - Email boot wires `FilesystemMailService.listen(on_message=agent._on_mail)` through the email intrinsic (`base_agent/__init__.py:441-442`).
 - `services/mail.py` imports `handshake.{is_agent,is_alive,resolve_address}` for routing/liveness (`services/mail.py:24`) and owns `_new_mailbox_id` at module top (`services/mail.py`) — it moved here from the email tool so `send()` no longer depends on `tools`; `lingtai/tools/email/primitives.py` imports it from here.
@@ -48,7 +50,7 @@ Kernel-side service ABCs and implementations. Services back cross-cutting kernel
 
 - **Parent:** `src/lingtai/kernel/` (see `ANATOMY.md`).
 - **Subfolders:** none.
-- **Sibling consumers:** the `email` tool (`lingtai/tools/email/`) owns mailbox tool behavior; `base_agent/` owns logging lifecycle; `src/lingtai/cli.py` exposes `lingtai-agent log {rebuild,doctor,query}` (`../lingtai/cli.py:294-305`).
+- **Sibling consumers:** the `email` tool (`lingtai/tools/email/`) owns mailbox tool behavior; the outside POSIX adapter owns event-journal storage lifecycle and is injected into `base_agent/` through the Core Port; `src/lingtai/cli.py` exposes `lingtai-agent log {rebuild,doctor,query}` (`../lingtai/cli.py:294-305`).
 
 ## State
 
@@ -56,7 +58,7 @@ Kernel-side service ABCs and implementations. Services back cross-cutting kernel
 - **Persistent log source-of-truth:** `<workdir>/logs/events.jsonl`; one JSON object per line, appended by `JSONLLoggingService.log()` after the composite service has redacted high-confidence secrets (`services/logging.py:130-149`, `services/logging.py:622-632`). Agent-originated rows carry `kernel_version`, `kernel_runtime_stamp`, and `kernel_runtime` so the latest event identifies the running kernel/runtime identity. Chat-history, token-ledger, and daemon traces remain authoritative in their own JSONL files (`history/chat_history*.jsonl`, `logs/token_ledger.jsonl`, `daemons/*/{logs/events.jsonl,logs/token_ledger.jsonl,history/chat_history.jsonl}`); live chat history is redacted by `BaseAgent._save_chat_history()` before `history/chat_history.jsonl` is written.
 - **Persistent log sidecar:** `<workdir>/logs/log.sqlite`; rebuildable/deletable SQLite trace index with `schema_migrations`, `import_cursors`, `events`, `chat_entries`, and `token_entries` tables. `events`, `chat_entries`, and `token_entries` keep `source_file/source_offset/source_line` provenance so JSONL replays are idempotent and traceable; `token_entries` additionally records token counters, model/endpoint, source/em/run/api ids, and `source_kind`/`scope` to avoid parent/daemon double-counting ambiguity (`services/logging.py:270-348`, `services/logging.py:455-484`).
 - **Ephemeral mail:** `_seen` is an in-memory set of delivered UUIDs rebuilt at listen start (`services/mail.py:224-227`); `_poll_thread` is a daemon thread joined by `stop()` (`services/mail.py:370-374`).
-- **Ephemeral log:** `JSONLLoggingService` holds an open file handle and a thread lock; `SQLiteEventIndex` holds an optional sqlite connection and disables itself after sqlite errors so agent turns fail open (`services/logging.py:110-124`, `services/logging.py:174-211`).
+- **Ephemeral log:** when composed by the outside POSIX journal adapter, `JSONLLoggingService` holds an open file handle and a thread lock; `SQLiteEventIndex` holds an optional sqlite connection and disables itself after sqlite errors so agent turns fail open (`services/logging.py:110-124`, `services/logging.py:174-211`).
 
 ## Notes
 

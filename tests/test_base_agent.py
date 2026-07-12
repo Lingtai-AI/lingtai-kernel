@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lingtai.adapters.posix.event_journal import PosixJsonlEventJournalAdapter
 from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT
 from lingtai.kernel.state import AgentState
@@ -156,7 +157,12 @@ def test_worker_hang_system_notification_is_high_priority(tmp_path):
 def test_agent_log_includes_kernel_runtime_identity(tmp_path):
     import json
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test")
+    agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
+        service=make_mock_service(),
+        working_dir=tmp_path / "test",
+        event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test"),
+    )
     agent._runtime_identity_event_fields = {
         "kernel_version": "test-version",
         "kernel_runtime_stamp": "test-version+unit",

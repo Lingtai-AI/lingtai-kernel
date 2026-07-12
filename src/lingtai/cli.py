@@ -8,6 +8,7 @@ import signal
 import sys
 from pathlib import Path
 
+from lingtai.adapters.posix.event_journal import PosixJsonlEventJournalAdapter
 from lingtai.kernel.config_resolve import (
     resolve_env,
     load_env_file,
@@ -127,6 +128,12 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
         agent_name=m.get("agent_name"),
         working_dir=working_dir,
         mail_service=mail_service,
+        # Config hydration follows construction on this boot path, so preserve
+        # the existing constructor-time JSON serialization default (False).
+        event_journal=PosixJsonlEventJournalAdapter(
+            working_dir,
+            ensure_ascii=False,
+        ),
         streaming=m.get("streaming", False),
     )
 

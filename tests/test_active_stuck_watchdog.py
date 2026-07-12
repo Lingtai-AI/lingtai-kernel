@@ -19,6 +19,16 @@ from unittest.mock import MagicMock
 from tests._service_helpers import make_tool_result_mock_service as make_mock_service
 
 
+class _RecordingEventJournal:
+    def __init__(self):
+        self.events: list[dict] = []
+
+    def append(self, event):
+        self.events.append(event)
+        return None
+
+    def close(self):
+        return None
 
 
 class TestProgressBookkeeping:
@@ -196,11 +206,13 @@ class TestWatchdogFires:
         monkeypatch.setenv("LINGTAI_ACTIVE_STUCK_THRESHOLD_S", "30")
 
         from lingtai.kernel import BaseAgent, AgentState
+        journal = _RecordingEventJournal()
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            event_journal=journal,
         )
         # Simulate: agent is ACTIVE, no progress for >> threshold.
         # Use a low env threshold via clamp (min 30) and rewind the
@@ -208,16 +220,7 @@ class TestWatchdogFires:
         agent._set_state(AgentState.ACTIVE, reason="test")
         agent._last_progress_at = time.time() - 120  # 2 minutes ago
 
-        logged: list[dict] = []
-        original_log = agent._log_service.log if agent._log_service else None
-
-        def capture_log(entry):
-            logged.append(entry)
-            if original_log:
-                original_log(entry)
-
-        if agent._log_service:
-            agent._log_service.log = capture_log
+        logged = journal.events
 
         agent._start_heartbeat()
         # Heartbeat ticks once per second; give it 2.5s to be sure.
@@ -268,25 +271,18 @@ class TestWatchdogFires:
         monkeypatch.setenv("LINGTAI_ACTIVE_STUCK_THRESHOLD_S", "30")
 
         from lingtai.kernel import BaseAgent, AgentState
+        journal = _RecordingEventJournal()
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            event_journal=journal,
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
         agent._last_progress_at = time.time() - 120
 
-        logged: list[dict] = []
-        original_log = agent._log_service.log if agent._log_service else None
-
-        def capture_log(entry):
-            logged.append(entry)
-            if original_log:
-                original_log(entry)
-
-        if agent._log_service:
-            agent._log_service.log = capture_log
+        logged = journal.events
 
         agent._start_heartbeat()
         # Let the heartbeat tick several times.
@@ -302,24 +298,17 @@ class TestWatchdogFires:
         monkeypatch.setenv("LINGTAI_ACTIVE_STUCK_THRESHOLD_S", "30")
 
         from lingtai.kernel import BaseAgent
+        journal = _RecordingEventJournal()
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            event_journal=journal,
         )
         agent._last_progress_at = time.time() - 120  # rewind
 
-        logged: list[dict] = []
-        original_log = agent._log_service.log if agent._log_service else None
-
-        def capture_log(entry):
-            logged.append(entry)
-            if original_log:
-                original_log(entry)
-
-        if agent._log_service:
-            agent._log_service.log = capture_log
+        logged = journal.events
 
         agent._start_heartbeat()
         time.sleep(2.5)

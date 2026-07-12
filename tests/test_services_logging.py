@@ -5,6 +5,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from lingtai.adapters.posix.event_journal import PosixJsonlEventJournalAdapter
 from lingtai.kernel.services.logging import (
     CompositeLoggingService,
     JSONLLoggingService,
@@ -15,6 +16,11 @@ from lingtai.kernel.services.logging import (
     rebuild_sqlite_event_index,
 )
 from tests._service_helpers import make_tool_result_mock_service as make_mock_service
+
+
+def _read_durable_events(agent) -> list[dict]:
+    path = agent.working_dir / "logs" / "events.jsonl"
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 class TestJSONLLoggingService:
@@ -158,6 +164,7 @@ class TestBaseAgentLoggingIntegration:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"),
         )
         agent.add_tool("greet", schema={"type": "object", "properties": {}}, handler=lambda args: {"status": "ok"})
 
@@ -178,7 +185,7 @@ class TestBaseAgentLoggingIntegration:
         # Log file should exist in working dir
         log_file = agent.working_dir / "logs" / "events.jsonl"
         assert log_file.is_file()
-        events = agent._log_service.get_events()
+        events = _read_durable_events(agent)
         types = [e["type"] for e in events]
         assert "tool_call" in types
         assert "tool_result" in types
@@ -187,8 +194,8 @@ class TestBaseAgentLoggingIntegration:
         # Verify ts is present
         assert all("ts" in e for e in events)
 
-    def test_auto_logging_to_working_dir(self, tmp_path):
-        """Agent always creates JSONL log in working dir."""
+    def test_injected_journal_logs_to_working_dir(self, tmp_path):
+        """An injected journal writes JSONL in the agent working dir."""
         from lingtai.kernel.tool_executor import ToolExecutor
 
         agent = BaseAgent(
@@ -196,6 +203,7 @@ class TestBaseAgentLoggingIntegration:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"),
         )
         agent.add_tool("greet", schema={"type": "object", "properties": {}}, handler=lambda args: {"status": "ok"})
 
@@ -216,7 +224,7 @@ class TestBaseAgentLoggingIntegration:
         # Log file should exist in working dir
         log_file = agent.working_dir / "logs" / "events.jsonl"
         assert log_file.is_file()
-        events = agent._log_service.get_events()
+        events = _read_durable_events(agent)
         types = [e["type"] for e in events]
         assert "tool_call" in types
 
@@ -227,10 +235,11 @@ class TestBaseAgentLoggingIntegration:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
 
-        events = agent._log_service.get_events()
+        events = _read_durable_events(agent)
         state_events = [e for e in events if e["type"] == "agent_state"]
         assert len(state_events) >= 1
 
@@ -367,9 +376,10 @@ class TestSQLiteEventIndex:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
+            event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"),
         )
         agent._log("custom", value=123)
-        agent._log_service.close()
+        agent._event_journal.close()
 
         sqlite_file = agent.working_dir / "logs" / "log.sqlite"
         assert sqlite_file.is_file()
