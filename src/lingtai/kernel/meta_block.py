@@ -53,7 +53,7 @@ import json as _json
 import time as _time
 import copy as _copy
 from collections.abc import Mapping
-from typing import NamedTuple
+from typing import Any, Dict, NamedTuple
 
 from .config import (
     CONTEXT_PRESSURE_HIGH_RATIO,
@@ -464,7 +464,7 @@ def static_adapter_comment(agent):
         return None
 
 
-def dynamic_adapter_comment(agent: AgentState) -> Mapping[str, Any] | None:
+def dynamic_adapter_comment(agent: object) -> Mapping[str, Any] | None:
     """Return adapter-owned dynamic tail state for ``_meta.agent_meta``.
 
     Adapters that can separate static guidance from dynamic runtime state should

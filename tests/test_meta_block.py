@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 from types import SimpleNamespace
+from typing import get_type_hints
 
 import pytest
 import lingtai.kernel.meta_block as meta_block
@@ -35,6 +36,20 @@ from lingtai.kernel.meta_block import (
     validate_runtime_guidance,
 )
 from lingtai.kernel.llm.interface import ToolResultBlock
+
+
+@pytest.mark.parametrize(
+    "helper",
+    [
+        dynamic_adapter_comment,
+        slim_adapter_comment_for_tail,
+        meta_block.build_meta_readme_section,
+        build_guidance_with_meta_readme,
+    ],
+)
+def test_helper_type_hints_are_runtime_resolvable(helper):
+    """Public helper annotations must resolve without caller-supplied globals."""
+    assert get_type_hints(helper)
 
 
 def _fake_agent(*, time_awareness: bool = True, timezone_awareness: bool = True):
