@@ -210,12 +210,7 @@ class SQLiteEventIndex:
             raise sqlite3.Error(self._disabled_reason)
         if self._conn is None:
             if read_only:
-                # Use a WAL-aware read-only connection for live sidecars, but keep
-                # immutable inspection for checkpointed/offline sidecars so doctor/query
-                # do not create empty -wal/-shm files as a read side effect.
-                has_wal_sidecar = self.path.with_name(self.path.name + "-wal").exists() or self.path.with_name(self.path.name + "-shm").exists()
-                suffix = "?mode=ro" if has_wal_sidecar else "?mode=ro&immutable=1"
-                uri = f"{self.path.resolve().as_uri()}{suffix}"
+                uri = f"{self.path.resolve().as_uri()}?mode=ro"
                 conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
             else:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
