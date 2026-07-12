@@ -244,9 +244,24 @@ def _rebuild_via_sqlite(
     boundary_source = "boot"
     if boundary_rows:
         row = boundary_rows[0]
+        try:
+            fields = json.loads(row.get("fields_json"))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+        boundary_molt_count = (
+            fields.get("molt_count") if isinstance(fields, dict) else None
+        )
+        if (
+            isinstance(boundary_molt_count, bool)
+            or not isinstance(boundary_molt_count, int)
+            or boundary_molt_count != molt_count
+        ):
+            return None
         boundary_ts = float(row.get("ts") or 0.0)
         boundary_offset = row.get("source_offset")
-        boundary_source = _boundary_source_from_fields(row.get("fields_json"))
+        boundary_source = str(fields.get("initiator") or "agent")
+    elif molt_count != 0:
+        return None
 
     try:
         agg = query(
@@ -428,18 +443,6 @@ def _read_tail_lines(path: Path, max_bytes: int) -> tuple[list[str], bool]:
         # Drop the possibly-truncated first line.
         lines = lines[1:]
     return lines, hit_start
-
-
-def _boundary_source_from_fields(fields_json: Any) -> str:
-    if not fields_json:
-        return "agent"
-    try:
-        fields = json.loads(fields_json) if isinstance(fields_json, str) else fields_json
-    except (json.JSONDecodeError, ValueError):
-        return "agent"
-    if isinstance(fields, dict):
-        return str(fields.get("initiator") or "agent")
-    return "agent"
 
 
 def _iso_from_ts(ts: float) -> str | None:

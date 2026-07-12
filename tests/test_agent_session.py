@@ -20,6 +20,7 @@ from lingtai.kernel.agent_session import (
     RuntimeSession,
     _rebuild_via_full_scan,
     _rebuild_via_reverse_scan,
+    _rebuild_via_sqlite,
     new_runtime_session,
     rebuild_agent_session_from_events,
 )
@@ -222,6 +223,78 @@ def test_all_three_tiers_agree(tmp_path):
     assert t1.api_calls == 2
     assert t1.input_tokens == 2468
     assert t1.cached_tokens == 1600
+
+
+@pytest.mark.parametrize(
+    "fields_json",
+    [
+        json.dumps({"molt_count": 1}),
+        json.dumps({"initiator": "agent"}),
+        "{malformed",
+    ],
+    ids=["stale", "missing", "malformed"],
+)
+def test_sqlite_rejects_invalid_molt_boundary(fields_json):
+    def query(sql: str) -> list[dict]:
+        if "psyche_molt" in sql:
+            return [{"ts": 2.0, "source_offset": 10, "fields_json": fields_json}]
+        pytest.fail("invalid boundary must be rejected before aggregation")
+
+    assert _rebuild_via_sqlite(query, molt_count=2) is None
+
+
+def test_sqlite_accepts_matching_molt_boundary():
+    def query(sql: str) -> list[dict]:
+        if "psyche_molt" in sql:
+            return [
+                {
+                    "ts": 2.0,
+                    "source_offset": 10,
+                    "fields_json": json.dumps(
+                        {"molt_count": 2, "initiator": "system"}
+                    ),
+                }
+            ]
+        return [
+            {
+                "n": 1,
+                "input_tokens": 1000,
+                "output_tokens": 200,
+                "cached_tokens": 700,
+                "thinking_tokens": 10,
+            }
+        ]
+
+    session = _rebuild_via_sqlite(query, molt_count=2)
+
+    assert session is not None
+    assert session.rebuild_tier == "sqlite"
+    assert session.boundary_source == "system"
+    assert session.input_tokens == 1000
+
+
+def test_sqlite_rejects_nonzero_molt_without_boundary():
+    def query(sql: str) -> list[dict]:
+        if "psyche_molt" in sql:
+            return []
+        pytest.fail("missing boundary must be rejected before aggregation")
+
+    assert _rebuild_via_sqlite(query, molt_count=2) is None
+
+
+def test_stale_sqlite_boundary_falls_back_to_authoritative_jsonl(tmp_path):
+    current_events = [
+        _molt_ev(2.0, 2),
+        _token_ev(3.0, 1000, 200, 700),
+    ]
+    _write_events(tmp_path, current_events)
+    _build_sqlite(tmp_path, [_molt_ev(1.0, 1)])
+
+    session = rebuild_agent_session_from_events(tmp_path, molt_count=2)
+
+    assert session.rebuild_tier == "reverse_scan"
+    assert session.api_calls == 1
+    assert session.input_tokens == 1000
 
 
 def test_public_entry_falls_back_to_reverse_scan_without_sidecar(tmp_path):
