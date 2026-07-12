@@ -50,6 +50,20 @@ from .service import TelegramService
 
 log = logging.getLogger("lingtai.mcp_servers.telegram")
 
+# Kernel-driven reverse channel for the live Telegram Task Card. The kernel
+# reverse-calls a *private tool name* that ``list_tools`` never returns; because
+# it is unlisted, ``mcp.server.lowlevel.Server.call_tool`` finds no cached
+# definition, skips input validation, and still invokes the handler. The public
+# ``telegram`` name keeps its default schema validation, so a public caller
+# cannot reach the task-card path even by guessing ``_PRIVATE_TASK_CARD_ACTION``
+# (that action is absent from the public ``SCHEMA`` enum). When the private tool
+# name arrives, the handler forces ``action=_PRIVATE_TASK_CARD_ACTION`` before
+# ``manager.handle``, so the hidden route can only ever project the card.
+# BaseAgent mirrors this name literally (see ``_TASK_CARD_TOOL`` in
+# ``kernel.base_agent``); keep the two in sync.
+_PRIVATE_TASK_CARD_TOOL = "_lingtai_telegram_task_card"
+_PRIVATE_TASK_CARD_ACTION = "_task_card_update"
+
 
 _SERVER_INSTRUCTIONS = (
     "lingtai-telegram: Telegram bot client. "
@@ -701,12 +715,22 @@ def build_server(manager: TelegramManager | None) -> Server:
             ),
         ]
 
+    # Default ``validate_input=True``: the library validates the public
+    # ``telegram`` name against the listed ``SCHEMA``. The private task-card tool
+    # is unlisted, so the library skips validation for it and dispatches straight
+    # to this handler (see ``_PRIVATE_TASK_CARD_TOOL`` above).
     @server.call_tool()
     async def _call_tool(
         name: str, arguments: dict[str, Any],
     ) -> list[types.TextContent]:
-        if name != "telegram":
+        if name == _PRIVATE_TASK_CARD_TOOL:
+            # Reverse channel. Force the private action so a caller cannot
+            # repurpose the hidden route for any public Telegram action, then
+            # dispatch through the same ``manager.handle`` path as the public tool.
+            arguments = {**arguments, "action": _PRIVATE_TASK_CARD_ACTION}
+        elif name != "telegram":
             raise ValueError(f"unknown tool: {name!r}")
+
         if manager is None:
             result = {
                 "status": "error",

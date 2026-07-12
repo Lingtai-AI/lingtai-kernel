@@ -57,6 +57,15 @@ from ..runtime_identity import runtime_identity_event_fields
 
 logger = get_logger()
 
+# Private MCP tool name for the kernel-driven Telegram Task Card reverse channel.
+# It is intentionally unlisted by the Telegram server's ``list_tools`` so the
+# model can neither see nor call it, and the server forces the task-card action
+# server-side — the kernel therefore sends no ``action`` here. Mirrors
+# ``_PRIVATE_TASK_CARD_TOOL`` in ``lingtai.mcp_servers.telegram.server``; it is a
+# literal (not an import) because the kernel must not depend on ``mcp_servers``.
+# Keep the two in sync.
+_TASK_CARD_TOOL = "_lingtai_telegram_task_card"
+
 
 def _block_type_name(block: object) -> str:
     """Return a compact, safe block type label for diagnostics."""
@@ -2243,7 +2252,10 @@ class BaseAgent:
         ctx = self._telegram_task_card_context
         if ctx is None:
             return
-        if tool_name == "telegram" and tool_args.get("action") == "_task_card_update":
+        # Recursion guard: never fire the hook for the private reverse-channel
+        # tool itself (it is unlisted, so the model can never dispatch it, but a
+        # guard keeps the invariant explicit).
+        if tool_name == _TASK_CARD_TOOL:
             return
         reasoning = tool_args.get("_reasoning", "")
         if not reasoning:
@@ -2252,10 +2264,10 @@ class BaseAgent:
         action = tool_args.get("action", "")
         with ctx["_lock"]:
             if ctx["card_message_id"] is None:
-                # Lazy create on first tool call.
+                # Lazy create on first tool call. Reverse-call the private tool
+                # name (no ``action`` — the server forces the task-card action).
                 try:
-                    result = ctx["mcp_client"].call_tool("telegram", {
-                        "action": "_task_card_update",
+                    result = ctx["mcp_client"].call_tool(_TASK_CARD_TOOL, {
                         "sub_action": "create",
                         "account": ctx["account"],
                         "chat_id": ctx["chat_id"],
@@ -2263,31 +2275,107 @@ class BaseAgent:
                         "tool_action": action,
                         "reasoning": reasoning,
                     }, timeout=5.0)
-                    ctx["card_message_id"] = result.get("message_id")
                 except Exception:
+                    # Fail-open, but observable: the reverse call itself raised.
+                    self._log_task_card_reverse_exception("create", tool_name)
                     return
+                # The MCP client never raises for a tool-level failure — it
+                # returns an error *dict*. Treat that as a real (fail-open)
+                # failure that must be observable, not as a fake success.
+                # Leaving card_message_id None means the next tool call retries
+                # the lazy create.
+                message_id = self._task_card_result_message_id(result)
+                if message_id is None:
+                    self._log_task_card_reverse_failure("create", tool_name, result)
+                else:
+                    ctx["card_message_id"] = message_id
             else:
-                # Edit same card — current step only.
+                # Edit same card — current step only. Reverse-call the private
+                # tool name (no ``action`` — the server forces it).
                 try:
-                    result = ctx["mcp_client"].call_tool("telegram", {
-                        "action": "_task_card_update",
+                    result = ctx["mcp_client"].call_tool(_TASK_CARD_TOOL, {
                         "sub_action": "update",
                         "card_message_id": ctx["card_message_id"],
                         "tool": tool_name,
                         "tool_action": action,
                         "reasoning": reasoning,
                     }, timeout=5.0)
-                    # If the edit-recovery path re-created the card, adopt
-                    # the new message_id so later updates/finalize target it.
-                    new_id = (
-                        result.get("message_id")
-                        if isinstance(result, dict)
-                        else None
-                    )
-                    if new_id and new_id != ctx["card_message_id"]:
-                        ctx["card_message_id"] = new_id
                 except Exception:
-                    pass  # Best-effort — never block the real tool.
+                    # Fail-open, but observable: the reverse call itself raised.
+                    self._log_task_card_reverse_exception("update", tool_name)
+                    return
+                # If the edit-recovery path re-created the card, adopt the new
+                # message_id so later updates/finalize target it.
+                new_id = self._task_card_result_message_id(result)
+                if new_id is None:
+                    # No usable message_id. This covers both an error dict and a
+                    # malformed success-shaped payload (e.g. ``{"status": "ok"}``
+                    # with no id): either way the update did not confirm a card,
+                    # so it must be observable rather than silently ignored.
+                    # Fail-open: keep the existing card id and surface the
+                    # failure through the content-free helper.
+                    self._log_task_card_reverse_failure("update", tool_name, result)
+                elif new_id != ctx["card_message_id"]:
+                    ctx["card_message_id"] = new_id
+                # A valid, unchanged message_id is a clean success — no warning.
+
+    @staticmethod
+    def _task_card_result_error(result: object) -> bool:
+        """True if an MCP reverse-call result reports a tool-level error.
+
+        The MCP client surfaces tool-level failures as an error *dict* rather
+        than raising (see ``lingtai.services.mcp.MCPClient.call_tool``), so the
+        Task Card hook must inspect the payload instead of relying on
+        exceptions.
+        """
+        return isinstance(result, dict) and result.get("status") == "error"
+
+    @staticmethod
+    def _task_card_result_message_id(result: object) -> str | None:
+        """Extract a card ``message_id`` from a successful reverse-call result.
+
+        Returns ``None`` for error results or any payload without a usable
+        message id, so an error dict can never be mistaken for a created card.
+        """
+        if not isinstance(result, dict) or result.get("status") == "error":
+            return None
+        message_id = result.get("message_id")
+        return message_id if isinstance(message_id, str) and message_id else None
+
+    @staticmethod
+    def _log_task_card_reverse_failure(
+        phase: str, tool_name: str, result: object,
+    ) -> None:
+        """Emit a content-free warning for a failed Task Card reverse call.
+
+        Redaction by construction: only the phase (create/update), the driving
+        tool name, and the result *status* are logged. The reasoning excerpt,
+        chat id, account, card id, and the provider error text are deliberately
+        never included, so the observable signal cannot leak user content,
+        credentials, or routing identifiers.
+        """
+        status = result.get("status") if isinstance(result, dict) else type(result).__name__
+        logger.warning(
+            "telegram task-card reverse call failed phase=%s tool=%s status=%s",
+            phase, tool_name, status,
+        )
+
+    @staticmethod
+    def _log_task_card_reverse_exception(phase: str, tool_name: str) -> None:
+        """Emit a content-free warning when a Task Card reverse call raises.
+
+        Call only from inside the ``except`` block. Redaction by construction:
+        the exception *class* name is read from ``sys.exc_info`` and only the
+        phase, driving tool name, and that class are logged — never the exception
+        message, reasoning, chat id, account, card id, or provider text.
+        """
+        import sys
+        exc_type = sys.exc_info()[0]
+        exc_name = exc_type.__name__ if exc_type is not None else "unknown"
+        logger.warning(
+            "telegram task-card reverse call raised phase=%s tool=%s exc=%s",
+            phase, tool_name, exc_name,
+        )
 
     def _setup_telegram_task_card(self) -> None:
         """Capture current Telegram inbound route; card created lazily on first tool call.
@@ -2353,16 +2441,22 @@ class BaseAgent:
             return
         try:
             if ctx.get("card_message_id") is not None:
-                ctx["mcp_client"].call_tool("telegram", {
-                    "action": "_task_card_update",
+                # Reverse-call the private tool name (no ``action`` — the server
+                # forces the task-card action).
+                result = ctx["mcp_client"].call_tool(_TASK_CARD_TOOL, {
                     "sub_action": "finalize",
                     "card_message_id": ctx["card_message_id"],
                     "tool": "",
                     "tool_action": "",
                     "reasoning": "",
                 }, timeout=5.0)
+                # A tool-level failure returns an error dict; surface it so a
+                # card left un-finalized is observable (still never blocking).
+                if self._task_card_result_error(result):
+                    self._log_task_card_reverse_failure("finalize", "", result)
         except Exception:
-            pass
+            # Fail-open, but observable: the finalize reverse call itself raised.
+            self._log_task_card_reverse_exception("finalize", "")
         finally:
             self._telegram_task_card_context = None
 
