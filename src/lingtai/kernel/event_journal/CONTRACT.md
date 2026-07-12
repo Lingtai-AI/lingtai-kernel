@@ -14,7 +14,7 @@ related_files:
   - src/lingtai/cli.py
   - tests/test_event_journal.py
 maintenance: |
-  <!-- CANONICAL-MAINTENANCE v1 BEGIN -->
+  <!-- CANONICAL-MAINTENANCE v2 BEGIN -->
   This component contract is governed by the root CONTRACT.md. Keep
   related_files complete and repo-relative: the paired ANATOMY.md, Port, every
   production Adapter, contract tests, and directly relevant component contracts
@@ -24,6 +24,7 @@ maintenance: |
   bump contract_version for a breaking Port-contract change. If code and contract
   disagree, treat the disagreement as a defect—do not silently rewrite the
   normative contract to match the implementation.
+  Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
   <!-- CANONICAL-MAINTENANCE END -->
 ---
 # Structured Event Journal

@@ -18,6 +18,7 @@ maintenance: |
   truth: update this anatomy in the same change that moves files, symbols,
   connections, composition, or state. Verify every changed citation and run the
   architecture-document validation before merge.
+  Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
 ---
 # Structured Event Journal Anatomy
 

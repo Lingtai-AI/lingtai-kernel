@@ -13,11 +13,15 @@ maintenance: |
   truth: update this anatomy in the same change that moves files, symbols,
   connections, composition, or state. Verify every changed citation and run the
   architecture-document validation before merge.
+  Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
 ---
 # POSIX Adapter Anatomy
 
 This narrow package contains the production filesystem adapter for the Core-owned
-structured event journal Port.
+structured event journal Port. It is an implementation-only Anatomy with no
+independent local Contract: its unique owning component Contract is
+`src/lingtai/kernel/event_journal/CONTRACT.md` because this package implements
+that Port rather than defining a separate behavioral promise.
 
 ## Components
 

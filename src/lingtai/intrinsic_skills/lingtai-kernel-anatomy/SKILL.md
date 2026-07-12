@@ -7,8 +7,8 @@ description: >
   explains how an agent enters and descends that graph, how it pairs with the
   distributed CONTRACT.md interface-definition graph, and what to do when code
   and navigation disagree.
-version: 0.2.0
-last_changed_at: "2026-07-11T01:19:00-07:00"
+version: 0.3.0
+last_changed_at: "2026-07-11T18:35:00-07:00"
 ---
 
 # LingTai Kernel Anatomy — Navigation Router
@@ -36,8 +36,12 @@ checkout follows the same revision.
   implementation behavior accidentally disagrees; manuals and skills explain
   how agents fulfill its obligations.
 
-A root-governed architectural component keeps `ANATOMY.md` and `CONTRACT.md`
-beside its code. The pair cross-links but does not duplicate content.
+A root-governed architectural component keeps reciprocal `ANATOMY.md` and
+`CONTRACT.md` twins beside its code. An implementation, Adapter, or
+navigation-only Anatomy that owns no independent promise instead points to
+its unique owning governed Contract. Root `CONTRACT.md` owns the full pairing,
+ownership, mutual-progressive-disclosure, and fail-loud reporting rule; do not
+duplicate or auto-fix that rule here.
 
 ## Navigation workflow
 

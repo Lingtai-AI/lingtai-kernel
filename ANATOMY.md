@@ -25,6 +25,7 @@ maintenance: |
   stale navigation in the same change that moves files, symbols, connections,
   composition, or state. Preserve the child template and its maintenance rule;
   validate the distributed graph before merge.
+  Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
 ---
 # LingTai Distributed Code Navigation Convention
 
@@ -77,8 +78,11 @@ The target skeleton for a governed component layer is:
 
 Existing anatomy files remain useful navigation during staged migration. A
 component enters the paired governed system when its co-located contract is
-linked from the root contract. From that point, the pair and parent/child link
-rules below are mandatory.
+linked from the root contract. An implementation, Adapter, or navigation-only
+Anatomy that owns no separate promise instead points to its one owning
+component Contract and explains why no independent local Contract exists. The
+full pairing, ownership, progressive-disclosure, and mismatch-reporting rule
+lives only in root `CONTRACT.md`; follow it rather than copying it here.
 
 ## Frontmatter convention
 
@@ -119,7 +123,10 @@ also carries the meta-convention and repository-wide entry points.
 
 ## Link and pairing semantics
 
-The paired distributed systems obey these rules:
+The paired distributed systems obey these structural rules. Root
+[`CONTRACT.md`](CONTRACT.md) is the single source for governed-component
+pairing, unique implementation/navigation ownership, mutual progressive
+disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
 
 1. This root anatomy and root contract list each other in `related_files`.
 2. A root-governed component's co-located `ANATOMY.md` and `CONTRACT.md` list
@@ -214,9 +221,10 @@ Maintenance is part of reading:
 - Verify every touched citation after moves, renames, splits, or ownership
   changes. The anatomy drift checker catches missing/out-of-range targets, not
   semantic misdescription.
-- Keep parent/child and Anatomy/Contract pair links reciprocal. Update the root
-  convention, its validator, root development skill, README entry, and bundled
-  anatomy router together when this system changes.
+- Keep parent/child and Anatomy/Contract pair or owner links reciprocal. Update
+  the root convention, its validator, root development skill, README entry,
+  and bundled anatomy router together when this system changes.
+- Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
 
 ## Template
 
@@ -234,6 +242,7 @@ maintenance: |
   truth: update this anatomy in the same change that moves files, symbols,
   connections, composition, or state. Verify every changed citation and run the
   architecture-document validation before merge.
+  Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
 ---
 # <Component Name> Anatomy
 

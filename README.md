@@ -58,8 +58,8 @@ Contract systems.
 | Entry point | What it covers |
 |---|---|
 | [`dev-guide-skill/SKILL.md`](dev-guide-skill/SKILL.md) | The mandatory repository-local dev guide skill: the development workflow a coding agent must follow before editing. |
-| [`ANATOMY.md`](ANATOMY.md) | Repository map — top-level layout and where each subsystem's anatomy begins. |
-| [`CONTRACT.md`](CONTRACT.md) | The distributed interface-and-behavior contract — what interfaces and expected agent behavior promise. |
+| [`ANATOMY.md`](ANATOMY.md) | Repository structure/composition map — where each subsystem's anatomy begins and how it reaches its behavioral Contract. |
+| [`CONTRACT.md`](CONTRACT.md) | Normative interface/behavior promises plus the governed-component pairing/ownership rule, linked back to Anatomy structure. |
 | [`src/lingtai/kernel/ANATOMY.md`](src/lingtai/kernel/ANATOMY.md) | The core runtime: `BaseAgent`, turn/lifecycle, tool machinery, mail, LLM protocol. |
 | [`src/lingtai/ANATOMY.md`](src/lingtai/ANATOMY.md) | The `lingtai` package: `Agent(BaseAgent)`, capabilities, presets, CLI, public re-exports. |
 | [`src/lingtai/tools/ANATOMY.md`](src/lingtai/tools/ANATOMY.md) | The concrete built-in tools and the registry that composes them. |

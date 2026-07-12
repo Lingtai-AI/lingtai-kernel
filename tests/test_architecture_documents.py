@@ -14,12 +14,18 @@ ROOT_README = ROOT / "README.md"
 ROOT_DEV_SKILL = ROOT / "dev-guide-skill/SKILL.md"
 ANATOMY_SKILL = ROOT / "src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md"
 
+PAIRING_RULE_POINTER = (
+    "Follow the root Anatomy/Contract pairing rule, report mismatches, and do not "
+    "duplicate or auto-fix the rule here."
+)
+
 CHILD_ANATOMY_MAINTENANCE = """Keep related_files repo-relative, duplicate-free, and linked to real files.
 Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
 parent/child anatomy links bidirectional. Code is the structural source of
 truth: update this anatomy in the same change that moves files, symbols,
 connections, composition, or state. Verify every changed citation and run the
 architecture-document validation before merge.
+Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
 """
 
 # The canonical child-contract Maintenance block is defined ONCE, inside the
@@ -187,6 +193,31 @@ def _assert_related_files(meta: dict) -> None:
         _assert_repo_file(path)
 
 
+def pairing_mismatch_report(
+    *,
+    component_or_directory: str,
+    path: str,
+    actual_pair_state: dict,
+    violated_rule: str,
+    expected_owner: str | None,
+    link_issues: list[str],
+) -> dict:
+    """Return the required fail-loud diagnostic without mutating documents."""
+    return {
+        "component_or_directory": component_or_directory,
+        "path": path,
+        "actual_pair_state": actual_pair_state,
+        "violated_rule": violated_rule,
+        "expected_owner": expected_owner,
+        "link_issues": link_issues,
+        "suggested_action": (
+            "Report the mismatch and ask the owner whether to restore the unique "
+            "pair/owner links or stage a component migration; do not create, "
+            "delete, move, normalize, or auto-fix files without authorization."
+        ),
+    }
+
+
 def test_root_architecture_documents_are_reciprocal_and_well_formed() -> None:
     anatomy_meta, _ = _read_document(ROOT_ANATOMY)
     contract_meta, _ = _read_document(ROOT_CONTRACT)
@@ -199,7 +230,7 @@ def test_root_architecture_documents_are_reciprocal_and_well_formed() -> None:
         "maintenance",
     ]
     assert contract_meta["name"] == "component-contract-convention"
-    assert contract_meta["contract_version"] == 1
+    assert contract_meta["contract_version"] == 2
 
     _assert_related_files(anatomy_meta)
     _assert_related_files(contract_meta)
@@ -217,6 +248,7 @@ def test_root_architecture_documents_are_reciprocal_and_well_formed() -> None:
     for required in [
         "README.md",
         "dev-guide-skill/SKILL.md",
+        "src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md",
         "tests/test_architecture_documents.py",
     ]:
         assert required in contract_meta["related_files"]
@@ -246,6 +278,9 @@ def test_root_anatomy_defines_the_distributed_navigation_system() -> None:
         "structural source of truth",
         "enters the paired governed system",
         "Orphans, missing targets, duplicate links",
+        "single source for governed-component",
+        "mutual progressive",
+        "fail-loud mismatch reports",
     ]:
         assert anchor in body
 
@@ -289,6 +324,12 @@ def test_root_contract_defines_the_distributed_interface_system() -> None:
         "Canonical Maintenance consistency check",
         "first differing byte position",
         "stays blocked until the child is corrected",
+        "unit of pairing is a **governed architectural component**",
+        "implementation, Adapter, or navigation-only Anatomy",
+        "exactly one owning governed component Contract",
+        "mutual progressive disclosure",
+        "actual `ANATOMY.md` / `CONTRACT.md` pair",
+        "suggested action",
     ]:
         assert anchor in body
 
@@ -364,8 +405,10 @@ def test_governed_cross_document_links_are_reciprocal() -> None:
     }
 
     governed_anatomies = {"ANATOMY.md"}
+    contract_metas = {}
     for contract_path in child_contracts:
         contract_meta, _ = _read_document(ROOT / contract_path)
+        contract_metas[contract_path] = contract_meta
         anatomy_path = str(Path(contract_path).with_name("ANATOMY.md"))
         governed_anatomies.add(anatomy_path)
 
@@ -385,6 +428,72 @@ def test_governed_cross_document_links_are_reciprocal() -> None:
             linked_meta, _ = _read_document(ROOT / linked)
             assert anatomy_path in linked_meta["related_files"]
 
+    # A governed Contract may link implementation/navigation Anatomies that own
+    # no independent promise. Each such Anatomy must have exactly one owner,
+    # explain the absence of a local Contract, and link back. The validator emits
+    # a complete report and never creates or rewrites documents to force a pass.
+    owner_links: dict[str, list[str]] = {}
+    for contract_path, contract_meta in contract_metas.items():
+        for linked in contract_meta["related_files"]:
+            if linked.endswith("/ANATOMY.md") and linked not in governed_anatomies:
+                owner_links.setdefault(linked, []).append(contract_path)
+
+    for anatomy_path, owners in owner_links.items():
+        anatomy_meta, anatomy_body = _read_document(ROOT / anatomy_path)
+        local_contract = str(Path(anatomy_path).with_name("CONTRACT.md"))
+        local_contract_exists = (ROOT / local_contract).is_file()
+        expected_owner = owners[0] if len(owners) == 1 else None
+        normalized_body = " ".join(anatomy_body.split())
+        link_issues = []
+        if len(owners) != 1:
+            link_issues.append(f"expected one governing Contract link, found {owners}")
+        if local_contract_exists:
+            link_issues.append(f"unexpected local Contract: {local_contract}")
+        if expected_owner and expected_owner not in anatomy_meta["related_files"]:
+            link_issues.append(f"Anatomy does not link back to owner: {expected_owner}")
+        if expected_owner and expected_owner not in normalized_body:
+            link_issues.append(f"Anatomy body does not name owner: {expected_owner}")
+        if "no independent local Contract" not in normalized_body:
+            link_issues.append("Anatomy body does not explain why no local Contract exists")
+        if PAIRING_RULE_POINTER not in anatomy_meta["maintenance"]:
+            link_issues.append("Anatomy Maintenance omits the root-rule pointer")
+
+        report = pairing_mismatch_report(
+            component_or_directory=str(Path(anatomy_path).parent),
+            path=anatomy_path,
+            actual_pair_state={
+                "anatomy": True,
+                "local_contract": local_contract if local_contract_exists else None,
+                "owner_contracts": owners,
+            },
+            violated_rule="unique governed Contract ownership for implementation Anatomy",
+            expected_owner=expected_owner,
+            link_issues=link_issues,
+        )
+        assert not link_issues, report
+
+
+def test_pairing_mismatch_report_has_required_fail_loud_fields() -> None:
+    report = pairing_mismatch_report(
+        component_or_directory="src/example/adapter",
+        path="src/example/adapter/ANATOMY.md",
+        actual_pair_state={"anatomy": True, "local_contract": None},
+        violated_rule="missing unique owning component Contract",
+        expected_owner="src/example/CONTRACT.md",
+        link_issues=["missing reciprocal owner link"],
+    )
+    assert list(report) == [
+        "component_or_directory",
+        "path",
+        "actual_pair_state",
+        "violated_rule",
+        "expected_owner",
+        "link_issues",
+        "suggested_action",
+    ]
+    assert "do not create" in report["suggested_action"]
+    assert "auto-fix" in report["suggested_action"]
+
 
 def test_public_and_agent_entry_points_route_to_the_local_network() -> None:
     readme = ROOT_README.read_text(encoding="utf-8")
@@ -397,6 +506,8 @@ def test_public_and_agent_entry_points_route_to_the_local_network() -> None:
     assert dev_meta["name"] == "lingtai-kernel-dev"
     assert "Use this before changing code" in dev_meta["description"]
     assert "repository’s local dev guide skill" in readme
+    assert "Repository structure/composition map" in readme
+    assert "governed-component pairing/ownership rule" in readme
     for path in ["ANATOMY.md", "CONTRACT.md", "CONTRIBUTING.md"]:
         assert f"]({path})" in readme
     for anchor in [
@@ -410,6 +521,8 @@ def test_public_and_agent_entry_points_route_to_the_local_network() -> None:
         "references/",
         "assets/",
         "never push directly to `main`",
+        "Classify the Anatomy/Contract relationship first",
+        "root-defined mismatch fields",
         "Copy the canonical Maintenance block exactly",
         "byte-for-byte",
         "CANONICAL-MAINTENANCE v<N> BEGIN",
@@ -426,6 +539,8 @@ def test_public_and_agent_entry_points_route_to_the_local_network() -> None:
     assert "distributed code interface definition system" in anatomy_skill
     assert "anatomy of anatomy" in anatomy_skill
     assert "src/lingtai/kernel/ANATOMY.md" in anatomy_skill
+    assert "unique owning governed Contract" in anatomy_skill
+    assert "fail-loud reporting rule" in anatomy_skill
 
 
 # ---------------------------------------------------------------------------
@@ -451,8 +566,9 @@ def _make_root_source(version: int = 1, body: str = "Line one.\nLine two.") -> s
 
 def test_canonical_maintenance_extracts_from_real_root() -> None:
     version, text, digest = canonical_maintenance()
-    assert version == 1
-    assert text.startswith("<!-- CANONICAL-MAINTENANCE v1 BEGIN -->\n")
+    assert version == 2
+    assert text.startswith("<!-- CANONICAL-MAINTENANCE v2 BEGIN -->\n")
+    assert PAIRING_RULE_POINTER in text
     assert text.endswith("<!-- CANONICAL-MAINTENANCE END -->\n")
     assert digest == hashlib.sha256(text.encode("utf-8")).hexdigest()
     # The extracted block equals the derived constant used elsewhere.
@@ -644,10 +760,9 @@ def test_validator_scans_real_governed_children_when_present(tmp_path) -> None:
     assert report2["actual_hash"] != report2["expected_hash"]
 
 
-def test_zero_governed_children_is_truthfully_reconciled() -> None:
-    # The canonical-future-child rule is compatible with the current zero-child
-    # skeleton: governed children come only from root `related_files`, and the
-    # legacy on-disk tool CONTRACT.md files are NOT governed until listed there.
+def test_governed_set_is_truthfully_reconciled() -> None:
+    # Governed children come only from root `related_files`; legacy or staged
+    # on-disk CONTRACT.md files are not governed until explicitly linked there.
     root_meta, _ = _read_document(ROOT_CONTRACT)
     governed = [
         path
@@ -672,5 +787,6 @@ def test_anatomy_points_to_the_normative_maintenance_rule_without_duplicating() 
     assert "canonical Maintenance block from" in body
     assert "tests/test_architecture_documents.py" in body
     assert "does not restate a second, possibly\ndivergent, copy of it" in body
+    assert PAIRING_RULE_POINTER in body
     # ...without embedding its own copy of the canonical block markers.
     assert "CANONICAL-MAINTENANCE" not in body

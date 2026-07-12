@@ -74,6 +74,19 @@ implementation drift is a defect unless a maintainer explicitly authorizes a
 promise change. Do not create a second graph registry; maintain YAML
 `related_files` around the nodes you touch.
 
+### Classify the Anatomy/Contract relationship first
+
+Follow the full pairing and ownership rule in root
+[`CONTRACT.md`](../CONTRACT.md). A governed architectural component owns
+reciprocal Anatomy/Contract twins; an implementation, Adapter, or
+navigation-only Anatomy may instead point to exactly one owning governed
+Contract and explain why it has no independent local Contract. Read Anatomy
+for structure and Contract for promises, following their reciprocal links
+rather than copying either body. Never manufacture an empty or duplicate
+Contract for filename symmetry. If the relationship does not satisfy the root
+rule, stop and report the root-defined mismatch fields and suggested action;
+do not normalize or auto-fix it without authorization.
+
 ### Copy the canonical Maintenance block exactly
 
 When you create or update a child component `CONTRACT.md`, its `maintenance`

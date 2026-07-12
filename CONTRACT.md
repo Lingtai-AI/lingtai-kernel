@@ -1,19 +1,22 @@
 ---
 name: component-contract-convention
-contract_version: 1
+contract_version: 2
 related_files:
   - ANATOMY.md
   - src/lingtai/kernel/event_journal/CONTRACT.md
   - CONTRIBUTING.md
   - README.md
   - dev-guide-skill/SKILL.md
+  - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
   - tests/test_architecture_documents.py
 maintenance: |
   This file is the normative root of the distributed code interface definition
   system and the contract-of-contract. Keep the root ANATOMY.md reciprocal. Keep
   each governed child CONTRACT.md linked here exactly once and require every
   child to point back with root_contract: CONTRACT.md and pair with its
-  co-located ANATOMY.md. Change architecture rules, schemas, templates,
+  co-located ANATOMY.md. Apply the governed-component pairing and ownership
+  rule below; report mismatches and never manufacture or auto-fix empty or
+  duplicate Contracts. Change architecture rules, schemas, templates,
   maintenance contracts, and validation together. Revalidate all linked pairs
   whenever this convention changes; bump contract_version for a breaking
   convention change.
@@ -23,8 +26,9 @@ maintenance: |
 ## Purpose
 
 **CONTRACT is the distributed code interface definition system.** Each
-architectural layer keeps a `CONTRACT.md` beside the code whose interface it
-owns: Core/use cases, inbound and outbound Ports, Adapters, expected agent
+governed architectural component keeps a `CONTRACT.md` beside the code whose
+interface it owns: Core/use cases, inbound and outbound Ports, Adapters,
+expected agent
 behavior, errors, ordering, state semantics, and conformance tests. Local
 contracts link into a
 graph that an agent can descend from this repository root to the exact interface
@@ -226,6 +230,34 @@ second registry. This root contract and root anatomy list each other exactly
 once. The governed child `CONTRACT.md` entries in root `related_files` form the
 canonical paired-component index.
 
+### Governed component pairing and ownership
+
+The unit of pairing is a **governed architectural component**, not every
+directory. Every governed component MUST have co-located, reciprocal
+`ANATOMY.md` and `CONTRACT.md` twins. Do not create an empty or duplicate
+Contract merely to make filenames symmetrical.
+
+An implementation, Adapter, or navigation-only Anatomy MAY omit a local
+Contract only when it owns no independent behavioral promise. Its
+`related_files` MUST identify exactly one owning governed component Contract,
+its body MUST name that owner and explain why no independent local Contract
+exists, and the owner Contract MUST link back to that Anatomy. This unique
+ownership preserves one normative behavioral source.
+
+The twins provide mutual progressive disclosure without copying each other:
+Anatomy answers where code lives and how it composes, then points to Contract
+for promises and boundaries; Contract states the normative promises, then
+points to Anatomy for code locations, composition, and call chains. An owned
+implementation Anatomy points to its owning component Contract, which points
+back to the implementation structure.
+
+A maintainer who finds a pairing or ownership mismatch MUST fail loud and
+report it rather than ignore, normalize, or auto-fix it. The report MUST name
+the component or directory, the actual `ANATOMY.md` / `CONTRACT.md` pair
+state, the violated rule, the expected unique owning component Contract, any
+missing, duplicate, or wrong reciprocal links, and a suggested action. The
+suggestion is not authorization to create, delete, move, or rewrite files.
+
 Each governed child appears exactly once there, points back with
 `root_contract: CONTRACT.md`, and lists its co-located `ANATOMY.md`. That anatomy
 lists the child contract in return. Child `related_files` also lists the Port,
@@ -259,12 +291,14 @@ when structure or composition also changes.
 ## Validation
 
 `tests/test_architecture_documents.py` validates root definitions, frontmatter
-schemas, repo-relative paths, Anatomy/Contract pairs, root-child and
-child-to-child reciprocity, heading order, maintenance text, and required
-architecture anchors. Zero governed children is valid at this convention-only
-stage; a component enters the paired governed system only when root
-`related_files` lists its contract. Behavioral truth remains in each
-component's shared contract tests and code review.
+schemas, repo-relative paths, governed Anatomy/Contract twins, unique owners
+for linked implementation-only Anatomies, reciprocal links, heading order,
+maintenance text, and required architecture anchors. A component enters the
+paired governed system only when root `related_files` lists its contract.
+Legacy or staged documents outside that index remain outside automated pair
+enforcement; audits MUST report them and migrate them component-by-component,
+not silently normalize them. Behavioral truth remains in
+each component's shared contract tests and code review.
 
 **Canonical Maintenance consistency check.** The single source of truth for the
 child Maintenance block is the region between the
@@ -298,7 +332,7 @@ related_files:
   - <repo-relative production Adapter file>
   - <repo-relative contract-test file>
 maintenance: |
-  <!-- CANONICAL-MAINTENANCE v1 BEGIN -->
+  <!-- CANONICAL-MAINTENANCE v2 BEGIN -->
   This component contract is governed by the root CONTRACT.md. Keep
   related_files complete and repo-relative: the paired ANATOMY.md, Port, every
   production Adapter, contract tests, and directly relevant component contracts
@@ -308,6 +342,7 @@ maintenance: |
   bump contract_version for a breaking Port-contract change. If code and contract
   disagree, treat the disagreement as a defect—do not silently rewrite the
   normative contract to match the implementation.
+  Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
   <!-- CANONICAL-MAINTENANCE END -->
 ---
 # <Component Name>
