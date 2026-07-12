@@ -28,6 +28,7 @@ import threading
 from .. import _skill
 
 if TYPE_CHECKING:
+    from lingtai.kernel.notification_store import NotificationStorePort
     from .service import TelegramService
 
 log = logging.getLogger(__name__)
@@ -398,10 +399,12 @@ class TelegramManager:
         service: "TelegramService",
         *,
         working_dir: Path,
+        notification_store: "NotificationStorePort",
         on_inbound: "Callable[[dict], None]",
     ) -> None:
         self._service = service
         self._working_dir = Path(working_dir)
+        self._notification_store = notification_store
         self._on_inbound = on_inbound
         # Duplicate send protection: (account, chat_id, text) → count
         self._last_sent: dict[tuple[str, int, str], int] = {}
@@ -1233,52 +1236,49 @@ class TelegramManager:
             ids.update(matches)
         return ids
 
-    def _all_notification_ids_read(self, compound_ids: set[str]) -> bool:
-        read_by_account: dict[str, set[str]] = {}
-        for compound_id in compound_ids:
-            try:
-                account, _chat_id, _msg_id = self._parse_compound_id(compound_id)
-            except ValueError:
-                return False
-            if account not in read_by_account:
-                read_by_account[account] = self._read_ids(account)
-            if compound_id not in read_by_account[account]:
-                return False
-        return bool(compound_ids)
-
     def _clear_notification_if_handled(self) -> None:
-        """Clear stale ``mcp.telegram`` notification mirrors once handled.
+        """Atomically clear only the current fully handled Telegram mirror."""
+        from lingtai.kernel.notification_store import UNCONDITIONAL
 
-        LICC notification files are wake-up mirrors, not Telegram's source of
-        truth. If every Telegram message referenced by the current mirror is
-        now in the producer's durable ``read.json`` state, remove the mirror so
-        a later wake/molt does not re-deliver the same handled message.
-        """
-        target = self._working_dir / ".notification" / f"{_NOTIFICATION_CHANNEL}.json"
+        read_by_account = tuple(
+            (account, frozenset(self._read_ids(account)))
+            for account in self._service.list_accounts()
+        )
+
+        def _mutator(current_payload: dict):
+            notification_ids = self._notification_message_ids(current_payload)
+            if notification_ids is None:
+                return current_payload, False, ()
+            for compound_id in notification_ids:
+                try:
+                    account, _chat_id, _msg_id = self._parse_compound_id(compound_id)
+                except ValueError:
+                    return current_payload, False, ()
+                read_ids = next(
+                    (ids for alias, ids in read_by_account if alias == account),
+                    frozenset(),
+                )
+                if compound_id not in read_ids:
+                    return current_payload, False, ()
+            handled_ids = tuple(sorted(notification_ids))
+            if not handled_ids:
+                return current_payload, False, ()
+            return None, True, handled_ids
+
         try:
-            payload = json.loads(target.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return
-        except (json.JSONDecodeError, OSError) as exc:
-            log.debug("cannot inspect Telegram notification mirror: %s", exc)
-            return
-
-        notification_ids = self._notification_message_ids(payload)
-        if notification_ids is None:
-            return
-        if not self._all_notification_ids_read(notification_ids):
-            return
-
-        try:
-            from lingtai.kernel.notifications import clear as clear_notification
-
-            clear_notification(self._working_dir, _NOTIFICATION_CHANNEL)
-            log.info(
-                "telegram notification mirror cleared after read: ids=%s",
-                sorted(notification_ids),
+            result = self._notification_store.compare_update_channel(
+                _NOTIFICATION_CHANNEL, UNCONDITIONAL, _mutator
             )
         except Exception as exc:
-            log.debug("failed to clear Telegram notification mirror: %s", exc)
+            log.debug("failed to update Telegram notification mirror: %s", exc)
+            return
+
+        handled_ids = result.value if isinstance(result.value, tuple) else ()
+        if result.changed and result.cleared and handled_ids:
+            log.info(
+                "telegram notification mirror cleared after read: ids=%s",
+                list(handled_ids),
+            )
 
     def _load_contacts(self, account: str) -> dict:
         path = self._account_dir(account) / "contacts.json"

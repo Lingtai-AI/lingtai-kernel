@@ -14,6 +14,7 @@ from lingtai.kernel.tool_call_guard import GuardDecision, ToolCallGuard
 
 from tests._daemon_helpers import make_daemon_agent as _make_agent
 from tests._daemon_helpers import make_daemon_run_dir as _make_run_dir
+from tests._notification_store_helpers import store_agent_for
 
 
 def _reuse_parent_service(monkeypatch, agent):
@@ -1108,10 +1109,10 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
 
     time.sleep(1)
 
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     assert agent.inbox.empty()
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     assert len(events) == 2
     assert {e["source"] for e in events} == {"daemon"}
     assert {e["ref_id"] for e in events} == set(ids)
@@ -1499,10 +1500,10 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
     statuses = {e["id"]: e["status"] for e in list_result["emanations"]}
     assert statuses.get(em_id) == "done"
 
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     assert agent.inbox.empty()
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     assert any(e["source"] == "daemon" and e["ref_id"] == em_id for e in events)
     assert any("Task done" in e["body"] for e in events)
     assert any(f"daemon(action=\"check\", id=\"{em_id}\")" in e["body"] for e in events)
@@ -1514,7 +1515,7 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
 
 
 def test_on_emanation_done_publishes_system_notification_not_request(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1533,7 +1534,7 @@ def test_on_emanation_done_publishes_system_notification_not_request(tmp_path):
     mgr._on_emanation_done("em-9", "test task", future)
 
     assert agent.inbox.empty()
-    notifications = collect_notifications(agent._working_dir)
+    notifications = snapshot_notifications(agent._working_dir)
     events = notifications["system"]["data"]["events"]
     assert len(events) == 1
     event = events[0]
@@ -1546,7 +1547,7 @@ def test_on_emanation_done_publishes_system_notification_not_request(tmp_path):
 
 
 def test_on_emanation_done_failure_always_notifies(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1565,7 +1566,7 @@ def test_on_emanation_done_failure_always_notifies(tmp_path):
     mgr._on_emanation_done("em-fail", "test task", future)
 
     assert agent.inbox.empty()
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     assert len(events) == 1
     assert events[0]["source"] == "daemon"
     assert events[0]["ref_id"] == "em-fail"
@@ -1575,7 +1576,7 @@ def test_on_emanation_done_failure_always_notifies(tmp_path):
 
 
 def test_on_emanation_done_short_success_notifies(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1594,7 +1595,7 @@ def test_on_emanation_done_short_success_notifies(tmp_path):
     mgr._on_emanation_done("em-short", "test task", future)
 
     assert agent.inbox.empty()
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     assert len(events) == 1
     assert events[0]["source"] == "daemon"
     assert events[0]["ref_id"] == "em-short"
@@ -1606,7 +1607,7 @@ def test_on_emanation_done_cancelled_notifies_despite_short_text(tmp_path):
     """A cancelled run returns the short ``[cancelled]`` sentinel but its
     run_dir state is authoritative. The parent must always learn the daemon
     terminated, with the correct terminal label."""
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1626,7 +1627,7 @@ def test_on_emanation_done_cancelled_notifies_despite_short_text(tmp_path):
     mgr._on_emanation_done("em-cancel", "test task", future)
 
     assert agent.inbox.empty()
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     assert len(events) == 1
     assert events[0]["source"] == "daemon"
     assert events[0]["ref_id"] == "em-cancel"
@@ -1636,7 +1637,7 @@ def test_on_emanation_done_cancelled_notifies_despite_short_text(tmp_path):
 def test_on_emanation_done_timeout_notifies_despite_short_text(tmp_path):
     """A timed-out run also returns the short sentinel; its terminal state is
     ``timeout`` and must be reported with that label."""
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1656,7 +1657,7 @@ def test_on_emanation_done_timeout_notifies_despite_short_text(tmp_path):
     mgr._on_emanation_done("em-timeout", "test task", future)
 
     assert agent.inbox.empty()
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     assert len(events) == 1
     assert events[0]["ref_id"] == "em-timeout"
     assert "timeout" in events[0]["body"]
@@ -1666,7 +1667,7 @@ def test_on_emanation_done_notifies_terminal_only_once(tmp_path):
     """A daemon run's terminal notification is delivered exactly once even if
     the done-callback fires more than once for the same run (e.g. a racing
     reclaim or a duplicated callback). Dedup is keyed on the run's ref_id."""
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1686,13 +1687,13 @@ def test_on_emanation_done_notifies_terminal_only_once(tmp_path):
     mgr._on_emanation_done("em-dup", "test task", future)
     mgr._on_emanation_done("em-dup", "test task", future)
 
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     daemon_events = [e for e in events if e["ref_id"] == "em-dup"]
     assert len(daemon_events) == 1
 
 
 def test_terminal_notification_enqueue_failure_leaves_retryable_state(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
@@ -1719,7 +1720,7 @@ def test_terminal_notification_enqueue_failure_leaves_retryable_state(tmp_path):
     state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
     assert state["terminal_notified"] is False
     assert state["terminal_notification_claim"] is None
-    assert "system" not in collect_notifications(agent._working_dir)
+    assert "system" not in snapshot_notifications(agent._working_dir)
 
     agent._enqueue_system_notification = original_enqueue
     mgr._on_emanation_done("em-retry", "test task", future)
@@ -1730,13 +1731,13 @@ def test_terminal_notification_enqueue_failure_leaves_retryable_state(tmp_path):
     assert state["terminal_notification_receipt"]["idempotency_key"] == (
         f"daemon-terminal:{rd.run_id}"
     )
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     daemon_events = [e for e in events if e["ref_id"] == "em-retry"]
     assert len(daemon_events) == 1
 
 
 def test_daemon_startup_retries_unpublished_terminal_notification(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     daemon_json = _write_daemon_json(
         tmp_path,
@@ -1756,7 +1757,7 @@ def test_daemon_startup_retries_unpublished_terminal_notification(tmp_path):
     state = json.loads(daemon_json.read_text(encoding="utf-8"))
     assert state["terminal_notified"] is True
     assert state["terminal_notification_claim"] is None
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     daemon_events = [e for e in events if e["ref_id"] == "em-restart"]
     assert len(daemon_events) == 1
     assert daemon_events[0]["idempotency_key"] == "daemon-terminal:em-restart"
@@ -1764,7 +1765,7 @@ def test_daemon_startup_retries_unpublished_terminal_notification(tmp_path):
 
 
 def test_concurrent_terminal_callbacks_publish_once(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
@@ -1794,7 +1795,7 @@ def test_concurrent_terminal_callbacks_publish_once(tmp_path):
         thread.join(timeout=5)
         assert not thread.is_alive()
 
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     daemon_events = [e for e in events if e["ref_id"] == "em-race"]
     assert len(daemon_events) == 1
     state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
@@ -1802,7 +1803,8 @@ def test_concurrent_terminal_callbacks_publish_once(tmp_path):
 
 
 def test_crash_after_publish_before_receipt_retry_is_idempotent(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications, submit
+    from lingtai.kernel.notifications import submit
+    from tests._notification_store_helpers import snapshot_notifications
 
     daemon_json = _write_daemon_json(
         tmp_path,
@@ -1814,7 +1816,7 @@ def test_crash_after_publish_before_receipt_retry_is_idempotent(tmp_path):
     )
     workdir = tmp_path / "daemon-agent"
     submit(
-        workdir,
+        store_agent_for(workdir),
         "system",
         header="1 system notification",
         icon="🔔",
@@ -1833,7 +1835,7 @@ def test_crash_after_publish_before_receipt_retry_is_idempotent(tmp_path):
 
     agent = _make_agent(tmp_path, ["daemon"])
 
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     daemon_events = [e for e in events if e.get("idempotency_key") == "daemon-terminal:em-crash"]
     assert len(daemon_events) == 1
     assert daemon_events[0]["event_id"] == "evt_existing"
@@ -1845,7 +1847,7 @@ def test_crash_after_publish_before_receipt_retry_is_idempotent(tmp_path):
 
 
 def test_legacy_terminal_notified_true_is_not_republished(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     _write_daemon_json(
         tmp_path,
@@ -1858,11 +1860,11 @@ def test_legacy_terminal_notified_true_is_not_republished(tmp_path):
 
     agent = _make_agent(tmp_path, ["daemon"])
 
-    assert "system" not in collect_notifications(agent._working_dir)
+    assert "system" not in snapshot_notifications(agent._working_dir)
 
 
 def test_legacy_missing_terminal_notified_key_is_not_republished_or_mutated(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     daemon_json = _write_daemon_json(
         tmp_path,
@@ -1877,7 +1879,7 @@ def test_legacy_missing_terminal_notified_key_is_not_republished_or_mutated(tmp_
     agent = _make_agent(tmp_path, ["daemon"])
 
     after = json.loads(daemon_json.read_text(encoding="utf-8"))
-    assert "system" not in collect_notifications(agent._working_dir)
+    assert "system" not in snapshot_notifications(agent._working_dir)
     assert "terminal_notified" not in after
     assert "terminal_notification_receipt" not in after
 
@@ -1928,7 +1930,7 @@ def test_daemon_schema_has_no_terminal_notification_toggle():
 def test_on_emanation_done_notification_includes_task_summary(tmp_path):
     """The terminal notification carries a bounded task summary so the parent
     can recognize which dispatched daemon ended without opening the run dir."""
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1950,7 +1952,7 @@ def test_on_emanation_done_notification_includes_task_summary(tmp_path):
 
     mgr._on_emanation_done("em-task", "test task", future)
 
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     body = next(e["body"] for e in events if e["ref_id"] == "em-task")
     assert "payment retry logic" in body
 
@@ -1960,7 +1962,7 @@ def test_terminal_notification_not_blocked_by_prior_followup(tmp_path):
     the run is still alive. The terminal notification must still be delivered
     afterward — the once-only guard is scoped to the terminal event, not to any
     event carrying the same ref_id."""
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1985,7 +1987,7 @@ def test_terminal_notification_not_blocked_by_prior_followup(tmp_path):
     future.result.return_value = "final long-enough report from the daemon run"
     mgr._on_emanation_done("em-ask", "test task", future)
 
-    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     bodies = [e["body"] for e in events if e["ref_id"] == "em-ask"]
     assert any("Daemon em-ask done" in b for b in bodies), bodies
 
@@ -2495,7 +2497,7 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
     preset_svc._base_url = "https://mock.deepseek.com"
 
     preset_path = str(presets_dir / "deepseek.json")
-    with patch.object(preset_connectivity, "_probe_host", return_value=42), \
+    with patch.object(preset_connectivity, "_probe_host", return_value=42),\
          patch("lingtai.llm.service.LLMService", return_value=preset_svc):
         result = mgr.handle({"action": "emanate", "tasks": [
             {"task": "find todos", "tools": ["file"], "preset": preset_path},

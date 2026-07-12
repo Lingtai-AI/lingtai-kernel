@@ -12,6 +12,7 @@ import pytest
 from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.state import AgentState
 from tests._workdir_lease_helpers import make_test_lease
+from tests._notification_store_helpers import notification_store_for
 
 
 def _make_agent(tmp_path, **kwargs):
@@ -19,7 +20,7 @@ def _make_agent(tmp_path, **kwargs):
     svc = MagicMock()
     svc.create_session.return_value = MagicMock()
     kwargs.setdefault("working_dir", str(tmp_path / "test000000ab"))
-    agent = BaseAgent(svc, intrinsics=_TEST_INTRINSICS, **kwargs, workdir_lease=make_test_lease())
+    agent = BaseAgent(svc, intrinsics=_TEST_INTRINSICS, **kwargs, workdir_lease=make_test_lease(), notification_store=notification_store_for(kwargs["working_dir"]))
     return agent
 
 
@@ -235,9 +236,9 @@ class TestCPRLingtai:
         fake_proc = MagicMock()
         fake_proc.pid = 99999
         from pathlib import Path as _Path
-        with patch("subprocess.Popen", return_value=fake_proc), \
+        with patch("subprocess.Popen", return_value=fake_proc),\
              patch("lingtai.venv_resolve.resolve_venv",
-                   return_value=_Path("/fake/venv")), \
+                   return_value=_Path("/fake/venv")),\
              patch("lingtai.venv_resolve.venv_python",
                    return_value="/fake/venv/bin/python"):
             resuscitated = reviver._cpr_agent(target_dir)
@@ -342,7 +343,7 @@ class TestSelfSleepPendingNotificationsGuard:
         """A notification on disk whose fingerprint matches the agent's
         last-committed fingerprint = already processed. Sleep is fine."""
         from lingtai.tools.system import handle
-        from lingtai.kernel.notifications import notification_fingerprint
+        from tests._notification_store_helpers import fingerprint_notifications
         agent = _make_agent(tmp_path)
 
         self._write_notification(agent, "email.json", {
@@ -350,7 +351,7 @@ class TestSelfSleepPendingNotificationsGuard:
             "priority": "normal", "data": {},
         })
         # Pretend the notification heartbeat has already injected + committed
-        agent._notification_fp = notification_fingerprint(agent.working_dir)
+        agent._notification_fp = fingerprint_notifications(agent.working_dir)
 
         result = handle(agent, {"action": "sleep", "reason": "all caught up"})
 

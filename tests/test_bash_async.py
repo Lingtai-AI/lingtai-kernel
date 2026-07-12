@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from lingtai.kernel.notifications import collect_notifications
+from tests._notification_store_helpers import notification_store_for, snapshot_notifications
 from lingtai.tools.bash import BashManager, BashPolicy, get_schema
 
 
@@ -16,7 +16,10 @@ class TestBashAsync:
     """Tests for async run / poll / cancel."""
 
     def _make_manager(self, tmp_path: Path) -> BashManager:
-        return BashManager(policy=BashPolicy.yolo(), working_dir=str(tmp_path))
+        agent = SimpleNamespace(_notification_store=notification_store_for(tmp_path))
+        return BashManager(
+            policy=BashPolicy.yolo(), working_dir=str(tmp_path), agent=agent
+        )
 
     # 1. async run returns job_id and pid
     def test_async_run_returns_job_id_and_pid(self, tmp_path):
@@ -109,7 +112,8 @@ class TestBashAsync:
         policy_file = tmp_path / "policy.json"
         policy_file.write_text(json.dumps({"deny": ["rm"]}))
         policy = BashPolicy.from_file(str(policy_file))
-        mgr = BashManager(policy=policy, working_dir=str(tmp_path))
+        agent = SimpleNamespace(_notification_store=notification_store_for(tmp_path))
+        mgr = BashManager(policy=policy, working_dir=str(tmp_path), agent=agent)
 
         result = mgr.handle({"command": "rm -rf /", "async": True})
         assert result["status"] == "error"
@@ -230,7 +234,7 @@ class TestBashAsync:
 
         time.sleep(0.3)
 
-        events = collect_notifications(tmp_path)["system"]["data"]["events"]
+        events = snapshot_notifications(tmp_path)["system"]["data"]["events"]
         assert len(events) == 1
         event = events[0]
         assert event["source"] == "bash.reminder"
@@ -250,7 +254,7 @@ class TestBashAsync:
 
         time.sleep(0.3)
 
-        events = collect_notifications(tmp_path)["system"]["data"]["events"]
+        events = snapshot_notifications(tmp_path)["system"]["data"]["events"]
         assert len(events) == 2
         assert {event["ref_id"] for event in events} == {
             f"bash.reminder:{job_id}" for job_id in job_ids
@@ -270,7 +274,7 @@ class TestBashAsync:
         assert poll["status"] == "done"
         time.sleep(0.3)
 
-        assert "system" not in collect_notifications(tmp_path)
+        assert "system" not in snapshot_notifications(tmp_path)
 
     def test_successful_cancel_suppresses_async_reminder(self, tmp_path):
         mgr = self._make_manager(tmp_path)
@@ -286,7 +290,7 @@ class TestBashAsync:
         assert cancel["status"] == "cancelled"
         time.sleep(0.3)
 
-        assert "system" not in collect_notifications(tmp_path)
+        assert "system" not in snapshot_notifications(tmp_path)
 
     def test_poll_ignores_reminder_field(self, tmp_path):
         mgr = self._make_manager(tmp_path)
@@ -343,30 +347,33 @@ class TestBashAsync:
         assert published == [job_id]
         assert job_id not in mgr._reminder_cancel_events
 
-    def test_agent_exception_fallback_uses_agent_system_lock(self, tmp_path, monkeypatch):
-        agent_lock = threading.Lock()
-        agent = SimpleNamespace(_system_notification_lock=agent_lock)
+    def test_agent_exception_fallback_uses_injected_store(self, tmp_path):
+        store = notification_store_for(tmp_path)
+        agent = SimpleNamespace(_notification_store=store)
 
         def failing_enqueue(**_kwargs):
             raise RuntimeError("boom")
 
         agent._enqueue_system_notification = failing_enqueue
-        mgr = BashManager(policy=BashPolicy.yolo(), working_dir=str(tmp_path), agent=agent)
-
-        seen = {}
-
-        def fake_fallback(**kwargs):
-            seen.update(kwargs)
-
-        monkeypatch.setattr(mgr, "_append_system_notification_fallback", fake_fallback)
+        mgr = BashManager(
+            policy=BashPolicy.yolo(), working_dir=str(tmp_path), agent=agent
+        )
 
         mgr._publish_async_reminder("job-fallback")
 
-        assert seen["lock"] is agent_lock
+        events = store.snapshot(lambda channel: channel == "system")["system"][
+            "data"
+        ]["events"]
+        assert events[0]["ref_id"] == "bash.reminder:job-fallback"
 
-    def test_direct_manager_fallback_is_shared_across_managers(self, tmp_path):
-        first = self._make_manager(tmp_path)
-        second = self._make_manager(tmp_path)
+    def test_direct_manager_fallback_is_serialized_by_shared_store(self, tmp_path):
+        agent = SimpleNamespace(_notification_store=notification_store_for(tmp_path))
+        first = BashManager(
+            policy=BashPolicy.yolo(), working_dir=str(tmp_path), agent=agent
+        )
+        second = BashManager(
+            policy=BashPolicy.yolo(), working_dir=str(tmp_path), agent=agent
+        )
         managers = [first, second]
         n_events = 20
 
@@ -380,7 +387,7 @@ class TestBashAsync:
         with ThreadPoolExecutor(max_workers=n_events) as pool:
             list(pool.map(worker, range(n_events)))
 
-        events = collect_notifications(tmp_path)["system"]["data"]["events"]
+        events = snapshot_notifications(tmp_path)["system"]["data"]["events"]
         assert len(events) == n_events
         assert {event["ref_id"] for event in events} == {
             f"bash.reminder:job-{i}" for i in range(n_events)

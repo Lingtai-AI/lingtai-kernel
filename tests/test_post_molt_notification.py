@@ -137,7 +137,7 @@ class TestPostMoltNotificationAgentMolt:
             data = payload["data"]
             assert data.get("initiator") == "agent"
             assert data.get("molt_count") == result["molt_count"]
-            assert data.get("reasoning") == \
+            assert data.get("reasoning") ==\
                 "context full; want to resume foo cleanly"
             # Helpful echo of the briefing the agent wrote for itself
             assert data.get("reminder")
@@ -396,19 +396,19 @@ class TestPostMoltChannelIsolation:
         """Cleaning stale `.notification/molt.json` must
         leaves `.notification/post-molt.json` intact — they are separate
         producer channels."""
-        from lingtai.kernel.notifications import publish, clear
+        from tests._notification_store_helpers import publish_test_payload, clear_test_payload
 
         # Use a bare workdir; this exercises only the file-channel contract.
         workdir = tmp_path / "agent"
         workdir.mkdir()
 
-        publish(workdir, "molt", {
+        publish_test_payload(workdir, "molt", {
             "header": "context 92% — molt NOW",
             "icon": "🚨",
             "priority": "high",
             "data": {"pressure": 0.92, "urgent": True},
         })
-        publish(workdir, "post-molt", {
+        publish_test_payload(workdir, "post-molt", {
             "header": "you just molted",
             "icon": "🌱",
             "priority": "high",
@@ -419,7 +419,7 @@ class TestPostMoltChannelIsolation:
         assert (workdir / ".notification" / "post-molt.json").is_file()
 
         # Simulate legacy-cleanup (channel="molt").
-        clear(workdir, "molt")
+        clear_test_payload(workdir, "molt")
 
         assert not (workdir / ".notification" / "molt.json").exists(), (
             "legacy cleanup should remove the molt channel"

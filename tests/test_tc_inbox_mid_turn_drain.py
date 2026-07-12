@@ -42,6 +42,7 @@ from lingtai.kernel.tc_inbox import InvoluntaryToolCall, TCInbox
 from lingtai.llm.api_gate import APICallGate
 from lingtai.llm.base import _GatedSession
 from tests._workdir_lease_helpers import make_test_lease
+from tests._notification_store_helpers import notification_store_for
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +253,7 @@ class TestInstallDrainHook:
             service=make_mock_service(),
             agent_name="hook-test",
             working_dir=tmp_path / "hook-test", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "hook-test"),
         )
         # Stub the chat session — anything with a pre_request_hook attribute
         # qualifies.
@@ -270,6 +272,7 @@ class TestInstallDrainHook:
             service=make_mock_service(),
             agent_name="hook-test",
             working_dir=tmp_path / "hook-test", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "hook-test"),
         )
         agent._chat = None
         agent._install_drain_hook()  # must not raise
@@ -282,6 +285,7 @@ class TestInstallDrainHook:
             service=make_mock_service(),
             agent_name="hook-test",
             working_dir=tmp_path / "hook-test", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "hook-test"),
         )
         legacy_chat = object()  # no pre_request_hook
         agent._chat = legacy_chat
@@ -295,6 +299,7 @@ class TestInstallDrainHook:
             service=make_mock_service(),
             agent_name="hook-test",
             working_dir=tmp_path / "hook-test", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "hook-test"),
         )
         stub_chat = MagicMock(spec_set=["pre_request_hook", "interface"])
         stub_chat.pre_request_hook = None
@@ -320,6 +325,7 @@ class TestInstallDrainHook:
             service=make_mock_service(),
             agent_name="gate-hook-test",
             working_dir=tmp_path / "gate-hook-test", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "gate-hook-test"),
         )
         iface = ChatInterface()
         iface.add_user_message("hello")
@@ -358,6 +364,7 @@ class TestDrainHookSplices:
             service=make_mock_service(),
             agent_name="splice-test",
             working_dir=tmp_path / "splice-test", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "splice-test"),
         )
         iface = ChatInterface()
         iface.add_user_message("hello")
@@ -396,6 +403,7 @@ class TestDrainHookSplices:
             service=make_mock_service(),
             agent_name="noop-test",
             working_dir=tmp_path / "noop-test", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "noop-test"),
         )
         iface = ChatInterface()
         iface.add_user_message("hello")
@@ -426,6 +434,7 @@ class TestReplaceInHistoryMidTurn:
             service=make_mock_service(),
             agent_name="replace-test",
             working_dir=tmp_path / "replace-test", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "replace-test"),
         )
         iface = ChatInterface()
         iface.add_user_message("hello")
@@ -489,6 +498,7 @@ class TestNoDoubleSplice:
             service=make_mock_service(),
             agent_name="double-splice-test",
             working_dir=tmp_path / "double-splice-test", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "double-splice-test"),
         )
         iface = ChatInterface()
         iface.add_user_message("hello")

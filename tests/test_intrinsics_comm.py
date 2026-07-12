@@ -1,6 +1,7 @@
 from lingtai.kernel.prompt import SystemPromptManager
 from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 from tests._workdir_lease_helpers import make_test_lease
+from tests._notification_store_helpers import notification_store_for
 
 
 def test_system_prompt_manager():
@@ -54,7 +55,7 @@ def test_mail_send_passes_attachments(tmp_path):
     mail_svc.address = str(tmp_path / "test")
     mail_svc.send.return_value = None
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "test", mail_service=mail_svc, workdir_lease=make_test_lease())
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "test", mail_service=mail_svc, workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "test"))
 
     # Create a real file to attach
     attachment = tmp_path / "file.png"

@@ -29,13 +29,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from lingtai.kernel.notifications import (
-    notification_fingerprint,
-    collect_notifications,
-    publish,
-    clear,
-    save_large_result_acks,
-)
+import pytest
+
+from tests._notification_store_helpers import fingerprint_notifications, snapshot_notifications, publish_test_payload, clear_test_payload, replace_ack_refs_for_test
+from tests._notification_store_helpers import notification_store_for, store_agent_for
 
 
 # ---------------------------------------------------------------------------
@@ -44,13 +41,13 @@ from lingtai.kernel.notifications import (
 
 
 def test_fingerprint_empty_dir(tmp_path: Path) -> None:
-    assert notification_fingerprint(tmp_path) == ()
+    assert fingerprint_notifications(tmp_path) == ()
 
 
 def test_fingerprint_with_files(tmp_path: Path) -> None:
-    publish(tmp_path, "email", {"count": 3})
-    publish(tmp_path, "soul", {"voices": []})
-    fp = notification_fingerprint(tmp_path)
+    publish_test_payload(tmp_path, "email", {"count": 3})
+    publish_test_payload(tmp_path, "soul", {"voices": []})
+    fp = fingerprint_notifications(tmp_path)
     names = [entry[0] for entry in fp]
     assert names == sorted(names)
     assert "email.json" in names
@@ -63,29 +60,29 @@ def test_fingerprint_with_files(tmp_path: Path) -> None:
 
 
 def test_fingerprint_changes_on_overwrite(tmp_path: Path) -> None:
-    publish(tmp_path, "email", {"count": 1})
-    fp1 = notification_fingerprint(tmp_path)
-    publish(tmp_path, "email", {"count": 2, "extra": "more bytes"})
-    fp2 = notification_fingerprint(tmp_path)
+    publish_test_payload(tmp_path, "email", {"count": 1})
+    fp1 = fingerprint_notifications(tmp_path)
+    publish_test_payload(tmp_path, "email", {"count": 2, "extra": "more bytes"})
+    fp2 = fingerprint_notifications(tmp_path)
     assert fp1 != fp2
 
 
 def test_fingerprint_ignores_equivalent_rewrite_mtime_churn(tmp_path: Path) -> None:
-    publish(tmp_path, "email", {"count": 1})
-    fp1 = notification_fingerprint(tmp_path)
-    publish(tmp_path, "email", {"count": 1})
-    fp2 = notification_fingerprint(tmp_path)
+    publish_test_payload(tmp_path, "email", {"count": 1})
+    fp1 = fingerprint_notifications(tmp_path)
+    publish_test_payload(tmp_path, "email", {"count": 1})
+    fp2 = fingerprint_notifications(tmp_path)
     assert fp1 == fp2
 
 
 def test_collect_empty_dir(tmp_path: Path) -> None:
-    assert collect_notifications(tmp_path) == {}
+    assert snapshot_notifications(tmp_path) == {}
 
 
 def test_collect_mixed_files(tmp_path: Path) -> None:
-    publish(tmp_path, "email", {"count": 3})
-    publish(tmp_path, "mcp.telegram", {"messages": ["hi"]})
-    out = collect_notifications(tmp_path)
+    publish_test_payload(tmp_path, "email", {"count": 3})
+    publish_test_payload(tmp_path, "mcp.telegram", {"messages": ["hi"]})
+    out = snapshot_notifications(tmp_path)
     assert out == {
         "email": {"count": 3},
         "mcp.telegram": {"messages": ["hi"]},
@@ -93,18 +90,18 @@ def test_collect_mixed_files(tmp_path: Path) -> None:
 
 
 def test_collect_skips_malformed_silently(tmp_path: Path) -> None:
-    publish(tmp_path, "soul", {"x": 1})
+    publish_test_payload(tmp_path, "soul", {"x": 1})
     bad_path = tmp_path / ".notification" / "bad.json"
     bad_path.write_text("not json {")
-    out = collect_notifications(tmp_path)
+    out = snapshot_notifications(tmp_path)
     assert out == {"soul": {"x": 1}}
 
 
 def test_collect_skips_non_json_files(tmp_path: Path) -> None:
-    publish(tmp_path, "email", {"x": 1})
+    publish_test_payload(tmp_path, "email", {"x": 1})
     other = tmp_path / ".notification" / "stray.txt"
     other.write_text("ignored")
-    out = collect_notifications(tmp_path)
+    out = snapshot_notifications(tmp_path)
     assert "email" in out
     assert "stray" not in out
 
@@ -112,12 +109,12 @@ def test_collect_skips_non_json_files(tmp_path: Path) -> None:
 def test_publish_creates_dir(tmp_path: Path) -> None:
     notif_dir = tmp_path / ".notification"
     assert not notif_dir.exists()
-    publish(tmp_path, "email", {"x": 1})
+    publish_test_payload(tmp_path, "email", {"x": 1})
     assert notif_dir.is_dir()
 
 
 def test_publish_atomic_no_tmp_residue(tmp_path: Path) -> None:
-    publish(tmp_path, "email", {"x": 1})
+    publish_test_payload(tmp_path, "email", {"x": 1})
     notif_dir = tmp_path / ".notification"
     assert (notif_dir / "email.json").is_file()
     leftover = [p for p in notif_dir.iterdir() if p.name.endswith(".tmp")]
@@ -126,7 +123,7 @@ def test_publish_atomic_no_tmp_residue(tmp_path: Path) -> None:
 
 def test_publish_preserves_compact_json_bytes(tmp_path: Path) -> None:
     payload = {"message": "\u7075\u53f0", "count": 1}
-    publish(tmp_path, "email", payload)
+    publish_test_payload(tmp_path, "email", payload)
 
     raw = (tmp_path / ".notification" / "email.json").read_bytes()
     assert raw == json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -135,7 +132,7 @@ def test_publish_preserves_compact_json_bytes(tmp_path: Path) -> None:
 
 def test_large_result_acks_preserve_compact_json_bytes(tmp_path: Path) -> None:
     ref_ids = {"ref-\u7075", "ref-a"}
-    save_large_result_acks(tmp_path, ref_ids)
+    replace_ack_refs_for_test(tmp_path, ref_ids)
 
     raw = (tmp_path / ".notification" / "large_result_acks.json").read_bytes()
     assert raw == json.dumps(sorted(ref_ids), ensure_ascii=False).encode("utf-8")
@@ -148,12 +145,12 @@ def test_large_result_acks_preserve_compact_json_bytes(tmp_path: Path) -> None:
 
 def test_clear_idempotent(tmp_path: Path) -> None:
     # Clearing a non-existent file should not raise.
-    clear(tmp_path, "soul")
-    publish(tmp_path, "email", {"x": 1})
-    clear(tmp_path, "email")
+    clear_test_payload(tmp_path, "soul")
+    publish_test_payload(tmp_path, "email", {"x": 1})
+    clear_test_payload(tmp_path, "email")
     assert not (tmp_path / ".notification" / "email.json").exists()
     # Second clear is a no-op.
-    clear(tmp_path, "email")
+    clear_test_payload(tmp_path, "email")
 
 
 def test_concurrent_publish_atomicity(tmp_path: Path) -> None:
@@ -164,12 +161,12 @@ def test_concurrent_publish_atomicity(tmp_path: Path) -> None:
 
     def worker(source: str) -> None:
         for i in range(50):
-            publish(tmp_path, source, {"src": source, "i": i})
+            publish_test_payload(tmp_path, source, {"src": source, "i": i})
 
     with ThreadPoolExecutor(max_workers=len(sources)) as pool:
         list(pool.map(worker, sources))
 
-    out = collect_notifications(tmp_path)
+    out = snapshot_notifications(tmp_path)
     # All 10 sources eventually published.
     assert set(out.keys()) == set(sources)
     # Every value parsed successfully (collect's try/except skips
@@ -220,8 +217,8 @@ def test_check_action_returns_empty_when_nothing_published(
 def test_check_action_returns_placeholder(tmp_path: Path) -> None:
     from lingtai.tools.notification import handle
 
-    publish(tmp_path, "email", {"count": 5, "newest_received_at": "2026-05-05T00:00:00Z"})
-    publish(tmp_path, "soul", {"voices": [{"source": "warmth", "voice": "..."}]})
+    publish_test_payload(tmp_path, "email", {"count": 5, "newest_received_at": "2026-05-05T00:00:00Z"})
+    publish_test_payload(tmp_path, "soul", {"voices": [{"source": "warmth", "voice": "..."}]})
 
     @dataclass
     class _Stub:
@@ -272,7 +269,10 @@ class _ProducerStubAgent:
     write to .notification/."""
     _working_dir: Path = None
     _logs: list[tuple[str, dict]] = field(default_factory=list)
-    _system_notification_lock: threading.Lock = field(default_factory=threading.Lock)
+    _notification_store: object = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._notification_store = notification_store_for(self._working_dir)
 
     def _log(self, evt: str, **fields: Any) -> None:
         self._logs.append((evt, fields))
@@ -318,7 +318,7 @@ def test_email_publish_writes_file(tmp_path: Path, monkeypatch) -> None:
     result = _rerender_unread_digest(agent)
     assert result == "email"
 
-    out = collect_notifications(tmp_path)
+    out = snapshot_notifications(tmp_path)
     assert "email" in out
     data = out["email"]["data"]
     assert data["count"] == 3
@@ -334,7 +334,7 @@ def test_email_clear_on_zero(tmp_path: Path, monkeypatch) -> None:
     from lingtai.tools.email import _rerender_unread_digest
 
     agent = _ProducerStubAgent(_working_dir=tmp_path)
-    publish(tmp_path, "email", {"data": {"count": 5}})  # pre-existing
+    publish_test_payload(tmp_path, "email", {"data": {"count": 5}})  # pre-existing
     assert (tmp_path / ".notification" / "email.json").exists()
 
     monkeypatch.setattr(
@@ -359,7 +359,7 @@ def test_system_publish_appends_event(tmp_path: Path) -> None:
         agent, source="email.bounce", ref_id="msg_2", body="bounce 2"
     )
 
-    out = collect_notifications(tmp_path)
+    out = snapshot_notifications(tmp_path)
     assert "system" in out
     events = out["system"]["data"]["events"]
     assert len(events) == 2
@@ -402,7 +402,7 @@ def test_system_publish_caps_at_20(tmp_path: Path) -> None:
             agent, source="daemon", ref_id=f"ref_{i}", body=f"event {i}"
         )
 
-    events = collect_notifications(tmp_path)["system"]["data"]["events"]
+    events = snapshot_notifications(tmp_path)["system"]["data"]["events"]
     assert len(events) == 20
     refs = [e["ref_id"] for e in events]
     # Cap retained the most recent: ref_5 .. ref_24.
@@ -425,7 +425,7 @@ def test_system_publish_concurrent_no_lost_writes(tmp_path: Path) -> None:
     with ThreadPoolExecutor(max_workers=n_events) as pool:
         list(pool.map(worker, range(n_events)))
 
-    events = collect_notifications(tmp_path)["system"]["data"]["events"]
+    events = snapshot_notifications(tmp_path)["system"]["data"]["events"]
     # All 20 fit under the 20-cap.
     assert len(events) == n_events
     refs = {e["ref_id"] for e in events}
@@ -469,7 +469,7 @@ def test_human_soul_inquiry_publishes_btw_notification(tmp_path: Path) -> None:
         "What should I know?",
     )
 
-    out = collect_notifications(tmp_path)
+    out = snapshot_notifications(tmp_path)
     assert "btw" in out
     payload = out["btw"]
     assert payload["header"] == "/btw side inquiry answered"
@@ -505,7 +505,7 @@ def test_non_human_soul_inquiry_does_not_publish_btw_notification(
 
     inquiry._run_inquiry(agent, "auto?", source="insight")
 
-    out = collect_notifications(tmp_path)
+    out = snapshot_notifications(tmp_path)
     assert "btw" not in out
     assert any(evt == "insight" for evt, _ in agent._logs)
     assert (tmp_path / "logs" / "soul_inquiry.jsonl").is_file()
@@ -520,11 +520,11 @@ def test_submit_writes_envelope(tmp_path: Path) -> None:
     """``submit`` builds the documented envelope and writes the file."""
     from lingtai.kernel.notifications import submit
 
-    submit(tmp_path, "system",
+    submit(store_agent_for(tmp_path), "system",
            header="hello", icon="✨",
            data={"x": 1, "y": [2, 3]})
 
-    out = collect_notifications(tmp_path)
+    out = snapshot_notifications(tmp_path)
     assert "system" in out
     payload = out["system"]
     assert payload["header"] == "hello"
@@ -539,11 +539,11 @@ def test_submit_writes_envelope(tmp_path: Path) -> None:
 def test_submit_priority_override(tmp_path: Path) -> None:
     from lingtai.kernel.notifications import submit
 
-    submit(tmp_path, "nudge",
+    submit(store_agent_for(tmp_path), "nudge",
            header="oh no", icon="🚨",
            priority="high", data={})
 
-    assert collect_notifications(tmp_path)["nudge"]["priority"] == "high"
+    assert snapshot_notifications(tmp_path)["nudge"]["priority"] == "high"
 
 
 def test_submit_via_system_alias(tmp_path: Path) -> None:
@@ -552,19 +552,19 @@ def test_submit_via_system_alias(tmp_path: Path) -> None:
     from lingtai.tools.system import (
         publish_notification, clear_notification,
     )
-    from lingtai.kernel.notifications import submit, clear
+    from lingtai.kernel.notifications import clear as core_clear, submit
 
     assert publish_notification is submit
-    assert clear_notification is clear
+    assert clear_notification is core_clear
 
-    publish_notification(tmp_path, "system",
+    publish_notification(store_agent_for(tmp_path), "system",
                          header="via", icon="🛰",
                          data={"ok": True})
-    out = collect_notifications(tmp_path)
+    out = snapshot_notifications(tmp_path)
     assert out["system"]["data"] == {"ok": True}
 
-    clear_notification(tmp_path, "system")
-    out = collect_notifications(tmp_path)
+    clear_notification(store_agent_for(tmp_path), "system")
+    out = snapshot_notifications(tmp_path)
     assert "system" not in out
 
 
@@ -577,8 +577,8 @@ def test_molt_preserves_notification_dir(tmp_path: Path) -> None:
     """After molt, the .notification/ dir and its files survive — they are
     system state, not conversation memory.  In-memory tracking is reset
     (block_id, pending_meta) but the on-disk files and fingerprint persist."""
-    publish(tmp_path, "email", {"count": 3})
-    publish(tmp_path, "soul", {"voices": []})
+    publish_test_payload(tmp_path, "email", {"count": 3})
+    publish_test_payload(tmp_path, "soul", {"voices": []})
     assert (tmp_path / ".notification").is_dir()
 
     # Stub agent with the bare minimum the molt reset logic needs.
@@ -632,6 +632,7 @@ def _make_idle_agent_with_pending_tail(tmp_path: Path, *, call_id: str = "tc-pen
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_deferred_log_fp = ()
@@ -687,6 +688,7 @@ def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_deferred_log_fp = ()
@@ -717,7 +719,7 @@ def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
             pass
 
     agent = _Agent(tmp_path)
-    publish(tmp_path, "email", {"count": 1})
+    publish_test_payload(tmp_path, "email", {"count": 1})
     agent._sync_notifications()
 
     # Wire pair injected.
@@ -751,7 +753,7 @@ def test_sync_idle_heal_replays_recorded_tool_result_before_notification(
         encoding="utf-8",
     )
     agent = _make_idle_agent_with_pending_tail(tmp_path)
-    publish(tmp_path, "email", {"count": 1})
+    publish_test_payload(tmp_path, "email", {"count": 1})
 
     agent._sync_notifications()
 
@@ -778,7 +780,7 @@ def test_sync_idle_heal_falls_back_to_synthetic_when_no_recorded_result(
     from lingtai.kernel.llm.interface import ToolResultBlock
 
     agent = _make_idle_agent_with_pending_tail(tmp_path)
-    publish(tmp_path, "email", {"count": 1})
+    publish_test_payload(tmp_path, "email", {"count": 1})
 
     agent._sync_notifications()
 
@@ -814,6 +816,7 @@ def test_sync_idle_injects_post_molt_after_molt_batch_deferred_stamp(tmp_path: P
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_block_id = None
@@ -844,7 +847,7 @@ def test_sync_idle_injects_post_molt_after_molt_batch_deferred_stamp(tmp_path: P
 
     agent = _Agent(tmp_path)
     # The molt wrote the continuation channel while ACTIVE.
-    publish(tmp_path, "post-molt", {
+    publish_test_payload(tmp_path, "post-molt", {
         "header": "post-molt #1 — resume work",
         "icon": "🌱",
         "priority": "high",
@@ -882,6 +885,7 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_block_id = None
@@ -914,7 +918,7 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
             pass
 
     agent = _Agent(tmp_path)
-    publish(tmp_path, "email", {"count": 1, "data": {"count": 1}})
+    publish_test_payload(tmp_path, "email", {"count": 1, "data": {"count": 1}})
 
     agent._sync_notifications()
 
@@ -968,6 +972,7 @@ def test_sync_idle_skeletonizes_then_reinjects(tmp_path: Path) -> None:
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_block_id = None
@@ -997,7 +1002,7 @@ def test_sync_idle_skeletonizes_then_reinjects(tmp_path: Path) -> None:
             pass
 
     agent = _Agent(tmp_path)
-    publish(tmp_path, "email", {"count": 1})
+    publish_test_payload(tmp_path, "email", {"count": 1})
     agent._sync_notifications()
     first_id = agent._notification_block_id
     assert first_id is not None
@@ -1007,7 +1012,7 @@ def test_sync_idle_skeletonizes_then_reinjects(tmp_path: Path) -> None:
     # to fire.  Sleep a moment to bump mtime_ns.
     import time as _time
     _time.sleep(0.001)
-    publish(tmp_path, "email", {"count": 2, "extra": "more bytes"})
+    publish_test_payload(tmp_path, "email", {"count": 2, "extra": "more bytes"})
     agent._sync_notifications()
     second_id = agent._notification_block_id
 
@@ -1031,6 +1036,7 @@ def test_sync_idle_empty_strips(tmp_path: Path) -> None:
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_block_id = None
@@ -1060,11 +1066,11 @@ def test_sync_idle_empty_strips(tmp_path: Path) -> None:
             pass
 
     agent = _Agent(tmp_path)
-    publish(tmp_path, "email", {"count": 1})
+    publish_test_payload(tmp_path, "email", {"count": 1})
     agent._sync_notifications()
     assert len(agent._chat_stub.interface.entries) == 2
 
-    clear(tmp_path, "email")
+    clear_test_payload(tmp_path, "email")
     agent._sync_notifications()
 
     # The synthesized pair remains in history, but its live payload is
@@ -1087,6 +1093,7 @@ def test_sync_no_change_is_noop(tmp_path: Path) -> None:
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_block_id = None
@@ -1116,7 +1123,7 @@ def test_sync_no_change_is_noop(tmp_path: Path) -> None:
             pass
 
     agent = _Agent(tmp_path)
-    publish(tmp_path, "email", {"count": 1})
+    publish_test_payload(tmp_path, "email", {"count": 1})
     agent._sync_notifications()
     first_id = agent._notification_block_id
     n_entries_before = len(agent._chat_stub.interface.entries)
@@ -1151,6 +1158,7 @@ def test_sync_active_defers_without_committing_or_mutating_tool_result(tmp_path:
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = AgentState.ACTIVE
             self._notification_fp = ()
             self._notification_deferred_log_fp = ()
@@ -1183,8 +1191,8 @@ def test_sync_active_defers_without_committing_or_mutating_tool_result(tmp_path:
             pass
 
     agent = _Agent(tmp_path)
-    publish(tmp_path, "system", {"data": {"events": [{"source": "daemon"}]}})
-    fp = notification_fingerprint(tmp_path)
+    publish_test_payload(tmp_path, "system", {"data": {"events": [{"source": "daemon"}]}})
+    fp = fingerprint_notifications(tmp_path)
 
     agent._sync_notifications()
     agent._sync_notifications()
@@ -1212,6 +1220,7 @@ def test_sync_empty_state_commits_empty_fingerprint(tmp_path: Path) -> None:
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = AgentState.ACTIVE
             self._notification_fp = (("soul.json", 1, 1),)
             self._notification_block_id = None
@@ -1246,6 +1255,33 @@ def test_sync_empty_state_commits_empty_fingerprint(tmp_path: Path) -> None:
     agent._sync_notifications()
 
     assert agent._notification_fp == ()
+
+
+@pytest.mark.parametrize("state_name", ["STUCK", "SUSPENDED"])
+def test_sync_noninjecting_state_commits_observed_store_version(
+    tmp_path: Path, state_name: str
+) -> None:
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.notifications import is_channel_allowed
+    from lingtai.kernel.state import AgentState
+
+    store = notification_store_for(tmp_path)
+    store.publish("email", {"data": {"count": 1}})
+
+    class _Agent:
+        _sync_notifications = BaseAgent._sync_notifications
+
+        def __init__(self):
+            self._notification_store = store
+            self._notification_fp = ()
+            self._notification_deferred_log_fp = (("old.json", 1, "old"),)
+            self._state = getattr(AgentState, state_name)
+
+    agent = _Agent()
+    agent._sync_notifications()
+
+    assert agent._notification_fp == store.fingerprint(is_channel_allowed)
+    assert agent._notification_deferred_log_fp == ()
 
 
 def test_session_manager_has_no_notification_inject_hook() -> None:
@@ -1303,6 +1339,7 @@ def test_end_of_turn_idle_sync_delivers_deferred_notification(tmp_path: Path) ->
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = AgentState.ACTIVE
             self._notification_fp = ()
             self._notification_block_id = None
@@ -1343,7 +1380,7 @@ def test_end_of_turn_idle_sync_delivers_deferred_notification(tmp_path: Path) ->
     # Stop the run loop after the post-turn sweep has a chance to execute.
     # Patch the module-level dispatcher because _run_loop calls it directly.
     def fake_handle_message(_agent, _msg):
-        publish(_agent._working_dir, "system", {"data": {"events": [{"source": "daemon"}]}})
+        publish_test_payload(_agent._working_dir, "system", {"data": {"events": [{"source": "daemon"}]}})
         _agent._shutdown.set()
 
     orig_handle = turn_mod._handle_message
@@ -1355,7 +1392,7 @@ def test_end_of_turn_idle_sync_delivers_deferred_notification(tmp_path: Path) ->
 
     assert AgentState.IDLE in states
     assert agent._notification_block_id is not None
-    assert agent._notification_fp == notification_fingerprint(tmp_path)
+    assert agent._notification_fp == fingerprint_notifications(tmp_path)
     wake = agent.inbox.get_nowait()
     assert wake.type == MSG_TC_WAKE
 
@@ -1390,6 +1427,7 @@ def test_sync_asleep_wakes_on_change(tmp_path: Path) -> None:
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = AgentState.ASLEEP
             self._notification_fp = ()
             self._notification_block_id = None
@@ -1423,7 +1461,7 @@ def test_sync_asleep_wakes_on_change(tmp_path: Path) -> None:
             pass
 
     agent = _Agent(tmp_path)
-    publish(tmp_path, "email", {"count": 1})
+    publish_test_payload(tmp_path, "email", {"count": 1})
 
     agent._sync_notifications()
 
@@ -1447,6 +1485,7 @@ def test_sync_asleep_no_change_stays_asleep(tmp_path: Path) -> None:
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = AgentState.ASLEEP
             self._notification_fp = ()
             self._notification_block_id = None
@@ -1501,6 +1540,7 @@ def _make_asleep_inject_fail_agent(tmp_path: Path, chat, state_history):
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = AgentState.ASLEEP
             self._notification_fp = ()
             self._notification_block_id = None
@@ -1559,14 +1599,14 @@ def test_sync_asleep_inject_fail_falls_back_to_degraded_request(tmp_path: Path) 
     """
     from lingtai.kernel.state import AgentState
     from lingtai.kernel.message import MSG_REQUEST, MSG_TC_WAKE
-    from lingtai.kernel.notifications import notification_fingerprint
+    from tests._notification_store_helpers import fingerprint_notifications
 
     chat = _make_chat_stub()
     state_history: list = []
     agent = _make_asleep_inject_fail_agent(tmp_path, chat, state_history)
 
-    publish(tmp_path, "mcp.wechat", {"data": {"count": 2}})
-    fp_before = notification_fingerprint(tmp_path)
+    publish_test_payload(tmp_path, "mcp.wechat", {"data": {"count": 2}})
+    fp_before = fingerprint_notifications(tmp_path)
 
     agent._sync_notifications()
 
@@ -1611,7 +1651,7 @@ def test_sync_asleep_inject_fail_does_not_replay_on_second_sync(tmp_path: Path) 
     state_history: list = []
     agent = _make_asleep_inject_fail_agent(tmp_path, chat, state_history)
 
-    publish(tmp_path, "mcp.wechat", {"data": {"count": 1}})
+    publish_test_payload(tmp_path, "mcp.wechat", {"data": {"count": 1}})
     agent._sync_notifications()
 
     inject_calls_after_first = agent.inject_calls
@@ -1861,7 +1901,7 @@ def test_context_molt_batch_skips_active_notification_stamp(tmp_path):
     from lingtai.kernel.llm.base import ToolCall
     from lingtai.kernel.llm.interface import ToolResultBlock
     from lingtai.kernel.meta_block import attach_active_notifications
-    from lingtai.kernel.notifications import notification_fingerprint
+    from tests._notification_store_helpers import fingerprint_notifications
 
     notif_dir = tmp_path / ".notification"
     notif_dir.mkdir(parents=True, exist_ok=True)
@@ -1889,7 +1929,7 @@ def test_context_molt_batch_skips_active_notification_stamp(tmp_path):
 
     assert "notifications" not in molt_result.content
     assert agent._notification_fp == (("sentinel.json", 1, 1),)
-    assert notification_fingerprint(tmp_path) != agent._notification_fp
+    assert fingerprint_notifications(tmp_path) != agent._notification_fp
 
 
 def test_non_molt_batch_after_molt_can_consume_post_molt(tmp_path):
@@ -1900,7 +1940,7 @@ def test_non_molt_batch_after_molt_can_consume_post_molt(tmp_path):
     from lingtai.kernel.llm.base import ToolCall
     from lingtai.kernel.llm.interface import ToolResultBlock
     from lingtai.kernel.meta_block import attach_active_notifications
-    from lingtai.kernel.notifications import notification_fingerprint
+    from tests._notification_store_helpers import fingerprint_notifications
 
     notif_dir = tmp_path / ".notification"
     notif_dir.mkdir(parents=True, exist_ok=True)
@@ -1910,6 +1950,7 @@ def test_non_molt_batch_after_molt_can_consume_post_molt(tmp_path):
 
     agent = SimpleNamespace(
         _working_dir=tmp_path,
+        _notification_store=notification_store_for(tmp_path),
         _notification_fp=(),
         _notification_live_holder=None,
     )
@@ -1923,7 +1964,7 @@ def test_non_molt_batch_after_molt_can_consume_post_molt(tmp_path):
         )
 
     assert "post-molt" in later_result.content["_meta"]["notifications"]
-    assert agent._notification_fp == notification_fingerprint(tmp_path)
+    assert agent._notification_fp == fingerprint_notifications(tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1942,6 +1983,7 @@ def _make_stub_agent_for_block_log(tmp_path: Path):
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_block_id = None
@@ -1977,8 +2019,8 @@ def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> 
     """IDLE injection via _inject_notification_pair must log notification_block_injected
     with the full ``_meta`` envelope (tool_meta/agent_meta/guidance/notifications/
     notification_guidance)."""
-    publish(tmp_path, "email", {"count": 2, "data": {"count": 2, "digest": "2 unread"}})
-    publish(tmp_path, "system", {"events": [{"source": "test", "body": "ping"}]})
+    publish_test_payload(tmp_path, "email", {"count": 2, "data": {"count": 2, "digest": "2 unread"}})
+    publish_test_payload(tmp_path, "system", {"events": [{"source": "test", "body": "ping"}]})
 
     agent = _make_stub_agent_for_block_log(tmp_path)
     agent._sync_notifications()
@@ -2038,7 +2080,7 @@ def test_inject_notification_pair_adds_telegram_persistent_and_strips_ephemeral(
         }
         for i in range(1, 22)
     ]
-    publish(
+    publish_test_payload(
         tmp_path,
         "mcp.telegram",
         {
@@ -2130,7 +2172,7 @@ def test_inject_notification_pair_strips_tool_meta_context_transit_keys(
     monkeypatch.setattr(base_agent_module, "build_meta", fake_build_meta)
     monkeypatch.setattr(meta_block_module, "build_meta", fake_build_meta)
 
-    publish(tmp_path, "email", {"count": 1, "data": {"count": 1}})
+    publish_test_payload(tmp_path, "email", {"count": 1, "data": {"count": 1}})
     agent = _make_stub_agent_for_block_log(tmp_path)
     agent._sync_notifications()
 
@@ -2171,7 +2213,7 @@ def test_block_injected_payload_not_mutated_by_skeletonization(tmp_path: Path) -
     """The logged payload must survive later skeletonization of the live holder."""
     import time as _time
 
-    publish(tmp_path, "email", {"count": 1})
+    publish_test_payload(tmp_path, "email", {"count": 1})
     agent = _make_stub_agent_for_block_log(tmp_path)
     agent._sync_notifications()
 
@@ -2183,7 +2225,7 @@ def test_block_injected_payload_not_mutated_by_skeletonization(tmp_path: Path) -
     # Simulate later delivery: publish new state and re-sync; this skeletonizes
     # the first live holder.
     _time.sleep(0.001)
-    publish(tmp_path, "email", {"count": 2, "extra": "more"})
+    publish_test_payload(tmp_path, "email", {"count": 2, "extra": "more"})
     agent._sync_notifications()
 
     # The *first* logged snapshot must still have email in it (not mutated).
@@ -2193,7 +2235,7 @@ def test_block_injected_payload_not_mutated_by_skeletonization(tmp_path: Path) -
 def test_block_injected_emits_companion_to_pair_injected(tmp_path: Path) -> None:
     """Both notification_pair_injected and notification_block_injected must fire
     on every IDLE injection, in that order (pair before block)."""
-    publish(tmp_path, "email", {"count": 1})
+    publish_test_payload(tmp_path, "email", {"count": 1})
     agent = _make_stub_agent_for_block_log(tmp_path)
     agent._sync_notifications()
 
@@ -2221,6 +2263,7 @@ def _make_poisoned_sync_agent(tmp_path: Path, state):
     class _Agent(BaseAgent):
         def __init__(self, workdir):
             self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
             self._state = state
             self._notification_fp = (("email.json", 1, "old"),)
             self._notification_deferred_log_fp = ()
@@ -2280,7 +2323,7 @@ def test_sync_notifications_asleep_refuses_touch_when_poisoned(tmp_path: Path) -
 
     agent = _make_poisoned_sync_agent(tmp_path, AgentState.ASLEEP)
     before_fp = agent._notification_fp
-    publish(tmp_path, "system", {"data": {"events": [{"source": "daemon"}]}})
+    publish_test_payload(tmp_path, "system", {"data": {"events": [{"source": "daemon"}]}})
 
     agent._sync_notifications()
 
@@ -2303,7 +2346,7 @@ def test_sync_notifications_idle_refuses_touch_when_poisoned(tmp_path: Path) -> 
 
     agent = _make_poisoned_sync_agent(tmp_path, AgentState.IDLE)
     before_fp = agent._notification_fp
-    publish(tmp_path, "email", {"data": {"count": 1}})
+    publish_test_payload(tmp_path, "email", {"data": {"count": 1}})
 
     agent._sync_notifications()
 

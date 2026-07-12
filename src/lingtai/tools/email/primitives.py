@@ -495,14 +495,14 @@ def _rerender_unread_digest(agent) -> str | None:
     body, count, newest_ts = _render_unread_digest(agent)
 
     if count == 0:
-        clear_notification(agent._working_dir, "email")
+        clear_notification(agent, "email")
         agent._log("email_notification_cleared")
         return None
 
     email_items, email_ids = _unread_notification_context(agent)
 
     publish_notification(
-        agent._working_dir, "email",
+        agent, "email",
         header=f"{count} unread email{'s' if count != 1 else ''}",
         icon="📧",
         instructions=(

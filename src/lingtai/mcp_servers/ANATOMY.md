@@ -13,6 +13,8 @@ related_files:
   - src/lingtai/mcp_servers/feishu/manager.py
   - src/lingtai/mcp_servers/imap/manager.py
   - src/lingtai/mcp_servers/telegram/manager.py
+  - src/lingtai/mcp_servers/telegram/server.py
+  - src/lingtai/adapters/posix/notification_store.py
   - src/lingtai/mcp_servers/wechat/manager.py
   - src/lingtai/mcp_servers/whatsapp/manager.py
   - tests/test_cloud_mail_addon.py
@@ -36,7 +38,7 @@ Curated and built-in MCP server package implementations shipped inside the `ling
 | `_skill.py` | Shared bundled-skill helper: re-exports the kernel-owned `split_frontmatter` from `lingtai.kernel._frontmatter` (one impl shared with the prompt-section catalog; kernel never imports the wrapper), `load_skill()` loads package `SKILL.md`, `manual_action_description()` injects frontmatter into the schema, and `manual_payload()` returns the manual body + absolute path without sidecar lists (`_skill.py:36-79`). |
 | `_identity.py` | Shared public-identity envelope/path/write helper for curated messaging MCPs: builds the `lingtai.mcp.identity.v1` document, computes `system/mcp_identities/<name>.json`, and performs the newline-terminated atomic JSON write. Provider-specific account fields and redaction stay in each provider. |
 | `daemon_common/` | Built-in daemon lifecycle MCP. `daemon_common/server.py:1-151` exposes `finish(status, summary?, reason?, artifacts?)`, validates the call, and atomically writes the internal per-run `daemon_completion.json` file named by `LINGTAI_DAEMON_COMPLETION_FILE`; daemon runners validate that file before allowing success. |
-| `telegram/`, `imap/`, `feishu/`, `wechat/`, `whatsapp/`, `cloud_mail/` | Curated MCPs using `_skill.py` for their `action="manual"` payloads (`telegram/manager.py`, `imap/manager.py`, `feishu/manager.py`, `wechat/manager.py`, `whatsapp/manager.py`, `cloud_mail/manager.py`). Messaging MCPs with runtime account identity also delegate their identity envelope/path/write policy to `_identity.py`; curated IM notifications package bounded structured `recent_messages` / `latest_incoming` metadata (Telegram also includes `referenced_messages` when the current message replies to one outside the last-20 window) plus generic `platform` / `conversation_ref` / `message_ref` routing keys for the kernel `_meta.notification_persistent.mcp.<channel>` lanes. Telegram is a last-20 delta lane; WeChat and Feishu are last-10 delta lanes; WhatsApp is a last-10 snapshot lane with no `previous_block`. Durable message text lives in `_meta.notification_persistent`, not in the ephemeral notification hook — Jason #6148. |
+| `telegram/`, `imap/`, `feishu/`, `wechat/`, `whatsapp/`, `cloud_mail/` | Curated messaging MCPs. TelegramManager requires an injected `NotificationStorePort`; `telegram/server.py` constructs one POSIX adapter, and handled-mirror policy runs against the current payload in one compare-update so newer mirrors survive (`src/lingtai/mcp_servers/telegram/manager.py:380-391`, `src/lingtai/mcp_servers/telegram/manager.py:1223-1265`, `src/lingtai/mcp_servers/telegram/server.py:655-663`). The external LICC path/envelope and persistent-message lanes remain unchanged. |
 | Per-package `SKILL.md` | The human/agent-facing bundled manual. If a manual has sidecars, the sidecar inventory and relative paths live in this markdown, not in the tool payload. |
 | `pyproject.toml` package-data entries | Ships every curated MCP `SKILL.md`; `reference/**/*` and `assets/**/*` are also packaged for future sidecar files (`pyproject.toml:81-86`). |
 

@@ -43,6 +43,8 @@ import mcp.types as types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
+from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
+
 from .. import _config
 from .licc import push_inbox_event
 from .manager import TelegramManager, SCHEMA, DESCRIPTION
@@ -666,9 +668,11 @@ def build_manager() -> tuple[TelegramManager, Path]:
         config_source=os.environ.get("LINGTAI_TELEGRAM_CONFIG"),
     )
 
+    notification_store = PosixNotificationStoreAdapter(working_dir)
     mgr = TelegramManager(
         service=svc,
         working_dir=working_dir,
+        notification_store=notification_store,
         on_inbound=_on_inbound,
     )
     mgr_ref[0] = mgr

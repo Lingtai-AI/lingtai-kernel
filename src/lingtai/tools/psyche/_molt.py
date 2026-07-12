@@ -52,7 +52,7 @@ def _publish_post_molt(
         import uuid as _uuid
         from datetime import datetime, timezone
 
-        from ..system import publish_notification
+        from lingtai.kernel.notifications import submit as publish_notification
 
         reminder = (reasoning or "").strip() or _first_nonempty_line(summary)
         if initiator == "agent":
@@ -108,7 +108,7 @@ def _publish_post_molt(
         )
 
         publish_notification(
-            agent._working_dir,
+            agent,
             _POST_MOLT_CHANNEL,
             header=header,
             icon="🌱",

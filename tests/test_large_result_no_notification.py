@@ -13,7 +13,6 @@ time (``_maybe_notify_large_tool_result``) nor at the turn boundary
 """
 from __future__ import annotations
 
-import threading
 from unittest.mock import MagicMock
 
 from lingtai.kernel.llm.interface import (
@@ -36,7 +35,6 @@ def _make_stub_agent(iface: ChatInterface):
     agent._chat.interface = iface
     agent._log = MagicMock()
     agent._summarize_notification_threshold = 5000
-    agent._system_notification_lock = threading.Lock()
 
     published: list[dict] = []
 

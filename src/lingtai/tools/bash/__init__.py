@@ -29,7 +29,6 @@ PROVIDERS = {"providers": [], "default": "builtin"}
 
 _DEFAULT_POLICY_FILE = Path(__file__).parent / "bash_policy.json"
 _DEFAULT_ASYNC_REMINDER_SECONDS = 1800.0
-_SYSTEM_NOTIFICATION_FALLBACK_LOCK = threading.Lock()
 
 # Length of the stderr tail surfaced in the failure warning. Short on purpose:
 # the full stderr is already present in the result; the tail just makes the
@@ -322,8 +321,8 @@ class BashManager:
         self,
         policy: BashPolicy,
         working_dir: str,
+        agent: "BaseAgent",
         max_output: int = 50_000,
-        agent: "BaseAgent | None" = None,
     ):
         self._policy = policy
         self._working_dir = working_dir
@@ -583,7 +582,7 @@ class BashManager:
             f"Poll it with bash(action=\"poll\", job_id=\"{job_id}\")."
         )
         agent = self._agent
-        if agent is not None and hasattr(agent, "_enqueue_system_notification"):
+        if hasattr(agent, "_enqueue_system_notification"):
             try:
                 agent._enqueue_system_notification(
                     source="bash.reminder",
@@ -594,12 +593,11 @@ class BashManager:
                 return
             except Exception:
                 pass
-        fallback_lock = getattr(agent, "_system_notification_lock", None)
+        # Fallback: use the agent's store directly via compare_update_channel.
         self._append_system_notification_fallback(
             source="bash.reminder",
             ref_id=f"bash.reminder:{job_id}",
             body=body,
-            lock=fallback_lock,
         )
 
     def _append_system_notification_fallback(
@@ -608,25 +606,28 @@ class BashManager:
         source: str,
         ref_id: str,
         body: str,
-        lock: threading.Lock | None = None,
     ) -> str:
-        """Small direct-manager equivalent of BaseAgent._enqueue_system_notification."""
+        """Append a system event using the agent's serialized store.
+
+        Uses compare_update_channel so serialization is store-owned.
+        """
         import secrets
         import time
         from datetime import datetime, timezone
 
-        from lingtai.kernel.notifications import collect_notifications
-        from lingtai.kernel.notifications import submit as publish_notification
+        from lingtai.kernel.notification_store import UNCONDITIONAL
+
+        agent = self._agent
+        store = agent._notification_store
 
         event_id = f"evt_{int(time.time()*1000):x}_{secrets.token_hex(8)}"
         received_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        actual_lock = lock or _SYSTEM_NOTIFICATION_FALLBACK_LOCK
-        with actual_lock:
-            current = collect_notifications(Path(self._working_dir)).get("system", {})
+        def _mutator(current_payload: dict) -> tuple[dict | None, bool, str]:
+            current = current_payload if isinstance(current_payload, dict) else {}
             events = list(current.get("data", {}).get("events", []))
             if any(isinstance(ev, dict) and ev.get("ref_id") == ref_id for ev in events):
-                return ""
+                return current_payload, False, ""
             events.append({
                 "event_id": event_id,
                 "source": source,
@@ -635,18 +636,20 @@ class BashManager:
                 "at": received_at,
             })
             events = events[-20:]
-            publish_notification(
-                Path(self._working_dir),
-                "system",
-                header=(
+            payload = {
+                "header": (
                     f"{len(events)} system notification"
                     f"{'s' if len(events) != 1 else ''}"
                 ),
-                icon="🔔",
-                priority="normal",
-                data={"events": events},
-            )
-        return event_id
+                "icon": "🔔",
+                "priority": "normal",
+                "published_at": received_at,
+                "data": {"events": events},
+            }
+            return payload, True, event_id
+
+        result = store.compare_update_channel("system", UNCONDITIONAL, _mutator)
+        return result.value if isinstance(result.value, str) else ""
 
     def _watch_async_job(
         self, job_id: str, command: str, proc: subprocess.Popen,
@@ -673,11 +676,11 @@ class BashManager:
         except Exception:
             pass
 
-        # Write notification to .notification/bash.json
+        # Write notification to .notification/bash.json via the store.
         try:
             from datetime import datetime, timezone
-            notif_dir = Path(self._working_dir) / ".notification"
-            notif_dir.mkdir(exist_ok=True)
+            agent = self._agent
+            store = agent._notification_store
             payload = {
                 "header": f"Job {job_id} completed (exit {returncode})",
                 "icon": "⚡",
@@ -692,10 +695,7 @@ class BashManager:
                     "stdout_preview": stdout_preview,
                 },
             }
-            target = notif_dir / "bash.json"
-            tmp = target.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-            tmp.rename(target)
+            store.publish("bash", payload)
         except Exception:
             pass  # Notification failure should not break the job
 

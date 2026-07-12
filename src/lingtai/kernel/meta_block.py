@@ -2763,21 +2763,16 @@ def build_synthetic_meta_envelope(
 def _collect_active_notifications_payload(agent) -> dict | None:
     """Return the canonical active notification payload.
 
-    Reads ``.notification/*.json`` via :func:`collect_notifications` and wraps
+    Reads ``.notification/*.json`` via the agent's notification store and wraps
     it with the same guidance fields used by the synthesized notification pair.
     Returns ``None`` when there are no active channels (or anything goes wrong);
     callers treat ``None`` as "do not stamp."
 
     """
     try:
-        from .notifications import collect_notifications
-        from pathlib import Path
-        from .notifications import notification_fingerprint
+        from .notifications import is_channel_allowed
 
-        working_dir = getattr(agent, "_working_dir", None)
-        if working_dir is None:
-            return None
-        notifications = collect_notifications(Path(working_dir))
+        notifications = agent._notification_store.snapshot(is_channel_allowed)
         if not notifications:
             return None
         return build_notification_payload(notifications)
@@ -2937,12 +2932,11 @@ def _commit_notification_fp(agent) -> None:
     forever-retry against the IDLE sync path.
     """
     try:
-        from pathlib import Path
-        from .notifications import notification_fingerprint
+        from .notifications import is_channel_allowed
 
-        working_dir = getattr(agent, "_working_dir", None)
-        if working_dir is not None and hasattr(agent, "_notification_fp"):
-            agent._notification_fp = notification_fingerprint(Path(working_dir))
+        agent._notification_fp = agent._notification_store.fingerprint(
+            is_channel_allowed
+        )
     except Exception:
         pass
 

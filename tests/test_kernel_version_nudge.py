@@ -1,6 +1,6 @@
 import json
 
-from lingtai.kernel.notifications import collect_notifications
+from tests._notification_store_helpers import notification_store_for, snapshot_notifications
 from lingtai.kernel.nudge import upsert
 from lingtai.kernel.nudge import kernel_version as kv
 
@@ -8,6 +8,7 @@ from lingtai.kernel.nudge import kernel_version as kv
 class _Agent:
     def __init__(self, workdir):
         self._working_dir = workdir
+        self._notification_store = notification_store_for(workdir)
         self.logs = []
 
     def _log(self, event, **fields):
@@ -16,7 +17,7 @@ class _Agent:
 
 def _entries(workdir):
     return (
-        collect_notifications(workdir)
+        snapshot_notifications(workdir)
         .get("nudge", {})
         .get("data", {})
         .get("nudges", [])
@@ -244,7 +245,7 @@ def test_dev_or_editable_runtime_skips_and_clears_kernel_nudge(tmp_path, monkeyp
 
     kv.check(agent)
 
-    assert "nudge" not in collect_notifications(tmp_path)
+    assert "nudge" not in snapshot_notifications(tmp_path)
     state = json.loads((tmp_path / ".notification" / ".nudge_state.json").read_text())
     assert state["kernel_version"]["last_skip_date"] == "2026-06-24"
     assert state["kernel_version"]["skip_reason"] == "editable-install"
@@ -267,7 +268,7 @@ def test_current_remote_version_clears_existing_kernel_nudge(tmp_path, monkeypat
 
     kv.check(agent)
 
-    assert "nudge" not in collect_notifications(tmp_path)
+    assert "nudge" not in snapshot_notifications(tmp_path)
     state = json.loads((tmp_path / ".notification" / ".nudge_state.json").read_text())
     assert state["kernel_version"]["latest_seen"] == "0.14.1"
     assert state["kernel_version"]["emitted_for_latest"] is None

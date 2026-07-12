@@ -61,7 +61,7 @@ def test_email_receive_notification(tmp_path):
     on tc_inbox — the kernel's notification sync mechanism reads the file on
     its next heartbeat tick and injects the wire pair/persistent lane.
     """
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     # Mail must be on disk before the notification renderer runs.
@@ -76,7 +76,7 @@ def test_email_receive_notification(tmp_path):
     # tc_inbox should be empty under the new path.
     assert len(agent._tc_inbox.drain()) == 0
     # The raw notification mirror carries full unread message context.
-    out = collect_notifications(agent.working_dir)
+    out = snapshot_notifications(agent.working_dir)
     assert "email" in out
     data = out["email"]["data"]
     assert data["count"] == 1
@@ -92,12 +92,12 @@ def test_email_receive_notification(tmp_path):
 
 def test_email_receive_fallback_id(tmp_path):
     """Digest should still publish even when arrival payload omits _mailbox_id."""
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     _make_inbox_email(agent.working_dir, sender="sender", subject="(no subj)", message="body")
     agent._on_mail_received({"from": "sender", "message": "body"})
-    out = collect_notifications(agent.working_dir)
+    out = snapshot_notifications(agent.working_dir)
     assert "email" in out
     assert out["email"]["data"]["count"] == 1
 
@@ -105,7 +105,7 @@ def test_email_receive_fallback_id(tmp_path):
 def test_email_receive_via_agent(tmp_path):
     """After add_capability('email'), agent._on_mail_received publishes
     the unread email notification to ``.notification/email.json``."""
-    from lingtai.kernel.notifications import collect_notifications
+    from tests._notification_store_helpers import snapshot_notifications
 
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     email_id = _make_inbox_email(agent.working_dir, sender="sender", subject="hi", message="body")
@@ -116,7 +116,7 @@ def test_email_receive_via_agent(tmp_path):
         "subject": "hi",
         "message": "body",
     })
-    out = collect_notifications(agent.working_dir)
+    out = snapshot_notifications(agent.working_dir)
     assert "email" in out
     assert out["email"]["data"]["count"] == 1
 
@@ -903,7 +903,7 @@ def test_email_send_unwraps_json_string_address(tmp_path):
     assert len(sent_files) == 1, f"expected 1 sent record, got {len(sent_files)}"
 
     record = json.loads(sent_files[0].read_text())
-    assert record["to"] == ["alice", "bob"], \
+    assert record["to"] == ["alice", "bob"],\
         f"to field not unwrapped: {record['to']!r}"
 
 

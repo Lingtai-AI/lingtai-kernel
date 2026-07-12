@@ -23,12 +23,8 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 from lingtai.tools import notification as notif_intrinsic
-from lingtai.kernel.notifications import (
-    collect_notifications,
-    is_generic_dismiss_guarded,
-    notification_fingerprint,
-    publish,
-)
+from lingtai.kernel.notifications import is_generic_dismiss_guarded
+from tests._notification_store_helpers import snapshot_notifications, fingerprint_notifications, publish_test_payload
 
 # Shared with test_notification_tool.py — see tests/_notification_helpers.py.
 from tests._notification_helpers import (
@@ -37,18 +33,6 @@ from tests._notification_helpers import (
     mark_delivered as _mark_delivered,
     publish_large_result_reminder as _publish_large_result_reminder,
 )
-
-
-class _RecordingLock:
-    def __init__(self) -> None:
-        self.entered = False
-
-    def __enter__(self):
-        self.entered = True
-        return self
-
-    def __exit__(self, *_exc) -> None:
-        return None
 
 
 def _dismiss_channel(agent, channel, **kwargs):
@@ -67,13 +51,13 @@ def _dismiss_ref(agent, **kwargs):
 
 def test_dismiss_channel_clears_existing_file(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
     _mark_delivered(agent)
 
     res = _dismiss_channel(agent, "soul")
 
     assert res == {"status": "ok", "channel": "soul", "cleared": True, "forced": False}
-    assert collect_notifications(tmp_path) == {}
+    assert snapshot_notifications(tmp_path) == {}
     nd = _events(agent, "notification_dismiss")[0]
     assert nd["channel"] == "soul"
     assert nd["existed"] is True
@@ -94,14 +78,14 @@ def test_dismiss_channel_is_idempotent_when_absent(tmp_path: Path) -> None:
 
 def test_dismiss_mcp_dotted_channel(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "mcp.telegram", {"header": "telegram event"})
+    publish_test_payload(tmp_path, "mcp.telegram", {"header": "telegram event"})
     _mark_delivered(agent)
 
     res = _dismiss_channel(agent, "mcp.telegram")
 
     assert res["status"] == "ok"
     assert res["cleared"] is True
-    assert "mcp.telegram" not in collect_notifications(tmp_path)
+    assert "mcp.telegram" not in snapshot_notifications(tmp_path)
 
 
 def test_dismiss_validation_errors(tmp_path: Path) -> None:
@@ -132,14 +116,14 @@ def test_guarded_email_refuses_without_force(tmp_path: Path) -> None:
     import lingtai.tools.email  # noqa: F401 - import performs registration
 
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "email", {"header": "1 unread"})
+    publish_test_payload(tmp_path, "email", {"header": "1 unread"})
 
     res = _dismiss_channel(agent, "email")
 
     assert res["status"] == "error"
     assert res["reason"] == "guarded"
     assert "email_id" in res["message"]
-    assert "email" in collect_notifications(tmp_path)
+    assert "email" in snapshot_notifications(tmp_path)
     # Provenance is notification, not system.
     assert _events(agent, "notification_dismiss_guarded")
     assert _events(agent, "system_dismiss_guarded") == []
@@ -168,14 +152,14 @@ def test_guarded_email_force_clears_surface_but_not_mail_state(tmp_path: Path) -
         "received_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }))
     agent._on_mail_received({"from": "sender", "subject": "topic", "message": "body"})
-    assert "email" in collect_notifications(agent.working_dir)
+    assert "email" in snapshot_notifications(agent.working_dir)
 
     res = _dismiss_channel(agent, "email", force=True)
 
     assert res["status"] == "ok"
     assert res["cleared"] is True
     assert res["forced"] is True
-    assert "email" not in collect_notifications(agent.working_dir)
+    assert "email" not in snapshot_notifications(agent.working_dir)
 
     # Producer canonical state (mailbox read-state) is untouched by a mirror clear.
     check = agent._email_manager.handle({"action": "check"})
@@ -187,46 +171,46 @@ def test_soul_dismiss_alias_uses_shared_helper(tmp_path: Path) -> None:
     from lingtai.tools import soul
 
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
     _mark_delivered(agent)
 
     res = soul.handle(agent, {"action": "dismiss"})
 
     assert res["status"] == "ok"
     assert res["channel"] == "soul"
-    assert "soul" not in collect_notifications(tmp_path)
+    assert "soul" not in snapshot_notifications(tmp_path)
     assert _events(agent, "soul_dismiss") == [{}]
     assert _events(agent, "notification_dismiss")[0]["invoked_by"] == "soul"
 
 
 def test_dismiss_one_channel_preserves_other_channels(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "email", {"header": "1 unread"})
-    publish(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(tmp_path, "email", {"header": "1 unread"})
+    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
     _mark_delivered(agent)
 
     res = _dismiss_channel(agent, "soul")
 
     assert res["status"] == "ok"
-    out = collect_notifications(tmp_path)
+    out = snapshot_notifications(tmp_path)
     assert set(out) == {"email"}
 
 
 def test_post_molt_dismiss_requires_ack_reason(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "post-molt", {"header": "resume work"})
+    publish_test_payload(tmp_path, "post-molt", {"header": "resume work"})
 
     res = _dismiss_channel(agent, "post-molt")
 
     assert res["status"] == "error"
     assert res["reason"] == "missing_ack_reason"
-    assert "post-molt" in collect_notifications(tmp_path)
+    assert "post-molt" in snapshot_notifications(tmp_path)
     assert _events(agent, "notification_dismiss_missing_reason")[0]["channel"] == "post-molt"
 
 
 def test_post_molt_dismiss_records_ack_reason(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "post-molt", {"header": "resume work"})
+    publish_test_payload(tmp_path, "post-molt", {"header": "resume work"})
     _mark_delivered(agent)
 
     res = _dismiss_channel(
@@ -240,8 +224,8 @@ def test_post_molt_dismiss_records_ack_reason(tmp_path: Path) -> None:
         "forced": False,
         "reason": "continue: resumed the preserved task",
     }
-    assert "post-molt" not in collect_notifications(tmp_path)
-    assert _events(agent, "notification_dismiss")[0]["reason"] == \
+    assert "post-molt" not in snapshot_notifications(tmp_path)
+    assert _events(agent, "notification_dismiss")[0]["reason"] ==\
         "continue: resumed the preserved task"
     # No system_dismiss line via the notification path.
     assert _events(agent, "system_dismiss") == []
@@ -249,10 +233,10 @@ def test_post_molt_dismiss_records_ack_reason(tmp_path: Path) -> None:
 
 def test_stale_system_dismiss_refuses_and_preserves_newer_file(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "system", {"header": "one", "data": {"events": ["old"]}})
+    publish_test_payload(tmp_path, "system", {"header": "one", "data": {"events": ["old"]}})
     _mark_delivered(agent)
     delivered_fp = agent._notification_fp
-    publish(
+    publish_test_payload(
         tmp_path,
         "system",
         {"header": "two", "data": {"events": ["old", "new"], "extra": "changed"}},
@@ -265,7 +249,7 @@ def test_stale_system_dismiss_refuses_and_preserves_newer_file(tmp_path: Path) -
     assert res["channel"] == "system"
     assert res["forced"] is False
     assert res["delivered_version"] != res["current_version"]
-    assert collect_notifications(tmp_path)["system"]["header"] == "two"
+    assert snapshot_notifications(tmp_path)["system"]["header"] == "two"
     assert agent._notification_fp == delivered_fp
     refusal = _events(agent, "notification_dismiss_refused")[0]
     assert refusal["reason"] == "stale_channel_version"
@@ -274,9 +258,9 @@ def test_stale_system_dismiss_refuses_and_preserves_newer_file(tmp_path: Path) -
 
 def test_force_bypasses_stale_version_guard(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "system", {"header": "one", "data": {"events": ["old"]}})
+    publish_test_payload(tmp_path, "system", {"header": "one", "data": {"events": ["old"]}})
     _mark_delivered(agent)
-    publish(
+    publish_test_payload(
         tmp_path,
         "system",
         {"header": "two", "data": {"events": ["old", "new"], "extra": "changed"}},
@@ -287,15 +271,15 @@ def test_force_bypasses_stale_version_guard(tmp_path: Path) -> None:
     assert res["status"] == "ok"
     assert res["cleared"] is True
     assert res["forced"] is True
-    assert "system" not in collect_notifications(tmp_path)
+    assert "system" not in snapshot_notifications(tmp_path)
 
 
 def test_stale_other_channel_does_not_block_delivered_channel(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "soul", {"header": "soul flow"})
-    publish(tmp_path, "system", {"header": "one", "data": {"events": ["old"]}})
+    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(tmp_path, "system", {"header": "one", "data": {"events": ["old"]}})
     _mark_delivered(agent)
-    publish(
+    publish_test_payload(
         tmp_path,
         "system",
         {"header": "two", "data": {"events": ["old", "new"], "extra": "changed"}},
@@ -305,14 +289,14 @@ def test_stale_other_channel_does_not_block_delivered_channel(tmp_path: Path) ->
 
     assert res["status"] == "ok"
     assert res["cleared"] is True
-    out = collect_notifications(tmp_path)
+    out = snapshot_notifications(tmp_path)
     assert set(out) == {"system"}
     assert out["system"]["header"] == "two"
 
 
 def test_never_delivered_current_channel_refuses_without_force(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "nudge", {"header": "new nudge"})
+    publish_test_payload(tmp_path, "nudge", {"header": "new nudge"})
 
     res = _dismiss_channel(agent, "nudge")
 
@@ -320,21 +304,19 @@ def test_never_delivered_current_channel_refuses_without_force(tmp_path: Path) -
     assert res["reason"] == "stale_channel_version"
     assert res["delivered_version"] is None
     assert res["current_version"][0] == "nudge.json"
-    assert "nudge" in collect_notifications(tmp_path)
+    assert "nudge" in snapshot_notifications(tmp_path)
 
 
-def test_system_compare_and_clear_uses_system_notification_lock(tmp_path: Path) -> None:
+def test_system_compare_and_clear_uses_injected_store_transaction(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    lock = _RecordingLock()
-    agent._system_notification_lock = lock
-    publish(tmp_path, "system", {"header": "system event"})
+    publish_test_payload(agent, "system", {"header": "system event"})
     _mark_delivered(agent)
 
     res = _dismiss_channel(agent, "system")
 
     assert res["status"] == "ok"
-    assert lock.entered is True
-    assert "system" not in collect_notifications(tmp_path)
+    assert not hasattr(agent, "_system_notification_lock")
+    assert "system" not in snapshot_notifications(agent)
 
 
 def test_unknown_notification_channel_is_not_dismissible(tmp_path: Path) -> None:
@@ -347,8 +329,8 @@ def test_unknown_notification_channel_is_not_dismissible(tmp_path: Path) -> None
 
 def test_goal_channel_is_protected_from_generic_dismiss(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(tmp_path, "goal", {"data": {"status": "active"}})
-    agent._notification_fp = notification_fingerprint(tmp_path)
+    publish_test_payload(tmp_path, "goal", {"data": {"status": "active"}})
+    agent._notification_fp = fingerprint_notifications(tmp_path)
 
     result = _dismiss_channel(agent, "goal", force=True)
 
@@ -360,7 +342,7 @@ def test_goal_channel_is_protected_from_generic_dismiss(tmp_path: Path) -> None:
 
 def test_system_event_dismiss_by_event_id_preserves_other_events(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(
+    publish_test_payload(
         tmp_path,
         "system",
         {
@@ -376,13 +358,13 @@ def test_system_event_dismiss_by_event_id_preserves_other_events(tmp_path: Path)
             },
         },
     )
-    agent._notification_fp = notification_fingerprint(tmp_path)
+    agent._notification_fp = fingerprint_notifications(tmp_path)
 
     result = _dismiss_event(agent, event_id="evt_b")
 
     assert result["status"] == "ok"
     assert result["removed"] == 1
-    payload = collect_notifications(tmp_path)["system"]
+    payload = snapshot_notifications(tmp_path)["system"]
     assert payload["header"] == "1 system notification"
     assert payload["data"]["events"] == [
         {"event_id": "evt_a", "source": "daemon", "ref_id": "a", "body": "A"}
@@ -392,12 +374,12 @@ def test_system_event_dismiss_by_event_id_preserves_other_events(tmp_path: Path)
 
 def test_system_event_dismiss_by_ref_id_clears_file_when_last_event(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(
+    publish_test_payload(
         tmp_path,
         "system",
         {"data": {"events": [{"event_id": "evt_a", "source": "goal.reminder", "ref_id": "goal:current"}]}},
     )
-    agent._notification_fp = notification_fingerprint(tmp_path)
+    agent._notification_fp = fingerprint_notifications(tmp_path)
 
     result = _dismiss_ref(agent, ref_id="goal:current")
 
@@ -409,7 +391,7 @@ def test_system_event_dismiss_by_ref_id_clears_file_when_last_event(tmp_path: Pa
 
 def test_large_result_reminder_cleared_by_whole_channel_dismiss(tmp_path: Path) -> None:
     """Whole-channel system dismiss now acks and clears large-result reminders (escape hatch)."""
-    from lingtai.kernel.notifications import load_large_result_acks
+    from tests._notification_store_helpers import load_ack_refs_for_test
 
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path)
@@ -422,10 +404,10 @@ def test_large_result_reminder_cleared_by_whole_channel_dismiss(tmp_path: Path) 
     assert "acked_large_result_refs" in res
     assert "large_tool_result:toolu_big" in res["acked_large_result_refs"]
     # The ack is persisted.
-    acks = load_large_result_acks(tmp_path)
+    acks = load_ack_refs_for_test(tmp_path)
     assert "large_tool_result:toolu_big" in acks
     # Notification file removed (only event was the large-result one).
-    assert "system" not in collect_notifications(tmp_path)
+    assert "system" not in snapshot_notifications(tmp_path)
     # A dismiss log was emitted (not a refusal).
     assert _events(agent, "large_result_reminder_dismissed")
     assert _events(agent, "notification_dismiss_refused") == []
@@ -433,7 +415,7 @@ def test_large_result_reminder_cleared_by_whole_channel_dismiss(tmp_path: Path) 
 
 def test_large_result_reminder_cleared_by_force_whole_channel(tmp_path: Path) -> None:
     """force=true on a whole-channel system dismiss also acks large-result reminders."""
-    from lingtai.kernel.notifications import load_large_result_acks
+    from tests._notification_store_helpers import load_ack_refs_for_test
 
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path)
@@ -443,14 +425,14 @@ def test_large_result_reminder_cleared_by_force_whole_channel(tmp_path: Path) ->
 
     assert res["status"] == "ok"
     assert res["forced"] is True
-    acks = load_large_result_acks(tmp_path)
+    acks = load_ack_refs_for_test(tmp_path)
     assert "large_tool_result:toolu_big" in acks
-    assert "system" not in collect_notifications(tmp_path)
+    assert "system" not in snapshot_notifications(tmp_path)
 
 
 def test_large_result_reminder_cleared_by_event_id(tmp_path: Path) -> None:
     """Targeted event_id dismiss of a large-result reminder now acks and removes it."""
-    from lingtai.kernel.notifications import load_large_result_acks
+    from tests._notification_store_helpers import load_ack_refs_for_test
 
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path)
@@ -461,15 +443,15 @@ def test_large_result_reminder_cleared_by_event_id(tmp_path: Path) -> None:
     assert res["status"] == "ok"
     assert res["event_id"] == "evt_lr"
     assert "acked_large_result_refs" in res
-    acks = load_large_result_acks(tmp_path)
+    acks = load_ack_refs_for_test(tmp_path)
     assert "large_tool_result:toolu_big" in acks
     # Notification file removed.
-    assert "system" not in collect_notifications(tmp_path)
+    assert "system" not in snapshot_notifications(tmp_path)
 
 
 def test_large_result_reminder_cleared_by_ref_id(tmp_path: Path) -> None:
     """Targeted ref_id dismiss of a large-result reminder now acks and removes it."""
-    from lingtai.kernel.notifications import load_large_result_acks
+    from tests._notification_store_helpers import load_ack_refs_for_test
 
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path, tool_call_id="toolu_x")
@@ -479,14 +461,14 @@ def test_large_result_reminder_cleared_by_ref_id(tmp_path: Path) -> None:
 
     assert res["status"] == "ok"
     assert res["ref_id"] == "large_tool_result:toolu_x"
-    acks = load_large_result_acks(tmp_path)
+    acks = load_ack_refs_for_test(tmp_path)
     assert "large_tool_result:toolu_x" in acks
-    assert "system" not in collect_notifications(tmp_path)
+    assert "system" not in snapshot_notifications(tmp_path)
 
 
 def test_large_result_reminder_cleared_by_force_ref_id(tmp_path: Path) -> None:
     """force=true on a targeted ref_id dismiss also acks the large-result reminder."""
-    from lingtai.kernel.notifications import load_large_result_acks
+    from tests._notification_store_helpers import load_ack_refs_for_test
 
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path, tool_call_id="toolu_x")
@@ -495,13 +477,13 @@ def test_large_result_reminder_cleared_by_force_ref_id(tmp_path: Path) -> None:
     res = _dismiss_ref(agent, ref_id="large_tool_result:toolu_x", force=True)
 
     assert res["status"] == "ok"
-    acks = load_large_result_acks(tmp_path)
+    acks = load_ack_refs_for_test(tmp_path)
     assert "large_tool_result:toolu_x" in acks
 
 
 def test_whole_channel_dismiss_with_large_result_and_other_events(tmp_path: Path) -> None:
     """Whole-channel dismiss acks large-result events and clears all events in the channel."""
-    from lingtai.kernel.notifications import load_large_result_acks
+    from tests._notification_store_helpers import load_ack_refs_for_test
 
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(
@@ -514,10 +496,10 @@ def test_whole_channel_dismiss_with_large_result_and_other_events(tmp_path: Path
 
     # Mixed events: large-result acked, whole channel cleared.
     assert res["status"] == "ok"
-    acks = load_large_result_acks(tmp_path)
+    acks = load_ack_refs_for_test(tmp_path)
     assert "large_tool_result:toolu_big" in acks
     # All events cleared from the channel.
-    assert "system" not in collect_notifications(tmp_path)
+    assert "system" not in snapshot_notifications(tmp_path)
 
 
 def test_non_protected_system_event_still_dismissible_by_event_id(tmp_path: Path) -> None:
@@ -533,14 +515,14 @@ def test_non_protected_system_event_still_dismissible_by_event_id(tmp_path: Path
 
     assert res["status"] == "ok"
     assert res["removed"] == 1
-    events = collect_notifications(tmp_path)["system"]["data"]["events"]
+    events = snapshot_notifications(tmp_path)["system"]["data"]["events"]
     sources = {ev["source"] for ev in events}
     assert sources == {"large_tool_result"}
 
 
 def test_system_event_dismiss_with_malformed_data_is_noop(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish(
+    publish_test_payload(
         tmp_path,
         "system",
         {
@@ -548,14 +530,14 @@ def test_system_event_dismiss_with_malformed_data_is_noop(tmp_path: Path) -> Non
             "data": ["not", "a", "dict"],
         },
     )
-    agent._notification_fp = notification_fingerprint(tmp_path)
+    agent._notification_fp = fingerprint_notifications(tmp_path)
 
     result = _dismiss_event(agent, event_id="evt_a")
 
     assert result["status"] == "ok"
     assert result["removed"] == 0
     assert result["remaining"] == 0
-    assert collect_notifications(tmp_path)["system"]["data"] == ["not", "a", "dict"]
+    assert snapshot_notifications(tmp_path)["system"]["data"] == ["not", "a", "dict"]
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +569,7 @@ def _agent_with_chat(tmp_path: Path):
 
 def test_real_channel_clear_signals_chat_for_ws_full_epoch(tmp_path: Path) -> None:
     agent = _agent_with_chat(tmp_path)
-    publish(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
     _mark_delivered(agent)
 
     res = _dismiss_channel(agent, "soul")
@@ -598,7 +580,7 @@ def test_real_channel_clear_signals_chat_for_ws_full_epoch(tmp_path: Path) -> No
 
 def test_real_event_dismiss_signals_chat_for_ws_full_epoch(tmp_path: Path) -> None:
     agent = _agent_with_chat(tmp_path)
-    publish(
+    publish_test_payload(
         tmp_path,
         "system",
         {
@@ -606,7 +588,7 @@ def test_real_event_dismiss_signals_chat_for_ws_full_epoch(tmp_path: Path) -> No
             "data": {"events": [{"event_id": "evt_a", "source": "btw"}]},
         },
     )
-    agent._notification_fp = notification_fingerprint(tmp_path)
+    agent._notification_fp = fingerprint_notifications(tmp_path)
 
     res = _dismiss_event(agent, event_id="evt_a")
 
@@ -627,7 +609,7 @@ def test_refused_dismiss_does_not_signal_chat(tmp_path: Path) -> None:
     import lingtai.tools.email  # noqa: F401 - import performs registration
 
     agent = _agent_with_chat(tmp_path)
-    publish(tmp_path, "email", {"header": "1 unread"})
+    publish_test_payload(tmp_path, "email", {"header": "1 unread"})
 
     res = _dismiss_channel(agent, "email")
 

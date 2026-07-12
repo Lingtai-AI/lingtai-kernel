@@ -19,6 +19,7 @@ from lingtai.kernel.services.logging import (
     rebuild_sqlite_event_index,
 )
 from tests._service_helpers import make_tool_result_mock_service as make_mock_service
+from tests._notification_store_helpers import notification_store_for
 
 
 def _read_durable_events(agent) -> list[dict]:
@@ -169,6 +170,7 @@ class TestBaseAgentLoggingIntegration:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"), workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent.add_tool("greet", schema={"type": "object", "properties": {}}, handler=lambda args: {"status": "ok"})
 
@@ -208,6 +210,7 @@ class TestBaseAgentLoggingIntegration:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"), workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent.add_tool("greet", schema={"type": "object", "properties": {}}, handler=lambda args: {"status": "ok"})
 
@@ -240,6 +243,7 @@ class TestBaseAgentLoggingIntegration:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"), workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
 
@@ -381,6 +385,7 @@ class TestSQLiteEventIndex:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"), workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._log("custom", value=123)
         agent._event_journal.close()
@@ -416,8 +421,8 @@ class TestSQLiteEventIndex:
         rebuild_sqlite_event_index(tmp_path, workdir_lease=PosixWorkdirLeaseAdapter(tmp_path))
         sqlite_file = logs / "log.sqlite"
         before_mtime = sqlite_file.stat().st_mtime_ns
-        for suffix in ("-wal", "-shm"):
-            (logs / ("log.sqlite" + suffix)).unlink(missing_ok=True)
+        assert not (logs / "log.sqlite-wal").exists()
+        assert not (logs / "log.sqlite-shm").exists()
 
         result = doctor_sqlite_event_index(tmp_path)
         assert result["status"] == "ok"

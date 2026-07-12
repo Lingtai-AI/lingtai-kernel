@@ -88,7 +88,7 @@ def _soul_whisper(agent) -> None:
     cycle instead of waiting indefinitely.
     """
     from lingtai.kernel.state import AgentState
-    from lingtai.kernel.notifications import notification_fingerprint, collect_notifications
+    from lingtai.kernel.notifications import is_channel_allowed
 
     agent._soul_timer = None
     try:
@@ -96,9 +96,10 @@ def _soul_whisper(agent) -> None:
             # Issue #47: Check for pending notifications before consultation
             # This ensures messages are seen within one soul delay cycle
             try:
-                fp = notification_fingerprint(agent._working_dir)
+                store = agent._notification_store
+                fp = store.fingerprint(is_channel_allowed)
                 if fp != agent._notification_fp:
-                    notifications = collect_notifications(agent._working_dir)
+                    notifications = store.snapshot(is_channel_allowed)
                     if notifications:
                         agent._log("soul_flow_notification_check",
                                    sources=list(notifications.keys()))
@@ -257,7 +258,7 @@ def _run_consultation_fire(agent) -> None:
             _run_consultation_batch,
             build_consultation_pair,
         )
-        from ..system import publish_notification, clear_notification
+        from lingtai.kernel.notifications import submit as publish_notification, clear as clear_notification
 
         diary = _render_current_diary(agent)
         voices = _run_consultation_batch(agent)
@@ -309,7 +310,7 @@ def _run_consultation_fire(agent) -> None:
         if not voices:
             # Nothing to say this fire — clear the file if it exists so
             # the kernel's notification sync strips any prior wire pair.
-            clear_notification(agent._working_dir, "soul")
+            clear_notification(agent, "soul")
             agent._log("consultation_fire_empty", fire_id=fire_id)
             return
 
@@ -322,7 +323,7 @@ def _run_consultation_fire(agent) -> None:
         # state transitions now.
         voices_data = _shape_soul_voices(voices_for_pair)
         publish_notification(
-            agent._working_dir, "soul",
+            agent, "soul",
             header="soul flow",
             icon="🌊",
             instructions=(
