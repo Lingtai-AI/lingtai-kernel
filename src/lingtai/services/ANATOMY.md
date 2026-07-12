@@ -13,6 +13,8 @@ related_files:
   - src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md
   - src/lingtai/services/vision/ANATOMY.md
   - src/lingtai/services/websearch/ANATOMY.md
+  - src/lingtai/adapters/posix/ANATOMY.md
+  - src/lingtai/kernel/mail_transport/ANATOMY.md
   - src/lingtai/kernel/services/ANATOMY.md
   - tests/test_mcp_closed_resource_restart.py
 maintenance: |
@@ -35,7 +37,7 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 | `__init__.py` | 1 | Docstring-only package marker |
 | `file_io.py` | 530 | `FileIOService` facade contract + `FileIOBackend`/`LocalFileIOBackend` — backs read/edit/write/glob/grep. `grep` accepts an optional basename `glob_filter` that prunes the candidate set before stat/read |
 | `file_io_sidecar.py` | 698 | Rust-backed grep/glob: `RustFileIOBackend`, `SidecarAdapter`, `SidecarError`, plus the `resolve_sidecar_binary` resolver and the `default_file_io_service` factory used by `Agent.__init__`. `grep`'s `glob_filter` is applied as a Python-side basename post-filter (the sidecar wire protocol carries no glob field yet) |
-| `mail.py` | 4 | Re-exports `MailService`, `FilesystemMailService` from `lingtai.kernel.services.mail` |
+| `mail.py` | 19 | High-level compatibility surface: re-exports the Core `MailTransportPort` as `MailService` and the POSIX adapter as both `PosixFilesystemMailAdapter` and the legacy public name `FilesystemMailService` |
 | `mcp.py` | 510 | `MCPClient` (stdio) + `HTTPMCPClient` (streamable HTTP) — async-to-sync MCP bridges |
 | `mcp_registry.py` | — | MCP registry infrastructure (the non-tool half of the `lingtai/tools/mcp` capability): record schema (`validate_record`), JSONL registry I/O (`read_registry`, `_append_record`), catalog loader (`_load_catalog`, path constant recomputed for this location), secret-safe identity projection (`read_identities`, `IDENTITY_SAFE_ACCOUNT_KEYS`), boot-time addon decompression (`decompress_addons`), and the system-prompt XML renderer (`_build_registry_xml`). Consumed by the `lingtai/tools/mcp` tool slice (lazy import) and `agent.py` |
 | `mcp_inbox.py` | — | LICC v1 filesystem inbox poller (`MCPInboxPoller`, the consumer half) + shared contract constants |
@@ -48,7 +50,8 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 ## Connections
 
 - **→ `lingtai.kernel.logging.get_logger`** (mcp.py:16) — structured logging.
-- **→ `lingtai.kernel.services.mail`** (mail.py:2) — pure re-export of kernel mail types.
+- **→ `lingtai.kernel.mail_transport`** (`mail.py:9`) — re-exports the Core-owned Port as `MailService`.
+- **→ `lingtai.adapters.posix.mail`** (`mail.py:10-13`) — re-exports the production adapter under its canonical name and the legacy public `FilesystemMailService` alias.
 - **→ `mcp.client.stdio`**, **`mcp.client.streamable_http`**, **`mcp.client.session`** (mcp.py:224, 406-407) — third-party MCP SDK. Imported lazily inside async connect methods.
 - **← `lingtai.tools.vision`** — uses `services.vision.VisionService`.
 - **← `lingtai.tools.web_search`** — uses `services.websearch.SearchService`.
@@ -56,7 +59,7 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 
 ## Composition
 
-`file_io.py` is a pure stdlib abstraction layer. `LocalFileIOService` is the tool-facing facade while `LocalFileIOBackend` owns the default Python local filesystem implementation. `file_io_sidecar.py` provides `RustFileIOBackend`, an opt-in alternative backend that delegates `read`/`write`/`edit` to a private `LocalFileIOBackend` but routes `grep`/`glob` to the Rust binary under `crates/lingtai-search-sidecar/` via short-lived JSON subprocess calls. `mail.py` is a passthrough re-export. `mcp.py` is the heavy module — two parallel client classes sharing the same pattern.
+`file_io.py` is a pure stdlib abstraction layer. `LocalFileIOService` is the tool-facing facade while `LocalFileIOBackend` owns the default Python local filesystem implementation. `file_io_sidecar.py` provides `RustFileIOBackend`, an opt-in alternative backend that delegates `read`/`write`/`edit` to a private `LocalFileIOBackend` but routes `grep`/`glob` to the Rust binary under `crates/lingtai-search-sidecar/` via short-lived JSON subprocess calls. `mail.py` is a high-level compatibility re-export across the Core Port and POSIX Adapter; it owns no implementation. `mcp.py` is the heavy module — two parallel client classes sharing the same pattern.
 
 ## State
 
@@ -73,5 +76,5 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 - Lazy start: both clients auto-connect on first `call_tool()`.
 - **Stale-resource recovery (issue #104):** `MCPClient` detects a dead stdio transport in `call_tool` and recovers. `_format_exception` renders `ClassName: message` (class-only when `str(e)` is empty) so an empty `ClosedResourceError` never surfaces as a blank `{"status":"error","message":""}`. `_is_stale_resource_error` flags closed/broken transports by class name + message substrings. On a stale error `call_tool` calls `restart()` (which `close()`s, clears `_ready`/`_error`, resets `_closed`/`_session`/`_loop`/`_thread`/`*_cm` so `start()` cannot lie) and retries **once**; a failed retry returns a helpful error naming the class and the retry failure. Non-stale errors surface the class name without churning the subprocess. `HTTPMCPClient` reuses `MCPClient._format_exception` for its connect error only — it has no stale-resource restart (stdio is the reported transport). Tests: `tests/test_mcp_closed_resource_restart.py`.
 - `mcp.py` has significant code duplication between the two classes — same `call_tool()`, `list_tools()`, `_run_loop()`, `_async_cleanup()` pattern.
-- `mail.py` is a thin shim — the real implementation lives in `lingtai.kernel.services.mail`.
+- `mail.py` is a compatibility-only alias surface. The normative boundary is `lingtai.kernel.mail_transport.MailTransportPort`; the production implementation is `lingtai.adapters.posix.mail.PosixFilesystemMailAdapter`. The legacy public names remain aliases, not a second implementation or a Core shim.
 - `file_io_sidecar.py` is the **default native backend** for `Agent`-created file-I/O services. `default_file_io_service` is the factory that `Agent.__init__` calls; it consults `LINGTAI_FILE_IO_BACKEND` (`auto` / `rust` / `python`, default `auto`) and `resolve_sidecar_binary` to pick between Rust and the pure-Python `LocalFileIOBackend`. Resolver priority: explicit `binary_path=` > `LINGTAI_FILE_IO_SIDECAR` env > `LINGTAI_SEARCH_SIDECAR` (legacy) env > packaged `lingtai/bin/` binary (shipped in platform-specific wheels by `setup.py`) > dev-tree `crates/lingtai-search-sidecar/target/{release,debug}/`. The strict `SidecarAdapter()` constructor still ignores packaged / dev-tree sources — opt-in callers see `not_configured` rather than picking up a stale binary. Defaults (`DEFAULT_*` constants) are imported from `file_io.py` so both backends stay in lock-step. Cargo is **not** required for install or the normal test suite — tests use a Python-script "sidecar"; only `test_rust_sidecar_integration_grep_and_glob` is cargo-gated.

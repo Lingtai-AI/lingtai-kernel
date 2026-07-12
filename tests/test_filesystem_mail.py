@@ -1,4 +1,4 @@
-"""Tests for FilesystemMailService — filesystem-based mail delivery."""
+"""Tests for PosixFilesystemMailAdapter — filesystem-based mail delivery."""
 from __future__ import annotations
 
 import json
@@ -12,13 +12,13 @@ from ._agent_dir_helpers import make_agent_dir as _make_agent_dir
 class TestSend:
 
     def test_send_creates_message(self, tmp_path):
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = _make_agent_dir(tmp_path, "recip01")
         (recip_dir / "mailbox" / "inbox").mkdir(parents=True)
 
-        svc = FilesystemMailService(sender_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(sender_dir, mailbox_rel="mailbox")
         result = svc.send(str(recip_dir), {"message": "hello", "subject": "test"})
         assert result is None  # success
 
@@ -31,13 +31,13 @@ class TestSend:
 
     def test_send_injects_mailbox_metadata(self, tmp_path):
         """send() must inject _mailbox_id and received_at for mail intrinsic."""
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = _make_agent_dir(tmp_path, "recip01")
         (recip_dir / "mailbox" / "inbox").mkdir(parents=True)
 
-        svc = FilesystemMailService(sender_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(sender_dir, mailbox_rel="mailbox")
         result = svc.send(str(recip_dir), {"message": "hello"})
         assert result is None
 
@@ -50,7 +50,7 @@ class TestSend:
         assert data["received_at"].endswith("Z")  # UTC format
 
     def test_send_copies_attachments(self, tmp_path):
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = _make_agent_dir(tmp_path, "recip01")
@@ -60,7 +60,7 @@ class TestSend:
         att = sender_dir / "report.txt"
         att.write_text("data")
 
-        svc = FilesystemMailService(sender_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(sender_dir, mailbox_rel="mailbox")
         result = svc.send(str(recip_dir), {
             "message": "see attached",
             "attachments": [str(att)],
@@ -79,19 +79,19 @@ class TestSend:
         assert "report.txt" in data["attachments"][0]
 
     def test_send_fails_no_agent_json(self, tmp_path):
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         bad_dir = tmp_path / "noagent"
         bad_dir.mkdir()
 
-        svc = FilesystemMailService(sender_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(sender_dir, mailbox_rel="mailbox")
         result = svc.send(str(bad_dir), {"message": "hello"})
         assert result is not None  # error string
         assert "no agent" in result.lower()
 
     def test_send_fails_stale_heartbeat(self, tmp_path):
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = _make_agent_dir(tmp_path, "recip01")
@@ -99,19 +99,19 @@ class TestSend:
         # Write stale heartbeat
         (recip_dir / ".agent.heartbeat").write_text(str(time.time() - 10))
 
-        svc = FilesystemMailService(sender_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(sender_dir, mailbox_rel="mailbox")
         result = svc.send(str(recip_dir), {"message": "hello"})
         assert result is not None
         assert "not running" in result.lower()
 
     def test_send_self(self, tmp_path):
         """Send to own address should work (self-send)."""
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         agent_dir = _make_agent_dir(tmp_path, "agent01")
         (agent_dir / "mailbox" / "inbox").mkdir(parents=True)
 
-        svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
         result = svc.send(str(agent_dir), {"message": "note to self"})
         assert result is None
 
@@ -122,13 +122,13 @@ class TestSend:
         assert data["message"] == "note to self"
 
     def test_send_fails_missing_attachment(self, tmp_path):
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = _make_agent_dir(tmp_path, "recip01")
         (recip_dir / "mailbox" / "inbox").mkdir(parents=True)
 
-        svc = FilesystemMailService(sender_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(sender_dir, mailbox_rel="mailbox")
         result = svc.send(str(recip_dir), {
             "message": "see attached",
             "attachments": ["/nonexistent/file.txt"],
@@ -138,7 +138,7 @@ class TestSend:
 
     def test_send_to_human_skips_heartbeat(self, tmp_path):
         """Human recipients (admin=null) don't need a heartbeat."""
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         human_dir = tmp_path / "human01"
@@ -150,7 +150,7 @@ class TestSend:
         (human_dir / "mailbox" / "inbox").mkdir(parents=True)
         # No .agent.heartbeat file — should still deliver
 
-        svc = FilesystemMailService(sender_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(sender_dir, mailbox_rel="mailbox")
         result = svc.send(str(human_dir), {"message": "hello human"})
         assert result is None  # success
 
@@ -161,7 +161,7 @@ class TestSend:
         assert msg["message"] == "hello human"
 
     def test_send_fails_no_heartbeat_file(self, tmp_path):
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = tmp_path / "recip01"
@@ -172,20 +172,20 @@ class TestSend:
         }))
         # No .agent.heartbeat file
 
-        svc = FilesystemMailService(sender_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(sender_dir, mailbox_rel="mailbox")
         result = svc.send(str(recip_dir), {"message": "hello"})
         assert result is not None
         assert "not running" in result.lower()
 
     def test_send_atomic_write(self, tmp_path):
         """Verify no .tmp file is left behind after successful send."""
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = _make_agent_dir(tmp_path, "recip01")
         (recip_dir / "mailbox" / "inbox").mkdir(parents=True)
 
-        svc = FilesystemMailService(sender_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(sender_dir, mailbox_rel="mailbox")
         svc.send(str(recip_dir), {"message": "hello"})
 
         inbox = recip_dir / "mailbox" / "inbox"
@@ -197,13 +197,13 @@ class TestSend:
 class TestListen:
 
     def test_listen_detects_new_message(self, tmp_path):
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         agent_dir = _make_agent_dir(tmp_path, "agent01")
         (agent_dir / "mailbox" / "inbox").mkdir(parents=True)
 
         received = []
-        svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
         svc.listen(on_message=lambda p: received.append(p))
 
         # Simulate incoming mail (another agent writes to our inbox)
@@ -220,7 +220,7 @@ class TestListen:
         assert received[0]["message"] == "hi"
 
     def test_listen_ignores_existing_messages(self, tmp_path):
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         agent_dir = _make_agent_dir(tmp_path, "agent01")
         inbox = agent_dir / "mailbox" / "inbox"
@@ -232,20 +232,20 @@ class TestListen:
         (old / "message.json").write_text(json.dumps({"message": "old"}))
 
         received = []
-        svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
         svc.listen(on_message=lambda p: received.append(p))
         time.sleep(1.0)
         svc.stop()
         assert len(received) == 0
 
     def test_listen_detects_multiple_messages(self, tmp_path):
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         agent_dir = _make_agent_dir(tmp_path, "agent01")
         (agent_dir / "mailbox" / "inbox").mkdir(parents=True)
 
         received = []
-        svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
         svc.listen(on_message=lambda p: received.append(p))
 
         for i in range(3):
@@ -262,10 +262,10 @@ class TestListen:
         assert messages == ["msg-0", "msg-1", "msg-2"]
 
     def test_stop_is_idempotent(self, tmp_path):
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         agent_dir = _make_agent_dir(tmp_path, "agent01")
-        svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
         # stop without listen should not raise
         svc.stop()
         svc.stop()
@@ -274,17 +274,17 @@ class TestListen:
 class TestAddress:
 
     def test_address_returns_working_dir_name(self, tmp_path):
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         agent_dir = _make_agent_dir(tmp_path, "agent01")
-        svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
         assert svc.address == agent_dir.name
 
     def test_address_is_str(self, tmp_path):
-        from lingtai.kernel.services.mail import FilesystemMailService
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
         agent_dir = _make_agent_dir(tmp_path, "agent01")
-        svc = FilesystemMailService(agent_dir, mailbox_rel="mailbox")
+        svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
         assert isinstance(svc.address, str)
 
 
@@ -294,7 +294,7 @@ def test_pseudo_agent_outbox_pickup(tmp_path):
     import json
     import threading
     import time
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
     # Two sibling folders under a shared parent.
     base = tmp_path
@@ -327,7 +327,7 @@ def test_pseudo_agent_outbox_pickup(tmp_path):
         received.append(payload)
         received_event.set()
 
-    svc = FilesystemMailService(
+    svc = PosixFilesystemMailAdapter(
         working_dir=my_dir,
         pseudo_agent_subscriptions=["../human"],
     )
@@ -372,7 +372,7 @@ def test_pseudo_agent_outbox_polled_before_blocking_inbox_scan(tmp_path):
     """Pseudo-agent outbox delivery should not wait behind an own-inbox scan."""
     import json
     import threading
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
     base = tmp_path
     pseudo_dir = base / "human"
@@ -426,7 +426,7 @@ def test_pseudo_agent_outbox_polled_before_blocking_inbox_scan(tmp_path):
         received.append(payload)
         received_event.set()
 
-    svc = FilesystemMailService(
+    svc = PosixFilesystemMailAdapter(
         working_dir=my_dir,
         pseudo_agent_subscriptions=["../human"],
     )
@@ -452,7 +452,7 @@ def test_pseudo_agent_outbox_polled_before_blocking_inbox_scan(tmp_path):
 def test_seen_inbox_entries_skip_stat_before_is_dir(tmp_path):
     """Already-seen inbox names should not pay an is_dir/stat call each tick."""
     import threading
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
     agent_dir = _make_agent_dir(tmp_path, "agent_a")
     real_inbox = agent_dir / "mailbox" / "inbox"
@@ -502,7 +502,7 @@ def test_seen_inbox_entries_skip_stat_before_is_dir(tmp_path):
             return self.path / child
 
     received: list[dict] = []
-    svc = FilesystemMailService(working_dir=agent_dir)
+    svc = PosixFilesystemMailAdapter(working_dir=agent_dir)
     svc._seen.add("already-seen")
     svc._inbox_dir = SeenInboxDir(real_inbox)
     svc.listen(on_message=lambda p: received.append(p))
@@ -524,7 +524,7 @@ def test_pseudo_outbox_oserror_does_not_skip_own_inbox_scan(tmp_path):
     error starved own-inbox delivery for the whole tick.
     """
     import threading
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
     agent_dir = _make_agent_dir(tmp_path, "agent_a")
     real_inbox = agent_dir / "mailbox" / "inbox"
@@ -536,7 +536,7 @@ def test_pseudo_outbox_oserror_does_not_skip_own_inbox_scan(tmp_path):
     pseudo_dir.mkdir()
     (pseudo_dir / "mailbox").mkdir()
 
-    svc = FilesystemMailService(
+    svc = PosixFilesystemMailAdapter(
         working_dir=agent_dir,
         pseudo_agent_subscriptions=["../human"],
     )
@@ -578,7 +578,7 @@ def test_runtime_probe_ack_from_pseudo_agent_outbox(tmp_path):
     """Explicit runtime probes get a structured ack from the real poller."""
     import json
     import time
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
     base = tmp_path
     pseudo_dir = base / "human"
@@ -615,7 +615,7 @@ def test_runtime_probe_ack_from_pseudo_agent_outbox(tmp_path):
     (msg_dir / "message.json").write_text(json.dumps(probe))
 
     received: list[dict] = []
-    svc = FilesystemMailService(
+    svc = PosixFilesystemMailAdapter(
         working_dir=my_dir,
         pseudo_agent_subscriptions=["../human"],
     )
@@ -654,7 +654,7 @@ def test_pseudo_agent_outbox_lost_race_rollback(tmp_path):
     import json
     import threading
     import time
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
     base = tmp_path
     pseudo_dir = base / "human"
@@ -693,10 +693,10 @@ def test_pseudo_agent_outbox_lost_race_rollback(tmp_path):
         received_b.append(payload)
         b_evt.set()
 
-    svc_a = FilesystemMailService(
+    svc_a = PosixFilesystemMailAdapter(
         working_dir=a_dir, pseudo_agent_subscriptions=["../human"]
     )
-    svc_b = FilesystemMailService(
+    svc_b = PosixFilesystemMailAdapter(
         working_dir=b_dir, pseudo_agent_subscriptions=["../human"]
     )
     svc_a.listen(on_message=on_a)
@@ -750,7 +750,7 @@ def test_pseudo_agent_outbox_skips_non_matching_to(tmp_path):
     """Messages addressed to a different agent are not claimed."""
     import json
     import time
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
     base = tmp_path
     pseudo_dir = base / "human"
@@ -773,7 +773,7 @@ def test_pseudo_agent_outbox_skips_non_matching_to(tmp_path):
     (msg_dir / "message.json").write_text(json.dumps(msg))
 
     received: list[dict] = []
-    svc = FilesystemMailService(
+    svc = PosixFilesystemMailAdapter(
         working_dir=my_dir,
         pseudo_agent_subscriptions=["../human"],
     )

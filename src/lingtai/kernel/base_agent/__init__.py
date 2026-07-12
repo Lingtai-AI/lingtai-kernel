@@ -254,7 +254,7 @@ class BaseAgent:
     Services (all optional):
         - ``service`` (LLMService): The brain — thinking, generating text.
         - ``file_io`` (FileIOService): File access — backs read/edit/write/glob/grep.
-        - ``mail_service`` (MailService): Message transport — backs mail intrinsic.
+        - ``mail_service`` (MailTransportPort): Message transport — backs mail intrinsic.
         - ``event_journal`` (EventJournalPort): Durable structured event append.
 
     Missing service = intrinsics backed by it are auto-disabled.

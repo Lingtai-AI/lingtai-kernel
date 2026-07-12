@@ -58,7 +58,8 @@ def test_facade_objects_are_canonical_kernel_objects():
     import lingtai.kernel.config
     import lingtai.kernel.message
     import lingtai.kernel.services.logging
-    import lingtai.kernel.services.mail
+    import lingtai.kernel.mail_transport
+    import lingtai.adapters.posix.mail
     import lingtai.kernel.state
     import lingtai.kernel.types
 
@@ -69,8 +70,14 @@ def test_facade_objects_are_canonical_kernel_objects():
     assert lingtai.MSG_REQUEST is lingtai.kernel.message.MSG_REQUEST
     assert lingtai.MSG_USER_INPUT is lingtai.kernel.message.MSG_USER_INPUT
     assert lingtai.UnknownToolError is lingtai.kernel.types.UnknownToolError
-    assert lingtai.MailService is lingtai.kernel.services.mail.MailService
-    assert lingtai.FilesystemMailService is lingtai.kernel.services.mail.FilesystemMailService
+    # After the mail Ports & Adapters split, the Port is canonical in
+    # lingtai.kernel.mail_transport and the concrete transport is owned by the
+    # POSIX adapter; the back-compat public name resolves to the adapter class.
+    assert lingtai.MailService is lingtai.kernel.mail_transport.MailTransportPort
+    assert (
+        lingtai.FilesystemMailService
+        is lingtai.adapters.posix.mail.PosixFilesystemMailAdapter
+    )
     assert lingtai.LoggingService is lingtai.kernel.services.logging.LoggingService
     assert lingtai.JSONLLoggingService is lingtai.kernel.services.logging.JSONLLoggingService
 

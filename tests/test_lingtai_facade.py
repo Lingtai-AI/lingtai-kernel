@@ -93,7 +93,8 @@ def test_facade_names_match_canonical_objects():
     import lingtai.kernel.config
     import lingtai.kernel.message
     import lingtai.kernel.services.logging
-    import lingtai.kernel.services.mail
+    import lingtai.kernel.mail_transport
+    import lingtai.adapters.posix.mail
     import lingtai.kernel.state
     import lingtai.kernel.types
     import lingtai.services.file_io
@@ -137,10 +138,10 @@ def test_facade_names_match_canonical_objects():
         is lingtai.services.file_io_sidecar.resolve_sidecar_binary
     )
 
-    assert lingtai.MailService is lingtai.kernel.services.mail.MailService
+    assert lingtai.MailService is lingtai.kernel.mail_transport.MailTransportPort
     assert (
         lingtai.FilesystemMailService
-        is lingtai.kernel.services.mail.FilesystemMailService
+        is lingtai.adapters.posix.mail.PosixFilesystemMailAdapter
     )
     assert lingtai.LoggingService is lingtai.kernel.services.logging.LoggingService
     assert lingtai.JSONLLoggingService is lingtai.kernel.services.logging.JSONLLoggingService

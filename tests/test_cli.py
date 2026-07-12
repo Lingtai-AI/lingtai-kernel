@@ -73,7 +73,7 @@ def test_load_init_validation_error(tmp_path):
 
 @patch("lingtai.cli.LLMService")
 @patch("lingtai.cli.Agent")
-@patch("lingtai.cli.FilesystemMailService")
+@patch("lingtai.cli.PosixFilesystemMailAdapter")
 def test_build_agent_constructs_correctly(mock_mail, mock_agent, mock_llm, tmp_path):
     from lingtai.cli import load_init, build_agent
     _write_init(tmp_path)
@@ -162,7 +162,7 @@ def test_resolve_env_no_env_name():
 
 @patch("lingtai.cli.LLMService")
 @patch("lingtai.cli.Agent")
-@patch("lingtai.cli.FilesystemMailService")
+@patch("lingtai.cli.PosixFilesystemMailAdapter")
 def test_build_agent_resolves_api_key_env(mock_mail, mock_agent, mock_llm, tmp_path):
     """api_key_env resolves from environment, overriding raw api_key."""
     from lingtai.cli import load_init, build_agent
@@ -187,7 +187,7 @@ def test_build_agent_resolves_api_key_env(mock_mail, mock_agent, mock_llm, tmp_p
 
 @patch("lingtai.cli.LLMService")
 @patch("lingtai.cli.Agent")
-@patch("lingtai.cli.FilesystemMailService")
+@patch("lingtai.cli.PosixFilesystemMailAdapter")
 def test_build_agent_env_file_loaded(mock_mail, mock_agent, mock_llm, tmp_path):
     """env_file is loaded before resolving env vars."""
     from lingtai.cli import load_init, build_agent
@@ -215,7 +215,7 @@ def test_build_agent_env_file_loaded(mock_mail, mock_agent, mock_llm, tmp_path):
 
 @patch("lingtai.cli.LLMService")
 @patch("lingtai.cli.Agent")
-@patch("lingtai.cli.FilesystemMailService")
+@patch("lingtai.cli.PosixFilesystemMailAdapter")
 def test_build_agent_env_file_overwrites_on_refresh_marker(mock_mail, mock_agent, mock_llm, tmp_path):
     """Refresh relaunches should let an edited env_file replace stale
     inherited process environment values before resolving api_key_env.
@@ -248,7 +248,7 @@ def test_build_agent_env_file_overwrites_on_refresh_marker(mock_mail, mock_agent
 
 @patch("lingtai.cli.LLMService")
 @patch("lingtai.cli.Agent")
-@patch("lingtai.cli.FilesystemMailService")
+@patch("lingtai.cli.PosixFilesystemMailAdapter")
 def test_build_agent_passes_addons(mock_mail, mock_agent, mock_llm, tmp_path):
     """Addons from init.json are handled by _setup_from_init, not constructor."""
     from lingtai.cli import load_init, build_agent
@@ -274,7 +274,7 @@ def test_build_agent_passes_addons(mock_mail, mock_agent, mock_llm, tmp_path):
 
 @patch("lingtai.cli.LLMService")
 @patch("lingtai.cli.Agent")
-@patch("lingtai.cli.FilesystemMailService")
+@patch("lingtai.cli.PosixFilesystemMailAdapter")
 def test_build_agent_resolves_addon_env(mock_mail, mock_agent, mock_llm, tmp_path):
     """Addon *_env fields are resolved by _setup_from_init via init.json."""
     from lingtai.cli import load_init, build_agent
@@ -306,7 +306,7 @@ def test_build_agent_resolves_addon_env(mock_mail, mock_agent, mock_llm, tmp_pat
 
 @patch("lingtai.cli.LLMService")
 @patch("lingtai.cli.Agent")
-@patch("lingtai.cli.FilesystemMailService")
+@patch("lingtai.cli.PosixFilesystemMailAdapter")
 def test_build_agent_no_addons(mock_mail, mock_agent, mock_llm, tmp_path):
     """No addons field — _setup_from_init handles this gracefully."""
     from lingtai.cli import load_init, build_agent

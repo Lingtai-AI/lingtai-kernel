@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from lingtai.adapters.posix.event_journal import PosixJsonlEventJournalAdapter
+from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 from lingtai.kernel.config_resolve import (
     resolve_env,
     load_env_file,
@@ -17,7 +18,6 @@ from lingtai.init_schema import validate_init
 from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 from lingtai.agent import Agent
 from lingtai.kernel.process_match import match_agent_run
-from lingtai.kernel.services.mail import FilesystemMailService
 
 
 def load_init(working_dir: Path) -> dict:
@@ -117,7 +117,7 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
         provider_defaults=provider_defaults,
     )
 
-    mail_service = FilesystemMailService(
+    mail_service = PosixFilesystemMailAdapter(
         working_dir=working_dir,
         pseudo_agent_subscriptions=m.get("pseudo_agent_subscriptions", ["../human"]),
     )
