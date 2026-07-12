@@ -37,6 +37,7 @@ from lingtai.kernel.tool_glossary import append_tool_glossary
 from lingtai.kernel.loop_guard import LoopGuard
 from lingtai.kernel.meta_block import build_meta
 from lingtai.kernel.tool_executor import ToolExecutor
+from lingtai.kernel.trace_redaction import redact_text
 from .run_dir import DaemonRunDir
 from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
 from .runtime import (
@@ -358,6 +359,22 @@ _OPENCODE_FAMILY_RESERVED_BACKEND_FLAGS = {
     "--format",
 }
 
+# MiMo Code additionally owns its session selectors: the daemon captures the
+# session id from the run's own JSONL and drives resume through
+# daemon(action='ask') (``mimo run --session <id> --format json``). Letting a
+# caller pass ``--session``/``--continue``/``--fork`` in backend_options would
+# hijack or fork the harness-owned session and silently break resume, so they
+# are reserved MiMo-specifically (generic opencode session flags are untouched).
+# Short aliases ``-s``/``-c`` cannot be emitted by backend_options — which only
+# creates long ``--flag`` tokens — but are listed for defense-in-depth.
+_MIMOCODE_RESERVED_BACKEND_FLAGS = _OPENCODE_FAMILY_RESERVED_BACKEND_FLAGS | {
+    "--session",
+    "-s",
+    "--continue",
+    "-c",
+    "--fork",
+}
+
 # Qwen Code owns the prompt/headless/approval flags that drive LingTai's
 # non-interactive harness; overriding them via backend_options would break
 # headless capture or re-enable interactive prompting.
@@ -533,7 +550,7 @@ _BACKEND_SPECS: dict[str, _BackendSpec] = {
         runner_attr="_run_mimocode_emanation",
         ask_handler_attr="_handle_ask_mimocode",
         ask_unsupported_msg=None,
-        reserved_flags=frozenset(_OPENCODE_FAMILY_RESERVED_BACKEND_FLAGS),
+        reserved_flags=frozenset(_MIMOCODE_RESERVED_BACKEND_FLAGS),
     ),
     "qwen-code": _BackendSpec(
         id="qwen-code",
@@ -618,7 +635,10 @@ def _validate_claude_backend_argv(backend: str, argv: list[str]) -> None:
 
       * Claude print-mode owns ``--print`` / ``--output-format stream-json``;
         interactive mode also owns ``--settings`` hooks + managed system prompt.
-      * OpenCode-family (``opencode``, ``mimocode``) own ``--format`` (JSON).
+      * OpenCode-family (``opencode``, ``mimocode``) own ``--format`` (JSON);
+        ``mimocode`` additionally reserves its session selectors
+        (``--session``/``-s``, ``--continue``/``-c``, ``--fork``) so a caller
+        cannot hijack the harness-owned MiMo session/resume.
       * Qwen Code owns ``--prompt`` / ``--yolo`` / ``--approval-mode``.
       * Oh-My-Pi owns ``--mode`` / approval-yolo / session flags.
 
@@ -4425,6 +4445,77 @@ class DaemonManager:
                 return t
         return ""
 
+    # MiMo Code JSONL contract (verified against MiMo Code 0.1.5). Unlike the
+    # permissive OpenCode extractor, MiMo tags every event with ``type`` and
+    # carries a nested ``part.text`` on MANY of them (reasoning, tool, step,
+    # step-start, ...), not only the final answer. The generic extractor would
+    # surface any of those ``part.text`` values as the daemon result, leaking
+    # internal reasoning/tool chatter. The user-visible answer is ONLY the
+    # ``type == "text"`` event's ``part.text`` string.
+    @staticmethod
+    def _mimocode_extract_answer_text(event: dict) -> str:
+        """Return the MiMo answer text: ``part.text`` iff ``type == 'text'``.
+
+        Reasoning/tool/step events also carry ``part.text``; they are ignored
+        so only the model's user-visible answer becomes the daemon result.
+        Returns "" for any non-answer or malformed event.
+        """
+        if event.get("type") != "text":
+            return ""
+        part = event.get("part")
+        if isinstance(part, dict):
+            text = part.get("text")
+            if isinstance(text, str) and text.strip():
+                return text
+        return ""
+
+    @staticmethod
+    def _mimocode_extract_error(event: dict) -> str | None:
+        """Return a bounded, secret-redacted detail for a MiMo error event.
+
+        A structured ``type == "error"`` event must make the daemon fail
+        loudly even when the process exits 0. MiMo Code 0.1.5's ``run.ts``
+        emits ``emit("error", { error: props.error })`` and derives the useful
+        detail as ``String(props.error.data.message)`` when present, else
+        ``String(props.error.name)``. We pin that official shape first
+        (``error.data.message`` → ``error.name``), then fall back to other safe
+        human-readable fields for defensiveness. The chosen detail is redacted
+        with the smallest suitable helper (``redact_text``) and only then
+        bounded to the daemon's existing <=500-char convention, so a secret can
+        never be split past the redactor; the raw nested payload is never
+        surfaced. Returns None for any non-error event.
+        """
+        if event.get("type") != "error":
+            return None
+        err = event.get("error")
+        # Priority chain of candidate detail sources, official 0.1.5 fields
+        # first (``error.data.message`` → ``error.name``), then defensive
+        # non-official fields. A truthy non-string or a whitespace-only
+        # higher-priority field must NOT suppress a later valid string, so we
+        # scan for the first nonblank string explicitly rather than relying on
+        # ``or`` short-circuiting.
+        candidates: list = []
+        if isinstance(err, dict):
+            data = err.get("data")
+            if isinstance(data, dict):
+                candidates.append(data.get("message"))  # official 0.1.5 shape
+            candidates.append(err.get("name"))  # official fallback
+            candidates.append(err.get("message"))  # defensive
+            candidates.append(err.get("detail"))  # defensive
+            candidates.append(err.get("reason"))  # defensive
+        elif isinstance(err, str):
+            candidates.append(err)
+        candidates.append(event.get("message"))  # top-level fallback
+
+        message: str | None = None
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                message = candidate
+                break
+        if message is None:
+            message = "MiMo Code reported a structured error event"
+        return redact_text(message)[:500]
+
     def _run_opencode_emanation(
         self,
         em_id: str,
@@ -4438,6 +4529,8 @@ class DaemonManager:
         backend_name: str = "opencode",
         session_state_key: str = "opencode_session_id",
         cmd_prefix: list[str] | None = None,
+        text_extractor: Callable[[dict], str] | None = None,
+        error_detector: Callable[[dict], str | None] | None = None,
     ) -> str:
         """Run an OpenCode-family CLI session as the emanation backend.
 
@@ -4451,10 +4544,16 @@ class DaemonManager:
         by ``daemon(action='ask')`` to resume the session.
 
         OpenCode-family event field naming is less standardized than
-        claude-code or codex, so the parser is intentionally permissive.
-        See ``_opencode_extract_text`` / ``_opencode_extract_session_id``
-        for the shapes accepted.
+        claude-code or codex, so the default parser is intentionally
+        permissive. ``text_extractor`` overrides how answer text is pulled from
+        an event (MiMo Code passes a strict ``type == "text"``-only extractor so
+        reasoning/tool/step ``part.text`` never leaks as the answer);
+        ``error_detector`` lets a backend recognize a structured error event and
+        fail loudly even on exit 0 (MiMo Code's ``type == "error"``). See
+        ``_opencode_extract_text`` / ``_opencode_extract_session_id`` for the
+        default shapes accepted.
         """
+        extract_text = text_extractor or self._opencode_extract_text
         if cancel_event.is_set():
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
@@ -4516,6 +4615,7 @@ class DaemonManager:
         text_chunks: list[str] = []
         final_text: str | None = None
         final_is_error = False
+        error_detail: str | None = None
         any_event = False
 
         def _store_session_id(sid: str) -> None:
@@ -4555,7 +4655,14 @@ class DaemonManager:
                 if sid:
                     _store_session_id(sid)
 
-                text = self._opencode_extract_text(event)
+                # A structured backend error must fail the run loudly even when
+                # the process later exits 0 (MiMo Code's ``type == "error"``).
+                if error_detector is not None:
+                    detail = error_detector(event)
+                    if detail is not None:
+                        error_detail = detail
+
+                text = extract_text(event)
                 if text:
                     text_chunks.append(text)
                     run_dir.record_cli_output(text, stream="stdout")
@@ -4583,6 +4690,17 @@ class DaemonManager:
             self._unregister_cli_proc(proc, group_id=run_dir.group_id)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+
+        # A structured error event is a terminal failure regardless of exit
+        # code — a MiMo run that reports ``type:error`` then exits 0 must not
+        # masquerade as success. The detail is already bounded + redacted by
+        # the detector.
+        if error_detail is not None:
+            exc = RuntimeError(
+                f"{backend_name} CLI reported a structured error: {error_detail}"
+            )
+            run_dir.mark_failed(exc)
+            raise exc
 
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
@@ -4629,14 +4747,21 @@ class DaemonManager:
 
         MiMo Code's npm package ``@mimo-ai/cli`` exposes the ``mimo``
         executable and an OpenCode-derived ``run --format json`` command, so
-        the existing defensive OpenCode JSONL parser is reused with a distinct
-        session-id field in daemon.json.
+        the OpenCode-family runner (session capture, argv placement, non-JSON
+        tolerance) is reused with a distinct session-id field. MiMo's JSONL
+        contract (0.1.5) differs from generic OpenCode in two ways the shared
+        runner is told about: the user-visible answer is ONLY the
+        ``type == "text"`` event's nested ``part.text`` (reasoning/tool/step
+        events also carry ``part.text`` and must be ignored), and a structured
+        ``type == "error"`` event is a terminal failure even on exit 0.
         """
         return self._run_opencode_emanation(
             em_id, run_dir, task, cancel_event, timeout_event, backend_argv,
             executable="mimo",
             backend_name="mimocode",
             session_state_key="mimocode_session_id",
+            text_extractor=self._mimocode_extract_answer_text,
+            error_detector=self._mimocode_extract_error,
         )
 
     def _run_oh_my_pi_emanation(
@@ -4962,6 +5087,8 @@ class DaemonManager:
         backend_name: str = "opencode",
         session_state_key: str = "opencode_session_id",
         build_resume_cmd: Callable[[str, str, str], list[str]] | None = None,
+        text_extractor: Callable[[dict], str] | None = None,
+        error_detector: Callable[[dict], str | None] | None = None,
     ) -> dict:
         """Dispatch an OpenCode-family session-resume follow-up off the caller's turn.
 
@@ -4974,6 +5101,9 @@ class DaemonManager:
         ``build_resume_cmd(executable, session_id, message)`` overrides the
         argv for backends whose resume shape differs (e.g. Oh-My-Pi's
         ``omp --mode json --approval-mode yolo --session <id> <message>``).
+        ``text_extractor`` / ``error_detector`` apply the same answer/error
+        contract to the resume stream that the initial run used (MiMo Code
+        passes its strict ``type:text`` / ``type:error`` handlers).
         """
         run_dir = entry.get("run_dir")
         if run_dir is None:
@@ -5037,7 +5167,8 @@ class DaemonManager:
             pass
 
         ask_future = self._ask_pool.submit(
-            self._run_ask_opencode_stream, em_id, entry, proc, run_dir, backend_name,
+            self._run_ask_opencode_stream, em_id, entry, proc, run_dir,
+            backend_name, text_extractor, error_detector,
         )
         ask_future.add_done_callback(
             lambda f, eid=em_id: self._on_ask_done(eid, f)
@@ -5049,12 +5180,21 @@ class DaemonManager:
                            f"id='{em_id}') for progress and final reply"}
 
     def _handle_ask_mimocode(self, em_id: str, entry: dict, message: str) -> dict:
-        """Dispatch a MiMo Code ``mimo run --session`` follow-up."""
+        """Dispatch a MiMo Code ``mimo run --session`` follow-up.
+
+        Resume argv stays the harness-owned
+        ``mimo run --session <id> --format json <message>``; the MiMo
+        answer/error contract is applied to the resume stream too, so a
+        ``type:error`` follow-up fails loudly and reasoning/tool ``part.text``
+        never surfaces as the reply.
+        """
         return self._handle_ask_opencode(
             em_id, entry, message,
             executable="mimo",
             backend_name="mimocode",
             session_state_key="mimocode_session_id",
+            text_extractor=self._mimocode_extract_answer_text,
+            error_detector=self._mimocode_extract_error,
         )
 
     @staticmethod
@@ -5086,6 +5226,8 @@ class DaemonManager:
         proc: subprocess.Popen,
         run_dir: DaemonRunDir,
         backend_name: str = "opencode",
+        text_extractor: Callable[[dict], str] | None = None,
+        error_detector: Callable[[dict], str | None] | None = None,
     ) -> dict:
         """Background worker: stream an ``opencode run --session`` subprocess.
 
@@ -5093,8 +5235,12 @@ class DaemonManager:
         non-JSON lines are recorded verbatim, text is pulled from any
         plausible field, terminal-shaped events override intermediate
         text. Always clears ``ask_in_flight`` and detaches ``proc`` from
-        ``_cli_procs`` on exit.
+        ``_cli_procs`` on exit. ``text_extractor`` / ``error_detector`` mirror
+        the initial-run overrides so a resumed MiMo stream applies the same
+        answer/error contract (only ``type:text`` surfaces; ``type:error``
+        fails the follow-up even on exit 0).
         """
+        extract_text = text_extractor or self._opencode_extract_text
         stderr_thread = _spawn_stderr_drainer(
             proc, run_dir,
             thread_name=f"daemon-{backend_name}-ask-stderr-{em_id}",
@@ -5104,6 +5250,7 @@ class DaemonManager:
         text_chunks: list[str] = []
         final_text: str | None = None
         final_is_error = False
+        error_detail: str | None = None
         any_event = False
         timed_out = False
 
@@ -5129,7 +5276,11 @@ class DaemonManager:
                     continue
 
                 any_event = True
-                text = self._opencode_extract_text(event)
+                if error_detector is not None:
+                    detail = error_detector(event)
+                    if detail is not None:
+                        error_detail = detail
+                text = extract_text(event)
                 if text:
                     text_chunks.append(text)
                     run_dir.record_cli_output(text, stream="stdout")
@@ -5160,6 +5311,16 @@ class DaemonManager:
 
         if timed_out:
             err = f"{backend_name} run timed out after {self._timeout}s"
+            self._publish_followup_if_live(
+                em_id, status="follow-up failed", text=err, run_dir=run_dir,
+            )
+            return {"status": "error", "id": em_id, "message": err}
+
+        # A structured error event fails the follow-up regardless of exit code,
+        # so a resumed MiMo run that reports ``type:error`` then exits 0 does
+        # not masquerade as a successful reply. Detail is bounded + redacted.
+        if error_detail is not None:
+            err = f"{backend_name} CLI reported a structured error: {error_detail}"
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )

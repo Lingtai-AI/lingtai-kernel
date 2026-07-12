@@ -6,8 +6,8 @@ description: >
   MiMo-specific CLI flags (model selection, provider switches): it routes you
   to the installed CLI's live help via bash and shows how to translate that
   help into the generic `backend_options` mechanism. It is not a flag catalog.
-version: 0.1.0
-last_changed_at: "2026-07-09T19:22:58-07:00"
+version: 0.2.0
+last_changed_at: "2026-07-11T00:00:00-07:00"
 ---
 
 # MiMo Code Daemon Backend — Flag Discovery Entrypoint
@@ -58,20 +58,32 @@ decides its semantics (or rejects it).
 
 ## Harness boundary
 
-`mimocode` shares the OpenCode-family reserved list: `--format` is
-harness-owned (daemon progress/result extraction depends on `--format json`
-JSONL events), and passing it in `backend_options` refuses the whole batch
-before any process is spawned. Session resume is also harness-owned:
-`daemon(action="ask")` asynchronously runs
+`mimocode` reserves `--format` (daemon progress/result extraction depends on
+`--format json` JSONL events) plus its own session selectors — `--session`
+(`-s`), `--continue` (`-c`), and `--fork` — MiMo-specifically. Passing any of
+them in `backend_options` refuses the whole batch before any process is
+spawned, because session/resume is harness-owned: `daemon(action="ask")`
+asynchronously runs
 `mimo run --session <mimocode_session_id> --format json <message>`, with the
 session id captured from the first session-shaped JSON event into
-`daemon.json`. Do not re-set `--session` through `backend_options`.
+`daemon.json`. Non-session `backend_options` (e.g. `--model`) still pass
+through unchanged.
+
+## Verified JSONL answer/error contract (MiMo Code 0.1.5)
+
+MiMo tags every JSONL event with a `type` and carries a nested `part.text` on
+many of them (`reasoning`, `tool`, `step`, `step-start`, ...), not only the
+answer. LingTai surfaces the user-visible answer from **only** the
+`type == "text"` event's `part.text` string; reasoning/tool/step `part.text`
+is ignored and never becomes the daemon result. A structured
+`type == "error"` event makes the run fail loudly even when the process exits
+0; the human-visible detail is bounded (≤500 chars) and secret-redacted, not
+the raw nested payload. The same answer/error contract applies to the `ask`
+resume stream. Non-JSON stdout lines are still recorded as `cli_output`.
 
 Per-run `daemon_common` MCP injection is not wired for `mimocode` yet, so the
 MCP completion contract is not enforced on this backend; parent MCP
-registrations reach the run as prompt catalog only. Output parsing uses the
-permissive OpenCode-family JSONL parser — non-JSON stdout lines are still
-recorded as `cli_output`, never silently dropped.
+registrations reach the run as prompt catalog only.
 
 To debug what was actually sent, `daemon.json` records the raw
 `backend_options` object alongside the resolved `backend_argv` /
