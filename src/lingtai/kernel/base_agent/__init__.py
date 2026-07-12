@@ -2227,14 +2227,45 @@ class BaseAgent:
         ``tool_call_id`` is the provider-assigned id for this tool call,
         passed directly by ToolExecutor so no heuristic scan is needed.
 
+        For the live Task Card this freezes the matching row (final whole-second
+        elapsed + done marker) while other active rows keep ticking.  It runs on
+        the orchestrating thread in input order in both the sequential and
+        parallel paths, so it never touches a tool result — it only observes
+        completion — and always returns ``None`` for the card path.
+
         Large tool results no longer raise a ``large_tool_result`` system
         notification here.  They are ranked instead through
         ``_meta.agent_meta.current_tool_result_chars.top_results`` and digested
         via ``system(action="summarize")`` (see meta_block.current_tool_result_chars).
-        This hook is retained as a stable extension point; the large-result
-        reminder it once published has been removed.
         """
+        self._freeze_task_card_row(tool_call_id)
         return None
+
+    def _freeze_task_card_row(self, tool_call_id: str | None) -> None:
+        """Freeze the completed row for ``tool_call_id`` (best-effort, fail-open).
+
+        Records the row's final whole-second elapsed and marks it done, then
+        re-renders so the completed row shows its frozen value while any still
+        -active parallel rows keep ticking.  Never raises into tool execution.
+        """
+        ctx = self._telegram_task_card_context
+        if ctx is None:
+            return
+        try:
+            with ctx["_lock"]:
+                rows = ctx.get("rows", [])
+                now = self._task_card_clock(ctx)()
+                frozen = False
+                for r in rows:
+                    if r["call_id"] == tool_call_id and not r["done"]:
+                        r["elapsed_s"] = max(0, int(now - r["started"]))
+                        r["done"] = True
+                        frozen = True
+                        break
+                if frozen:
+                    self._render_task_card(ctx)
+        except Exception:
+            self._log_task_card_reverse_exception("freeze", tool_name="")
 
     def _on_tool_pre_dispatch_hook(
         self,
@@ -2243,11 +2274,15 @@ class BaseAgent:
         *,
         tool_call_id: str | None = None,
     ) -> None:
-        """Pre-dispatch hook: updates live Telegram Task Card — current step only.
+        """Pre-dispatch hook: opens/extends the live Telegram Task Card batch.
 
-        Single transient card shows only the current tool + capped reasoning.
-        Previous steps are replaced, not accumulated.  Card is created lazily
-        on the first tool call; direct-answer turns produce no card.
+        One row per tool call.  Parallel pre-dispatch callbacks are serialized
+        by ToolExecutor before any future starts, so the first active row of a
+        batch resets the current batch (bumping the generation and starting the
+        heartbeat) and subsequent pre-hooks append while any row is still
+        active.  Sequential tools therefore replace the prior completed batch
+        instead of growing unbounded history.  The card is created lazily on the
+        first tool call; direct-answer turns produce no card.
         """
         ctx = self._telegram_task_card_context
         if ctx is None:
@@ -2263,61 +2298,177 @@ class BaseAgent:
 
         action = tool_args.get("action", "")
         with ctx["_lock"]:
-            if ctx["card_message_id"] is None:
-                # Lazy create on first tool call. Reverse-call the private tool
-                # name (no ``action`` — the server forces the task-card action).
-                try:
-                    result = ctx["mcp_client"].call_tool(_TASK_CARD_TOOL, {
-                        "sub_action": "create",
-                        "account": ctx["account"],
-                        "chat_id": ctx["chat_id"],
-                        "tool": tool_name,
-                        "tool_action": action,
-                        "reasoning": reasoning,
-                    }, timeout=5.0)
-                except Exception:
-                    # Fail-open, but observable: the reverse call itself raised.
-                    self._log_task_card_reverse_exception("create", tool_name)
-                    return
-                # The MCP client never raises for a tool-level failure — it
-                # returns an error *dict*. Treat that as a real (fail-open)
-                # failure that must be observable, not as a fake success.
-                # Leaving card_message_id None means the next tool call retries
-                # the lazy create.
-                message_id = self._task_card_result_message_id(result)
-                if message_id is None:
-                    self._log_task_card_reverse_failure("create", tool_name, result)
-                else:
-                    ctx["card_message_id"] = message_id
+            rows = ctx.setdefault("rows", [])
+            # A batch is "active" while any row is not yet done.  The first row
+            # that arrives with no active predecessor starts a fresh batch: reset
+            # rows, bump the generation (so a stale heartbeat from the previous
+            # batch can't overwrite this one), and (re)start the heartbeat.
+            batch_active = any(not r["done"] for r in rows)
+            if not batch_active:
+                rows = []
+                ctx["rows"] = rows
+                ctx["generation"] = ctx.get("generation", 0) + 1
+                self._start_task_card_heartbeat(ctx)
+            rows.append({
+                "call_id": tool_call_id,
+                "tool": tool_name,
+                "tool_action": action,
+                "reasoning": reasoning,
+                "started": self._task_card_clock(ctx)(),
+                "elapsed_s": 0,
+                "done": False,
+            })
+            self._render_task_card(ctx)
+
+    def _render_task_card(self, ctx: dict) -> None:
+        """Send the current batch rows to the card (create lazily, else edit).
+
+        Caller holds ``ctx["_lock"]``.  Fail-open and observable: a reverse-call
+        failure keeps the existing card id and is logged content-free, never
+        raising into tool execution.  A recovery re-create adopts the new id.
+        """
+        payload_rows = self._task_card_payload_rows(ctx["rows"])
+        if ctx.get("card_message_id") is None:
+            try:
+                result = ctx["mcp_client"].call_tool(_TASK_CARD_TOOL, {
+                    "sub_action": "create",
+                    "account": ctx["account"],
+                    "chat_id": ctx["chat_id"],
+                    "rows": payload_rows,
+                }, timeout=5.0)
+            except Exception:
+                self._log_task_card_reverse_exception("create", "batch")
+                return
+            message_id = self._task_card_result_message_id(result)
+            if message_id is None:
+                self._log_task_card_reverse_failure("create", "batch", result)
             else:
-                # Edit same card — current step only. Reverse-call the private
-                # tool name (no ``action`` — the server forces it).
-                try:
-                    result = ctx["mcp_client"].call_tool(_TASK_CARD_TOOL, {
-                        "sub_action": "update",
-                        "card_message_id": ctx["card_message_id"],
-                        "tool": tool_name,
-                        "tool_action": action,
-                        "reasoning": reasoning,
-                    }, timeout=5.0)
-                except Exception:
-                    # Fail-open, but observable: the reverse call itself raised.
-                    self._log_task_card_reverse_exception("update", tool_name)
+                ctx["card_message_id"] = message_id
+        else:
+            try:
+                result = ctx["mcp_client"].call_tool(_TASK_CARD_TOOL, {
+                    "sub_action": "update",
+                    "card_message_id": ctx["card_message_id"],
+                    "rows": payload_rows,
+                }, timeout=5.0)
+            except Exception:
+                self._log_task_card_reverse_exception("update", "batch")
+                return
+            new_id = self._task_card_result_message_id(result)
+            if new_id is None:
+                self._log_task_card_reverse_failure("update", "batch", result)
+            elif new_id != ctx["card_message_id"]:
+                ctx["card_message_id"] = new_id
+
+    @staticmethod
+    def _task_card_clock(ctx: dict):
+        """Return the context's monotonic clock, defaulting to ``time.monotonic``.
+
+        Production always injects ``clock`` in ``_setup_telegram_task_card``; the
+        default keeps the hooks robust for a context built without one.
+        """
+        clock = ctx.get("clock")
+        if clock is not None:
+            return clock
+        import time
+        return time.monotonic
+
+    @staticmethod
+    def _task_card_payload_rows(rows: list) -> list:
+        """Project internal row state into the manager's render payload.
+
+        Only the display fields cross the reverse channel — the monotonic
+        ``started`` timestamp and the internal ``call_id`` stay in the kernel.
+        """
+        return [
+            {
+                "tool": r["tool"],
+                "tool_action": r["tool_action"],
+                "reasoning": r["reasoning"],
+                "elapsed_s": r["elapsed_s"],
+                "done": r["done"],
+            }
+            for r in rows
+        ]
+
+    def _task_card_heartbeat_tick(self, generation: int | None = None) -> None:
+        """One heartbeat step: refresh active-row elapsed and edit the card.
+
+        Best-effort and race-safe.  A no-op when the context is gone, when
+        ``generation`` names an older batch (a stale timer), or when every row
+        is already frozen (so the frozen last-behavior state is never
+        overwritten).  Uses the injected monotonic clock; never sends a new card.
+        """
+        ctx = self._telegram_task_card_context
+        if ctx is None:
+            return
+        with ctx["_lock"]:
+            if generation is not None and generation != ctx.get("generation"):
+                return
+            rows = ctx.get("rows", [])
+            if not any(not r["done"] for r in rows):
+                return
+            now = self._task_card_clock(ctx)()
+            for r in rows:
+                if not r["done"]:
+                    r["elapsed_s"] = max(0, int(now - r["started"]))
+            self._render_task_card(ctx)
+
+    # Mechanical heartbeat cadence (whole seconds) while any tool row is active.
+    _TASK_CARD_HEARTBEAT_INTERVAL = 1.0
+
+    def _start_task_card_heartbeat(self, ctx: dict) -> None:
+        """Start the once-per-second heartbeat (one thread for the whole turn).
+
+        Idempotent: a single turn-scoped thread is reused across batches — each
+        tick reads the *current* generation/rows, so a new batch is picked up
+        without spawning another thread, and the generation guard still stops a
+        stale write.  Spawning is gated on ``heartbeat_enabled`` so unit tests can
+        drive ticks deterministically without a real thread or real ``sleep``.
+        Caller holds ``ctx["_lock"]``.
+        """
+        if not ctx.get("heartbeat_enabled"):
+            return
+        if ctx.get("timer_thread") is not None:
+            return  # one heartbeat thread per turn is enough
+        import threading
+
+        stop_event = ctx.get("stop_event") or threading.Event()
+        ctx["stop_event"] = stop_event
+        sleep = ctx.get("sleep") or stop_event.wait
+
+        def _loop() -> None:
+            # Exit as soon as the turn ends (stop_event) or the context is torn
+            # down/replaced.  Sleep first so the initial render (done by the
+            # pre-dispatch hook) is not immediately duplicated.  Each tick reads
+            # the current generation, so a stale write is impossible even as the
+            # batch turns over under the thread.
+            while not stop_event.is_set():
+                if sleep(self._TASK_CARD_HEARTBEAT_INTERVAL):
+                    return  # stop_event was set during the wait
+                if self._telegram_task_card_context is not ctx:
                     return
-                # If the edit-recovery path re-created the card, adopt the new
-                # message_id so later updates/finalize target it.
-                new_id = self._task_card_result_message_id(result)
-                if new_id is None:
-                    # No usable message_id. This covers both an error dict and a
-                    # malformed success-shaped payload (e.g. ``{"status": "ok"}``
-                    # with no id): either way the update did not confirm a card,
-                    # so it must be observable rather than silently ignored.
-                    # Fail-open: keep the existing card id and surface the
-                    # failure through the content-free helper.
-                    self._log_task_card_reverse_failure("update", tool_name, result)
-                elif new_id != ctx["card_message_id"]:
-                    ctx["card_message_id"] = new_id
-                # A valid, unchanged message_id is a clean success — no warning.
+                self._task_card_heartbeat_tick()
+
+        thread = threading.Thread(
+            target=_loop, daemon=True, name="telegram-task-card-heartbeat",
+        )
+        ctx["timer_thread"] = thread
+        thread.start()
+
+    @staticmethod
+    def _stop_task_card_heartbeat(ctx: dict) -> None:
+        """Signal the heartbeat thread to stop promptly and join briefly.
+
+        Idempotent and best-effort; safe to call on a context that never started
+        a heartbeat (direct-answer turns, unit-test contexts).
+        """
+        stop_event = ctx.get("stop_event")
+        if stop_event is not None:
+            stop_event.set()
+        thread = ctx.get("timer_thread")
+        if thread is not None:
+            thread.join(timeout=2.0)
 
     @staticmethod
     def _task_card_result_error(result: object) -> bool:
@@ -2421,34 +2572,58 @@ class BaseAgent:
         if telegram_client is None:
             return
 
+        import time as _time
+
         self._telegram_task_card_context = {
             "mcp_client": telegram_client,
             "account": account,
             "chat_id": chat_id,
             "card_message_id": None,
-            "_lock": threading.Lock(),
+            # Re-entrant: the pre-dispatch/result hooks and the heartbeat thread
+            # all take this lock, and the hooks nest the render under it.
+            "_lock": threading.RLock(),
+            # Monotonic clock for elapsed measurement; injectable for tests.
+            "clock": _time.monotonic,
+            "rows": [],
+            "generation": 0,
+            # Production arms the real 1s heartbeat thread; unit tests leave this
+            # unset and drive ticks deterministically.
+            "heartbeat_enabled": True,
+            "stop_event": threading.Event(),
         }
         self._last_telegram_card_fingerprint = fp
 
     def _teardown_telegram_task_card(self) -> None:
-        """Finalize and clear turn-local Task Card context.
+        """Stop the heartbeat and freeze the resident card's last-behavior state.
 
-        Idempotent: safe to call multiple times.  If no card was ever
-        created (direct-answer turn), just clears the context silently.
+        Idempotent: safe to call multiple times.  If no card was ever created
+        (direct-answer turn), just clears the context silently.  The resident
+        card is left showing its concrete last batch — the tool rows with their
+        completed markers and final elapsed values — as a last-behavior record,
+        not a generic overall ``DONE`` headline (the normal assistant reply
+        communicates overall completion).  Any row still active at turn end is
+        frozen at its current elapsed so the card never keeps ticking.
         """
         ctx = self._telegram_task_card_context
         if ctx is None:
             return
         try:
+            self._stop_task_card_heartbeat(ctx)
             if ctx.get("card_message_id") is not None:
+                with ctx["_lock"]:
+                    now = self._task_card_clock(ctx)()
+                    for r in ctx.get("rows", []):
+                        if not r["done"]:
+                            r["elapsed_s"] = max(0, int(now - r["started"]))
+                            r["done"] = True
+                    payload_rows = self._task_card_payload_rows(ctx.get("rows", []))
                 # Reverse-call the private tool name (no ``action`` — the server
-                # forces the task-card action).
+                # forces the task-card action). Send the frozen rows so the card
+                # freezes on the concrete last behavior.
                 result = ctx["mcp_client"].call_tool(_TASK_CARD_TOOL, {
                     "sub_action": "finalize",
                     "card_message_id": ctx["card_message_id"],
-                    "tool": "",
-                    "tool_action": "",
-                    "reasoning": "",
+                    "rows": payload_rows,
                 }, timeout=5.0)
                 # A tool-level failure returns an error dict; surface it so a
                 # card left un-finalized is observable (still never blocking).

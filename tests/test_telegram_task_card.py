@@ -355,7 +355,12 @@ def test_hook_lazy_creates_card():
     assert client.calls[0][0] == _TASK_CARD_TOOL  # private tool name
     assert client.calls[0][1]["sub_action"] == "create"
     assert "action" not in client.calls[0][1]  # server forces the action
-    assert client.calls[0][1]["tool_action"] == "run"  # display label, not routing
+    # The tool renders as one row carrying its display label (not routing).
+    rows = client.calls[0][1]["rows"]
+    assert rows == [{
+        "tool": "bash", "tool_action": "run", "reasoning": "check",
+        "elapsed_s": 0, "done": False,
+    }]
     assert agent._telegram_task_card_context["card_message_id"] == "mybot:123:789"
 
 
@@ -374,8 +379,12 @@ def test_hook_second_tool_edits_same_card():
     assert client.calls[0][0] == _TASK_CARD_TOOL  # private tool name
     assert client.calls[0][1]["sub_action"] == "update"
     assert "action" not in client.calls[0][1]  # server forces the action
-    assert client.calls[0][1]["tool_action"] == ""  # no action in tool_args
     assert client.calls[0][1]["card_message_id"] == "mybot:123:789"
+    rows = client.calls[0][1]["rows"]
+    assert rows == [{
+        "tool": "read", "tool_action": "", "reasoning": "step 2",
+        "elapsed_s": 0, "done": False,
+    }]
 
 
 def test_no_tool_no_card():

@@ -162,6 +162,17 @@ class TelegramAccount:
         self._last_verified_at: str | None = None
         self._client: httpx.Client | None = None
 
+        # Resident Task Card message id per chat: {chat_id_str: compound_id}.
+        # Exactly one card stays resident per (account, chat); the next card
+        # deletes the tracked prior one (Jason #6667). Persisted in state.json so
+        # the deletion survives a refresh.  ``_state_lock`` serializes the
+        # read-modify-write of state.json across the poll thread and the
+        # orchestrating turn thread.
+        self._task_cards: dict[str, str] = {}
+        # Re-entrant so a card mutator can hold the lock across its
+        # read-modify-write and the nested ``_save_state`` snapshot.
+        self._state_lock = threading.RLock()
+
         self._load_state()
 
     # -- API helpers ---------------------------------------------------------
@@ -1058,32 +1069,84 @@ class TelegramAccount:
             self._last_update_id = data.get("last_update_id", 0)
             self._bot_info = data.get("bot_info")
             self._last_verified_at = data.get("last_verified_at")
+            self._task_cards = self._normalize_task_cards(data.get("task_cards"))
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Failed to load Telegram state: %s", e)
+
+    @staticmethod
+    def _normalize_task_cards(raw: object) -> dict[str, str]:
+        """Coerce a persisted ``task_cards`` value into a clean {chat: id} map.
+
+        Backward-compatible and defensive: a missing or wrongly-typed value
+        becomes ``{}`` (rather than losing unrelated state), and any non-string
+        key or value is dropped so a malformed record can never crash a later
+        create or resurrect a bogus id.
+        """
+        if not isinstance(raw, dict):
+            return {}
+        clean: dict[str, str] = {}
+        for chat, compound in raw.items():
+            if isinstance(chat, str) and isinstance(compound, str) and compound:
+                clean[chat] = compound
+        return clean
 
     def _save_state(self) -> None:
         path = self._state_path()
         if path is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "last_update_id": self._last_update_id,
-            "bot_info": self._bot_info,
-            "last_verified_at": self._last_verified_at,
-        }
-        fd, tmp = tempfile.mkstemp(
-            dir=str(path.parent),
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-                f.write("\n")
-            os.replace(tmp, path)
-        except Exception:
+        # Serialize the snapshot+write so a poll-thread offset update and a
+        # turn-thread task-card update cannot lose each other's field.
+        with self._state_lock:
+            data = {
+                "last_update_id": self._last_update_id,
+                "bot_info": self._bot_info,
+                "last_verified_at": self._last_verified_at,
+                "task_cards": dict(self._task_cards),
+            }
+            fd, tmp = tempfile.mkstemp(
+                dir=str(path.parent),
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+            )
             try:
-                os.unlink(tmp)
-            except FileNotFoundError:
-                pass
-            raise
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                    f.write("\n")
+                os.replace(tmp, path)
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except FileNotFoundError:
+                    pass
+                raise
+
+    # -- Resident Task Card id (one per account+chat) ------------------------
+
+    def get_task_card(self, chat_id: int) -> str | None:
+        """Return the persisted resident Task Card compound id for ``chat_id``.
+
+        ``None`` when no card is tracked for that chat.
+        """
+        with self._state_lock:
+            return self._task_cards.get(str(chat_id))
+
+    def set_task_card(self, chat_id: int, compound_id: str) -> None:
+        """Persist ``compound_id`` as the resident Task Card id for ``chat_id``.
+
+        Overwrites any previous id for the same chat and durably saves state so
+        the id survives a refresh.  Other chats and unrelated state are left
+        untouched.
+        """
+        with self._state_lock:
+            self._task_cards[str(chat_id)] = compound_id
+            self._save_state()
+
+    def clear_task_card(self, chat_id: int) -> None:
+        """Forget the resident Task Card id for ``chat_id`` and persist.
+
+        No-op when nothing is tracked for that chat.
+        """
+        with self._state_lock:
+            if self._task_cards.pop(str(chat_id), None) is not None:
+                self._save_state()

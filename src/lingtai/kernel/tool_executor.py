@@ -1039,6 +1039,51 @@ class ToolExecutor:
                 cancel_event=cancel_event,
             )
 
+    @staticmethod
+    def _invoke_result_hook(
+        on_result_hook: Callable | None,
+        tool_name: str,
+        args: dict,
+        result_msg: Any,
+        tc_id: str | None,
+    ) -> str | None:
+        """Fire the post-dispatch result hook, fail-open.
+
+        Returns the hook's intercept string (or ``None``).  A hook exception is
+        swallowed and logged content-free — it must never be caught by the
+        dispatch error handler and turned into a fake error, and must never
+        replace, reorder, mutate, or suppress a real tool result.
+        """
+        if on_result_hook is None:
+            return None
+        hook_result = getattr(result_msg, "content", None)
+        if hook_result is None:
+            hook_result = (
+                result_msg.get("result", result_msg)
+                if isinstance(result_msg, dict) else result_msg
+            )
+        try:
+            return on_result_hook(tool_name, args, hook_result, tool_call_id=tc_id)
+        except Exception:
+            return None
+
+    @classmethod
+    def _invoke_result_hook_observe(
+        cls,
+        on_result_hook: Callable | None,
+        tool_name: str,
+        args: dict,
+        result_msg: Any,
+        tc_id: str | None,
+    ) -> None:
+        """Fire the result hook purely to observe completion; ignore its return.
+
+        Used on the intercept path, where the tool's own intercept is
+        authoritative: the hook may record completion (Task Card row freeze) but
+        must not un-intercept, replace, reorder, or suppress the result.
+        """
+        cls._invoke_result_hook(on_result_hook, tool_name, args, result_msg, tc_id)
+
     def _execute_single(
         self,
         tc: ToolCall,
@@ -1182,6 +1227,13 @@ class ToolExecutor:
                     tc.name, result, tool_call_id=tc_id, tool_trace_id=trace_id,
                     status=status, elapsed_ms=timer.elapsed_ms,
                 )
+                # The post-dispatch hook still runs for an intercepted result so
+                # completion is observed (e.g. the Task Card row freezes), but the
+                # tool's own intercept wins — the hook's return value is ignored
+                # and can neither un-intercept nor replace the result.
+                self._invoke_result_hook_observe(
+                    on_result_hook, tc.name, args, result_msg, tc_id,
+                )
                 return result_msg, True, intercept_text
 
             # A-priori summary: the raw result is already durably logged above
@@ -1201,10 +1253,13 @@ class ToolExecutor:
                 collected_errors.append(f"{tc.name}: {err_msg}")
 
             if on_result_hook is not None:
-                hook_result = getattr(result_msg, "content", None)
-                if hook_result is None:
-                    hook_result = result_msg.get("result", result_msg) if isinstance(result_msg, dict) else result_msg
-                intercept = on_result_hook(tc.name, args, hook_result, tool_call_id=tc_id)
+                # Fail-open in its own scope: a raising result hook must never be
+                # caught by the dispatch handler below and turned into a fake
+                # dispatch error — it must not replace, mutate, or suppress a real
+                # tool result. An intercept the hook explicitly returns still wins.
+                intercept = self._invoke_result_hook(
+                    on_result_hook, tc.name, args, result_msg, tc_id,
+                )
                 if intercept is not None:
                     return result_msg, True, intercept
 
@@ -1252,6 +1307,15 @@ class ToolExecutor:
                 status="error", elapsed_ms=timer.elapsed_ms,
             )
             collected_errors.append(f"{tc.name}: {e}")
+            # A raised dispatch produces a normal error result, exactly as the
+            # parallel path does (``_run_one`` catches internally), so fire the
+            # completion hook here too — otherwise a crashing sequential tool's
+            # Task Card row keeps ticking until teardown. Observe-only: a raising
+            # hook cannot re-enter this handler, fake an intercept, or mutate the
+            # error, and the intercept return is intentionally ignored here.
+            self._invoke_result_hook_observe(
+                on_result_hook, tc.name, args, result_msg, tc_id,
+            )
             return result_msg, False, ""
 
     def _execute_sequential(
@@ -1643,6 +1707,11 @@ class ToolExecutor:
                     err_msg = result.get("message", "unknown error")
                     collected_errors.append(f"{tc.name}: {err_msg}")
                 if isinstance(result, dict) and result.get("intercept"):
+                    # Observe completion for the intercepted call too (Task Card
+                    # row freeze) without letting the hook override the intercept.
+                    self._invoke_result_hook_observe(
+                        on_result_hook, tc.name, args, result_msg, tc_id,
+                    )
                     tool_results.sort(key=lambda x: x[0])
                     return (
                         [r for _, r in tool_results],
@@ -1650,10 +1719,9 @@ class ToolExecutor:
                         result.get("text", ""),
                     )
                 if on_result_hook is not None:
-                    hook_result = getattr(result_msg, "content", None)
-                    if hook_result is None:
-                        hook_result = result_msg.get("result", result_msg) if isinstance(result_msg, dict) else result_msg
-                    intercept = on_result_hook(tc.name, args, hook_result, tool_call_id=tc_id)
+                    intercept = self._invoke_result_hook(
+                        on_result_hook, tc.name, args, result_msg, tc_id,
+                    )
                     if intercept is not None:
                         tool_results.sort(key=lambda x: x[0])
                         return [r for _, r in tool_results], True, intercept
