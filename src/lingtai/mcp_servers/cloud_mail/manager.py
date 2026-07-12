@@ -440,15 +440,21 @@ class CloudMailManager:
             key=_eid,
         )
         pushed = 0
+        watermark_id = last_id
         for r in new_rows:
+            email_id = _eid(r)
             if not acct.sender_allowed(r.get("sendEmail")):
+                watermark_id = email_id
                 continue
             if self._push_licc(acct, r):
                 pushed += 1
-        # Advance watermark to the max we observed regardless of allow-list,
-        # so filtered-out senders don't replay forever.
-        if max_id > last_id:
-            acct.watermark.set_last_email_id(max_id, seeded=True)
+                watermark_id = email_id
+                continue
+            # Preserve this row for retry. Higher rows must not advance the
+            # watermark past a failed allowed delivery.
+            break
+        if watermark_id > last_id:
+            acct.watermark.set_last_email_id(watermark_id, seeded=True)
         return pushed
 
     def _push_licc(self, acct: CloudMailAccount, row: dict) -> bool:
