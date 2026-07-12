@@ -12,26 +12,27 @@ from lingtai.kernel.message import Message, _make_message, MSG_REQUEST, MSG_USER
 from lingtai.kernel.state import AgentState
 from lingtai.kernel.types import UnknownToolError
 from tests._service_helpers import make_tool_result_mock_service as make_mock_service
+from tests._workdir_lease_helpers import make_test_lease
 
 
 
 
 def test_agent_no_name(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     assert agent.agent_name is None
     assert agent.nickname is None
     assert agent.working_dir == tmp_path / "test"
 
 
 def test_set_name_once(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     agent.set_name("悟空")
     assert agent.agent_name == "悟空"
 
 
 def test_set_name_twice_fails(tmp_path):
     """True name is immutable — cannot be set twice."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     agent.set_name("悟空")
     with pytest.raises(RuntimeError, match="True name already set"):
         agent.set_name("八戒")
@@ -39,14 +40,14 @@ def test_set_name_twice_fails(tmp_path):
 
 
 def test_set_name_empty_fails(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     with pytest.raises(ValueError, match="cannot be empty"):
         agent.set_name("")
 
 
 def test_agent_with_name_at_construction_is_immutable(tmp_path):
     """Name given at construction is a true name — immutable."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", agent_name="alice")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", agent_name="alice", workdir_lease=make_test_lease())
     assert agent.agent_name == "alice"
     with pytest.raises(RuntimeError, match="True name already set"):
         agent.set_name("bob")
@@ -54,7 +55,7 @@ def test_agent_with_name_at_construction_is_immutable(tmp_path):
 
 def test_nickname_mutable(tmp_path):
     """Nickname can be set and changed freely."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", agent_name="悟空")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", agent_name="悟空", workdir_lease=make_test_lease())
     assert agent.nickname is None
     agent.set_nickname("代码探索者")
     assert agent.nickname == "代码探索者"
@@ -64,7 +65,7 @@ def test_nickname_mutable(tmp_path):
 
 def test_nickname_clear(tmp_path):
     """Empty nickname clears it to None."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     agent.set_nickname("explorer")
     assert agent.nickname == "explorer"
     agent.set_nickname("")
@@ -74,7 +75,7 @@ def test_nickname_clear(tmp_path):
 def test_set_name_updates_manifest(tmp_path):
     import json
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     agent.set_name("悟空")
     manifest = json.loads((agent.working_dir / ".agent.json").read_text())
     assert manifest["agent_name"] == "悟空"
@@ -83,7 +84,7 @@ def test_set_name_updates_manifest(tmp_path):
 def test_nickname_in_manifest(tmp_path):
     import json
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", agent_name="悟空")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", agent_name="悟空", workdir_lease=make_test_lease())
     agent.set_nickname("代码探索者")
     manifest = json.loads((agent.working_dir / ".agent.json").read_text())
     assert manifest["agent_name"] == "悟空"
@@ -96,7 +97,7 @@ def test_nickname_in_manifest(tmp_path):
 
 def test_perform_refresh_saves_chat_history(tmp_path):
     """_perform_refresh saves chat history before self-restart."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease())
 
     save_calls = []
     agent._save_chat_history = lambda: save_calls.append(True)
@@ -110,7 +111,7 @@ def test_perform_refresh_saves_chat_history(tmp_path):
 
 def test_perform_refresh_no_launch_cmd_is_noop(tmp_path):
     """_perform_refresh with no _build_launch_cmd returns None is a no-op."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     assert agent._build_launch_cmd() is None
 
     log_calls = []
@@ -128,7 +129,7 @@ def test_worker_hang_system_notification_is_high_priority(tmp_path):
     import json
     from lingtai.kernel.base_agent.worker_recovery import publish_worker_hang_notification
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     artifact = "history/unfinished_turns/worker_still_running_test.json"
     ref_id = "worker_still_running:worker_still_running_test"
     event_id = publish_worker_hang_notification(
@@ -162,6 +163,7 @@ def test_agent_log_includes_kernel_runtime_identity(tmp_path):
         service=make_mock_service(),
         working_dir=tmp_path / "test",
         event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test"),
+        workdir_lease=make_test_lease(),
     )
     agent._runtime_identity_event_fields = {
         "kernel_version": "test-version",
@@ -231,7 +233,7 @@ def test_unknown_tool_error():
 def test_status_context_decomposition(tmp_path):
     """status() exposes a 'context' sub-block with system/tools/history/total
     token counts plus meta-line decomposition (fixed_tokens, growing_tokens)."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     agent.start()
     try:
         st = agent.status()

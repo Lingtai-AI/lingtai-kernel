@@ -9,6 +9,7 @@ import pytest
 
 from lingtai.agent import Agent
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._workdir_lease_helpers import make_test_lease
 
 
 
@@ -161,7 +162,7 @@ def test_file_capability_relative_paths_resolve_under_workdir(tmp_path):
 def test_base_agent_has_no_file_intrinsics(tmp_path):
     """BaseAgent should NOT have file intrinsics after phase 2."""
     from lingtai.kernel.base_agent import BaseAgent
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     for name in ("read", "write", "edit", "glob", "grep"):
         assert name not in agent._intrinsics, f"{name} should not be in BaseAgent intrinsics"
     agent.stop(timeout=1.0)
@@ -170,7 +171,7 @@ def test_base_agent_has_no_file_intrinsics(tmp_path):
 def test_base_agent_kernel_only(tmp_path):
     """BaseAgent should have exactly 5 intrinsics: email, system, psyche, soul, notification."""
     from lingtai.kernel.base_agent import BaseAgent
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease())
     assert set(agent._intrinsics.keys()) == {"email", "system", "psyche", "soul", "notification"}
     agent.stop(timeout=1.0)
 

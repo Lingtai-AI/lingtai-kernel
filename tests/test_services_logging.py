@@ -5,7 +5,10 @@ import sqlite3
 import threading
 from pathlib import Path
 
+import pytest
+
 from lingtai.adapters.posix.event_journal import PosixJsonlEventJournalAdapter
+from lingtai.adapters.posix.workdir_lease import PosixWorkdirLeaseAdapter
 from lingtai.kernel.services.logging import (
     CompositeLoggingService,
     JSONLLoggingService,
@@ -149,6 +152,7 @@ from unittest.mock import MagicMock
 from lingtai.kernel import BaseAgent, AgentState
 from lingtai.kernel.llm import ToolCall
 from lingtai.kernel.loop_guard import LoopGuard
+from tests._workdir_lease_helpers import make_test_lease
 
 
 
@@ -164,7 +168,7 @@ class TestBaseAgentLoggingIntegration:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
-            event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"),
+            event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"), workdir_lease=make_test_lease(),
         )
         agent.add_tool("greet", schema={"type": "object", "properties": {}}, handler=lambda args: {"status": "ok"})
 
@@ -203,7 +207,7 @@ class TestBaseAgentLoggingIntegration:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
-            event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"),
+            event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"), workdir_lease=make_test_lease(),
         )
         agent.add_tool("greet", schema={"type": "object", "properties": {}}, handler=lambda args: {"status": "ok"})
 
@@ -235,7 +239,7 @@ class TestBaseAgentLoggingIntegration:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
-            event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"),
+            event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"), workdir_lease=make_test_lease(),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
 
@@ -348,7 +352,7 @@ class TestSQLiteEventIndex:
             encoding="utf-8",
         )
 
-        result = rebuild_sqlite_event_index(tmp_path)
+        result = rebuild_sqlite_event_index(tmp_path, workdir_lease=PosixWorkdirLeaseAdapter(tmp_path))
         assert result["status"] == "ok"
         assert result["event_count"] == 2
 
@@ -376,7 +380,7 @@ class TestSQLiteEventIndex:
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
-            event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"),
+            event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"), workdir_lease=make_test_lease(),
         )
         agent._log("custom", value=123)
         agent._event_journal.close()
@@ -409,7 +413,7 @@ class TestSQLiteEventIndex:
         logs = tmp_path / "logs"
         logs.mkdir()
         (logs / "events.jsonl").write_text(json.dumps({"type": "alpha", "ts": 1}) + "\n", encoding="utf-8")
-        rebuild_sqlite_event_index(tmp_path)
+        rebuild_sqlite_event_index(tmp_path, workdir_lease=PosixWorkdirLeaseAdapter(tmp_path))
         sqlite_file = logs / "log.sqlite"
         before_mtime = sqlite_file.stat().st_mtime_ns
         for suffix in ("-wal", "-shm"):
@@ -454,7 +458,7 @@ class TestSQLiteEventIndex:
     def test_rebuild_missing_agent_dir_does_not_materialize_path(self, tmp_path):
         missing = tmp_path / "missing-agent"
         try:
-            rebuild_sqlite_event_index(missing)
+            rebuild_sqlite_event_index(missing, workdir_lease=PosixWorkdirLeaseAdapter(missing))
             assert False, "missing agent dir should fail before lock setup"
         except FileNotFoundError as exc:
             assert "agent directory not found" in str(exc)
@@ -484,7 +488,7 @@ class TestSQLiteEventIndex:
             encoding="utf-8",
         )
 
-        result = rebuild_sqlite_event_index(tmp_path)
+        result = rebuild_sqlite_event_index(tmp_path, workdir_lease=PosixWorkdirLeaseAdapter(tmp_path))
         assert result["event_count"] == 2
         assert result["chat_entry_count"] == 3
         assert result["source_count"] == 5
@@ -523,7 +527,7 @@ class TestSQLiteEventIndex:
             encoding="utf-8",
         )
 
-        result = rebuild_sqlite_event_index(tmp_path)
+        result = rebuild_sqlite_event_index(tmp_path, workdir_lease=PosixWorkdirLeaseAdapter(tmp_path))
         assert result["event_count"] == 0
         assert result["chat_entry_count"] == 2
 
@@ -617,7 +621,7 @@ class TestSQLiteEventIndex:
             encoding="utf-8",
         )
 
-        result = rebuild_sqlite_event_index(tmp_path)
+        result = rebuild_sqlite_event_index(tmp_path, workdir_lease=PosixWorkdirLeaseAdapter(tmp_path))
         assert result["event_count"] == 0
         assert result["chat_entry_count"] == 0
         assert result["token_entry_count"] == 2
@@ -674,7 +678,7 @@ class TestSQLiteEventIndex:
         svc.close()
 
         assert query_sqlite_event_index(tmp_path, "SELECT COUNT(*) AS n FROM events") == [{"n": 2}]
-        result = rebuild_sqlite_event_index(tmp_path)
+        result = rebuild_sqlite_event_index(tmp_path, workdir_lease=PosixWorkdirLeaseAdapter(tmp_path))
         assert result["event_count"] == 2
         rows = query_sqlite_event_index(tmp_path, "SELECT type FROM events ORDER BY ts")
         assert rows == [{"type": "first"}, {"type": "second"}]
@@ -688,7 +692,7 @@ class TestSQLiteEventIndex:
             encoding="utf-8",
         )
 
-        result = rebuild_sqlite_event_index(tmp_path)
+        result = rebuild_sqlite_event_index(tmp_path, workdir_lease=PosixWorkdirLeaseAdapter(tmp_path))
         assert result["event_count"] == 2
         rows = query_sqlite_event_index(
             tmp_path,
@@ -719,19 +723,72 @@ class TestSQLiteEventIndex:
         ]
         assert index.disabled_reason == "simulated"
 
-    def test_rebuild_requires_offline_agent_lock(self, tmp_path):
-        from lingtai.kernel.workdir import WorkingDir
-
+    def test_rebuild_requires_offline_agent_lease(self, tmp_path):
         logs = tmp_path / "logs"
         logs.mkdir()
         (logs / "events.jsonl").write_text(json.dumps({"type": "alpha", "ts": 1}) + "\n", encoding="utf-8")
-        lock = WorkingDir(tmp_path)
-        lock.acquire_lock(timeout=0)
+        # A live agent holds the workdir lease; the rebuild's own lease must
+        # contend and fail immediately (timeout=0) rather than corrupt state.
+        held = PosixWorkdirLeaseAdapter(tmp_path)
+        held.acquire(0)
         try:
-            try:
-                rebuild_sqlite_event_index(tmp_path)
-                assert False, "rebuild should require offline lock"
-            except RuntimeError as exc:
-                assert "stopped/offline" in str(exc)
+            with pytest.raises(RuntimeError) as excinfo:
+                rebuild_sqlite_event_index(tmp_path, workdir_lease=PosixWorkdirLeaseAdapter(tmp_path))
+            # Pin the exact CLI-visible wrapper wording. The historical phrase is
+            # "could not acquire rebuild lock ..." — preserved as a user-facing
+            # string even though the internal architecture term is now "lease".
+            resolved = tmp_path.resolve()
+            message = str(excinfo.value)
+            assert message == (
+                "sqlite log rebuild requires the agent to be stopped/offline; "
+                f"could not acquire rebuild lock for {resolved}: "
+                f"Working directory '{resolved}' is already in use by another agent. "
+                "Each agent needs its own directory."
+            )
         finally:
-            lock.release_lock()
+            held.release()
+
+    def _seed_rebuild_sources(self, tmp_path):
+        logs = tmp_path / "logs"
+        logs.mkdir()
+        (logs / "events.jsonl").write_text(
+            json.dumps({"type": "alpha", "ts": 1}) + "\n", encoding="utf-8"
+        )
+
+    def test_rebuild_releases_lease_on_post_acquire_setup_failure(self, tmp_path, monkeypatch):
+        """A failure in post-acquire setup (temp-dir creation) must still release
+        the lease exactly once — the acquire is not stranded outside a finally."""
+        import lingtai.kernel.services.logging as logging_mod
+        from tests._workdir_lease_helpers import RecordingWorkdirLease
+
+        self._seed_rebuild_sources(tmp_path)
+
+        def boom(*args, **kwargs):
+            raise OSError("disk full")
+
+        # mkdtemp runs after acquisition but before the rebuild's own try-block —
+        # the exact hole the reviewer probed (acquires:[0] releases:0).
+        monkeypatch.setattr(logging_mod.tempfile, "mkdtemp", boom)
+        lease = RecordingWorkdirLease()
+        with pytest.raises(OSError, match="disk full"):
+            rebuild_sqlite_event_index(tmp_path, workdir_lease=lease)
+        assert lease.acquires == [0]
+        assert lease.releases == 1  # released despite the setup failure
+
+    def test_rebuild_releases_lease_on_in_rebuild_failure(self, tmp_path, monkeypatch):
+        """A failure during the rebuild itself must release the lease exactly once."""
+        import lingtai.kernel.services.logging as logging_mod
+        from tests._workdir_lease_helpers import RecordingWorkdirLease
+
+        self._seed_rebuild_sources(tmp_path)
+
+        class BoomIndex:
+            def __init__(self, *args, **kwargs):
+                raise sqlite3.DatabaseError("rebuild exploded")
+
+        monkeypatch.setattr(logging_mod, "SQLiteEventIndex", BoomIndex)
+        lease = RecordingWorkdirLease()
+        with pytest.raises(sqlite3.DatabaseError, match="rebuild exploded"):
+            rebuild_sqlite_event_index(tmp_path, workdir_lease=lease)
+        assert lease.acquires == [0]
+        assert lease.releases == 1

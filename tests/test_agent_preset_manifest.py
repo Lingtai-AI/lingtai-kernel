@@ -17,6 +17,7 @@ from unittest.mock import MagicMock
 from lingtai.agent import Agent
 from lingtai.kernel.base_agent import BaseAgent, _build_identity_section
 from lingtai.kernel.base_agent.identity import _build_manifest, _safe_llm_from_service
+from tests._workdir_lease_helpers import make_test_lease
 
 
 def _mock_service(
@@ -77,6 +78,7 @@ def test_kernel_manifest_includes_llm_from_service(tmp_path):
         service=_mock_service("anthropic", "claude-opus-4-7", "https://api.anthropic.com"),
         agent_name="alice",
         working_dir=tmp_path / "alice",
+        workdir_lease=make_test_lease(),
     )
     data = _build_manifest(agent)
     assert data["llm"] == {
@@ -93,6 +95,7 @@ def test_kernel_manifest_omits_base_url_when_none(tmp_path):
         service=_mock_service("openai", "gpt-4.6", base_url=None),
         agent_name="bob",
         working_dir=tmp_path / "bob",
+        workdir_lease=make_test_lease(),
     )
     data = _build_manifest(agent)
     assert data["llm"] == {"provider": "openai", "model": "gpt-4.6"}
@@ -101,7 +104,7 @@ def test_kernel_manifest_omits_base_url_when_none(tmp_path):
 
 def test_kernel_manifest_drops_mock_attrs(tmp_path):
     svc = MagicMock()
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="ghost", working_dir=tmp_path / "ghost")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="ghost", working_dir=tmp_path / "ghost", workdir_lease=make_test_lease())
     data = _build_manifest(agent)
     if "llm" in data:
         for v in data["llm"].values():

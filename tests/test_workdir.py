@@ -75,24 +75,10 @@ def test_workdir_creates_parents(tmp_path):
     assert wd.path.is_dir()
 
 
-def test_lock_prevents_second_instance(tmp_path):
-    wd1 = WorkingDir(working_dir=tmp_path / "myagent")
-    wd1.acquire_lock()
-    try:
-        wd2 = WorkingDir(working_dir=tmp_path / "myagent")
-        with pytest.raises(RuntimeError, match="already in use"):
-            wd2.acquire_lock()
-    finally:
-        wd1.release_lock()
-
-
-def test_lock_release_allows_reuse(tmp_path):
-    wd1 = WorkingDir(working_dir=tmp_path / "myagent")
-    wd1.acquire_lock()
-    wd1.release_lock()
-    wd2 = WorkingDir(working_dir=tmp_path / "myagent")
-    wd2.acquire_lock()  # should not raise
-    wd2.release_lock()
+# The exclusive working-directory lock moved out of WorkingDir to the Core-owned
+# WorkdirLeasePort and its POSIX flock adapter. Collision, release/reuse, timeout,
+# and expiry are now pinned in tests/test_workdir_lease.py against both the
+# production adapter and the deterministic fake.
 
 
 def test_git_init_creates_repo(tmp_path):
@@ -164,61 +150,3 @@ def test_diff_read_only(tmp_path):
         cwd=wd.path, capture_output=True, text=True,
     )
     assert status.stdout.strip()  # still dirty
-
-
-import time
-import threading
-
-
-def test_acquire_lock_timeout_succeeds_after_release(tmp_path):
-    """acquire_lock with timeout should succeed once the lock is released."""
-    dir_a = tmp_path / "agent"
-    dir_a.mkdir()
-    wd1 = WorkingDir(dir_a)
-    wd1.acquire_lock()
-
-    acquired = threading.Event()
-
-    def try_lock():
-        wd2 = WorkingDir(dir_a)
-        wd2.acquire_lock(timeout=5.0)
-        acquired.set()
-        wd2.release_lock()
-
-    t = threading.Thread(target=try_lock)
-    t.start()
-
-    time.sleep(0.5)
-    assert not acquired.is_set()  # still waiting
-
-    wd1.release_lock()
-    t.join(timeout=5.0)
-    assert acquired.is_set()
-
-
-def test_acquire_lock_timeout_zero_raises_immediately(tmp_path):
-    """acquire_lock with timeout=0 (default) raises immediately if locked."""
-    dir_a = tmp_path / "agent"
-    dir_a.mkdir()
-    wd1 = WorkingDir(dir_a)
-    wd1.acquire_lock()
-
-    wd2 = WorkingDir(dir_a)
-    with pytest.raises(RuntimeError, match="already in use"):
-        wd2.acquire_lock(timeout=0)
-
-    wd1.release_lock()
-
-
-def test_acquire_lock_timeout_expires(tmp_path):
-    """acquire_lock should raise after timeout if lock is never released."""
-    dir_a = tmp_path / "agent"
-    dir_a.mkdir()
-    wd1 = WorkingDir(dir_a)
-    wd1.acquire_lock()
-
-    wd2 = WorkingDir(dir_a)
-    with pytest.raises(RuntimeError, match="already in use"):
-        wd2.acquire_lock(timeout=1.0)
-
-    wd1.release_lock()

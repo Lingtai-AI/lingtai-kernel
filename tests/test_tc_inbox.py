@@ -10,6 +10,7 @@ import pytest
 
 from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
 from lingtai.kernel.tc_inbox import InvoluntaryToolCall, TCInbox
+from tests._workdir_lease_helpers import make_test_lease
 
 
 def _make_item(source: str, voice: str = "v", coalesce: bool = False) -> InvoluntaryToolCall:
@@ -100,7 +101,7 @@ class TestDrainTCInbox:
             intrinsics=_TEST_INTRINSICS,
             service=svc,
             agent_name="test",
-            working_dir=tmp_path / "agent",
+            working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
         )
         return agent
 
@@ -198,7 +199,7 @@ class TestReplaceInHistory:
             intrinsics=_TEST_INTRINSICS,
             service=svc,
             agent_name="test",
-            working_dir=tmp_path / "agent",
+            working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
         )
         iface = ChatInterface()
         iface.add_user_message("hi")

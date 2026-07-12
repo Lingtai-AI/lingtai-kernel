@@ -37,6 +37,7 @@ from lingtai.kernel.llm.interface import (
     ToolCallBlock,
     ToolResultBlock,
 )
+from tests._workdir_lease_helpers import make_test_lease
 
 
 # ---------------------------------------------------------------------------
@@ -749,7 +750,7 @@ def test_handle_dispatches_summarize(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
 
     result = agent._intrinsics["system"]({"action": "summarize", "items": []})
     # Empty items → error, but the dispatch must reach _summarize (not unknown action)
@@ -773,7 +774,7 @@ def _make_base_agent_for_notification(tmp_path):
     svc.get_adapter.return_value = MagicMock()
     svc.provider = "gemini"
     svc.model = "gemini-test"
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
     return agent
 
 
@@ -982,7 +983,7 @@ def test_base_agent_threshold_init_from_config(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-test", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
     assert agent._summarize_notification_threshold == 3000  # default
 
     # Simulate what _setup_from_init does after reading manifest.  An explicit
@@ -1012,7 +1013,7 @@ def test_base_agent_threshold_config_accepts_zero(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-zero", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-zero", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
 
     manifest = {
         "llm": {"provider": "gemini", "model": "gemini-test"},
@@ -1037,7 +1038,7 @@ def test_base_agent_threshold_config_rejects_bool(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-bool", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-bool", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
 
     manifest = {
         "llm": {"provider": "gemini", "model": "gemini-test"},
@@ -1062,7 +1063,7 @@ def test_base_agent_threshold_default_when_not_in_config(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="default-test", working_dir=tmp_path / "ag")
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="default-test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
     assert agent._summarize_notification_threshold == 3000
 
 

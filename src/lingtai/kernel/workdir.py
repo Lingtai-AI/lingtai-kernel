@@ -1,34 +1,20 @@
-"""WorkingDir — agent working directory: lock, git, manifest."""
+"""WorkingDir — agent working directory: git, manifest.
+
+The exclusive working-directory lock is no longer owned here. It moved to the
+Core-owned ``lingtai.kernel.workdir_lease.WorkdirLeasePort`` and its production
+``PosixWorkdirLeaseAdapter``; ``WorkdirLayout.agent_lock`` still names the
+``.agent.lock`` path the adapter and read-only observers use.
+"""
 from __future__ import annotations
 
 import json
 import os
 import re
 import subprocess
-import sys
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-if sys.platform == "win32":
-    import msvcrt as _msvcrt
-
-    def _lock_fd(fd):
-        _msvcrt.locking(fd.fileno(), _msvcrt.LK_NBLCK, 1)
-
-    def _unlock_fd(fd):
-        _msvcrt.locking(fd.fileno(), _msvcrt.LK_UNLCK, 1)
-else:
-    import fcntl as _fcntl
-
-    def _lock_fd(fd):
-        _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
-
-    def _unlock_fd(fd):
-        _fcntl.flock(fd, _fcntl.LOCK_UN)
-
 
 _LOCK_FILE = ".agent.lock"
 _MANIFEST_FILE = ".agent.json"
@@ -234,57 +220,22 @@ def write_resolved_manifest(working_dir: Path | str, data: dict) -> Path | None:
 
 
 class WorkingDir:
-    """Manages an agent's working directory — locking, git, manifest."""
+    """Manages an agent's working directory — git, manifest.
+
+    Lock authority was removed: the exclusive working-directory lease now lives
+    behind ``WorkdirLeasePort`` and its ``PosixWorkdirLeaseAdapter``. This class
+    still names the ``.agent.lock`` path via ``WorkdirLayout`` for the adapter and
+    read-only observers, but no longer acquires or releases it.
+    """
 
     def __init__(self, working_dir: Path | str) -> None:
         self._path = Path(working_dir)
         self._path.mkdir(parents=True, exist_ok=True)
         self._layout = workdir_layout(self._path)
-        self._lock_file: Any = None
 
     @property
     def path(self) -> Path:
         return self._path
-
-    # --- Lock lifecycle ---
-
-    def acquire_lock(self, timeout: float = 0) -> None:
-        """Acquire an exclusive file lock on the working directory.
-
-        Args:
-            timeout: Max seconds to wait for the lock. 0 = fail immediately
-                (default, backward compatible). Polls at 250ms intervals.
-        """
-        lock_path = self._layout.agent_lock
-        deadline = time.monotonic() + timeout
-        while True:
-            self._lock_file = open(lock_path, "w")
-            try:
-                _lock_fd(self._lock_file)
-                return  # success
-            except OSError:
-                self._lock_file.close()
-                self._lock_file = None
-                if time.monotonic() >= deadline:
-                    raise RuntimeError(
-                        f"Working directory '{self._path}' is already in use "
-                        f"by another agent. Each agent needs its own directory."
-                    )
-                time.sleep(0.25)
-
-    def release_lock(self) -> None:
-        if self._lock_file is not None:
-            lock_path = self._layout.agent_lock
-            try:
-                _unlock_fd(self._lock_file)
-                self._lock_file.close()
-            except OSError:
-                pass
-            try:
-                lock_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            self._lock_file = None
 
     # --- Git operations ---
 

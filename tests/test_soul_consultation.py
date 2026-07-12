@@ -32,6 +32,7 @@ from lingtai.kernel.llm.interface import (
     ToolCallBlock,
     ToolResultBlock,
 )
+from tests._workdir_lease_helpers import make_test_lease
 
 
 @pytest.fixture(autouse=True)
@@ -853,7 +854,7 @@ class TestRunConsultationFire:
             intrinsics=_TEST_INTRINSICS,
             service=svc,
             agent_name="t",
-            working_dir=tmp_path / "agent",
+            working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
         )
         return agent
 
@@ -926,7 +927,7 @@ class TestSoulFlowPersistenceSchema:
             intrinsics=_TEST_INTRINSICS,
             service=svc,
             agent_name="t",
-            working_dir=tmp_path / "agent",
+            working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
         )
         return agent
 
@@ -1124,7 +1125,7 @@ class TestPersistSoulEntryUnchanged:
             intrinsics=_TEST_INTRINSICS,
             service=svc,
             agent_name="t",
-            working_dir=tmp_path / "agent",
+            working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
         )
         return agent
 
@@ -1158,7 +1159,7 @@ class TestRehydrateAppendixTracking:
             intrinsics=_TEST_INTRINSICS,
             service=svc,
             agent_name="t",
-            working_dir=tmp_path / "agent",
+            working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
         )
         return agent
 
@@ -1235,7 +1236,7 @@ class TestRehydrateAppendixTracking:
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
-            service=svc, agent_name="t", working_dir=tmp_path / "agent",
+            service=svc, agent_name="t", working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
         )
         with patch.object(agent, "_run_consultation_fire") as mock_fire, \
              patch.object(agent, "_start_soul_timer") as mock_resched:
@@ -1252,7 +1253,7 @@ class TestRehydrateAppendixTracking:
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
-            service=svc, agent_name="t", working_dir=tmp_path / "agent",
+            service=svc, agent_name="t", working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
         )
         with patch.object(agent, "_run_consultation_fire",
                           side_effect=RuntimeError("boom")), \
@@ -1981,7 +1982,7 @@ class TestSoulNotificationInstructions:
             intrinsics=_TEST_INTRINSICS,
             service=svc,
             agent_name="t",
-            working_dir=tmp_path / "agent",
+            working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
         )
         return agent
 

@@ -8,6 +8,7 @@ from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 from pathlib import Path
 
 import pytest
+from tests._workdir_lease_helpers import make_test_lease
 
 
 def _build_lib(plib: Path, *, big_limit=200000, small_limit=8000):
@@ -83,7 +84,7 @@ def _make_test_agent(tmp_path):
     _build_lib(plib)
     wd = tmp_path / "test"
     _build_workdir(wd, plib, active=str(plib / "big.json"))
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=wd)
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=wd, workdir_lease=make_test_lease())
     return agent, plib
 
 
