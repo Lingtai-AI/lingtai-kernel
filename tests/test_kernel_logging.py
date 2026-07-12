@@ -59,15 +59,71 @@ def test_setup_logging_retargets_owned_file_handler(tmp_path):
 
         setup_logging(log_dir=second_dir, logger_name=logger.name)
         logger.info("new target")
-        file_handler.flush()
-
-        assert next(
+        replacement = next(
             handler
             for handler in logger.handlers
             if getattr(handler, "_lingtai_handler", None) == "file"
-        ) is file_handler
+        )
+        replacement.flush()
+
+        assert replacement is not file_handler
+        assert file_handler._closed
         assert not (first_dir / "agent.log").read_text()
         assert "new target" in (second_dir / "agent.log").read_text()
+    finally:
+        _close_handlers(logger)
+
+
+def test_setup_logging_failed_retarget_preserves_handler_and_retry_recovers(tmp_path):
+    logger = logging.getLogger("test.lingtai.logging.retarget_failure")
+    _close_handlers(logger)
+    first_dir = tmp_path / "first"
+    blocked_dir = tmp_path / "blocked"
+    blocked_dir.mkdir()
+    obstacle = blocked_dir / "agent.log"
+    obstacle.mkdir()
+
+    try:
+        setup_logging(log_dir=first_dir, logger_name=logger.name)
+        file_handler = next(
+            handler
+            for handler in logger.handlers
+            if getattr(handler, "_lingtai_handler", None) == "file"
+        )
+        original_filename = file_handler.baseFilename
+        original_stream = file_handler.stream
+        original_formatter = file_handler.formatter
+        original_level = file_handler.level
+
+        try:
+            setup_logging(log_dir=blocked_dir, logger_name=logger.name)
+        except IsADirectoryError:
+            pass
+        else:
+            raise AssertionError("retargeting to a directory should fail")
+
+        assert file_handler in logger.handlers
+        assert file_handler.baseFilename == original_filename
+        assert file_handler.stream is original_stream
+        assert file_handler.formatter is original_formatter
+        assert file_handler.level == original_level
+        logger.info("old target remains usable")
+        file_handler.flush()
+        assert "old target remains usable" in (first_dir / "agent.log").read_text()
+
+        obstacle.rmdir()
+        setup_logging(log_dir=blocked_dir, logger_name=logger.name)
+        replacement = next(
+            handler
+            for handler in logger.handlers
+            if getattr(handler, "_lingtai_handler", None) == "file"
+        )
+        logger.info("retry reached new target")
+        replacement.flush()
+
+        assert replacement is not file_handler
+        assert file_handler._closed
+        assert "retry reached new target" in obstacle.read_text()
     finally:
         _close_handlers(logger)
 

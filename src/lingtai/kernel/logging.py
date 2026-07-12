@@ -72,18 +72,16 @@ def setup_logging(
             file_handlers = _owned_handlers(logger, _FILE_HANDLER)
             if file_handlers and isinstance(file_handlers[0], logging.FileHandler):
                 fh = file_handlers[0]
-                for duplicate in file_handlers[1:]:
-                    logger.removeHandler(duplicate)
-                    duplicate.close()
                 if Path(fh.baseFilename) != filename:
-                    fh.acquire()
-                    try:
-                        if fh.stream is not None:
-                            fh.stream.close()
-                        fh.baseFilename = str(filename)
-                        fh.stream = fh._open()
-                    finally:
-                        fh.release()
+                    replacement = logging.FileHandler(filename)
+                    setattr(replacement, _HANDLER_OWNER_ATTR, _FILE_HANDLER)
+                    replacement.setLevel(fh.level)
+                    replacement.setFormatter(fh.formatter)
+                    fh = _replace_owned_handler(logger, file_handlers, replacement)
+                else:
+                    for duplicate in file_handlers[1:]:
+                        logger.removeHandler(duplicate)
+                        duplicate.close()
             else:
                 fh = logging.FileHandler(filename)
                 setattr(fh, _HANDLER_OWNER_ATTR, _FILE_HANDLER)
