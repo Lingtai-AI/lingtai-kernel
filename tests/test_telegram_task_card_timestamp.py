@@ -1,10 +1,17 @@
-"""Immutable local start timestamp on each Task Card tool row.
+"""Immutable local start timestamp captured per Task Card tool row.
 
-Final UI contract: every tool row shows one local start time captured once when
-that tool begins, shaped ``HH:MM:SS UTC±HH`` (hour-only offset, no colon, no
-date, no ``Started`` label, no regional abbreviation).  Heartbeats/elapsed edits
-never change it, and parallel rows each keep their own captured instant.  A
-fixed injected wall-clock keeps these assertions deterministic (no real clock).
+Capture contract (kernel side): every tool row captures one local start time
+once when that tool begins, shaped ``HH:MM:SS UTC±HH`` (hour-only offset, no
+colon, no date, no ``Started`` label, no regional abbreviation).  Heartbeats and
+elapsed edits never change it, and parallel rows each keep their own captured
+instant.
+
+Presentation contract (manager render, Jason #6894/#6899): the card shows a
+single card-level time line — never a per-row inline suffix.  It is the Task
+Card's final standalone line ``时间 HH:MM:SS UTC±HH`` after the fixed
+progress-only footer, using the first non-empty ``started_at`` in original row
+order for a batched/parallel card, and is omitted entirely when no row carries a
+usable stamp.  A fixed injected wall-clock keeps these assertions deterministic.
 """
 
 from __future__ import annotations
@@ -13,7 +20,7 @@ import threading
 from datetime import datetime, timezone, timedelta
 
 from lingtai.kernel.base_agent import BaseAgent, _TASK_CARD_TOOL
-from lingtai.mcp_servers.telegram.manager import TelegramManager
+from lingtai.mcp_servers.telegram.manager import TelegramManager, _TASK_CARD_FOOTER
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +182,10 @@ def test_timestamp_immutable_across_finalize():
     assert frozen[0]["done"] is True
 
 
-def test_parallel_rows_keep_distinct_timestamps():
+def test_parallel_rows_keep_distinct_timestamps(monkeypatch):
+    # Two parallel rows must both stay visible to compare their captured stamps,
+    # so widen the rolling window past the default of 1 (env reverts per test).
+    monkeypatch.setenv("LINGTAI_TASK_CARD_MAX_TOOL_ROWS", "3")
     client = FakeMCPClient()
     mono = FakeMonotonic()
     wall = FakeWallClock(datetime(2026, 7, 12, 4, 8, 8, tzinfo=timezone(timedelta(hours=-7))))
@@ -199,19 +209,74 @@ def test_parallel_rows_keep_distinct_timestamps():
 
 
 # ---------------------------------------------------------------------------
-# Rendering: standalone timestamp on the tool row, none on API-error rows
+# Rendering: single card-level 时间 final line, never a per-row inline suffix
 # ---------------------------------------------------------------------------
 
-def test_manager_renders_timestamp_standalone_on_tool_row():
+def _time_lines(text):
+    return [ln for ln in text.splitlines() if ln.startswith("时间 ")]
+
+
+def test_manager_renders_single_time_line_not_inline_on_row():
     text = TelegramManager._format_task_card_text("", "", "", rows=[
         {"tool": "bash", "tool_action": "run", "reasoning": "build",
          "elapsed_s": 3, "done": False, "started_at": "04:08:08 UTC-07"},
     ])
+    # The stamp is NOT appended to the row line.
     row_line = next(ln for ln in text.splitlines() if "bash.run" in ln)
-    assert "04:08:08 UTC-07" in row_line
-    assert "(3s)" in row_line
+    assert "04:08:08 UTC-07" not in row_line
+    assert "UTC" not in row_line
+    assert row_line == "• bash.run: build (3s)"
+    # It is the card's final standalone line, exactly `时间 <stamp>`.
+    lines = text.splitlines()
+    assert lines[-1] == "时间 04:08:08 UTC-07"
+    assert _time_lines(text) == ["时间 04:08:08 UTC-07"]
     # Standalone — no "Started" prose.
     assert "Started" not in text
+
+
+def test_time_line_follows_the_progress_only_footer():
+    text = TelegramManager._format_task_card_text("", "", "", rows=[
+        {"tool": "bash", "tool_action": "run", "reasoning": "build",
+         "elapsed_s": 3, "done": False, "started_at": "04:08:08 UTC-07"},
+    ])
+    lines = text.splitlines()
+    footer_idx = next(i for i, ln in enumerate(lines) if _TASK_CARD_FOOTER in ln)
+    time_idx = next(i for i, ln in enumerate(lines) if ln.startswith("时间 "))
+    # The time line is strictly after the fixed progress-only footer line.
+    assert time_idx > footer_idx
+    assert lines[time_idx] == "时间 04:08:08 UTC-07"
+
+
+def test_parallel_rows_use_first_nonempty_started_at_for_the_one_time_line():
+    text = TelegramManager._format_task_card_text("", "", "", rows=[
+        # First row has NO stamp; the card time uses the first NON-EMPTY one in
+        # original row order (the second row here), not the earliest clock value.
+        {"tool": "bash", "tool_action": "run", "reasoning": "a",
+         "elapsed_s": 5, "done": False, "started_at": ""},
+        {"tool": "read", "tool_action": "", "reasoning": "b",
+         "elapsed_s": 2, "done": False, "started_at": "04:08:09 UTC-07"},
+        {"tool": "grep", "tool_action": "", "reasoning": "c",
+         "elapsed_s": 1, "done": False, "started_at": "04:08:11 UTC-07"},
+    ])
+    assert _time_lines(text) == ["时间 04:08:09 UTC-07"]
+    # No row line carries an inline stamp.
+    for ln in text.splitlines():
+        if ln.startswith(("•", "✓")):
+            assert "UTC" not in ln
+
+
+def test_no_time_line_when_no_row_has_a_stamp():
+    text = TelegramManager._format_task_card_text("", "", "", rows=[
+        {"tool": "bash", "tool_action": "run", "reasoning": "x",
+         "elapsed_s": 1, "done": False, "started_at": ""},
+        {"tool": "read", "tool_action": "", "reasoning": "y",
+         "elapsed_s": 2, "done": False},
+    ])
+    # No usable stamp anywhere → the time line is omitted entirely.
+    assert _time_lines(text) == []
+    assert "时间" not in text
+    # The footer is still the last line.
+    assert text.splitlines()[-1] == _TASK_CARD_FOOTER
 
 
 def test_api_error_row_has_no_timestamp_field():
@@ -228,18 +293,36 @@ def test_api_error_row_has_no_timestamp_field():
     api_rows = [r for r in client.last_rows() if r.get("kind") == "api_error"]
     assert len(api_rows) == 1
     assert "started_at" not in api_rows[0]
-    # The rendered API line carries no timestamp either.
+    # The rendered API line carries no timestamp inline.
     text = TelegramManager._format_task_card_text("", "", "", rows=client.last_rows())
+    api_line = next(ln for ln in text.splitlines() if "API error" in ln)
+    assert "UTC" not in api_line
+    # An API-error-only card has no tool stamp, so no 时间 line either.
+    assert _time_lines(text) == []
+
+
+def test_api_error_row_does_not_supply_the_time_line_but_a_tool_row_does():
+    """A mixed batch (tool row + API-error row) still renders exactly one time
+    line, sourced from the tool row's stamp; the API-error row never carries one.
+    """
+    text = TelegramManager._format_task_card_text("", "", "", rows=[
+        {"tool": "bash", "tool_action": "run", "reasoning": "build",
+         "elapsed_s": 3, "done": False, "started_at": "04:08:08 UTC-07"},
+        {"kind": "api_error", "status": 429, "code": "usage_limit_reached",
+         "state": "retrying", "attempt": 1, "max_attempts": 3, "done": False},
+    ])
+    assert _time_lines(text) == ["时间 04:08:08 UTC-07"]
     api_line = next(ln for ln in text.splitlines() if "API error" in ln)
     assert "UTC" not in api_line
 
 
 def test_render_tool_row_without_started_at_is_safe():
-    """Backward-compatible: a row missing started_at renders without a stamp
-    (no crash), so an older in-flight payload still displays."""
+    """Backward-compatible: a row missing started_at renders without any stamp
+    (no crash, no time line), so an older in-flight payload still displays."""
     text = TelegramManager._format_task_card_text("", "", "", rows=[
         {"tool": "bash", "tool_action": "", "reasoning": "x",
          "elapsed_s": 1, "done": False},
     ])
     assert "bash" in text
     assert "(1s)" in text
+    assert _time_lines(text) == []

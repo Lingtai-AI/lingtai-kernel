@@ -176,16 +176,21 @@ def test_redaction_before_truncation_per_row():
     assert "<REDACTED" in text or "github_token" in text
 
 
-def test_many_rows_bounded_but_each_row_represented():
-    """Under many-row length pressure the render stays bounded, yet no parallel
-    row is hidden — each call id must remain visible."""
+def test_moderate_rows_fit_under_transport_limit_with_every_row_represented():
+    """At a moderate row count, shrinking the huge per-row reasoning keeps the
+    render under the Telegram 4096-char hard limit while no parallel row is hidden
+    — each call id remains visible.  This is the excerpt-shrinkage guarantee at a
+    row count with headroom, NOT an all-N bound: fixed scaffolding is unbounded in
+    row count, so an extreme N can still exceed the limit (see
+    tests/test_telegram_task_card_blockers.py::
+    test_extreme_row_count_exceeds_budget_but_keeps_every_row)."""
     rows = [
         {"tool": f"tool{i}", "tool_action": "", "reasoning": "Z" * 600,
          "elapsed_s": i, "done": False}
         for i in range(8)
     ]
     text = _fmt(rows)
-    # Bounded well under the Telegram 4096-char hard limit.
+    # At 8 rows the excerpt budget has ample headroom under the 4096 hard limit.
     assert len(text) <= 4096
     # Each of the 8 rows is still represented by its tool name.
     for i in range(8):

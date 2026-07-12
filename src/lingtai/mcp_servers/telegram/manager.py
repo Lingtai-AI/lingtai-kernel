@@ -68,6 +68,13 @@ _TASK_CARD_FOOTER = (
     "Reply in the normal chat to the final result instead."
 )
 
+# Card-level time line prefix.  Jason #6894/#6899: the Task Card carries one
+# standalone time line (not a per-row inline suffix), rendered as its final line
+# after the fixed footer, e.g. ``时间 12:37:32 UTC-07``.  The stamp value itself
+# is captured and shaped kernel-side (``HH:MM:SS UTC±HH``); the renderer only
+# prefixes it.
+_TASK_CARD_TIME_PREFIX = "时间 "
+
 
 def _safe_document_download_reason(exc: Exception) -> str:
     """Return a bounded provider reason without retaining arbitrary exception text."""
@@ -1368,12 +1375,15 @@ class TelegramManager:
         """Private internal action — kernel-driven Task Card projection.
 
         Sub-actions:
-          - create:  Send a fresh 📋 TASK CARD for the current tool.
-          - update:  Edit the same card to show only the current tool.
-          - finalize: Mark card as ✅ TASK CARD · DONE.
+          - create:  Project the resident 📋 TASK CARD for the current batch —
+                     update-first, editing the persisted resident in place (same
+                     id) and sending/deleting only as fail-open recovery.
+          - update:  Edit the same card to show the current batch.
+          - finalize: Freeze the card on its concrete last batch (legacy scalar
+                     form marks ✅ TASK CARD · DONE).
 
-        Single transient current-step card; no cumulative history,
-        no continuation/overflow.  Not in SCHEMA — LLM cannot call.
+        One resident card per account+chat; no cumulative history, no
+        continuation/overflow.  Not in SCHEMA — LLM cannot call.
         """
         sub_action = args.get("sub_action", "update")
         try:
@@ -1390,14 +1400,22 @@ class TelegramManager:
             return {"status": "error", "error": str(e)}
 
     def _task_card_create(self, args: dict) -> dict:
-        """Create the resident Task Card for (account, chat), singleton per chat.
+        """Project the resident Task Card for (account, chat), singleton per chat.
 
-        Ordering matches Jason #6667 exactly: read the previously persisted card
-        id, send the NEW card first, and only after a successful send persist the
-        new id and best-effort delete the prior one.  If the new send fails, the
-        old card and its persisted id are left untouched and nothing is deleted.
-        The prior-card delete is fail-open: a failure never rolls the new id back
-        nor blocks the turn.
+        Update-first (Jason #6894/#6899): the automatic BaseAgent task-card
+        context is turn/request-local, so every new tool batch/turn re-issues
+        ``create``.  This must NOT re-send and delete a card each time — that is
+        the flicker.  When a valid persisted resident already exists, edit it in
+        place through Telegram and return the SAME compound id, sending nothing
+        new and deleting nothing.
+
+        A replacement send/delete happens only as fail-open recovery: if there is
+        no persisted resident (first card of the chat), send and persist the first
+        card normally; if the persisted message genuinely cannot be edited
+        (stale/deleted) the edit fails and recovery sends a replacement, persists
+        its id, and best-effort deletes the exact stale id.  A failed replacement
+        send preserves the old card and its id and deletes nothing; the stale-id
+        delete is fail-open and never rolls the new id back nor blocks the turn.
         """
         account = args["account"]
         chat_id = args["chat_id"]
@@ -1405,21 +1423,48 @@ class TelegramManager:
             args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""),
             rows=args.get("rows"))
 
-        previous_id = self._get_resident_task_card(account, chat_id)
+        resident_id = self._get_resident_task_card(account, chat_id)
+        if resident_id and self.update_progress_message(resident_id, text):
+            # Steady state: the resident card is edited in place, so its compound
+            # id is preserved and no replacement card is ever sent.
+            return {"status": "ok", "message_id": resident_id}
 
+        if not resident_id:
+            # First card for this chat: send and persist normally (no delete).
+            result = self.send_progress_message(account, chat_id, text)
+            if result is None:
+                return {"status": "error", "error": "Failed to send task card"}
+            new_id = result["message_id"]
+            self._set_resident_task_card(account, chat_id, new_id)
+            return {"status": "ok", "message_id": new_id}
+
+        # A resident existed but its message could not be edited (stale/deleted):
+        # recover by replacement using the shared send-persist-delete discipline.
+        return self._recover_task_card_by_replacement(
+            account, chat_id, resident_id, text, error="Failed to send task card")
+
+    def _recover_task_card_by_replacement(
+        self, account: str, chat_id: int, stale_id: str, text: str, *, error: str,
+    ) -> dict:
+        """Replace an un-editable resident card, preserving the singleton rules.
+
+        Shared by ``create`` and ``update`` recovery.  Send the replacement
+        first; only after a successful send persist the new id as the resident
+        and best-effort delete the exact ``stale_id``.  If the replacement send
+        fails, the old card and its persisted id are left untouched and nothing
+        is deleted.  The stale-id delete is fail-open: a failure never rolls the
+        new id back nor blocks the turn.
+        """
         result = self.send_progress_message(account, chat_id, text)
         if result is None:
-            # New send failed: preserve the old card + its id, delete nothing.
-            return {"status": "error", "error": "Failed to send task card"}
-
+            # Replacement send failed: preserve the stale card + id, delete nothing.
+            return {"status": "error", "error": error}
         new_id = result["message_id"]
         # Persist the new id as current BEFORE deleting the old one, so a crash
         # between send and delete still leaves the new (visible) card tracked.
         self._set_resident_task_card(account, chat_id, new_id)
-
-        if previous_id and previous_id != new_id:
-            self._delete_task_card_message(previous_id)
-
+        if new_id != stale_id:
+            self._delete_task_card_message(stale_id)
         return {"status": "ok", "message_id": new_id}
 
     def _get_resident_task_card(self, account: str, chat_id: int) -> str | None:
@@ -1465,16 +1510,11 @@ class TelegramManager:
         if not self.update_progress_message(card_message_id, text):
             # Card may have been deleted — best-effort re-create.  The recovered
             # card becomes the resident one for this chat, so persist and retire
-            # the replaced id consistently (same create-then-delete discipline).
+            # the replaced id consistently (same replacement discipline as create).
             account, chat_id, _ = self._parse_compound_id(card_message_id)
-            result = self.send_progress_message(account, chat_id, text)
-            if result is None:
-                return {"status": "error", "error": "Failed to recover task card"}
-            new_id = result["message_id"]
-            if new_id != card_message_id:
-                self._set_resident_task_card(account, chat_id, new_id)
-                self._delete_task_card_message(card_message_id)
-            return {"status": "ok", "message_id": new_id}
+            return self._recover_task_card_by_replacement(
+                account, chat_id, card_message_id, text,
+                error="Failed to recover task card")
         return {"status": "ok", "message_id": card_message_id}
 
     def _task_card_finalize(self, args: dict) -> dict:
@@ -1519,7 +1559,13 @@ class TelegramManager:
         Secret redaction always runs on each row's reasoning *before* any
         excerpt or length trim, so a secret can never survive truncation, and
         every row is always represented even under length pressure — rows are
-        never dropped to fit; only per-row excerpts shrink.
+        never dropped to fit; only per-row excerpts shrink.  The
+        ``_TASK_CARD_TEXT_LIMIT`` budget governs that reasoning-excerpt
+        shrinkage only; it is not a guarantee that the whole render stays under
+        the limit.  Fixed per-row scaffolding is unbounded in the number of
+        rows, so an extreme operator-set ``LINGTAI_TASK_CARD_MAX_TOOL_ROWS`` can
+        still produce a render above the budget (and above Telegram's transport
+        limit).  See ``_format_rows_task_card_text``.
         """
         if rows is None:
             return cls._format_scalar_task_card_text(tool, action, reasoning)
@@ -1546,10 +1592,16 @@ class TelegramManager:
         # Split tool rows (redacted, capped reasoning) from sanitized API-error
         # rows (fixed machine summary, no reasoning to redact).  Redact every tool
         # row's reasoning up front (before any excerpt/trim) and compute the
-        # per-row budget so the whole render stays under the limit while keeping
-        # every row visible.
-        tool_prepared: list[tuple[int, str, str, str, bool, str]] = []
+        # per-row reasoning-excerpt budget so the *reasoning* stays under the
+        # ceiling while keeping every row visible.  NOTE: the budget bounds
+        # excerpt shrinkage only, not the total render — fixed per-row scaffolding
+        # (below) is unbounded in row count, so an extreme operator-set N can
+        # still exceed the ceiling and Telegram's transport limit.  The start
+        # stamps are collected here only to derive the single card-level time line
+        # — no stamp is rendered inline on a row.
+        tool_prepared: list[tuple[int, str, str, str, bool]] = []
         api_prepared: list[tuple[int, str]] = []
+        card_started_at = ""
         for idx, row in enumerate(rows):
             if not isinstance(row, dict):
                 continue
@@ -1564,49 +1616,64 @@ class TelegramManager:
             done = bool(row.get("done", False))
             started_at = row.get("started_at", "")
             started_at = started_at if isinstance(started_at, str) else ""
-            tool_prepared.append((idx, label, redacted, elapsed, done, started_at))
+            # First non-empty stamp in original row order is the card timestamp
+            # (batched/parallel rows collapse to one card-level time line).
+            if started_at and not card_started_at:
+                card_started_at = started_at
+            tool_prepared.append((idx, label, redacted, elapsed, done))
 
         if not tool_prepared and not api_prepared:
             return f"{cls._TASK_CARD_HEADER}\n\n{_TASK_CARD_FOOTER}"
 
+        # The single card-level time line, when any row carried a usable stamp,
+        # is the card's final standalone line after the footer (omitted when no
+        # stamp exists).  Its exact text is included in the length budget below.
+        time_line = (
+            f"{_TASK_CARD_TIME_PREFIX}{card_started_at}" if card_started_at else ""
+        )
+
         # Budget the reasoning excerpts against the render ceiling.  The fixed
         # cost is the header + footer + their newlines plus the *actual*
         # non-reasoning scaffolding of every row (marker, label, elapsed suffix,
-        # the standalone timestamp, and each row's newline) — measured, not a
-        # flat estimate, so a long label or the ~16-char timestamp cannot push a
-        # timestamped many-row card past ``_TASK_CARD_TEXT_LIMIT``.  What remains
-        # is shared evenly across tool rows so no single row crowds the others
-        # out; reasoning shrinks but a row is never dropped.
+        # and each row's newline) and the single time line — measured, not a flat
+        # estimate.  ``fixed`` is subtracted from the ceiling so the reasoning
+        # excerpts shrink first; when ``fixed`` itself exceeds the ceiling (many
+        # rows and/or long labels), ``budget`` goes negative and ``per_row_cap``
+        # floors at 0 — every row still renders with an empty excerpt, and the
+        # scaffolding alone can then exceed ``_TASK_CARD_TEXT_LIMIT`` (and
+        # Telegram's transport limit).  We deliberately do NOT drop rows or
+        # truncate the final string to fit: the operator asked for N rows, so N
+        # rows are shown.  What remains of the budget is shared evenly across tool
+        # rows so no single row crowds the others out.
         api_scaffold = sum(len(line) + 1 for _, line in api_prepared)
         tool_scaffold = 0
-        for _, label, _redacted, elapsed, done, started_at in tool_prepared:
+        for _, label, _redacted, elapsed, done in tool_prepared:
             marker = "✓ " if done else "• "
             prefix = f"{marker}{label}: " if label else marker
-            stamp = f" {started_at}" if started_at else ""
             # +1 newline, +1 for a possible truncation ellipsis (conservative).
-            tool_scaffold += len(prefix) + len(f" ({elapsed}s)") + len(stamp) + 2
+            tool_scaffold += len(prefix) + len(f" ({elapsed}s)") + 2
         fixed = (
             len(cls._TASK_CARD_HEADER) + 1  # header + newline
             + 1                              # blank line before footer
             + len(_TASK_CARD_FOOTER)
+            + (len(time_line) + 1 if time_line else 0)  # time line + its newline
             + api_scaffold + tool_scaffold
         )
         budget = cls._TASK_CARD_TEXT_LIMIT - fixed
         divisor = max(1, len(tool_prepared))
-        # Floor at 0 (not 16) so a degenerate over-budget batch still trims to
-        # empty excerpts rather than blowing the ceiling; a healthy card keeps a
-        # generous per-row excerpt.
+        # Floor at 0 (not 16) so an over-budget batch trims reasoning to empty
+        # excerpts (the most the excerpt budget can do); the remaining scaffolding
+        # may still exceed the ceiling for extreme N — we do not truncate or drop
+        # rows to force a fit.  A healthy card keeps a generous per-row excerpt.
         per_row_cap = max(0, min(cls._TASK_CARD_REASONING_CAP, budget // divisor))
 
         # Render in original row order so tool and API rows interleave correctly.
         by_idx: dict[int, str] = {}
-        for idx, label, redacted, elapsed, done, started_at in tool_prepared:
+        for idx, label, redacted, elapsed, done in tool_prepared:
             excerpt = redacted[:per_row_cap] + "…" if len(redacted) > per_row_cap else redacted
             marker = "✓ " if done else "• "
             prefix = f"{marker}{label}: " if label else marker
-            # Standalone immutable start stamp (omitted when not captured).
-            stamp = f" {started_at}" if started_at else ""
-            by_idx[idx] = f"{prefix}{excerpt} ({elapsed}s){stamp}"
+            by_idx[idx] = f"{prefix}{excerpt} ({elapsed}s)"
         for idx, line in api_prepared:
             by_idx[idx] = line
 
@@ -1614,6 +1681,8 @@ class TelegramManager:
         lines.extend(by_idx[i] for i in sorted(by_idx))
         lines.append("")
         lines.append(_TASK_CARD_FOOTER)
+        if time_line:
+            lines.append(time_line)
         return "\n".join(lines)
 
     @classmethod

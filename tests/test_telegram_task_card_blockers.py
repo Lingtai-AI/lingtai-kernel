@@ -7,7 +7,12 @@ B2 — an after-tool continuation provider error must reach the *live* Task Card
      context (before ``_handle_request``'s finally tears it down).
 B3 — a final AED attempt with a viable preset fallback must not render the row
      as terminal ``error`` before the fallback runs.
-B4 — timestamped many-row cards must stay under ``_TASK_CARD_TEXT_LIMIT``.
+B4 — the ``_TASK_CARD_TEXT_LIMIT`` budget shrinks reasoning excerpts so a
+     moderate-row card fits under the ceiling; it is NOT a guarantee for every
+     possible row count.  Fixed per-row scaffolding is unbounded in row count, so
+     an extreme operator-set ``LINGTAI_TASK_CARD_MAX_TOOL_ROWS`` can exceed the
+     ceiling (and Telegram's transport limit) — and the renderer still keeps
+     every requested row rather than dropping or truncating.
 """
 
 from __future__ import annotations
@@ -452,10 +457,14 @@ def test_no_fallback_exhaustion_renders_terminal(tmp_path, monkeypatch):
 
 
 # ===========================================================================
-# B4 — timestamped many-row length pressure stays under _TASK_CARD_TEXT_LIMIT
+# B4 — the reasoning-excerpt budget keeps a MODERATE-row card under the ceiling
+#      (it is not a guarantee for every N; see the high-N boundary test below)
 # ===========================================================================
 
-def test_timestamped_many_rows_stay_under_text_limit():
+def test_timestamped_moderate_rows_stay_under_text_limit():
+    """At a moderate row count the excerpt budget has headroom, so shrinking the
+    (huge) per-row reasoning keeps the whole render under ``_TASK_CARD_TEXT_LIMIT``.
+    This proves the excerpt-shrinkage guarantee, not an all-N bound."""
     rows = [
         {"tool": f"tool{i}", "tool_action": "run", "reasoning": "Z" * 600,
          "elapsed_s": i, "done": i % 2 == 0, "started_at": "04:08:08 UTC-07"}
@@ -467,8 +476,44 @@ def test_timestamped_many_rows_stay_under_text_limit():
     for i in range(12):
         assert f"tool{i}" in text
     assert _TASK_CARD_FOOTER in text
-    # Each visible row keeps its immutable timestamp.
-    assert text.count("04:08:08 UTC-07") == 12
+    # The card renders ONE card-level time line (never a per-row inline suffix),
+    # counted in the excerpt budget so this moderate card fits.
+    assert text.count("04:08:08 UTC-07") == 1
+    assert text.splitlines()[-1] == "时间 04:08:08 UTC-07"
+    for ln in text.splitlines():
+        if ln.startswith(("•", "✓")):
+            assert "UTC" not in ln  # no inline stamp on any row
+
+
+def test_extreme_row_count_exceeds_budget_but_keeps_every_row():
+    """Truthful high-N boundary: fixed per-row scaffolding is unbounded in row
+    count, so a very large operator-set N produces a render ABOVE the budget (and
+    above Telegram's 4096 transport limit).  The renderer deliberately does NOT
+    drop rows or truncate the final string to force a fit — the operator asked for
+    N rows, so all N are shown.  A stable threshold (N far above the ~153/~181
+    first-exceed points) is used so the assertion does not overfit an incidental
+    exact character count.
+    """
+    n = 300
+    rows = [
+        {"tool": f"tool{i}", "tool_action": "run", "reasoning": "",
+         "elapsed_s": 0, "done": False, "started_at": "04:08:08 UTC-07"}
+        for i in range(n)
+    ]
+    text = TelegramManager._format_task_card_text("", "", "", rows=rows)
+    # Honest: the whole render is NOT bounded by the budget for extreme N.
+    assert len(text) > TelegramManager._TASK_CARD_TEXT_LIMIT
+    assert len(text) > 4096  # also above Telegram's hard transport limit
+    # Yet every requested row is still present — none dropped to fit...
+    line_count = sum(1 for ln in text.splitlines() if ln.startswith(("•", "✓")))
+    assert line_count == n
+    for i in (0, n // 2, n - 1):
+        assert f"tool{i}" in text
+    # ...and there is no blind final-string truncation ellipsis tail.
+    assert not text.endswith("…")
+    # The fixed footer and the single card-level time line still render.
+    assert _TASK_CARD_FOOTER in text
+    assert text.splitlines()[-1] == "时间 04:08:08 UTC-07"
 
 
 def test_timestamped_rows_redaction_before_truncation():
