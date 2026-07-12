@@ -45,6 +45,12 @@ MATCH_CASES = [
     ("/usr/local/bin/lingtai-agent run /a/foobar", "/a/foo", None),
     ("/v/bin/python -m lingtai run /a/foo/", "/a/foo", "module"),
     ("/usr/local/bin/lingtai-agent run /a/foo/", "/a/foo", "console"),
+    ("/v/bin/python -m lingtai run /a/elsewhere/../foo", "/a/foo", "module"),
+    ("/usr/local/bin/lingtai-agent run /a/elsewhere/../foo", "/a/foo", "console"),
+    ("/usr/local/bin/lingtai run /a/elsewhere/../foo", "/a/foo", "legacy"),
+    ("python -m lingtai run agent", "agent", None),
+    ("lingtai-agent run agent", "agent", None),
+    ("lingtai run agent", "agent", None),
     ("grep lingtai run /a/foo", "/a/foo", None),
     ("grep lingtai-agent run /a/foo", "/a/foo", None),
     ("tail -f /var/log/x lingtai run /a/foo", "/a/foo", None),
@@ -107,6 +113,25 @@ def test_refresh_watcher_imports_canonical_match_agent_run(tmp_path):
 
     assert "from lingtai.kernel.process_match import match_agent_run" in script
     assert "def match_agent_run" not in script
+
+
+def test_all_matcher_copies_resolve_absolute_symlink_alias(tmp_path):
+    real_dir = tmp_path / "real-agent"
+    real_dir.mkdir()
+    alias_dir = tmp_path / "agent-alias"
+    alias_dir.symlink_to(real_dir, target_is_directory=True)
+
+    doctor = _load_doctor_module()
+    matchers = (match_agent_run, doctor.match_agent_run)
+    commands = (
+        f"python -m lingtai run {alias_dir}",
+        f"lingtai-agent run {alias_dir}",
+        f"lingtai run {alias_dir}",
+    )
+
+    for matcher in matchers:
+        for command, expected in zip(commands, ("module", "console", "legacy")):
+            assert matcher(command, str(real_dir)) == expected
 
 
 def test_cli_duplicate_process_detects_console_script(tmp_path):
