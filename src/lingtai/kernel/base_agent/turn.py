@@ -127,6 +127,36 @@ def _exception_status_code(exc: Exception) -> int | None:
     return None
 
 
+def _report_api_error_to_task_card(
+    agent, exc: Exception, *, attempt=None, max_attempts=None, terminal=False,
+) -> None:
+    """Observe-only: surface a provider API error to the automatic Task Card.
+
+    Defensive at the call site as well as inside the method: the reporting hook
+    is optional (absent on lightweight agents/test doubles) and must NEVER affect
+    the retry/fallback decision, the eventual success/failure, or token
+    accounting — so a missing method or any failure here is swallowed.
+    """
+    report = getattr(agent, "_report_task_card_api_error", None)
+    if report is None:
+        return
+    try:
+        report(exc, attempt=attempt, max_attempts=max_attempts, terminal=terminal)
+    except Exception:
+        pass
+
+
+def _recover_api_error_on_task_card(agent) -> None:
+    """Observe-only companion to :func:`_report_api_error_to_task_card`."""
+    recover = getattr(agent, "_recover_task_card_api_error", None)
+    if recover is None:
+        return
+    try:
+        recover()
+    except Exception:
+        pass
+
+
 def _is_transient_provider_error(exc: Exception) -> bool:
     """Return True for provider/network blips that should not spend AED budget.
 
@@ -641,6 +671,11 @@ def _run_loop(agent) -> None:
                         skip_post_turn_save = True
                         break
                     _handle_message(agent, msg)
+                    # If a prior provider API error was surfaced to the Task Card
+                    # this turn, mark it recovered (observe-only/fail-open); a
+                    # clean first-attempt turn reported nothing, so this no-ops.
+                    if aed_attempts or transient_attempts:
+                        _recover_api_error_on_task_card(agent)
                     transient_attempts = 0
                     break  # success (chat saved after each session.send inside)
                 except Exception as e:
@@ -733,6 +768,15 @@ def _run_loop(agent) -> None:
                                 f"[{agent.agent_name}] AED transient retry "
                                 f"{transient_attempts}/{_TRANSIENT_AED_RETRY_LIMIT}: {err_desc}",
                             )
+                            # Surface the provider error to the Task Card as one
+                            # stable retrying row (observe-only/fail-open; sanitized
+                            # to status + allow-listed code, never err_desc).
+                            _report_api_error_to_task_card(
+                                agent, e,
+                                attempt=transient_attempts,
+                                max_attempts=_TRANSIENT_AED_RETRY_LIMIT,
+                                terminal=False,
+                            )
                             time.sleep(backoff_s)
                             msg = _prepare_aed_retry_message(agent, err_desc)
                             continue
@@ -768,8 +812,32 @@ def _run_loop(agent) -> None:
                         f"[{agent.agent_name}] AED attempt {aed_attempts}/{agent._config.max_aed_attempts}: {err_desc}",
                     )
 
+                    # Surface the provider error to the Task Card as one stable
+                    # row (observe-only/fail-open; sanitized, never err_desc).
+                    # Terminal truth depends on whether a *real* next recovery
+                    # action exists: a viable, not-yet-attempted preset fallback
+                    # means the turn is not actually done, so the row must stay
+                    # nonterminal/truthful rather than falsely showing "failed"
+                    # right before ``_perform_refresh``.  Report here, before the
+                    # preset-fallback ``try`` below rebinds ``e``.
+                    _can_still_fallback = (
+                        not agent._preset_fallback_attempted
+                        and agent._can_fallback_preset()
+                    )
+                    _aed_terminal = (
+                        aed_attempts >= agent._config.max_aed_attempts
+                        and not _can_still_fallback
+                    )
+                    _original_provider_exc = e
+                    _report_api_error_to_task_card(
+                        agent, e,
+                        attempt=aed_attempts,
+                        max_attempts=agent._config.max_aed_attempts,
+                        terminal=_aed_terminal,
+                    )
+
                     if aed_attempts >= agent._config.max_aed_attempts:
-                        if not agent._preset_fallback_attempted and agent._can_fallback_preset():
+                        if _can_still_fallback:
                             agent._preset_fallback_attempted = True
                             agent._log("preset_auto_fallback",
                                       reason=err_desc,
@@ -778,6 +846,17 @@ def _run_loop(agent) -> None:
                                 agent._activate_default_preset()
                             except Exception as e:
                                 agent._log("preset_auto_fallback_failed", error=str(e))
+                                # Fallback itself failed and no recovery remains —
+                                # only now is this a truthful terminal failure, so
+                                # freeze the same row as error before ASLEEP.  Use
+                                # the original provider error (the exhaustion
+                                # cause), not the activation exception.
+                                _report_api_error_to_task_card(
+                                    agent, _original_provider_exc,
+                                    attempt=aed_attempts,
+                                    max_attempts=agent._config.max_aed_attempts,
+                                    terminal=True,
+                                )
                                 # fall through to ASLEEP
                             else:
                                 agent._perform_refresh()
@@ -1802,7 +1881,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         in_tool_loop = True
         try:
             response = agent._session.send(tool_results)
-        except Exception:
+        except Exception as _continuation_exc:
             # The local tools have already executed and returned results; only
             # the post-tool LLM continuation failed. Some adapters append tool
             # results as part of send(tool_results) and roll that user entry
@@ -1814,6 +1893,14 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             _restore_tool_results_after_continuation_failure(
                 agent, tool_results, ledger_source=ledger_source,
             )
+            # Surface the API error to the *still-live* Task Card here: the outer
+            # AED catch runs only after ``_handle_request``'s finally has torn
+            # down the card context, so its report would no-op. Observe-only and
+            # fail-open — the exception is re-raised unchanged for AED/retry/
+            # fallback, and the stable-row upsert keeps a later AED report (if a
+            # context is somehow still live) idempotent. No attempt number is
+            # known yet, so it reports as a truthful "retrying" without n/N.
+            _report_api_error_to_task_card(agent, _continuation_exc, terminal=False)
             raise
         agent._last_usage = response.usage
         agent._save_chat_history(ledger_source=ledger_source)

@@ -7,11 +7,16 @@ only (no cumulative history), no continuation/overflow, loud 📋 TASK CARD.
 from __future__ import annotations
 
 import threading
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import pytest
 from lingtai.kernel.base_agent import BaseAgent, _TASK_CARD_TOOL
 from lingtai.mcp_servers.telegram.manager import TelegramManager, SCHEMA
+
+# Fixed local instant so the immutable per-row start stamp is deterministic.
+_FIXED_LOCAL_DT = datetime(2026, 7, 12, 4, 8, 8, tzinfo=timezone(timedelta(hours=-7)))
+_FIXED_STAMP = "04:08:08 UTC-07"
 
 
 # ---------------------------------------------------------------------------
@@ -349,17 +354,19 @@ def test_hook_lazy_creates_card():
         "chat_id": 123,
         "card_message_id": None,
         "_lock": threading.Lock(),
+        "wall_clock": lambda: _FIXED_LOCAL_DT,
     }
     agent._on_tool_pre_dispatch_hook("bash", {"_reasoning": "check", "action": "run"}, tool_call_id="c1")
     assert len(client.calls) == 1
     assert client.calls[0][0] == _TASK_CARD_TOOL  # private tool name
     assert client.calls[0][1]["sub_action"] == "create"
     assert "action" not in client.calls[0][1]  # server forces the action
-    # The tool renders as one row carrying its display label (not routing).
+    # The tool renders as one row carrying its display label (not routing) and
+    # its immutable captured local start stamp.
     rows = client.calls[0][1]["rows"]
     assert rows == [{
         "tool": "bash", "tool_action": "run", "reasoning": "check",
-        "elapsed_s": 0, "done": False,
+        "elapsed_s": 0, "done": False, "started_at": _FIXED_STAMP,
     }]
     assert agent._telegram_task_card_context["card_message_id"] == "mybot:123:789"
 
@@ -373,6 +380,7 @@ def test_hook_second_tool_edits_same_card():
         "chat_id": 123,
         "card_message_id": "mybot:123:789",
         "_lock": threading.Lock(),
+        "wall_clock": lambda: _FIXED_LOCAL_DT,
     }
     agent._on_tool_pre_dispatch_hook("read", {"_reasoning": "step 2"}, tool_call_id="c2")
     assert len(client.calls) == 1
@@ -383,7 +391,7 @@ def test_hook_second_tool_edits_same_card():
     rows = client.calls[0][1]["rows"]
     assert rows == [{
         "tool": "read", "tool_action": "", "reasoning": "step 2",
-        "elapsed_s": 0, "done": False,
+        "elapsed_s": 0, "done": False, "started_at": _FIXED_STAMP,
     }]
 
 

@@ -1511,7 +1511,7 @@ class TelegramManager:
 
         When ``rows`` is supplied (the batched multi-row form) each parallel or
         sequential call renders as its own row showing ``tool.action``, its
-        redacted reasoning excerpt, its own one-decimal elapsed seconds, and a
+        redacted reasoning excerpt, its own whole-second elapsed, and a
         ``✓`` marker once it has completed.  The scalar ``tool``/``action``/``reasoning``
         path is retained for backward-compatible single-tool callers and does
         not render the footer (it is the legacy transient-step form).
@@ -1543,12 +1543,18 @@ class TelegramManager:
     def _format_rows_task_card_text(cls, rows: list) -> str:
         from lingtai.kernel.trace_redaction import redact_text
 
-        # Redact every row's reasoning up front (before any excerpt/trim), and
-        # compute the per-row budget so the whole render stays under the limit
-        # while keeping every row visible.
-        prepared: list[tuple[str, str, str, bool]] = []
-        for row in rows:
+        # Split tool rows (redacted, capped reasoning) from sanitized API-error
+        # rows (fixed machine summary, no reasoning to redact).  Redact every tool
+        # row's reasoning up front (before any excerpt/trim) and compute the
+        # per-row budget so the whole render stays under the limit while keeping
+        # every row visible.
+        tool_prepared: list[tuple[int, str, str, str, bool, str]] = []
+        api_prepared: list[tuple[int, str]] = []
+        for idx, row in enumerate(rows):
             if not isinstance(row, dict):
+                continue
+            if row.get("kind") == "api_error":
+                api_prepared.append((idx, cls._format_api_error_line(row)))
                 continue
             tool = str(row.get("tool", ""))
             action = str(row.get("tool_action", ""))
@@ -1556,47 +1562,105 @@ class TelegramManager:
             redacted = redact_text(str(row.get("reasoning", "")))
             elapsed = cls._format_elapsed(row.get("elapsed_s", 0))
             done = bool(row.get("done", False))
-            prepared.append((label, redacted, elapsed, done))
+            started_at = row.get("started_at", "")
+            started_at = started_at if isinstance(started_at, str) else ""
+            tool_prepared.append((idx, label, redacted, elapsed, done, started_at))
 
-        if not prepared:
+        if not tool_prepared and not api_prepared:
             return f"{cls._TASK_CARD_HEADER}\n\n{_TASK_CARD_FOOTER}"
 
-        # Fixed overhead (header + footer + per-row scaffolding) leaves this many
-        # characters for the reasoning excerpts, shared evenly across rows so no
-        # single row can crowd the others out.
-        fixed = len(cls._TASK_CARD_HEADER) + len(_TASK_CARD_FOOTER) + 4
-        per_row_overhead = 24  # marker, label, elapsed suffix, separators
-        budget = cls._TASK_CARD_TEXT_LIMIT - fixed - per_row_overhead * len(prepared)
-        per_row_cap = max(16, min(cls._TASK_CARD_REASONING_CAP, budget // len(prepared)))
-
-        lines = [cls._TASK_CARD_HEADER]
-        for label, redacted, elapsed, done in prepared:
-            if len(redacted) > per_row_cap:
-                excerpt = redacted[:per_row_cap] + "…"
-            else:
-                excerpt = redacted
+        # Budget the reasoning excerpts against the render ceiling.  The fixed
+        # cost is the header + footer + their newlines plus the *actual*
+        # non-reasoning scaffolding of every row (marker, label, elapsed suffix,
+        # the standalone timestamp, and each row's newline) — measured, not a
+        # flat estimate, so a long label or the ~16-char timestamp cannot push a
+        # timestamped many-row card past ``_TASK_CARD_TEXT_LIMIT``.  What remains
+        # is shared evenly across tool rows so no single row crowds the others
+        # out; reasoning shrinks but a row is never dropped.
+        api_scaffold = sum(len(line) + 1 for _, line in api_prepared)
+        tool_scaffold = 0
+        for _, label, _redacted, elapsed, done, started_at in tool_prepared:
             marker = "✓ " if done else "• "
             prefix = f"{marker}{label}: " if label else marker
-            lines.append(f"{prefix}{excerpt} ({elapsed}s)")
+            stamp = f" {started_at}" if started_at else ""
+            # +1 newline, +1 for a possible truncation ellipsis (conservative).
+            tool_scaffold += len(prefix) + len(f" ({elapsed}s)") + len(stamp) + 2
+        fixed = (
+            len(cls._TASK_CARD_HEADER) + 1  # header + newline
+            + 1                              # blank line before footer
+            + len(_TASK_CARD_FOOTER)
+            + api_scaffold + tool_scaffold
+        )
+        budget = cls._TASK_CARD_TEXT_LIMIT - fixed
+        divisor = max(1, len(tool_prepared))
+        # Floor at 0 (not 16) so a degenerate over-budget batch still trims to
+        # empty excerpts rather than blowing the ceiling; a healthy card keeps a
+        # generous per-row excerpt.
+        per_row_cap = max(0, min(cls._TASK_CARD_REASONING_CAP, budget // divisor))
+
+        # Render in original row order so tool and API rows interleave correctly.
+        by_idx: dict[int, str] = {}
+        for idx, label, redacted, elapsed, done, started_at in tool_prepared:
+            excerpt = redacted[:per_row_cap] + "…" if len(redacted) > per_row_cap else redacted
+            marker = "✓ " if done else "• "
+            prefix = f"{marker}{label}: " if label else marker
+            # Standalone immutable start stamp (omitted when not captured).
+            stamp = f" {started_at}" if started_at else ""
+            by_idx[idx] = f"{prefix}{excerpt} ({elapsed}s){stamp}"
+        for idx, line in api_prepared:
+            by_idx[idx] = line
+
+        lines = [cls._TASK_CARD_HEADER]
+        lines.extend(by_idx[i] for i in sorted(by_idx))
         lines.append("")
         lines.append(_TASK_CARD_FOOTER)
         return "\n".join(lines)
 
+    @classmethod
+    def _format_api_error_line(cls, row: dict) -> str:
+        """Render a sanitized LLM/provider API-error row.
+
+        Shows only the numeric status and an already-allow-listed machine code
+        (both supplied pre-sanitized by the kernel), plus the lifecycle state
+        (retrying n/N, recovered, error).  Never renders any raw exception text —
+        there is no free-form field on an API-error row to leak.
+        """
+        state = row.get("state")
+        parts = ["API error"]
+        status = row.get("status")
+        if isinstance(status, int):
+            parts.append(str(status))
+        code = row.get("code")
+        if isinstance(code, str) and code:
+            parts.append(code)
+        summary = " · ".join(parts)
+
+        if state == "recovered":
+            return f"✓ {summary} · recovered"
+        if state == "error":
+            return f"⚠️ {summary} · failed"
+        # retrying (default)
+        attempt = row.get("attempt")
+        max_attempts = row.get("max_attempts")
+        if isinstance(attempt, int) and isinstance(max_attempts, int):
+            return f"⚠️ {summary} · retrying {attempt}/{max_attempts}"
+        if isinstance(attempt, int):
+            return f"⚠️ {summary} · retrying (attempt {attempt})"
+        return f"⚠️ {summary} · retrying"
+
     @staticmethod
     def _format_elapsed(value: object) -> str:
-        """Render a row's elapsed seconds to exactly one decimal place.
+        """Render a row's elapsed seconds as whole seconds (no decimal point).
 
-        The heartbeat ticks every 0.5s and the kernel quantizes elapsed to one
-        decimal, so frames advance ``0.5 → 1.0 → 1.5`` rather than duplicating
-        integer seconds.  ``:.1f`` gives a stable single-decimal string with no
-        float-repr noise (``0.30000000000000004`` → ``0.3``) and coerces ints
-        (``3`` → ``3.0``); a non-numeric value degrades to ``0.0`` rather than
-        raising into the render.
+        The heartbeat still ticks every 0.5s, but elapsed is floored to whole
+        seconds by the kernel, so half-second frames read ``0s, 0s, 1s, 1s, 2s``.
+        This coerces + floors defensively (a float payload is floored, junk
+        degrades to ``0``) so the render never raises.
         """
         try:
-            return f"{float(value):.1f}"
+            return str(max(0, int(float(value))))
         except (TypeError, ValueError):
-            return "0.0"
+            return "0"
 
     # ------------------------------------------------------------------
     # Actions

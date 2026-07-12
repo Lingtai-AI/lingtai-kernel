@@ -57,8 +57,9 @@ def test_single_row_shows_tool_action_reasoning_elapsed():
     ])
     assert "bash.run" in text
     assert "compile project" in text
-    # Elapsed renders to one decimal place.
-    assert "3.0s" in text
+    # Elapsed renders as whole seconds, no decimal point.
+    assert "3s" in text
+    assert "3.0s" not in text
 
 
 def test_parallel_rows_all_represented_with_independent_elapsed():
@@ -70,61 +71,60 @@ def test_parallel_rows_all_represented_with_independent_elapsed():
         {"tool": "grep", "tool_action": "", "reasoning": "scan",
          "elapsed_s": 8, "done": True},
     ])
-    # Each row present with its own tool + one-decimal elapsed.
+    # Each row present with its own tool + whole-second elapsed.
     assert "bash.run" in text
     assert "read" in text
     assert "grep" in text
-    assert "5.0s" in text
-    assert "2.0s" in text
-    assert "8.0s" in text
+    assert "5s" in text
+    assert "2s" in text
+    assert "8s" in text
 
 
 # ---------------------------------------------------------------------------
-# One-decimal elapsed formatting rule (stable, no float-repr surprises)
+# Whole-second display rule (no decimal point)
 # ---------------------------------------------------------------------------
 
-def test_fractional_half_second_renders_one_decimal():
+def test_no_decimal_point_in_render():
     text = _fmt([
         {"tool": "bash", "tool_action": "run", "reasoning": "x",
-         "elapsed_s": 0.5, "done": False},
+         "elapsed_s": 12, "done": False},
     ])
-    assert "0.5s" in text
+    assert "12s" in text
+    # The elapsed suffix is whole-second, no decimal point in it.
+    row_line = next(ln for ln in text.splitlines() if "bash.run" in ln)
+    elapsed_suffix = row_line[row_line.rindex("("):]  # "(12s)"
+    assert elapsed_suffix == "(12s)"
+    assert "." not in elapsed_suffix
 
 
-def test_one_and_a_half_second_renders_one_decimal():
+def test_float_elapsed_payload_is_floored_to_whole_second():
+    """A float elapsed (e.g. from an in-flight value) is floored, not rounded,
+    and shows no decimal — 8.99s displays 8s."""
     text = _fmt([
         {"tool": "bash", "tool_action": "run", "reasoning": "x",
-         "elapsed_s": 1.5, "done": False},
+         "elapsed_s": 8.99, "done": False},
     ])
-    assert "1.5s" in text
+    assert "8s" in text
+    assert "8.99" not in text
+    assert "9s" not in text
 
 
-def test_float_repr_noise_is_formatted_to_one_decimal():
-    """A raw float carrying repr noise (0.1+0.2 == 0.30000000000000004) must
-    render as a clean single decimal, never leak extra digits."""
-    text = _fmt([
-        {"tool": "bash", "tool_action": "run", "reasoning": "x",
-         "elapsed_s": 0.1 + 0.2, "done": False},
-    ])
-    assert "0.3s" in text
-    assert "0.30000" not in text
-
-
-def test_zero_elapsed_renders_one_decimal():
+def test_zero_elapsed_renders_zero_seconds():
     text = _fmt([
         {"tool": "bash", "tool_action": "run", "reasoning": "x",
          "elapsed_s": 0, "done": False},
     ])
-    assert "0.0s" in text
+    assert "0s" in text
+    assert "0.0s" not in text
 
 
-def test_done_row_elapsed_is_one_decimal():
+def test_done_row_elapsed_is_whole_second():
     text = _fmt([
         {"tool": "bash", "tool_action": "run", "reasoning": "x",
-         "elapsed_s": 7.0, "done": True},
+         "elapsed_s": 7, "done": True},
     ])
-    # Frozen/completed rows are one-decimal too.
-    assert "7.0s" in text
+    assert "7s" in text
+    assert "7.0s" not in text
 
 
 def test_done_row_has_marker_and_active_row_does_not():

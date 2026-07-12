@@ -2,12 +2,12 @@
 
 The pre-dispatch hook builds one row per tool call (the first active row of a
 batch resets the batch; later pre-hooks append while any row is active).  The
-result hook freezes a completed row (final one-decimal elapsed + done marker)
+result hook freezes a completed row (final whole-second elapsed + done marker)
 on the orchestrating thread while other rows keep ticking.  A 0.5s heartbeat
-edits the same card with fresh one-decimal elapsed values (frames advance
-0.5 → 1.0 → 1.5), never sends a new card per tick, uses a monotonic clock, and a
-stale timer can never overwrite a newer batch, a recreated card, or the frozen
-last-behavior state.
+edits the same card with fresh whole-second elapsed values (floor display, so
+half-second frames read 0s, 0s, 1s, 1s, 2s), never sends a new card per tick,
+uses a monotonic clock, and a stale timer can never overwrite a newer batch, a
+recreated card, or the frozen last-behavior state.
 
 Clock and sleep are injected so the tick logic is exercised without real time.
 """
@@ -15,6 +15,7 @@ Clock and sleep are injected so the tick logic is exercised without real time.
 from __future__ import annotations
 
 import threading
+from datetime import datetime, timezone, timedelta
 
 from lingtai.kernel.base_agent import BaseAgent, _TASK_CARD_TOOL
 
@@ -52,6 +53,11 @@ class FakeMCPClient:
         return [c for c in self.calls if c[1].get("sub_action") == "update"]
 
 
+# Fixed local instant so the immutable per-row start stamp is deterministic.
+_FIXED_LOCAL_DT = datetime(2026, 7, 12, 4, 8, 8, tzinfo=timezone(timedelta(hours=-7)))
+_FIXED_STAMP = "04:08:08 UTC-07"
+
+
 def _agent(client, clock, *, card_message_id=None):
     agent = BaseAgent.__new__(BaseAgent)
     agent._telegram_task_card_context = {
@@ -61,6 +67,7 @@ def _agent(client, clock, *, card_message_id=None):
         "card_message_id": card_message_id,
         "_lock": threading.RLock(),
         "clock": clock,
+        "wall_clock": lambda: _FIXED_LOCAL_DT,
     }
     return agent
 
@@ -146,19 +153,19 @@ def test_completed_row_freezes_final_elapsed_while_other_advances():
         "read", {"_reasoning": "open"}, tool_call_id="c2")   # started t=1000
 
     clock.advance(4.5)  # now t=1004.5
-    # c1 completes at 4.5s elapsed and freezes to one decimal (not truncated).
+    # c1 completes at 4.5s elapsed and freezes floored to whole seconds (4).
     agent._on_tool_result_hook("bash", {}, {"ok": True}, tool_call_id="c1")
 
     clock.advance(3)  # now t=1007.5
-    # Heartbeat tick: c2 should read 7.5s, c1 stays frozen at 4.5s.
+    # Heartbeat tick: c2 reads floor(7.5)=7s, c1 stays frozen at floor(4.5)=4s.
     agent._task_card_heartbeat_tick()
 
     rows = _rows_of(client.updates()[-1])
     by_tool = {r["tool"]: r for r in rows}
     assert by_tool["bash"]["done"] is True
-    assert by_tool["bash"]["elapsed_s"] == 4.5
+    assert by_tool["bash"]["elapsed_s"] == 4
     assert by_tool["read"]["done"] is False
-    assert by_tool["read"]["elapsed_s"] == 7.5
+    assert by_tool["read"]["elapsed_s"] == 7
 
 
 # ---------------------------------------------------------------------------
@@ -184,21 +191,28 @@ def test_heartbeat_edits_same_card_never_sends_new():
     assert elapsed_seq[-1] == 3
 
 
-def test_heartbeat_half_second_cadence_advances_frames():
-    """At the 0.5s cadence, successive ticks yield distinct one-decimal frames
-    0.5 → 1.0 → 1.5 rather than duplicate integer seconds."""
+def test_heartbeat_half_second_cadence_floors_to_whole_seconds():
+    """At the 0.5s cadence, whole-second floor display yields duplicated integer
+    frames 0s, 0s, 1s, 1s, 2s over successive half-second ticks (Jason's spec)."""
     client = FakeMCPClient()
     clock = FakeClock()
     agent = _agent(client, clock)
 
     agent._on_tool_pre_dispatch_hook("bash", {"_reasoning": "x"}, tool_call_id="c1")
     frames = []
-    for _ in range(3):
+    for _ in range(5):
         clock.advance(0.5)
         agent._task_card_heartbeat_tick()
         frames.append(_rows_of(client.updates()[-1])[0]["elapsed_s"])
 
-    assert frames == [0.5, 1.0, 1.5]
+    # +0.5→0, +0.5→1, +0.5→1, +0.5→2, +0.5→2 (floor of 0.5,1.0,1.5,2.0,2.5)
+    assert frames == [0, 1, 1, 2, 2]
+    # No frame carries a decimal point once rendered.
+    from lingtai.mcp_servers.telegram.manager import TelegramManager
+    rendered = TelegramManager._format_task_card_text(
+        "", "", "", rows=[{"tool": "bash", "tool_action": "",
+                           "reasoning": "x", "elapsed_s": frames[-1], "done": False}])
+    assert "2s" in rendered and "2.0s" not in rendered
 
 
 def test_heartbeat_interval_is_half_second():
@@ -287,10 +301,11 @@ def test_teardown_finalizes_frozen_rows_not_generic_done():
     finals = [c for c in client.calls if c[1].get("sub_action") == "finalize"]
     assert len(finals) == 1
     rows = finals[0][1]["rows"]
-    # Concrete last-behavior row, frozen, no generic DONE subject.
+    # Concrete last-behavior row, frozen, no generic DONE subject; the immutable
+    # captured start stamp survives the freeze.
     assert rows == [{
         "tool": "bash", "tool_action": "run", "reasoning": "build",
-        "elapsed_s": 3, "done": True,
+        "elapsed_s": 3, "done": True, "started_at": _FIXED_STAMP,
     }]
     assert agent._telegram_task_card_context is None
 
@@ -309,8 +324,8 @@ def test_teardown_freezes_row_still_active_at_turn_end():
     finals = [c for c in client.calls if c[1].get("sub_action") == "finalize"]
     rows = finals[0][1]["rows"]
     assert rows[0]["done"] is True
-    # Frozen to one decimal (the old int() truncation would have dropped .5).
-    assert rows[0]["elapsed_s"] == 6.5
+    # Frozen with whole-second floor: floor(6.5) == 6.
+    assert rows[0]["elapsed_s"] == 6
 
 
 # ---------------------------------------------------------------------------

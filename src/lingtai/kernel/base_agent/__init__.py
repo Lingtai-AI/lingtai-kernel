@@ -2227,7 +2227,7 @@ class BaseAgent:
         ``tool_call_id`` is the provider-assigned id for this tool call,
         passed directly by ToolExecutor so no heuristic scan is needed.
 
-        For the live Task Card this freezes the matching row (final one-decimal
+        For the live Task Card this freezes the matching row (final whole-second
         elapsed + done marker) while other active rows keep ticking.  It runs on
         the orchestrating thread in input order in both the sequential and
         parallel paths, so it never touches a tool result — it only observes
@@ -2244,7 +2244,7 @@ class BaseAgent:
     def _freeze_task_card_row(self, tool_call_id: str | None) -> None:
         """Freeze the completed row for ``tool_call_id`` (best-effort, fail-open).
 
-        Records the row's final one-decimal elapsed and marks it done, then
+        Records the row's final whole-second elapsed and marks it done, then
         re-renders so the completed row shows its frozen value while any still
         -active parallel rows keep ticking.  Never raises into tool execution.
         """
@@ -2299,11 +2299,17 @@ class BaseAgent:
         action = tool_args.get("action", "")
         with ctx["_lock"]:
             rows = ctx.setdefault("rows", [])
-            # A batch is "active" while any row is not yet done.  The first row
-            # that arrives with no active predecessor starts a fresh batch: reset
-            # rows, bump the generation (so a stale heartbeat from the previous
-            # batch can't overwrite this one), and (re)start the heartbeat.
-            batch_active = any(not r["done"] for r in rows)
+            # A batch is "active" while any *tool* row is not yet done.  The first
+            # tool that arrives with no active tool predecessor starts a fresh
+            # batch: reset rows, bump the generation (so a stale heartbeat from
+            # the previous batch can't overwrite this one), and (re)start the
+            # heartbeat.  API-error rows are excluded from this check — a new tool
+            # batch means the LLM has responded, so it supersedes any prior
+            # API-error row as the concrete last behavior (sequential-batch
+            # replacement), rather than accreting onto it.
+            batch_active = any(
+                not r["done"] for r in rows if r.get("kind") != "api_error"
+            )
             if not batch_active:
                 rows = []
                 ctx["rows"] = rows
@@ -2314,11 +2320,26 @@ class BaseAgent:
                 "tool": tool_name,
                 "tool_action": action,
                 "reasoning": reasoning,
+                # Monotonic start for elapsed; wall-clock local instant captured
+                # once here and frozen into an immutable display string so
+                # heartbeats never change it and parallel rows keep their own.
                 "started": self._task_card_clock(ctx)(),
+                "started_at": self._capture_task_card_started_at(ctx),
                 "elapsed_s": 0,
                 "done": False,
             })
             self._render_task_card(ctx)
+
+    def _capture_task_card_started_at(self, ctx: dict) -> str:
+        """Capture the local start instant as an immutable display string.
+
+        Fail-open: a wall-clock error must never block a tool from dispatching,
+        so any failure yields ``""`` (the render simply omits the stamp).
+        """
+        try:
+            return self._format_task_card_timestamp(self._task_card_wall_clock(ctx)())
+        except Exception:
+            return ""
 
     def _render_task_card(self, ctx: dict) -> None:
         """Send the current batch rows to the card (create lazily, else edit).
@@ -2374,14 +2395,51 @@ class BaseAgent:
         return time.monotonic
 
     @staticmethod
-    def _task_card_elapsed(now: float, started: float) -> float:
-        """Monotonic elapsed seconds, clamped to >=0 and quantized to one decimal.
+    def _task_card_elapsed(now: float, started: float) -> int:
+        """Monotonic elapsed whole seconds, floored and clamped to >=0.
 
-        Rounding to 0.1 pairs with the 0.5s heartbeat so live and frozen frames
-        are stable one-decimal values (``0.5``, ``1.0``, ``1.5``) rather than raw
-        floats; the manager formats the value with ``:.1f`` for display.
+        Floor semantics (``int``) so the 0.5s heartbeat shows integer seconds
+        without a decimal point — half-second frames read ``0s, 0s, 1s, 1s, 2s``
+        and a final 8.01s freezes as ``8s``.
         """
-        return round(max(0.0, now - started), 1)
+        return max(0, int(now - started))
+
+    @staticmethod
+    def _task_card_wall_clock(ctx: dict):
+        """Return the context's wall clock, defaulting to local-aware now.
+
+        Captures the *local* start instant once per tool (separate from the
+        monotonic ``clock`` used for elapsed).  ``datetime.now().astimezone()``
+        yields a tz-aware value carrying the machine's local UTC offset.
+        Injectable so tests fix the instant instead of asserting a real clock.
+        """
+        wall = ctx.get("wall_clock")
+        if wall is not None:
+            return wall
+        from datetime import datetime
+
+        def _local_now():
+            return datetime.now().astimezone()
+
+        return _local_now
+
+    @staticmethod
+    def _format_task_card_timestamp(dt) -> str:
+        """Format a captured local instant as ``HH:MM:SS UTC±HH`` (hour-only).
+
+        Final UI contract: time of day plus a signed two-digit local UTC hour,
+        with no date, no ``Started`` label, no regional abbreviation, and no
+        minute component on the offset (a fractional-hour zone like ``UTC+05:30``
+        is intentionally shown as ``UTC+05``).  Returns ``""`` for a value with no
+        usable offset so the render simply omits the stamp rather than raising.
+        """
+        offset = getattr(dt, "utcoffset", lambda: None)()
+        if offset is None:
+            return ""
+        total = offset.total_seconds()
+        sign = "-" if total < 0 else "+"
+        hours = int(abs(total) // 3600)
+        return f"{dt.strftime('%H:%M:%S')} UTC{sign}{hours:02d}"
 
     @staticmethod
     def _task_card_payload_rows(rows: list) -> list:
@@ -2389,17 +2447,180 @@ class BaseAgent:
 
         Only the display fields cross the reverse channel — the monotonic
         ``started`` timestamp and the internal ``call_id`` stay in the kernel.
+        A sanitized API-error row carries only its safe machine summary
+        (``status``/``code``/``state``/attempt counts), never the raw exception.
         """
-        return [
-            {
-                "tool": r["tool"],
-                "tool_action": r["tool_action"],
-                "reasoning": r["reasoning"],
-                "elapsed_s": r["elapsed_s"],
-                "done": r["done"],
-            }
-            for r in rows
-        ]
+        payload: list[dict] = []
+        for r in rows:
+            if r.get("kind") == "api_error":
+                payload.append({
+                    "kind": "api_error",
+                    "status": r.get("status"),
+                    "code": r.get("code"),
+                    "state": r.get("state"),
+                    "attempt": r.get("attempt"),
+                    "max_attempts": r.get("max_attempts"),
+                    "done": r["done"],
+                })
+            else:
+                payload.append({
+                    "tool": r["tool"],
+                    "tool_action": r["tool_action"],
+                    "reasoning": r["reasoning"],
+                    "elapsed_s": r["elapsed_s"],
+                    "done": r["done"],
+                    # Immutable local start stamp (tool rows only); the monotonic
+                    # ``started`` and internal ``call_id`` stay in the kernel.
+                    "started_at": r.get("started_at", ""),
+                })
+        return payload
+
+    # ------------------------------------------------------------------
+    # LLM/provider API-error reporting into the automatic Task Card
+    # ------------------------------------------------------------------
+
+    # Internal sentinel call-id for the single stable API-error row per turn.
+    _TASK_CARD_API_ROW_ID = "__api_error__"
+
+    # Allow-list of provider machine error codes safe to display verbatim. A
+    # code outside this set is dropped (only the numeric status shows), so an
+    # untrusted/free-form code can never leak arbitrary provider text. Keep this
+    # curated and conservative — add a code only when it is a known, non-secret
+    # machine identifier.
+    _TASK_CARD_SAFE_API_CODES = frozenset({
+        "usage_limit_reached",
+        "rate_limit_exceeded",
+        "rate_limit_error",
+        "insufficient_quota",
+        "quota_exceeded",
+        "context_length_exceeded",
+        "overloaded_error",
+        "server_error",
+        "service_unavailable",
+        "api_error",
+        "timeout",
+    })
+
+    @staticmethod
+    def _task_card_api_status(exc: object) -> int | None:
+        """Best-effort HTTP-ish status code from a provider exception.
+
+        Reads only structured integer attributes (``status_code``/``status``/
+        ``code``, or ``response.status_code``) — never the message/body — so the
+        surfaced value is machine-safe.
+        """
+        for attr in ("status_code", "status", "code"):
+            value = getattr(exc, attr, None)
+            if isinstance(value, int):
+                return value
+        response = getattr(exc, "response", None)
+        if response is not None:
+            value = getattr(response, "status_code", None)
+            if isinstance(value, int):
+                return value
+        return None
+
+    @classmethod
+    def _task_card_api_code(cls, exc: object) -> str | None:
+        """Extract a provider machine error code, strictly allow-listed.
+
+        Only structured attributes are inspected (``code`` string, or a
+        ``body``/``error`` dict's ``code``/``type``), and the candidate must be
+        an exact member of ``_TASK_CARD_SAFE_API_CODES`` — otherwise ``None``.
+        Never derived from ``str(exc)`` or a free-form message, so arbitrary
+        provider text, URLs, tokens, or paths can never reach the card.
+        """
+        candidates: list[object] = []
+        code_attr = getattr(exc, "code", None)
+        if isinstance(code_attr, str):
+            candidates.append(code_attr)
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            err = body.get("error")
+            if isinstance(err, dict):
+                candidates.append(err.get("code"))
+                candidates.append(err.get("type"))
+            candidates.append(body.get("code"))
+        for cand in candidates:
+            if isinstance(cand, str) and cand in cls._TASK_CARD_SAFE_API_CODES:
+                return cand
+        return None
+
+    def _report_task_card_api_error(
+        self,
+        exc: object,
+        *,
+        attempt: int | None = None,
+        max_attempts: int | None = None,
+        terminal: bool = False,
+    ) -> None:
+        """Surface an LLM/provider API failure onto the automatic Task Card.
+
+        Observe-only and fail-open: this only ever reports; it never changes the
+        original error, the retry/fallback decision, an eventual success, a final
+        failure, token accounting, or any user-facing semantics.  A no-op when no
+        Telegram Task Card context exists (non-Telegram/no-route turn).
+
+        One stable API-error row per turn/retry sequence is upserted into the
+        current batch and the same card is created (lazily) or edited — repeated
+        failures update the row rather than sending a card per error.  The row
+        carries only a sanitized machine summary (status code + allow-listed
+        code); ``terminal`` freezes it as the concrete last behavior.
+        """
+        ctx = self._telegram_task_card_context
+        if ctx is None:
+            return
+        try:
+            status = self._task_card_api_status(exc)
+            code = self._task_card_api_code(exc)
+            with ctx["_lock"]:
+                rows = ctx.setdefault("rows", [])
+                row = self._find_api_error_row(rows)
+                if row is None:
+                    row = {
+                        "call_id": self._TASK_CARD_API_ROW_ID,
+                        "kind": "api_error",
+                    }
+                    rows.append(row)
+                row["status"] = status
+                row["code"] = code
+                row["attempt"] = attempt
+                row["max_attempts"] = max_attempts
+                row["state"] = "error" if terminal else "retrying"
+                row["done"] = bool(terminal)
+                self._render_task_card(ctx)
+        except Exception:
+            # Fail-open, but observable: reporting must never raise into the turn.
+            self._log_task_card_reverse_exception("api_error", tool_name="")
+
+    def _recover_task_card_api_error(self) -> None:
+        """Mark a previously-reported API-error row ``recovered`` (fail-open).
+
+        Preserves the fact that an error happened (the row stays, frozen) while
+        recording that the turn ultimately succeeded.  A no-op when no API-error
+        row was reported this turn or no card context exists.
+        """
+        ctx = self._telegram_task_card_context
+        if ctx is None:
+            return
+        try:
+            with ctx["_lock"]:
+                rows = ctx.get("rows", [])
+                row = self._find_api_error_row(rows)
+                if row is None:
+                    return
+                row["state"] = "recovered"
+                row["done"] = True
+                self._render_task_card(ctx)
+        except Exception:
+            self._log_task_card_reverse_exception("api_error", tool_name="")
+
+    @classmethod
+    def _find_api_error_row(cls, rows: list) -> dict | None:
+        for r in rows:
+            if r.get("kind") == "api_error":
+                return r
+        return None
 
     def _task_card_heartbeat_tick(self, generation: int | None = None) -> None:
         """One heartbeat step: refresh active-row elapsed and edit the card.
@@ -2416,17 +2637,24 @@ class BaseAgent:
             if generation is not None and generation != ctx.get("generation"):
                 return
             rows = ctx.get("rows", [])
-            if not any(not r["done"] for r in rows):
+            # Only TOOL rows have a monotonic ``started`` and a ticking elapsed.
+            # API-error rows (``kind='api_error'``) carry no ``started`` and are
+            # rendered by their own explicit state transitions, so the heartbeat
+            # must never read ``r['started']`` on them (else a retrying API row,
+            # which is ``done=False``, would KeyError and kill the timer thread).
+            active_tool_rows = [
+                r for r in rows if not r["done"] and r.get("kind") != "api_error"
+            ]
+            if not active_tool_rows:
                 return
             now = self._task_card_clock(ctx)()
-            for r in rows:
-                if not r["done"]:
-                    r["elapsed_s"] = self._task_card_elapsed(now, r["started"])
+            for r in active_tool_rows:
+                r["elapsed_s"] = self._task_card_elapsed(now, r["started"])
             self._render_task_card(ctx)
 
     # Mechanical heartbeat cadence (seconds) while any tool row is active. 0.5s
-    # so visible frames advance 0.5 → 1.0 → 1.5 instead of duplicate integer
-    # seconds; elapsed is quantized to one decimal by ``_task_card_elapsed``.
+    # so the card stays lively; elapsed is floored to whole seconds by
+    # ``_task_card_elapsed``, so half-second frames read 0s, 0s, 1s, 1s, 2s.
     _TASK_CARD_HEARTBEAT_INTERVAL = 0.5
 
     def _start_task_card_heartbeat(self, ctx: dict) -> None:
@@ -2585,6 +2813,7 @@ class BaseAgent:
             return
 
         import time as _time
+        from datetime import datetime as _datetime
 
         self._telegram_task_card_context = {
             "mcp_client": telegram_client,
@@ -2596,6 +2825,9 @@ class BaseAgent:
             "_lock": threading.RLock(),
             # Monotonic clock for elapsed measurement; injectable for tests.
             "clock": _time.monotonic,
+            # Wall clock for the immutable local start stamp per tool row
+            # (separate from the monotonic elapsed clock); injectable for tests.
+            "wall_clock": lambda: _datetime.now().astimezone(),
             "rows": [],
             "generation": 0,
             # Production arms the real 1s heartbeat thread; unit tests leave this
@@ -2625,7 +2857,11 @@ class BaseAgent:
                 with ctx["_lock"]:
                     now = self._task_card_clock(ctx)()
                     for r in ctx.get("rows", []):
-                        if not r["done"]:
+                        # Only freeze TOOL rows — API-error rows have no
+                        # ``started`` and their terminal/recovered state is set
+                        # explicitly, so reading ``r['started']`` here would abort
+                        # finalization inside the outer fail-open wrapper.
+                        if not r["done"] and r.get("kind") != "api_error":
                             r["elapsed_s"] = self._task_card_elapsed(now, r["started"])
                             r["done"] = True
                     payload_rows = self._task_card_payload_rows(ctx.get("rows", []))
