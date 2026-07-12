@@ -266,6 +266,15 @@ def _stop(agent, timeout: float = 5.0) -> None:
     agent._log("agent_stop")
     agent._cancel_soul_timer()
     agent._shutdown.set()
+    # Stop any programmable Task Card watcher threads deterministically. The
+    # loops also observe ``_shutdown`` (daemon threads), but this joins and
+    # clears them without any filesystem deletion (Jason #7258/#7259).
+    _task_card_controller = getattr(agent, "_task_card_controller", None)
+    if _task_card_controller is not None:
+        try:
+            _task_card_controller.shutdown_for_agent_stop(reason="agent_stop")
+        except Exception:
+            pass
     if agent._thread:
         agent._thread.join(timeout=timeout)
     _shutdown_daemon_runtime(agent, reason="agent_stop")
