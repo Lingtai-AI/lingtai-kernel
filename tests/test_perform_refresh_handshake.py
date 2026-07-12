@@ -22,6 +22,7 @@ import sys
 import textwrap
 from unittest.mock import MagicMock, patch
 from tests._workdir_lease_helpers import make_test_lease
+from tests._notification_store_helpers import notification_store_for
 
 
 def make_mock_service():
@@ -40,11 +41,16 @@ def _make_agent_with_launch_cmd(tmp_path, agent_name="alice", launch_cmd=None):
     from lingtai.kernel.base_agent import BaseAgent
     wd = tmp_path / "test"
     wd.mkdir(exist_ok=True)
+    # The production composition root creates the log directory before a
+    # refresh watcher can run. This bare BaseAgent fixture must provide the
+    # same outer-runtime precondition so the watcher can open its relaunch log.
+    (wd / "logs").mkdir(exist_ok=True)
     agent = BaseAgent(
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(),
         agent_name=agent_name,
         working_dir=wd, workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(wd),
     )
     # BaseAgent._build_launch_cmd returns None; rebind to a sentinel
     # list so the handshake/signal code runs.
@@ -254,6 +260,7 @@ def test_perform_refresh_no_launch_cmd_skips_handshake(tmp_path):
         service=make_mock_service(),
         agent_name="alice",
         working_dir=wd, workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(wd),
     )
     # Default _build_launch_cmd returns None — do not override.
 

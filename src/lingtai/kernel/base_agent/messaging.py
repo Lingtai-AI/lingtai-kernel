@@ -118,26 +118,26 @@ def _enqueue_system_notification(
     """
     import secrets
     from datetime import datetime, timezone
-    from ..notifications import collect_notifications
-    from ..notifications import submit as publish_notification
+    from ..notification_store import UNCONDITIONAL
 
     event_id = f"evt_{int(time.time()*1000):x}_{secrets.token_hex(8)}"
     received_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    lock = agent._system_notification_lock
+    # The Store owns this serialized current-payload update.
+    store = agent._notification_store
 
-    with lock:
-        current = collect_notifications(agent._working_dir).get("system", {})
+    def _mutator(current_payload: dict) -> tuple[dict | None, bool, str]:
+        current = current_payload if isinstance(current_payload, dict) else {}
         events = list(current.get("data", {}).get("events", []))
 
         if skip_if_ref_id_exists:
             for ev in events:
                 if ev.get("ref_id") == ref_id:
-                    return ""
+                    return current_payload, False, ""
         if skip_if_idempotency_key_exists and idempotency_key:
             for ev in events:
                 if ev.get("idempotency_key") == idempotency_key:
-                    return ""
+                    return current_payload, False, ""
 
         event = {
             "event_id": event_id,
@@ -166,20 +166,26 @@ def _enqueue_system_notification(
             else "normal"
         )
 
-        publish_notification(
-            agent._working_dir, "system",
-            header=(
+        payload = {
+            "header": (
                 f"{len(events)} system notification"
                 f"{'s' if len(events) != 1 else ''}"
             ),
-            icon="🔔",
-            priority=envelope_priority,
-            data={"events": events},
-        )
+            "icon": "🔔",
+            "priority": envelope_priority,
+            "published_at": received_at,
+            "data": {"events": events},
+        }
+        return payload, True, event_id
+
+    result = store.compare_update_channel("system", UNCONDITIONAL, _mutator)
+    applied_event_id = result.value if isinstance(result.value, str) else ""
+    if not applied_event_id:
+        return ""
 
     agent._log(
         "system_notification_published",
-        event_id=event_id,
+        event_id=applied_event_id,
         source=source,
         ref_id=ref_id,
     )
@@ -195,7 +201,7 @@ def _enqueue_system_notification(
             error=str(e)[:200],
         )
 
-    return event_id
+    return applied_event_id
 
 
 def _rescan_large_tool_results(agent) -> int:

@@ -51,12 +51,13 @@ def _sleep(agent, args: dict) -> dict:
     """
     from lingtai.kernel.i18n import t
     from lingtai.kernel.state import AgentState
-    from lingtai.kernel.notifications import notification_fingerprint
+    from lingtai.kernel.notifications import is_channel_allowed
 
     reason = args.get("reason", "")
     force = bool(args.get("force", False))
 
-    pending_fp = notification_fingerprint(agent._working_dir)
+    store = agent._notification_store
+    pending_fp = store.fingerprint(is_channel_allowed)
     has_pending = pending_fp != agent._notification_fp
 
     if has_pending and not force:

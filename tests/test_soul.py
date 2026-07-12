@@ -25,6 +25,7 @@ import pytest
 from lingtai.kernel.config import AgentConfig
 from lingtai.tools import soul
 from tests._workdir_lease_helpers import make_test_lease
+from tests._notification_store_helpers import notification_store_for
 
 
 def _make_mock_agent():
@@ -228,6 +229,7 @@ class TestSoulTimer:
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         assert agent._soul_delay == 999999999.0
         assert agent._soul_timer is None
@@ -244,6 +246,7 @@ class TestSoulTimer:
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._soul_delay = 300.0
 
@@ -268,6 +271,7 @@ class TestSoulTimer:
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._soul_delay = 1.0
         agent._shutdown.set()
@@ -283,6 +287,7 @@ class TestSoulTimer:
             agent_name="test",
             config=AgentConfig(soul_delay=60.0),
             working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         assert agent._soul_delay == 60.0
 
@@ -295,6 +300,7 @@ class TestSoulTimer:
             agent_name="test",
             config=AgentConfig(soul_delay=-10.0),
             working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         assert agent._soul_delay == 1.0
 
@@ -305,6 +311,7 @@ class TestSoulTimer:
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._soul_delay = 300.0
         agent._start_soul_timer()
@@ -392,6 +399,7 @@ class TestSoulTimerOptIn:
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._soul_delay = 300.0
         agent._start_soul_timer()
@@ -405,6 +413,7 @@ class TestSoulTimerOptIn:
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._soul_delay = 300.0
         try:
@@ -423,6 +432,7 @@ class TestSoulTimerOptIn:
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._soul_delay = 300.0
         agent._set_state(AgentState.ACTIVE, reason="test")
@@ -542,6 +552,7 @@ class TestNonFlowActionsUnaffectedByOptIn:
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         try:
             result = soul.handle(agent, {"action": "config", "delay_seconds": 300})
@@ -563,6 +574,7 @@ class TestNonFlowActionsUnaffectedByOptIn:
             service=_make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
+        notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         try:
             result = soul.handle(agent, {"action": "config", "delay_seconds": 300})

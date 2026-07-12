@@ -9,6 +9,7 @@ from typing import Any
 
 from lingtai.mcp_servers.telegram import manager as telegram_manager
 from lingtai.mcp_servers.telegram.manager import TelegramManager
+from tests._notification_store_helpers import FakeNotificationStore
 
 
 class _FakeAccount:
@@ -47,6 +48,9 @@ class _FakeService:
     def get_account(self, _alias: str) -> _FakeAccount:
         return self.default_account
 
+    def list_accounts(self) -> list[str]:
+        return ["main"]
+
 
 def _document_update(*, caption: str | None = None) -> dict[str, Any]:
     message: dict[str, Any] = {
@@ -77,6 +81,7 @@ def _receive(
         _FakeService(account),
         working_dir=tmp_path,
         on_inbound=inbound_events.append,
+        notification_store=FakeNotificationStore(),
     )
     monkeypatch.setattr(telegram_manager._typing_manager, "start_typing", lambda *_args: None)
     manager.on_incoming("main", update)

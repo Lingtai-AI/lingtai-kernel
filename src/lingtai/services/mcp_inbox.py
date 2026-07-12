@@ -377,7 +377,7 @@ def _dispatch_summary(
                 instructions_lines.append(f"     [{', '.join(meta_bits)}]")
 
     publish_notification(
-        agent._working_dir,
+        agent,
         f"mcp.{mcp_name}",
         header=header,
         icon="💬",

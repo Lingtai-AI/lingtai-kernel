@@ -18,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from lingtai.mcp_servers.telegram.manager import TelegramManager
+from tests._notification_store_helpers import FakeNotificationStore
 
 
 class FakeAccount:
@@ -80,7 +81,10 @@ def _manager(tmp_path, *accounts):
         accounts = (FakeAccount(),)
     service = FakeService(list(accounts))
     manager = TelegramManager(
-        service, working_dir=Path(tmp_path), on_inbound=lambda _: None,
+        service,
+        working_dir=Path(tmp_path),
+        on_inbound=lambda _: None,
+        notification_store=FakeNotificationStore(),
     )
     return manager, service
 
@@ -351,7 +355,12 @@ def test_persisted_resident_is_edited_in_place_after_refresh(tmp_path):
         alias="mybot", bot_token="1:x", allowed_users=None, state_dir=state_dir,
     )
     svc1 = FakeService([acct1])
-    mgr1 = TelegramManager(svc1, working_dir=Path(tmp_path), on_inbound=lambda _: None)
+    mgr1 = TelegramManager(
+        svc1,
+        working_dir=Path(tmp_path),
+        on_inbound=lambda _: None,
+        notification_store=FakeNotificationStore(),
+    )
     r1 = mgr1._handle_task_card_update({
         "sub_action": "create", "account": "mybot", "chat_id": 999,
         "tool": "bash", "reasoning": "first",
@@ -368,7 +377,12 @@ def test_persisted_resident_is_edited_in_place_after_refresh(tmp_path):
     assert acct2.get_task_card(999) == first_id  # persisted across instances
 
     svc2 = FakeService([acct2])
-    mgr2 = TelegramManager(svc2, working_dir=Path(tmp_path), on_inbound=lambda _: None)
+    mgr2 = TelegramManager(
+        svc2,
+        working_dir=Path(tmp_path),
+        on_inbound=lambda _: None,
+        notification_store=FakeNotificationStore(),
+    )
     r2 = mgr2._handle_task_card_update({
         "sub_action": "create", "account": "mybot", "chat_id": 999,
         "tool": "bash", "reasoning": "second",

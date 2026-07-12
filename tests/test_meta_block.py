@@ -1891,8 +1891,11 @@ def _notif_agent(working_dir):
     ``_notification_payload_signature`` starts ``None`` (no payload emitted yet)
     so the first active payload always attaches; the sparse change-gate in
     ``attach_active_notifications`` updates it thereafter."""
+    from tests._notification_store_helpers import notification_store_for
+
     return SimpleNamespace(
         _working_dir=working_dir,
+        _notification_store=notification_store_for(working_dir),
         _notification_fp=(),
         _notification_payload_signature=None,
     )
@@ -1981,7 +1984,7 @@ def _write_telegram_notif(tmp_path, messages: list[dict]) -> None:
 
 
 def test_attach_active_notifications_first_payload_attaches(tmp_path):
-    from lingtai.kernel.notifications import notification_fingerprint
+    from tests._notification_store_helpers import fingerprint_notifications
 
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
@@ -2024,7 +2027,7 @@ def test_attach_active_notifications_first_payload_attaches(tmp_path):
     assert agent._notification_payload_signature is not None
     # Successful stamping must commit the fingerprint, so the IDLE-path
     # synthesized pair will treat this same state as already delivered.
-    expected_fp = notification_fingerprint(tmp_path)
+    expected_fp = fingerprint_notifications(tmp_path)
     assert expected_fp != ()
     assert agent._notification_fp == expected_fp
 
@@ -2061,7 +2064,7 @@ def test_attach_active_notifications_changed_payload_reattaches_and_retains_prio
     # trace — notification payloads are timely transient state, and canonical
     # history is no longer retroactively stripped (Jason #4307); only the
     # newest emitted payload is current.
-    from lingtai.kernel.notifications import notification_fingerprint
+    from tests._notification_store_helpers import fingerprint_notifications
 
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
@@ -2098,14 +2101,14 @@ def test_attach_active_notifications_changed_payload_reattaches_and_retains_prio
     assert "digest" not in persistent_email
     assert persistent_email["emails"][0]["message"] == "Three new email body"
     assert persistent_email["emails"][0]["id"] == "email-2"
-    assert agent._notification_fp == notification_fingerprint(tmp_path)
+    assert agent._notification_fp == fingerprint_notifications(tmp_path)
 
 
 def test_attach_active_notifications_unchanged_commits_fp_to_avoid_retry(tmp_path):
     # Even when an unchanged payload is not restamped, the fingerprint is
     # committed so an equivalent rewrite / same-material payload does not retry
     # forever against the IDLE-path synthesized pair.
-    from lingtai.kernel.notifications import notification_fingerprint
+    from tests._notification_store_helpers import fingerprint_notifications
 
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
@@ -2130,7 +2133,7 @@ def test_attach_active_notifications_unchanged_commits_fp_to_avoid_retry(tmp_pat
     # Not restamped (unchanged material), but the fingerprint IS committed.
     assert new_holder is holder
     assert "_meta" not in second.content or "notifications" not in second.content["_meta"]
-    assert agent._notification_fp == notification_fingerprint(tmp_path)
+    assert agent._notification_fp == fingerprint_notifications(tmp_path)
 
 
 def test_attach_active_notifications_unchanged_signature_without_holder_reattaches(tmp_path):
@@ -2196,8 +2199,8 @@ def test_attach_active_notifications_empty_resets_signature_for_reappearance(tmp
     holder = attach_active_notifications(agent, [first], prior_holder=None)
     assert agent._notification_payload_signature is not None
 
-    # Notifications cleared.
-    (tmp_path / ".notification" / "email.json").unlink()
+    # Notifications cleared through the injected Store.
+    assert agent._notification_store.clear("email") is True
     empty_batch = ToolResultBlock(id="t2", name="x", content={"ok": False})
     result = attach_active_notifications(agent, [empty_batch], prior_holder=holder)
     assert result is None
@@ -3568,7 +3571,7 @@ def _write_post_molt_notif(tmp_path):
 
 def test_attach_active_notifications_can_stamp_post_molt_after_molt_batch(tmp_path):
     """Post-molt is not globally idle-only; later ACTIVE batches may consume it."""
-    from lingtai.kernel.notifications import notification_fingerprint
+    from tests._notification_store_helpers import fingerprint_notifications
 
     _write_post_molt_notif(tmp_path)
     agent = _notif_agent(tmp_path)
@@ -3578,12 +3581,12 @@ def test_attach_active_notifications_can_stamp_post_molt_after_molt_batch(tmp_pa
 
     assert holder is block.content
     assert "post-molt" in block.content["_meta"]["notifications"]
-    assert agent._notification_fp == notification_fingerprint(tmp_path)
+    assert agent._notification_fp == fingerprint_notifications(tmp_path)
 
 
 def test_attach_active_notifications_stamps_post_molt_with_other_channels(tmp_path):
     """Mixed ordinary channels and post-molt stamp together on non-molt batches."""
-    from lingtai.kernel.notifications import notification_fingerprint
+    from tests._notification_store_helpers import fingerprint_notifications
 
     _write_email_notif(tmp_path)
     _write_post_molt_notif(tmp_path)
@@ -3595,7 +3598,7 @@ def test_attach_active_notifications_stamps_post_molt_with_other_channels(tmp_pa
     assert holder is block.content
     assert "email" in block.content["_meta"]["notifications"]
     assert "post-molt" in block.content["_meta"]["notifications"]
-    assert agent._notification_fp == notification_fingerprint(tmp_path)
+    assert agent._notification_fp == fingerprint_notifications(tmp_path)
 
 
 # ---------------------------------------------------------------------------

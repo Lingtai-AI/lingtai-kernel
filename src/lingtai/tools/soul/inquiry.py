@@ -76,7 +76,7 @@ def _publish_human_inquiry_notification(agent, result: dict, question: str) -> N
 
     answer = str(result.get("voice") or "")
     submit(
-        agent._working_dir,
+        agent,
         "btw",
         header="/btw side inquiry answered",
         icon="💭",

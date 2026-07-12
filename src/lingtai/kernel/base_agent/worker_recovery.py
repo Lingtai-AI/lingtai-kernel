@@ -84,9 +84,11 @@ def _message_preview(msg: Message) -> dict:
 def _collect_notification_metadata(agent) -> dict:
     """Safe metadata about live notifications (sources + ref ids only)."""
     try:
-        from ..notifications import collect_notifications
+        from ..notifications import _get_allow_predicate
 
-        notifications = collect_notifications(agent._working_dir)
+        store = agent._notification_store
+        allow = _get_allow_predicate()
+        notifications = store.snapshot(allow)
     except Exception:
         return {"notification_sources": [], "notification_ref_ids": []}
 
@@ -236,19 +238,6 @@ def is_worker_interface_poisoned(agent) -> bool:
     return bool(getattr(agent, "_llm_worker_interface_poisoned", False))
 
 
-def _system_event_exists(agent, ref_id: str) -> bool:
-    try:
-        from ..notifications import collect_notifications
-
-        system_payload = collect_notifications(agent._working_dir).get("system", {})
-        events = system_payload.get("data", {}).get("events", [])
-    except Exception:
-        return False
-    if not isinstance(events, list):
-        return False
-    return any(isinstance(event, dict) and event.get("ref_id") == ref_id for event in events)
-
-
 def publish_worker_hang_notification(
     agent,
     artifact_relpath: str | None,
@@ -261,8 +250,6 @@ def publish_worker_hang_notification(
     """
     context = context or {}
     ref_id = _artifact_ref_id(artifact_relpath)
-    if _system_event_exists(agent, ref_id):
-        return None
     turn = context.get("turn") if isinstance(context.get("turn"), dict) else {}
     error = context.get("error") if isinstance(context.get("error"), dict) else {}
     body = (
@@ -281,13 +268,15 @@ def publish_worker_hang_notification(
     }
     try:
         enqueue = getattr(agent, "_enqueue_system_notification")
-        return enqueue(
+        event_id = enqueue(
             source="kernel.llm_worker_hang",
             ref_id=ref_id,
             body=body,
             priority="high",
             extra=extra,
+            skip_if_ref_id_exists=True,
         )
+        return event_id or None
     except Exception as notif_err:
         try:
             agent._log(
@@ -377,8 +366,6 @@ def rehydrate_worker_hang_recovery(agent) -> int:
     except ValueError:
         artifact_relpath = str(path)
     ref_id = payload.get("recovery", {}).get("notification_ref_id") or _artifact_ref_id(artifact_relpath)
-    if _system_event_exists(agent, ref_id):
-        return 0
     event_id = publish_worker_hang_notification(agent, artifact_relpath, payload)
     return 1 if event_id else 0
 

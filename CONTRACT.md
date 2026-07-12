@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/kernel/event_journal/CONTRACT.md
   - src/lingtai/kernel/mail_transport/CONTRACT.md
   - src/lingtai/kernel/workdir_lease/CONTRACT.md
+  - src/lingtai/kernel/notification_store/CONTRACT.md
   - CONTRIBUTING.md
   - README.md
   - dev-guide-skill/SKILL.md

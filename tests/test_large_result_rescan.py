@@ -19,7 +19,6 @@ This file pins what survives that removal:
 from __future__ import annotations
 from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
-import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -33,6 +32,7 @@ from lingtai.kernel.base_agent.messaging import (
     _enqueue_system_notification,
 )
 from tests._workdir_lease_helpers import make_test_lease
+from tests._notification_store_helpers import notification_store_for
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +52,6 @@ def _make_stub_agent(chat_interface: ChatInterface | None = None):
     agent._chat.interface = iface
     agent._log = MagicMock()
     agent._summarize_notification_threshold = 5000
-    agent._system_notification_lock = threading.Lock()
 
     published: list[dict] = []
 
@@ -143,7 +142,7 @@ def test_base_agent_has_rescan_method(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-rescan", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-rescan", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "ag"))
     assert callable(agent._rescan_large_tool_results)
     assert agent._rescan_large_tool_results() == 0
 
@@ -157,7 +156,7 @@ def test_base_agent_rescan_with_chat_session_publishes_nothing(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-rescan-chat", working_dir=tmp_path / "ag2", workdir_lease=make_test_lease())
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-rescan-chat", working_dir=tmp_path / "ag2", workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "ag2"))
     agent._summarize_notification_threshold = 100
 
     iface = ChatInterface()
@@ -197,7 +196,7 @@ def test_enqueue_skip_if_ref_id_exists(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-dedup", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-dedup", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "ag"))
 
     ev1 = _enqueue_system_notification(
         agent,
@@ -217,8 +216,8 @@ def test_enqueue_skip_if_ref_id_exists(tmp_path):
     )
     assert ev2 == "", "must return empty string when skipped"
 
-    from lingtai.kernel.notifications import collect_notifications
-    notifs = collect_notifications(agent._working_dir)
+    from tests._notification_store_helpers import snapshot_notifications
+    notifs = snapshot_notifications(agent._working_dir)
     events = notifs.get("system", {}).get("data", {}).get("events", [])
     ref_ids = [ev.get("ref_id") for ev in events]
     assert ref_ids.count("daemon:tc-test-001") == 1
@@ -233,7 +232,7 @@ def test_enqueue_no_skip_publishes_twice(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-nodedup", working_dir=tmp_path / "ag", workdir_lease=make_test_lease())
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-nodedup", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "ag"))
 
     ev1 = _enqueue_system_notification(
         agent,
@@ -253,8 +252,8 @@ def test_enqueue_no_skip_publishes_twice(tmp_path):
     assert ev2 != ""
     assert ev1 != ev2
 
-    from lingtai.kernel.notifications import collect_notifications
-    notifs = collect_notifications(agent._working_dir)
+    from tests._notification_store_helpers import snapshot_notifications
+    notifs = snapshot_notifications(agent._working_dir)
     events = notifs.get("system", {}).get("data", {}).get("events", [])
     ref_ids = [ev.get("ref_id") for ev in events]
     assert ref_ids.count("daemon:tc-dup-001") == 2
@@ -268,13 +267,13 @@ def test_enqueue_no_skip_publishes_twice(tmp_path):
 def test_stale_large_result_event_can_be_dismissed(tmp_path):
     """A persisted large_tool_result event (e.g. from before this change or a
     pre-molt session) can still be dismissed via dismiss_ref (escape hatch)."""
-    import threading
     from dataclasses import dataclass, field
     from typing import Any
-    from lingtai.kernel.notifications import (
-        load_large_result_acks,
-        notification_fingerprint,
-        publish,
+    from tests._notification_store_helpers import (
+        fingerprint_notifications,
+        load_ack_refs_for_test,
+        notification_store_for,
+        publish_test_payload,
     )
     from lingtai.tools import notification as notif_intrinsic
 
@@ -283,7 +282,10 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
         _working_dir: Path
         _logs: list = field(default_factory=list)
         _notification_fp: tuple = ()
-        _system_notification_lock: threading.Lock = field(default_factory=threading.Lock)
+        _notification_store: object = field(init=False)
+
+        def __post_init__(self) -> None:
+            self._notification_store = notification_store_for(self._working_dir)
 
         def _log(self, event_type: str, **fields: Any) -> None:
             self._logs.append((event_type, fields))
@@ -291,7 +293,7 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
     agent = _StubAgent(tmp_path)
 
     stale_ref = "large_tool_result:toolu_pre_molt_xyz"
-    publish(
+    publish_test_payload(
         tmp_path,
         "system",
         {
@@ -311,14 +313,14 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
             },
         },
     )
-    agent._notification_fp = notification_fingerprint(tmp_path)
+    agent._notification_fp = fingerprint_notifications(tmp_path)
 
     res = notif_intrinsic.handle(agent, {"action": "dismiss_ref", "ref_id": stale_ref})
 
     assert res["status"] == "ok"
     assert stale_ref in res.get("acked_large_result_refs", [])
 
-    acks = load_large_result_acks(tmp_path)
+    acks = load_ack_refs_for_test(tmp_path)
     assert stale_ref in acks
     assert not (tmp_path / ".notification" / "system.json").exists()
 

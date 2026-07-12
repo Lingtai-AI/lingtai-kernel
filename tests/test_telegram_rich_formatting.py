@@ -13,6 +13,7 @@ from pathlib import Path
 
 from lingtai.mcp_servers.telegram.account import TelegramAccount
 from lingtai.mcp_servers.telegram.manager import SCHEMA, TelegramManager
+from tests._notification_store_helpers import FakeNotificationStore
 
 
 class FakeAccount:
@@ -77,11 +78,17 @@ class FakeService:
         assert alias == "mybot"
         return self.default_account
 
+    def list_accounts(self):
+        return ["mybot"]
+
 
 def _manager(tmp_path):
     service = FakeService()
     manager = TelegramManager(
-        service, working_dir=Path(tmp_path), on_inbound=lambda _: None
+        service,
+        working_dir=Path(tmp_path),
+        on_inbound=lambda _: None,
+        notification_store=FakeNotificationStore(),
     )
     return manager, service.default_account
 

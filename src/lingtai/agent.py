@@ -139,6 +139,17 @@ class Agent(BaseAgent):
 
                 kwargs["workdir_lease"] = select_workdir_lease(kwargs["working_dir"])
 
+            # BaseAgent requires a notification store. As the composition root,
+            # construct the production POSIX adapter. A caller may inject its own.
+            if "notification_store" not in kwargs and "working_dir" in kwargs:
+                from lingtai.adapters.posix.notification_store import (
+                    PosixNotificationStoreAdapter,
+                )
+
+                kwargs["notification_store"] = PosixNotificationStoreAdapter(
+                    kwargs["working_dir"]
+                )
+
             # Store combo name before super().__init__ (not forwarded to BaseAgent)
             self._combo_name = combo_name
             super().__init__(*args, **kwargs)

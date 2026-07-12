@@ -25,6 +25,7 @@ from lingtai.adapters.posix.workdir_lease import PosixWorkdirLeaseAdapter
 from lingtai.adapters.workdir_lease import select_workdir_lease
 
 from ._workdir_lease_helpers import FakeWorkdirLease
+from tests._notification_store_helpers import notification_store_for
 
 
 # --------------------------------------------------------------------------
@@ -354,6 +355,7 @@ def test_base_agent_acquires_the_lease_exactly_once_with_ten_seconds(tmp_path):
         service=MagicMock(),
         working_dir=tmp_path / "agent",
         workdir_lease=lease,
+        notification_store=notification_store_for(tmp_path / "agent"),
     )
     assert lease.acquires == [10]
     assert lease.releases == 0  # healthy construction never releases
@@ -375,7 +377,7 @@ def test_base_agent_releases_the_lease_when_construction_fails(tmp_path):
 
     recording = RecordingWorkdirLease()
     with pytest.raises(FileExistsError):
-        BaseAgent(service=object(), working_dir=workdir, workdir_lease=recording)
+        BaseAgent(service=object(), working_dir=workdir, workdir_lease=recording, notification_store=notification_store_for(workdir))
     assert recording.acquires == [10]  # original exception (not a release error) propagated
     assert recording.releases == 1  # rolled back exactly once
 
@@ -384,7 +386,7 @@ def test_base_agent_releases_the_lease_when_construction_fails(tmp_path):
     real = PosixWorkdirLeaseAdapter(workdir)
     real.acquire(10)
     with pytest.raises(FileExistsError):
-        BaseAgent(service=object(), working_dir=workdir, workdir_lease=real)
+        BaseAgent(service=object(), working_dir=workdir, workdir_lease=real, notification_store=notification_store_for(workdir))
     real2 = PosixWorkdirLeaseAdapter(workdir)
     real2.acquire(0)  # must not raise — the failed construction released the lock
     real2.release()

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from lingtai.kernel.base_agent import BaseAgent
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 from tests._workdir_lease_helpers import make_test_lease
+from tests._notification_store_helpers import notification_store_for
 
 
 
@@ -16,7 +17,7 @@ def _schema_by_name(agent: BaseAgent) -> dict[str, dict]:
 
 
 def test_secondary_schema_not_injected_into_dynamic_or_intrinsic_tools(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease())
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "test"))
     agent.add_tool(
         "long_work",
         schema={"type": "object", "properties": {"path": {"type": "string"}}},
