@@ -71,10 +71,11 @@ _TASK_CARD_FOOTER = (
 
 # Card-level time line prefix.  Jason #6894/#6899: the Task Card carries one
 # standalone time line (not a per-row inline suffix), rendered as its final line
-# after the fixed footer, e.g. ``时间 12:37:32 UTC-07``.  The stamp value itself
-# is captured and shaped kernel-side (``HH:MM:SS UTC±HH``); the renderer only
-# prefixes it.
-_TASK_CARD_TIME_PREFIX = "时间 "
+# after the fixed footer.  Jason #7213/#7216: that line is the bare stamp with NO
+# label — no ``时间``, no ``Time``, no other prefix — e.g. ``12:37:32 UTC-07``.
+# The stamp value itself is captured and shaped kernel-side (``HH:MM:SS UTC±HH``);
+# the renderer emits it verbatim, so the prefix is the empty string.
+_TASK_CARD_TIME_PREFIX = ""
 
 
 def _safe_document_download_reason(exc: Exception) -> str:
@@ -409,6 +410,12 @@ class TelegramManager:
         # Duplicate send protection: (account, chat_id, text) → count
         self._last_sent: dict[tuple[str, int, str], int] = {}
         self._dup_free_passes = 2
+        # Resident Task Card composition (Jason #7258/#7259): ONE resident message
+        # per account+chat composed from two independent channels — "automatic"
+        # (turn-local tool rows) and "programmable" (the public task_card renderer
+        # output). Each channel owns only its own frame; updating one never
+        # overwrites the other. Keyed by ``"{account}:{chat_id}"``.
+        self._task_card_channels: dict[str, dict[str, str]] = {}
 
     def _account_dir(self, account: str) -> Path:
         return self._working_dir / "telegram" / account
@@ -1370,6 +1377,125 @@ class TelegramManager:
     _TASK_CARD_TEXT_LIMIT = 3500
     # Header shown at the top of every card.
     _TASK_CARD_HEADER = "📋 TASK CARD"
+    # The two composed channels of the single resident card (Jason #7258/#7259).
+    _TASK_CARD_CHANNELS = ("automatic", "programmable")
+    _TASK_CARD_DEFAULT_CHANNEL = "automatic"
+    # Header for the appended programmable section; keeps the composed message
+    # legible when both channels are present. English-only (Jason #7175/#7205).
+    _TASK_CARD_PROGRAMMABLE_HEADER = "— WATCH —"
+
+    def _channel_key(self, account: str, chat_id: int) -> str:
+        return f"{account}:{chat_id}"
+
+    def _set_channel_frame(
+        self, account: str, chat_id: int, channel: str, frame: str | None,
+    ) -> None:
+        """Store one channel's last frame; ``None`` clears that channel only."""
+        key = self._channel_key(account, chat_id)
+        slots = self._task_card_channels.setdefault(key, {})
+        if frame is None:
+            slots.pop(channel, None)
+        else:
+            slots[channel] = frame
+
+    def _compose_channels(
+        self, account: str, chat_id: int,
+        *, channel: str | None = None, frame: str | None = None,
+    ) -> str:
+        """Compose the resident message from the two channel frames.
+
+        When the programmable channel is empty the composed text is exactly the
+        automatic channel's own frame, so the automatic Task Card render is
+        unchanged byte-for-byte (no regression). When the programmable channel is
+        present it is appended as its own clearly-delimited section; either
+        channel may be absent independently.
+
+        ``channel``/``frame`` build a *proposed* payload for a not-yet-committed
+        edit: that slot uses ``frame`` (``None`` clears it) instead of the stored
+        frame, WITHOUT mutating ``_task_card_channels``. Callers commit the frame
+        via ``_set_channel_frame`` only after the transport succeeds, so a failed
+        edit never poisons the stored state.
+        """
+        slots = dict(self._task_card_channels.get(self._channel_key(account, chat_id), {}))
+        if channel is not None:
+            if frame is None:
+                slots.pop(channel, None)
+            else:
+                slots[channel] = frame
+        automatic = slots.get("automatic", "")
+        programmable = slots.get("programmable", "")
+        if not programmable:
+            return automatic
+        prog_block = f"{self._TASK_CARD_PROGRAMMABLE_HEADER}\n{programmable}"
+        if not automatic:
+            return prog_block
+        return f"{automatic}\n\n{prog_block}"
+
+    def _deliver_channel_frame(
+        self, account: str, chat_id: int, channel: str, frame: str | None,
+        *, error: str,
+    ) -> dict:
+        """Deliver a proposed ``channel`` frame to the ONE resident card and
+        commit it to ``_task_card_channels`` **only after** the edit/send/
+        replacement succeeds.
+
+        The composed payload uses the proposed ``frame`` for ``channel`` and the
+        last committed frame for the other slot. On total delivery failure the
+        committed channel state is left untouched — it stays the last frame that
+        was actually delivered — so a later automatic or programmable compose can
+        never resurrect a frame that was never sent. Shared by the automatic
+        ``create`` path and the programmable channel (both resolve the resident by
+        persisted id).
+        """
+        text = self._compose_channels(account, chat_id, channel=channel, frame=frame)
+        resident_id = self._get_resident_task_card(account, chat_id)
+        if resident_id and self.update_progress_message(resident_id, text):
+            self._set_channel_frame(account, chat_id, channel, frame)
+            return {"status": "ok", "message_id": resident_id}
+        if not resident_id:
+            result = self.send_progress_message(account, chat_id, text)
+            if result is None:
+                return {"status": "error", "error": error}
+            new_id = result["message_id"]
+            self._set_channel_frame(account, chat_id, channel, frame)
+            self._set_resident_task_card(account, chat_id, new_id)
+            return {"status": "ok", "message_id": new_id}
+        # Resident existed but is un-editable (stale/deleted): recover by
+        # replacement, committing the frame only if the replacement send lands.
+        recovered = self._recover_task_card_by_replacement(
+            account, chat_id, resident_id, text, error=error)
+        if recovered.get("status") == "ok":
+            self._set_channel_frame(account, chat_id, channel, frame)
+        return recovered
+
+    @classmethod
+    def _format_programmable_card_text(cls, card: dict) -> str:
+        """Render a validated programmable Task Card JSON object to plain text.
+
+        The manager is the single render owner: the public controller sends only
+        a validated schema object (never code), and this method turns it into the
+        programmable channel frame. Secret redaction runs on every free-text field
+        before the render ceiling is applied, mirroring the automatic path. All
+        copy is English-only (Jason #7175/#7205).
+        """
+        from lingtai.kernel.trace_redaction import redact_text
+
+        parts: list[str] = []
+        title = str(card.get("title", "")).strip()
+        if title:
+            parts.append(redact_text(title)[:cls._TASK_CARD_REASONING_CAP])
+        for line in card.get("lines", []) or []:
+            if not isinstance(line, str):
+                continue
+            rendered = redact_text(line)[:cls._TASK_CARD_REASONING_CAP]
+            parts.append(f"• {rendered}")
+        footer = str(card.get("footer", "")).strip()
+        if footer:
+            parts.append(redact_text(footer)[:cls._TASK_CARD_REASONING_CAP])
+        text = "\n".join(parts)
+        if len(text) > cls._TASK_CARD_TEXT_LIMIT:
+            text = text[:cls._TASK_CARD_TEXT_LIMIT]
+        return text
 
     def _handle_task_card_update(self, args: dict) -> dict:
         """Private internal action — kernel-driven Task Card projection.
@@ -1382,11 +1508,17 @@ class TelegramManager:
           - finalize: Freeze the card on its concrete last batch (legacy scalar
                      form marks ✅ TASK CARD · DONE).
 
-        One resident card per account+chat; no cumulative history, no
+        One resident card per account+chat, composed from the "automatic" and
+        "programmable" channels (Jason #7258/#7259); no cumulative history, no
         continuation/overflow.  Not in SCHEMA — LLM cannot call.
         """
         sub_action = args.get("sub_action", "update")
+        channel = args.get("channel", self._TASK_CARD_DEFAULT_CHANNEL)
+        if channel not in self._TASK_CARD_CHANNELS:
+            return {"status": "error", "error": f"Unknown channel: {channel}"}
         try:
+            if channel == "programmable":
+                return self._task_card_programmable(sub_action, args)
             if sub_action == "create":
                 return self._task_card_create(args)
             elif sub_action == "update":
@@ -1419,29 +1551,14 @@ class TelegramManager:
         """
         account = args["account"]
         chat_id = args["chat_id"]
-        text = self._format_task_card_text(
+        automatic = self._format_task_card_text(
             args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""),
             rows=args.get("rows"))
-
-        resident_id = self._get_resident_task_card(account, chat_id)
-        if resident_id and self.update_progress_message(resident_id, text):
-            # Steady state: the resident card is edited in place, so its compound
-            # id is preserved and no replacement card is ever sent.
-            return {"status": "ok", "message_id": resident_id}
-
-        if not resident_id:
-            # First card for this chat: send and persist normally (no delete).
-            result = self.send_progress_message(account, chat_id, text)
-            if result is None:
-                return {"status": "error", "error": "Failed to send task card"}
-            new_id = result["message_id"]
-            self._set_resident_task_card(account, chat_id, new_id)
-            return {"status": "ok", "message_id": new_id}
-
-        # A resident existed but its message could not be edited (stale/deleted):
-        # recover by replacement using the shared send-persist-delete discipline.
-        return self._recover_task_card_by_replacement(
-            account, chat_id, resident_id, text, error="Failed to send task card")
+        # Compose with the proposed automatic frame + the live programmable slot,
+        # deliver, and commit the automatic frame only once the edit/send/replace
+        # succeeds (a failed edit must not poison the stored channel state).
+        return self._deliver_channel_frame(
+            account, chat_id, "automatic", automatic, error="Failed to send task card")
 
     def _recover_task_card_by_replacement(
         self, account: str, chat_id: int, stale_id: str, text: str, *, error: str,
@@ -1504,17 +1621,25 @@ class TelegramManager:
 
     def _task_card_update(self, args: dict) -> dict:
         card_message_id = args["card_message_id"]
-        text = self._format_task_card_text(
+        account, chat_id, _ = self._parse_compound_id(card_message_id)
+        automatic = self._format_task_card_text(
             args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""),
             rows=args.get("rows"))
+        # Compose the proposed automatic frame against the live programmable slot;
+        # commit the automatic frame only after the edit/replacement succeeds.
+        text = self._compose_channels(
+            account, chat_id, channel="automatic", frame=automatic)
         if not self.update_progress_message(card_message_id, text):
             # Card may have been deleted — best-effort re-create.  The recovered
             # card becomes the resident one for this chat, so persist and retire
             # the replaced id consistently (same replacement discipline as create).
-            account, chat_id, _ = self._parse_compound_id(card_message_id)
-            return self._recover_task_card_by_replacement(
+            recovered = self._recover_task_card_by_replacement(
                 account, chat_id, card_message_id, text,
                 error="Failed to recover task card")
+            if recovered.get("status") == "ok":
+                self._set_channel_frame(account, chat_id, "automatic", automatic)
+            return recovered
+        self._set_channel_frame(account, chat_id, "automatic", automatic)
         return {"status": "ok", "message_id": card_message_id}
 
     def _task_card_finalize(self, args: dict) -> dict:
@@ -1530,17 +1655,60 @@ class TelegramManager:
         if card_message_id:
             rows = args.get("rows")
             if rows is not None:
-                text = self._format_task_card_text("", "", "", rows=rows)
+                automatic = self._format_task_card_text("", "", "", rows=rows)
             else:
                 tool = args.get("tool", "")
                 if tool:
-                    text = self._format_task_card_text(
+                    automatic = self._format_task_card_text(
                         tool, args.get("tool_action", ""), args.get("reasoning", ""))
-                    text += "\n\n✅ TASK CARD · DONE"
+                    automatic += "\n\n✅ TASK CARD · DONE"
                 else:
-                    text = "✅ TASK CARD · DONE"
-            self.update_progress_message(card_message_id, text)
+                    automatic = "✅ TASK CARD · DONE"
+            account, chat_id, _ = self._parse_compound_id(card_message_id)
+            # Compose the proposed frozen automatic frame against the live
+            # programmable slot; commit it only if the (best-effort) edit lands so
+            # a failed freeze never poisons the stored automatic frame.
+            text = self._compose_channels(
+                account, chat_id, channel="automatic", frame=automatic)
+            if self.update_progress_message(card_message_id, text):
+                self._set_channel_frame(account, chat_id, "automatic", automatic)
         return {"status": "ok"}
+
+    def _task_card_programmable(self, sub_action: str, args: dict) -> dict:
+        """Update or clear the programmable channel of the resident card.
+
+        The programmable channel is the public ``task_card`` controller's output.
+        It shares the ONE resident message and composes alongside the automatic
+        channel (Jason #7258/#7259): updating it replaces only the programmable
+        frame; ``finalize`` clears only the programmable frame and leaves the
+        automatic channel — and the message itself — intact.
+
+        Sub-actions:
+          - create / update:  render the validated ``card`` object into the
+                              programmable frame, compose, and edit the resident.
+          - finalize:         clear the programmable frame, compose, and edit the
+                              resident so the automatic channel remains.
+
+        The caller supplies ``account`` and ``chat_id`` so both channels resolve
+        to the same resident id; Telegram only ever receives validated data.
+        """
+        account = args["account"]
+        chat_id = args["chat_id"]
+        if sub_action == "finalize":
+            frame: str | None = None
+        elif sub_action in ("create", "update"):
+            card = args.get("card")
+            if not isinstance(card, dict):
+                return {"status": "error", "error": "programmable card must be an object"}
+            frame = self._format_programmable_card_text(card)
+        else:
+            return {"status": "error", "error": f"Unknown sub_action: {sub_action}"}
+
+        # Deliver the proposed programmable frame and commit it only on success:
+        # a failed edit must leave the last delivered programmable frame in place
+        # so a subsequent automatic compose cannot resurrect an unsent frame.
+        return self._deliver_channel_frame(
+            account, chat_id, "programmable", frame, error="Failed to send task card")
 
     @classmethod
     def _format_task_card_text(

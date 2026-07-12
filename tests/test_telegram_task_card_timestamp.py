@@ -6,12 +6,13 @@ colon, no date, no ``Started`` label, no regional abbreviation).  Heartbeats and
 elapsed edits never change it, and parallel rows each keep their own captured
 instant.
 
-Presentation contract (manager render, Jason #6894/#6899): the card shows a
-single card-level time line — never a per-row inline suffix.  It is the Task
-Card's final standalone line ``时间 HH:MM:SS UTC±HH`` after the fixed
-progress-only footer, using the first non-empty ``started_at`` in original row
-order for a batched/parallel card, and is omitted entirely when no row carries a
-usable stamp.  A fixed injected wall-clock keeps these assertions deterministic.
+Presentation contract (manager render, Jason #6894/#6899, #7213/#7216): the card
+shows a single card-level time line — never a per-row inline suffix.  It is the
+Task Card's final standalone line, the BARE stamp ``HH:MM:SS UTC±HH`` with no
+label (no ``时间``, no ``Time``, no other prefix), after the fixed progress-only
+footer, using the first non-empty ``started_at`` in original row order for a
+batched/parallel card, and is omitted entirely when no row carries a usable
+stamp.  A fixed injected wall-clock keeps these assertions deterministic.
 """
 
 from __future__ import annotations
@@ -209,11 +210,20 @@ def test_parallel_rows_keep_distinct_timestamps(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Rendering: single card-level 时间 final line, never a per-row inline suffix
+# Rendering: single card-level bare-stamp final line, never a per-row inline
+# suffix and never a labelled line (Jason #7213/#7216 removed the label).
 # ---------------------------------------------------------------------------
 
+# The time line is a standalone line carrying only the ``HH:MM:SS UTC±HH`` stamp:
+# it holds "UTC" but, unlike a tool/API row, has no leading marker or "API error".
 def _time_lines(text):
-    return [ln for ln in text.splitlines() if ln.startswith("时间 ")]
+    return [
+        ln
+        for ln in text.splitlines()
+        if "UTC" in ln
+        and not ln.startswith(("•", "✓"))
+        and "API error" not in ln
+    ]
 
 
 def test_manager_renders_single_time_line_not_inline_on_row():
@@ -226,11 +236,13 @@ def test_manager_renders_single_time_line_not_inline_on_row():
     assert "04:08:08 UTC-07" not in row_line
     assert "UTC" not in row_line
     assert row_line == "• bash.run: build (3s)"
-    # It is the card's final standalone line, exactly `时间 <stamp>`.
+    # It is the card's final standalone line, the BARE stamp with no label.
     lines = text.splitlines()
-    assert lines[-1] == "时间 04:08:08 UTC-07"
-    assert _time_lines(text) == ["时间 04:08:08 UTC-07"]
-    # Standalone — no "Started" prose.
+    assert lines[-1] == "04:08:08 UTC-07"
+    assert _time_lines(text) == ["04:08:08 UTC-07"]
+    # No label of any kind — no 时间, no Time, no Started prose.
+    assert "时间" not in text
+    assert "Time" not in text
     assert "Started" not in text
 
 
@@ -241,10 +253,10 @@ def test_time_line_follows_the_progress_only_footer():
     ])
     lines = text.splitlines()
     footer_idx = next(i for i, ln in enumerate(lines) if _TASK_CARD_FOOTER in ln)
-    time_idx = next(i for i, ln in enumerate(lines) if ln.startswith("时间 "))
+    time_idx = next(i for i, ln in enumerate(lines) if ln == "04:08:08 UTC-07")
     # The time line is strictly after the fixed progress-only footer line.
     assert time_idx > footer_idx
-    assert lines[time_idx] == "时间 04:08:08 UTC-07"
+    assert lines[time_idx] == "04:08:08 UTC-07"
 
 
 def test_parallel_rows_use_first_nonempty_started_at_for_the_one_time_line():
@@ -258,7 +270,7 @@ def test_parallel_rows_use_first_nonempty_started_at_for_the_one_time_line():
         {"tool": "grep", "tool_action": "", "reasoning": "c",
          "elapsed_s": 1, "done": False, "started_at": "04:08:11 UTC-07"},
     ])
-    assert _time_lines(text) == ["时间 04:08:09 UTC-07"]
+    assert _time_lines(text) == ["04:08:09 UTC-07"]
     # No row line carries an inline stamp.
     for ln in text.splitlines():
         if ln.startswith(("•", "✓")):
@@ -311,7 +323,7 @@ def test_api_error_row_does_not_supply_the_time_line_but_a_tool_row_does():
         {"kind": "api_error", "status": 429, "code": "usage_limit_reached",
          "state": "retrying", "attempt": 1, "max_attempts": 3, "done": False},
     ])
-    assert _time_lines(text) == ["时间 04:08:08 UTC-07"]
+    assert _time_lines(text) == ["04:08:08 UTC-07"]
     api_line = next(ln for ln in text.splitlines() if "API error" in ln)
     assert "UTC" not in api_line
 

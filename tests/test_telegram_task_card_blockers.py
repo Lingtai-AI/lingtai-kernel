@@ -479,7 +479,7 @@ def test_timestamped_moderate_rows_stay_under_text_limit():
     # The card renders ONE card-level time line (never a per-row inline suffix),
     # counted in the excerpt budget so this moderate card fits.
     assert text.count("04:08:08 UTC-07") == 1
-    assert text.splitlines()[-1] == "时间 04:08:08 UTC-07"
+    assert text.splitlines()[-1] == "04:08:08 UTC-07"  # bare stamp, no label
     for ln in text.splitlines():
         if ln.startswith(("•", "✓")):
             assert "UTC" not in ln  # no inline stamp on any row
@@ -513,7 +513,7 @@ def test_extreme_row_count_exceeds_budget_but_keeps_every_row():
     assert not text.endswith("…")
     # The fixed footer and the single card-level time line still render.
     assert _TASK_CARD_FOOTER in text
-    assert text.splitlines()[-1] == "时间 04:08:08 UTC-07"
+    assert text.splitlines()[-1] == "04:08:08 UTC-07"  # bare stamp, no label
 
 
 def test_timestamped_rows_redaction_before_truncation():
