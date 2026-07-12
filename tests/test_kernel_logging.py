@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import threading
 
+import lingtai.kernel.logging as kernel_logging
 from lingtai.kernel.logging import setup_logging
 
 
@@ -109,5 +111,47 @@ def test_setup_logging_closes_duplicate_owned_file_handler(tmp_path):
 
         assert duplicate not in logger.handlers
         assert duplicate._closed
+    finally:
+        _close_handlers(logger)
+
+
+def test_setup_logging_serializes_concurrent_handler_discovery(monkeypatch):
+    logger = logging.getLogger("test.lingtai.logging.concurrent")
+    _close_handlers(logger)
+    discovery_barrier = threading.Barrier(2)
+    original_owned_handlers = kernel_logging._owned_handlers
+
+    def synchronized_discovery(target, kind):
+        handlers = original_owned_handlers(target, kind)
+        if kind == "console" and not handlers:
+            try:
+                discovery_barrier.wait(timeout=0.2)
+            except threading.BrokenBarrierError:
+                pass
+        return handlers
+
+    monkeypatch.setattr(kernel_logging, "_owned_handlers", synchronized_discovery)
+    errors = []
+
+    def run_setup():
+        try:
+            setup_logging(logger_name=logger.name)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=run_setup)
+        for _ in range(2)
+    ]
+
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=2)
+
+        assert all(not thread.is_alive() for thread in threads)
+        assert not errors
+        assert len(original_owned_handlers(logger, "console")) == 1
     finally:
         _close_handlers(logger)
