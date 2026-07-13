@@ -270,6 +270,46 @@ def run(working_dir: Path) -> None:
             agent.stop(timeout=10.0)
         except Exception:
             pass
+        _force_exit_if_worker_poisoned(agent)
+
+
+def _force_exit_if_worker_poisoned(agent) -> None:
+    """Hard-exit the process when a wedged LLM worker poisoned the interface.
+
+    A ``WorkerStillRunningError`` poison means an LLM worker thread is still
+    alive inside the session's ``_timeout_pool`` ThreadPoolExecutor. The AED
+    loop already skipped the unsafe chat save, put the agent ASLEEP, and
+    requested a refresh whose watcher will relaunch a fresh process; ``stop()``
+    then withdrew ``.agent.heartbeat`` and released ``.agent.lock``. But the
+    wedged worker is a non-daemon thread that ``session.close()`` cannot
+    reclaim (``shutdown(wait=False)`` cannot cancel a thread stuck in the HTTP
+    call), so ``concurrent.futures``' atexit join blocks interpreter exit
+    indefinitely. The old process then lingers with no heartbeat/lock but still
+    visible in ``ps``, and the relaunch's duplicate-process guard refuses to
+    boot — stranding the agent as a stale ``asleep`` marker with no working
+    process.
+
+    ``_stop`` already reclaims daemon workers / CLI process groups for exactly
+    this reason; a wedged LLM worker is the one resource it cannot reclaim, so
+    the process owner force-exits after the graceful teardown. Guarded on the
+    poison flag, so ordinary stop/refresh shutdowns are unchanged.
+    """
+    if not getattr(agent, "_llm_worker_interface_poisoned", False):
+        return
+    try:
+        agent._log(
+            "process_force_exit_after_worker_poison",
+            artifact=getattr(agent, "_llm_worker_poison_artifact", None),
+        )
+    except Exception:
+        pass
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    # Exit 0 because the refresh watcher owns relaunch; this is handled recovery, not a crash.
+    os._exit(0)
 
 
 def _emit_json(data: object) -> None:
