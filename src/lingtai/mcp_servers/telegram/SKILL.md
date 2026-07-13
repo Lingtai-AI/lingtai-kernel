@@ -42,7 +42,12 @@ descriptions; you do not need to call it before every send.
   the placeholder shows progress only (it may optionally be deleted).
 - When the current agent has `taskcard: True`, an automatic Task Card may update
   separately during Telegram-originated turns (you do not manage it; use
-  send/reply for your own messages). See **TASKCARD STATE** below.
+  send/reply for your own messages). Automatic, programmable, heartbeat, and
+  final frames edit one stable resident message ID in place; an identical
+  Telegram edit is a successful no-op. See **TASKCARD STATE** below.
+- The addon replaces that resident only after Telegram explicitly reports the
+  message missing or uneditable. Unknown/transient edit failures are surfaced and
+  retain the resident ID and last delivered slots instead of sending/retracting.
 - For very fast responses (under ~5s), native Telegram typing/👀 presence is
   enough — skip the placeholder.
 

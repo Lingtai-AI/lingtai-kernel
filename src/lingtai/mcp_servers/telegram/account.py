@@ -170,9 +170,10 @@ class TelegramAccount:
         self._client: httpx.Client | None = None
 
         # Resident Task Card message id per chat: {chat_id_str: compound_id}.
-        # Exactly one card stays resident per (account, chat); the next card
-        # deletes the tracked prior one (Jason #6667). Persisted in state.json so
-        # the deletion survives a refresh.  ``_state_lock`` serializes the
+        # Exactly one card stays resident per (account, chat) and ordinary frames
+        # edit that id in place. Persisted in state.json so the identity survives a
+        # refresh; only confirmed edit-impossible recovery replaces it and retires
+        # the tracked stale id. ``_state_lock`` serializes the
         # read-modify-write of state.json across the poll thread and the
         # orchestrating turn thread.
         self._task_cards: dict[str, str] = {}

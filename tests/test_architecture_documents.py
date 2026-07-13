@@ -388,6 +388,18 @@ def test_root_contract_states_the_design_principles_first() -> None:
     assert "a capability that has a manual" not in body
 
 
+def test_snapshot_contract_names_every_required_component_test() -> None:
+    contract_path = ROOT / "src/lingtai/kernel/snapshot/CONTRACT.md"
+    meta, _ = _read_document(contract_path)
+    assert meta["name"] == "snapshot-source-revision"
+    assert {
+        "tests/test_snapshot.py",
+        "tests/test_git_init.py",
+        "tests/test_heartbeat.py",
+        "tests/test_architecture_documents.py",
+    } <= set(meta["related_files"])
+
+
 def test_governed_child_contracts_have_reciprocal_anatomy_pairs() -> None:
     root_meta, _ = _read_document(ROOT_CONTRACT)
     child_contracts = [
@@ -859,3 +871,26 @@ def test_anatomy_points_to_the_normative_maintenance_rule_without_duplicating() 
     assert PAIRING_RULE_POINTER in body
     # ...without embedding its own copy of the canonical block markers.
     assert "CANONICAL-MAINTENANCE" not in body
+
+
+def test_snapshot_ports_keep_git_process_mechanism_outside_core() -> None:
+    port = (ROOT / "src/lingtai/kernel/snapshot/__init__.py").read_text(encoding="utf-8")
+    runtime_identity = (ROOT / "src/lingtai/kernel/runtime_identity.py").read_text(encoding="utf-8")
+    workdir = (ROOT / "src/lingtai/kernel/workdir.py").read_text(encoding="utf-8")
+    base_agent = (ROOT / "src/lingtai/kernel/base_agent/__init__.py").read_text(encoding="utf-8")
+    lifecycle = (ROOT / "src/lingtai/kernel/base_agent/lifecycle.py").read_text(encoding="utf-8")
+
+    for core_source in (port, runtime_identity, workdir):
+        assert "import subprocess" not in core_source
+        assert "CompletedProcess" not in core_source
+        assert "PosixGitCliAdapter" not in core_source
+        assert "lingtai.adapters" not in core_source
+    assert "PosixGitCliAdapter" not in base_agent
+    assert "PosixGitCliAdapter" not in lifecycle
+    assert "def run(" not in port
+    assert "argv" not in port
+    assert "def init_git(" not in workdir
+    assert "def snapshot(" not in workdir
+    assert "def gc(" not in workdir
+    assert "def diff(" not in workdir
+    assert "def diff_and_commit(" not in workdir

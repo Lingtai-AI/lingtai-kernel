@@ -30,6 +30,7 @@ from ..state import AgentState
 from ..workdir import WorkingDir
 from ..workdir_lease import WorkdirLeasePort
 from ..notification_store import NotificationStorePort
+from ..snapshot import SnapshotPort, SourceRevisionPort
 from ..message import Message
 from ..prompt import SystemPromptManager
 from ..llm import (
@@ -318,6 +319,10 @@ class BaseAgent:
         - ``notification_store`` (NotificationStorePort): Persistence for
           ``.notification/`` channel mirrors. Required on every supported
           agent; there is no nullable/no-op path.
+        - ``snapshot_port`` (SnapshotPort): Best-effort workdir initialization,
+          capture, and maintenance used by lifecycle policy.
+        - ``source_revision_port`` (SourceRevisionPort): Bounded running-source
+          revision and tracked-dirty queries used by identity and drift policy.
 
     Services (all optional):
         - ``service`` (LLMService): The brain — thinking, generating text.
@@ -352,6 +357,8 @@ class BaseAgent:
         working_dir: str | Path,
         workdir_lease: WorkdirLeasePort,
         notification_store: "NotificationStorePort",
+        snapshot_port: SnapshotPort,
+        source_revision_port: SourceRevisionPort,
         intrinsics: "Mapping[str, Mapping[str, Any]] | None" = None,
         file_io: Any | None = None,
         mail_service: Any | None = None,
@@ -381,7 +388,12 @@ class BaseAgent:
         self._last_usage = None  # UsageMetadata from last LLM call, for ledger
         self._created_at: str = ""
         self._uptime_anchor: float | None = None  # set in start(), None means not started
-        self._runtime_identity_event_fields = runtime_identity_event_fields()
+        # Core receives both snapshot/revision capabilities as required Ports.
+        self._snapshot_port = snapshot_port
+        self._source_revision_port = source_revision_port
+        self._runtime_identity_event_fields = runtime_identity_event_fields(
+            self._source_revision_port
+        )
 
         # Working directory (caller-owned path)
         self._workdir = WorkingDir(working_dir)

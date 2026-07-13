@@ -60,6 +60,22 @@ _STRUCTURED_MESSAGE_TEXT_CAP = 500
 _DOCUMENT_DOWNLOAD_REASON_CAP = 200
 _TELEGRAM_API_ERROR_PREFIX = "Telegram API error: "
 
+# Task Card edit outcomes are deliberately narrower than generic transport
+# success/failure. Telegram reports an identical edit as a 400 no-op; that means
+# the resident already carries the proposed content and must never trigger a
+# replacement. Only the exact Bot API conditions which prove the message itself
+# cannot be edited permit replacement; every unknown/network/provider failure
+# fails loud and leaves the resident and committed slot state untouched.
+_TASK_CARD_EDIT_OK = "ok"
+_TASK_CARD_EDIT_IMPOSSIBLE = "edit_impossible"
+_TASK_CARD_EDIT_FAILED = "failed"
+_TASK_CARD_EDIT_UNCHANGED = "bad request: message is not modified"
+_TASK_CARD_EDIT_IMPOSSIBLE_DESCRIPTIONS = frozenset({
+    "bad request: message to edit not found",
+    "bad request: message can't be edited",
+    "bad request: message can not be edited",
+})
+
 # Fixed human warning shown on every Task Card render (running and frozen
 # last-behavior).  Jason: the card is progress-only; the human must reply to the
 # normal conversation/final result, never to this card.  Kept short so it always
@@ -1373,29 +1389,52 @@ class TelegramManager:
             log.debug("Failed to send progress message: %s", e)
             return None
 
+    @staticmethod
+    def _task_card_edit_error_outcome(exc: Exception) -> str:
+        """Classify only provider-confirmed edit semantics; unknowns fail closed."""
+        detail = str(exc)
+        if not detail.startswith(_TELEGRAM_API_ERROR_PREFIX):
+            return _TASK_CARD_EDIT_FAILED
+        description = " ".join(
+            detail[len(_TELEGRAM_API_ERROR_PREFIX):].split()
+        ).casefold()
+        if description.startswith(_TASK_CARD_EDIT_UNCHANGED):
+            return _TASK_CARD_EDIT_OK
+        if description in _TASK_CARD_EDIT_IMPOSSIBLE_DESCRIPTIONS:
+            return _TASK_CARD_EDIT_IMPOSSIBLE
+        return _TASK_CARD_EDIT_FAILED
+
+    def _try_update_progress_message(
+        self,
+        compound_id: str,
+        text: str,
+    ) -> str:
+        """Edit once and preserve whether replacement is actually permissible."""
+        try:
+            account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
+            acct = self._service.get_account(account)
+            acct.edit_message(chat_id, tg_msg_id, text)
+            return _TASK_CARD_EDIT_OK
+        except Exception as exc:
+            outcome = self._task_card_edit_error_outcome(exc)
+            if outcome == _TASK_CARD_EDIT_OK:
+                log.debug("Task card edit was already current; keeping resident id")
+            elif outcome == _TASK_CARD_EDIT_IMPOSSIBLE:
+                log.warning("Task card resident is not editable; replacement required")
+            else:
+                log.warning(
+                    "Task card edit failed; resident retained (error_type=%s)",
+                    type(exc).__name__,
+                )
+            return outcome
+
     def update_progress_message(
         self,
         compound_id: str,
         text: str,
     ) -> bool:
-        """Edit a progress message with updated text.
-
-        Args:
-            compound_id: Compound message ID from send_progress_message()
-                (format: "{account}:{chat_id}:{message_id}").
-            text: New text for the progress message.
-
-        Returns True on success, False on failure.
-        Best-effort — never blocks or fails the main task.
-        """
-        try:
-            account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
-            acct = self._service.get_account(account)
-            acct.edit_message(chat_id, tg_msg_id, text)
-            return True
-        except Exception as e:
-            log.debug("Failed to update progress message: %s", e)
-            return False
+        """Compatibility bool: true for an applied edit or identical-content no-op."""
+        return self._try_update_progress_message(compound_id, text) == _TASK_CARD_EDIT_OK
 
     # ------------------------------------------------------------------
     # Private Task Card helpers (kernel-driven, not LLM-exposed)
@@ -1463,40 +1502,47 @@ class TelegramManager:
 
     def _deliver_channel_frame(
         self, account: str, chat_id: int, channel: str, frame: str | None,
-        *, error: str,
+        *, error: str, resident_id: str | None = None,
     ) -> dict:
         """Deliver a proposed ``channel`` frame to the ONE resident card and
         commit it to ``_task_card_channels`` **only after** the edit/send/
         replacement succeeds.
 
         The composed payload uses the proposed ``frame`` for ``channel`` and the
-        last committed frame for the other slot. On total delivery failure the
-        committed channel state is left untouched — it stays the last frame that
-        was actually delivered — so a later automatic or programmable compose can
-        never resurrect a frame that was never sent. Shared by the automatic
-        ``create`` path and the programmable channel (both resolve the resident by
-        persisted id).
+        last committed frame for the other slot. An identical-content Telegram
+        no-op counts as success and retains the resident id. Replacement is allowed
+        only after Telegram explicitly proves the resident is edit-impossible;
+        unknown or transient edit failures fail loud without sending or committing.
+        Thus a later automatic or programmable compose can never resurrect a frame
+        that was never delivered. Shared by every automatic mutation and the
+        programmable channel.
         """
         text = self._compose_channels(account, chat_id, channel=channel, frame=frame)
-        resident_id = self._get_resident_task_card(account, chat_id)
-        if resident_id and self.update_progress_message(resident_id, text):
-            self._set_channel_frame(account, chat_id, channel, frame)
-            return {"status": "ok", "message_id": resident_id}
-        if not resident_id:
-            result = self.send_progress_message(account, chat_id, text)
-            if result is None:
+        resident_id = resident_id or self._get_resident_task_card(account, chat_id)
+        if resident_id:
+            edit_outcome = self._try_update_progress_message(resident_id, text)
+            if edit_outcome == _TASK_CARD_EDIT_OK:
+                self._set_channel_frame(account, chat_id, channel, frame)
+                return {"status": "ok", "message_id": resident_id}
+            if edit_outcome == _TASK_CARD_EDIT_FAILED:
+                # Unknown, transient, network, and provider failures do not prove
+                # that replacement is safe. Preserve both resident and slot state.
                 return {"status": "error", "error": error}
-            new_id = result["message_id"]
-            self._set_channel_frame(account, chat_id, channel, frame)
-            self._set_resident_task_card(account, chat_id, new_id)
-            return {"status": "ok", "message_id": new_id}
-        # Resident existed but is un-editable (stale/deleted): recover by
-        # replacement, committing the frame only if the replacement send lands.
-        recovered = self._recover_task_card_by_replacement(
-            account, chat_id, resident_id, text, error=error)
-        if recovered.get("status") == "ok":
-            self._set_channel_frame(account, chat_id, channel, frame)
-        return recovered
+            # The provider confirmed that this specific message cannot be edited.
+            # Only this outcome permits send-new/persist-new/delete-stale recovery.
+            recovered = self._recover_task_card_by_replacement(
+                account, chat_id, resident_id, text, error=error)
+            if recovered.get("status") == "ok":
+                self._set_channel_frame(account, chat_id, channel, frame)
+            return recovered
+
+        result = self.send_progress_message(account, chat_id, text)
+        if result is None:
+            return {"status": "error", "error": error}
+        new_id = result["message_id"]
+        self._set_channel_frame(account, chat_id, channel, frame)
+        self._set_resident_task_card(account, chat_id, new_id)
+        return {"status": "ok", "message_id": new_id}
 
     @classmethod
     def _format_programmable_card_text(cls, card: dict) -> str:
@@ -1578,13 +1624,14 @@ class TelegramManager:
         place through Telegram and return the SAME compound id, sending nothing
         new and deleting nothing.
 
-        A replacement send/delete happens only as fail-open recovery: if there is
-        no persisted resident (first card of the chat), send and persist the first
-        card normally; if the persisted message genuinely cannot be edited
-        (stale/deleted) the edit fails and recovery sends a replacement, persists
-        its id, and best-effort deletes the exact stale id.  A failed replacement
-        send preserves the old card and its id and deletes nothing; the stale-id
-        delete is fail-open and never rolls the new id back nor blocks the turn.
+        A replacement send/delete happens only as fail-loud last-resort recovery:
+        if there is no persisted resident (first card of the chat), send and persist
+        the first card normally; if Telegram explicitly reports the persisted
+        message edit-impossible (stale/deleted), recovery sends a replacement,
+        persists its id, and best-effort deletes the exact stale id. Identical
+        content is a successful no-op; unknown/transient edit failure returns an
+        error without sending. A failed replacement send preserves the old card and
+        id and deletes nothing; stale delete failure never rolls the new id back.
         """
         account = args["account"]
         chat_id = args["chat_id"]
@@ -1662,22 +1709,17 @@ class TelegramManager:
         automatic = self._format_task_card_text(
             args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""),
             rows=args.get("rows"))
-        # Compose the proposed automatic frame against the live programmable slot;
-        # commit the automatic frame only after the edit/replacement succeeds.
-        text = self._compose_channels(
-            account, chat_id, channel="automatic", frame=automatic)
-        if not self.update_progress_message(card_message_id, text):
-            # Card may have been deleted — best-effort re-create.  The recovered
-            # card becomes the resident one for this chat, so persist and retire
-            # the replaced id consistently (same replacement discipline as create).
-            recovered = self._recover_task_card_by_replacement(
-                account, chat_id, card_message_id, text,
-                error="Failed to recover task card")
-            if recovered.get("status") == "ok":
-                self._set_channel_frame(account, chat_id, "automatic", automatic)
-            return recovered
-        self._set_channel_frame(account, chat_id, "automatic", automatic)
-        return {"status": "ok", "message_id": card_message_id}
+        # All automatic mutations share the same edit-first delivery discipline:
+        # identical content is success, unknown transport failure fails loud, and
+        # only a provider-confirmed edit-impossible condition may replace.
+        return self._deliver_channel_frame(
+            account,
+            chat_id,
+            "automatic",
+            automatic,
+            error="Failed to update task card",
+            resident_id=card_message_id,
+        )
 
     def _task_card_finalize(self, args: dict) -> dict:
         """Freeze the resident card on its last behavior.
@@ -1702,13 +1744,14 @@ class TelegramManager:
                 else:
                     automatic = "✅ TASK CARD · DONE"
             account, chat_id, _ = self._parse_compound_id(card_message_id)
-            # Compose the proposed frozen automatic frame against the live
-            # programmable slot; commit it only if the (best-effort) edit lands so
-            # a failed freeze never poisons the stored automatic frame.
-            text = self._compose_channels(
-                account, chat_id, channel="automatic", frame=automatic)
-            if self.update_progress_message(card_message_id, text):
-                self._set_channel_frame(account, chat_id, "automatic", automatic)
+            return self._deliver_channel_frame(
+                account,
+                chat_id,
+                "automatic",
+                automatic,
+                error="Failed to finalize task card",
+                resident_id=card_message_id,
+            )
         return {"status": "ok"}
 
     def _task_card_programmable(self, sub_action: str, args: dict) -> dict:

@@ -56,7 +56,7 @@ def check(agent) -> None:
         return  # no startup fingerprint — nothing to compare
 
     try:
-        disk_fp = _capture_runtime_fingerprint()
+        disk_fp = _capture_runtime_fingerprint(agent._source_revision_port)
     except Exception:
         return
 

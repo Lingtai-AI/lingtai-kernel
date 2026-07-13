@@ -47,7 +47,9 @@ class FakeAccount:
     def edit_message(self, chat_id, message_id, text, **kwargs):
         self.calls.append(("edit_message", chat_id, message_id, text))
         if self._fail_edit:
-            raise RuntimeError("message to edit not found")
+            raise RuntimeError(
+                "Telegram API error: Bad Request: message to edit not found"
+            )
         return {"ok": True}
 
     def delete_message(self, chat_id, message_id):
