@@ -4508,3 +4508,92 @@ def test_build_context_rebuild_hint_stamps_after_high_ratio():
     assert "forces a rebuild at the 1.0 hard boundary" in hint
     assert "meta_guidance" in hint
     assert build_context_rebuild_hint(SimpleNamespace(_intrinsics=set()), 0.90) is None
+
+
+# ---------------------------------------------------------------------------
+# Persistent post-forced-rebuild overflow warning routed to the permanent
+# current-state channel tool_meta.context.molt (Jason, 2026-07-12). The adapter
+# owns the one-shot latch + verification; build_meta only renders + merges the
+# exact sentence, preserving any coexisting sustained-pressure / cache-miss lines.
+# ---------------------------------------------------------------------------
+
+
+def _overflow_chat(usage):
+    """Minimal chat stand-in exposing context_overflow_status + decomposition."""
+    class _Chat:
+        def context_window(self_):
+            return 1000
+
+        def context_overflow_status(self_):
+            return None if usage is None else {"usage": usage}
+
+        class _iface:
+            @staticmethod
+            def estimate_context_tokens():
+                return 1000
+
+        interface = _iface()
+
+    return _Chat()
+
+
+def test_build_context_overflow_warning_present_only_when_status_active():
+    from lingtai.kernel.meta_block import build_context_overflow_warning
+    from lingtai.kernel.reminders.context_pressure import (
+        render_forced_rebuild_failed_warning,
+    )
+
+    active = SimpleNamespace(_session=SimpleNamespace(chat=_overflow_chat(1000 / 900)))
+    assert build_context_overflow_warning(active) == (
+        render_forced_rebuild_failed_warning(1000 / 900)
+    )
+
+    # No status / no chat / no session -> no warning (never invented).
+    assert build_context_overflow_warning(
+        SimpleNamespace(_session=SimpleNamespace(chat=_overflow_chat(None)))
+    ) is None
+    assert build_context_overflow_warning(
+        SimpleNamespace(_session=SimpleNamespace(chat=None))
+    ) is None
+    assert build_context_overflow_warning(SimpleNamespace(_session=None)) is None
+
+
+def test_build_meta_preserves_sustained_overflow_and_budget_molt_lines():
+    from lingtai.kernel.meta_block import TOOL_META_CONTEXT_PENDING_KEY
+    from lingtai.kernel.reminders.context_pressure import (
+        render_forced_rebuild_failed_warning,
+    )
+
+    chat = _overflow_chat(1000 / 900)  # ~1.111 > 1.0 -> overflow warning active
+    agent = SimpleNamespace(
+        _intrinsics={"psyche", "system"},
+        _config=SimpleNamespace(
+            time_awareness=False,
+            timezone_awareness=False,
+            language="en",
+            context_limit=1000,
+            cache_miss_budget=1000,
+        ),
+        get_token_usage=lambda: {"input_tokens": 5000, "cached_tokens": 0},
+        _session=SimpleNamespace(
+            _system_prompt_tokens=100,
+            _tools_tokens=0,
+            _latest_input_tokens=1000,
+            _token_decomp_dirty=False,
+            chat=chat,
+            _chat=chat,
+            # Compat sustained-pressure surface (no real reminder object needed).
+            context_pressure_reminder=None,
+            context_pressure_warning_active=True,
+            context_pressure_streak=3,
+        ),
+    )
+
+    molt = build_meta(agent)[TOOL_META_CONTEXT_PENDING_KEY]["molt"]
+    overflow = render_forced_rebuild_failed_warning(1000 / 900)
+
+    # All three warnings coexist, each on its own newline.
+    lines = molt.split("\n")
+    assert overflow in lines                       # exact overflow sentence, verbatim
+    assert any("Context has stayed high" in ln for ln in lines)  # sustained-pressure
+    assert any("cache miss budget" in ln for ln in lines)        # cache-miss budget

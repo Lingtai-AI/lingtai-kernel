@@ -386,6 +386,44 @@ def _budget_meta(*, molt, budget, cache_miss):
     }
 
 
+def test_forced_rebuild_failed_overflow_line_persists_on_every_result_no_event(tmp_path):
+    # The persistent overflow warning rides the SAME `_tool_meta_context.molt`
+    # transit key, so it is promoted to PERMANENT `tool_meta.context.molt` on EVERY
+    # result in a multi-tool batch. It is a current-state warning, not an event
+    # route: no `_tool_meta_context_event` is attached, so no molt-reminder event
+    # is logged for it.
+    from lingtai.kernel.reminders.context_pressure import (
+        render_forced_rebuild_failed_warning,
+    )
+
+    overflow = render_forced_rebuild_failed_warning(1000 / 900)
+    assert overflow == (
+        "100% context Forced Rebuilt Failed. Context overflowed!! "
+        "(111.1 %) Molt IMMEDIATELY!!"
+    )
+
+    events, logger = _capture_logger()
+    executor, captured = _make_executor(
+        dispatch_fn=lambda tc: {"ok": True},
+        working_dir=tmp_path,
+        logger_fn=logger,
+        meta_fn=lambda: {TOOL_META_CONTEXT_PENDING_KEY: {"molt": overflow}},
+    )
+    executor.execute(
+        [
+            ToolCall(name="read", args={}, id="tc-a"),
+            ToolCall(name="read", args={}, id="tc-b"),
+            ToolCall(name="read", args={}, id="tc-c"),
+        ]
+    )
+    wires = [c.args[1] for c in captured.call_args_list]
+    assert len(wires) == 3
+    for wire in wires:
+        assert _tool_meta(wire)["context"]["molt"] == overflow
+    # Current-state warning, not an event route.
+    assert not any(e[0] == CURRENT_MOLT_EVENT for e in events)
+
+
 def test_budget_context_promoted_to_tool_meta_context_through_pipeline(tmp_path):
     events, logger = _capture_logger()
     executor, captured = _make_executor(

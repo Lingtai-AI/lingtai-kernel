@@ -202,11 +202,17 @@ call — with new items (record then apply the pending set) or with no items (pu
 rebuild of the already-pending summaries); applied summaries flip to
 `status: done`. Do not loop rebuild/summarize. At context usage 1.0 (the
 full-context hard boundary) the runtime forces a rebuild on the next request
-regardless of whether pending summaries exist: pending markers are applied and
+regardless of whether pending summaries exist, but only ONCE per continuous
+full-context episode (it does not re-force while context stays at/above 1.0, and
+re-arms only after context later drops below 1.0): pending markers are applied and
 marked done, and with no pending summaries it still runs to release transient
 context. Every 1.0 forced rebuild ALWAYS carries a one-shot
 `reconstruction.warning` (before→after context, proactive-0.75-rebuild advice, and
-"if still above the 0.6 recovery target, molt"). Waiting until full context is not
+"if still above the 0.6 recovery target, molt"). If that one forced rebuild does
+NOT clear the overflow (post-rebuild context stays strictly above 1.0), every
+result then also carries a permanent `_meta.tool_meta.context.molt` line `100%
+context Forced Rebuilt Failed. Context overflowed!! (xxx %) Molt IMMEDIATELY!!` —
+molt immediately. Waiting until full context is not
 ideal — prefer the proactive 0.75 rebuild; if the pending total is 0, the forced
 rebuild has nothing to apply, so summarize more or molt instead.
 `refresh` is reserved for emergency reconstruction (see above). Summarize

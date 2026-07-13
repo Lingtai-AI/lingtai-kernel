@@ -2606,6 +2606,25 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # local estimate, because the latter can omit provider-visible prompt and
         # tool-result mass.  See PR #535 live probe.
         self._last_provider_input_tokens: int | None = None
+        # One automatic forced provider-context rebuild per continuous
+        # hard-boundary episode (Jason, 2026-07-12; separate PR after #896).
+        # ``_hb_rebuild_fired`` latches True when the automatic forced rebuild
+        # fires at provider usage ``>= 1.0`` so it does NOT fire again while usage
+        # stays ``>= 1.0`` (including exactly 1.0); it re-arms (back to False) only
+        # after a later provider usage drops STRICTLY below 1.0. Shared by BOTH
+        # automatic paths — the pre-request boundary check
+        # (``_maybe_force_rebuild_at_boundary``) and the immediate
+        # ``on_history_summarized`` release — via ``_fire_boundary_forced_rebuild``.
+        # ``_hb_rebuild_awaiting_verify`` stays True from the fire until the first
+        # post-rebuild provider response is observed, so the persistent
+        # ``Forced Rebuilt Failed`` overflow warning is withheld until the forced
+        # fresh replay's own provider input is known (a failed forced request never
+        # updates ``_last_provider_input_tokens``, so verification stays pending).
+        # See ``_observe_provider_usage_for_boundary`` / ``context_overflow_status``.
+        # Explicit ``request_history_rebuild`` is independent and never touches
+        # these flags.
+        self._hb_rebuild_fired = False
+        self._hb_rebuild_awaiting_verify = False
         # The user's own ChatGPT account id (decoded upstream from their OAuth
         # auth data). When present it is sent as the ``ChatGPT-Account-ID`` HTTP
         # Account routing is a ChatGPT-account concern and intentionally
@@ -3254,23 +3273,100 @@ class CodexResponsesSession(OpenAIResponsesSession):
             "current_context_usage": usage,
         }
 
+    def _fire_boundary_forced_rebuild(self) -> bool:
+        """Fire the once-per-episode automatic forced rebuild, honoring the latch.
+
+        Shared by the pre-request boundary path (``_maybe_force_rebuild_at_boundary``)
+        and the immediate ``on_history_summarized`` release so the two cannot
+        double-fire within one continuous ``>= 1.0`` episode. Returns True iff this
+        call performed the rebuild; False if the one-shot has already fired for the
+        current episode. On fire it latches the one-shot, marks verification pending
+        (the persistent overflow warning stays withheld until the first post-rebuild
+        provider response is observed), and rebases the epoch via
+        ``_reset_ws_epoch("summarize_delayed")`` — which also records the one-shot
+        channel-A reconstruction event and applies any pending summaries.
+        """
+        if self._hb_rebuild_fired:
+            return False
+        self._hb_rebuild_fired = True
+        self._hb_rebuild_awaiting_verify = True
+        self._reset_ws_epoch("summarize_delayed")
+        return True
+
+    def _observe_provider_usage_for_boundary(self) -> None:
+        """Update the one-shot latch from the latest successful provider usage.
+
+        Called once per successful provider response (right after
+        ``_last_provider_input_tokens`` is set). Two transitions:
+
+          * provider usage STRICTLY below 1.0 -> the continuous ``>= 1.0`` episode
+            is over: re-arm the one-shot (and drop any pending verification) so a
+            future crossing forces exactly once again;
+          * provider usage ``>= 1.0`` while a forced rebuild is awaiting its first
+            post-rebuild provider response -> THIS response is that verification
+            boundary; clear the pending flag so ``context_overflow_status`` can
+            surface the warning when usage is strictly ``> 1.0``.
+
+        A failed forced request never reaches here (no usage is recorded on the
+        error path), so verification correctly stays pending until a successful
+        provider-usage result exists. Unknown usage (no provider input yet) is a
+        no-op — it neither re-arms nor verifies.
+        """
+        usage = self._summarize_delay_context().get("current_context_usage")
+        if usage is None:
+            return
+        if usage < self._forced_rebuild_threshold_ratio:
+            self._hb_rebuild_fired = False
+            self._hb_rebuild_awaiting_verify = False
+            return
+        if self._hb_rebuild_awaiting_verify:
+            self._hb_rebuild_awaiting_verify = False
+
+    def context_overflow_status(self) -> dict | None:
+        """Persistent hard-boundary overflow status. See ``ChatSession`` base.
+
+        Returns ``{"usage": <float>}`` only when the automatic one-shot forced
+        rebuild has fired for the current episode, its first post-rebuild provider
+        response has been observed (verification complete), and the current
+        provider-reported usage remains STRICTLY above 1.0 — the forced rebuild
+        failed to clear the overflow. Returns ``None`` otherwise: not fired,
+        verification still pending, or usage at/below 1.0 (exactly 1.0 carries no
+        overflow warning; the warning is for strictly ``> 1.0``). Pure, idempotent
+        read (``build_meta`` calls it repeatedly within a batch), keyed to the same
+        provider-input ruler as the forced rebuild itself.
+        """
+        if not self._hb_rebuild_fired or self._hb_rebuild_awaiting_verify:
+            return None
+        usage = self._summarize_delay_context().get("current_context_usage")
+        if usage is None or usage <= self._forced_rebuild_threshold_ratio:
+            return None
+        return {"usage": usage}
+
     def _maybe_force_rebuild_at_boundary(self) -> bool:
         # HARD 1.0 boundary: once context usage reaches the forced-rebuild ratio,
-        # force a fresh provider-context replay on the next request REGARDLESS of
-        # whether pending summaries exist. If pending markers exist they are applied
-        # and marked done (via _reset_ws_epoch's marking hook); if none exist the
-        # rebuild still runs so the fresh replay re-serializes through the shared
+        # force a fresh provider-context replay REGARDLESS of whether pending
+        # summaries exist. If pending markers exist they are applied and marked
+        # done (via _reset_ws_epoch's marking hook); if none exist the rebuild
+        # still runs so the fresh replay re-serializes through the shared
         # converter, omitting stale timely transient _meta copies (agent_meta,
         # guidance, notifications, notification_guidance — newest per family
         # kept; interface_converters.filter_stale_timely_transient) and picking
         # up other deliberate canonical rewrites. This is why the pending-set
         # guard that used to gate the pre-1.0 delayed release is gone.
+        #
+        # ONE-SHOT (Jason, 2026-07-12): the automatic forced rebuild fires at most
+        # once per continuous >= 1.0 episode. Delegating to
+        # _fire_boundary_forced_rebuild honors the shared latch, so a request that
+        # is still overflowed after the rebuild does NOT re-force. We still return
+        # True whenever the boundary is reached (fired now OR already fired this
+        # episode) so _maybe_reset_ws_epoch does not additionally schedule a
+        # turn_count reset at the boundary.
         ctx = self._summarize_delay_context()
         self._summarize_effect_delayed_last_context = ctx
         usage = ctx.get("current_context_usage")
         if usage is None or usage < self._forced_rebuild_threshold_ratio:
             return False
-        self._reset_ws_epoch("summarize_delayed")
+        self._fire_boundary_forced_rebuild()
         return True
 
     def _maybe_reset_ws_epoch(self) -> None:
@@ -3300,9 +3396,15 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # provider request because summarize runs as a tool result after the current
         # model call has already completed. Below 1.0 the summary stays pending; the
         # agent applies it via a manual rebuild=true or waits for the 1.0 boundary.
+        #
+        # This shares the ONE-SHOT latch with the pre-request boundary path via
+        # _fire_boundary_forced_rebuild: if the automatic forced rebuild already
+        # fired for the current >= 1.0 episode, this immediate release is a no-op
+        # (the just-added summarized ids stay pending until the next actual rebuild)
+        # so the runtime never force-rebuilds twice while usage stays >= 1.0.
         usage = self._summarize_effect_delayed_last_context.get("current_context_usage")
         if usage is not None and usage >= self._forced_rebuild_threshold_ratio:
-            self._reset_ws_epoch("summarize_delayed")
+            self._fire_boundary_forced_rebuild()
 
     def request_history_rebuild(self, reason: str = "summarize_rebuild_only") -> bool:
         # Explicit summarize rebuild=true: any history compression already ran in the
@@ -4109,6 +4211,11 @@ class CodexResponsesSession(OpenAIResponsesSession):
         except Exception:
             provider_input_tokens = 0
         self._last_provider_input_tokens = provider_input_tokens if provider_input_tokens > 0 else None
+        # Successful provider response observed: re-arm the one-shot forced-rebuild
+        # latch when usage dropped strictly below 1.0, or clear pending verification
+        # when this is the first post-rebuild response (the boundary for the
+        # persistent overflow warning). A failed request never reaches here.
+        self._observe_provider_usage_for_boundary()
 
         # Record assistant response into the interface so it rides along on
         # the next request. Without this, the stateless backend would never

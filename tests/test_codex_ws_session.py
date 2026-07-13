@@ -825,26 +825,30 @@ def test_reconstruction_event_recorded_on_immediate_release(monkeypatch):
 
 
 def test_reconstruction_event_recorded_on_delayed_release(monkeypatch):
-    """Below the boundary the summarize stays pending; the forced rebuild fires on
-    a later send once context reaches 1.0. That release must also record the
-    one-shot event."""
-    client = RealisticRestClient(input_tokens=1000)
+    """Below the boundary the summarize stays genuinely pending; the forced rebuild
+    fires on a later send once context reaches 1.0. That single one-shot release
+    records the one-shot event."""
+    # Start below the boundary so the summarize really does stay pending (no
+    # earlier pre-request fire consumes the one-shot latch first).
+    client = RealisticRestClient(input_tokens=900)
     session = _make_rest_session(client)
     monkeypatch.setattr(session, "context_window", lambda: 1000)
 
-    # First send records summarize while pending, then a full-context send releases.
-    session.send("one")
-    session.on_history_summarized(["call_old"])
-    # Force the pending state (simulate below-boundary-at-summarize-time).
-    session._summarize_effect_delayed_pending_ids.add("call_old")
-    session.take_pending_reconstruction_event()  # clear any immediate event
+    session.send("one")                             # 0.9 -> below the boundary
+    session.on_history_summarized(["call_old"])     # stays pending (no fire below 1.0)
+    assert "call_old" in session._summarize_effect_delayed_pending_ids
+    assert session.take_pending_reconstruction_event() is None
 
-    # Next send is at 1.0 -> forced rebuild fires.
-    session.send("three")
+    # Context reaches full; the forced rebuild fires once on the crossing send.
+    client.responses._input_tokens = 1000
+    session.send("two")                             # top still sees 0.9 -> no fire; completes at 1.0
+    session.send("three")                           # top sees 1.0 -> delayed release fires once
     event = session.take_pending_reconstruction_event()
     assert event is not None
     assert event["type"] == "delayed_summarize_reconstruction"
     assert event["before"]["usage"] == pytest.approx(1.0)
+    # One-shot: no second event while still overflowed.
+    assert session.take_pending_reconstruction_event() is None
 
 
 def test_forced_rebuild_fires_at_boundary_with_no_pending(monkeypatch):
@@ -1001,21 +1005,23 @@ def test_rest_summarize_releases_forced_rebuild_at_context_boundary(monkeypatch)
 def test_rest_summarize_release_uses_previous_provider_input_not_interface_estimate(monkeypatch):
     """Live PR #535 regression: ChatInterface's local estimate can stay low even
     when the real previous provider request reached the 1.0 forced-rebuild boundary.
-    The forced release must use the provider input-token count.
+    The forced release must use the provider input-token count, not the estimate.
     """
     client = RealisticRestClient(input_tokens=250_000)
     session = _make_rest_session(client, context_window=250_000)
     monkeypatch.setattr(session._interface, "estimate_context_tokens", lambda: 10)
 
-    session.send("one")
-    session.send("two")
+    session.send("one")  # provider input 250_000 == full; interface estimate stubbed to 10
+    # The release keys off the provider input (250_000/250_000 = 1.0), NOT the tiny
+    # interface estimate (10) — otherwise it would never fire — and the one-shot
+    # forces exactly once.
     session.on_history_summarized(["call_old"])
     assert session._summarize_effect_delayed_last_release_reason == "summarize_delayed"
     assert not session._summarize_effect_delayed_pending_ids
-    third = session.send("three")
 
-    assert third.usage.extra["codex_request_mode"] == "rest_full"
-    assert third.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_delayed"
+    second = session.send("two")  # the single fire's fresh replay
+    assert second.usage.extra["codex_request_mode"] == "rest_full"
+    assert second.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_delayed"
 
 
 def test_rest_summarize_uses_configured_context_window_when_base_returns_zero(monkeypatch):
@@ -1664,6 +1670,213 @@ def test_ws_epoch_reset_clears_frozen_outputs_before_full_replay():
     assert "call_old" not in session._ws_frozen_outputs
     assert session._ws_turns_since_epoch_reset == 1
     assert session._ws_last_diag["reason"] == "epoch_reset"
+
+
+# ---------------------------------------------------------------------------
+# One automatic forced provider-context rebuild per continuous hard-boundary
+# episode (Jason, 2026-07-12; separate PR after #896).
+#
+# Contract:
+#   * usage >= 1.0 (inclusive) forces the rebuild EXACTLY ONCE per continuous
+#     >= 1.0 episode; it does not re-fire while provider usage stays >= 1.0
+#     (including exactly 1.0);
+#   * both automatic paths — the pre-request boundary check
+#     (``_maybe_force_rebuild_at_boundary``) and the immediate
+#     ``on_history_summarized`` release — share the ONE latch;
+#   * the latch re-arms only after a later provider usage drops STRICTLY below
+#     1.0; a future crossing then forces once again;
+#   * the persistent "Forced Rebuilt Failed" overflow warning
+#     (``context_overflow_status``) becomes active only after the first
+#     provider response from the forced fresh replay is observed AND that
+#     post-rebuild provider input is strictly > 1.0 (a failed forced request
+#     keeps verification pending);
+#   * explicit ``request_history_rebuild`` stays independently available and
+#     does not arm/clear/observe the automatic latch.
+# ---------------------------------------------------------------------------
+
+
+def test_forced_rebuild_fires_once_per_continuous_boundary_episode(monkeypatch):
+    # Provider pinned at the 1.0 hard boundary on every response: the rebuild
+    # fires once (on the send whose pre-request check first sees >= 1.0) and does
+    # NOT re-fire while usage stays >= 1.0.
+    client = RealisticRestClient(input_tokens=1000)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+
+    first = session.send("one")    # last_provider is None at the top -> no fire
+    second = session.send("two")   # top sees 1.0 -> FORCE once (fresh full replay)
+    third = session.send("three")  # top sees 1.0 but latch set -> NO re-fire
+
+    assert first.usage.extra["codex_request_mode"] == "rest_full"
+    assert second.usage.extra["codex_request_mode"] == "rest_full"
+    assert second.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_delayed"
+    # The still-overflowed third send stays incremental — no repeated rebuild.
+    assert third.usage.extra["codex_request_mode"] == "rest_incremental"
+    assert third.usage.extra["codex_ws_delta_reason"] == "ok"
+    assert session._hb_rebuild_fired is True
+
+    # Exactly one reconstruction event across the whole episode.
+    event = session.take_pending_reconstruction_event()
+    assert event is not None
+    assert event["type"] == "delayed_summarize_reconstruction"
+    assert session.take_pending_reconstruction_event() is None
+
+
+def test_forced_rebuild_not_repeated_at_exactly_one_point_zero(monkeypatch):
+    # Exactly 1.0 is inclusive for the FIRST fire but never re-forces.
+    client = RealisticRestClient(input_tokens=1000)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+
+    session.send("one")            # completes at exactly 1.0
+    second = session.send("two")   # first crossing -> force once
+    assert second.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_delayed"
+
+    third = session.send("three")  # still exactly 1.0 -> no re-fire
+    fourth = session.send("four")  # still exactly 1.0 -> no re-fire
+    assert third.usage.extra["codex_ws_delta_reason"] == "ok"
+    assert fourth.usage.extra["codex_ws_delta_reason"] == "ok"
+    # Exactly 1.0 is NOT strictly > 1.0 -> no persistent overflow warning.
+    assert session._hb_rebuild_awaiting_verify is False
+    assert session.context_overflow_status() is None
+
+
+def test_on_history_summarized_shares_the_one_shot_latch(monkeypatch):
+    # Pre-request boundary fires first; a later summarize at >= 1.0 must NOT
+    # force a second rebuild (shared latch).
+    client = RealisticRestClient(input_tokens=1000)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+
+    session.send("one")
+    session.send("two")            # pre-request boundary fires the one-shot
+    assert session._hb_rebuild_fired is True
+    session.take_pending_reconstruction_event()  # clear the single fire's event
+
+    # Summarize while still overflowed: the shared latch blocks a second rebuild.
+    session.on_history_summarized(["call_old"])
+    assert session.take_pending_reconstruction_event() is None
+    # The summary stays pending (it is applied by a later rebuild, not re-forced now).
+    assert "call_old" in session._summarize_effect_delayed_pending_ids
+
+
+def test_summarize_fires_then_pre_request_boundary_does_not_refire(monkeypatch):
+    # Reverse order: the immediate on_history_summarized release fires the one-shot;
+    # the next send's pre-request boundary check must NOT record a second rebuild.
+    client = RealisticRestClient(input_tokens=1000)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+
+    session.send("one")                          # completes at 1.0
+    session.on_history_summarized(["call_old"])  # immediate release fires the one-shot
+    assert session._hb_rebuild_fired is True
+    first_event = session.take_pending_reconstruction_event()
+    assert first_event is not None
+    assert first_event["type"] == "delayed_summarize_reconstruction"
+
+    second = session.send("two")   # the single fire's fresh replay; pre-request must NOT re-fire
+    assert second.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_delayed"
+    assert session.take_pending_reconstruction_event() is None
+    third = session.send("three")  # still at 1.0 -> incremental, no re-fire
+    assert third.usage.extra["codex_ws_delta_reason"] == "ok"
+
+
+def test_forced_rebuild_rearms_after_usage_drops_below_one(monkeypatch):
+    # Drop strictly below 1.0 re-arms; a later crossing forces exactly once again.
+    client = RealisticRestClient(input_tokens=1000)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+
+    session.send("one")
+    session.send("two")            # forces once
+    assert session._hb_rebuild_fired is True
+
+    # Provider usage drops strictly below 1.0 -> re-arm.
+    client.responses._input_tokens = 500
+    session.send("three")          # completes at 0.5 -> re-arm
+    assert session._hb_rebuild_fired is False
+    assert session.context_overflow_status() is None
+
+    # Cross the boundary again -> forces exactly once more.
+    client.responses._input_tokens = 1000
+    session.send("four")           # top still sees 0.5 -> no fire; completes at 1.0
+    five = session.send("five")    # top sees 1.0 -> FORCE again
+    assert five.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_delayed"
+    assert session._hb_rebuild_fired is True
+
+
+def test_overflow_warning_active_only_after_verified_post_rebuild_over_one(monkeypatch):
+    # Post-rebuild provider input strictly > 1.0 -> the persistent warning activates
+    # and reports the CURRENT measured usage.
+    client = RealisticRestClient(input_tokens=1000)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 900)  # 1000/900 ~= 1.111
+
+    session.send("one")
+    # Before the rebuild fires there is no overflow warning.
+    assert session.context_overflow_status() is None
+    session.send("two")            # forces the rebuild; its own reply is the post-rebuild input
+    status = session.context_overflow_status()
+    assert status is not None
+    assert status["usage"] == pytest.approx(1000 / 900)
+
+
+def test_overflow_warning_pending_until_forced_request_succeeds(monkeypatch):
+    # A failed forced request records no provider usage -> verification stays
+    # pending and the warning is withheld until a successful provider usage.
+    client = RealisticRestClient(input_tokens=1000)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 900)
+
+    session.send("one")            # completes at 1000/900 > 1.0
+
+    calls = {"n": 0}
+    real_create = client.responses.create
+
+    def flaky_create(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("forced fresh replay failed")
+        return real_create(**kwargs)
+
+    monkeypatch.setattr(client.responses, "create", flaky_create)
+
+    # The forced fresh replay raises -> the one-shot has fired but verification
+    # is still pending, so the warning is withheld.
+    with pytest.raises(RuntimeError):
+        session.send("two")
+    assert session._hb_rebuild_fired is True
+    assert session._hb_rebuild_awaiting_verify is True
+    assert session.context_overflow_status() is None
+
+    # A later successful send supplies the post-rebuild provider usage.
+    session.send("three")
+    assert session._hb_rebuild_awaiting_verify is False
+    status = session.context_overflow_status()
+    assert status is not None
+    assert status["usage"] == pytest.approx(1000 / 900)
+
+
+def test_manual_rebuild_independent_of_automatic_one_shot_latch(monkeypatch):
+    # Explicit request_history_rebuild stays available and must not arm/clear the
+    # automatic latch.
+    client = RealisticRestClient(input_tokens=1000)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+
+    session.send("one")
+    session.send("two")            # automatic one-shot fires
+    assert session._hb_rebuild_fired is True
+    session.take_pending_reconstruction_event()  # clear the automatic event
+
+    # Manual rebuild still works while the automatic latch is set...
+    assert session.request_history_rebuild() is True
+    manual_event = session.take_pending_reconstruction_event()
+    assert manual_event is not None
+    assert manual_event["type"] == "summarize_rebuild_only_reconstruction"
+    # ...and it must NOT disturb the automatic one-shot latch/verification state.
+    assert session._hb_rebuild_fired is True
+    assert session._hb_rebuild_awaiting_verify is False
 
 
 # Imported here (not at top) so a missing symbol fails the import test loudly.
