@@ -75,7 +75,7 @@ class PosixAgentPresenceStoreAdapter(AgentPresenceStorePort):
             return ManifestObservation.absent()
         try:
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        except (UnicodeDecodeError, json.JSONDecodeError, OSError):
             # Present on disk but unparseable/unreadable. Still an agent by
             # file existence; not a valid manifest for identity/human policy.
             return ManifestObservation.malformed()

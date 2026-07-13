@@ -212,6 +212,20 @@ def test_adapter_observe_manifest_malformed_still_agent(tmp_path):
     assert is_human(obs) is False
 
 
+def test_adapter_observe_manifest_invalid_utf8_still_agent_and_alive(tmp_path):
+    # Decode failure is malformed evidence, not an exception: file presence still
+    # identifies an agent, and a fresh heartbeat still determines liveness.
+    (tmp_path / ".agent.json").write_bytes(b"\xff\xfe{")
+    (tmp_path / ".agent.heartbeat").write_text("999.0", encoding="utf-8")
+    store = PosixAgentPresenceStoreAdapter(tmp_path)
+
+    obs = store.observe_manifest()
+    assert obs.kind is ManifestKind.MALFORMED
+    assert is_agent(obs) is True
+    assert is_human(obs) is False
+    assert observe_alive(store, wall_now=1000.0) is True
+
+
 def test_adapter_observe_manifest_non_object_json_is_malformed(tmp_path):
     # Valid JSON that is not an object (a bare number): present but not a usable
     # manifest — is_agent True (file exists), is_human False, and no crash.

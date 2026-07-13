@@ -100,9 +100,9 @@ The event-journal adapter depends inward on `EventJournalPort` and
 `JournalPosition`, and on the existing logging primitives for byte serialization,
 redaction, primary-first ordering, and SQLite fail-open behavior
 (`src/lingtai/adapters/posix/event_journal.py:7-12`). The mail adapter depends
-inward on `MailTransportPort`, kernel `handshake` liveness helpers, and the
-kernel-owned `_new_mailbox_id`
-(`src/lingtai/adapters/posix/mail.py:27-29`). The workdir-lease adapter depends
+inward on `MailTransportPort`, Core `agent_presence` liveness policy,
+`handshake.resolve_address`, and the kernel-owned `_new_mailbox_id`
+(`src/lingtai/adapters/posix/mail.py:27-33`). The workdir-lease adapter depends
 inward on the kernel-owned `workdir_layout` for the `.agent.lock` path and on
 `WorkdirLeasePort` (`src/lingtai/adapters/posix/workdir_lease.py:23-24`). The
 notification-store adapter depends inward on `NotificationStorePort` and the
