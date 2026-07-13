@@ -263,7 +263,7 @@ summarize would discard cache benefit.
   **strictly above** `1.0` (a failed forced request keeps verification pending
   until a successful provider-usage result exists), EVERY following result carries
   a permanent `_meta.tool_meta.context.molt` line, verbatim:
-  `100% context Forced Rebuilt Failed. Context overflowed!! (xxx %) Molt IMMEDIATELY!!`
+  `100% context Forced Rebuild Failed to Bring Usage Below 100%. Context overflowed!! (xxx %) Molt IMMEDIATELY!!`
   (`xxx` = the current measured percentage, one decimal). It rides the same
   permanent current-state channel as the sustained-pressure and cache-miss-budget
   molt reminders (each preserved on its own line when several coexist). Because the

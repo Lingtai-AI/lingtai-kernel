@@ -72,7 +72,7 @@ one-shot `reconstruction.warning` (before→after context, proactive-`0.75`-rebu
 advice, and "if still above the `0.6` recovery target, molt"). If that one forced
 rebuild does NOT clear the overflow (post-rebuild context stays strictly above
 `1.0`), every result then also carries a permanent `_meta.tool_meta.context.molt`
-line `100% context Forced Rebuilt Failed. Context overflowed!! (xxx %) Molt
+line `100% context Forced Rebuild Failed to Bring Usage Below 100%. Context overflowed!! (xxx %) Molt
 IMMEDIATELY!!` — molt immediately. Waiting until full
 context is not ideal — prefer the proactive `0.75` rebuild. If pending total is 0,
 the forced rebuild has nothing to apply, so summarize more or molt. Do not loop

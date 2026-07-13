@@ -475,12 +475,12 @@ def test_render_forced_rebuild_failed_warning_exact_wording_one_decimal():
     )
 
     assert render_forced_rebuild_failed_warning(1.012) == (
-        "100% context Forced Rebuilt Failed. Context overflowed!! "
+        "100% context Forced Rebuild Failed to Bring Usage Below 100%. Context overflowed!! "
         "(101.2 %) Molt IMMEDIATELY!!"
     )
     # One decimal is pinned even when the percentage is round.
     assert render_forced_rebuild_failed_warning(1.05) == (
-        "100% context Forced Rebuilt Failed. Context overflowed!! "
+        "100% context Forced Rebuild Failed to Bring Usage Below 100%. Context overflowed!! "
         "(105.0 %) Molt IMMEDIATELY!!"
     )
     # A hair over the boundary still renders one decimal.

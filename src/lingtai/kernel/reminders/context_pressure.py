@@ -493,6 +493,6 @@ def render_forced_rebuild_failed_warning(usage: float) -> str:
     ``context_overflow_status`` gate guarantees it).
     """
     return (
-        "100% context Forced Rebuilt Failed. Context overflowed!! "
+        "100% context Forced Rebuild Failed to Bring Usage Below 100%. Context overflowed!! "
         f"({float(usage) * 100:.1f} %) Molt IMMEDIATELY!!"
     )

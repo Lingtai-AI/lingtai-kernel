@@ -398,7 +398,7 @@ def test_forced_rebuild_failed_overflow_line_persists_on_every_result_no_event(t
 
     overflow = render_forced_rebuild_failed_warning(1000 / 900)
     assert overflow == (
-        "100% context Forced Rebuilt Failed. Context overflowed!! "
+        "100% context Forced Rebuild Failed to Bring Usage Below 100%. Context overflowed!! "
         "(111.1 %) Molt IMMEDIATELY!!"
     )
 
