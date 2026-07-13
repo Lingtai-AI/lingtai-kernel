@@ -2,7 +2,9 @@
 related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/bash/__init__.py
+  - src/lingtai/tools/bash/_async_supervisor.py
   - src/lingtai/tools/bash/bash_policy.json
+  - src/lingtai/tools/bash/CONTRACT.md
   - src/lingtai/tools/bash/manual/SKILL.md
   - tests/test_bash_async.py
   - tests/test_layers_bash.py
@@ -25,7 +27,8 @@ be explicitly opted into.
 
 ## Components
 
-- `bash/__init__.py` — the entire capability in a single file. `get_description` (`__init__.py:175`), `get_schema` (`__init__.py:179-223`), `setup` (`__init__.py:822-860`). Two core classes: `BashPolicy` for command filtering (`__init__.py:227-315`), `BashManager` for execution (`__init__.py:318-819`). Module-level result helpers: `_augment_command_result` adds `ok`/`command_status`/`warning` fidelity fields (`__init__.py:121-173`), `_detect_failure_signature` labels `python_traceback`/`missing_module` (`__init__.py:64-78`), `_broad_scan_hint` returns timeout recipe text for broad recursive walks (`__init__.py:91-118`).
+- `bash/__init__.py` — public schema/setup plus policy, sync execution, and durable async manager orchestration. `get_description` (`__init__.py:195`), `get_schema` (`__init__.py:199`), and `setup` (`__init__.py:1416`) define the public capability surface. `BashPolicy` owns command filtering (`__init__.py:247`); `BashManager` owns validation, sync execution, durable-state rehydration, notification publication, and poll/cancel consumption (`__init__.py:338`). `_augment_command_result` adds `ok`/`command_status`/`warning` fidelity fields (`__init__.py:141`).
+- `bash/_async_supervisor.py` — private detached process that owns command spawn/wait/log handles and atomically persists terminal truth. State writers begin at `_async_supervisor.py:72`, PID identity at `:169`, group liveness proof at `:205`, start-lease claiming at `:263`, durable cancellation/wait at `:334`, and the supervisor entry path at `:386`.
 - `bash/bash_policy.json` — default denylist policy shipped with the kernel. Denies destructive (`rm`, `rmdir`, `shred`, `dd`), privilege escalation (`sudo`, `su`, `doas`), permission changes (`chmod`, `chown`, `chgrp`), disk management (`mount`, `umount`, `mkfs`, `fdisk`), package managers (`apt`, `apt-get`, `yum`, `dnf`, `brew`), process control (`kill`, `killall`, `pkill`, `shutdown`, `reboot`, `systemctl`), network (`nc`, `ncat`), and code execution (`eval`, `exec`).
 
 ## Public API
@@ -44,7 +47,7 @@ The `bash` tool supports synchronous and asynchronous execution:
 
 **Sync mode** (`async=false`, default): Returns `{status, exit_code, stdout, stderr, ok, command_status[, warning]}` once the command completes, or `{status: "error", message}` only when the shell itself could not run it (empty command, policy denial, timeout, spawn failure).
 
-**Async mode** (`async=true`): Returns `{status: "ok", job_id, pid, message}` immediately. Use `action="poll"` with the job_id to check status: returns `{status: "running", job_id, pid}` while running, or `{status: "done", exit_code, stdout, stderr, ok, command_status[, warning]}` once finished. Use `action="cancel"` to kill the process group. Async run validates `reminder` as a finite non-negative number bounded by `threading.TIMEOUT_MAX` and defaults omitted direct calls to 1800 seconds (`__init__.py:385-408`, `__init__.py:436-441`).
+**Async mode** (`async=true`): Returns `{status: "ok", job_id, pid, message}` immediately. Initial durable state carries both a tokenized finite supervisor-start lease and a bounded `return_handoff`. The supervisor must claim/recheck the start lease before command `Popen`; the parent then atomically replaces the crash-fallback reminder deadline with `returned_at + reminder` and arms the return handoff before returning. `status: ok` requires winning that valid pending-to-armed transition (or exact completed/failed truth under the still-valid guard); a late owner after expiry returns a pollable error with `job_id`/`pid` instead of false success. Any rehydrated old timer defers while that handoff is pending. The detached supervisor owns the command `Popen`/`wait()` and atomically records `{cwd, started_at, finished_at, exit_status_known, exit_code}`. A fresh manager never consumes unknown merely because a command PID vanished: it waits/reloads while the recorded supervisor can still commit, marks unknown only after an expired start lease or a definitively gone supervisor, and otherwise returns recoverable `running`. Terminal poll is a conditional one-shot claim. `cancel` persists a request; the supervisor keeps the direct child unreaped through TERM grace, KILLs the original group, proves live-member quiescence, and commits exact terminal truth before cancellation can atomically consume/suppress the job. Async run validates `reminder` as a finite non-negative number bounded by `threading.TIMEOUT_MAX` and defaults omitted direct calls to 1800 seconds.
 
 **Result fidelity — top-level `status` vs. inner command success.** The top-level `status` (`ok`/`done`) reflects only that the shell *spawned* the command; it stays `ok`/`done` even when the inner command exits nonzero. To make inner failures impossible to skim past *without* changing the `status` contract that downstream recovery/telemetry branch on (`tool_executor.py` enriches/logs/collects on `status == "error"`), `_augment_command_result` (`__init__.py`) adds three additive, model-visible fields keyed off `exit_code`:
 
@@ -56,7 +59,7 @@ On a still-running poll there is no `exit_code`, so no fidelity fields are added
 
 **Timeout hint.** On a sync timeout whose command resembles a broad recursive scan (`find … -name/-path/-type`, `rglob(`, `os.walk(`, `glob('**…')` — `_broad_scan_hint`), the timeout `message` appends an `rg --files`-based recipe. The hint is advisory text only; it never blocks or rewrites the command.
 
-Job files are stored under `system/jobs/{job_id}/` (stdout.log, stderr.log, pid, status). Cleaned up automatically on poll-completion or cancel. The process-exit watcher still writes single-slot `.notification/bash.json` with a bounded command preview (`__init__.py:651-700`); the last-resort reminder uses `.notification/system.json` multi-event append with stable `ref_id="bash.reminder:<job_id>"` so close-due jobs do not overwrite one another (`__init__.py:531-649`, `src/lingtai/kernel/base_agent/messaging.py:66-180`).
+Job files are stored under `system/jobs/{job_id}/`, where new IDs use the full UUID4 hex form `job-<32 hex>` and only old `job-<8 hex>` names remain accepted for legacy reads. `state.json` is the atomically replaced source of truth; it carries command/cwd, supervisor-start and successful-return handoff leases, supervisor and command PID identities, lifecycle timestamps, terminal result, cancellation request, and completion/reminder publication state. `stdout.log` and `stderr.log` remain supervisor-owned. Directories intentionally remain as durable records; retention/compaction is future policy, not implicit deletion. A conditional terminal claim changes `terminal_polled` and reminder suppression in one write, so concurrent managers have one terminal consumer. Reminder state is a tokenized `pending → publishing → published` (or bounded `suppressing` / terminal `suppressed`) claim; a due timer defers while `return_handoff` remains pending, and the final sink write shares the state lock with suppression. Stable reminder/completion refs correlate and can dedupe only while their bounded/current sinks retain them; they do not make bounded system events or latest-only Bash completion delivery globally exactly-once. Both are separate from `.notification/cron.json` workflow reminders.
 
 ## Internal Module Layout
 
@@ -80,13 +83,17 @@ bash/__init__.py
   │   ├── handle(args)               — dispatches to _handle_run / _handle_poll / _handle_cancel
   │   ├── _handle_run(args)          — validates + runs sync or async
   │   ├── _run_sync(command, cwd, timeout) — subprocess.run path; augments result + timeout hint
-  │   ├── _run_async(command, cwd, reminder) — subprocess.Popen with start_new_session, returns job_id
-  │   ├── _run_reminder_timer(...)   — daemon-threaded last-resort poll reminder
-  │   ├── _claim_reminder_timer(...) — lock-owned terminal-vs-deadline claim
-  │   ├── _publish_async_reminder(job_id) — appends bash.reminder system event
-  │   ├── _handle_poll(args)         — checks job status; augments completed result
-  │   ├── _handle_cancel(args)       — SIGTERM to process group, cleanup
-  │   └── _close_handles(job_id)     — closes open file handles for a job
+  │   ├── _run_async(command, cwd, reminder) — writes initial state, starts/reaps private supervisor, returns command PID
+  │   ├── _rehydrate_async_jobs()    — resumes reminder/completion state at manager construction
+  │   ├── _run_reminder_timer(...)   — deadline worker; claim is durable rather than timer-local
+  │   ├── _publish_async_reminder(...) / _publish_completion_if_due(...) — stable-ref notifications
+  │   ├── _handle_poll(args)         — reads exact durable outcome or explicit unknown exit
+  │   └── _handle_cancel(args)       — verifies durable supervisor ownership, requests cancel, waits exact commit
+  │
+  ├── _async_supervisor.py           — private detached runner; owns command wait/logs/atomic terminal write
+  │   ├── write_initial_state/update_state — fsync + replace under POSIX state lock
+  │   ├── process_identity(...)       — Linux start ticks or POSIX lstart identity
+  │   └── supervise(job_dir)          — command spawn, wait, exact exit persistence
   │
   └── setup(agent, policy_file, yolo) — resolves policy, registers bash tool
 ```
@@ -99,9 +106,10 @@ bash/__init__.py
 - **Result fidelity is additive, never status-changing:** A completed command always returns top-level `status: "ok"`/`"done"` regardless of `exit_code`. The pass/fail signal lives in additive `ok`/`command_status`/`warning` fields. `status: "error"` is reserved for the shell failing to run the command at all (empty/denied command, timeout, spawn failure) — this preserves the `tool_executor` contract that branches on `status == "error"` for error enrichment, lifecycle logging, and `collected_errors`.
 - **Output truncation:** `max_output = 50_000` chars. Both stdout and stderr are truncated with a note showing total length.
 - **Subprocess isolation:** Commands run via `subprocess.run(shell=True, capture_output=True, text=True, timeout=...)` in the agent's working directory by default.
-- **Async subprocess:** Async commands use `subprocess.Popen(shell=True, start_new_session=True)` with stdout/stderr redirected to files under `system/jobs/{job_id}/`. `start_new_session=True` ensures the process gets its own session, enabling `os.killpg()` for clean cancellation.
-- **Async reminder lifecycle:** `_run_async()` arms one daemon timer per job (`__init__.py:512-541`). The timer and terminal handling share `_reminder_lock`: `_claim_reminder_timer()` atomically pops the pending reminder before publish, while terminal `poll -> done` / successful `cancel` suppress by popping first (`__init__.py:543-577`, `__init__.py:742-744`, `__init__.py:800-801`). Process exit and `.notification/bash.json` completion do not cancel the timer.
-- **Job lifecycle:** Jobs are created on async run, tracked via PID files, and cleaned up (directory deleted) after poll-completion or cancel. File handles are closed via `_close_handles()` to avoid resource leaks.
+- **Async supervisor:** A private detached runner must claim a tokenized finite start lease and recheck it under the state lock before `Popen(shell=True, start_new_session=True)`. It records its incarnation and command identity, owns the unreaped child and exact `wait()`, and atomically persists terminal truth. If it exits before terminal commit, its owning parent reaper or a later lease/dead-PID proof makes the job explicitly unrecoverable.
+- **Terminal truth, cancellation, and consumption:** A missing command PID is pending evidence while the recorded supervisor can still commit. Poll writes unrecoverable only after bounded start-lease or supervisor-loss proof. After a durable cancel request, the supervisor retains the direct shell unreaped through TERM grace, KILLs the original group, and reports success only after live non-zombie group quiescence. `terminal_polled` is a conditional atomic claim coupled to reminder suppression, so poll/cancel races have one consumer.
+- **Async reminder lifecycle:** Deadline, return handoff, and publication state live in `state.json`, not only a timer. Initial state provides a crash fallback plus a bounded pending-return guard; due claims defer until the successful-return mutation atomically writes `returned_at + reminder` and arms that guard. The returning manager reports success only if this still-valid lock transition wins (or exact completed/failed terminal truth already won under the valid guard); after expiry it returns a pollable recovery error. On guard expiry, a live job may use the fallback while an expired launch/dead supervisor becomes unrecoverable. Cancellation's durable `suppressing` state is bounded and returns to `pending` after crash/timeout. Final reminder publication is serialized with terminal suppression; exact completion suppresses stale pending/publishing/suppressing watchdogs and Bash completion owns the wake. Stable refs offer bounded/current-sink deduplication only, so crashes after sink write can still duplicate after retention/eviction.
+- **Job lifecycle:** Jobs remain durable records after terminal poll/confirmed cancellation; retention/compaction is future policy. New IDs are full UUID4 hex and collision-safe; old eight-hex IDs are legacy read compatibility. A live legacy PID remains conservatively running and uncancellable because its incarnation cannot be proved; after it dies, one poll returns explicit unknown exit status rather than fabricated `-1` failure.
 - **Policy file location:** Default policy is `bash/bash_policy.json` (shipped with the kernel). Can be overridden via `policy_file` arg or bypassed with `yolo=True`.
 
 ## Dependencies
@@ -109,12 +117,12 @@ bash/__init__.py
 - `lingtai.i18n` — `t()` for localized strings
 - `lingtai.kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
 - `lingtai.kernel.base_agent.messaging._enqueue_system_notification` — canonical `.notification/system.json` multi-event append path when Bash is installed on an agent (`src/lingtai/kernel/base_agent/messaging.py:66-180`).
-- `lingtai.kernel.notifications.collect_notifications` / `submit` — direct-manager fallback for tests and programmatic BashManager use without a BaseAgent; protected by the agent's shared system lock when present, otherwise a module-global fallback lock (`__init__.py:605-649`).
+- `lingtai.kernel.notification_store.NotificationStore` — serialized compare/update ownership for direct-manager reminder appends and sink-idempotent Bash completion writes; injected through `agent._notification_store` (`__init__.py:937`, `:1012`).
 - `lingtai.kernel.trace_redaction.redact_text` — mechanical secret redaction for the stderr tail hoisted into `warning` (imported lazily inside `_redact_warning_tail`, fail-open).
 
 ## Composition
 
 - **Parent:** `src/lingtai/tools/` (tool package).
 - **Siblings:** `daemon/`, `avatar/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog).
-- **Manual:** `bash/manual/SKILL.md` — operational guide for agents (currently focused on scheduled / cron-driven work — when to schedule, the wake-by-mailbox-drop contract, hygiene rules, OS-specific recipes for launchd / systemd / crontab, and debugging walkthroughs).
+- **Manual:** `bash/manual/SKILL.md` — operational guide for agents covering async/poll/reminder durability plus scheduled / cron-driven work, wake-by-mailbox-drop, hygiene rules, OS-specific scheduler recipes, and debugging walkthroughs.
 - **Kernel hooks:** `setup()` is called during capability initialization; `BashManager.handle()` is registered as the `bash` tool handler.
