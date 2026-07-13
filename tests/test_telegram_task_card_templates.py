@@ -98,6 +98,25 @@ _ALLOWED_STATES = {
     "render_daemon.py": ["running", "done", "failed", "cancelled", "timeout"],
 }
 
+# Terminal states: the work has finished, so the terminal snapshot's footer must
+# request that the orchestrator stop/clear the watcher (the passive renderer
+# cannot stop itself). Non-terminal states are the remaining allow-listed states —
+# derived, not hand-maintained, so the two lists cannot drift apart.
+_TERMINAL_STATES = {
+    "render_bash_async.py": ["done", "failed", "cancelled"],
+    "render_daemon.py": ["done", "failed", "cancelled", "timeout"],
+}
+_NON_TERMINAL_STATES = {
+    asset: [s for s in _ALLOWED_STATES[asset] if s not in _TERMINAL_STATES[asset]]
+    for asset in _ALLOWED_STATES
+}
+
+# The exact model-facing stop call the templates/manual must teach (action-based,
+# like bash(action="poll") / daemon(action="check")) and the terminal footer text.
+_STOP_CALL = 'task_card(action="stop", watch_id="<watch_id>")'
+_TERMINAL_FOOTER_TEXT = "terminal snapshot — stop/clear this watch now"
+_TERMINAL_FOOTER_MARKER = "stop/clear this watch"
+
 
 # =========================================================================
 # 1. Two-entry-point human contract (bound concepts, not loose substrings)
@@ -216,6 +235,35 @@ def test_nested_manual_binds_watcher_default_in_when_to_reach_section():
     assert "live progress" not in section
 
 
+def test_nested_manual_binds_terminal_cleanup_in_its_own_section():
+    """The nested manual must lock the terminal-cleanup workflow in its own
+    section: a finished watch is stopped by the orchestrator (the renderer is
+    passive) via the exact action-based stop call, every terminal state is named,
+    a retryable stop_failed is retried with the same call (not restarted), and
+    non-terminal states stay resident. This is the core behavioral promise of this
+    change, so a regression that drops it must fail here."""
+    section = _section(
+        _NESTED_SKILL.read_text(encoding="utf-8"),
+        "### Terminal cleanup: stop a finished watch",
+    ).lower()
+    # The renderer cannot end itself; the orchestrator must stop it with the exact
+    # action-based tool call (no method-style pseudo-invocation).
+    assert "passive" in section
+    assert _STOP_CALL.lower() in section
+    assert "stop(watch_id)" not in section  # no bare/method-style pseudo-call
+    # Every terminal state is named (bash + daemon), plus the terminal footer cue.
+    for terminal in ("done", "failed", "cancelled", "timeout"):
+        assert terminal in section, terminal
+    assert _TERMINAL_FOOTER_TEXT.lower() in section
+    # Retryable stop_failed is retried with the SAME stop call, never restarted.
+    assert "stop_failed" in section
+    assert "same" in section
+    assert "restart" in section or "duplicate" in section
+    # Non-terminal states stay resident.
+    assert "starting" in section and "running" in section
+    assert "resident" in section
+
+
 # =========================================================================
 # 4. Asset shape / packaging
 # =========================================================================
@@ -242,6 +290,21 @@ def test_template_asset_exists_and_is_stdlib_only(asset, state_file, _id, _state
     assert state_file in source
     assert "STATE_FILE" in source
     assert "_MAX_BYTES" in source
+
+    # Documents the terminal-cleanup workflow with the EXACT action-based stop
+    # call (no method-style pseudo-invocation): the passive renderer cannot stop
+    # itself, so the orchestrator calls task_card(action="stop", ...) on a terminal
+    # state and retries the same call (never restart) on a retryable stop_failed.
+    # Whitespace is normalized so the concepts bind regardless of line wrapping.
+    normalized = " ".join(source.split())
+    lowered = normalized.lower()
+    assert _STOP_CALL in normalized
+    assert "task_card.stop(" not in normalized  # no method-style pseudo-call
+    assert "cannot stop" in lowered
+    assert "stop_failed" in normalized
+    # The retry guidance points at the SAME stop call, not a restart.
+    assert "call the same" in lowered
+    assert '`task_card(action="stop", ...)` again' in normalized
 
 
 # =========================================================================
@@ -339,6 +402,55 @@ def test_every_allowlisted_state_renders_when_identity_present(asset, state_file
     for st in _ALLOWED_STATES[asset]:
         frame = _render(asset, workdir, state_file, {id_key: "the-id", state_key: st})
         _assert_live(frame, "the-id", st)
+
+
+# -- terminal cleanup: finished work must request stopping the watcher ------
+
+
+@pytest.mark.parametrize("asset,state_file,id_key,state_key", _TEMPLATES, ids=_IDS)
+def test_terminal_state_footer_requests_stop_and_clear(asset, state_file, id_key, state_key, workdir):
+    """A terminal snapshot (finished work) must render a live card whose FOOTER
+    asks the orchestrator to stop/clear the watcher — the passive renderer cannot
+    stop itself, so this footer is the human/orchestrator cue that the completed
+    card should not stay resident. The updated_at path is used to prove the
+    terminal footer wins over the ordinary 'snapshot as of …' footer."""
+    for st in _TERMINAL_STATES[asset]:
+        frame = _render(
+            asset,
+            workdir,
+            state_file,
+            {id_key: "the-id", state_key: st, "updated_at": "2026-07-13T10:30:00Z"},
+        )
+        _assert_live(frame, "the-id", st)  # still a truthful live/terminal card
+        footer = frame.get("footer", "")
+        assert _TERMINAL_FOOTER_MARKER in footer, (st, footer)
+        # The terminal footer replaces the awaiting-next semantics entirely.
+        assert "awaiting next" not in footer, (st, footer)
+        assert "snapshot as of" not in footer, (st, footer)
+
+
+@pytest.mark.parametrize("asset,state_file,id_key,state_key", _TEMPLATES, ids=_IDS)
+def test_non_terminal_state_footer_stays_resident_awaiting(asset, state_file, id_key, state_key, workdir):
+    """A non-terminal snapshot (still running) must keep the awaiting-next footer
+    and MUST NOT request a stop — the watch stays resident and keeps updating."""
+    for st in _NON_TERMINAL_STATES[asset]:
+        # With updated_at: the 'snapshot as of …; awaiting next check' footer.
+        frame = _render(
+            asset,
+            workdir,
+            state_file,
+            {id_key: "the-id", state_key: st, "updated_at": "2026-07-13T10:30:00Z"},
+        )
+        _assert_live(frame, "the-id", st)
+        footer = frame.get("footer", "")
+        assert "awaiting next" in footer, (st, footer)
+        assert _TERMINAL_FOOTER_MARKER not in footer, (st, footer)
+
+        # Without updated_at: the bare 'awaiting next orchestrator update' footer.
+        frame = _render(asset, workdir, state_file, {id_key: "the-id", state_key: st})
+        footer = frame.get("footer", "")
+        assert "awaiting next orchestrator update" in footer, (st, footer)
+        assert _TERMINAL_FOOTER_MARKER not in footer, (st, footer)
 
 
 # -- truthfulness: no fabricated progress ----------------------------------

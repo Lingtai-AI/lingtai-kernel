@@ -9,7 +9,7 @@ description: |
   templates (bash async, daemon) shipped as skill assets, the
   start | inspect | retry | stop lifecycle, path/timeout/validation rules,
   fail-loud error wakes, and how the /taskcard toggle interacts.
-last_changed_at: "2026-07-13T12:15:00-07:00"
+last_changed_at: "2026-07-13T15:00:00-07:00"
 ---
 
 # Programmable Telegram Task Card — manual (what / how / why)
@@ -194,6 +194,23 @@ driver that forwards validated frames.
   is the only content on the card, stopping
   shows a stable `— WATCH STOPPED —` marker (an empty Telegram message is not
   allowed) and leaves the resident message reusable. Pass the `watch_id`.
+
+### Terminal cleanup: stop a finished watch
+
+A watcher does not end itself — the renderer is passive and has no `watch_id`, so
+**you** must stop it when the work finishes. When your job reaches a terminal
+state — bash `status` `done`/`failed`/`cancelled`, or daemon `state`
+`done`/`failed`/`cancelled`/`timeout` (learned from the terminal bash
+`bash(action="poll")` or the terminal `daemon` notification/`daemon(action="check")`)
+— record that terminal snapshot, then **immediately call
+`task_card(action="stop", watch_id="<watch_id>")`** (the `watch_id` that
+`task_card(action="start", ...)` returned) to quiesce the watcher and clear the
+programmable slot so the completed card does not stay resident. The two shipped
+templates surface this by rendering the footer
+`terminal snapshot — stop/clear this watch now` on a terminal snapshot. If it
+returns a retryable `stop_failed`, **call the same `task_card(action="stop", ...)`
+again** — do not restart or duplicate the watch. Non-terminal states
+(`starting`/`running`) stay resident and keep updating.
 
 ### When a watch fails
 

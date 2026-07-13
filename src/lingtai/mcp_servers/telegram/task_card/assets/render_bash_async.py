@@ -52,6 +52,21 @@ time — build the full JSON in memory and write it in one call (an atomic
 temp-file-plus-`os.replace` in the same directory avoids a reader seeing a
 half-written file) — so the renderer never parses a partial object.
 
+Terminal cleanup — you MUST stop the watcher yourself
+-----------------------------------------------------
+This renderer is PASSIVE: it only prints title/lines/footer and has no
+`watch_id` and no tool access, so it CANNOT stop the watch or clear the card by
+itself. When the job reaches a terminal status (`done`, `failed`, or
+`cancelled`) — which you learn from the terminal `bash(action="poll")` result —
+record that terminal snapshot, then IMMEDIATELY call
+`task_card(action="stop", watch_id="<watch_id>")` (the `watch_id` that
+`task_card(action="start", ...)` returned) to quiesce the watcher and clear the
+programmable slot so the finished card does not stay resident. If it returns a
+retryable `stop_failed`, call the SAME `task_card(action="stop", ...)` again — do
+not restart or duplicate the watch. A terminal snapshot's footer says
+`terminal snapshot — stop/clear this watch now` as your reminder. Non-terminal
+statuses (`starting`, `running`) stay resident and keep updating.
+
 Safety: stdlib-only; reads at most a few KiB of the snapshot; accepts only the
 allow-listed primitive fields; strips control characters; clips every string;
 caps the line count; and prints a valid bounded card on any missing/partial/
@@ -82,6 +97,15 @@ _STATUS_GLYPH = {
     "failed": "✗",
     "cancelled": "⊘",
 }
+
+# Terminal statuses: the job has finished (successfully or not). When the
+# snapshot records one of these, the work is over and the watcher should be
+# quiesced. The renderer is PASSIVE — it cannot stop itself — so it asks the
+# orchestrator, in the footer, to call
+# ``task_card(action="stop", watch_id="<watch_id>")``. ``starting`` and
+# ``running`` are non-terminal.
+_TERMINAL_STATUSES = {"done", "failed", "cancelled"}
+_TERMINAL_FOOTER = "terminal snapshot — stop/clear this watch now"
 
 _UNAVAILABLE_TITLE = "Async job"
 _AWAITING = "no snapshot yet — awaiting orchestrator update"
@@ -167,12 +191,18 @@ def _build_card(state: dict) -> dict:
     if note:
         lines.append(note)
 
-    updated_at = _clean_str(state.get("updated_at"), 40)
-    footer = (
-        f"snapshot as of {updated_at}; awaiting next check"
-        if updated_at
-        else "awaiting next orchestrator update"
-    )
+    if status in _TERMINAL_STATUSES:
+        # The job has finished: ask the orchestrator to stop the watcher now so the
+        # completed card does not stay resident. A non-terminal status keeps the
+        # awaiting-next-check footer.
+        footer = _TERMINAL_FOOTER
+    else:
+        updated_at = _clean_str(state.get("updated_at"), 40)
+        footer = (
+            f"snapshot as of {updated_at}; awaiting next check"
+            if updated_at
+            else "awaiting next orchestrator update"
+        )
 
     title = _clean_str(state.get("title")) or _UNAVAILABLE_TITLE
     return {"title": title, "lines": lines[:_MAX_LINES], "footer": footer}
