@@ -180,10 +180,10 @@ def test_many_repeated_creates_never_send_or_delete_again(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Create edit failure recovers: send-new, persist-new, delete-stale
+# Create edit failure recovers: probe, delete/missing-confirm, send, persist
 # ---------------------------------------------------------------------------
 
-def test_create_edit_failure_recovers_by_send_new_persist_new_delete_stale(tmp_path):
+def test_create_edit_failure_recovers_by_delete_old_then_send_new(tmp_path):
     acct = FakeAccount(fail_edit=True)
     manager, service = _manager(tmp_path, acct)
 
@@ -195,9 +195,9 @@ def test_create_edit_failure_recovers_by_send_new_persist_new_delete_stale(tmp_p
     new_id = r["message_id"]
     assert new_id != "mybot:999:50"
 
-    # Edit was attempted first, then the replacement send, then the stale delete.
+    # Exact-old edit probe and delete happen before the replacement send.
     kinds = [c[0] for c in acct.calls]
-    assert kinds == ["edit_message", "send_message", "delete_message"]
+    assert kinds == ["edit_message", "delete_message", "send_message"]
 
     # New id is persisted as the resident; the exact stale id was retired.
     assert acct.get_task_card(999) == new_id
@@ -207,10 +207,10 @@ def test_create_edit_failure_recovers_by_send_new_persist_new_delete_stale(tmp_p
 
 
 # ---------------------------------------------------------------------------
-# Recovery replacement send failure preserves the stale resident, no delete
+# Recovery replacement send failure may leave zero after exact-old deletion
 # ---------------------------------------------------------------------------
 
-def test_recovery_send_failure_preserves_stale_resident_and_no_delete(tmp_path):
+def test_recovery_send_failure_reports_deleted_old_resident(tmp_path):
     acct = FakeAccount(fail_edit=True, fail_send=True)
     manager, service = _manager(tmp_path, acct)
 
@@ -219,27 +219,29 @@ def test_recovery_send_failure_preserves_stale_resident_and_no_delete(tmp_path):
     r = _create(manager, reasoning="recover")
     assert r["status"] == "error"
 
-    # The stale resident id and its (unusable) card survive; nothing deleted.
+    # The durable id is stale but safe; exact old deletion was confirmed first.
+    assert r.get("old_resident_deleted") is True
     assert acct.get_task_card(999) == "mybot:999:50"
-    assert not _deletes(acct)
+    assert len(_deletes(acct)) == 1
+    assert not _sends(acct)
 
 
 # ---------------------------------------------------------------------------
-# Recovery delete failure leaves the new card authoritative (fail-open)
+# Recovery delete failure blocks replacement send (fail closed)
 # ---------------------------------------------------------------------------
 
-def test_recovery_delete_failure_is_fail_open(tmp_path):
+def test_recovery_delete_failure_is_fail_closed(tmp_path):
     acct = FakeAccount(fail_edit=True, fail_delete=True)
     manager, service = _manager(tmp_path, acct)
 
     acct.set_task_card(999, "mybot:999:50")
 
     r = _create(manager, reasoning="recover")
-    # Even though the stale delete raised, recovery succeeded and the new id is
-    # authoritative — state is never rolled back.
-    assert r["status"] == "ok"
-    assert acct.get_task_card(999) == r["message_id"]
-    assert len(_deletes(acct)) == 1  # the delete was attempted
+    assert r["status"] == "error"
+    assert r.get("stale_delete_failed") is True
+    assert acct.get_task_card(999) == "mybot:999:50"
+    assert len(_deletes(acct)) == 1
+    assert not _sends(acct)
 
 
 # ---------------------------------------------------------------------------

@@ -42,12 +42,29 @@ descriptions; you do not need to call it before every send.
   the placeholder shows progress only (it may optionally be deleted).
 - When the current agent has `taskcard: True`, an automatic Task Card may update
   separately during Telegram-originated turns (you do not manage it; use
-  send/reply for your own messages). Automatic, programmable, heartbeat, and
-  final frames edit one stable resident message ID in place; an identical
-  Telegram edit is a successful no-op. See **TASKCARD STATE** below.
-- The addon replaces that resident only after Telegram explicitly reports the
-  message missing or uneditable. Unknown/transient edit failures are surfaced and
-  retain the resident ID and last delivered slots instead of sending/retracting.
+  send/reply for your own messages). While the resident Task Card is still the
+  chat's last message, automatic, programmable, heartbeat, and final frames edit
+  that one stable resident message ID in place; an identical Telegram edit is a
+  successful no-op. See **TASKCARD STATE** below.
+- The Task Card's tracked resident target is kept as the last message. When a
+  newer message has arrived below it — your own durable send/reply, or an incoming
+  user message — the addon same-content-probes the exact old resident with its last committed
+  render when available. After a cold in-memory start, the exact delete result is
+  itself the existence/removal probe. Unknown/transient probe failures fail closed
+  and send nothing.
+- Before injecting a replacement, the exact old resident must be confirmed deleted
+  or Telegram must explicitly report it already missing. A delete failure blocks
+  the new send. Only then is the fresh card sent and persisted, so tracked rotation
+  never deliberately displays two cards. A later send failure may leave zero and
+  is reported explicitly; a new-id persistence failure retains the in-process id
+  and surfaces a partial durability failure. Malformed/cross-bound resident ids
+  never reach transport, ordinary messages are never deletion candidates, and
+  unknown historical orphan cards are not scanned or deleted. The durable map is
+  one tracked target per account+chat, not proof of global chat-history cardinality.
+- Automatic and programmable delivery shares one per-account+chat transaction.
+  While the tracked resident remains latest it is edited in place; an identical
+  Telegram edit is a successful no-op. An unknown latest-message high-water stays
+  conservative and does not authorize rotation or deletion.
 - For very fast responses (under ~5s), native Telegram typing/👀 presence is
   enough — skip the placeholder.
 

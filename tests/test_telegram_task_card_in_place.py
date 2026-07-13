@@ -173,5 +173,5 @@ def test_edit_impossible_replaces_only_after_failed_edit_attempt(tmp_path):
 
     assert recovered["status"] == "ok"
     assert recovered["message_id"] != stale_id
-    assert [call[0] for call in account.calls[-3:]] == ["edit", "send", "delete"]
+    assert [call[0] for call in account.calls[-3:]] == ["edit", "delete", "send"]
     assert account.get_task_card(55) == recovered["message_id"]
