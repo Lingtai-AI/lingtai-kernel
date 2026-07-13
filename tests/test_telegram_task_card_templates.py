@@ -92,18 +92,22 @@ _FULL_STATE = {
     },
 }
 
-# The allow-listed states each template may render as live/terminal.
+# The allow-listed display states each template may render as live/terminal. For
+# bash these are DISPLAY states the orchestrator derives from the sanctioned
+# poll/cancel result (see _BASH_RESULT_TO_DISPLAY_STATE below), not raw bash
+# statuses; `unknown` is the exit-status-unavailable terminal.
 _ALLOWED_STATES = {
-    "render_bash_async.py": ["starting", "running", "done", "failed", "cancelled"],
+    "render_bash_async.py": ["starting", "running", "done", "failed", "cancelled", "unknown"],
     "render_daemon.py": ["running", "done", "failed", "cancelled", "timeout"],
 }
 
 # Terminal states: the work has finished, so the terminal snapshot's footer must
 # request that the orchestrator stop/clear the watcher (the passive renderer
 # cannot stop itself). Non-terminal states are the remaining allow-listed states —
-# derived, not hand-maintained, so the two lists cannot drift apart.
+# derived, not hand-maintained, so the two lists cannot drift apart. The bash
+# `unknown` display state is terminal (an unavailable exit status still ends the job).
 _TERMINAL_STATES = {
-    "render_bash_async.py": ["done", "failed", "cancelled"],
+    "render_bash_async.py": ["done", "failed", "cancelled", "unknown"],
     "render_daemon.py": ["done", "failed", "cancelled", "timeout"],
 }
 _NON_TERMINAL_STATES = {
@@ -451,6 +455,184 @@ def test_non_terminal_state_footer_stays_resident_awaiting(asset, state_file, id
         footer = frame.get("footer", "")
         assert "awaiting next orchestrator update" in footer, (st, footer)
         assert _TERMINAL_FOOTER_MARKER not in footer, (st, footer)
+
+
+# =========================================================================
+# B1: the bash display state is a mapping from the REAL public Bash result
+# =========================================================================
+#
+# The bash `status` an orchestrator records is a DISPLAY state derived from the
+# sanctioned `bash(action="poll")` / `bash(action="cancel")` result — NOT the raw
+# top-level bash `status`, which is ALWAYS "done" on completion (a nonzero inner
+# command is signalled by the additive `exit_status_known`/`exit_code`/`ok`/
+# `command_status` fields, never by a top-level "failed"). These fixtures are the
+# real public result shapes documented in src/lingtai/tools/bash/CONTRACT.md and
+# render them through the real controller so the public-result -> display-state
+# mapping is executable and locked, not hand-authored renderer states.
+
+# Representative REAL `bash` result shapes (see bash/CONTRACT.md §Tool surface).
+_BASH_RESULT_RUNNING = {"status": "running", "job_id": "job-a1b2", "pid": 4321}
+_BASH_RESULT_DONE_ZERO = {
+    "status": "done", "exit_status_known": True, "exit_code": 0,
+    "ok": True, "command_status": "success", "stdout": "all green\n", "stderr": "",
+}
+_BASH_RESULT_DONE_NONZERO = {
+    "status": "done", "exit_status_known": True, "exit_code": 1,
+    "ok": False, "command_status": "failed", "stdout": "", "stderr": "boom\n",
+    "warning": "command exited with code 1; …",
+}
+_BASH_RESULT_DONE_UNKNOWN = {
+    "status": "done", "job_id": "job-a1b2", "exit_status_known": False,
+    "exit_code": None, "stdout": "", "stderr": "",
+    "message": "Async job terminated but its exit status is unavailable",
+}
+_BASH_RESULT_CANCELLED = {"status": "cancelled", "job_id": "job-a1b2"}
+
+
+def _bash_result_to_display_state(result: dict) -> str:
+    """The exact poll/cancel-result -> recorded `status` mapping the bash manual and
+    the render_bash_async.py docstring instruct the orchestrator to perform. This is
+    the SAME procedure a real orchestrator follows (not a test-only shortcut): branch
+    on the additive fidelity fields, never on a top-level "failed" (bash never emits
+    one)."""
+    top = result.get("status")
+    if top == "running":
+        return "running"
+    if top == "cancelled":
+        return "cancelled"
+    assert top == "done", f"unexpected top-level bash status: {top!r}"
+    if not result.get("exit_status_known"):
+        return "unknown"  # exit_status_known is false -> exit status unavailable
+    return "done" if result.get("exit_code") == 0 else "failed"
+
+
+# (real bash result, expected display state, is-terminal)
+_BASH_RESULT_CASES = [
+    (_BASH_RESULT_RUNNING, "running", False),
+    (_BASH_RESULT_DONE_ZERO, "done", True),
+    (_BASH_RESULT_DONE_NONZERO, "failed", True),
+    (_BASH_RESULT_CANCELLED, "cancelled", True),
+    (_BASH_RESULT_DONE_UNKNOWN, "unknown", True),
+]
+_BASH_RESULT_IDS = ["running", "done-zero", "done-nonzero", "cancelled", "done-unknown"]
+
+
+def _snapshot_from_bash_result(result: dict) -> dict:
+    """Build the orchestrator-owned snapshot from a real bash result exactly as the
+    manual documents: derive the display `status`, and copy `exit_code` ONLY when the
+    exit status is known (omit it for `unknown`)."""
+    status = _bash_result_to_display_state(result)
+    snapshot = {"job_id": "job-a1b2", "status": status}
+    if status in ("done", "failed") and result.get("exit_status_known"):
+        snapshot["exit_code"] = result["exit_code"]
+    return snapshot
+
+
+@pytest.mark.parametrize("result,expected_state,is_terminal", _BASH_RESULT_CASES, ids=_BASH_RESULT_IDS)
+def test_bash_result_maps_to_expected_display_state(result, expected_state, is_terminal, workdir):
+    """A real bash poll/cancel result, mapped as documented and rendered through the
+    real controller, produces the expected truthful live/terminal card — proving a
+    nonzero completion renders `failed` (not `done`) and every terminal display
+    state renders the stop/clear footer."""
+    snapshot = _snapshot_from_bash_result(result)
+    assert snapshot["status"] == expected_state  # the documented mapping held
+    frame = _render("render_bash_async.py", workdir, "task_card_state.json", snapshot)
+    _assert_live(frame, "job-a1b2", expected_state)
+    footer = frame.get("footer", "")
+    if is_terminal:
+        assert _TERMINAL_FOOTER_MARKER in footer, (expected_state, footer)
+    else:
+        assert _TERMINAL_FOOTER_MARKER not in footer, (expected_state, footer)
+        assert "awaiting next" in footer, (expected_state, footer)
+
+
+def test_bash_done_nonzero_is_failed_not_done(workdir):
+    """The Terra B1 core case: a terminal poll is top-level `status: "done"` even on
+    a nonzero inner command, so copying the raw top-level status would fabricate
+    success. The documented mapping records `failed`, and the rendered card shows
+    `failed` (never a `done` glyph/label) plus the terminal stop footer."""
+    snapshot = _snapshot_from_bash_result(_BASH_RESULT_DONE_NONZERO)
+    frame = _render("render_bash_async.py", workdir, "task_card_state.json", snapshot)
+    _assert_live(frame, "job-a1b2", "failed")
+    body = _body(frame)
+    assert "status: failed" in body, body
+    assert "status: done" not in body, body  # the raw top-level status is NOT copied
+    assert "exit: 1" in body, body
+    assert _TERMINAL_FOOTER_MARKER in frame.get("footer", "")
+
+
+def test_bash_exit_status_unknown_is_terminal_unknown_outcome(workdir):
+    """`{"status": "done", "exit_status_known": false, "exit_code": null}` maps to the
+    distinct terminal `unknown` display state. Its text must say the exit status is
+    unavailable and imply NEITHER success NOR failure; it must NOT surface a success
+    glyph, a failure glyph, or an exit code; and it is TERMINAL, so its footer still
+    requires the exact stop closeout."""
+    snapshot = _snapshot_from_bash_result(_BASH_RESULT_DONE_UNKNOWN)
+    assert snapshot["status"] == "unknown"
+    assert "exit_code" not in snapshot  # unknown exit status is NOT recorded as a code
+    frame = _render("render_bash_async.py", workdir, "task_card_state.json", snapshot)
+    _assert_live(frame, "job-a1b2", "unknown")
+    body = _body(frame).lower()
+    # States plainly that the exit status is unavailable / outcome unknown.
+    assert "unavailable" in body and "unknown" in body, body
+    # Neither success nor failure is implied: no done/success or failed wording,
+    # and no exit code leaks in.
+    assert "success" not in body, body
+    assert "failed" not in body and "failure" not in body, body
+    assert "exit:" not in body, body
+    # Terminal: the stop/clear footer is required even though the outcome is unknown.
+    footer = frame.get("footer", "")
+    assert _TERMINAL_FOOTER_MARKER in footer, footer
+    assert "awaiting next" not in footer, footer
+
+
+def test_bash_exit_status_unknown_does_not_surface_stray_exit_code(workdir):
+    """Even if a snapshot mistakenly carries an exit_code alongside `unknown` (which
+    the mapping says to omit), the renderer must NOT surface it — an unavailable exit
+    status can never be dressed up as a known outcome."""
+    frame = _render(
+        "render_bash_async.py",
+        workdir,
+        "task_card_state.json",
+        {"job_id": "job-a1b2", "status": "unknown", "exit_code": 0},
+    )
+    _assert_live(frame, "job-a1b2", "unknown")
+    body = _body(frame)
+    assert "exit: 0" not in body and "exit:" not in body, body
+    assert _TERMINAL_FOOTER_MARKER in frame.get("footer", "")
+
+
+def test_nested_manual_documents_bash_display_state_mapping():
+    """The nested manual must make the poll-result -> display-state mapping explicit:
+    the derived-display-state framing, all four terminal display states (including
+    the exit-status-unavailable `unknown`), and that a nonzero completion is `failed`
+    rather than a copied top-level `done`."""
+    text = _NESTED_SKILL.read_text(encoding="utf-8")
+    lowered = text.lower()
+    assert "display state" in lowered
+    assert "exit_status_known" in text
+    assert "command_status" in text
+    # The unknown/exit-status-unavailable terminal is documented as terminal.
+    assert "unknown" in lowered
+    assert "exit status is unavailable" in lowered or "exit-status-unavailable" in lowered
+    # A nonzero completion is failed, not a raw copied done.
+    assert "`failed`" in text and "never" in lowered
+
+
+def test_bash_template_docstring_documents_display_state_mapping():
+    """render_bash_async.py's own docstring must document the derived display state,
+    the additive fidelity fields it maps from, and the terminal `unknown` outcome —
+    so an agent copying the asset learns the mapping from the file itself."""
+    source = (_ASSETS_DIR / "render_bash_async.py").read_text(encoding="utf-8")
+    normalized = " ".join(source.split())
+    lowered = normalized.lower()
+    assert "display state" in lowered
+    assert "exit_status_known" in normalized
+    assert "command_status" in normalized
+    assert "unknown" in lowered
+    # It states the unavailable-exit-status terminal claims neither success nor failure.
+    assert "unavailable" in lowered
+    assert "neither success" in lowered or ("claims neither" in lowered)
 
 
 # -- truthfulness: no fabricated progress ----------------------------------

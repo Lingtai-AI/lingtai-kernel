@@ -35,35 +35,62 @@ renders an explicit "awaiting orchestrator update" frame — never a fabricated
 
     {
       "job_id":   "job-a1b2...",             # REQUIRED str: the id bash(async=true) returned
-      "status":   "running",                 # REQUIRED str: starting|running|done|failed|cancelled
+      "status":   "running",                 # REQUIRED str: starting|running|done|failed|cancelled|unknown
       "title":    "Refactor auth module",    # optional str headline
-      "exit_code": 0,                        # optional int, once a terminal poll is recorded
+      "exit_code": 0,                        # optional int, once a terminal poll reports a known exit code
       "stage":    "tests passing",           # optional str progress note
       "updated_at": "2026-07-13T10:30:00Z",  # optional str (ISO-8601 UTC of your last write)
       "note":     "3/5 modules done"         # optional str extra one-liner
     }
 
+`status` is a DISPLAY STATE you derive from the sanctioned action result — it is
+NOT the raw top-level `status` of the poll. Bash's terminal poll is ALWAYS
+top-level `status: "done"`: a nonzero inner command does not change it to a
+top-level `"failed"`. Read the additive fidelity fields and map them:
+
+    bash(action="poll") result                              -> record status=
+    ----------------------------------------------------------  ---------------
+    {"status": "running", ...}                                  "running"
+    {"status": "done", "exit_status_known": true,               "done"
+        "exit_code": 0, "ok": true, "command_status": "success"}
+    {"status": "done", "exit_status_known": true,               "failed"
+        "exit_code": <nonzero>, "ok": false,
+        "command_status": "failed"}
+    {"status": "done", "exit_status_known": false,              "unknown"
+        "exit_code": null, ...}
+    bash(action="cancel") -> {"status": "cancelled", ...}       "cancelled"
+
+So a nonzero completion is recorded `failed` (never `done`), and an
+exit-status-unknown terminal completion is recorded `unknown` — a distinct
+TERMINAL state that reports the exit status is unavailable and claims NEITHER
+success NOR failure (Bash itself never invents `-1` or a false
+`command_status: "failed"` for it, so neither may this card). Only copy the exit
+code into `exit_code` when `exit_status_known` is true; for `unknown` leave it
+out. Update the snapshot from your turn on each meaningful poll and at the
+terminal result. Write it COMPLETELY each time — build the full JSON in memory
+and write it in one call (an atomic temp-file-plus-`os.replace` in the same
+directory avoids a reader seeing a half-written file) — so the renderer never
+parses a partial object.
+
 Only the primitive types above are accepted; containers, booleans in numeric
 fields, non-finite/oversized numbers, and wrong types are ignored, not
-stringified. Update it from your turn, e.g. after a poll:
-    bash(action="poll", job_id="job-a1b2...")  ->  {"status":"done","exit_code":0,...}
-then write status="done" and exit_code=0. Write the snapshot COMPLETELY each
-time — build the full JSON in memory and write it in one call (an atomic
-temp-file-plus-`os.replace` in the same directory avoids a reader seeing a
-half-written file) — so the renderer never parses a partial object.
+stringified.
 
 Terminal cleanup — you MUST stop the watcher yourself
 -----------------------------------------------------
 This renderer is PASSIVE: it only prints title/lines/footer and has no
 `watch_id` and no tool access, so it CANNOT stop the watch or clear the card by
-itself. When the job reaches a terminal status (`done`, `failed`, or
-`cancelled`) — which you learn from the terminal `bash(action="poll")` result —
-record that terminal snapshot, then IMMEDIATELY call
+itself. When the job reaches a terminal status (`done`, `failed`, `cancelled`,
+or `unknown` — the exit-status-unavailable terminal) — which you learn from the
+terminal `bash(action="poll")` or `bash(action="cancel")` result — record that
+terminal snapshot, then IMMEDIATELY call
 `task_card(action="stop", watch_id="<watch_id>")` (the `watch_id` that
 `task_card(action="start", ...)` returned) to quiesce the watcher and clear the
-programmable slot so the finished card does not stay resident. If it returns a
-retryable `stop_failed`, call the SAME `task_card(action="stop", ...)` again — do
-not restart or duplicate the watch. A terminal snapshot's footer says
+programmable slot so the finished card does not stay resident. This is required
+for `unknown` too: an unavailable exit status is still terminal and must be
+stopped/cleared, not left resident. If it returns a retryable `stop_failed`,
+call the SAME `task_card(action="stop", ...)` again — do not restart or
+duplicate the watch. A terminal snapshot's footer says
 `terminal snapshot — stop/clear this watch now` as your reminder. Non-terminal
 statuses (`starting`, `running`) stay resident and keep updating.
 
@@ -89,23 +116,32 @@ _MAX_LINES = 20  # controller rejects more than 20 lines; stay well under it.
 _MAX_STR = 120  # clip any single rendered value to this many characters.
 _MAX_INT = 10**9  # ignore an exit_code outside this sane magnitude.
 
-# The only accepted job states, mapped to a small status glyph.
+# The only accepted display states, mapped to a small status glyph. These are
+# DISPLAY states the orchestrator derives from the sanctioned poll/cancel result
+# (see the module docstring), not the raw top-level bash ``status``. ``unknown``
+# is the exit-status-unavailable terminal: it claims neither success nor failure.
 _STATUS_GLYPH = {
     "starting": "…",
     "running": "▶",
     "done": "✓",
     "failed": "✗",
     "cancelled": "⊘",
+    "unknown": "?",
 }
 
-# Terminal statuses: the job has finished (successfully or not). When the
-# snapshot records one of these, the work is over and the watcher should be
-# quiesced. The renderer is PASSIVE — it cannot stop itself — so it asks the
-# orchestrator, in the footer, to call
-# ``task_card(action="stop", watch_id="<watch_id>")``. ``starting`` and
+# Terminal display states: the job has finished (successfully, unsuccessfully, or
+# with an unavailable exit status) or was cancelled. When the snapshot records one
+# of these, the work is over and the watcher should be quiesced. The renderer is
+# PASSIVE — it cannot stop itself — so it asks the orchestrator, in the footer, to
+# call ``task_card(action="stop", watch_id="<watch_id>")``. ``unknown`` is
+# terminal too: an unavailable exit status still ends the job. ``starting`` and
 # ``running`` are non-terminal.
-_TERMINAL_STATUSES = {"done", "failed", "cancelled"}
+_TERMINAL_STATUSES = {"done", "failed", "cancelled", "unknown"}
 _TERMINAL_FOOTER = "terminal snapshot — stop/clear this watch now"
+
+# For the exit-status-unavailable terminal, the body line must state that the exit
+# status is unavailable and imply NEITHER success NOR failure.
+_UNKNOWN_OUTCOME_LINE = "exit status unavailable — outcome unknown"
 
 _UNAVAILABLE_TITLE = "Async job"
 _AWAITING = "no snapshot yet — awaiting orchestrator update"
@@ -179,9 +215,15 @@ def _build_card(state: dict) -> dict:
 
     lines = [f"{_STATUS_GLYPH[status]} status: {status}", f"job: {job_id}"]
 
-    exit_code = _clean_int(state.get("exit_code"))
-    if exit_code is not None:
-        lines.append(f"exit: {exit_code}")
+    if status == "unknown":
+        # Exit-status-unavailable terminal: state it plainly and do NOT surface an
+        # exit code even if the snapshot carries one, so the card cannot imply a
+        # known success/failure the poll never established.
+        lines.append(_UNKNOWN_OUTCOME_LINE)
+    else:
+        exit_code = _clean_int(state.get("exit_code"))
+        if exit_code is not None:
+            lines.append(f"exit: {exit_code}")
 
     stage = _clean_str(state.get("stage"))
     if stage:

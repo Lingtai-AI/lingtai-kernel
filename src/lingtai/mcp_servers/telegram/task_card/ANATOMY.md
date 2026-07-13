@@ -69,12 +69,13 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 
 ## Connections
 
-- Composition root: `Agent._maybe_setup_task_card_controller` calls `setup`
-  only after the newly rebuilt reverse-route map contains Telegram; it
-  re-registers the same controller after a full refresh clears the public tool
-  surface or a colliding MCP overwrites it, verifying the handler binding and
-  owned schema rather than a name/count alone (`src/lingtai/agent.py:975`,
-  `src/lingtai/agent.py:1330`).
+- Composition root: `Agent._maybe_setup_task_card_controller`
+  (`src/lingtai/agent.py:1001-1042`) calls `setup` only after the newly rebuilt
+  reverse-route map contains Telegram; it re-registers the same controller after a
+  full refresh clears the public tool surface or a colliding MCP overwrites it,
+  verifying the handler binding and owned schema rather than a name/count alone. It
+  runs at the end of each MCP-connect path that may add the Telegram route
+  (`src/lingtai/agent.py:998`, `src/lingtai/agent.py:1099`).
 - Renderer: `_run_renderer` runs `sys.executable <renderer>` with the agent
   workdir as `cwd`; `_validate_renderer_path` confines the path to that workdir.
 - Reverse channel: `_project` calls the private `_lingtai_telegram_task_card`
