@@ -2,21 +2,35 @@
 name: telegram-task-card-manual
 description: |
   Manual for the programmable Telegram Task Card (`task_card` tool). Read this to
-  bind live state — a bash async job, a build, a countdown — to the resident
-  Telegram Task Card by supplying a small Python renderer whose stdout is one
-  Task Card JSON object. Covers the renderer contract, a safe runnable example,
-  the start | inspect | retry | stop lifecycle, path/timeout/validation rules,
+  surface your latest reported state snapshot — a bash async job, a daemon task,
+  a build — on the resident Telegram Task Card by supplying a small Python
+  renderer whose stdout is one Task Card JSON object. Covers the renderer
+  contract, the snapshot truthfulness model, the two co-located renderer
+  templates (bash async, daemon) shipped as skill assets, the
+  start | inspect | retry | stop lifecycle, path/timeout/validation rules,
   fail-loud error wakes, and how the /taskcard toggle interacts.
-last_changed_at: "2026-07-13T00:45:00-07:00"
+last_changed_at: "2026-07-13T15:00:00-07:00"
 ---
 
 # Programmable Telegram Task Card — manual (what / how / why)
 
-The `task_card` tool lets you attach your own live view to Telegram's one tracked
-resident Task Card. You write a small Python **renderer** file under your working
-directory; the controller runs it on an interval and projects its output onto the
-Task Card's **programmable** slot, side by side with the automatic tool-activity
-slot. The one tracked resident target carries both slots.
+The `task_card` tool lets you surface your own **latest reported snapshot** on
+Telegram's one tracked resident Task Card. You write a small Python **renderer**
+file under your working directory; the controller runs it on an interval and
+projects its output onto the Task Card's **programmable** slot, side by side with
+the automatic tool-activity slot. The one tracked resident target carries both
+slots. The renderer reflects a state snapshot you keep current — it is not an
+autonomous progress feed.
+
+## When to reach for this
+
+During a **Telegram-originated turn**, when you launch a meaningful
+**long-running `bash(async=true)` job or daemon task** and then go idle to await
+its result, add a human-visible programmable Task Card watcher so the human
+watching Telegram sees the latest reported snapshot instead of a silent gap. Two
+ready templates cover exactly these two cases — see **Two ready templates** below.
+This is the default for long, human-visible background work; skip it only for
+quick or invisible jobs.
 
 ## WHAT it is
 
@@ -60,36 +74,111 @@ Secrets are redacted at the render boundary by the Telegram manager, and raw
 renderer output never appears in error wakes — but keep secrets out of the card
 anyway; it is a progress view, not a data channel.
 
-### A safe runnable example
+### The state source: read a snapshot file you own, not tool internals
 
-Save this as `render_card.py` in your working directory. It reads a plain status
-file your long-running job updates and prints one Task Card object:
+The renderer receives **no arguments** and runs with your working directory as
+its cwd, so it locates state by a fixed relative path. Point it at a small
+**state snapshot file that you (the orchestrator) keep truthful** — not at a
+tool's private internals:
 
-```python
-# render_card.py — prints exactly one Task Card JSON object to stdout.
-import json
-import pathlib
+- A `bash(async=true)` job's own state under `system/jobs/<job_id>/` is **private
+  to the Bash capability**, and `bash(action="poll")` is a **one-shot, consuming**
+  read (the first terminal poll marks the job consumed). A passive renderer must
+  not touch either.
+- A daemon run's `daemons/<id>/daemon.json` is a **versioned forensic** artifact,
+  not a stable machine API; the sanctioned surface is `daemon(action="check",
+  id=...)`, which is read-only and safe to poll.
 
-status_file = pathlib.Path("job_status.txt")  # relative to the working dir
-state = status_file.read_text().strip() if status_file.exists() else "starting"
+So the honest pattern is: **you** own a tiny JSON snapshot in the working
+directory and rewrite it from your own turn — right after the launch returns your
+`job_id`/`id`, after each **meaningful** `poll` / `check`, and at the **terminal**
+result or completion notification. The renderer shows only the **latest reported
+snapshot** — the frame it prints reflects what you last recorded, not autonomous
+job progress. It never invents or introspects tool state.
 
-print(json.dumps({
-    "title": "Nightly backup",
-    "lines": [
-        f"stage: {state}",
-        "host: db-primary",
-    ],
-    "footer": "auto-refreshing",
-}))
-```
+**Truthfulness contract (both templates enforce this):** a live/terminal card is
+shown **only** when the snapshot carries both a nonempty **identity** (`job_id`
+for bash, `id` for daemon) **and** an exact allow-listed **state** string. A
+missing file, non-JSON, non-object, missing identity/state, an unknown state, or
+a wrong-typed field renders an explicit `awaiting orchestrator update` frame —
+never a fabricated `starting`/`running`. So an empty or half-written snapshot can
+never claim progress.
+
+Write the snapshot **completely** each time: build the whole JSON object in
+memory and write it in one operation. Writing to a temporary file in the same
+directory and then `os.replace`-ing it over the snapshot makes the update atomic,
+so the renderer never reads a partially written object. Keep secrets and raw log
+bodies out of the snapshot — the card is a progress view, not a data channel. The
+manager also redacts at the render boundary, but that cannot rescue a snapshot you
+fill with secrets in violation of the schema.
+
+### Two ready templates (locate, copy, adapt, bind)
+
+Two co-located, stdlib-only renderer templates implement exactly this pattern.
+Each prints exactly one bounded Task Card object, enforces the truthfulness
+contract above, and stays valid even when the snapshot is missing, partial, or
+malformed:
+
+- **`render_bash_async.py`** — for a `bash(async=true)` job. Reads
+  `task_card_state.json`. Requires `job_id` (str) + `status` (str, one of
+  `starting|running|done|failed|cancelled|unknown`); also surfaces optional
+  `title`, `exit_code` (int), `stage`, `updated_at`, `note`. Here `status` is a
+  **display state you derive from the sanctioned poll/cancel result**, not the raw
+  top-level bash `status` (which is always `done` on completion — see the mapping
+  under **Deriving the bash display state** below).
+- **`render_daemon.py`** — for a daemon task (emanation). Reads
+  `daemon_card_state.json`. Requires `id` (str) + `state` (str, one of
+  `running|done|failed|cancelled|timeout`); also surfaces optional `title`,
+  `current`, `elapsed_s` (finite number), `last_activity`, `health`
+  (`alive|stalled|unknown`), `updated_at`, `note`.
+
+**Deriving the bash display state.** The bash `status` you record is a **display
+state derived from the sanctioned action result**, not the raw top-level bash
+`status`. Bash's terminal `bash(action="poll")` is **always** top-level
+`status: "done"` — a nonzero inner command does **not** make it a top-level
+`"failed"`; the pass/fail signal is in the additive fidelity fields
+(`exit_status_known`, `exit_code`, `ok`, `command_status`). Map the result:
+
+| `bash` result | record `status` |
+|---|---|
+| `{"status": "running", ...}` | `running` (resident) |
+| `{"status": "done", "exit_status_known": true, "exit_code": 0, "ok": true, "command_status": "success"}` | `done` (terminal) |
+| `{"status": "done", "exit_status_known": true, "exit_code": <nonzero>, "ok": false, "command_status": "failed"}` | `failed` (terminal) |
+| `{"status": "done", "exit_status_known": false, "exit_code": null, ...}` | `unknown` (terminal) |
+| `bash(action="cancel")` → `{"status": "cancelled", ...}` | `cancelled` (terminal) |
+
+So a nonzero completion is recorded `failed` (never `done` by copying the raw
+top-level `status`), and an exit-status-unavailable terminal completion is
+recorded `unknown` — a distinct **terminal** state that reports the exit status is
+unavailable and claims **neither** success **nor** failure (Bash never invents
+`-1` or a false `command_status: "failed"` for it, so neither does the card). Copy
+`exit_code` only when `exit_status_known` is true; omit it for `unknown`. All four
+terminal display states (`done`, `failed`, `cancelled`, `unknown`) render the
+stop/clear footer and require the same terminal closeout below.
+
+**Locate and copy the asset.** The asset lives next to this manual under
+`task_card/assets/`. Resolve it relative to the **absolute manual path** that the
+Telegram `manual` action returns (`telegram(action='manual')` → its `path`; this
+manual sits at `task_card/SKILL.md` beside that directory), then **copy it into
+your working directory** — the controller confines `renderer_path` to the agent
+working directory, so the renderer must physically live there. Do not reference
+the source-tree or installed-package path directly. Rename the copy per job if you
+run several, and adapt only its `STATE_FILE` and labels; each file's docstring
+documents its full snapshot schema and orchestrator update points.
 
 Then bind it:
 
 ```json
-{"action": "start", "renderer_path": "render_card.py", "interval_s": 5}
+{"action": "start", "renderer_path": "render_bash_async.py", "interval_s": 5}
 ```
 
-As your job rewrites `job_status.txt`, the card's programmable slot follows it.
+As you rewrite the snapshot, the card's programmable slot follows the latest
+reported snapshot. Starting a watch **drives the programmable slot of the
+`TelegramManager`-owned single resident Task Card**; the manager reuses the one
+resident card it already tracks, or **creates its single resident** if none is
+tracked yet — it never starts a second manager or a second card. `TelegramManager`
+stays the one render/compose/persistence/transport owner; the controller is a thin
+driver that forwards validated frames.
 
 ### The lifecycle: start | inspect | retry | stop
 
@@ -132,6 +221,26 @@ As your job rewrites `job_status.txt`, the card's programmable slot follows it.
   is the only content on the card, stopping
   shows a stable `— WATCH STOPPED —` marker (an empty Telegram message is not
   allowed) and leaves the resident message reusable. Pass the `watch_id`.
+
+### Terminal cleanup: stop a finished watch
+
+A watcher does not end itself — the renderer is passive and has no `watch_id`, so
+**you** must stop it when the work finishes. When your job reaches a terminal
+display state — bash `status` `done`/`failed`/`cancelled`/`unknown`, or daemon
+`state` `done`/`failed`/`cancelled`/`timeout` (learned from the terminal bash
+`bash(action="poll")`/`bash(action="cancel")` or the terminal `daemon`
+notification/`daemon(action="check")`) — record that terminal snapshot, then
+**immediately call `task_card(action="stop", watch_id="<watch_id>")`** (the
+`watch_id` that `task_card(action="start", ...)` returned) to quiesce the watcher
+and clear the programmable slot so the completed card does not stay resident. The
+bash `unknown` display state (a terminal poll whose `exit_status_known` is
+`false`) is terminal too — it reports the exit status is unavailable, claims
+neither success nor failure, and must still be stopped/cleared, not left resident.
+The two shipped templates surface this by rendering the footer
+`terminal snapshot — stop/clear this watch now` on a terminal snapshot. If it
+returns a retryable `stop_failed`, **call the same `task_card(action="stop", ...)`
+again** — do not restart or duplicate the watch. Non-terminal states
+(`starting`/`running`) stay resident and keep updating.
 
 ### When a watch fails
 
@@ -183,7 +292,11 @@ old card is visible; read the current `taskcard` value.
 ## Reaching this manual
 
 This manual is co-located with the unit at
-`src/lingtai/mcp_servers/telegram/task_card/SKILL.md`. From the Telegram MCP
-manual (`telegram(action='manual')`), the **Programmable Task Card** section
-routes here. The paired `CONTRACT.md` states the interface promise and `ANATOMY.md`
-maps the structure.
+`src/lingtai/mcp_servers/telegram/task_card/SKILL.md` in the source tree. From the
+Telegram MCP manual (`telegram(action='manual')`), the **Programmable Task Card**
+section routes here. The two renderer templates ship as co-located skill assets
+under `task_card/assets/` (`render_bash_async.py`, `render_daemon.py`); resolve
+them relative to the absolute manual `path` the `manual` action returns and copy
+one into your working directory, as **Two ready templates** describes — that path,
+not any fixed source-tree location, is the usable one. The paired `CONTRACT.md`
+states the interface promise and `ANATOMY.md` maps the structure.

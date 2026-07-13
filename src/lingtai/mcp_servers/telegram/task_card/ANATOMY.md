@@ -7,6 +7,8 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/interface.py
   - src/lingtai/mcp_servers/telegram/task_card/controller.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
+  - src/lingtai/mcp_servers/telegram/task_card/assets/render_bash_async.py
+  - src/lingtai/mcp_servers/telegram/task_card/assets/render_daemon.py
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/agent.py
 maintenance: |
@@ -67,12 +69,14 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 
 ## Connections
 
-- Composition root: `Agent._maybe_setup_task_card_controller` calls `setup`
-  only after the newly rebuilt reverse-route map contains Telegram; it
-  re-registers the same controller after a full refresh clears the public tool
-  surface or a colliding MCP overwrites it, verifying the handler binding and
-  owned schema rather than a name/count alone (`src/lingtai/agent.py:975`,
-  `src/lingtai/agent.py:1330`).
+- Composition root: `Agent._maybe_setup_task_card_controller`
+  (`src/lingtai/agent.py:1023-1064`; `setup` call at
+  `src/lingtai/agent.py:1064`) calls `setup` only after the newly rebuilt
+  reverse-route map contains Telegram; it re-registers the same controller after a
+  full refresh clears the public tool surface or a colliding MCP overwrites it,
+  verifying the handler binding and owned schema rather than a name/count alone. It
+  runs at the end of each MCP-connect path that may add the Telegram route
+  (`src/lingtai/agent.py:1020`, `src/lingtai/agent.py:1121`).
 - Renderer: `_run_renderer` runs `sys.executable <renderer>` with the agent
   workdir as `cwd`; `_validate_renderer_path` confines the path to that workdir.
 - Reverse channel: `_project` calls the private `_lingtai_telegram_task_card`
@@ -99,14 +103,23 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   [`src/lingtai/kernel/base_agent/ANATOMY.md`](../../../kernel/base_agent/ANATOMY.md);
   render/compose/persistence in `src/lingtai/mcp_servers/telegram/manager.py`.
 - **Manual:** [`SKILL.md`](SKILL.md).
+- **Manual assets:** [`assets/render_bash_async.py`](assets/render_bash_async.py)
+  and [`assets/render_daemon.py`](assets/render_daemon.py) — the two co-located,
+  stdlib-only renderer templates the manual routes agents to (bash-async job and
+  daemon task). They read an orchestrator-owned working-dir state snapshot and
+  print one bounded Task Card object; they are packaged skill assets, not runtime
+  code (the controller never imports them — it runs the agent's own working-dir
+  copy as a subprocess).
 
 ## State
 
 The controller holds only in-memory per-watch state (`_watches`, threads,
-last-valid frames, error epochs). It writes no files and deletes none — renderer
-files are the agent's own. Durable Task Card state (resident message id per
-account+chat, composed slots, the `/taskcard` delivery boolean) is owned by the
-Telegram adapter, not here (see `src/lingtai/mcp_servers/ANATOMY.md`).
+last-valid frames, error epochs). It writes no files and deletes none — the
+renderer files it runs are the agent's own working-dir copies (the shipped
+`assets/` templates are read-only starting points the agent copies and adapts).
+Durable Task Card state (resident message id per account+chat, composed slots,
+the `/taskcard` delivery boolean) is owned by the Telegram adapter, not here
+(see `src/lingtai/mcp_servers/ANATOMY.md`).
 
 ## Notes
 
