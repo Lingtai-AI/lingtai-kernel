@@ -396,6 +396,7 @@ def _heartbeat_agent(snapshot_port, interval, working_dir):
     return SimpleNamespace(
         agent_name="snapshot-test",
         _heartbeat_thread=object(),
+        _heartbeat_stop=Mock(),
         _shutdown=shutdown,
         _heartbeat_runtime_ready=True,
         _config=SimpleNamespace(snapshot_interval=interval, aed_timeout=999),
@@ -439,20 +440,19 @@ def test_heartbeat_snapshot_and_gc_are_first_eligible_and_advance_clocks(tmp_pat
     def stop_after_tick(_seconds):
         agent._heartbeat_thread = None
 
+    agent._heartbeat_stop.wait.side_effect = stop_after_tick
     with patch.object(lifecycle, "_write_heartbeat_tick") as heartbeat_tick, patch.object(
         lifecycle, "_check_rules_file"
     ), patch.object(lifecycle, "_maybe_sleep_after_idle_timeout"), patch(
         "lingtai.kernel.nudge.run_checks"
     ), patch(
         "lingtai.kernel.base_agent.lifecycle.time.monotonic", return_value=90000
-    ) as monotonic, patch(
-        "lingtai.kernel.base_agent.lifecycle.time.sleep", side_effect=stop_after_tick
-    ) as sleep:
+    ) as monotonic:
         lifecycle._heartbeat_loop(agent)
 
     heartbeat_tick.assert_called_once_with(agent)
     monotonic.assert_called_once_with()
-    sleep.assert_called_once_with(1.0)
+    agent._heartbeat_stop.wait.assert_called_once_with(1.0)
     assert snapshot.snapshot_calls == 1
     assert snapshot.collect_garbage_calls == 1
     assert agent._last_snapshot == 90000
@@ -474,21 +474,19 @@ def test_heartbeat_gc_runs_only_at_exact_daily_boundaries(tmp_path):
         if len(sleep_calls) == len(clock_ticks):
             agent._heartbeat_thread = None
 
+    agent._heartbeat_stop.wait.side_effect = stop_after_final_tick
     with patch.object(lifecycle, "_write_heartbeat_tick") as heartbeat_tick, patch.object(
         lifecycle, "_check_rules_file"
     ), patch.object(lifecycle, "_maybe_sleep_after_idle_timeout"), patch(
         "lingtai.kernel.nudge.run_checks"
     ), patch(
         "lingtai.kernel.base_agent.lifecycle.time.monotonic", side_effect=clock_ticks
-    ) as monotonic, patch(
-        "lingtai.kernel.base_agent.lifecycle.time.sleep",
-        side_effect=stop_after_final_tick,
-    ) as sleep:
+    ) as monotonic:
         lifecycle._heartbeat_loop(agent)
 
     assert heartbeat_tick.call_args_list == [call(agent)] * 5
     assert monotonic.call_args_list == [call()] * 5
-    assert sleep.call_args_list == [call(1.0)] * 5
+    assert agent._heartbeat_stop.wait.call_args_list == [call(1.0)] * 5
     assert sleep_calls == [1.0] * 5
     assert gc_counts_after_ticks == [0, 1, 1, 1, 2]
     assert gc_clocks_after_ticks == [0.0, 86400, 86400, 86400, 172800]

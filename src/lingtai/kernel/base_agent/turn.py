@@ -623,6 +623,9 @@ def _run_loop(agent) -> None:
 
                 if msg is None:
                     break  # shutdown was set — exit inner loop
+                # Consume a stop wake before leaving ASLEEP or dispatching a turn.
+                if agent._shutdown.is_set():
+                    break
 
                 # Wake up
                 agent._asleep.clear()
@@ -637,6 +640,9 @@ def _run_loop(agent) -> None:
                     msg = agent.inbox.get(timeout=agent._inbox_timeout)
                 except queue.Empty:
                     continue
+                # Consume a stop wake before merging, state change, or dispatch.
+                if agent._shutdown.is_set():
+                    break
                 msg = _concat_queued_messages(agent, msg)
                 agent._set_state(AgentState.ACTIVE, reason=f"received {msg.type}")
 

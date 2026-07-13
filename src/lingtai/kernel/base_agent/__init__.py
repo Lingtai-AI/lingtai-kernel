@@ -704,6 +704,9 @@ class BaseAgent:
         # Heartbeat — always-on health monitor
         self._heartbeat: float = 0.0
         self._heartbeat_thread: threading.Thread | None = None
+        # Final-stop signal for the heartbeat cadence. It stays distinct from
+        # _shutdown because heartbeat remains live throughout teardown.
+        self._heartbeat_stop = threading.Event()
         self._aed_start: float | None = None
 
         # Issue #164 — ACTIVE-without-progress watchdog.

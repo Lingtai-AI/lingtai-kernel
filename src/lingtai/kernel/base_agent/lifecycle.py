@@ -261,6 +261,12 @@ def _stop(agent, timeout: float = 5.0) -> None:
     agent._log("agent_stop")
     agent._cancel_soul_timer()
     agent._shutdown.set()
+    # Wake a run loop blocked in inbox.get; its post-dequeue shutdown check
+    # consumes this sentinel without dispatching a turn.
+    inbox = getattr(agent, "inbox", None)
+    if inbox is not None:
+        from ..message import _make_message, MSG_TC_WAKE
+        inbox.put(_make_message(MSG_TC_WAKE, "system", ""))
     # Stop any programmable Task Card watcher threads deterministically. The
     # loops also observe ``_shutdown`` (daemon threads), but this joins and
     # clears them without any filesystem deletion (Jason #7258/#7259).
@@ -331,6 +337,8 @@ def _start_heartbeat(agent) -> None:
     """Start the heartbeat daemon thread."""
     if agent._heartbeat_thread is not None:
         return
+    # Do not inherit a prior final-stop signal on a new heartbeat thread.
+    agent._heartbeat_stop.clear()
     agent._heartbeat_thread = threading.Thread(
         target=_heartbeat_loop,
         args=(agent,),
@@ -345,6 +353,8 @@ def _stop_heartbeat(agent) -> None:
     """Stop the heartbeat (called only by stop/shutdown)."""
     thread = agent._heartbeat_thread
     agent._heartbeat_thread = None  # signals the loop to exit
+    # Wake the cadence before joining; unlink the heartbeat only after exit.
+    agent._heartbeat_stop.set()
     if thread is not None:
         thread.join(timeout=5.0)
     hb_file = agent._working_dir / ".agent.heartbeat"
@@ -375,7 +385,8 @@ def _heartbeat_loop(agent) -> None:
         # consuming signal files — the run loop is exiting and reprocessing
         # `.suspend`/`.refresh` here would emit spurious state-change events.
         if agent._shutdown.is_set() or not getattr(agent, "_heartbeat_runtime_ready", True):
-            time.sleep(1.0)
+            # _shutdown keeps beating; only final heartbeat stop wakes the wait.
+            agent._heartbeat_stop.wait(1.0)
             continue
 
         # --- signal file detection ---
@@ -612,7 +623,7 @@ def _heartbeat_loop(agent) -> None:
                 agent._snapshot_port.collect_garbage()
                 agent._last_gc = now_mono
 
-        time.sleep(1.0)
+        agent._heartbeat_stop.wait(1.0)
 
 
 def _maybe_sleep_after_idle_timeout(agent, *, now_mono: float | None = None) -> None:
