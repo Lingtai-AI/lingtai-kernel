@@ -55,13 +55,21 @@ the procedure lives in [`SKILL.md`](SKILL.md), not here:
    `stop_failed`), the last valid frame and its **UTC ISO-8601**
    `last_valid_frame_at` timestamp (stamped on every accepted initial/recovered
    frame; unchanged across failed attempts), and the current error. `retry`
-   re-runs the renderer now. `stop` clears **only** the programmable frame and
-   removes the watch **only after** the backend durably accepts the clear; a
-   failed clear returns a truthful, retryable `stop_failed` error and retains the
-   watch so `stop` can be retried while the renderer thread is already stopped.
-   When the programmable slot is the only resident content, finalize delivers a
-   stable nonempty `— WATCH STOPPED —` terminal marker (Telegram cannot edit to
-   empty) so the resident stays reusable. Renderer files are never deleted.
+   re-runs the renderer now for an active watch, but on a watch where `stop` has
+   already been requested it continues the stop path only (re-check quiescence,
+   then re-attempt the clear) and **never** re-runs the renderer. `stop` clears
+   **only** the programmable frame and removes the watch (returning `stopped`)
+   **only after** the watcher thread is quiescent **and** the backend durably
+   accepts the clear. `stop` never finalizes, removes, or reports `stopped` while
+   the watcher thread is still alive: a renderer still running past the join
+   budget yields a truthful, retryable `stop_failed` (`stop_thread_alive`) with
+   the watch retained, and a transient clear failure yields a retryable
+   `stop_failed` (`stop_finalize_failed`). A renderer that returns after stop was
+   requested is dropped — no late `update`, no last-valid overwrite, no
+   stop-error clear. When the programmable slot is the only resident content,
+   finalize delivers a stable nonempty `— WATCH STOPPED —` terminal marker
+   (Telegram cannot edit to empty) so the resident stays reusable. Renderer files
+   are never deleted.
 3. Renderer execution is confined to the agent working directory
    (symlink-resolved containment), runs under a per-run timeout, and requires
    stdout to be **exactly one** schema-valid Task Card JSON object (`title`

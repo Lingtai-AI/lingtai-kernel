@@ -7,7 +7,7 @@ description: |
   Task Card JSON object. Covers the renderer contract, a safe runnable example,
   the start | inspect | retry | stop lifecycle, path/timeout/validation rules,
   fail-loud error wakes, and how the /taskcard toggle interacts.
-last_changed_at: "2026-07-12T21:30:00-07:00"
+last_changed_at: "2026-07-12T22:15:00-07:00"
 ---
 
 # Programmable Telegram Task Card — manual (what / how / why)
@@ -104,19 +104,24 @@ As your job rewrites `job_status.txt`, the card's programmable slot follows it.
   timestamp of when that frame was captured — set on the first accepted frame and
   every later accepted/recovered one, and left unchanged while attempts fail), and
   the current `error` (if any). Pass the `watch_id`.
-- **retry** — re-run the renderer **now** for a failed (or healthy) watch instead
-  of waiting for the next interval, then report the fresh state. Pass the
-  `watch_id`.
+- **retry** — re-run the renderer **now** for an active (failed or healthy) watch
+  instead of waiting for the next interval, then report the fresh state. Once you
+  have asked to `stop`, `retry` continues the stop path only — it re-checks
+  quiescence and re-attempts the clear, and will **not** re-run your renderer.
+  Pass the `watch_id`.
 - **stop** — stop the renderer thread and clear **only** the programmable frame;
   the automatic slot and the resident message remain, and renderer files are
   **never** deleted. The watch is removed and `stopped` is returned **only after**
-  the clear is accepted. If the clear fails (a transient backend edit failure),
-  `stop` returns a truthful, retryable `stop_failed` error and **keeps** the watch
-  so you can call `stop` again — the renderer thread is already stopped, so the
-  retry only re-attempts the clear. When the programmable slot is the only content
-  on the card, stopping shows a stable `— WATCH STOPPED —` marker (an empty
-  Telegram message is not allowed) and leaves the resident message reusable. Pass
-  the `watch_id`.
+  the watcher thread has actually stopped **and** the clear is accepted — `stop`
+  never reports `stopped` while a renderer is still running. If the renderer has
+  not stopped yet (still running past the join budget) or the clear fails (a
+  transient backend edit failure), `stop` returns a truthful, retryable
+  `stop_failed` error and **keeps** the watch; call `stop` again (or `retry`) to
+  re-check quiescence and re-attempt the clear — it never re-runs your renderer,
+  and a renderer that returns after you asked to stop cannot project a late
+  update. When the programmable slot is the only content on the card, stopping
+  shows a stable `— WATCH STOPPED —` marker (an empty Telegram message is not
+  allowed) and leaves the resident message reusable. Pass the `watch_id`.
 
 ### When a watch fails
 
@@ -129,9 +134,10 @@ identical failures inside one episode stay silent; the next good frame emits one
 and `retry`.
 
 Failure codes you may see: `renderer_timeout`, `renderer_nonzero_exit`,
-`invalid_frame`, `renderer_failed`, `backend_edit_failed`, and — when a `stop`
-could not clear the programmable frame — `stop_finalize_failed` (retryable: call
-`stop` again).
+`invalid_frame`, `renderer_failed`, `backend_edit_failed`, and — for a `stop`
+that is not yet complete — `stop_thread_alive` (the renderer thread is still
+running; retry `stop` once quiescent) or `stop_finalize_failed` (the clear was
+rejected; retry `stop`). Both are retryable.
 
 ## WHY it is designed this way
 

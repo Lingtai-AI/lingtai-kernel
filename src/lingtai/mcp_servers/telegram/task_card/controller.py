@@ -186,6 +186,12 @@ class TaskCardController:
                 return self._inspect(self._require_watch(args.get("watch_id")))
             if action == "retry":
                 watch = self._require_watch(args.get("watch_id"))
+                # Once stop has been requested, ``retry`` continues the stop path
+                # only (re-check quiescence, then retry finalize). It must NEVER
+                # run the renderer again or project a fresh update, so a stopped
+                # watch cannot be resurrected into a visible frame.
+                if watch.stopping:
+                    return self._stop(watch)
                 self._tick(watch)
                 return self._inspect(watch)
             if action == "stop":
@@ -249,19 +255,49 @@ class TaskCardController:
             }
 
     def _stop(self, watch: _Watch) -> dict:
-        # Stop the renderer thread promptly and idempotently first, so a later
-        # ``stop`` retry only has to re-attempt finalization.
+        """Advance the stop lifecycle and finalize exactly once when quiescent.
+
+        Idempotent and retryable: both the ``stop`` action and ``retry`` on an
+        already-stopping watch route here. The invariant is that the watch is
+        never finalized, removed, or reported ``stopped`` while its watcher thread
+        is still alive — otherwise an in-flight renderer could project a late
+        ``update`` after ``stopped`` was returned and the handle was dropped.
+        """
+        # Request stop and mark stopping BEFORE waiting, so an in-flight renderer
+        # observes it (see ``_stop_requested``) and drops its result instead of
+        # projecting a late update.
         watch.stop_event.set()
-        if watch.thread is not None and watch.thread.is_alive():
-            watch.thread.join(timeout=_JOIN_TIMEOUT_S)
         with watch.lock:
             watch.stopping = True
-        # Clear only the programmable channel (the automatic channel is untouched
-        # and renderer files are never deleted). Commit the watch removal ONLY
-        # after the backend durably accepts the clear — the manager preserves the
-        # old programmable frame on a transient/unknown edit failure, so reporting
-        # ``stopped`` and dropping the handle here would strand a visible frame
-        # with no way to retry.
+        thread = watch.thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=_JOIN_TIMEOUT_S)
+        # If the thread has not gone quiescent within the join budget (e.g. a
+        # renderer running past it), do NOT finalize/remove/report stopped. Keep a
+        # truthful, retryable handle so stop can be retried once it is quiescent.
+        if thread is not None and thread.is_alive():
+            error = {
+                "code": "stop_thread_alive",
+                "retryable": True,
+                "message": (
+                    "the watcher thread has not stopped yet (renderer still "
+                    "running); retry stop once it is quiescent"
+                ),
+            }
+            with watch.lock:
+                watch.error = error
+            return {
+                "status": "error",
+                "watch_id": watch.watch_id,
+                "state": "stop_failed",
+                "error": error,
+            }
+        # Quiescent: clear only the programmable channel (the automatic channel is
+        # untouched and renderer files are never deleted). Commit the watch removal
+        # ONLY after the backend durably accepts the clear — the manager preserves
+        # the old programmable frame on a transient/unknown edit failure, so
+        # reporting ``stopped`` and dropping the handle would strand a visible
+        # frame with no way to retry.
         if self._project(watch, "finalize", None).get("status") == "error":
             error = {
                 "code": "stop_finalize_failed",
@@ -305,13 +341,36 @@ class TaskCardController:
                 return
             self._tick(watch)
 
+    def _stop_requested(self, watch: _Watch) -> bool:
+        """True once stop or agent shutdown was requested for this watch.
+
+        The renderer is a blocking subprocess, so stop can arrive while a tick is
+        mid-render. A tick that finishes after stop was requested MUST drop its
+        result: it must not project an ``update``, overwrite the last valid
+        frame/timestamp, or clear a pending stop error. Checking ``stop_event``
+        (set atomically by ``_stop``/``shutdown_for_agent_stop`` before the join)
+        makes that observable.
+        """
+        if watch.stop_event.is_set():
+            return True
+        shutdown = getattr(self._agent, "_shutdown", None)
+        return bool(shutdown is not None and shutdown.is_set())
+
     def _tick(self, watch: _Watch) -> None:
-        """Run the renderer once and reconcile the watch's error/frame state."""
+        """Run the renderer once and reconcile the watch's error/frame state.
+
+        If stop/shutdown was requested while the (blocking) renderer ran, the
+        completed tick is dropped without projecting, overwriting the last valid
+        frame/timestamp, or clearing a pending stop error."""
         try:
             frame = self._run_renderer(watch.renderer_path, watch.timeout_s)
         except TaskCardControllerError as e:
+            if self._stop_requested(watch):
+                return  # stop observed: drop this late failure, keep stop state
             self._mark_error(watch, self._error_from_exc(e))
             return
+        if self._stop_requested(watch):
+            return  # stop observed after render: no update, no overwrite, no clear
         if self._project(watch, "update", frame).get("status") == "error":
             self._mark_error(
                 watch,
