@@ -42,12 +42,27 @@ descriptions; you do not need to call it before every send.
   the placeholder shows progress only (it may optionally be deleted).
 - When the current agent has `taskcard: True`, an automatic Task Card may update
   separately during Telegram-originated turns (you do not manage it; use
-  send/reply for your own messages). Automatic, programmable, heartbeat, and
-  final frames edit one stable resident message ID in place; an identical
-  Telegram edit is a successful no-op. See **TASKCARD STATE** below.
-- The addon replaces that resident only after Telegram explicitly reports the
-  message missing or uneditable. Unknown/transient edit failures are surfaced and
-  retain the resident ID and last delivered slots instead of sending/retracting.
+  send/reply for your own messages). While the resident Task Card is still the
+  chat's last message, automatic, programmable, heartbeat, and final frames edit
+  that one stable resident message ID in place; an identical Telegram edit is a
+  successful no-op. See **TASKCARD STATE** below.
+- The Task Card resides as the last message. When a newer message has arrived
+  below it — your own durable send/reply, or an incoming user message — the addon
+  rotates the card back to the bottom: it sends a fresh Task Card first, then
+  deletes only the exact previous Task Card message. It never deletes a normal
+  message, and it only rotates when it deterministically knows a newer message
+  exists. An unknown latest-message mark keeps a correctly bound resident on
+  the edit-in-place path; malformed or cross-bound resident IDs and transient
+  transport failures fail loud without sending or deleting.
+- The addon also replaces the resident when Telegram explicitly reports the
+  message missing or uneditable. In both the rotation and the replacement paths
+  the new card is sent before the old one is removed, so a failed send never
+  destroys the only card. Automatic and programmable delivery is serialized per
+  account+chat; the exact old card is deleted only after the new resident write is
+  acknowledged. Persistence or stale-delete failures retain the new ID, preserve
+  any old card that is not safe to remove, and surface a partial-failure signal to
+  both automatic and programmable callers. Unknown/transient edit failures retain
+  the resident ID and last delivered slots instead of sending/retracting.
 - For very fast responses (under ~5s), native Telegram typing/👀 presence is
   enough — skip the placeholder.
 

@@ -437,6 +437,13 @@ class TaskCardController:
             return {"status": "error"}
         if not isinstance(result, dict) or result.get("status") == "error":
             return {"status": "error"}
+        partial = {
+            flag: True
+            for flag in ("resident_persist_failed", "stale_delete_failed")
+            if result.get(flag) is True
+        }
+        if partial:
+            return {"status": "error", "partial": True, **partial}
         return {"status": "ok"}
 
     # -- validation + route helpers ----------------------------------------

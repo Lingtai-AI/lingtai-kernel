@@ -2492,10 +2492,14 @@ class BaseAgent:
                 self._log_task_card_reverse_failure("create", "batch", result)
             else:
                 ctx["card_message_id"] = message_id
+            if self._task_card_result_partial_failure(result):
+                self._log_task_card_reverse_partial("create", "batch", result)
         else:
             try:
                 result = ctx["mcp_client"].call_tool(_TASK_CARD_TOOL, {
                     "sub_action": "update",
+                    "account": ctx["account"],
+                    "chat_id": ctx["chat_id"],
                     "card_message_id": ctx["card_message_id"],
                     "rows": payload_rows,
                 }, timeout=5.0)
@@ -2509,6 +2513,8 @@ class BaseAgent:
                 self._log_task_card_reverse_failure("update", "batch", result)
             elif new_id != ctx["card_message_id"]:
                 ctx["card_message_id"] = new_id
+            if self._task_card_result_partial_failure(result):
+                self._log_task_card_reverse_partial("update", "batch", result)
 
     @staticmethod
     def _task_card_clock(ctx: dict):
@@ -2873,6 +2879,28 @@ class BaseAgent:
         return message_id if isinstance(message_id, str) and message_id else None
 
     @staticmethod
+    def _task_card_result_partial_failure(result: object) -> bool:
+        """Whether delivery succeeded with an observable resident cleanup fault."""
+        return isinstance(result, dict) and any(
+            result.get(flag) is True
+            for flag in ("resident_persist_failed", "stale_delete_failed")
+        )
+
+    @staticmethod
+    def _log_task_card_reverse_partial(
+        phase: str, tool_name: str, result: object,
+    ) -> None:
+        """Log content-free partial-delivery flags while retaining the new id."""
+        flags = ",".join(
+            flag for flag in ("resident_persist_failed", "stale_delete_failed")
+            if isinstance(result, dict) and result.get(flag) is True
+        )
+        logger.warning(
+            "telegram task-card reverse call partial phase=%s tool=%s flags=%s",
+            phase, tool_name, flags or "unknown",
+        )
+
+    @staticmethod
     def _log_task_card_reverse_failure(
         phase: str, tool_name: str, result: object,
     ) -> None:
@@ -3010,6 +3038,8 @@ class BaseAgent:
                 # freezes on the concrete last behavior.
                 result = ctx["mcp_client"].call_tool(_TASK_CARD_TOOL, {
                     "sub_action": "finalize",
+                    "account": ctx["account"],
+                    "chat_id": ctx["chat_id"],
                     "card_message_id": ctx["card_message_id"],
                     "rows": payload_rows,
                 }, timeout=5.0)
@@ -3017,6 +3047,8 @@ class BaseAgent:
                 # card left un-finalized is observable (still never blocking).
                 if self._task_card_result_error(result):
                     self._log_task_card_reverse_failure("finalize", "", result)
+                elif self._task_card_result_partial_failure(result):
+                    self._log_task_card_reverse_partial("finalize", "", result)
         except Exception:
             # Fail-open, but observable: the finalize reverse call itself raised.
             self._log_task_card_reverse_exception("finalize", "")

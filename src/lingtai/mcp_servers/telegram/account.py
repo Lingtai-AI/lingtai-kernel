@@ -177,6 +177,17 @@ class TelegramAccount:
         # read-modify-write of state.json across the poll thread and the
         # orchestrating turn thread.
         self._task_cards: dict[str, str] = {}
+        # Highest Telegram message_id observed per chat (Jason #5272/#5273/#5275).
+        # Telegram message_ids are monotonic per chat, so this high-water mark is
+        # "the chat's last message id": bumped by every inbound message the poll
+        # loop sees and every outbound message this account sends, but never by an
+        # edit or delete (which add no new bottom message). The Task Card manager
+        # reads it to decide whether the resident card is still the last message.
+        # It is a deliberately EPHEMERAL observation cache — not persisted — so a
+        # refresh starts "unknown" (``None``) until the next observed message, and
+        # the manager treats unknown conservatively (edit in place, never delete).
+        # Keyed by the integer chat id and guarded by ``_state_lock``.
+        self._last_message_ids: dict[int, int] = {}
         # Re-entrant so a card mutator can hold the lock across its
         # read-modify-write and the nested ``_save_state`` snapshot.
         self._state_lock = threading.RLock()
@@ -301,6 +312,15 @@ class TelegramAccount:
         user_id = None
         if "message" in update:
             user_id = update["message"].get("from", {}).get("id")
+            # A plain message is a new bottom message in the chat; record it so a
+            # resident Task Card sent earlier is now known to be superseded. Done
+            # before allow-list filtering because the message exists in the chat
+            # regardless of whether this bot will act on it, and recording only an
+            # integer id leaks nothing. Callback queries (no new message) and
+            # edited messages (older id) are intentionally excluded.
+            msg = update["message"]
+            self._note_chat_message_id(
+                msg.get("chat", {}).get("id"), msg.get("message_id"))
         elif "callback_query" in update:
             user_id = update["callback_query"].get("from", {}).get("id")
             # Auto-answer callback query to dismiss spinner
@@ -929,7 +949,9 @@ class TelegramAccount:
             payload["link_preview_options"] = link_preview_options
         if disable_web_page_preview is not None:
             payload["disable_web_page_preview"] = disable_web_page_preview
-        return self._request("sendMessage", json=payload)
+        result = self._request("sendMessage", json=payload)
+        self._note_chat_message_id(chat_id, result.get("message_id"))
+        return result
 
     def send_photo(
         self,
@@ -953,7 +975,9 @@ class TelegramAccount:
             if caption_entities is not None:
                 # Multipart fields must be strings; serialize the array.
                 data["caption_entities"] = json.dumps(caption_entities)
-            return self._request("sendPhoto", files=files, data=data)
+            result = self._request("sendPhoto", files=files, data=data)
+        self._note_chat_message_id(chat_id, result.get("message_id"))
+        return result
 
     def send_document(
         self,
@@ -977,7 +1001,9 @@ class TelegramAccount:
             if caption_entities is not None:
                 # Multipart fields must be strings; serialize the array.
                 data["caption_entities"] = json.dumps(caption_entities)
-            return self._request("sendDocument", files=files, data=data)
+            result = self._request("sendDocument", files=files, data=data)
+        self._note_chat_message_id(chat_id, result.get("message_id"))
+        return result
 
     def edit_message(
         self,
@@ -1176,6 +1202,46 @@ class TelegramAccount:
                 except FileNotFoundError:
                     pass
                 raise
+
+    # -- Per-chat last-message-id observation (ephemeral high-water mark) -----
+
+    def _note_chat_message_id(self, chat_id: int, message_id: object) -> None:
+        """Record ``message_id`` as the chat's newest observed bottom message.
+
+        Monotonic per chat: a smaller/out-of-order id never lowers the mark, so
+        an edit that re-uses an older id cannot make the resident card look stale.
+        Defensive: a non-integer id (malformed update) is ignored, and the whole
+        recording is best-effort — it must never raise into the poll loop or a
+        send path, so a not-fully-constructed account (missing lock/map) is a
+        silent no-op rather than an error.
+        """
+        try:
+            chat = int(chat_id)
+            mid = int(message_id)
+        except (TypeError, ValueError):
+            return
+        lock = getattr(self, "_state_lock", None)
+        marks = getattr(self, "_last_message_ids", None)
+        if lock is None or marks is None:
+            return
+        with lock:
+            if mid > marks.get(chat, 0):
+                marks[chat] = mid
+
+    def get_last_message_id(self, chat_id: int) -> int | None:
+        """Return the highest observed Telegram message id for ``chat_id``.
+
+        ``None`` when no message has been observed for that chat yet (e.g. right
+        after a refresh, before any inbound or outbound message). Callers must
+        treat ``None`` conservatively — it is not evidence that any particular
+        message is or is not the last one.
+        """
+        try:
+            chat = int(chat_id)
+        except (TypeError, ValueError):
+            return None
+        with self._state_lock:
+            return self._last_message_ids.get(chat)
 
     # -- Resident Task Card id (one per account+chat) ------------------------
 

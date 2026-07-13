@@ -430,6 +430,11 @@ class TelegramManager:
         # output). Each channel owns only its own frame; updating one never
         # overwrites the other. Keyed by ``"{account}:{chat_id}"``.
         self._task_card_channels: dict[str, dict[str, str]] = {}
+        # Serialize the full compose/read/deliver/persist/delete/commit transaction
+        # per route. Automatic heartbeats/finalize and programmable watches run on
+        # different threads but must still share one resident-card transaction.
+        self._task_card_delivery_locks: dict[str, threading.RLock] = {}
+        self._task_card_delivery_locks_guard = threading.Lock()
 
     def _account_dir(self, account: str) -> Path:
         return self._working_dir / "telegram" / account
@@ -1497,7 +1502,23 @@ class TelegramManager:
             return prog_block
         return f"{automatic}\n\n{prog_block}"
 
+    def _task_card_delivery_lock(self, account: str, chat_id: int) -> threading.RLock:
+        """Return the stable transaction lock for one Telegram account+chat."""
+        key = f"{account}:{chat_id}"
+        with self._task_card_delivery_locks_guard:
+            return self._task_card_delivery_locks.setdefault(key, threading.RLock())
+
     def _deliver_channel_frame(
+        self, account: str, chat_id: int, channel: str, frame: str | None,
+        *, error: str, resident_id: str | None = None,
+    ) -> dict:
+        """Serialize and deliver one channel-frame transaction for this route."""
+        with self._task_card_delivery_lock(account, chat_id):
+            return self._deliver_channel_frame_locked(
+                account, chat_id, channel, frame, error=error, resident_id=resident_id
+            )
+
+    def _deliver_channel_frame_locked(
         self, account: str, chat_id: int, channel: str, frame: str | None,
         *, error: str, resident_id: str | None = None,
     ) -> dict:
@@ -1515,8 +1536,37 @@ class TelegramManager:
         programmable channel.
         """
         text = self._compose_channels(account, chat_id, channel=channel, frame=frame)
-        resident_id = resident_id or self._get_resident_task_card(account, chat_id)
+        # Re-read the resident *inside* the route transaction. A concurrently
+        # queued caller may carry the prior id while the first caller has already
+        # rotated and persisted a new resident; durable/in-memory state is newer.
+        tracked_resident = self._get_resident_task_card(account, chat_id)
+        resident_id = tracked_resident or resident_id
         if resident_id:
+            # A resident id is only authorized for its exact account+chat slot.
+            # Corrupt/cross-bound state must not edit or delete some other chat's
+            # message merely because that message id is older than this chat's
+            # high-water mark.
+            try:
+                resident_account, resident_chat_id, _ = self._parse_compound_id(
+                    resident_id)
+            except Exception:
+                return {"status": "error", "error": error}
+            if resident_account != account or resident_chat_id != chat_id:
+                return {"status": "error", "error": error}
+            # Jason #5272/#5273/#5275: the resident card must reside as the chat's
+            # LAST message. When we deterministically know a newer message exists
+            # below the resident, rotate — send a fresh card so it becomes last,
+            # then delete only the exact old resident — instead of editing it in
+            # place (which would leave it stranded above the newer message). When
+            # the resident is still the last message, or the latest-message state
+            # is unknown/malformed, we fall through to the in-place edit path
+            # (#891) and never delete anything on unknown/transient state.
+            if self._resident_superseded(account, chat_id, resident_id):
+                rotated = self._rotate_task_card_to_latest(
+                    account, chat_id, resident_id, text, error=error)
+                if rotated.get("status") == "ok":
+                    self._set_channel_frame(account, chat_id, channel, frame)
+                return rotated
             edit_outcome = self._try_update_progress_message(resident_id, text)
             if edit_outcome == _TASK_CARD_EDIT_OK:
                 self._set_channel_frame(account, chat_id, channel, frame)
@@ -1538,8 +1588,13 @@ class TelegramManager:
             return {"status": "error", "error": error}
         new_id = result["message_id"]
         self._set_channel_frame(account, chat_id, channel, frame)
-        self._set_resident_task_card(account, chat_id, new_id)
-        return {"status": "ok", "message_id": new_id}
+        persisted = self._set_resident_task_card(account, chat_id, new_id)
+        outcome: dict = {"status": "ok", "message_id": new_id}
+        if not persisted:
+            # The sent card remains visible and in-memory current, but the durable
+            # resident write was not acknowledged. No prior resident exists here.
+            outcome["resident_persist_failed"] = True
+        return outcome
 
     @classmethod
     def _format_programmable_card_text(cls, card: dict) -> str:
@@ -1658,12 +1713,101 @@ class TelegramManager:
             # Replacement send failed: preserve the stale card + id, delete nothing.
             return {"status": "error", "error": error}
         new_id = result["message_id"]
-        # Persist the new id as current BEFORE deleting the old one, so a crash
-        # between send and delete still leaves the new (visible) card tracked.
-        self._set_resident_task_card(account, chat_id, new_id)
+        # Delete is authorized only after the new resident write is acknowledged.
+        # On persistence failure both visible cards remain and the partial outcome
+        # lets the caller adopt the new in-memory id without hiding the failure.
+        persisted = self._set_resident_task_card(account, chat_id, new_id)
+        outcome: dict = {"status": "ok", "message_id": new_id}
+        if not persisted:
+            outcome["resident_persist_failed"] = True
+            return outcome
+        if new_id != stale_id and not self._delete_task_card_message(stale_id):
+            outcome["stale_delete_failed"] = True
+        return outcome
+
+    def _get_last_message_id(self, account: str, chat_id: int) -> int | None:
+        """Read the chat's latest observed message id from the account; fail-open.
+
+        Returns ``None`` when the owning layer does not know the latest message
+        id (unknown after a refresh, or a narrow test/third-party account double
+        without the accessor). ``None`` is deliberately conservative — it is not
+        evidence that the resident card is or is not the last message.
+        """
+        try:
+            getter = getattr(
+                self._service.get_account(account), "get_last_message_id", None)
+            if not callable(getter):
+                return None
+            value = getter(chat_id)
+        except Exception as e:
+            log.debug("Failed to read latest chat message id: %s", e)
+            return None
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    def _resident_superseded(
+        self, account: str, chat_id: int, resident_id: str,
+    ) -> bool:
+        """True only when a newer chat message is *known* to sit below the card.
+
+        Fail-closed on every uncertainty: a malformed resident id (unparseable),
+        or an unknown latest-message id, both return ``False`` so the caller edits
+        in place and never deletes. Deletion authorization requires a deterministic
+        ``latest > resident`` — nothing weaker.
+        """
+        try:
+            card_account, card_chat_id, card_tg_id = self._parse_compound_id(
+                resident_id)
+        except Exception:
+            return False
+        if card_account != account or card_chat_id != chat_id:
+            return False
+        latest = self._get_last_message_id(account, chat_id)
+        if latest is None:
+            return False
+        return latest > card_tg_id
+
+    def _rotate_task_card_to_latest(
+        self, account: str, chat_id: int, stale_id: str, text: str, *, error: str,
+    ) -> dict:
+        """Rotate the resident card to the bottom of the chat, create-new-first.
+
+        Ordering is send-new-then-delete-old, never the reverse: if we deleted
+        the old card first and the replacement send then failed, the chat would be
+        left with ZERO cards — the only resident lost. Create-new-first guarantees
+        at least one card exists at every intermediate point.
+
+        Partial-failure states:
+          - replacement send fails -> keep the old resident and its id, delete
+            nothing, return an error (the old card is still editable next turn);
+          - send succeeds, delete of the exact old card fails -> the new card is
+            the tracked latest resident (do NOT roll back to a card that is no
+            longer last), but fail loud: ``stale_delete_failed`` is set and the
+            leftover is logged, never pretending a clean single-card success.
+
+        The new id is persisted as resident BEFORE the delete so a crash between
+        send and delete still leaves the visible new card tracked. Only the exact
+        ``stale_id`` (the owned old resident) is ever deleted — never a normal
+        message.
+        """
+        result = self.send_progress_message(account, chat_id, text)
+        if result is None:
+            return {"status": "error", "error": error}
+        new_id = result["message_id"]
+        persisted = self._set_resident_task_card(account, chat_id, new_id)
+        outcome: dict = {"status": "ok", "message_id": new_id}
+        if not persisted:
+            # Never delete the only acknowledged resident until the replacement's
+            # resident write is confirmed. The new card remains visible/current.
+            outcome["resident_persist_failed"] = True
+            return outcome
         if new_id != stale_id:
-            self._delete_task_card_message(stale_id)
-        return {"status": "ok", "message_id": new_id}
+            if not self._delete_task_card_message(stale_id):
+                log.warning(
+                    "Task card rotated to latest but the old resident could not "
+                    "be deleted; leftover card remains above the new resident"
+                )
+                outcome["stale_delete_failed"] = True
+        return outcome
 
     def _get_resident_task_card(self, account: str, chat_id: int) -> str | None:
         """Read the persisted resident card id for (account, chat); fail-open."""
@@ -1673,36 +1817,45 @@ class TelegramManager:
             log.debug("Failed to read resident task card: %s", e)
             return None
 
-    def _set_resident_task_card(self, account: str, chat_id: int, compound_id: str) -> None:
-        """Persist the resident card id for (account, chat); fail-open.
-
-        A persistence failure must not fail the turn — the new card is already
-        sent and visible — but is logged content-free for observability.
-        """
+    def _set_resident_task_card(
+        self, account: str, chat_id: int, compound_id: str,
+    ) -> bool:
+        """Persist the resident id and acknowledge success before any old delete."""
         try:
             self._service.get_account(account).set_task_card(chat_id, compound_id)
+            return True
         except Exception as e:
             log.warning("Failed to persist resident task card id: %s", e)
+            return False
 
-    def _delete_task_card_message(self, compound_id: str) -> None:
+    def _delete_task_card_message(self, compound_id: str) -> bool:
         """Best-effort delete of the specifically tracked prior card message.
 
         Only ever deletes the exact ``account:chat:message`` this id names — it
         never crosses chats/accounts and never touches an untracked message.  A
-        failure is swallowed (logged content-free): the new card is already the
-        current resident, so a stale prior card is a cosmetic leftover, not a
-        correctness problem, and must not block or roll back the turn.
+        failure is swallowed (logged content-free) and reported as ``False`` so a
+        caller that must fail loud (rotation-to-latest) can surface the leftover
+        without rolling back the already-delivered new resident.  Returns ``True``
+        when the delete call completed without error.
         """
         try:
             account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
             acct = self._service.get_account(account)
             acct.delete_message(chat_id=chat_id, message_id=tg_msg_id)
+            return True
         except Exception as e:
             log.debug("Failed to delete prior task card message: %s", e)
+            return False
 
     def _task_card_update(self, args: dict) -> dict:
         card_message_id = args["card_message_id"]
-        account, chat_id, _ = self._parse_compound_id(card_message_id)
+        card_account, card_chat_id, _ = self._parse_compound_id(card_message_id)
+        # Current kernel callers provide the explicit route; legacy/private test
+        # callers may omit it, in which case the compound id remains the route.
+        account = args.get("account", card_account)
+        chat_id = args.get("chat_id", card_chat_id)
+        if card_account != account or card_chat_id != chat_id:
+            return {"status": "error", "error": "Failed to update task card"}
         automatic = self._format_task_card_text(
             args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""),
             rows=args.get("rows"))
@@ -1740,7 +1893,14 @@ class TelegramManager:
                     automatic += "\n\n✅ TASK CARD · DONE"
                 else:
                     automatic = "✅ TASK CARD · DONE"
-            account, chat_id, _ = self._parse_compound_id(card_message_id)
+            card_account, card_chat_id, _ = self._parse_compound_id(card_message_id)
+            # Backward compatibility: older internal callers supplied only the
+            # compound id. Current callers' explicit route, when present, must
+            # match it exactly before any edit or delete is permitted.
+            account = args.get("account", card_account)
+            chat_id = args.get("chat_id", card_chat_id)
+            if card_account != account or card_chat_id != chat_id:
+                return {"status": "error", "error": "Failed to finalize task card"}
             return self._deliver_channel_frame(
                 account,
                 chat_id,
