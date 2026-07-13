@@ -1,0 +1,583 @@
+"""Focused contract tests for the agent-wide Telegram Task Card toggle."""
+from __future__ import annotations
+
+import json
+import logging
+import threading
+from copy import deepcopy
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from lingtai.kernel.base_agent import BaseAgent, _TASK_CARD_TOOL
+from lingtai.mcp_servers.telegram.account import DEFAULT_COMMANDS
+from lingtai.mcp_servers.telegram.manager import TelegramManager
+from lingtai.mcp_servers.telegram.service import TelegramService
+from tests._notification_store_helpers import notification_store_for
+
+
+def _configs(*aliases: str, allowed_users: list[int] | None = None) -> list[dict]:
+    return [
+        {
+            "alias": alias,
+            "bot_token": f"token-{alias}",
+            "allowed_users": allowed_users,
+        }
+        for alias in aliases
+    ]
+
+
+def _service(
+    workdir: Path,
+    *aliases: str,
+    allowed_users: list[int] | None = None,
+    on_message=lambda _alias, _update: None,
+) -> TelegramService:
+    return TelegramService(
+        workdir,
+        _configs(*(aliases or ("main",)), allowed_users=allowed_users),
+        on_message,
+    )
+
+
+def _manager(workdir: Path, service: TelegramService, inbound=None) -> TelegramManager:
+    return TelegramManager(
+        service,
+        working_dir=workdir,
+        on_inbound=inbound or (lambda _event: None),
+        notification_store=notification_store_for(workdir),
+    )
+
+
+def _incoming_message(message_id: int = 53, *, text: str = "hello") -> dict[str, Any]:
+    return {
+        "id": f"main:123:{message_id}",
+        "from": {"username": "alice"},
+        "chat": {"id": 123, "type": "private"},
+        "date": "2026-07-12T18:00:00Z",
+        "text": text,
+        "media": None,
+        "callback_query": None,
+        "reply_to_message_id": None,
+        "_folder": "inbox",
+    }
+
+
+def _write_message(workdir: Path, message: dict[str, Any], folder: str = "inbox") -> Path:
+    msg_dir = workdir / "telegram" / "main" / folder / message["id"].replace(":", "-")
+    msg_dir.mkdir(parents=True, exist_ok=True)
+    stored = {key: value for key, value in message.items() if not key.startswith("_")}
+    path = msg_dir / "message.json"
+    path.write_text(json.dumps(stored), encoding="utf-8")
+    return path
+
+
+# Durable one-source-of-truth state -------------------------------------------------
+
+
+def test_taskcard_state_defaults_true_and_is_shared_across_accounts(tmp_path: Path) -> None:
+    service = _service(tmp_path, "one", "two")
+
+    assert service.taskcard_enabled() is True
+    assert service.get_account("one")._taskcard_enabled() is True
+    assert service.get_account("two")._taskcard_enabled() is True
+    assert not (tmp_path / "telegram" / "taskcard.json").exists()
+
+
+def test_taskcard_state_is_independent_between_agent_workdirs(tmp_path: Path) -> None:
+    first = _service(tmp_path / "agent-one", "main")
+    second = _service(tmp_path / "agent-two", "main")
+    first.set_taskcard_enabled(False)
+
+    assert first.taskcard_enabled() is False
+    assert second.taskcard_enabled() is True
+
+
+def test_taskcard_state_persists_false_and_true_across_service_instances(tmp_path: Path) -> None:
+    service = _service(tmp_path, "main")
+    service.set_taskcard_enabled(False)
+    state_path = tmp_path / "telegram" / "taskcard.json"
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {"taskcard": False}
+    assert _service(tmp_path, "main").taskcard_enabled() is False
+
+    service.set_taskcard_enabled(True)
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {"taskcard": True}
+    assert _service(tmp_path, "main").taskcard_enabled() is True
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["not json", "[]", "{}", '{"taskcard": "false"}', '{"taskcard": 0}'],
+)
+def test_invalid_taskcard_state_defaults_true_and_warns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, raw: str
+) -> None:
+    state_path = tmp_path / "telegram" / "taskcard.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(raw, encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        service = _service(tmp_path, "main")
+
+    assert service.taskcard_enabled() is True
+    assert "taskcard state" in caplog.text.lower()
+    assert raw not in caplog.text
+
+
+def test_taskcard_write_failure_preserves_effective_and_durable_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import lingtai.mcp_servers.telegram.service as service_module
+
+    service = _service(tmp_path, "main")
+    service.set_taskcard_enabled(False)
+    state_path = tmp_path / "telegram" / "taskcard.json"
+    before = state_path.read_bytes()
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("simulated durable write failure")
+
+    monkeypatch.setattr(service_module, "atomic_write_json", fail_write)
+    with pytest.raises(OSError):
+        service.set_taskcard_enabled(True)
+
+    assert service.taskcard_enabled() is False
+    assert state_path.read_bytes() == before
+    assert not list(state_path.parent.glob("*.tmp"))
+
+
+# Local slash command ---------------------------------------------------------------
+
+
+def test_default_menu_contains_taskcard_once_and_custom_menu_stays_replacement_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert [item["command"] for item in DEFAULT_COMMANDS].count("taskcard") == 1
+    service = TelegramService(
+        tmp_path,
+        [
+            {"alias": "default", "bot_token": "x"},
+            {
+                "alias": "custom",
+                "bot_token": "y",
+                "commands": [{"command": "onlymine", "description": "Mine"}],
+            },
+            {"alias": "empty", "bot_token": "z", "commands": []},
+        ],
+        lambda _alias, _update: None,
+    )
+    registered: dict[str, list[dict[str, str]]] = {}
+    for alias in service.list_accounts():
+        account = service.get_account(alias)
+        monkeypatch.setattr(
+            account,
+            "_request",
+            lambda _method, *, json, alias=alias: registered.setdefault(alias, json["commands"]),
+        )
+        account._register_commands()
+
+    assert registered["default"] == DEFAULT_COMMANDS
+    assert registered["custom"] == [{"command": "onlymine", "description": "Mine"}]
+    assert registered["empty"] == []
+
+
+def test_taskcard_commands_are_local_agent_wide_and_mentions_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    forwarded: list[tuple[str, dict]] = []
+    service = _service(
+        tmp_path,
+        "one",
+        "two",
+        allowed_users=[7],
+        on_message=lambda alias, update: forwarded.append((alias, update)),
+    )
+    replies: list[str] = []
+    for alias in service.list_accounts():
+        monkeypatch.setattr(
+            service.get_account(alias),
+            "send_message",
+            lambda _chat_id, text, **_kwargs: replies.append(text) or {"message_id": 1},
+        )
+
+    one = service.get_account("one")
+    two = service.get_account("two")
+    one._process_update({
+        "update_id": 1,
+        "message": {"from": {"id": 7}, "chat": {"id": 10}, "text": "/taskcard"},
+    })
+    assert "taskcard: True" in replies[-1]
+    assert "Usage: /taskcard on | /taskcard off" in replies[-1]
+
+    one._process_update({
+        "update_id": 2,
+        "message": {"from": {"id": 7}, "chat": {"id": 10}, "text": "/taskcard@SomeBot off"},
+    })
+    assert service.taskcard_enabled() is False
+    assert "taskcard: False" in replies[-1]
+    assert "internal mechanics still run" in replies[-1]
+
+    two._process_update({
+        "update_id": 3,
+        "message": {"from": {"id": 7}, "chat": {"id": 99}, "text": "/taskcard on"},
+    })
+    assert service.taskcard_enabled() is True
+    assert "taskcard: True" in replies[-1]
+    assert not forwarded
+
+
+def test_taskcard_invalid_help_and_unauthorized_forms_do_not_mutate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _service(tmp_path, "main", allowed_users=[7])
+    account = service.get_account("main")
+    replies: list[str] = []
+    monkeypatch.setattr(
+        account,
+        "send_message",
+        lambda _chat_id, text, **_kwargs: replies.append(text) or {"message_id": 1},
+    )
+
+    for update_id, text in enumerate(("/taskcard help", "/taskcard off extra"), 1):
+        account._process_update({
+            "update_id": update_id,
+            "message": {"from": {"id": 7}, "chat": {"id": 10}, "text": text},
+        })
+        assert replies[-1] == "❌ Usage: /taskcard on | /taskcard off"
+        assert service.taskcard_enabled() is True
+
+    account._process_update({
+        "update_id": 3,
+        "message": {"from": {"id": 99}, "chat": {"id": 10}, "text": "/taskcard off"},
+    })
+    assert service.taskcard_enabled() is True
+    assert len(replies) == 2
+
+
+def test_taskcard_command_write_failure_warns_without_false_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import lingtai.mcp_servers.telegram.service as service_module
+
+    service = _service(tmp_path, "main")
+    account = service.get_account("main")
+    replies: list[str] = []
+    monkeypatch.setattr(
+        account,
+        "send_message",
+        lambda _chat_id, text, **_kwargs: replies.append(text) or {"message_id": 1},
+    )
+    monkeypatch.setattr(
+        service_module,
+        "atomic_write_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("fail")),
+    )
+
+    account._process_update({
+        "update_id": 1,
+        "message": {"from": {"id": 1}, "chat": {"id": 10}, "text": "/taskcard off"},
+    })
+    assert service.taskcard_enabled() is True
+    assert replies == ["⚠️ Could not update taskcard; the previous setting is unchanged."]
+
+
+# Presentation-boundary suppression -------------------------------------------------
+
+
+@pytest.mark.parametrize("channel", ["automatic", "programmable"])
+@pytest.mark.parametrize("sub_action", ["create", "update", "finalize"])
+def test_disabled_manager_suppresses_both_slots_without_transport_or_state_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    channel: str,
+    sub_action: str,
+) -> None:
+    service = _service(tmp_path, "main")
+    service.set_taskcard_enabled(False)
+    manager = _manager(tmp_path, service)
+    manager._task_card_channels = {
+        "main:123": {"automatic": "old auto", "programmable": "old watch"}
+    }
+    account = service.get_account("main")
+    account.set_task_card(123, "main:123:77")
+    before_channels = deepcopy(manager._task_card_channels)
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Telegram transport/slot path must not run while hidden")
+
+    monkeypatch.setattr(manager, "send_progress_message", unexpected)
+    monkeypatch.setattr(manager, "update_progress_message", unexpected)
+    monkeypatch.setattr(manager, "_delete_task_card_message", unexpected)
+    monkeypatch.setattr(manager, "_set_channel_frame", unexpected)
+
+    args: dict[str, Any] = {
+        "sub_action": sub_action,
+        "channel": channel,
+        "account": "main",
+        "chat_id": 123,
+        "card_message_id": "main:123:77",
+        "rows": [{"tool": "bash", "action": "run", "reasoning": "work"}],
+        "card": {"lines": ["watch"]},
+    }
+    assert manager._handle_task_card_update(args) == {
+        "status": "ok",
+        "suppressed": True,
+        "taskcard": False,
+    }
+    assert manager._task_card_channels == before_channels
+    assert account.get_task_card(123) == "main:123:77"
+
+
+@pytest.mark.parametrize("args", [
+    {"channel": "unknown", "sub_action": "create"},
+    {"channel": "automatic", "sub_action": "unknown"},
+    {"channel": "programmable", "sub_action": "unknown"},
+])
+def test_disabled_manager_does_not_mask_invalid_channel_or_sub_action(
+    tmp_path: Path, args: dict[str, str]
+) -> None:
+    service = _service(tmp_path, "main")
+    service.set_taskcard_enabled(False)
+    result = _manager(tmp_path, service)._handle_task_card_update(args)
+    assert result["status"] == "error"
+
+
+def test_reenable_projects_next_frame_without_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    service = _service(tmp_path, "main")
+    manager = _manager(tmp_path, service)
+    account = service.get_account("main")
+    calls: list[tuple[int, str]] = []
+    monkeypatch.setattr(
+        account,
+        "send_message",
+        lambda chat_id, text, **_kwargs: calls.append((chat_id, text)) or {"message_id": 88},
+    )
+
+    service.set_taskcard_enabled(False)
+    hidden = manager._handle_task_card_update({
+        "sub_action": "create", "account": "main", "chat_id": 123,
+        "tool": "bash", "tool_action": "run", "reasoning": "hidden frame",
+    })
+    assert hidden["suppressed"] is True
+    assert calls == []
+
+    service.set_taskcard_enabled(True)
+    shown = manager._handle_task_card_update({
+        "sub_action": "create", "account": "main", "chat_id": 123,
+        "tool": "bash", "tool_action": "run", "reasoning": "visible frame",
+    })
+    assert shown == {"status": "ok", "message_id": "main:123:88"}
+    assert len(calls) == 1 and "visible frame" in calls[0][1]
+
+
+def test_base_agent_treats_suppression_as_success_and_keeps_mechanics(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict, float]] = []
+
+        def call_tool(self, tool_name, args, timeout=None):
+            self.calls.append((tool_name, dict(args), timeout))
+            return {"status": "ok", "suppressed": True, "taskcard": False}
+
+    client = Client()
+    agent = BaseAgent.__new__(BaseAgent)
+    ctx = {
+        "mcp_client": client,
+        "account": "main",
+        "chat_id": 123,
+        "card_message_id": None,
+        "rows": [{"tool": "bash", "tool_action": "run", "reasoning": "work", "elapsed_s": 0, "done": False}],
+        "_lock": threading.RLock(),
+    }
+    with caplog.at_level(logging.WARNING):
+        agent._render_task_card(ctx)
+        agent._render_task_card(ctx)
+
+    assert len(client.calls) == 2
+    assert all(call[0] == _TASK_CARD_TOOL for call in client.calls)
+    assert ctx["rows"] and ctx["card_message_id"] is None
+    assert "task-card reverse call failed" not in caplog.text
+
+
+def test_programmable_watch_keeps_rendering_while_hidden_and_projects_after_reenable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lingtai.kernel.task_card_controller import TaskCardController, _Watch
+
+    service = _service(tmp_path, "main")
+    manager = _manager(tmp_path, service)
+    account = service.get_account("main")
+    sends: list[str] = []
+    monkeypatch.setattr(
+        account,
+        "send_message",
+        lambda _chat_id, text, **_kwargs: sends.append(text) or {"message_id": 91},
+    )
+
+    class Client:
+        def call_tool(self, tool_name, args, timeout=None):
+            assert tool_name == _TASK_CARD_TOOL
+            return manager.handle({**args, "action": "_task_card_update"})
+
+    events: list[dict[str, Any]] = []
+    agent = SimpleNamespace(
+        _working_dir=tmp_path,
+        _mcp_clients_by_tool={"telegram": Client()},
+        _enqueue_system_notification=lambda **event: events.append(event),
+    )
+    controller = TaskCardController(agent)
+    watch = _Watch("tc_1", tmp_path / "renderer.py", 5.0, 1.0, "main", 123)
+    frames = iter(({"lines": ["hidden latest"]}, {"lines": ["visible latest"]}))
+    monkeypatch.setattr(controller, "_run_renderer", lambda *_args: next(frames))
+
+    service.set_taskcard_enabled(False)
+    controller._tick(watch)
+    assert watch.last_valid_frame == {"lines": ["hidden latest"]}
+    assert watch.error is None and events == [] and sends == []
+
+    service.set_taskcard_enabled(True)
+    controller._tick(watch)
+    assert watch.last_valid_frame == {"lines": ["visible latest"]}
+    assert watch.error is None and events == []
+    assert len(sends) == 1 and "visible latest" in sends[0]
+
+
+# Every agent-visible message representation ---------------------------------------
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_current_taskcard_flag_is_derived_for_preview_structured_and_tool_reads(
+    tmp_path: Path, enabled: bool
+) -> None:
+    service = _service(tmp_path, "main")
+    service.set_taskcard_enabled(enabled)
+    manager = _manager(tmp_path, service)
+    message = _incoming_message()
+    stored_path = _write_message(tmp_path, message)
+    stored_before = stored_path.read_bytes()
+
+    structured = manager._structured_message(message)
+    preview = manager._render_conversation_preview(
+        [message], chat_id=123, current_compound_id=message["id"]
+    )
+    check = manager._check({"account": "main"})
+    read = manager._read({"account": "main", "chat_id": 123})
+    search = manager._search({"account": "main", "query": "hello"})
+
+    assert structured["taskcard"] is enabled
+    message_lines = [line for line in preview.splitlines() if "#main:123:53" in line]
+    assert message_lines and all(f"taskcard: {enabled}" in line for line in message_lines)
+    for result in (check, read, search):
+        assert result["taskcard"] is enabled
+        assert result["messages"]
+        assert all(item["taskcard"] is enabled for item in result["messages"])
+    assert stored_path.read_bytes() == stored_before
+
+
+def test_reply_target_preview_line_has_current_taskcard_flag(tmp_path: Path) -> None:
+    service = _service(tmp_path, "main")
+    manager = _manager(tmp_path, service)
+    original = _incoming_message(52, text="original")
+    reply = _incoming_message(53, text="reply")
+    reply["reply_to_message_id"] = 52
+
+    preview = manager._render_conversation_preview(
+        [original, reply], chat_id=123, current_compound_id=reply["id"]
+    )
+    rendered_lines = [line for line in preview.splitlines() if "#main:123:" in line]
+    assert len(rendered_lines) == 3
+    assert all("taskcard: True" in line for line in rendered_lines)
+
+
+def test_degraded_incoming_preview_includes_current_taskcard_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _service(tmp_path, "main")
+    service.set_taskcard_enabled(False)
+    account = service.get_account("main")
+    monkeypatch.setattr(account, "send_chat_action", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(account, "set_message_reaction", lambda *_args, **_kwargs: None)
+    inbound: list[dict[str, Any]] = []
+    manager = _manager(tmp_path, service, inbound.append)
+    monkeypatch.setattr(
+        manager,
+        "_build_conversation_preview_and_metadata",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("degraded")),
+    )
+
+    manager.on_incoming(
+        "main",
+        {
+            "message": {
+                "message_id": 53,
+                "date": 1781600000,
+                "from": {"id": 1, "username": "alice"},
+                "chat": {"id": 123, "type": "private"},
+                "text": "fallback body",
+            }
+        },
+    )
+    assert inbound and "taskcard: False" in inbound[0]["body"]
+
+
+@pytest.mark.parametrize("update_type", ["callback_query", "edited_message"])
+def test_callback_and_edited_message_projections_carry_current_taskcard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, update_type: str
+) -> None:
+    service = _service(tmp_path, "main")
+    service.set_taskcard_enabled(False)
+    account = service.get_account("main")
+    monkeypatch.setattr(account, "send_chat_action", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(account, "set_message_reaction", lambda *_args, **_kwargs: None)
+    inbound: list[dict[str, Any]] = []
+    manager = _manager(tmp_path, service, inbound.append)
+
+    if update_type == "callback_query":
+        update = {
+            "callback_query": {
+                "id": "callback-1",
+                "from": {"id": 1, "username": "alice"},
+                "data": "approved",
+                "message": {
+                    "message_id": 53,
+                    "chat": {"id": 123, "type": "private"},
+                },
+            }
+        }
+    else:
+        _write_message(tmp_path, _incoming_message(text="before edit"))
+        update = {
+            "edited_message": {
+                "message_id": 53,
+                "date": 1781600000,
+                "from": {"id": 1, "username": "alice"},
+                "chat": {"id": 123, "type": "private"},
+                "text": "after edit",
+            }
+        }
+
+    manager.on_incoming("main", update)
+    assert inbound
+    assert all(
+        item["taskcard"] is False
+        for item in inbound[-1]["metadata"]["recent_messages"]
+    )
+    assert "taskcard: False" in inbound[-1]["body"]
+
+
+def test_old_message_projection_changes_with_current_state_without_record_rewrite(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path, "main")
+    manager = _manager(tmp_path, service)
+    path = _write_message(tmp_path, _incoming_message())
+    before = path.read_bytes()
+
+    assert manager._read({"account": "main", "chat_id": 123})["messages"][0]["taskcard"] is True
+    service.set_taskcard_enabled(False)
+    assert manager._read({"account": "main", "chat_id": 123})["messages"][0]["taskcard"] is False
+    assert path.read_bytes() == before

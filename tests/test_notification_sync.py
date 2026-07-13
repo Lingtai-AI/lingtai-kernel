@@ -2076,6 +2076,7 @@ def test_inject_notification_pair_adds_telegram_persistent_and_strips_ephemeral(
             "sender": "Jason",
             "date": f"2026-07-05T22:{i:02d}:00Z",
             "text": f"message {i}",
+            "taskcard": False,
             "is_current": i == 21,
         }
         for i in range(1, 22)
@@ -2117,6 +2118,7 @@ def test_inject_notification_pair_adds_telegram_persistent_and_strips_ephemeral(
     assert len(telegram["messages"]) == 20
     assert telegram["messages"][0]["id"] == "main:123:2"
     assert telegram["messages"][-1]["id"] == "main:123:21"
+    assert all(message["taskcard"] is False for message in telegram["messages"])
     assert telegram["previous_block"] == {
         "path": "_meta.notification_persistent.mcp.telegram",
         "tool_result_id": None,

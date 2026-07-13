@@ -75,3 +75,14 @@ def test_licc_notification_contract_locks_new_channel_two_lane_gate():
     ]
     for phrase in required_phrases:
         assert phrase in text
+
+
+def test_licc_notification_contract_locks_telegram_taskcard_message_field():
+    text = " ".join(DOC.read_text(encoding="utf-8").split())
+    for phrase in (
+        "explicit current-agent boolean `taskcard`",
+        "`recent_messages`, `latest_incoming`, and `referenced_messages`",
+        "not that automatic or programmable mechanics have stopped",
+        "transient identity hook",
+    ):
+        assert phrase in text

@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Callable
+
+from lingtai.kernel._fsutil import atomic_write_json, read_json
 
 from .. import _identity
 from .account import TelegramAccount
@@ -32,6 +35,11 @@ class TelegramService:
         self._config_source = config_source
         self._account_order: list[str] = []
         self._accounts: dict[str, TelegramAccount] = {}
+        # One durable presentation preference for the current agent. It is not
+        # account-, chat-, session-, or project-scoped.
+        self._taskcard_path = self._working_dir / "telegram" / "taskcard.json"
+        self._taskcard_lock = threading.RLock()
+        self._taskcard = self._load_taskcard_enabled()
 
         for cfg in accounts_config:
             alias = cfg["alias"]
@@ -44,9 +52,44 @@ class TelegramService:
                 on_message=on_message,
                 state_dir=state_dir,
                 commands=cfg.get("commands"),
+                taskcard_enabled=self.taskcard_enabled,
+                set_taskcard_enabled=self.set_taskcard_enabled,
             )
             self._accounts[alias] = acct
             self._account_order.append(alias)
+
+    def _load_taskcard_enabled(self) -> bool:
+        """Load the current-agent Task Card delivery preference, defaulting on damage."""
+        if not self._taskcard_path.is_file():
+            return True
+        try:
+            data = read_json(self._taskcard_path, expect=dict)
+            enabled = data.get("taskcard")
+            if type(enabled) is not bool:
+                raise TypeError("taskcard must be a boolean")
+            return enabled
+        except (OSError, ValueError, TypeError):
+            # Content-free warning: the state file may be malformed and must never
+            # be echoed into logs. Preserve legacy behavior by failing open to on.
+            logger.warning("Invalid or unreadable Telegram taskcard state; defaulting to True")
+            return True
+
+    def taskcard_enabled(self) -> bool:
+        """Return the current agent-wide Telegram Task Card delivery setting."""
+        with self._taskcard_lock:
+            return self._taskcard
+
+    def set_taskcard_enabled(self, enabled: bool) -> None:
+        """Durably set Task Card delivery, committing memory only after fsync."""
+        if type(enabled) is not bool:
+            raise TypeError("enabled must be a boolean")
+        with self._taskcard_lock:
+            atomic_write_json(
+                self._taskcard_path,
+                {"taskcard": enabled},
+                fsync=True,
+            )
+            self._taskcard = enabled
 
     def get_account(self, alias: str) -> TelegramAccount:
         """Get account by alias. Raises KeyError if not found."""

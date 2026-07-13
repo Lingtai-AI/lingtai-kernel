@@ -4,8 +4,8 @@ description: >
   Contract for LICC/MCP notification events and their model-visible projection
   into _meta.notifications and _meta.notification_persistent.
 status: active
-contract_version: 1
-last_changed_at: "2026-07-06"
+contract_version: 2
+last_changed_at: "2026-07-12"
 related_files:
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/services/mcp_inbox.py
@@ -120,8 +120,14 @@ where they share the `.notification/` filesystem protocol.
 5. **Model-visible persistent communication context.** When structured IM metadata is available, `build_notification_persistent_payload` emits `_meta.notification_persistent.mcp.<channel>` with `messages`, `events`, and comments through the shared `_ImPersistentLane` machinery. Delta lanes (Telegram, WeChat, Feishu) also carry `previous_block`; WhatsApp is snapshot/no-previous-block because the producer sends the current bounded conversation window per event. Telegram additionally carries full out-of-window reply targets under `referenced_messages`. For built-in email it emits `_meta.notification_persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate)
    (`src/lingtai/kernel/meta_block.py:1857-2489`). The Telegram MCP supplies the
    structured `recent_messages`, `latest_incoming`, and `referenced_messages`
-   metadata (`src/lingtai/mcp_servers/telegram/manager.py:967-1007`,
-   `src/lingtai/mcp_servers/telegram/manager.py:1063-1102`); the WeChat
+   metadata. Every Telegram message object in those fields carries the explicit
+   current-agent boolean `taskcard`; it is derived at producer projection time
+   (including old/referenced messages) and means Task Card delivery is allowed or
+   hidden, not that automatic or programmable mechanics have stopped
+   (`src/lingtai/mcp_servers/telegram/manager.py:967-1007`,
+   `src/lingtai/mcp_servers/telegram/manager.py:1063-1102`). Telegram's textual
+   notification body likewise labels every rendered message/reply-target line
+   with the current `taskcard: True|False`, including its degraded fallback; the WeChat
    MCP supplies `recent_messages` and `latest_incoming` built from its merged
    inbox+sent preview window with per-message text bounded at 500 chars
    (`src/lingtai/mcp_servers/wechat/manager.py:835-956`); Feishu supplies the
@@ -267,7 +273,11 @@ Producer metadata copied into `.notification` or `_meta.notification_persistent`
 MUST be bounded and secret-safe. The MCP inbox copies only allowlisted scalar IM
 metadata and bounded JSON-safe structured fields (`src/lingtai/services/mcp_inbox.py:183-219`).
 Curated MCPs that add new structured metadata must update this contract and tests
-before the new field becomes model-visible.
+before the new field becomes model-visible. Telegram's structured message shape
+includes the non-secret boolean `taskcard` on every item in `recent_messages`,
+`latest_incoming`, and `referenced_messages`; the MCP inbox bounded JSON copy and
+persistent lane preserve that field without moving it into the transient identity
+hook.
 
 ## State
 
