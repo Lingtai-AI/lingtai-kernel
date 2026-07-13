@@ -9,7 +9,7 @@ description: >
   summarize-manual instead.
 version: 0.1.0
 tags: [lingtai, notifications, dismiss, force, stale, safety]
-last_changed_at: "2026-07-12T19:24:00-07:00"
+last_changed_at: "2026-07-12T20:20:43-07:00"
 ---
 
 # Notification Dismissal Safety
@@ -57,7 +57,7 @@ as a routine retry or a substitute for handling the producer.
 
 `goal` is protected source of truth. A generic
 `notification(action='dismiss_channel', channel='goal')` refuses even with
-`force=true`; use `../../../goal-manual/SKILL.md` to cancel or complete active goal
+`force=true`; use `../../../system-manual/reference/goal-manual/SKILL.md` to cancel or complete active goal
 state correctly.
 
 The kernel-owned `post-molt` continuation channel requires a non-empty reason
@@ -79,7 +79,7 @@ legacy reminder.
 
 New large tool results are not notification events. The kernel ranks formal
 results under `_meta.agent_meta.current_tool_result_chars`; read
-`../../../summarize-manual/SKILL.md` for the canonical digest,
+`../../../system-manual/reference/summarize-manual/SKILL.md` for the canonical digest,
 `system(action='summarize')`, recovery, and summarize-versus-molt procedure. Do
 not duplicate that workflow here.
 

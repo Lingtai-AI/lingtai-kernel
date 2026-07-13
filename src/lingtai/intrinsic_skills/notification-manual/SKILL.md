@@ -7,9 +7,9 @@ description: >
   or deciding between producer-specific handling and safe mirror dismissal.
   Routes channel/sync mechanics and dismissal safety into nested references;
   large-result compaction remains owned by summarize-manual.
-version: 0.3.0
+version: 0.4.0
 tags: [lingtai, notifications, channels, dismiss, manual, force, stale, nudge]
-last_changed_at: "2026-07-12T19:24:00-07:00"
+last_changed_at: "2026-07-12T20:20:43-07:00"
 ---
 
 # Notification Manual — Router
@@ -40,7 +40,7 @@ do not voluntarily call `check` again merely to confirm the clear.
 `notification(action='manual')` reads only:
 
 ```text
-<agent>/.library/intrinsic/capabilities/system-manual/reference/notification-manual/SKILL.md
+<agent>/.library/intrinsic/capabilities/notification-manual/SKILL.md
 ```
 
 Success returns exactly `status`, `notification_manual`, and `manual_path`.
@@ -75,9 +75,9 @@ producer state, delivery fingerprints, or acknowledgement state.
 |---|---|
 | Channel names; `.notification/*.json`; allowlist; `mcp.` channels; envelope fields; `instructions`; nudge/update checks; `_meta.notifications`; voluntary `check`; producer state versus mirror | `reference/channel-model/SKILL.md` |
 | Which dismiss action; producer-specific handling; guarded/stale mirror; `force`; protected `goal`; post-molt reason; legacy `large_tool_result` event | `reference/dismissal-safety/SKILL.md` |
-| Tool-result ranking, digest quality, `system(action='summarize')`, recovery by `tool_call_id`, summarize versus molt | `../summarize-manual/SKILL.md` |
-| Active goal source-of-truth and cancellation/completion | `../goal-manual/SKILL.md` |
-| Runtime/kernel update nudges | `../runtime-update-checks/SKILL.md` |
+| Tool-result ranking, digest quality, `system(action='summarize')`, recovery by `tool_call_id`, summarize versus molt | `../system-manual/reference/summarize-manual/SKILL.md` |
+| Active goal source-of-truth and cancellation/completion | `../system-manual/reference/goal-manual/SKILL.md` |
+| Runtime/kernel update nudges | `../system-manual/reference/runtime-update-checks/SKILL.md` |
 
 ## Safety boundaries to keep resident
 
@@ -89,7 +89,7 @@ producer state, delivery fingerprints, or acknowledgement state.
   override protected source-of-truth channels and never mutates producer state.
 - Large tool results are ranked under
   `_meta.agent_meta.current_tool_result_chars`, not emitted as new
-  notifications. Follow `../summarize-manual/SKILL.md`; do not invent a second
+  notifications. Follow `../system-manual/reference/summarize-manual/SKILL.md`; do not invent a second
   summarization procedure here.
 
 ## Why the boundary is split this way

@@ -77,8 +77,6 @@ def _manual(agent, args: dict) -> dict:
         / ".library"
         / "intrinsic"
         / "capabilities"
-        / "system-manual"
-        / "reference"
         / "notification-manual"
         / "SKILL.md"
     )

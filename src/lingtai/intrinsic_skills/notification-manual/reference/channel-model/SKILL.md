@@ -8,7 +8,7 @@ description: >
   producing, or debugging notification payloads; skip for dismissal policy.
 version: 0.1.0
 tags: [lingtai, notifications, channels, protocol, sync, nudge]
-last_changed_at: "2026-07-12T19:24:00-07:00"
+last_changed_at: "2026-07-12T20:20:43-07:00"
 ---
 
 # Notification Channel Model
@@ -33,7 +33,7 @@ model-visible notification lane.
 `nudge` is the formal channel for mechanical, throttled checks. For example,
 runtime update checks publish `data.nudges[]` entries with
 `kind: kernel_version`; route those through
-`../../../runtime-update-checks/SKILL.md` before asking a human to update or
+`../../../system-manual/reference/runtime-update-checks/SKILL.md` before asking a human to update or
 refresh.
 
 ## Envelope and producer instructions

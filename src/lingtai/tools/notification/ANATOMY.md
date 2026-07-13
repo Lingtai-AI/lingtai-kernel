@@ -10,9 +10,9 @@ related_files:
   - src/lingtai/kernel/base_agent/turn.py
   - src/lingtai/agent.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/notification-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/notification-manual/reference/channel-model/SKILL.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/notification-manual/reference/dismissal-safety/SKILL.md
+  - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
+  - src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
+  - src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
   - tests/test_notification_tool.py
   - tests/test_system_dismiss.py
   - src/lingtai/tools/notification/glossary-en.md
@@ -41,19 +41,19 @@ adaptation, and installed-manual retrieval.
   `check` / `dismiss_channel` / `dismiss_event` / `dismiss_ref` / `manual`
   action domain (`src/lingtai/tools/notification/schema.py:27-62`).
 - `handle()` selects one of the five handlers and returns a structured error for
-  unknown or absent actions (`src/lingtai/tools/notification/__init__.py:176-191`).
+  unknown or absent actions (`src/lingtai/tools/notification/__init__.py:174-189`).
 - `_check()` returns the dict-shaped placeholder onto which the turn loop can
   stamp the current notification payload
   (`src/lingtai/tools/notification/__init__.py:52-70`).
 - `_manual()` constructs the fixed installed
-  `.library/intrinsic/capabilities/system-manual/reference/notification-manual/SKILL.md`
+  `.library/intrinsic/capabilities/notification-manual/SKILL.md`
   path, returns its UTF-8 body, or returns an explicit degraded envelope when
-  the installed file is absent (`src/lingtai/tools/notification/__init__.py:73-99`).
+  the installed file is absent (`src/lingtai/tools/notification/__init__.py:73-97`).
 - `_dismiss_channel()` adapts a whole-channel request and rejects event/ref
-  targets (`src/lingtai/tools/notification/__init__.py:102-133`).
+  targets (`src/lingtai/tools/notification/__init__.py:100-131`).
 - `_dismiss_event()` and `_dismiss_ref()` adapt targeted system-event removal
   while defaulting the channel to `system`
-  (`src/lingtai/tools/notification/__init__.py:136-173`).
+  (`src/lingtai/tools/notification/__init__.py:134-171`).
 - `registry.INTRINSICS` registers `notification` as a mandatory intrinsic next
   to email, system, psyche, and soul (`src/lingtai/tools/registry.py:45-53`).
 

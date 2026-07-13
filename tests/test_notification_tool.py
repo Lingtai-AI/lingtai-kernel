@@ -180,8 +180,6 @@ def _notification_manual_path(workdir: Path) -> Path:
         / ".library"
         / "intrinsic"
         / "capabilities"
-        / "system-manual"
-        / "reference"
         / "notification-manual"
         / "SKILL.md"
     )

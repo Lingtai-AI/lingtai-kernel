@@ -17,9 +17,9 @@ related_files:
   - src/lingtai/tools/notification/glossary-zh.md
   - src/lingtai/tools/notification/glossary-wen.md
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/notification-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/notification-manual/reference/channel-model/SKILL.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/notification-manual/reference/dismissal-safety/SKILL.md
+  - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
+  - src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
+  - src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
 maintenance: |
   <!-- CANONICAL-MAINTENANCE v2 BEGIN -->
   This component contract is governed by the root CONTRACT.md. Keep
@@ -76,7 +76,7 @@ Observable action contracts are:
 - `dismiss_event` requires `event_id`; `dismiss_ref` requires `ref_id`; each
   defaults `channel` to `system` and delegates targeted removal to Core.
 - `manual` reads only
-  `<agent>/.library/intrinsic/capabilities/system-manual/reference/notification-manual/SKILL.md`.
+  `<agent>/.library/intrinsic/capabilities/notification-manual/SKILL.md`.
   Success contains exactly `{status: "ok", notification_manual, manual_path}`.
   Absence contains exactly `{status: "degraded", notification_manual: "",
   manual_path, error}`, where `error` is `notification manual missing —
@@ -101,8 +101,8 @@ stale checks, protected channels, acknowledgement policy, and Store use.
 `_manual` is a bounded installed-resource adapter: it performs one `is_file`
 check and one UTF-8 read at the fixed path. It does not call notification Core,
 `NotificationStorePort`, the post-hook, a producer, or a shared loader. Agent
-initialization copies the containing `system-manual` tree into the installed
-per-agent intrinsic library.
+initialization copies the bundled first-level `notification-manual` skill tree
+into the installed per-agent intrinsic library.
 
 ## Contract rules
 
