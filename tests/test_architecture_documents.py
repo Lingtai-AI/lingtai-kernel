@@ -230,7 +230,7 @@ def test_root_architecture_documents_are_reciprocal_and_well_formed() -> None:
         "maintenance",
     ]
     assert contract_meta["name"] == "component-contract-convention"
-    assert contract_meta["contract_version"] == 2
+    assert contract_meta["contract_version"] == 3
 
     _assert_related_files(anatomy_meta)
     _assert_related_files(contract_meta)
@@ -281,6 +281,11 @@ def test_root_anatomy_defines_the_distributed_navigation_system() -> None:
         "single source for governed-component",
         "mutual progressive",
         "fail-loud mismatch reports",
+        # Navigation counterpart of Design principle 4: a capability manual is a
+        # graph target linked from BOTH owner twins, with the normative rule
+        # routed back to root CONTRACT.md `## Design principles`.
+        "navigation target linked from **both** owner twins",
+        "both-edges requirement is owned by root",
     ]:
         assert anchor in body
 
@@ -289,6 +294,7 @@ def test_root_contract_defines_the_distributed_interface_system() -> None:
     _, body = _read_document(ROOT_CONTRACT)
 
     assert _heading_order(body) == [
+        "## Design principles",
         "## Purpose",
         "## Architecture foundation",
         "## Behavior",
@@ -332,6 +338,54 @@ def test_root_contract_defines_the_distributed_interface_system() -> None:
         "suggested action",
     ]:
         assert anchor in body
+
+
+def test_root_contract_states_the_design_principles_first() -> None:
+    _, body = _read_document(ROOT_CONTRACT)
+
+    # The design-principles section is the very first body section.
+    assert _heading_order(body)[0] == "## Design principles"
+    assert body.index("## Design principles") < body.index("## Purpose")
+
+    # Each of the five normative principles is present and cannot silently
+    # regress: i18n gate, progressive disclosure, every-capability-has-a-manual
+    # (with the Contract-vs-manual distinction), the both-owner-twins manual
+    # discoverability rule, and dev-guide enforcement.
+    for anchor in [
+        "User-facing-only i18n, gated by human confirmation",
+        "MUST ask the human to confirm",
+        "Progressive disclosure wherever possible",
+        "agent-consumed",
+        "Every capability is taught by a manual",
+        "what to do, how it works, and why it is",
+        "a Contract still defines the capability's obligations",
+        "The dev guide enforces these principles",
+    ]:
+        assert anchor in body
+
+    # Principle 4 requires BOTH owner edges — the corresponding capability
+    # CONTRACT.md AND its paired ANATOMY.md — not general reachability via one
+    # side. Lock the literal both-edges wording so it cannot regress to "either".
+    for anchor in [
+        "Manuals are discoverable from both owner twins",
+        "both edges, not either one",
+        "global reachability through only one side does not satisfy",
+    ]:
+        assert anchor in body
+    # The detailed frontmatter and link-semantics rules carry the same both-twins
+    # requirement (manual on the capability Contract and its paired Anatomy).
+    assert "MUST link the same manual(s) so both owner twins" in body
+    assert "Missing either edge is a defect" in body
+
+    # Principle 3 makes the manual MANDATORY for every capability. The detailed
+    # frontmatter and link-semantics rules must state that obligation without
+    # optional/conditional escape hatches, and must not regress to "when the
+    # capability has any" / "a capability that has a manual" optionality.
+    assert "for every capability the governed component" in body
+    assert "Every exposed capability MUST have such a manual" in body
+    assert "Every capability's corresponding manual" in body
+    assert "when the capability has any" not in body
+    assert "a capability that has a manual" not in body
 
 
 def test_governed_child_contracts_have_reciprocal_anatomy_pairs() -> None:
@@ -528,6 +582,13 @@ def test_public_and_agent_entry_points_route_to_the_local_network() -> None:
         "CANONICAL-MAINTENANCE v<N> BEGIN",
         "Stop and report that diagnostic",
         "Do not\n   silently normalize, hand-edit, or auto-fix",
+        # The dev guide must strongly route to and enforce the root
+        # design-principles section (root CONTRACT.md `## Design principles`),
+        # including the both-twins manual-discoverability rule.
+        "Design principles",
+        "apply those principles to every change",
+        "mandatory reading",
+        "discoverable from **both** the corresponding",
     ]:
         assert anchor in dev_skill
     assert "repository’s dev guide skill" in contributing
@@ -587,6 +648,14 @@ def test_real_child_template_carries_the_canonical_block() -> None:
         "template-example", "CONTRACT.md#Template", template_meta["maintenance"]
     )
     assert report is None, report
+    # Per Design principles 3 and 4, the canonical child template must teach a
+    # capability manual / manual-reference related_files slot so a copied child
+    # carries the required Contract->manual edge; the terminology matches the
+    # Frontmatter contract ("manual or manual reference").
+    assert (
+        "<repo-relative capability manual or manual reference>"
+        in template_meta["related_files"]
+    )
 
 
 def test_byte_identical_child_passes() -> None:

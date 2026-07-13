@@ -141,6 +141,13 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
    the same PR. A change affecting both updates the pair together.
 6. Orphans, missing targets, duplicate links, one-way pair links, and unpaired
    governed components are defects and MUST fail validation.
+7. A capability's manual is a navigation target linked from **both** owner twins:
+   the paired `ANATOMY.md` lists it in `related_files` as a route to the manual,
+   and the capability `CONTRACT.md` lists the same manual as its interface owner.
+   The normative both-edges requirement is owned by root
+   [`CONTRACT.md`](CONTRACT.md) `## Design principles` (principle 4); this anatomy
+   only names the navigation edge and does not restate that rule. A manual reached
+   from only one twin is a missing-edge defect.
 
 ## Components
 
