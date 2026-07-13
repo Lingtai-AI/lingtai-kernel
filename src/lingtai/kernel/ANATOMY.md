@@ -37,6 +37,7 @@ related_files:
   - src/lingtai/kernel/message.py
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/kernel/migrate/ANATOMY.md
+  - src/lingtai/kernel/migrate/CONTRACT.md
   - src/lingtai/kernel/notifications.py
   - src/lingtai/kernel/notification_store/ANATOMY.md
   - src/lingtai/kernel/nudge/ANATOMY.md
@@ -280,7 +281,7 @@ This file is the top of the kernel anatomy tree. Each subfolder below has its ow
 - [`workdir_lease/`](workdir_lease/ANATOMY.md) — Core-owned `acquire`/`release` exclusive working-directory lease Port; the production POSIX `flock` adapter and platform selector live outside the kernel.
 - [`services/`](services/ANATOMY.md) — kernel-side service implementations: filesystem mailbox (`mail.py`), JSONL event/token-ledger sources plus additive SQLite query index (`logging.py`).
 - [`maintenance/`](maintenance/ANATOMY.md) — operator-run maintenance reporters; currently dry-run retention reporting only.
-- [`migrate/`](migrate/ANATOMY.md) — versioned, append-only migrations for kernel-managed on-disk state. Preset-domain migrations are `m<NNN>_<name>.py`; agent-workdir/init migrations are `agent_m<NNN>_<name>.py`.
+- [`migrate/`](migrate/ANATOMY.md) — versioned, append-only migration Core plus the Core-owned seven-family `MigrationWorkspacePort`. Preset-domain migrations are `m<NNN>_<name>.py`; agent-workdir/init migrations are `agent_m<NNN>_<name>.py`. Transforms consume adapter-provided text and write through the Port; the production `PosixMigrationWorkspaceAdapter` and the composition roots that construct it live outside Core. See `migrate/ANATOMY.md` and `migrate/CONTRACT.md`.
 - [`i18n/`](i18n/ANATOMY.md) — three-locale message catalog (en / zh / wen). Loaded by `t(language, key)`. Concrete tool strings now live in the `lingtai.tools` package (`lingtai/tools/i18n/`) and register into this cache via `register_strings` on import; the kernel keeps only machinery strings.
 
 ## State

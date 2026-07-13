@@ -14,11 +14,22 @@ import pytest
 from lingtai.kernel.migrate import (
     AGENT_CURRENT_VERSION,
     CURRENT_VERSION,
+    INIT_DOCUMENT_REF,
+    MCP_REGISTRY_REF,
+    MigrationArchiveKind,
+    MigrationDomain,
+    MigrationEntryKind,
+    MigrationWorkspaceError,
+)
+from lingtai.kernel.migrate.migrate import meta_filename, reset_process_cache
+from tests._migration_workspace_helpers import (
+    FakeMigrationWorkspace,
     agent_meta_relative_path,
+    agent_workspace,
+    preset_workspace,
     run_agent_migrations,
     run_migrations,
 )
-from lingtai.kernel.migrate.migrate import meta_filename, reset_process_cache
 
 
 @pytest.fixture(autouse=True)
@@ -333,7 +344,9 @@ def test_run_agent_migrations_treats_non_object_meta_as_zero(tmp_path, caplog):
     meta_path.parent.mkdir(parents=True)
     meta_path.write_text("null", encoding="utf-8")
 
-    caplog.set_level(logging.WARNING, logger="lingtai.kernel.migrate.migrate")
+    # The malformed-meta → version 0 read is adapter mechanism now, so the
+    # "expected object" warning is logged by the POSIX adapter.
+    caplog.set_level(logging.WARNING, logger="lingtai.adapters.posix.migration_workspace")
     run_agent_migrations(tmp_path)
 
     assert "procedures_file" not in _read(init_path)
@@ -431,14 +444,13 @@ def test_current_version_derived_from_registry_max():
     assert CURRENT_VERSION == max(v for v, _, _ in _MIGRATIONS)
 
 
-def test_save_version_uses_pid_suffixed_tmp_file(tmp_path):
+def test_store_version_uses_pid_suffixed_tmp_file(tmp_path):
     """Concurrent processes writing the same meta file would otherwise race
-    on `_kernel_meta.json.tmp`. The tmp filename includes the PID."""
-    from lingtai.kernel.migrate.migrate import _save_version
+    on `_kernel_meta.json.tmp`. The adapter's tmp filename includes the PID."""
     plib = tmp_path / "presets"
     plib.mkdir()
 
-    _save_version(plib, 1)
+    preset_workspace(plib).store_version(1)
 
     # No leftover tmp file with this process's PID
     pid_tmp = plib / f"{meta_filename()}.{os.getpid()}.tmp"
@@ -716,7 +728,7 @@ def test_run_agent_migrations_rewrites_legacy_curated_mcp_launch_args(tmp_path):
 
 def test_discover_presets_triggers_migration(tmp_path):
     """discover_presets() with old-layout files migrates them automatically."""
-    from lingtai.presets import discover_presets
+    from tests._migration_workspace_helpers import discover_presets
     plib = tmp_path / "presets"
     plib.mkdir()
     p = _write_preset(plib, "x", {
@@ -739,7 +751,7 @@ def test_discover_presets_triggers_migration(tmp_path):
 
 def test_discover_presets_excludes_kernel_meta_file(tmp_path):
     """The internal _kernel_meta.json is not surfaced as a preset."""
-    from lingtai.presets import discover_presets
+    from tests._migration_workspace_helpers import discover_presets
     plib = tmp_path / "presets"
     plib.mkdir()
     _write_preset(plib, "real", {
@@ -756,3 +768,195 @@ def test_discover_presets_excludes_kernel_meta_file(tmp_path):
     assert len(found) == 1
     assert next(iter(found.keys())).endswith("real.json")
     assert all("_kernel_meta" not in k for k in found)
+
+
+# ---------------------------------------------------------------------------
+# Seven-family Port conformance — the production adapter and the in-memory fake
+# are proven against the same MigrationWorkspacePort contract.
+# ---------------------------------------------------------------------------
+
+
+def _fake_preset(tmp_path, entries):
+    return FakeMigrationWorkspace(MigrationDomain.PRESET_LIBRARY, entries=entries)
+
+
+def _posix_preset(tmp_path, entries):
+    root = tmp_path / "lib"
+    root.mkdir()
+    for name, text in entries.items():
+        (root / name).write_text(text, encoding="utf-8")
+    return preset_workspace(root)
+
+
+def _fake_agent(tmp_path, entries):
+    return FakeMigrationWorkspace(MigrationDomain.AGENT_WORKDIR, entries=entries)
+
+
+def _posix_agent(tmp_path, entries):
+    root = tmp_path / "wd"
+    root.mkdir()
+    for name, text in entries.items():
+        (root / name).write_text(text, encoding="utf-8")
+    return agent_workspace(root)
+
+
+@pytest.mark.parametrize("factory", [_fake_preset, _posix_preset])
+def test_conformance_preset_families(factory, tmp_path):
+    ws = factory(tmp_path, {"a.json": '{"m": 1}', "b.jsonc": '{"m": 2}'})
+
+    state = ws.inspect()
+    assert state.available is True
+    assert isinstance(state.cache_key, str) and state.cache_key
+    assert state.current_version == 0
+
+    refs = ws.enumerate_entries()
+    assert sorted(r.name for r in refs) == ["a.json", "b.jsonc"]
+    assert all(r.kind is MigrationEntryKind.PRESET_DOCUMENT for r in refs)
+
+    a = next(r for r in refs if r.name == "a.json")
+    assert ws.read_entry(a) == '{"m": 1}'
+    ws.atomic_replace_entry(a, '{"m": 9}')
+    assert ws.read_entry(a) == '{"m": 9}'
+
+    ws.store_version(2)
+    assert ws.inspect().current_version == 2
+
+
+@pytest.mark.parametrize("factory", [_fake_agent, _posix_agent])
+def test_conformance_agent_families(factory, tmp_path):
+    import hashlib
+
+    ws = factory(tmp_path, {"init.json": '{"manifest": {"agent_name": "x"}}'})
+
+    state = ws.inspect()
+    assert state.available is True
+    assert state.current_version == 0
+    # Agent domain has no enumerable candidate documents.
+    assert ws.enumerate_entries() == ()
+
+    assert ws.read_entry(INIT_DOCUMENT_REF) is not None
+    assert ws.read_entry(MCP_REGISTRY_REF) is None  # not seeded
+    ws.atomic_replace_entry(INIT_DOCUMENT_REF, '{"x": 1}')
+    assert ws.read_entry(INIT_DOCUMENT_REF) == '{"x": 1}'
+
+    result = ws.archive(MigrationArchiveKind.INIT_PROCEDURES, "legacy text")
+    digest = hashlib.sha256(b"legacy text").hexdigest()
+    assert result.relative_path == f"system/migrations/init-procedures-{digest}.md"
+    assert result.content_hash == digest
+    assert result.byte_length == len(b"legacy text")
+    assert result.char_length == len("legacy text")
+
+    # Best-effort audit append never raises.
+    ws.append_audit("conformance_probe", {"k": "v"})
+
+    ws.store_version(1)
+    assert ws.inspect().current_version == 1
+
+
+def test_run_migrations_drives_fake_workspace():
+    """The Core runner cooperates with any conforming workspace, not just POSIX."""
+    ws = FakeMigrationWorkspace(
+        MigrationDomain.PRESET_LIBRARY,
+        entries={
+            "legacy.json": json.dumps({
+                "name": "legacy",
+                "manifest": {
+                    "llm": {"provider": "p", "model": "m"},
+                    "capabilities": {},
+                    "context_limit": 4096,
+                },
+            }),
+        },
+    )
+
+    from lingtai.kernel.migrate import run_migrations as core_run_migrations
+    core_run_migrations(ws)
+
+    [ref] = ws.enumerate_entries()
+    after = json.loads(ws.read_entry(ref))
+    assert after["manifest"]["llm"]["context_limit"] == 4096
+    assert "context_limit" not in after["manifest"]
+    # Version advanced to the preset registry head after both transforms run.
+    assert ws.inspect().current_version == CURRENT_VERSION
+
+
+# ---------------------------------------------------------------------------
+# Store-version durability — success-by-success persistence across the Port
+#
+# A failed version write must not be swallowed: the mechanism raises
+# MigrationWorkspaceError, the Core does not advance the persisted version, and
+# it does not process-cache the workspace, so the next launch retries the step.
+# ---------------------------------------------------------------------------
+
+
+class _FailOnceStoreWorkspace(FakeMigrationWorkspace):
+    """Fake that raises `MigrationWorkspaceError` on its first `store_version`
+    call, then persists normally — a transient version-write failure."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.store_attempts = 0
+
+    def store_version(self, version: int) -> None:
+        self.store_attempts += 1
+        if self.store_attempts == 1:
+            raise MigrationWorkspaceError("simulated one-time version-write failure")
+        super().store_version(version)
+
+
+def test_posix_store_version_failure_raises_and_cleans_temp(tmp_path):
+    """A failed version write surfaces as `MigrationWorkspaceError` (never a raw
+    OSError), persists no version advance, and removes the PID-suffixed temp file.
+    """
+    plib = tmp_path / "presets"
+    plib.mkdir()
+    # Force os.replace to fail deterministically: the version-meta target is an
+    # (un-replaceable) directory, so the tmp file is written and must then be
+    # cleaned up on the error path.
+    meta_target = plib / meta_filename()
+    meta_target.mkdir()
+
+    ws = preset_workspace(plib)
+    with pytest.raises(MigrationWorkspaceError):
+        ws.store_version(1)
+
+    # The PID-suffixed temp file was cleaned up, not orphaned.
+    pid_tmp = plib / f"{meta_filename()}.{os.getpid()}.tmp"
+    assert not pid_tmp.exists()
+    # No version was persisted: the meta target is still the untouched directory
+    # and inspect() reports version 0 across the Port.
+    assert meta_target.is_dir()
+    assert ws.inspect().current_version == 0
+
+
+def test_one_time_store_version_failure_is_not_process_cached():
+    """Success-by-success durability: a transient `store_version` failure aborts
+    the run at version 0 without process-caching the workspace, so a retry in the
+    same process resumes and reaches CURRENT_VERSION.
+    """
+    from lingtai.kernel.migrate import run_migrations as core_run_migrations
+
+    ws = _FailOnceStoreWorkspace(
+        MigrationDomain.PRESET_LIBRARY,
+        entries={
+            "legacy.json": json.dumps({
+                "name": "legacy",
+                "manifest": {
+                    "llm": {"provider": "p", "model": "m"},
+                    "capabilities": {},
+                    "context_limit": 4096,
+                },
+            }),
+        },
+    )
+
+    # First run: the very first version write fails, so the run aborts with the
+    # version unadvanced and the workspace is NOT added to the process cache.
+    core_run_migrations(ws)
+    assert ws.store_attempts == 1
+    assert ws.inspect().current_version == 0
+
+    # Second run in the same process: nothing was cached, so the runner retries
+    # and now persists all the way to the registry head.
+    core_run_migrations(ws)
+    assert ws.inspect().current_version == CURRENT_VERSION

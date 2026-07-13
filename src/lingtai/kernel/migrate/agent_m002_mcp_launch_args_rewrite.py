@@ -9,10 +9,10 @@ started.
 from __future__ import annotations
 
 import json
-import os
-import time
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .migrate import MigrationWorkspacePort
 
 _LEGACY_TO_CANONICAL = {
     "lingtai_imap": "lingtai.mcp_servers.imap",
@@ -21,16 +21,6 @@ _LEGACY_TO_CANONICAL = {
     "lingtai_wechat": "lingtai.mcp_servers.wechat",
     "lingtai_whatsapp": "lingtai.mcp_servers.whatsapp",
 }
-
-
-def _write_text_atomic(path: Path, text: str) -> None:
-    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(str(tmp), str(path))
-
-
-def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
-    _write_text_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
 def _rewrite_args(args: Any) -> bool:
@@ -45,36 +35,13 @@ def _rewrite_args(args: Any) -> bool:
     return changed
 
 
-def _append_agent_event(working_dir: Path, event_type: str, **fields: Any) -> None:
-    try:
-        init_data: dict[str, Any] = {}
-        try:
-            loaded = json.loads((working_dir / "init.json").read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                init_data = loaded
-        except Exception:
-            init_data = {}
-        manifest = init_data.get("manifest") if isinstance(init_data.get("manifest"), dict) else {}
-        log_dir = working_dir / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        event = {
-            "type": event_type,
-            "address": working_dir.name,
-            "agent_name": manifest.get("agent_name"),
-            "ts": time.time(),
-            **fields,
-        }
-        with (log_dir / "events.jsonl").open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
-    except OSError:
-        pass
+def _rewrite_registry(workspace: MigrationWorkspacePort) -> int:
+    from .migrate import MCP_REGISTRY_REF
 
-
-def _rewrite_registry(working_dir: Path) -> int:
-    path = working_dir / "mcp_registry.jsonl"
-    if not path.is_file():
+    text = workspace.read_entry(MCP_REGISTRY_REF)
+    if text is None:
         return 0
-    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = text.splitlines()
     out: list[str] = []
     changed_count = 0
     changed_file = False
@@ -94,17 +61,21 @@ def _rewrite_registry(working_dir: Path) -> int:
         else:
             out.append(line)
     if changed_file:
-        _write_text_atomic(path, "\n".join(out) + ("\n" if lines else ""))
+        workspace.atomic_replace_entry(
+            MCP_REGISTRY_REF, "\n".join(out) + ("\n" if lines else "")
+        )
     return changed_count
 
 
-def _rewrite_init(working_dir: Path) -> int:
-    path = working_dir / "init.json"
-    if not path.is_file():
+def _rewrite_init(workspace: MigrationWorkspacePort) -> int:
+    from .migrate import INIT_DOCUMENT_REF
+
+    text = workspace.read_entry(INIT_DOCUMENT_REF)
+    if text is None:
         return 0
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(text)
     if not isinstance(data, dict):
-        raise ValueError(f"{path} did not contain a JSON object")
+        raise ValueError("init.json did not contain a JSON object")
     mcp = data.get("mcp")
     if not isinstance(mcp, dict):
         return 0
@@ -113,18 +84,21 @@ def _rewrite_init(working_dir: Path) -> int:
         if isinstance(record, dict) and _rewrite_args(record.get("args")):
             changed_count += 1
     if changed_count:
-        _write_json_atomic(path, data)
+        workspace.atomic_replace_entry(
+            INIT_DOCUMENT_REF, json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+        )
     return changed_count
 
 
-def migrate_mcp_launch_args_rewrite(working_dir: Path) -> None:
+def migrate_mcp_launch_args_rewrite(workspace: MigrationWorkspacePort) -> None:
     """Rewrite stale curated MCP ``python -m lingtai_<name>`` launch args."""
-    registry_rewrites = _rewrite_registry(working_dir)
-    init_rewrites = _rewrite_init(working_dir)
+    registry_rewrites = _rewrite_registry(workspace)
+    init_rewrites = _rewrite_init(workspace)
     if registry_rewrites or init_rewrites:
-        _append_agent_event(
-            working_dir,
+        workspace.append_audit(
             "mcp_launch_args_rewrite_migrated",
-            registry_rewrites=registry_rewrites,
-            init_rewrites=init_rewrites,
+            {
+                "registry_rewrites": registry_rewrites,
+                "init_rewrites": init_rewrites,
+            },
         )

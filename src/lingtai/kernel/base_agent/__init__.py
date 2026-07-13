@@ -395,6 +395,8 @@ class BaseAgent:
         self.nickname: str | None = None  # mutable alias (别名)
         self.service = service
         self._config = config or AgentConfig()
+        # Preset-loader hook: Agent wrapper composes it; None on a bare BaseAgent so `load_preset` fails loud.
+        self._preset_loader: Callable[..., dict] | None = None
         self._context = context
         self._admin = admin or {}
         self._cancel_event = threading.Event()
@@ -2010,6 +2012,21 @@ class BaseAgent:
             skip_chat_history_save=skip_chat_history_save,
             skip_save_reason=skip_save_reason,
         )
+
+    def load_preset(self, name: str, working_dir: "str | Path | None" = None) -> dict:
+        """Load a preset through the composed preset-loader hook.
+
+        The surface daemon/system tools call so they never import Core
+        ``load_preset`` or construct an adapter — the wrapper sets ``_preset_loader``.
+        Fails loud on a bare BaseAgent. ``working_dir`` defaults to this agent's workdir.
+        """
+        if self._preset_loader is None:
+            raise RuntimeError(
+                f"preset loader not composed on {type(self).__name__}; the Agent "
+                "wrapper must set _preset_loader"
+            )
+        wd = working_dir if working_dir is not None else self._working_dir
+        return self._preset_loader(name, wd)
 
     def _activate_preset(self, name: str) -> None:
         """Swap to a named preset — override in subclasses that support presets.

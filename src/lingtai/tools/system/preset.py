@@ -68,10 +68,10 @@ def _check_context_fits(agent, preset_name: str) -> tuple:
     When fits=False, returns a user-facing error message and a dict of fields
     for the preset_swap_refused_oversize log event.
     """
-    from lingtai.kernel.presets import load_preset, preset_context_limit
+    from lingtai.kernel.presets import preset_context_limit
 
     try:
-        preset = load_preset(preset_name, working_dir=agent._working_dir)
+        preset = agent.load_preset(preset_name)
     except (KeyError, ValueError):
         return True, None, None  # let activate_preset surface the error
 
@@ -238,7 +238,7 @@ def _presets(agent, args: dict) -> dict:
     No caching — every call is a fresh check.
     """
     import json
-    from lingtai.kernel.presets import load_preset, resolve_allowed_presets, home_shortened
+    from lingtai.kernel.presets import resolve_allowed_presets, home_shortened
     from lingtai.kernel.preset_connectivity import check_many
 
     init_path = agent._working_dir / "init.json"
@@ -271,7 +271,7 @@ def _presets(agent, args: dict) -> dict:
 
     for name, _path in entries:
         try:
-            preset = load_preset(name, working_dir=agent._working_dir)
+            preset = agent.load_preset(name)
         except (KeyError, ValueError):
             # Allowed entries that no longer exist on disk are reported as
             # malformed in their connectivity check rather than silently

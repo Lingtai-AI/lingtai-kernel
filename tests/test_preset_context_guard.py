@@ -87,6 +87,11 @@ def _make_test_agent(tmp_path):
     wd = tmp_path / "test"
     _build_workdir(wd, plib, active=str(plib / "big.json"))
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=wd, workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(wd))
+    # This unit-test BaseAgent stands in for the concrete Agent composition root.
+    # Compose the same wrapper-level loader that production Agent installs; a bare
+    # BaseAgent intentionally fails loud under the MigrationWorkspace Contract.
+    from lingtai.agent import load_preset as composed_load_preset
+    agent._preset_loader = composed_load_preset
     return agent, plib
 
 

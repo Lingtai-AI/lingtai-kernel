@@ -297,7 +297,26 @@ def _make_test_agent_for_presets(tmp_path, presets_path=None, active_preset=None
     (wd / "init.json").write_text(json.dumps(init))
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="alice",
                       working_dir=wd, workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(wd))
+    # The system preset tools resolve presets through the composed BaseAgent
+    # ``load_preset`` hook; wire the wrapper preset-loader the real Agent uses.
+    from lingtai.agent import load_preset as _workspace_load_preset
+    agent._preset_loader = _workspace_load_preset
     return agent
+
+
+def test_base_agent_load_preset_hook_fails_loud_when_uncomposed(tmp_path):
+    """A bare BaseAgent has no composed preset-loader; the hook fails loud
+    rather than importing Core load_preset or constructing an adapter."""
+    wd = tmp_path / "bare"
+    wd.mkdir()
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(),
+                      agent_name="test", working_dir=wd, workdir_lease=make_test_lease(),
+                      snapshot_port=make_test_snapshot_port(),
+                      source_revision_port=make_test_source_revision_port(),
+                      notification_store=notification_store_for(wd))
+    assert agent._preset_loader is None
+    with pytest.raises(RuntimeError):
+        agent.load_preset("~/whatever.json")
 
 
 def test_refresh_with_unauthorized_preset_returns_error(tmp_path, monkeypatch):
