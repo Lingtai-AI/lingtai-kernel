@@ -15,6 +15,7 @@ related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
   - src/lingtai/kernel/ANATOMY.md
+  - src/lingtai/kernel/snapshot/ANATOMY.md
   - tests/test_architecture_documents.py
 maintenance: |
   This file is both the repository-root anatomy and the normative

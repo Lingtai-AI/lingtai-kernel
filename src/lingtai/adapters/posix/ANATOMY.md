@@ -8,11 +8,14 @@ related_files:
   - src/lingtai/services/ANATOMY.md
   - src/lingtai/adapters/posix/__init__.py
   - src/lingtai/adapters/posix/event_journal.py
+  - src/lingtai/adapters/posix/git_cli.py
   - src/lingtai/adapters/posix/mail.py
   - src/lingtai/adapters/posix/workdir_lease.py
   - src/lingtai/adapters/posix/notification_store.py
   - src/lingtai/kernel/workdir_lease/ANATOMY.md
   - src/lingtai/kernel/workdir_lease/CONTRACT.md
+  - src/lingtai/kernel/snapshot/ANATOMY.md
+  - src/lingtai/kernel/snapshot/CONTRACT.md
   - src/lingtai/kernel/services/logging.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
@@ -25,7 +28,8 @@ maintenance: |
 # POSIX Adapter Anatomy
 
 This narrow package contains production filesystem adapters for Core-owned Ports:
-the structured event journal, mail transport, notification store, and workdir lease. It is an
+the structured event journal, mail transport, notification store, workdir lease,
+and fixed-command snapshot/source-revision Git capability. It is an
 implementation-only Anatomy with no independent local Contract; for the
 Anatomy/Contract pairing rule its unique owning component Contract is
 `src/lingtai/kernel/event_journal/CONTRACT.md` (this Anatomy is listed only in
@@ -62,6 +66,10 @@ co-located ANATOMY.md files for each component.
   `release()` unlocks then guarantees the handle is closed in a `finally` (even if
   the explicit `LOCK_UN` raises) before a best-effort unlink, swallows the
   specified `OSError`s, resets its handle, and is idempotent.
+- `PosixGitCliAdapter` implements both `SnapshotPort` and `SourceRevisionPort`
+  through fixed Git command families. Separate composed instances target the
+  agent workdir and running source; no arbitrary argv/process/result object is
+  exposed.
 - `PosixNotificationStoreAdapter` implements all seven `NotificationStorePort`
   families on `.notification/<channel>.json`, including typed compare-update and
   atomic acknowledgement-set mutation
@@ -90,7 +98,8 @@ and Telegram-server roots construct it; Core never imports this package.
 - **Parent wrapper:** `src/lingtai/ANATOMY.md`.
 - **Port components:** `src/lingtai/kernel/event_journal/ANATOMY.md`,
   `src/lingtai/kernel/mail_transport/ANATOMY.md`,
-  `src/lingtai/kernel/workdir_lease/ANATOMY.md`, and
+  `src/lingtai/kernel/workdir_lease/ANATOMY.md`,
+  `src/lingtai/kernel/snapshot/ANATOMY.md`, and
   `src/lingtai/kernel/notification_store/ANATOMY.md`.
 - **Storage primitives:** `src/lingtai/kernel/services/ANATOMY.md`.
 

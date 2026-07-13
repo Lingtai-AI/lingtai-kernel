@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 import sys
 import time
 import threading
@@ -18,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..config import IDLE_SLEEP_TIMEOUT_SECONDS
+from ..snapshot import SourceRevisionPort
 
 
 # Key source files to hash for the runtime fingerprint.  A small curated
@@ -36,7 +36,9 @@ _FP_KEY_FILES: list[str] = [
 ]
 
 
-def _capture_runtime_fingerprint() -> dict:
+def _capture_runtime_fingerprint(
+    source_revision_port: SourceRevisionPort,
+) -> dict:
     """Capture a dual fingerprint of the running lingtai.kernel source.
 
     Returns a dict with:
@@ -51,21 +53,12 @@ def _capture_runtime_fingerprint() -> dict:
     except Exception:
         pkg_dir = None
 
-    # git rev-parse --short HEAD
-    git_rev: str | None = None
-    if pkg_dir is not None:
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"],
-                cwd=str(pkg_dir),
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
-            if result.returncode == 0:
-                git_rev = result.stdout.strip() or None
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            pass
+    # Native-short revision query; process failure translation belongs to the Port.
+    git_rev = (
+        source_revision_port.current_revision(None, 2.0)
+        if pkg_dir is not None
+        else None
+    )
 
     # Hash key source files
     source_digest: str | None = None
@@ -108,9 +101,9 @@ def _start(agent) -> None:
         return
     agent._shutdown.clear()
 
-    # Initialize git repo in working directory (only if snapshots enabled)
+    # Initialize snapshot storage only when the opt-in policy is enabled.
     if agent._config.snapshot_interval is not None:
-        agent._workdir.init_git()
+        agent._snapshot_port.initialize()
 
     # Capture startup time for uptime tracking
     from datetime import datetime, timezone
@@ -228,7 +221,9 @@ def _start(agent) -> None:
 
     # Capture runtime fingerprint for drift detection
     try:
-        agent._runtime_fingerprint = _capture_runtime_fingerprint()
+        agent._runtime_fingerprint = _capture_runtime_fingerprint(
+            agent._source_revision_port
+        )
     except Exception:
         agent._runtime_fingerprint = None
 
@@ -609,12 +604,12 @@ def _heartbeat_loop(agent) -> None:
         if agent._config.snapshot_interval is not None:
             now_mono = time.monotonic()
             if now_mono - agent._last_snapshot >= agent._config.snapshot_interval:
-                agent._workdir.snapshot()
+                agent._snapshot_port.snapshot()
                 agent._last_snapshot = now_mono
 
             # Periodic GC — every 24 hours
             if now_mono - agent._last_gc >= 86400:
-                agent._workdir.gc()
+                agent._snapshot_port.collect_garbage()
                 agent._last_gc = now_mono
 
         time.sleep(1.0)
@@ -777,6 +772,7 @@ def _perform_refresh(
     address = agent._working_dir.name
     working_dir_str = str(working_dir)
     stderr_log = str(working_dir / "logs" / "refresh_relaunch.log")
+    identity_fields = dict(agent._runtime_identity_event_fields)
     relaunch_script = (
         "import time, subprocess, os, sys, json, signal\n"
         "from datetime import datetime, timezone\n"
@@ -788,6 +784,7 @@ def _perform_refresh(
         f"cmd = {cmd!r}\n"
         f"name = {agent_name!r}\n"
         f"addr = {address!r}\n"
+        f"identity_fields = {identity_fields!r}\n"
         "MAX_ATTEMPTS = 12\n"
         "HEALTH_CHECK_WAIT = 10\n"
         # The watcher writes events.jsonl through its own log() below, bypassing
@@ -809,11 +806,6 @@ def _perform_refresh(
         "    def _redact_for_trajectory(value):\n"
         "        return value\n"
         "    _REDACTOR_IMPORT_OK = False\n"
-        "try:\n"
-        "    from lingtai.kernel.runtime_identity import runtime_identity_event_fields as _runtime_identity_event_fields\n"
-        "except Exception:\n"
-        "    def _runtime_identity_event_fields():\n"
-        "        return {}\n"
         # Terminal-failure visibility (PR #292): when all relaunch attempts are
         # exhausted the watcher writes logs/refresh_failed_permanent.json and a
         # high-priority system notification carrying this failure_state so the
@@ -844,7 +836,7 @@ def _perform_refresh(
         "    'recovery_guidance': RECOVERY_GUIDANCE,\n"
         "}\n"
         "def log(typ, **kw):\n"
-        "    entry = {'type': typ, 'address': addr, 'agent_name': name, 'ts': time.time(), **_runtime_identity_event_fields(), **kw}\n"
+        "    entry = {'type': typ, 'address': addr, 'agent_name': name, 'ts': time.time(), **identity_fields, **kw}\n"
         "    if not _REDACTOR_IMPORT_OK:\n"
         "        entry['redaction_unavailable'] = True\n"
         "    else:\n"

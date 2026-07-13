@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from tests._workdir_lease_helpers import make_test_lease
+from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
 from tests._notification_store_helpers import notification_store_for
 
 
@@ -85,7 +86,7 @@ def _make_test_agent(tmp_path):
     _build_lib(plib)
     wd = tmp_path / "test"
     _build_workdir(wd, plib, active=str(plib / "big.json"))
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=wd, workdir_lease=make_test_lease(), notification_store=notification_store_for(wd))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=wd, workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(wd))
     return agent, plib
 
 

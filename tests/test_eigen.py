@@ -10,6 +10,7 @@ from lingtai.kernel.base_agent import BaseAgent
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 from tests._molt_helpers import write_session_journal as _write_session_journal
 from tests._workdir_lease_helpers import make_test_lease
+from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
 from tests._notification_store_helpers import notification_store_for
 
 
@@ -24,7 +25,7 @@ def test_psyche_pad_edit(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     result = agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "hello world"})
     assert result["status"] == "ok"
@@ -39,7 +40,7 @@ def test_psyche_pad_edit_empty_clears(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     # First write something
     agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "data"})
@@ -62,7 +63,7 @@ def test_psyche_pad_load(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     agent.start()
     try:
@@ -85,7 +86,7 @@ def test_psyche_pad_load_empty(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     agent.start()
     try:
@@ -122,7 +123,7 @@ def test_psyche_molt_uses_summary(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=svc, agent_name="test", working_dir=tmp_path / "test",
         workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     agent.start()
     try:
@@ -178,7 +179,7 @@ def test_psyche_molt_rejects_empty_summary(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     result = agent._intrinsics["psyche"]({
         "object": "context", "action": "molt", "summary": "",
@@ -194,7 +195,7 @@ def test_psyche_molt_rejects_missing_summary(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     result = agent._intrinsics["psyche"]({"object": "context", "action": "molt"})
     assert "error" in result
@@ -219,7 +220,7 @@ def test_psyche_rejects_invalid_object_action_pair(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     result = agent._intrinsics["psyche"]({"object": "context", "action": "load"})
     assert "error" in result
@@ -254,7 +255,7 @@ def test_eigen_forget_wipes_context(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=svc, agent_name="test", working_dir=tmp_path / "test",
         workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     agent.start()
     try:
@@ -281,7 +282,7 @@ def test_eigen_unknown_object(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     result = agent._intrinsics["psyche"]({"object": "bogus", "action": "edit"})
     assert "error" in result
@@ -293,7 +294,7 @@ def test_eigen_unknown_action(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     result = agent._intrinsics["psyche"]({"object": "pad", "action": "bogus"})
     assert "error" in result
@@ -306,7 +307,7 @@ def test_eigen_is_intrinsic_not_pad(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     assert "psyche" in agent._intrinsics
     assert "pad" not in agent._intrinsics
@@ -319,7 +320,7 @@ def test_eigen_is_intrinsic_not_pad(tmp_path):
 
 def test_eigen_name_sets_agent_name(tmp_path):
     """psyche name action sets agent true name."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     assert agent.agent_name is None
     result = agent._intrinsics["psyche"]({"object": "name", "action": "set", "content": "悟空"})
     assert result["status"] == "ok"
@@ -330,7 +331,7 @@ def test_eigen_name_sets_agent_name(tmp_path):
 
 def test_eigen_name_rejects_second_set(tmp_path):
     """psyche name action fails if already named."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", agent_name="alice", workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", agent_name="alice", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     result = agent._intrinsics["psyche"]({"object": "name", "action": "set", "content": "bob"})
     assert "error" in result
     assert agent.agent_name == "alice"  # unchanged
@@ -339,7 +340,7 @@ def test_eigen_name_rejects_second_set(tmp_path):
 
 def test_eigen_name_rejects_empty(tmp_path):
     """psyche name action fails with empty name."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     result = agent._intrinsics["psyche"]({"object": "name", "action": "set", "content": ""})
     assert "error" in result
     assert agent.agent_name is None  # still unnamed
@@ -373,7 +374,7 @@ def _agent_with_session(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=svc, agent_name="snapshot-test", working_dir=tmp_path / "snapshot-test",
         workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "snapshot-test"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "snapshot-test"),
     )
     agent.start()
     return agent

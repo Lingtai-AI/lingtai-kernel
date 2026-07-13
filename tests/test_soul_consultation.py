@@ -33,6 +33,7 @@ from lingtai.kernel.llm.interface import (
     ToolResultBlock,
 )
 from tests._workdir_lease_helpers import make_test_lease
+from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
 from tests._notification_store_helpers import notification_store_for
 
 
@@ -856,7 +857,7 @@ class TestRunConsultationFire:
             service=svc,
             agent_name="t",
             working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "agent"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
         )
         return agent
 
@@ -930,7 +931,7 @@ class TestSoulFlowPersistenceSchema:
             service=svc,
             agent_name="t",
             working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "agent"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
         )
         return agent
 
@@ -1129,7 +1130,7 @@ class TestPersistSoulEntryUnchanged:
             service=svc,
             agent_name="t",
             working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "agent"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
         )
         return agent
 
@@ -1164,7 +1165,7 @@ class TestRehydrateAppendixTracking:
             service=svc,
             agent_name="t",
             working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "agent"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
         )
         return agent
 
@@ -1242,7 +1243,7 @@ class TestRehydrateAppendixTracking:
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=svc, agent_name="t", working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "agent"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
         )
         with patch.object(agent, "_run_consultation_fire") as mock_fire,\
              patch.object(agent, "_start_soul_timer") as mock_resched:
@@ -1260,7 +1261,7 @@ class TestRehydrateAppendixTracking:
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=svc, agent_name="t", working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "agent"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
         )
         with patch.object(agent, "_run_consultation_fire",
                           side_effect=RuntimeError("boom")),\
@@ -1990,7 +1991,7 @@ class TestSoulNotificationInstructions:
             service=svc,
             agent_name="t",
             working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "agent"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
         )
         return agent
 
