@@ -32,6 +32,7 @@ DEFAULT_COMMANDS: list[dict[str, str]] = [
     {"command": "status", "description": "Show agent status"},
     {"command": "help", "description": "List available commands"},
     {"command": "kanban", "description": "Show full agent dashboard (model, tokens, network, config)"},
+    {"command": "taskcard", "description": "Show or hide Task Cards"},
     {"command": "refresh", "description": "Restart agent"},
     {"command": "sleep", "description": "Put agent to sleep"},
     {"command": "system", "description": "Browse system files (tap to view)"},
@@ -143,6 +144,8 @@ class TelegramAccount:
         on_message: Callable[[str, dict], None] | None = None,
         state_dir: Path | None = None,
         commands: list[dict[str, str]] | None = None,
+        taskcard_enabled: Callable[[], bool] | None = None,
+        set_taskcard_enabled: Callable[[bool], None] | None = None,
     ) -> None:
         self.alias = alias
         self._bot_token = bot_token
@@ -150,6 +153,10 @@ class TelegramAccount:
         self._poll_interval = poll_interval
         self._on_message = on_message
         self._state_dir = state_dir
+        # Injected service-owned accessors keep the setting agent-wide even when
+        # this account is one of several Telegram bots/chats.
+        self._taskcard_enabled = taskcard_enabled or (lambda: True)
+        self._set_taskcard_enabled = set_taskcard_enabled
         # If commands is None, fall back to DEFAULT_COMMANDS at registration
         # time. An explicit empty list means "register no commands" and is
         # respected (Telegram clears the menu).
@@ -342,6 +349,9 @@ class TelegramAccount:
         if cmd == "/kanban":
             self._cmd_kanban(chat_id)
             return True
+        if cmd == "/taskcard":
+            self._cmd_taskcard(chat_id, text)
+            return True
         if cmd == "/refresh":
             self._cmd_refresh(chat_id)
             return True
@@ -353,6 +363,51 @@ class TelegramAccount:
             return True
         # Unknown slash command — let it pass through to agent
         return False
+
+    def _cmd_taskcard(self, chat_id: int, text: str) -> None:
+        """Report or durably toggle agent-wide Telegram Task Card delivery."""
+        parts = text.split()
+        args = parts[1:]
+        if len(args) > 1 or (args and args[0].lower() not in {"on", "off"}):
+            self.send_message(chat_id, "❌ Usage: /taskcard on | /taskcard off")
+            return
+
+        if args:
+            setter = self._set_taskcard_enabled
+            if setter is None:
+                self.send_message(
+                    chat_id,
+                    "⚠️ Could not update taskcard; the previous setting is unchanged.",
+                )
+                return
+            try:
+                setter(args[0].lower() == "on")
+            except Exception:
+                logger.warning(
+                    "Telegram account '%s' could not persist taskcard setting",
+                    self.alias,
+                )
+                self.send_message(
+                    chat_id,
+                    "⚠️ Could not update taskcard; the previous setting is unchanged.",
+                )
+                return
+
+        enabled = self._taskcard_enabled()
+        if enabled:
+            description = (
+                "automatic and programmable Task Cards may be sent for this agent."
+            )
+        else:
+            description = (
+                "automatic and programmable Task Cards are hidden for this agent; "
+                "internal mechanics still run."
+            )
+        self.send_message(
+            chat_id,
+            f"📋 taskcard: {enabled} — {description}\n"
+            "Usage: /taskcard on | /taskcard off",
+        )
 
     def _cmd_kanban(self, chat_id: int) -> None:
         """Handle /kanban — show a layered agent dashboard. Pure filesystem read, no LLM."""

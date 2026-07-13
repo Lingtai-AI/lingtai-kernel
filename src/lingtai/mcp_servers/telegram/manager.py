@@ -402,9 +402,10 @@ DESCRIPTION = (
     "Voice messages are automatically transcribed using Whisper (local) and delivered as text. "
     "Rich feedback: automatic typing indicators, emoji reactions (👀 seen, ✅ done), "
     "and live-status messages for long-running tasks (placeholder + edit-in-place). "
-    "Automatic Task Card progress is separate: every tool call with an explicit "
-    "`reasoning` argument is automatically projected into a live task card "
-    "during Telegram-originated turns — the agent does not manage this card."
+    "Automatic Task Card progress is separate: when the current agent setting is "
+    "`taskcard: True`, every tool call with an explicit `reasoning` argument may be "
+    "projected into a live task card during Telegram-originated turns — the agent "
+    "does not manage this card."
 )
 
 
@@ -439,6 +440,15 @@ class TelegramManager:
     def _resolve_account(self, args: dict) -> str:
         """Get account alias from args, defaulting to first account."""
         return args.get("account") or self._service.default_account.alias
+
+    def _taskcard_enabled(self) -> bool:
+        """Read current-agent delivery state at projection time.
+
+        The fallback preserves compatibility for narrow test/third-party service
+        doubles; the production TelegramService always provides the durable getter.
+        """
+        getter = getattr(self._service, "taskcard_enabled", None)
+        return bool(getter()) if callable(getter) else True
 
     @staticmethod
     def _parse_compound_id(compound_id: str) -> tuple[str, int, int]:
@@ -667,6 +677,10 @@ class TelegramManager:
             preview = text[:300].replace("\n", " ")
             if len(text) > 300:
                 preview += "..."
+            preview = (
+                f"[taskcard: {self._taskcard_enabled()}] "
+                f"{preview or '(no text — see media or callback)'}"
+            )
 
         log.info(
             "telegram_received account=%s sender=%r id=%s",
@@ -1037,6 +1051,7 @@ class TelegramManager:
             "relative_time": self._relative_time(message.get("date", ""), now=now),
             "text": text,
             "text_truncated": text_truncated,
+            "taskcard": self._taskcard_enabled(),
         }
         if current_compound_id and cid == current_compound_id:
             item["is_current"] = True
@@ -1066,6 +1081,7 @@ class TelegramManager:
     ) -> str:
         """Render a markdown conversation preview for notification previews."""
         now = datetime.now(timezone.utc)
+        taskcard = self._taskcard_enabled()
         by_id: dict[str, dict] = {m.get("id", ""): m for m in messages}
         lines: list[str] = []
 
@@ -1077,7 +1093,8 @@ class TelegramManager:
             direction = "outgoing" if m.get("_folder") == "sent" else "incoming"
             marker = "[NEW]" if cid == current_compound_id else "[context]"
             lines.append(
-                f"{marker}[{direction}][{rel}] #{cid} {sender}: {text_display}"
+                f"{marker}[{direction}][{rel}][taskcard: {taskcard}] "
+                f"#{cid} {sender}: {text_display}"
             )
 
             reply_id_raw = m.get("reply_to_message_id")
@@ -1093,7 +1110,8 @@ class TelegramManager:
                         if len(orig_text) > 50:
                             orig_snippet += "…"
                         lines.append(
-                            f"  ↳ [{orig_rel}] #{reply_compound}: {orig_snippet}"
+                            f"  ↳ [{orig_rel}][taskcard: {taskcard}] "
+                            f"#{reply_compound}: {orig_snippet}"
                         )
 
         header = _NOTIFICATION_HEADER_TEMPLATE.format(channel="Telegram").rstrip("\n")
@@ -1105,7 +1123,19 @@ class TelegramManager:
             # Keep the guidance header and the newest end of the conversation.
             budget = 10000 - len(prefix) - len("\n…\n")
             if budget > 0:
-                conversation = "…\n" + conversation[-budget:]
+                tail = conversation[-budget:]
+                if len(conversation) > budget:
+                    # Avoid presenting a cut message-line fragment without the
+                    # explicit current state. Prefer the next complete line; for
+                    # a single overlong message, label the retained fragment.
+                    first_newline = tail.find("\n")
+                    if first_newline >= 0:
+                        tail = tail[first_newline + 1:]
+                    elif f"taskcard: {taskcard}" not in tail:
+                        label = f"[taskcard: {taskcard}] …"
+                        remaining = max(0, budget - len(label))
+                        tail = label + (tail[-remaining:] if remaining else "")
+                conversation = "…\n" + tail
                 body = f"{prefix}\n{conversation}"
             else:
                 body = body[:9997] + "…"
@@ -1164,7 +1194,7 @@ class TelegramManager:
         Scans inbox/ and sent/ dirs for messages matching *chat_id*, sorts by
         date ascending, takes the tail, and formats each line as:
 
-            [NEW|context][direction][relative_time] #compound_id sender_name: text
+            [NEW|context][direction][relative_time][taskcard: True|False] #compound_id sender_name: text
 
         If a message has reply_to_message_id the quoted message is shown
         indented beneath it (truncated to 50 chars).
@@ -1562,6 +1592,13 @@ class TelegramManager:
         channel = args.get("channel", self._TASK_CARD_DEFAULT_CHANNEL)
         if channel not in self._TASK_CARD_CHANNELS:
             return {"status": "error", "error": f"Unknown channel: {channel}"}
+        if sub_action not in {"create", "update", "finalize"}:
+            return {"status": "error", "error": f"Unknown sub_action: {sub_action}"}
+        # Deliberate presentation suppression happens only after route validation
+        # and before transport, resident-id, or composed-slot mutation. Internal
+        # automatic rows/heartbeats and programmable watches continue calling.
+        if not self._taskcard_enabled():
+            return {"status": "ok", "suppressed": True, "taskcard": False}
         try:
             if channel == "programmable":
                 return self._task_card_programmable(sub_action, args)
@@ -2177,6 +2214,7 @@ class TelegramManager:
         messages = inbox + sent
         messages.sort(key=lambda m: m.get("date", ""), reverse=True)
         read_ids = self._read_ids(account)
+        taskcard = self._taskcard_enabled()
 
         # Group by chat_id for conversation view
         conversations: dict[int, dict] = {}
@@ -2198,6 +2236,7 @@ class TelegramManager:
                     "last_date": msg.get("date", ""),
                     "total": 0,
                     "unread": 0,
+                    "taskcard": taskcard,
                 }
             conversations[cid]["total"] += 1
             if msg.get("id") and msg["id"] not in read_ids:
@@ -2205,6 +2244,7 @@ class TelegramManager:
 
         return {
             "status": "ok",
+            "taskcard": taskcard,
             "total": len(messages),
             "messages": list(conversations.values()),
         }
@@ -2243,7 +2283,8 @@ class TelegramManager:
             self._mark_read(account, compound_ids)
             self._clear_notification_if_handled()
 
-        # Strip internal fields
+        # Strip internal fields and derive current presentation state at read time.
+        taskcard = self._taskcard_enabled()
         cleaned = []
         for m in recent:
             cleaned.append({
@@ -2257,9 +2298,10 @@ class TelegramManager:
                 "callback_query": m.get("callback_query"),
                 "reply_to_message_id": m.get("reply_to_message_id"),
                 "_direction": "outgoing" if m.get("to") else "incoming",
+                "taskcard": taskcard,
             })
 
-        return {"status": "ok", "messages": cleaned}
+        return {"status": "ok", "taskcard": taskcard, "messages": cleaned}
 
     def _reply(self, args: dict) -> dict:
         compound_id = args.get("message_id", "")
@@ -2302,6 +2344,7 @@ class TelegramManager:
             return {"error": f"Invalid regex: {e}"}
 
         messages = self._list_messages(account, "inbox")
+        taskcard = self._taskcard_enabled()
         matches = []
         for msg in messages:
             if target_chat and msg.get("chat", {}).get("id") != target_chat:
@@ -2317,9 +2360,15 @@ class TelegramManager:
                     "from": msg.get("from"),
                     "date": msg.get("date"),
                     "text": msg.get("text"),
+                    "taskcard": taskcard,
                 })
 
-        return {"status": "ok", "total": len(matches), "messages": matches}
+        return {
+            "status": "ok",
+            "taskcard": taskcard,
+            "total": len(matches),
+            "messages": matches,
+        }
 
     def _delete(self, args: dict) -> dict:
         compound_id = args.get("message_id", "")

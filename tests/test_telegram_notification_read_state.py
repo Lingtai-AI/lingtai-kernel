@@ -134,6 +134,7 @@ def test_incoming_event_populates_generic_notification_refs(tmp_path: Path) -> N
     assert metadata["latest_incoming"]["sender"] == "alice"
     assert metadata["latest_incoming"]["text"] == "hello"
     assert metadata["latest_incoming"]["text_truncated"] is False
+    assert metadata["latest_incoming"]["taskcard"] is True
     assert metadata["latest_incoming"]["is_current"] is True
     assert "[NEW][incoming]" in inbound_events[0]["body"]
     assert "Conversation — last 1 messages" in inbound_events[0]["body"]
@@ -290,6 +291,7 @@ def test_incoming_reply_to_old_target_carries_full_referenced_message(
     assert referenced[0]["text"] == full_target_text
     assert len(referenced[0]["text"]) > 500
     assert referenced[0]["text_truncated"] is False
+    assert referenced[0]["taskcard"] is True
     assert inbox._copy_structured_preview_meta(referenced) is not None
 
 

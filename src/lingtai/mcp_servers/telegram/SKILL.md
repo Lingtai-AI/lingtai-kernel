@@ -7,8 +7,8 @@ description: |
   messages, reply vs send, read/check/search, parse_mode/entities, chat_action, dynamic slash commands,
   and error surfacing. Pulled on demand via action='manual'; you do not need to
   call it before every send.
-version: 1.2.1
-last_changed_at: "2026-07-12T18:05:00-07:00"
+version: 1.3.0
+last_changed_at: "2026-07-12T18:20:00-07:00"
 ---
 
 # Telegram MCP — usage manual (progressive disclosure)
@@ -40,10 +40,11 @@ descriptions; you do not need to call it before every send.
 - The final answer must be a **separate durable message** using `action='send'`
   or `action='reply'`. Do **not** edit the placeholder into the final answer;
   the placeholder shows progress only (it may optionally be deleted).
-- An automatic Task Card updates separately during Telegram-originated turns
-  (you do not manage it; use send/reply for your own messages). Automatic,
-  programmable, heartbeat, and final frames edit one stable resident message ID
-  in place; an identical Telegram edit is a successful no-op.
+- When the current agent has `taskcard: True`, an automatic Task Card may update
+  separately during Telegram-originated turns (you do not manage it; use
+  send/reply for your own messages). Automatic, programmable, heartbeat, and
+  final frames edit one stable resident message ID in place; an identical
+  Telegram edit is a successful no-op. See **TASKCARD STATE** below.
 - The addon replaces that resident only after Telegram explicitly reports the
   message missing or uneditable. Unknown/transient edit failures are surfaced and
   retain the resident ID and last delivered slots instead of sending/retracting.
@@ -90,7 +91,7 @@ Telegram has two separate slash-command layers:
    from each account's optional `commands` config list.
 2. **Runtime handling**: what happens when a user sends the slash command. A
    small built-in set is handled locally by the addon without an LLM call
-   (`/kanban`, `/refresh`, `/sleep`, `/system`). Other slash commands are not
+   (`/kanban`, `/taskcard`, `/refresh`, `/sleep`, `/system`). Other slash commands are not
    swallowed; they pass through as normal inbound messages for the host agent to
    answer or route.
 
@@ -141,6 +142,31 @@ Important behavior notes:
   default command menu.
 - Do not edit or print `bot_token` values while documenting or debugging slash
   commands.
+
+## TASKCARD STATE
+
+- `/taskcard` reports the current setting. `/taskcard on` and `/taskcard off`
+  change it locally without an LLM call; `/taskcard@BotName on|off` works in
+  groups through Telegram's normal command-mention form.
+- The setting is one durable boolean for the current agent. It is shared by all
+  of that agent's configured Telegram accounts and chats, persists under the
+  agent workdir across refresh/restart, and is not project-, network-, session-,
+  or chat-scoped.
+- Every Telegram message representation shown to the agent carries the current
+  boolean: structured message objects use `taskcard: true|false`, and textual
+  preview message lines use `taskcard: True|False`. Check/read/search results
+  include it on every message item. It is derived when projected or read, so an
+  old stored message reflects the current setting without rewriting history.
+- `taskcard: True` means automatic and programmable Task Cards may be sent to
+  Telegram. `taskcard: False` means delivery of **both** slots is hidden at the
+  Telegram presentation boundary. It does **not** mean work stopped: automatic
+  rows, heartbeats, reverse calls, renderers, watchers, retries, and last-valid
+  bookkeeping continue normally.
+- Turning delivery off does not retroactively delete or edit an already resident
+  Task Card. Turning it back on needs no restart; the next automatic heartbeat or
+  programmable watcher projection may update the resident card again.
+- When answering whether Task Cards are on, use the explicit current `taskcard`
+  value rather than inferring state from whether an old Task Card is visible.
 
 ## ERROR SURFACING
 

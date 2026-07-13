@@ -2485,6 +2485,8 @@ class BaseAgent:
             except Exception:
                 self._log_task_card_reverse_exception("create", "batch")
                 return
+            if self._task_card_result_suppressed(result):
+                return
             message_id = self._task_card_result_message_id(result)
             if message_id is None:
                 self._log_task_card_reverse_failure("create", "batch", result)
@@ -2499,6 +2501,8 @@ class BaseAgent:
                 }, timeout=5.0)
             except Exception:
                 self._log_task_card_reverse_exception("update", "batch")
+                return
+            if self._task_card_result_suppressed(result):
                 return
             new_id = self._task_card_result_message_id(result)
             if new_id is None:
@@ -2845,6 +2849,16 @@ class BaseAgent:
         exceptions.
         """
         return isinstance(result, dict) and result.get("status") == "error"
+
+    @staticmethod
+    def _task_card_result_suppressed(result: object) -> bool:
+        """True for deliberate Telegram presentation suppression, not failure."""
+        return (
+            isinstance(result, dict)
+            and result.get("status") == "ok"
+            and result.get("suppressed") is True
+            and result.get("taskcard") is False
+        )
 
     @staticmethod
     def _task_card_result_message_id(result: object) -> str | None:
