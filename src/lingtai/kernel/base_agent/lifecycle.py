@@ -353,15 +353,14 @@ def _stop_heartbeat(agent) -> None:
     """Stop the heartbeat (called only by stop/shutdown)."""
     thread = agent._heartbeat_thread
     agent._heartbeat_thread = None  # signals the loop to exit
-    # Wake the cadence before joining; unlink the heartbeat only after exit.
+    # Wake the cadence before joining; withdraw the heartbeat only after exit.
     agent._heartbeat_stop.set()
     if thread is not None:
         thread.join(timeout=5.0)
-    hb_file = agent._working_dir / ".agent.heartbeat"
-    try:
-        hb_file.unlink(missing_ok=True)
-    except OSError:
-        pass
+    # Withdraw own liveness through the injected presence Port (best-effort
+    # inside the adapter), preserving the manifest-persist → heartbeat-withdraw
+    # → workdir-lease-release teardown order owned by ``_stop``.
+    agent._agent_presence.withdraw_heartbeat()
     agent._log("heartbeat_stop", heartbeat=agent._heartbeat)
 
 
@@ -661,15 +660,14 @@ def _maybe_sleep_after_idle_timeout(agent, *, now_mono: float | None = None) -> 
 def _write_heartbeat_tick(agent) -> None:
     """Write one real runtime heartbeat and best-effort status snapshot."""
     # time.time() (wall clock), not time.monotonic(). Deliberate:
-    # heartbeat is written to a file and read by handshake.is_alive()
-    # in a DIFFERENT process.
+    # heartbeat is written to a file and read by the presence store's liveness
+    # observation in a DIFFERENT process. S7a keeps this direct wall clock as a
+    # temporary measure; S7b extracts the wall/monotonic clocks. Publication of
+    # the value now goes through the injected AgentPresenceStorePort (best-effort
+    # inside the adapter), not a direct file write.
     agent._heartbeat = time.time()
 
-    try:
-        hb_file = agent._working_dir / ".agent.heartbeat"
-        hb_file.write_text(str(agent._heartbeat), encoding="utf-8")
-    except OSError:
-        pass
+    agent._agent_presence.publish_heartbeat(agent._heartbeat)
 
     try:
         agent._write_status_snapshot()

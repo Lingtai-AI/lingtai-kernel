@@ -125,6 +125,91 @@ def test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock(monkeypatch):
     assert manifest_i < heartbeat_i < lock_i
 
 
+def test_stop_heartbeat_withdraws_through_presence_port(monkeypatch):
+    """``_stop_heartbeat`` withdraws own liveness through the presence Port.
+
+    The former direct ``.agent.heartbeat`` unlink is now
+    ``agent._agent_presence.withdraw_heartbeat()``. This pins that the
+    withdrawal flows through the injected Port (best-effort inside the adapter),
+    not a direct filesystem call in Core.
+    """
+    from lingtai.kernel.base_agent import lifecycle
+    from tests._agent_presence_helpers import RecordingAgentPresenceStore
+
+    presence = RecordingAgentPresenceStore()
+    agent = SimpleNamespace(
+        _heartbeat_thread=None,
+        _heartbeat_stop=threading.Event(),
+        _heartbeat=123.0,
+        _agent_presence=presence,
+        _log=lambda *a, **k: None,
+    )
+
+    lifecycle._stop_heartbeat(agent)
+
+    assert presence.withdraws == 1
+
+
+def test_stop_teardown_order_withdraws_via_port_between_manifest_and_release(monkeypatch):
+    """Full ``_stop`` order manifest → heartbeat-withdraw(Port) → lease-release.
+
+    Uses a real ``_stop_heartbeat`` (not monkeypatched) so the presence Port's
+    ``withdraw_heartbeat`` is the recorded 'heartbeat' step, proving the Port
+    withdrawal sits inside the safety-critical teardown window.
+    """
+    from lingtai.kernel.base_agent import lifecycle
+    import lingtai.tools.soul.flow as soul_flow
+
+    order = []
+
+    class RecordingPresence:
+        def observe_manifest(self):  # pragma: no cover - not used here
+            raise AssertionError("not expected")
+
+        def observe_heartbeat(self):  # pragma: no cover - not used here
+            raise AssertionError("not expected")
+
+        def publish_heartbeat(self, wall_seconds):  # pragma: no cover
+            raise AssertionError("not expected")
+
+        def withdraw_heartbeat(self):
+            order.append(("heartbeat", None))
+
+    class FakeWorkdir:
+        def write_manifest(self, manifest):
+            order.append(("manifest", manifest))
+
+    class FakeLease:
+        def release(self):
+            order.append(("lock", None))
+
+    agent = SimpleNamespace(
+        _log=lambda event, **fields: None,
+        _shutdown=threading.Event(),
+        _thread=None,
+        _heartbeat_thread=None,
+        _heartbeat_stop=threading.Event(),
+        _heartbeat=1.0,
+        _session=SimpleNamespace(close=lambda: None),
+        _mail_service=None,
+        _event_journal=None,
+        _workdir=FakeWorkdir(),
+        _workdir_lease=FakeLease(),
+        _agent_presence=RecordingPresence(),
+        _build_manifest=lambda: {"agent": "test"},
+        get_capability=lambda name: None,
+    )
+    agent._cancel_soul_timer = lambda: None
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda a: None)
+
+    lifecycle._stop(agent, timeout=0.01)
+
+    manifest_i = order.index(("manifest", {"agent": "test"}))
+    heartbeat_i = order.index(("heartbeat", None))
+    lock_i = order.index(("lock", None))
+    assert manifest_i < heartbeat_i < lock_i
+
+
 def test_daemon_shutdown_waits_for_cli_ask_future_before_releasing_liveness(tmp_path, monkeypatch):
     from lingtai.tools import daemon as daemon_module
 

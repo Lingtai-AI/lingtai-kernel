@@ -30,6 +30,7 @@ from ..state import AgentState
 from ..workdir import WorkingDir
 from ..workdir_lease import WorkdirLeasePort
 from ..notification_store import NotificationStorePort
+from ..agent_presence import AgentPresenceStorePort
 from ..snapshot import SnapshotPort, SourceRevisionPort
 from ..message import Message
 from ..prompt import SystemPromptManager
@@ -335,6 +336,10 @@ class BaseAgent:
         - ``notification_store`` (NotificationStorePort): Persistence for
           ``.notification/`` channel mirrors. Required on every supported
           agent; there is no nullable/no-op path.
+        - ``agent_presence`` (AgentPresenceStorePort): Own-heartbeat publish/
+          withdraw and foreign-address presence observation, bound to this
+          agent's working directory. Required and explicit; there is no
+          nullable/no-op path and Core never constructs the concrete adapter.
         - ``snapshot_port`` (SnapshotPort): Best-effort workdir initialization,
           capture, and maintenance used by lifecycle policy.
         - ``source_revision_port`` (SourceRevisionPort): Bounded running-source
@@ -373,6 +378,7 @@ class BaseAgent:
         working_dir: str | Path,
         workdir_lease: WorkdirLeasePort,
         notification_store: "NotificationStorePort",
+        agent_presence: AgentPresenceStorePort,
         snapshot_port: SnapshotPort,
         source_revision_port: SourceRevisionPort,
         intrinsics: "Mapping[str, Mapping[str, Any]] | None" = None,
@@ -435,6 +441,13 @@ class BaseAgent:
         # mechanism (a POSIX filesystem adapter today) is composed outside.
         # This is a required, explicit dependency: there is no no-op fallback.
         self._notification_store = notification_store
+
+        # Core receives the agent-presence Port bound to this working directory;
+        # the concrete filesystem mechanism (a POSIX .agent.json/.agent.heartbeat
+        # adapter today) is composed outside. The heartbeat loop publishes and
+        # teardown withdraws liveness through it. Required and explicit: there is
+        # no no-op fallback and Core never constructs the concrete adapter.
+        self._agent_presence = agent_presence
 
         # --- Wire services ---
         # FileIOService: optional, provided by Agent or host

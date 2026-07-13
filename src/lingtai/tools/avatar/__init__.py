@@ -33,7 +33,22 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from lingtai.kernel.agent_presence import observe_alive as _presence_observe_alive
 from lingtai.kernel.i18n import t
+
+
+def _is_alive(working_dir) -> bool:
+    """Foreign-address liveness check via the presence store + Core policy.
+
+    Builds a target-bound POSIX presence adapter for *working_dir* and applies
+    the Core freshness/human policy in manifest-first order, replacing the
+    former ``handshake.is_alive`` call.
+    """
+    from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
+
+    store = PosixAgentPresenceStoreAdapter(working_dir)
+    return _presence_observe_alive(store, wall_now=time.time())
+
 
 # Avatar name doubles as its working-directory basename. Letters (any script,
 # including CJK), digits, underscore, and hyphen — no path separators, no
@@ -141,7 +156,7 @@ class AvatarManager:
 
     Each avatar gets its own working directory with init.json and is
     launched via `lingtai-agent run`.  No in-process references — liveness
-    is checked via the filesystem (handshake.is_alive).
+    is checked via the filesystem through the agent-presence store.
     """
 
     def __init__(self, agent: "Agent"):
@@ -245,11 +260,10 @@ class AvatarManager:
                 }
 
         # Check if this peer already exists and is live
-        from lingtai.kernel.handshake import is_alive
         for record in self._read_ledger():
             if record.get("name") == peer_name:
                 wd = record.get("working_dir", "")
-                if wd and is_alive(wd):
+                if wd and _is_alive(wd):
                     return {
                         "status": "already_active",
                         "working_dir": wd,

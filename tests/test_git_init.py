@@ -19,6 +19,7 @@ from tests._service_helpers import make_gemini_mock_service as make_mock_service
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
 from tests._notification_store_helpers import notification_store_for
+from tests._agent_presence_helpers import make_test_presence_store
 
 
 
@@ -32,7 +33,7 @@ def test_start_creates_git_repo(tmp_path):
     """agent.start() should git init the working directory."""
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test",
                        working_dir=tmp_path / "test",
-                       config=_git_enabled_config(), workdir_lease=make_test_lease(), snapshot_port=PosixGitCliAdapter(tmp_path / "test"), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+                       config=_git_enabled_config(), workdir_lease=make_test_lease(), snapshot_port=PosixGitCliAdapter(tmp_path / "test"), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     agent.start()
     try:
         git_dir = agent.working_dir / ".git"
@@ -45,7 +46,7 @@ def test_start_creates_gitignore(tmp_path):
     """agent.start() should create a .gitignore protecting local secrets."""
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test",
                        working_dir=tmp_path / "test",
-                       config=_git_enabled_config(), workdir_lease=make_test_lease(), snapshot_port=PosixGitCliAdapter(tmp_path / "test"), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+                       config=_git_enabled_config(), workdir_lease=make_test_lease(), snapshot_port=PosixGitCliAdapter(tmp_path / "test"), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     agent.start()
     try:
         gitignore = agent.working_dir / ".gitignore"
@@ -69,7 +70,7 @@ def test_start_creates_system_dir(tmp_path):
     """agent.start() should create system/ directory with covenant.md and pad.md."""
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test",
                        working_dir=tmp_path / "test",
-                       config=_git_enabled_config(), workdir_lease=make_test_lease(), snapshot_port=PosixGitCliAdapter(tmp_path / "test"), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+                       config=_git_enabled_config(), workdir_lease=make_test_lease(), snapshot_port=PosixGitCliAdapter(tmp_path / "test"), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     agent.start()
     try:
         system_dir = agent.working_dir / "system"
@@ -84,7 +85,7 @@ def test_start_makes_initial_commit(tmp_path):
     """agent.start() should make an initial git commit."""
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test",
                        working_dir=tmp_path / "test",
-                       config=_git_enabled_config(), workdir_lease=make_test_lease(), snapshot_port=PosixGitCliAdapter(tmp_path / "test"), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+                       config=_git_enabled_config(), workdir_lease=make_test_lease(), snapshot_port=PosixGitCliAdapter(tmp_path / "test"), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     agent.start()
     try:
         result = subprocess.run(
@@ -108,7 +109,7 @@ def test_start_skips_git_init_if_git_exists(tmp_path):
     """
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test",
                        working_dir=tmp_path / "test",
-                       config=_git_enabled_config(), workdir_lease=make_test_lease(), snapshot_port=PosixGitCliAdapter(tmp_path / "test"), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+                       config=_git_enabled_config(), workdir_lease=make_test_lease(), snapshot_port=PosixGitCliAdapter(tmp_path / "test"), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     agent.start()
     agent.stop()
     agent.start()

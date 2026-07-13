@@ -19,6 +19,7 @@ from tests._service_helpers import make_tool_result_mock_service as make_mock_se
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
 from tests._notification_store_helpers import notification_store_for
+from tests._agent_presence_helpers import make_test_presence_store
 
 
 PRODUCTION_ADAPTER_FACTORIES = [
@@ -161,7 +162,7 @@ def test_raw_base_agent_has_no_hidden_posix_journal(tmp_path):
         agent_name="core-only",
         working_dir=tmp_path,
         workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path),
     )
     try:
         assert agent._event_journal is None
@@ -193,7 +194,7 @@ def test_base_agent_uses_none_as_the_only_disabled_journal_sentinel(tmp_path):
         working_dir=tmp_path,
         event_journal=journal,
         workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path),
     )
     journal.events.clear()
     try:

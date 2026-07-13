@@ -36,7 +36,7 @@ class WorkdirLayout:
 
     Deliberately dumb: it only *names* paths from a root. No validation, no
     file creation, no policy — those stay in the owning modules
-    (``handshake.is_alive``, ``notifications.validate_allowed_channel``, …).
+    (agent-presence adapters/policy, ``notifications.validate_allowed_channel``, …).
     The point is a single discoverable surface for the agent workdir
     filesystem protocol (``.agent.json``, ``.agent.heartbeat``,
     ``.notification/<channel>.json``, ``tmp/tool-results/``, …) so the same
@@ -116,8 +116,8 @@ class WorkdirLayout:
 def workdir_layout(path: Path | str) -> WorkdirLayout:
     """Return the :class:`WorkdirLayout` rooted at *path*.
 
-    A ``str`` is coerced to ``Path`` (so ``handshake.is_agent(str(dir))`` keeps
-    working); anything else — a real ``Path`` or a duck-typed stand-in such as a
+    A ``str`` is coerced to ``Path`` so construction-bound filesystem adapters
+    keep accepting string roots; anything else — a real ``Path`` or a duck-typed stand-in such as a
     test ``MagicMock`` — is stored as-is so the ``root / name`` joins stay on
     whatever object the caller passed. This mirrors the pre-helper behavior
     where producers used ``workdir / "…"`` directly without coercion.

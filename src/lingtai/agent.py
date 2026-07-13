@@ -170,6 +170,18 @@ class Agent(BaseAgent):
                     kwargs["working_dir"]
                 )
 
+            # BaseAgent requires an agent-presence store bound to its own
+            # working directory. As the composition root, construct the
+            # production POSIX adapter. A caller may inject its own.
+            if "agent_presence" not in kwargs and "working_dir" in kwargs:
+                from lingtai.adapters.posix.agent_presence import (
+                    PosixAgentPresenceStoreAdapter,
+                )
+
+                kwargs["agent_presence"] = PosixAgentPresenceStoreAdapter(
+                    kwargs["working_dir"]
+                )
+
             # Compose the two required snapshot/revision capabilities outside Core.
             # Separate instances intentionally target the workdir and running source.
             if "snapshot_port" not in kwargs and "working_dir" in kwargs:
@@ -822,12 +834,18 @@ class Agent(BaseAgent):
         import shlex
         import subprocess
         import time
-        from lingtai.kernel.handshake import is_agent, is_alive, resolve_address
+        from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
+        from lingtai.kernel.agent_presence import (
+            is_agent as _presence_is_agent,
+            observe_alive as _presence_observe_alive,
+        )
+        from lingtai.kernel.handshake import resolve_address
         from lingtai.venv_resolve import resolve_venv, venv_python
 
         base_dir = self._working_dir.parent
         target = resolve_address(address, base_dir)
-        if not is_agent(target):
+        target_presence = PosixAgentPresenceStoreAdapter(target)
+        if not _presence_is_agent(target_presence.observe_manifest()):
             return None
 
         init_path = target / "init.json"
@@ -878,7 +896,11 @@ class Agent(BaseAgent):
 
         deadline = time.time() + 10.0
         while time.time() < deadline:
-            if is_alive(target, threshold=3.0):
+            if _presence_observe_alive(
+                target_presence,
+                wall_now=time.time(),
+                threshold=3.0,
+            ):
                 self._log("cpr_alive", target=str(target), pid=proc.pid)
                 return True
             code = proc.poll()

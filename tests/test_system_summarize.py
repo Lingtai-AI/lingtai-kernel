@@ -40,6 +40,7 @@ from lingtai.kernel.llm.interface import (
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
 from tests._notification_store_helpers import notification_store_for
+from tests._agent_presence_helpers import make_test_presence_store
 
 
 # ---------------------------------------------------------------------------
@@ -752,7 +753,7 @@ def test_handle_dispatches_summarize(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
 
     result = agent._intrinsics["system"]({"action": "summarize", "items": []})
     # Empty items → error, but the dispatch must reach _summarize (not unknown action)
@@ -776,7 +777,7 @@ def _make_base_agent_for_notification(tmp_path):
     svc.get_adapter.return_value = MagicMock()
     svc.provider = "gemini"
     svc.model = "gemini-test"
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
     return agent
 
 
@@ -985,7 +986,7 @@ def test_base_agent_threshold_init_from_config(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
     assert agent._summarize_notification_threshold == 3000  # default
 
     # Simulate what _setup_from_init does after reading manifest.  An explicit
@@ -1015,7 +1016,7 @@ def test_base_agent_threshold_config_accepts_zero(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-zero", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-zero", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
 
     manifest = {
         "llm": {"provider": "gemini", "model": "gemini-test"},
@@ -1040,7 +1041,7 @@ def test_base_agent_threshold_config_rejects_bool(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-bool", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-bool", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
 
     manifest = {
         "llm": {"provider": "gemini", "model": "gemini-test"},
@@ -1065,7 +1066,7 @@ def test_base_agent_threshold_default_when_not_in_config(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="default-test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="default-test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
     assert agent._summarize_notification_threshold == 3000
 
 
