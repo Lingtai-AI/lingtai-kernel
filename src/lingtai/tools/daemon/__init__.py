@@ -1089,6 +1089,34 @@ def get_description(lang: str = "en") -> str:
     return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Actions: emanate (dispatch), list (status), ask (follow-up), check (inspect recent events), reclaim (kill all), manual (return the installed daemon-manual skill). Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", id=...). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions.'
 
 
+def _backend_option_value_schema() -> dict:
+    """Return a fresh JSON schema for one generic CLI option value.
+
+    ``backend_options`` remains an open-ended argv passthrough.  A factory keeps
+    its explicit provider-visible properties and ``additionalProperties`` on
+    the same validation contract without sharing mutable schema nodes.
+    """
+    return {
+        "anyOf": [
+            {"type": "boolean"},
+            {"type": "string"},
+            {"type": "integer"},
+            {"type": "number"},
+            {"type": "null"},
+            {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "integer"},
+                        {"type": "number"},
+                    ],
+                },
+            },
+        ],
+    }
+
+
 def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
@@ -1121,25 +1149,18 @@ def get_schema(lang: str = "en") -> dict:
                         },
                         "backend_options": {
                             "type": "object",
-                            "additionalProperties": {
-                                "anyOf": [
-                                    {"type": "boolean"},
-                                    {"type": "string"},
-                                    {"type": "integer"},
-                                    {"type": "number"},
-                                    {"type": "null"},
-                                    {
-                                        "type": "array",
-                                        "items": {
-                                            "anyOf": [
-                                                {"type": "string"},
-                                                {"type": "integer"},
-                                                {"type": "number"},
-                                            ],
-                                        },
-                                    },
-                                ],
+                            "properties": {
+                                "config": {
+                                    **_backend_option_value_schema(),
+                                    "description": (
+                                        "Explicitly declared so constrained tool-schema "
+                                        "providers can generate repeated --config overrides; "
+                                        "uses the same scalar/list contract as generic "
+                                        "backend_options."
+                                    ),
+                                },
                             },
+                            "additionalProperties": _backend_option_value_schema(),
                             "description": 'Optional free-form CLI options for \'claude-code\' / \'codex\' / \'opencode\' / \'mimocode\' / \'qwen-code\' / \'oh-my-pi\' / \'kimicode\' / \'cursor\' backends ONLY (ignored by lingtai). JSON object mapping flag names to values: true → flag only (e.g. {"search": true} → --search); string/int/float → \'--flag <value>\'; list of scalars → \'--flag <v1> --flag <v2>\'; false/null omits the flag. Underscores in keys become dashes; nested objects and unsafe keys are rejected. Applies only when starting the emanation (not to `ask`). Discover supported flags by running \'claude --help\', \'codex exec --help\', \'opencode run --help\', \'mimo run --help\', \'qwen --help\', \'omp --help\', \'kimi --help\', or \'agent --help\' in bash — the CLI\'s flag list changes between versions; this field is intentionally a passthrough rather than a fixed list. See daemon-manual.',
                         },
                         "prompt": {

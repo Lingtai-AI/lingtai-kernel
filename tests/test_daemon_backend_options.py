@@ -445,8 +445,14 @@ def test_schema_includes_backend_options():
     schema = get_schema("en")
     task_props = schema["properties"]["tasks"]["items"]["properties"]
     assert "backend_options" in task_props
-    assert task_props["backend_options"]["type"] == "object"
-    passthrough = task_props["backend_options"]["additionalProperties"]
+    backend_options = task_props["backend_options"]
+    assert backend_options["type"] == "object"
+    passthrough = backend_options["additionalProperties"]
+    assert set(backend_options["properties"]) == {"config"}
+    config = backend_options["properties"]["config"]
+    assert config is not passthrough
+    assert config["anyOf"] == passthrough["anyOf"]
+    assert "constrained tool-schema providers" in config["description"]
     alternatives = passthrough["anyOf"]
     assert {item.get("type") for item in alternatives} == {
         "boolean", "string", "integer", "number", "null", "array",
