@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/kernel/nudge/goal.py
   - src/lingtai/kernel/nudge/kernel_version.py
   - src/lingtai/kernel/nudge/source_drift.py
+  - src/lingtai/kernel/snapshot/ANATOMY.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -52,7 +53,9 @@ bad check never breaks the loop). It dispatches to each check's
   startup runtime fingerprint with the current on-disk fingerprint and emits a
   low-priority refresh nudge only for non-dev/non-editable/non-source runtimes;
   development checkouts are skipped so agents are not nudged into arbitrary
-  in-flight source changes.
+  in-flight source changes. Revision capture uses the agent's injected
+  `SourceRevisionPort`; curated source hashing, timestamps, comparison, throttle,
+  and nudge policy remain here in Core.
 - `goal.py` — IDLE-only goal reminder check. It reads the allowlisted protected
   `.notification/goal.json`; if and only if that file exists, is active, and the
   idle delay has elapsed, it publishes one short `goal.reminder` event into

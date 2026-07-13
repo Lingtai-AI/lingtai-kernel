@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tests._notification_store_helpers import FakeNotificationStore
+from tests._snapshot_helpers import FakeSourceRevisionPort
 
 
 # ---------------------------------------------------------------------------
@@ -18,12 +19,12 @@ from tests._notification_store_helpers import FakeNotificationStore
 
 
 class TestCaptureRuntimeFingerprint:
-    """Unit tests for _capture_runtime_fingerprint()."""
+    """Unit tests for _capture_runtime_fingerprint(FakeSourceRevisionPort(revision="abc1234"))."""
 
     def test_returns_expected_keys(self):
         from lingtai.kernel.base_agent.lifecycle import _capture_runtime_fingerprint
 
-        fp = _capture_runtime_fingerprint()
+        fp = _capture_runtime_fingerprint(FakeSourceRevisionPort(revision="abc1234"))
         assert "git_rev" in fp
         assert "source_digest" in fp
         assert "captured_at" in fp
@@ -31,7 +32,7 @@ class TestCaptureRuntimeFingerprint:
     def test_source_digest_is_12_hex_chars(self):
         from lingtai.kernel.base_agent.lifecycle import _capture_runtime_fingerprint
 
-        fp = _capture_runtime_fingerprint()
+        fp = _capture_runtime_fingerprint(FakeSourceRevisionPort(revision="abc1234"))
         digest = fp["source_digest"]
         assert digest is not None
         assert len(digest) == 12
@@ -40,58 +41,50 @@ class TestCaptureRuntimeFingerprint:
     def test_captured_at_is_iso8601(self):
         from lingtai.kernel.base_agent.lifecycle import _capture_runtime_fingerprint
 
-        fp = _capture_runtime_fingerprint()
+        fp = _capture_runtime_fingerprint(FakeSourceRevisionPort(revision="abc1234"))
         ts = fp["captured_at"]
         assert ts.endswith("Z")
         # Should parse without error
         from datetime import datetime, timezone
         datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
-    def test_git_rev_null_when_not_in_repo(self):
+    def test_git_rev_null_when_revision_port_reports_unavailable(self):
         from lingtai.kernel.base_agent.lifecycle import _capture_runtime_fingerprint
 
-        with patch("lingtai.kernel.base_agent.lifecycle.subprocess") as mock_sub:
-            mock_sub.run.side_effect = FileNotFoundError
-            mock_sub.TimeoutExpired = subprocess.TimeoutExpired
-            fp = _capture_runtime_fingerprint()
-        # git_rev might be None (if the fixture isn't in a repo) or a string
-        # — either is acceptable. The key point is no crash.
+        revision = FakeSourceRevisionPort(revision=None)
+        fp = _capture_runtime_fingerprint(revision)
+        assert fp["git_rev"] is None
+        assert revision.revision_calls == [(None, 2.0)]
 
-    def test_git_rev_null_on_timeout(self):
-        import subprocess as _sp
-
+    def test_fingerprint_uses_native_short_revision_and_two_second_bound(self):
         from lingtai.kernel.base_agent.lifecycle import _capture_runtime_fingerprint
 
-        with patch("lingtai.kernel.base_agent.lifecycle.subprocess") as mock_sub:
-            mock_sub.run.side_effect = _sp.TimeoutExpired(cmd="git", timeout=2)
-            mock_sub.TimeoutExpired = _sp.TimeoutExpired
-            mock_sub.CalledProcessError = _sp.CalledProcessError
-            mock_sub.FileNotFoundError = FileNotFoundError
-            fp = _capture_runtime_fingerprint()
-        # Should not crash; git_rev may or may not be None depending on real git
-        assert "git_rev" in fp
+        revision = FakeSourceRevisionPort(revision="abc1234")
+        fp = _capture_runtime_fingerprint(revision)
+        assert fp["git_rev"] == "abc1234"
+        assert revision.revision_calls == [(None, 2.0)]
 
-    def test_source_digest_changes_on_file_change(self, tmp_path):
-        """Simulate source file change and verify digest changes."""
+    def test_source_digest_changes_in_synthetic_package(self, tmp_path, monkeypatch):
+        """Digest drift is exercised only in an isolated temporary package tree."""
         import lingtai.kernel
         from lingtai.kernel.base_agent.lifecycle import _capture_runtime_fingerprint, _FP_KEY_FILES
 
-        fp1 = _capture_runtime_fingerprint()
+        pkg_dir = tmp_path / "synthetic_kernel"
+        package_init = pkg_dir / "__init__.py"
+        package_init.parent.mkdir(parents=True)
+        package_init.write_text("# synthetic package\n", encoding="utf-8")
+        monkeypatch.setattr(lingtai.kernel, "__file__", str(package_init))
+        for rel in _FP_KEY_FILES:
+            source = pkg_dir / rel
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(f"# {rel}\n", encoding="utf-8")
 
-        # Modify one of the key files temporarily
-        pkg_dir = Path(lingtai.kernel.__file__).resolve().parent
+        revision = FakeSourceRevisionPort(revision="abc1234")
+        fp1 = _capture_runtime_fingerprint(revision)
         target = pkg_dir / _FP_KEY_FILES[0]
-        original = target.read_bytes()
-        try:
-            target.write_text(original.decode("utf-8") + "\n# drift marker\n")
-            fp2 = _capture_runtime_fingerprint()
-            assert fp1["source_digest"] != fp2["source_digest"]
-        finally:
-            target.write_bytes(original)
-
-
-# We need subprocess at module level for the mock patch
-import subprocess
+        target.write_text("# synthetic drift\n", encoding="utf-8")
+        fp2 = _capture_runtime_fingerprint(revision)
+        assert fp1["source_digest"] != fp2["source_digest"]
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +197,7 @@ class TestSourceDriftNudge:
         agent = MagicMock()
         agent._working_dir = Path("/tmp/test-nudge")
         agent._runtime_fingerprint = startup_fp
+        agent._source_revision_port = FakeSourceRevisionPort(revision="abc1234")
         agent._nudge_source_drift_state = {}
         agent._notification_store = FakeNotificationStore()
         return agent

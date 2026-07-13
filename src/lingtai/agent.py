@@ -150,6 +150,19 @@ class Agent(BaseAgent):
                     kwargs["working_dir"]
                 )
 
+            # Compose the two required snapshot/revision capabilities outside Core.
+            # Separate instances intentionally target the workdir and running source.
+            if "snapshot_port" not in kwargs and "working_dir" in kwargs:
+                from lingtai.adapters.posix.git_cli import PosixGitCliAdapter
+
+                kwargs["snapshot_port"] = PosixGitCliAdapter(kwargs["working_dir"])
+            if "source_revision_port" not in kwargs:
+                from lingtai.adapters.posix.git_cli import PosixGitCliAdapter
+
+                kwargs["source_revision_port"] = PosixGitCliAdapter(
+                    Path(__file__).resolve().parent
+                )
+
             # Store combo name before super().__init__ (not forwarded to BaseAgent)
             self._combo_name = combo_name
             super().__init__(*args, **kwargs)

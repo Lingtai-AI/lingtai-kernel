@@ -2,6 +2,7 @@
 """Tests for deep refresh (full agent reconstruct from init.json)."""
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -808,3 +809,111 @@ def test_refresh_codex_adapter_keeps_per_agent_anchor(tmp_path):
     new_adapter = agent.service.get_adapter("codex")
     assert new_adapter._codex_session_anchor == old_anchor
     assert new_adapter._codex_session_anchor == str((tmp_path / "init.json").resolve())
+
+
+def test_refresh_watcher_receives_parent_captured_runtime_identity(tmp_path):
+    """The generated watcher structurally reuses only parent-captured identity."""
+    from lingtai.kernel.base_agent.lifecycle import _perform_refresh
+
+    captured_identity = {
+        "kernel_version": "captured-version",
+        "kernel_runtime_stamp": "captured-stamp",
+        "kernel_runtime": {"version": "captured-version", "stamp": "captured-stamp"},
+    }
+    agent = _make_agent(tmp_path)
+    agent._runtime_identity_event_fields = captured_identity
+    agent._build_launch_cmd = MagicMock(
+        return_value=["lingtai-agent", "run", str(tmp_path)]
+    )
+
+    with patch("subprocess.Popen") as popen:
+        _perform_refresh(
+            agent,
+            skip_chat_history_save=True,
+            skip_save_reason="identity-handoff-test",
+        )
+
+    script = popen.call_args.args[0][2]
+    tree = ast.parse(script)
+
+    identity_assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "identity_fields"
+            for target in node.targets
+        )
+    ]
+    assert len(identity_assignments) == 1
+    assert ast.literal_eval(identity_assignments[0].value) == captured_identity
+
+    logger = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "log"
+    )
+    entry_assignment = next(
+        node
+        for node in ast.walk(logger)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "entry"
+            for target in node.targets
+        )
+        and isinstance(node.value, ast.Dict)
+    )
+    expanded_names = [
+        value.id
+        for key, value in zip(
+            entry_assignment.value.keys, entry_assignment.value.values
+        )
+        if key is None and isinstance(value, ast.Name)
+    ]
+    assert expanded_names == ["identity_fields", "kw"]
+
+    imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        node.module or ""
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+    }
+    imported_symbols = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert all("revision" not in imported.lower() for imported in imports)
+    assert all("revision" not in symbol.lower() for symbol in imported_symbols)
+    assert all("lingtai.adapters" not in imported for imported in imports)
+    assert all(
+        "revision" not in node.name.lower()
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    )
+
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    attributes = {
+        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+    }
+    string_literals = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert {"rev-parse", "current_revision", "is_dirty"}.isdisjoint(
+        string_literals
+    )
+    assert {
+        "PosixGitCliAdapter",
+        "SourceRevisionPort",
+        "current_revision",
+        "is_dirty",
+        "runtime_identity_event_fields",
+    }.isdisjoint(names | attributes | imported_symbols)
+    agent._workdir_lease.release()

@@ -11,6 +11,7 @@ import pytest
 from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
 from lingtai.kernel.tc_inbox import InvoluntaryToolCall, TCInbox
 from tests._workdir_lease_helpers import make_test_lease
+from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
 from tests._notification_store_helpers import notification_store_for
 
 
@@ -103,7 +104,7 @@ class TestDrainTCInbox:
             service=svc,
             agent_name="test",
             working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "agent"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
         )
         return agent
 
@@ -202,7 +203,7 @@ class TestReplaceInHistory:
             service=svc,
             agent_name="test",
             working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
-        notification_store=notification_store_for(tmp_path / "agent"),
+        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
         )
         iface = ChatInterface()
         iface.add_user_message("hi")

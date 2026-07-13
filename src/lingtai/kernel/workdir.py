@@ -1,4 +1,4 @@
-"""WorkingDir — agent working directory: git, manifest.
+"""WorkingDir — agent working-directory layout and manifest.
 
 The exclusive working-directory lock is no longer owned here. It moved to the
 Core-owned ``lingtai.kernel.workdir_lease.WorkdirLeasePort`` and its production
@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -220,7 +219,7 @@ def write_resolved_manifest(working_dir: Path | str, data: dict) -> Path | None:
 
 
 class WorkingDir:
-    """Manages an agent's working directory — git, manifest.
+    """Manages an agent's working-directory layout and manifest.
 
     Lock authority was removed: the exclusive working-directory lease now lives
     behind ``WorkdirLeasePort`` and its ``PosixWorkdirLeaseAdapter``. This class
@@ -236,190 +235,6 @@ class WorkingDir:
     @property
     def path(self) -> Path:
         return self._path
-
-    # --- Git operations ---
-
-    def init_git(self) -> None:
-        git_dir = self._path / ".git"
-        if git_dir.is_dir():
-            return
-
-        try:
-            subprocess.run(
-                ["git", "init"], cwd=self._path,
-                capture_output=True, check=True,
-            )
-            subprocess.run(
-                ["git", "config", "user.email", "agent@lingtai"],
-                cwd=self._path, capture_output=True, check=True,
-            )
-            subprocess.run(
-                ["git", "config", "user.name", "灵台 Agent"],
-                cwd=self._path, capture_output=True, check=True,
-            )
-
-            gitignore = self._path / ".gitignore"
-            # Exclude secrets and transient lifecycle files from git tracking.
-            # Without this, snapshot()'s `git add -A` would commit .secrets/
-            # (MCP addon credentials such as bot tokens) to git history.
-            gitignore.write_text(
-                "# Secrets — MCP addon credentials (bot tokens, API keys)\n"
-                ".secrets/\n"
-                "\n"
-                "# Transient lifecycle signal files\n"
-                ".sleep\n"
-                ".suspend\n"
-                ".agent.heartbeat\n"
-                ".timemachine.pid\n"
-            )
-
-            system_dir = self._path / "system"
-            system_dir.mkdir(exist_ok=True)
-            covenant_file = system_dir / "covenant.md"
-            if not covenant_file.is_file():
-                covenant_file.write_text("")
-            principle_file = system_dir / "principle.md"
-            if not principle_file.is_file():
-                principle_file.write_text("")
-            pad_file = system_dir / "pad.md"
-            if not pad_file.is_file():
-                pad_file.write_text("")
-
-            subprocess.run(
-                ["git", "add", ".gitignore", "system/"],
-                cwd=self._path, capture_output=True, check=True,
-            )
-            subprocess.run(
-                ["git", "commit", "-m", "init: agent working directory"],
-                cwd=self._path, capture_output=True, check=True,
-            )
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            system_dir = self._path / "system"
-            system_dir.mkdir(exist_ok=True)
-            covenant_file = system_dir / "covenant.md"
-            if not covenant_file.is_file():
-                covenant_file.write_text("")
-            principle_file = system_dir / "principle.md"
-            if not principle_file.is_file():
-                principle_file.write_text("")
-            pad_file = system_dir / "pad.md"
-            if not pad_file.is_file():
-                pad_file.write_text("")
-
-    def diff(self, rel_path: str) -> str:
-        try:
-            result = subprocess.run(
-                ["git", "diff", rel_path],
-                cwd=self._path, capture_output=True, text=True,
-            )
-            diff_text = result.stdout.strip()
-            if not diff_text:
-                status_result = subprocess.run(
-                    ["git", "status", "--porcelain", rel_path],
-                    cwd=self._path, capture_output=True, text=True,
-                )
-                if status_result.stdout.strip():
-                    file_path = self._path / rel_path
-                    diff_text = f"(new/untracked file)\n{file_path.read_text(encoding='utf-8')}"
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            diff_text = ""
-        return diff_text
-
-    def diff_and_commit(self, rel_path: str, label: str) -> tuple[str | None, str | None]:
-        try:
-            diff_result = subprocess.run(
-                ["git", "diff", rel_path],
-                cwd=self._path, capture_output=True, text=True,
-            )
-            diff_cached = subprocess.run(
-                ["git", "diff", "--cached", rel_path],
-                cwd=self._path, capture_output=True, text=True,
-            )
-            status_result = subprocess.run(
-                ["git", "status", "--porcelain", rel_path],
-                cwd=self._path, capture_output=True, text=True,
-            )
-
-            has_changes = bool(
-                diff_result.stdout.strip()
-                or diff_cached.stdout.strip()
-                or status_result.stdout.strip()
-            )
-
-            if not has_changes:
-                return None, None
-
-            diff_text = diff_result.stdout or status_result.stdout
-
-            subprocess.run(
-                ["git", "add", rel_path],
-                cwd=self._path, capture_output=True, check=True,
-            )
-
-            if not diff_text.strip():
-                staged = subprocess.run(
-                    ["git", "diff", "--cached", rel_path],
-                    cwd=self._path, capture_output=True, text=True,
-                )
-                diff_text = staged.stdout
-
-            subprocess.run(
-                ["git", "commit", "-m", f"system: update {label}"],
-                cwd=self._path, capture_output=True, check=True,
-            )
-
-            hash_result = subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"],
-                cwd=self._path, capture_output=True, text=True,
-            )
-            commit_hash = hash_result.stdout.strip()
-
-            return diff_text, commit_hash
-
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            return None, None
-
-    def snapshot(self) -> str | None:
-        """Commit entire working directory state. Returns commit hash or None.
-
-        No-op if nothing changed. Like Apple Time Machine — captures everything.
-        """
-        try:
-            subprocess.run(
-                ["git", "add", "-A"],
-                cwd=self._path, capture_output=True, check=True,
-            )
-            status = subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=self._path, capture_output=True,
-            )
-            if status.returncode == 0:
-                return None  # nothing staged
-
-            from datetime import datetime, timezone
-            ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            subprocess.run(
-                ["git", "commit", "-m", f"snapshot {ts}"],
-                cwd=self._path, capture_output=True, check=True,
-            )
-            result = subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"],
-                cwd=self._path, capture_output=True, text=True,
-            )
-            return result.stdout.strip()
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            return None
-
-    def gc(self) -> None:
-        """Run git garbage collection to optimize repo storage."""
-        try:
-            subprocess.run(
-                ["git", "gc", "--auto"],
-                cwd=self._path, capture_output=True,
-                timeout=60,
-            )
-        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            pass
 
     # --- Manifest ---
 
