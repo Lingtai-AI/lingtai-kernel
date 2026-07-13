@@ -77,13 +77,10 @@ _TASK_CARD_EDIT_IMPOSSIBLE_DESCRIPTIONS = frozenset({
 })
 
 # Fixed human warning shown on every Task Card render (running and frozen
-# last-behavior).  Jason: the card is progress-only; the human must reply to the
-# normal conversation/final result, never to this card.  Kept short so it always
-# fits under the Telegram message-size bound even under multi-row length pressure.
-_TASK_CARD_FOOTER = (
-    "⚠️ Progress only — don't reply to this Task Card. "
-    "Reply in the normal chat to the final result instead."
-)
+# last-behavior). Jason: never reply to the card; point directly to the local
+# command that controls its delivery. Kept short so it always fits under the
+# Telegram message-size bound even under multi-row length pressure.
+_TASK_CARD_FOOTER = "Don't reply to this Task Card. Use /taskcard on|off to toggle."
 
 # Card-level time line prefix.  Jason #6894/#6899: the Task Card carries one
 # standalone time line (not a per-row inline suffix), rendered as its final line
