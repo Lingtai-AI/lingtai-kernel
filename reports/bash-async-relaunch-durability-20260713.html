@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bash async relaunch durability — implementation and validation report</title>
+<style>
+  :root {
+    --ink:#172033; --muted:#637083; --paper:#f5f7fb; --card:#ffffff;
+    --line:#dfe5ee; --blue:#2458d3; --blue-soft:#eaf0ff;
+    --green:#16744b; --green-soft:#e8f7ef; --amber:#9a5b00; --amber-soft:#fff3dc;
+    --red:#a13c34; --red-soft:#fff0ee; --shadow:0 12px 34px rgba(27,42,72,.08);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; color:var(--ink); background:var(--paper); font:15px/1.58 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  main { width:min(1180px, calc(100% - 36px)); margin:34px auto 70px; }
+  .hero { padding:34px 38px; color:white; border-radius:20px; background:linear-gradient(135deg,#183c9a,#2f68e6 58%,#5c88ef); box-shadow:var(--shadow); }
+  .eyebrow { font-size:12px; font-weight:750; letter-spacing:.12em; text-transform:uppercase; opacity:.78; }
+  h1 { margin:8px 0 10px; font-size:clamp(30px,5vw,52px); line-height:1.08; letter-spacing:-.035em; }
+  .hero p { max-width:850px; margin:0; font-size:18px; opacity:.9; }
+  .meta { display:flex; flex-wrap:wrap; gap:9px; margin-top:22px; }
+  .pill { display:inline-flex; align-items:center; gap:7px; padding:7px 11px; border:1px solid rgba(255,255,255,.28); border-radius:999px; background:rgba(255,255,255,.12); font-size:13px; }
+  section { margin-top:22px; padding:27px 30px; border:1px solid var(--line); border-radius:18px; background:var(--card); box-shadow:var(--shadow); }
+  h2 { margin:0 0 14px; font-size:24px; letter-spacing:-.02em; }
+  h3 { margin:0 0 7px; font-size:16px; }
+  p { margin:7px 0; }
+  code { padding:.12em .35em; border-radius:5px; background:#edf1f7; font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .lead { font-size:18px; }
+  .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:13px; }
+  .metric { padding:17px; border:1px solid var(--line); border-radius:13px; background:#fbfcff; }
+  .metric strong { display:block; font-size:25px; line-height:1.15; }
+  .metric span { color:var(--muted); font-size:13px; }
+  .success { color:var(--green); }
+  .flow { display:grid; grid-template-columns:1fr 56px 1fr; align-items:stretch; gap:11px; }
+  .flow-card { padding:19px; border-radius:14px; border:1px solid var(--line); }
+  .flow-card.before { background:var(--red-soft); border-color:#f1ccc7; }
+  .flow-card.after { background:var(--green-soft); border-color:#c7e7d6; }
+  .arrow { display:grid; place-items:center; color:var(--blue); font-size:31px; font-weight:800; }
+  ol.chain { margin:12px 0 0; padding-left:22px; }
+  ol.chain li { margin:7px 0; }
+  table { width:100%; border-collapse:collapse; margin-top:10px; }
+  th,td { padding:12px 13px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+  th { color:#45536a; background:#f7f9fc; font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+  tr:last-child td { border-bottom:0; }
+  .tag { display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; font-weight:700; }
+  .tag.green { color:var(--green); background:var(--green-soft); }
+  .tag.amber { color:var(--amber); background:var(--amber-soft); }
+  .note { padding:15px 17px; border-left:4px solid var(--blue); border-radius:8px; background:var(--blue-soft); }
+  .warning { border-left-color:var(--amber); background:var(--amber-soft); }
+  .paths { display:grid; grid-template-columns:1fr 1fr; gap:8px 18px; padding:0; list-style:none; }
+  .paths li { padding:9px 11px; border:1px solid var(--line); border-radius:9px; overflow-wrap:anywhere; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+  footer { margin-top:22px; color:var(--muted); text-align:center; font-size:13px; }
+  @media (max-width:850px) { .grid{grid-template-columns:1fr 1fr}.flow{grid-template-columns:1fr}.arrow{transform:rotate(90deg)}.paths{grid-template-columns:1fr} }
+  @media (max-width:520px) { main{width:min(100% - 20px,1180px);margin-top:10px}.hero,section{padding:22px 19px;border-radius:14px}.grid{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<main>
+  <header class="hero">
+    <div class="eyebrow">LingTai kernel · Bash capability · PR candidate</div>
+    <h1>Async jobs now outlive the agent that started them.</h1>
+    <p>A durable supervisor owns the child process, logs, cancellation, and exact exit status. A relaunched manager rehydrates the same job instead of guessing from an orphaned PID.</p>
+    <div class="meta">
+      <span class="pill">Live base <code>99deeafe</code></span>
+      <span class="pill">8 implementation/doc/test paths</span>
+      <span class="pill">No merge or release authorized</span>
+      <span class="pill">Report generated 2026-07-13</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>Conclusion first</h2>
+    <p class="lead">The candidate closes the cross-refresh/relaunch ownership gap without pretending that a live PID is proof of process identity or exact exit status.</p>
+    <div class="grid">
+      <div class="metric"><strong class="success">114 passed</strong><span>Bash async + layer focused gate</span></div>
+      <div class="metric"><strong class="success">330 passed</strong><span>Anatomy, architecture, package, glossary, layers; 54 resources validated</span></div>
+      <div class="metric"><strong class="success">10 × 8</strong><span>Cancellation/start/handoff/suppression races, all green</span></div>
+      <div class="metric"><strong class="success">5109 passed</strong><span>Full source suite; 3 skipped, 5 failures exactly reproduced on clean base</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Before and after</h2>
+    <div class="flow">
+      <div class="flow-card before">
+        <h3>Before: manager-owned lifetime</h3>
+        <ol class="chain">
+          <li>Agent manager starts a child and keeps transient process handles.</li>
+          <li>Refresh/relaunch destroys the manager's in-memory ownership.</li>
+          <li>A later poll can see files or a PID, but cannot recover exact wait status.</li>
+          <li>Cancellation and reminders can race terminal truth or report premature success.</li>
+        </ol>
+      </div>
+      <div class="arrow">→</div>
+      <div class="flow-card after">
+        <h3>After: supervisor-owned lifetime</h3>
+        <ol class="chain">
+          <li>Manager atomically creates durable job state with a finite start lease and bounded successful-return handoff.</li>
+          <li>Supervisor claims and rechecks the start lease before <code>Popen</code>; parent reaping or later dead/expired proof closes every preclaim exit.</li>
+          <li>Supervisor owns <code>Popen</code>, logs, whole-group TERM→KILL quiescence, exact <code>wait()</code>, and terminal commit.</li>
+          <li>Any later manager rehydrates state; <code>status: ok</code> is permitted only while the return handoff still linearizes safely.</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Normative contracts locked by the patch</h2>
+    <table>
+      <thead><tr><th>Concern</th><th>Promise</th><th>Failure avoided</th></tr></thead>
+      <tbody>
+        <tr><td>Supervisor start</td><td>Initial state carries a tokenized finite lease; the supervisor claims it and rechecks under the state lock immediately before command spawn. The owning parent reaps an early exit; a fresh manager uses expired-lease or definitively-dead PID proof.</td><td>Preclaim death stranded forever in <code>launching</code>/<code>running</code>, duplicate spawn, and PID-reuse guessing.</td></tr>
+        <tr><td>Exact terminal truth</td><td>Only the supervisor holding the direct child unreaped commits the real wait result after logs close.</td><td>Fabricated <code>-1</code>, false failure, or poll-before-commit unknown.</td></tr>
+        <tr><td>Polling</td><td>Verified-live commands fast-path; otherwise poll waits for bounded supervisor commit before declaring explicit unrecoverable state.</td><td>Command PID exits a moment before supervisor persists the exit code.</td></tr>
+        <tr><td>Cancellation</td><td>The supervisor keeps the direct shell unreaped through TERM grace, KILLs the original process group, and reports <code>group_cancelled</code> only after no live non-zombie group member remains.</td><td>False “cancelled” after outer-shell exit while a TERM-ignoring descendant survives.</td></tr>
+        <tr><td>One terminal consumer</td><td>Terminal claim and reminder suppression are atomic under the durable state lock.</td><td>Two managers both consuming the same result.</td></tr>
+        <tr><td>Reminder timing</td><td>A bounded durable return handoff blocks the crash fallback before <code>Popen</code> and between durable <code>running</code> and successful return. <code>status: ok</code> requires the valid lock-owned transition; a post-expiry owner returns a pollable error with <code>job_id/pid</code>.</td><td>Premature reminder or false start success after fallback publication.</td></tr>
+        <tr><td>Completion wake</td><td>Exact completion suppresses pending/publishing/bounded-suppressing watchdogs; expired cancellation suppression recovers to pending. Bash completion owns the authoritative wake.</td><td>Stale reminder, permanent suppression after manager crash, and reminder/terminal races.</td></tr>
+        <tr><td>Legacy jobs</td><td>A live legacy PID stays conservatively running and uncancellable; after it dies, one poll returns explicit unknown status.</td><td>Signalling an unowned reused PID or inventing an exit code.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Validation receipts</h2>
+    <table>
+      <thead><tr><th>Gate</th><th>Exact result</th><th>Evidence</th></tr></thead>
+      <tbody>
+        <tr><td>Focused</td><td><span class="tag green">PASS</span> 114 tests in 18.66s</td><td><code>final-focused-20260713T1402Z/receipt.txt</code></td></tr>
+        <tr><td>Related contracts/docs</td><td><span class="tag green">PASS</span> 330 tests in 26.13s; 54 glossary resources validated</td><td><code>final-related-20260713T1402Z/receipt.txt</code></td></tr>
+        <tr><td>Race repetition</td><td><span class="tag green">PASS</span> 8 adversarial tests × 10 iterations</td><td><code>final-race-repeat-20260713T1404Z/receipt.txt</code></td></tr>
+        <tr><td>Full source suite</td><td><span class="tag amber">BASELINE ONLY</span> 5109 passed, 3 skipped, 5 failed in 225.64s; no Bash failures</td><td><code>final-full-source-20260713T1405Z/receipt.txt</code></td></tr>
+        <tr><td>Baseline comparison</td><td><span class="tag green">REPRODUCED</span> the same five failures on clean exact base <code>99deeafe</code></td><td><code>baseline-five-cleanbase-20260713T1415Z/receipt.txt</code></td></tr>
+      </tbody>
+    </table>
+    <div class="note warning">
+      <strong>Verified baseline failures, not candidate regressions.</strong>
+      Three Codex-focused tests fail because the intentionally empty scratch <code>HOME</code> has no <code>codex-auth.json</code>; the traversal-budget test sees <code>/tmp/</code> in the absolute task-scratch prefix; and the wheel sidecar smoke test installs a wheel without <code>lingtai/bin/</code>. Clean exact base <code>99deeafe</code> reproduces all five under the same confined environment.
+    </div>
+  </section>
+
+  <section>
+    <h2>Patch scope</h2>
+    <ul class="paths">
+      <li>src/lingtai/tools/bash/__init__.py</li>
+      <li>src/lingtai/tools/bash/_async_supervisor.py</li>
+      <li>src/lingtai/tools/bash/CONTRACT.md</li>
+      <li>src/lingtai/tools/bash/ANATOMY.md</li>
+      <li>src/lingtai/tools/bash/manual/SKILL.md</li>
+      <li>src/lingtai/tools/bash/glossary-zh.md</li>
+      <li>src/lingtai/tools/bash/glossary-wen.md</li>
+      <li>tests/test_bash_async.py</li>
+    </ul>
+    <p>The report itself is intentionally separate from the eight implementation/doc/test paths. The previous stale-base worktree and every failed/review/test artifact remain preserved; no cleanup or deletion was performed.</p>
+  </section>
+
+  <section>
+    <h2>Review focus</h2>
+    <div class="note">
+      The decisive questions are not style or line count. Review the state-machine linearization points: finite supervisor-start claim and pre-<code>Popen</code> recheck; owning-parent/fresh-manager recovery from preclaim death; exact terminal commit; poll's precommit wait; whole-group cancellation quiescence; atomic terminal consumption; bounded return-handoff success; and reminder publication versus cancellation/terminal suppression.
+    </div>
+    <p>External side effects remain gated: the candidate is not committed, pushed, merged, released, or installed by this report.</p>
+  </section>
+
+  <footer>Source: candidate worktree and preserved validation receipts under the task scratch root. This is a self-contained local report with no external scripts, fonts, or network requests.</footer>
+</main>
+</body>
+</html>

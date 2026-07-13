@@ -1,5 +1,7 @@
 """Tests for async mode of the bash capability."""
 import json
+import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -10,6 +12,7 @@ import pytest
 
 from tests._notification_store_helpers import notification_store_for, snapshot_notifications
 from lingtai.tools.bash import BashManager, BashPolicy, get_schema
+from lingtai.tools.bash import _async_supervisor
 
 
 class TestBashAsync:
@@ -143,7 +146,7 @@ class TestBashAsync:
         assert result["status"] == "error"
         assert "job_id is required" in result["message"]
 
-    # 8. double-poll after completion returns error (job already cleaned up)
+    # 8. double-poll after completion returns error (durable record is consumed)
     def test_double_poll_after_completion(self, tmp_path):
         mgr = self._make_manager(tmp_path)
         result = mgr.handle({"command": "echo done", "async": True})
@@ -151,24 +154,24 @@ class TestBashAsync:
 
         time.sleep(0.5)
 
-        # First poll — should succeed and clean up
+        # First poll succeeds and durably marks the terminal result consumed.
         poll1 = mgr.handle({"action": "poll", "command": "", "job_id": job_id})
         assert poll1["status"] == "done"
 
-        # Second poll — job dir is gone
+        # The record remains for relaunch evidence, but the public result is one-shot.
         poll2 = mgr.handle({"action": "poll", "command": "", "job_id": job_id})
         assert poll2["status"] == "error"
-        assert "not found" in poll2["message"].lower()
+        assert "already finished" in poll2["message"].lower()
 
     def test_poll_nonexistent_job(self, tmp_path):
         mgr = self._make_manager(tmp_path)
-        result = mgr.handle({"action": "poll", "command": "", "job_id": "job-doesnotexist"})
+        result = mgr.handle({"action": "poll", "command": "", "job_id": "job-ffffffffffffffffffffffffffffffff"})
         assert result["status"] == "error"
         assert "not found" in result["message"].lower()
 
     def test_cancel_nonexistent_job(self, tmp_path):
         mgr = self._make_manager(tmp_path)
-        result = mgr.handle({"action": "cancel", "command": "", "job_id": "job-doesnotexist"})
+        result = mgr.handle({"action": "cancel", "command": "", "job_id": "job-ffffffffffffffffffffffffffffffff"})
         assert result["status"] == "error"
         assert "not found" in result["message"].lower()
 
@@ -208,6 +211,31 @@ class TestBashAsync:
         assert result["status"] == "ok"
         mgr.handle({"action": "cancel", "command": "", "job_id": result["job_id"]})
 
+    def test_reminder_deadline_starts_at_successful_async_return(self, tmp_path, monkeypatch):
+        mgr = self._make_manager(tmp_path)
+        real_popen = subprocess.Popen
+        startup_delay = 0.2
+        reminder = 0.15
+
+        def delayed_supervisor_start(*args, **kwargs):
+            time.sleep(startup_delay)
+            return real_popen(*args, **kwargs)
+
+        monkeypatch.setattr("lingtai.tools.bash.subprocess.Popen", delayed_supervisor_start)
+        started = mgr.handle({"command": "sleep 5", "async": True, "reminder": reminder})
+        returned_at = time.time()
+        assert started["status"] == "ok"
+
+        state = json.loads(
+            (tmp_path / "system" / "jobs" / started["job_id"] / "state.json").read_text()
+        )
+        deadline = state["reminder"]["deadline_at"]
+        # The initial persisted deadline is only the crash fallback. A successful
+        # return gives the caller the requested interval after supervisor startup.
+        assert deadline - state["created_at"] >= startup_delay + reminder * 0.5
+        assert deadline - returned_at >= reminder * 0.5
+        mgr.handle({"action": "cancel", "job_id": started["job_id"]})
+
     @pytest.mark.parametrize(
         "value",
         [
@@ -227,21 +255,17 @@ class TestBashAsync:
         assert result["status"] == "error"
         assert "reminder" in result["message"]
 
-    def test_async_reminder_publishes_after_delay_even_if_process_exited_unpolled(self, tmp_path):
+    def test_completed_unpolled_job_uses_completion_wake_without_stale_reminder(self, tmp_path):
         mgr = self._make_manager(tmp_path)
         result = mgr.handle({"command": "echo finished", "async": True, "reminder": 0.05})
         job_id = result["job_id"]
 
         time.sleep(0.3)
 
-        events = snapshot_notifications(tmp_path)["system"]["data"]["events"]
-        assert len(events) == 1
-        event = events[0]
-        assert event["source"] == "bash.reminder"
-        assert event["ref_id"] == f"bash.reminder:{job_id}"
-        assert job_id in event["body"]
-        assert "poll" in event["body"]
-        assert "echo finished" not in event["body"]
+        notifications = snapshot_notifications(tmp_path)
+        assert "system" not in notifications
+        assert notifications["bash"]["data"]["job_id"] == job_id
+        assert notifications["bash"]["data"]["exit_code"] == 0
 
         poll = mgr.handle({"action": "poll", "command": "", "job_id": job_id})
         assert poll["status"] == "done"
@@ -288,6 +312,9 @@ class TestBashAsync:
             "reminder": float("nan"),
         })
         assert cancel["status"] == "cancelled"
+        consumed = mgr.handle({"action": "poll", "command": "", "job_id": job_id})
+        assert consumed["status"] == "error"
+        assert "cancelled" in consumed["message"].lower()
         time.sleep(0.3)
 
         assert "system" not in snapshot_notifications(tmp_path)
@@ -417,3 +444,921 @@ class TestBashAsync:
         assert second.startswith("evt_")
         assert first != second
         assert [len(event_id.rsplit("_", 1)[1]) for event_id in (first, second)] == [16, 16]
+
+
+class TestBashAsyncRelaunchDurability:
+    """Regression coverage for jobs surviving a fresh BashManager instance."""
+
+    @staticmethod
+    def _manager(tmp_path: Path) -> BashManager:
+        return BashManager(
+            policy=BashPolicy.yolo(),
+            working_dir=str(tmp_path),
+            agent=SimpleNamespace(_notification_store=notification_store_for(tmp_path)),
+        )
+
+    @staticmethod
+    def _wait_for(predicate, timeout: float = 3.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.02)
+        raise AssertionError("timed out waiting for durable async state")
+
+    @staticmethod
+    def _durable_state(
+        tmp_path: Path,
+        job_id: str,
+        *,
+        status: str = "completed",
+        deadline: float | None = None,
+        pid: int | None = None,
+        pid_identity: str | None = None,
+    ) -> Path:
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        now = time.time()
+        (job_dir / "state.json").write_text(json.dumps({
+            "version": 1,
+            "job_id": job_id,
+            "command": "echo durable",
+            "cwd": str(tmp_path),
+            "status": status,
+            "created_at": now - 1,
+            "started_at": now - 1,
+            "finished_at": now if status == "completed" else None,
+            "pid": pid,
+            "pid_identity": pid_identity,
+            "pid_start_time": pid_identity,
+            "exit_status_known": status == "completed",
+            "exit_code": 0 if status == "completed" else None,
+            "terminal_polled": False,
+            "reminder": {
+                "deadline_at": deadline,
+                "state": "pending",
+                "ref_id": f"bash.reminder:{job_id}",
+            },
+            "completion": {
+                "state": "pending",
+                "ref_id": f"bash.completion:{job_id}",
+            },
+        }))
+        (job_dir / "stdout.log").write_text("durable output\n")
+        (job_dir / "stderr.log").write_text("")
+        return job_dir
+
+    @pytest.mark.parametrize("command, expected", [("exit 0", 0), ("exit 23", 23)])
+    def test_fresh_manager_recovers_exact_supervisor_exit_code(
+        self, tmp_path, command, expected
+    ):
+        first = self._manager(tmp_path)
+        started = first.handle({"command": command, "async": True, "reminder": 30})
+        job_id = started["job_id"]
+        job_dir = tmp_path / "system" / "jobs" / job_id
+
+        self._wait_for(lambda: (job_dir / "state.json").exists())
+        self._wait_for(
+            lambda: json.loads((job_dir / "state.json").read_text())["status"] == "completed"
+        )
+
+        # A new manager has no Popen handle and must use the supervisor's durable
+        # terminal result rather than inferring a false -1 failure from a dead PID.
+        relaunched = self._manager(tmp_path)
+        poll = relaunched.handle({"action": "poll", "job_id": job_id})
+        assert poll["status"] == "done"
+        assert poll["exit_status_known"] is True
+        assert poll["exit_code"] == expected
+        assert poll["ok"] is (expected == 0)
+
+    def test_supervisor_survives_actual_manager_process_exit(self, tmp_path):
+        launcher = """
+import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+from tests._notification_store_helpers import notification_store_for
+from lingtai.tools.bash import BashManager, BashPolicy
+
+root = Path(sys.argv[1])
+manager = BashManager(
+    policy=BashPolicy.yolo(),
+    working_dir=str(root),
+    agent=SimpleNamespace(_notification_store=notification_store_for(root)),
+)
+print(json.dumps(manager.handle({
+    "command": "sleep 0.2; exit 17",
+    "async": True,
+    "reminder": 30,
+})), flush=True)
+"""
+        launched = subprocess.run(
+            [sys.executable, "-c", launcher, str(tmp_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        started = json.loads(launched.stdout.strip())
+        job_id = started["job_id"]
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        self._wait_for(
+            lambda: (job_dir / "state.json").exists()
+            and json.loads((job_dir / "state.json").read_text())["status"] == "completed"
+        )
+
+        relaunched = self._manager(tmp_path)
+        poll = relaunched.handle({"action": "poll", "job_id": job_id})
+        assert poll["status"] == "done"
+        assert poll["exit_status_known"] is True
+        assert poll["exit_code"] == 17
+        assert poll["ok"] is False
+
+    def test_rehydrate_future_and_overdue_reminders_publish_once(self, tmp_path):
+        future = "job-20000000000000000000000000000001"
+        overdue = "job-20000000000000000000000000000002"
+        self._durable_state(
+            tmp_path, future, status="running", deadline=time.time() + 0.12
+        )
+        self._durable_state(
+            tmp_path, overdue, status="running", deadline=time.time() - 1
+        )
+
+        self._manager(tmp_path)
+        self._wait_for(
+            lambda: len(
+                snapshot_notifications(tmp_path).get("system", {}).get("data", {}).get("events", [])
+            ) == 2
+        )
+        # A second rehydrate is a retry/relaunch, not a duplicate publication.
+        self._manager(tmp_path)
+        time.sleep(0.15)
+
+        events = snapshot_notifications(tmp_path)["system"]["data"]["events"]
+        assert {event["ref_id"] for event in events} == {
+            f"bash.reminder:{future}", f"bash.reminder:{overdue}"
+        }
+        assert len(events) == 2
+
+    def test_rehydrated_terminal_poll_and_cancel_suppress_reminders(self, tmp_path):
+        first = self._manager(tmp_path)
+        completed = first.handle({"command": "exit 0", "async": True, "reminder": 0.2})
+        cancelled = first.handle({"command": "sleep 5", "async": True, "reminder": 0.2})
+        completed_dir = tmp_path / "system" / "jobs" / completed["job_id"]
+
+        self._wait_for(
+            lambda: (completed_dir / "state.json").exists()
+            and json.loads((completed_dir / "state.json").read_text())["status"] == "completed"
+        )
+
+        relaunched = self._manager(tmp_path)
+        poll = relaunched.handle({"action": "poll", "job_id": completed["job_id"]})
+        assert poll["status"] == "done"
+        cancel = relaunched.handle({"action": "cancel", "job_id": cancelled["job_id"]})
+        assert cancel["status"] == "cancelled"
+
+        time.sleep(0.3)
+        assert "system" not in snapshot_notifications(tmp_path)
+
+    def test_legacy_dead_pid_is_explicitly_unknown_not_false_failure(self, tmp_path):
+        import subprocess
+
+        dead = subprocess.Popen(["sh", "-c", "exit 0"])
+        dead.wait()
+        job_id = "job-deadbeef"
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        (job_dir / "command").write_text("exit 0")
+        (job_dir / "status").write_text("running")
+        (job_dir / "pid").write_text(str(dead.pid))
+        (job_dir / "stdout.log").write_text("")
+        (job_dir / "stderr.log").write_text("")
+
+        poll = self._manager(tmp_path).handle({"action": "poll", "job_id": job_id})
+        assert poll["status"] == "done"
+        assert poll["exit_status_known"] is False
+        assert poll["exit_code"] is None
+        assert "ok" not in poll
+        assert "command_status" not in poll
+
+    def test_legacy_live_pid_remains_running_and_uncancellable(self, tmp_path):
+        import os
+
+        proc = subprocess.Popen(["sh", "-c", "sleep 5"])
+        try:
+            job_id = "job-feedface"
+            job_dir = tmp_path / "system" / "jobs" / job_id
+            job_dir.mkdir(parents=True)
+            (job_dir / "command").write_text("sleep 5")
+            (job_dir / "status").write_text("running")
+            (job_dir / "pid").write_text(str(proc.pid))
+            (job_dir / "stdout.log").write_text("")
+            (job_dir / "stderr.log").write_text("")
+
+            manager = self._manager(tmp_path)
+            poll = manager.handle({"action": "poll", "job_id": job_id})
+            assert poll["status"] == "running"
+            assert poll["pid"] == proc.pid
+            assert "cancellation is unavailable" in poll["message"]
+
+            cancel = manager.handle({"action": "cancel", "job_id": job_id})
+            assert cancel["status"] == "error"
+            assert "legacy" in cancel["message"].lower()
+            os.kill(proc.pid, 0)
+        finally:
+            proc.terminate()
+            proc.wait(timeout=2)
+
+    def test_pid_identity_mismatch_refuses_process_group_signal(self, tmp_path):
+        import os
+        import subprocess
+
+        proc = subprocess.Popen(["sh", "-c", "sleep 5"], start_new_session=True)
+        try:
+            job_id = "job-11111111111111111111111111111111"
+            job_dir = self._durable_state(
+                tmp_path,
+                job_id,
+                status="running",
+                deadline=time.time() + 30,
+                pid=proc.pid,
+                pid_identity="not-the-saved-process",
+            )
+            # Compatibility files make sure an old manager would have signalled it.
+            (job_dir / "status").write_text("running")
+            (job_dir / "pid").write_text(str(proc.pid))
+
+            result = self._manager(tmp_path).handle({"action": "cancel", "job_id": job_id})
+            assert result["status"] == "error"
+            assert "identity" in result["message"].lower()
+            os.kill(proc.pid, 0)
+        finally:
+            proc.terminate()
+            proc.wait(timeout=2)
+
+    def test_rehydrated_completion_is_published_to_bash_notification_channel(self, tmp_path):
+        job_id = "job-20000000000000000000000000000003"
+        self._durable_state(tmp_path, job_id, deadline=time.time() + 30)
+
+        self._manager(tmp_path)
+        self._wait_for(lambda: "bash" in snapshot_notifications(tmp_path))
+        payload = snapshot_notifications(tmp_path)["bash"]
+        assert payload["data"]["job_id"] == job_id
+        assert payload["data"]["exit_code"] == 0
+        assert payload["data"]["ref_id"] == f"bash.completion:{job_id}"
+
+    def test_completion_retry_is_idempotent_at_notification_store(self, tmp_path):
+        class CountingStore:
+            def __init__(self):
+                self.current = {}
+                self.writes = 0
+
+            def compare_update_channel(self, channel, _expected, mutate):
+                payload, changed, value = mutate(self.current.get(channel))
+                if changed:
+                    self.current[channel] = payload
+                    self.writes += 1
+                return SimpleNamespace(value=value)
+
+        job_id = "job-20000000000000000000000000000004"
+        job_dir = self._durable_state(tmp_path, job_id, deadline=time.time() + 30)
+        store = CountingStore()
+        manager = BashManager(
+            policy=BashPolicy.yolo(),
+            working_dir=str(tmp_path),
+            agent=SimpleNamespace(_notification_store=store),
+        )
+        assert store.writes == 1
+
+        # Simulate a crash window where durable state is retried after the sink
+        # already contains the same stable completion reference.
+        state = json.loads((job_dir / "state.json").read_text())
+        assert manager._publish_async_completion(job_id, job_dir, state) is True
+        assert store.writes == 1
+
+
+class TestBashAsyncTerminalRaces:
+    """Deterministic coverage for durable terminal/cancellation linearization."""
+
+    @staticmethod
+    def _manager(tmp_path: Path) -> BashManager:
+        return BashManager(
+            policy=BashPolicy.yolo(),
+            working_dir=str(tmp_path),
+            agent=SimpleNamespace(_notification_store=notification_store_for(tmp_path)),
+        )
+
+    @staticmethod
+    def _completed_job(tmp_path: Path, job_id: str) -> Path:
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        now = time.time()
+        _async_supervisor.write_initial_state(job_dir, {
+            "version": 2, "job_id": job_id, "command": "echo durable",
+            "cwd": str(tmp_path), "status": "completed", "created_at": now - 1,
+            "started_at": now - 1, "finished_at": now, "pid": None,
+            "pid_identity": None, "exit_status_known": True, "exit_code": 0,
+            "terminal_polled": False,
+            "reminder": {"deadline_at": now + 30, "state": "pending", "ref_id": f"bash.reminder:{job_id}"},
+            "completion": {"state": "pending", "ref_id": f"bash.completion:{job_id}"},
+        })
+        (job_dir / "stdout.log").write_text("durable output\n")
+        (job_dir / "stderr.log").write_text("")
+        return job_dir
+
+    def test_poll_does_not_consume_unknown_during_supervisor_precommit_window(
+        self, tmp_path, monkeypatch
+    ):
+        manager = self._manager(tmp_path)
+        job_id = "job-10000000000000000000000000000001"
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        initial_state = manager._initial_async_state(job_id, "exit 23", str(tmp_path), 30)
+        _async_supervisor.write_initial_state(job_dir, initial_state)
+        start_token = initial_state["supervisor_start_lease"]["token"]
+        before_commit = threading.Event()
+        release_commit = threading.Event()
+        real_update_state = _async_supervisor.update_state
+
+        def paused_update(job_path, mutate):
+            if getattr(mutate, "__name__", "") == "mark_completed":
+                before_commit.set()
+                assert release_commit.wait(2)
+            return real_update_state(job_path, mutate)
+
+        monkeypatch.setattr(_async_supervisor, "update_state", paused_update)
+        worker = threading.Thread(
+            target=_async_supervisor.supervise, args=(job_dir, start_token)
+        )
+        worker.start()
+        assert before_commit.wait(2)
+
+        # The command has exited, but its live recorded supervisor is paused before
+        # the exact wait status commit.  This must remain recoverable, not consume
+        # an unknown terminal response.
+        pending = manager.handle({"action": "poll", "job_id": job_id})
+        assert pending["status"] == "running"
+        assert json.loads((job_dir / "state.json").read_text())["terminal_polled"] is False
+
+        release_commit.set()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        terminal = manager.handle({"action": "poll", "job_id": job_id})
+        assert terminal["status"] == "done"
+        assert terminal["exit_status_known"] is True
+        assert terminal["exit_code"] == 23
+
+    def test_term_ignoring_group_is_killed_by_supervisor_before_cancelled(self, tmp_path):
+        manager = self._manager(tmp_path)
+        started = manager.handle({
+            "command": "trap '' TERM; while :; do sleep 1; done",
+            "async": True,
+            "reminder": 30,
+        })
+        began = time.monotonic()
+        cancelled = manager.handle({"action": "cancel", "job_id": started["job_id"]})
+        elapsed = time.monotonic() - began
+        assert cancelled == {"status": "cancelled", "job_id": started["job_id"]}
+        # The supervisor grants TERM a bounded interval before escalating to KILL.
+        assert elapsed >= 0.35
+        state = json.loads(
+            (tmp_path / "system" / "jobs" / started["job_id"] / "state.json").read_text()
+        )
+        assert state["status"] == "completed"
+        assert state["exit_status_known"] is True
+        assert state["terminal_polled"] is True
+        assert state["reminder"]["state"] == "suppressed"
+
+    def test_outer_shell_exit_does_not_leave_term_ignoring_descendant(self, tmp_path):
+        manager = self._manager(tmp_path)
+        started = manager.handle({
+            "command": (
+                "sh -c 'trap \"\" TERM; echo $$ > descendant.pid; "
+                ": > descendant.ready; while :; do sleep 1; done' & wait $!"
+            ),
+            "async": True,
+            "reminder": 30,
+        })
+        descendant_file = tmp_path / "descendant.pid"
+        descendant_ready = tmp_path / "descendant.ready"
+        deadline = time.monotonic() + 2
+        while not descendant_ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        # The child writes this acknowledgement only after installing its ignored-
+        # TERM trap, so cancellation necessarily exercises the intended survivor.
+        assert descendant_ready.exists()
+        assert descendant_file.exists()
+        descendant_pid = int(descendant_file.read_text().strip())
+
+        cancelled = manager.handle({"action": "cancel", "job_id": started["job_id"]})
+        assert cancelled == {"status": "cancelled", "job_id": started["job_id"]}
+        deadline = time.monotonic() + 2
+        while _async_supervisor.process_is_alive(descendant_pid) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not _async_supervisor.process_is_alive(descendant_pid)
+        state = json.loads(
+            (tmp_path / "system" / "jobs" / started["job_id"] / "state.json").read_text()
+        )
+        assert state["exit_status_known"] is True
+        assert state["cancellation_outcome"] == "group_cancelled"
+
+    def test_owned_parent_reaper_terminalizes_early_supervisor_exit(self, tmp_path):
+        manager = self._manager(tmp_path)
+        job_id = "job-10000000000000000000000000000004"
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        _async_supervisor.write_initial_state(
+            job_dir, manager._initial_async_state(job_id, "sleep 1", str(tmp_path), 30)
+        )
+
+        class ExitedSupervisor:
+            @staticmethod
+            def wait():
+                return 17
+
+        manager._reap_supervisor(ExitedSupervisor(), job_dir)
+        state = json.loads((job_dir / "state.json").read_text())
+        assert state["status"] == "unrecoverable"
+        assert state["exit_status_known"] is False
+        assert "exited with code 17" in state["supervisor_error"]
+
+    def test_owned_parent_reaps_actual_supervisor_exit_before_start_claim(
+        self, tmp_path, monkeypatch
+    ):
+        manager = self._manager(tmp_path)
+        real_popen = subprocess.Popen
+
+        def launch_with_wrong_start_token(args, *popen_args, **popen_kwargs):
+            actual_args = list(args)
+            if "lingtai.tools.bash._async_supervisor" in actual_args:
+                actual_args[-1] = "wrong-start-token"
+            return real_popen(actual_args, *popen_args, **popen_kwargs)
+
+        monkeypatch.setattr(
+            "lingtai.tools.bash.subprocess.Popen", launch_with_wrong_start_token
+        )
+        started = manager.handle({
+            "command": "echo must-not-run", "async": True, "reminder": 30,
+        })
+        assert started["status"] == "error"
+        job_dirs = list((tmp_path / "system" / "jobs").iterdir())
+        assert len(job_dirs) == 1
+        state = json.loads((job_dirs[0] / "state.json").read_text())
+        assert state["status"] == "unrecoverable"
+        assert state["pid"] is None
+        assert state["exit_status_known"] is False
+        assert "owned supervisor exited with code 2" in state["supervisor_error"]
+
+    def test_fresh_manager_recovers_actual_preclaim_exit_after_owner_loss(
+        self, tmp_path
+    ):
+        seed = self._manager(tmp_path)
+        job_id = "job-1000000000000000000000000000000b"
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        state = seed._initial_async_state(job_id, "echo must-not-run", str(tmp_path), 30)
+        _async_supervisor.write_initial_state(job_dir, state)
+        wrong_token = "wrong-start-token"
+        supervisor = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "lingtai.tools.bash._async_supervisor",
+                str(job_dir),
+                wrong_token,
+            ],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        def record_without_identity(current):
+            current["supervisor_pid"] = supervisor.pid
+            return current
+
+        _async_supervisor.update_state(job_dir, record_without_identity)
+        assert supervisor.wait(timeout=2) == 2
+        self._manager(tmp_path)
+        recovered = json.loads((job_dir / "state.json").read_text())
+        assert recovered["status"] == "unrecoverable"
+        assert recovered["pid"] is None
+        assert recovered["exit_status_known"] is False
+        assert "definitively gone" in recovered["supervisor_error"]
+
+    def test_fresh_manager_proves_dead_supervisor_without_identity(self, tmp_path):
+        seed = self._manager(tmp_path)
+        job_id = "job-10000000000000000000000000000005"
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        state = seed._initial_async_state(job_id, "sleep 1", str(tmp_path), 30)
+        state["supervisor_pid"] = 999_999_999
+        state["supervisor_start_lease"].update({
+            "state": "claimed", "supervisor_pid": 999_999_999,
+        })
+        _async_supervisor.write_initial_state(job_dir, state)
+
+        self._manager(tmp_path)
+        recovered = json.loads((job_dir / "state.json").read_text())
+        assert recovered["status"] == "unrecoverable"
+        assert "definitively gone" in recovered["supervisor_error"]
+
+    def test_fresh_manager_expires_unclaimed_supervisor_start_lease(self, tmp_path):
+        seed = self._manager(tmp_path)
+        job_id = "job-10000000000000000000000000000006"
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        state = seed._initial_async_state(job_id, "sleep 1", str(tmp_path), 30)
+        state["supervisor_start_lease"]["deadline_at"] = time.time() - 1
+        _async_supervisor.write_initial_state(job_dir, state)
+
+        self._manager(tmp_path)
+        recovered = json.loads((job_dir / "state.json").read_text())
+        assert recovered["status"] == "unrecoverable"
+        assert "start lease expired" in recovered["supervisor_error"]
+
+    @pytest.mark.parametrize("terminal", [False, True])
+    def test_supervisor_refuses_expired_or_terminal_start_lease(
+        self, tmp_path, monkeypatch, terminal
+    ):
+        manager = self._manager(tmp_path)
+        job_id = (
+            "job-10000000000000000000000000000007"
+            if not terminal
+            else "job-10000000000000000000000000000008"
+        )
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        state = manager._initial_async_state(job_id, "echo forbidden", str(tmp_path), 30)
+        token = state["supervisor_start_lease"]["token"]
+        if terminal:
+            state.update({"status": "unrecoverable", "finished_at": time.time()})
+        else:
+            state["supervisor_start_lease"]["deadline_at"] = time.time() - 1
+        _async_supervisor.write_initial_state(job_dir, state)
+        monkeypatch.setattr(_async_supervisor, "process_identity", lambda pid: f"test:{pid}")
+        monkeypatch.setattr(
+            _async_supervisor.subprocess,
+            "Popen",
+            lambda *args, **kwargs: pytest.fail("expired/terminal supervisor spawned command"),
+        )
+
+        assert _async_supervisor.supervise(job_dir, token) == 2
+        recovered = json.loads((job_dir / "state.json").read_text())
+        assert recovered["status"] == "unrecoverable"
+
+    def test_stale_pre_return_reminder_timer_defers_to_latest_deadline(
+        self, tmp_path, monkeypatch
+    ):
+        manager = self._manager(tmp_path)
+        job_id = "job-10000000000000000000000000000009"
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        state = manager._initial_async_state(job_id, "sleep 1", str(tmp_path), 30)
+        state["reminder"]["deadline_at"] = time.time() - 1
+        _async_supervisor.write_initial_state(job_dir, state)
+        captured = []
+
+        class CapturedThread:
+            def __init__(self, *, target, args, daemon):
+                captured.append((target, args, daemon))
+
+            def start(self):
+                return None
+
+        monkeypatch.setattr("lingtai.tools.bash.threading.Thread", CapturedThread)
+        published = []
+        monkeypatch.setattr(
+            manager, "_publish_async_reminder", lambda value: published.append(value) or True
+        )
+        manager._start_reminder_timer(job_id, job_dir)
+        assert len(captured) == 1
+
+        latest_deadline = time.time() + 30
+
+        def retime(current):
+            current["reminder"]["deadline_at"] = latest_deadline
+            return current
+
+        _async_supervisor.update_state(job_dir, retime)
+        target, args, _ = captured[0]
+        target(*args)
+
+        recovered = json.loads((job_dir / "state.json").read_text())
+        assert published == []
+        assert recovered["reminder"]["state"] == "pending"
+        assert recovered["reminder"]["deadline_at"] == latest_deadline
+        assert "claim_token" not in recovered["reminder"]
+        assert len(captured) == 2
+
+    def test_return_handoff_blocks_fallback_while_parent_popen_is_delayed(
+        self, tmp_path, monkeypatch
+    ):
+        manager_a = self._manager(tmp_path)
+        reminder = 0.08
+        parent_popen_entered = threading.Event()
+        release_parent_popen = threading.Event()
+        real_popen = subprocess.Popen
+
+        def gated_supervisor_popen(*args, **kwargs):
+            parent_popen_entered.set()
+            assert release_parent_popen.wait(2)
+            return real_popen(*args, **kwargs)
+
+        monkeypatch.setattr("lingtai.tools.bash.subprocess.Popen", gated_supervisor_popen)
+        published = []
+        monkeypatch.setattr(
+            BashManager,
+            "_publish_async_reminder",
+            lambda self, job_id: published.append(job_id) or True,
+        )
+        claim_attempted = threading.Event()
+        real_claim = BashManager._claim_reminder_timer
+
+        def observed_claim(manager, *args):
+            result = real_claim(manager, *args)
+            claim_attempted.set()
+            return result
+
+        monkeypatch.setattr(BashManager, "_claim_reminder_timer", observed_claim)
+        outcome = {}
+
+        def start_job():
+            outcome["result"] = manager_a.handle({
+                "command": "sleep 5", "async": True, "reminder": reminder,
+            })
+            outcome["returned_at"] = time.time()
+
+        starter = threading.Thread(target=start_job)
+        starter.start()
+        assert parent_popen_entered.wait(2)
+        job_dirs = list((tmp_path / "system" / "jobs").iterdir())
+        assert len(job_dirs) == 1
+        job_dir = job_dirs[0]
+
+        # A second manager rehydrates the old crash-fallback deadline while the
+        # first manager is still live but has not launched its supervisor.  Its
+        # due timer must observe the durable return handoff and defer.
+        self._manager(tmp_path)
+        assert claim_attempted.wait(2)
+        assert published == []
+        pending = json.loads((job_dir / "state.json").read_text())
+        assert pending["status"] == "launching"
+        assert pending["return_handoff"]["state"] == "pending"
+        assert pending["reminder"]["state"] == "pending"
+
+        release_parent_popen.set()
+        starter.join(timeout=2)
+        assert not starter.is_alive()
+        assert outcome["result"]["status"] == "ok"
+        armed = json.loads((job_dir / "state.json").read_text())
+        returned_at = armed["return_handoff"]["returned_at"]
+        assert armed["return_handoff"]["state"] == "armed"
+        assert armed["reminder"]["deadline_at"] == pytest.approx(
+            returned_at + reminder
+        )
+        assert returned_at <= outcome["returned_at"]
+        manager_a.handle({"action": "cancel", "job_id": outcome["result"]["job_id"]})
+
+    def test_return_handoff_blocks_fallback_after_running_before_return_arm(
+        self, tmp_path, monkeypatch
+    ):
+        manager_a = self._manager(tmp_path)
+        reminder = 0.05
+        before_return_arm = threading.Event()
+        release_return_arm = threading.Event()
+        real_update_state = _async_supervisor.update_state
+
+        def paused_manager_update(job_dir, mutate):
+            if getattr(mutate, "__name__", "") == "arm_from_return":
+                before_return_arm.set()
+                assert release_return_arm.wait(2)
+            return real_update_state(job_dir, mutate)
+
+        monkeypatch.setattr("lingtai.tools.bash.update_state", paused_manager_update)
+        published = []
+        monkeypatch.setattr(
+            BashManager,
+            "_publish_async_reminder",
+            lambda self, job_id: published.append(job_id) or True,
+        )
+        claim_attempted = threading.Event()
+        real_claim = BashManager._claim_reminder_timer
+
+        def observed_claim(manager, *args):
+            result = real_claim(manager, *args)
+            claim_attempted.set()
+            return result
+
+        monkeypatch.setattr(BashManager, "_claim_reminder_timer", observed_claim)
+        outcome = {}
+
+        def start_job():
+            outcome["result"] = manager_a.handle({
+                "command": "sleep 5", "async": True, "reminder": reminder,
+            })
+            outcome["returned_at"] = time.time()
+
+        starter = threading.Thread(target=start_job)
+        starter.start()
+        assert before_return_arm.wait(2)
+        job_dirs = list((tmp_path / "system" / "jobs").iterdir())
+        assert len(job_dirs) == 1
+        job_dir = job_dirs[0]
+        pre_arm = json.loads((job_dir / "state.json").read_text())
+        assert pre_arm["status"] == "running"
+        assert pre_arm["return_handoff"]["state"] == "pending"
+        sleep_for = pre_arm["reminder"]["deadline_at"] - time.time() + 0.02
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+
+        self._manager(tmp_path)
+        assert claim_attempted.wait(2)
+        assert published == []
+        still_pending = json.loads((job_dir / "state.json").read_text())
+        assert still_pending["return_handoff"]["state"] == "pending"
+        assert still_pending["reminder"]["state"] == "pending"
+
+        release_return_arm.set()
+        starter.join(timeout=2)
+        assert not starter.is_alive()
+        assert outcome["result"]["status"] == "ok"
+        armed = json.loads((job_dir / "state.json").read_text())
+        returned_at = armed["return_handoff"]["returned_at"]
+        assert armed["return_handoff"]["state"] == "armed"
+        assert armed["reminder"]["deadline_at"] == pytest.approx(
+            returned_at + reminder
+        )
+        assert returned_at <= outcome["returned_at"]
+        manager_a.handle({"action": "cancel", "job_id": outcome["result"]["job_id"]})
+
+    def test_owner_resuming_after_handoff_expiry_cannot_report_start_success(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "lingtai.tools.bash._RETURN_HANDOFF_LEASE_SECONDS", 0.2
+        )
+        manager_a = self._manager(tmp_path)
+        before_return_arm = threading.Event()
+        release_return_arm = threading.Event()
+        fallback_published = threading.Event()
+        real_update_state = _async_supervisor.update_state
+
+        def paused_manager_update(job_dir, mutate):
+            if getattr(mutate, "__name__", "") == "arm_from_return":
+                before_return_arm.set()
+                assert release_return_arm.wait(2)
+            return real_update_state(job_dir, mutate)
+
+        monkeypatch.setattr("lingtai.tools.bash.update_state", paused_manager_update)
+        published = []
+
+        def record_publish(manager, job_id):
+            published.append(job_id)
+            fallback_published.set()
+            return True
+
+        monkeypatch.setattr(BashManager, "_publish_async_reminder", record_publish)
+        outcome = {}
+
+        def start_job():
+            outcome["result"] = manager_a.handle({
+                "command": "sleep 5", "async": True, "reminder": 0.02,
+            })
+
+        starter = threading.Thread(target=start_job)
+        starter.start()
+        assert before_return_arm.wait(2)
+        job_dirs = list((tmp_path / "system" / "jobs").iterdir())
+        assert len(job_dirs) == 1
+        job_dir = job_dirs[0]
+        pre_expiry = json.loads((job_dir / "state.json").read_text())
+        assert pre_expiry["status"] == "running"
+        assert pre_expiry["return_handoff"]["state"] == "pending"
+
+        # B is now entitled to the bounded crash fallback because A has not
+        # completed its return transition before the durable handoff deadline.
+        self._manager(tmp_path)
+        try:
+            assert fallback_published.wait(2)
+            # The sink callback runs while the state lock is held; its event can
+            # become visible just before publishing -> published is fsynced.
+            publish_deadline = time.monotonic() + 2
+            while time.monotonic() < publish_deadline:
+                expired = json.loads((job_dir / "state.json").read_text())
+                if expired["reminder"]["state"] == "published":
+                    break
+                time.sleep(0.01)
+            assert expired["return_handoff"]["state"] == "expired"
+            assert expired["reminder"]["state"] == "published"
+        finally:
+            release_return_arm.set()
+            starter.join(timeout=2)
+        assert not starter.is_alive()
+        late = outcome["result"]
+        assert late["status"] == "error"
+        assert late["job_id"] == job_dir.name
+        assert isinstance(late["pid"], int)
+        assert "remains pollable" in late["message"]
+        final = json.loads((job_dir / "state.json").read_text())
+        assert final["return_handoff"]["state"] == "expired"
+        assert final["reminder"]["state"] == "published"
+        assert published == [job_dir.name]
+        manager_a.handle({"action": "cancel", "job_id": job_dir.name})
+
+    def test_expired_suppressing_reminder_recovers_after_manager_crash(
+        self, tmp_path, monkeypatch
+    ):
+        manager = self._manager(tmp_path)
+        job_id = "job-1000000000000000000000000000000a"
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        state = manager._initial_async_state(job_id, "sleep 5", str(tmp_path), 30)
+        state.update({"status": "running", "pid": None})
+        state["return_handoff"].update({
+            "state": "armed", "returned_at": time.time() - 2,
+        })
+        state["reminder"].update({
+            "state": "suppressing",
+            "deadline_at": time.time() - 1,
+            "suppressing_at": time.time() - 2,
+            "suppressing_until": time.time() - 1,
+        })
+        _async_supervisor.write_initial_state(job_dir, state)
+        published = []
+        monkeypatch.setattr(
+            manager,
+            "_publish_async_reminder",
+            lambda value: published.append(value) or True,
+        )
+        cancel_event = threading.Event()
+        with manager._reminder_lock:
+            manager._reminder_cancel_events[job_id] = cancel_event
+
+        claim_token = manager._claim_reminder_timer(job_id, job_dir, cancel_event)
+        assert isinstance(claim_token, str)
+        assert manager._publish_claimed_reminder(job_id, job_dir, claim_token) is True
+        recovered = json.loads((job_dir / "state.json").read_text())
+        assert published == [job_id]
+        assert recovered["reminder"]["state"] == "published"
+        assert "suppressing_until" not in recovered["reminder"]
+
+    def test_concurrent_managers_have_one_terminal_consumer(self, tmp_path):
+        job_id = "job-10000000000000000000000000000002"
+        self._completed_job(tmp_path, job_id)
+        managers = [self._manager(tmp_path), self._manager(tmp_path)]
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(
+                lambda manager: manager.handle({"action": "poll", "job_id": job_id}),
+                managers,
+            ))
+
+        assert [result["status"] for result in results].count("done") == 1
+        assert [result["status"] for result in results].count("error") == 1
+
+    def test_terminal_suppression_wins_over_stale_reminder_publish(self, tmp_path, monkeypatch):
+        job_id = "job-10000000000000000000000000000003"
+        manager = self._manager(tmp_path)
+        # Create the terminal fixture after construction so rehydration cannot
+        # pre-suppress it; this test needs a stale claim acquired before poll wins.
+        job_dir = self._completed_job(tmp_path, job_id)
+
+        def make_due(current):
+            current["reminder"]["deadline_at"] = time.time() - 1
+            return current
+
+        _async_supervisor.update_state(job_dir, make_due)
+        cancel_event = threading.Event()
+        with manager._reminder_lock:
+            manager._reminder_cancel_events[job_id] = cancel_event
+        claim_token = manager._claim_reminder_timer(job_id, job_dir, cancel_event)
+        assert isinstance(claim_token, str)
+
+        published = []
+        monkeypatch.setattr(manager, "_publish_async_reminder", lambda value: published.append(value) or True)
+        assert manager._terminal_result(job_id, job_dir)["status"] == "done"
+        # The token was acquired before the terminal action, but final
+        # publication rechecks it under the same durable state lock.
+        assert manager._publish_claimed_reminder(job_id, job_dir, claim_token) is False
+        assert published == []
+        state = json.loads((job_dir / "state.json").read_text())
+        assert state["reminder"]["state"] == "suppressed"
+
+    def test_full_ids_are_strict_and_collision_safe(self, tmp_path, monkeypatch):
+        manager = self._manager(tmp_path)
+        existing = "a" * 32
+        replacement = "b" * 32
+        (tmp_path / "system" / "jobs" / f"job-{existing}").mkdir(parents=True)
+        values = iter((SimpleNamespace(hex=existing), SimpleNamespace(hex=replacement)))
+        monkeypatch.setattr("lingtai.tools.bash.uuid.uuid4", lambda: next(values))
+
+        started = manager.handle({"command": "exit 0", "async": True, "reminder": 30})
+        assert started["job_id"] == f"job-{replacement}"
+        assert len(started["job_id"]) == 36
+        assert manager._validate_job_id(started["job_id"]) is None
+        # The old eight-hex retained layout remains readable only as an explicit
+        # migration form; all other text, including traversal-shaped input, fails.
+        assert manager._validate_job_id("job-deadbeef") is None
+        for invalid in ("job-" + "c" * 31, "job-" + "C" * 32, "job-../escape"):
+            assert manager._validate_job_id(invalid)["status"] == "error"

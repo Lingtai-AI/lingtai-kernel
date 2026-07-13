@@ -11,8 +11,8 @@ description: >
   reminders, debugging silent jobs, and safe cleanup. Start here for any
   long-running agent CLI, time-driven recurring work ("every hour", "weekdays at
   9", "remind me later"), or when a scheduled job misbehaves.
-version: 1.6.1
-last_changed_at: "2026-06-24T14:38:03-07:00"
+version: 1.7.1
+last_changed_at: "2026-07-13T04:44:00-07:00"
 ---
 
 # Bash Manual — Router
@@ -209,17 +209,17 @@ reading the whole file when you only need recent events.
   ```text
   # Start the child agent in the background — returns immediately with a job_id:
   bash(async=true, reminder=1800, command="claude -p 'refactor the auth module' --output-format json")
-  # → {"status": "ok", "job_id": "job-a1b2c3d4", "pid": 4321}
+  # → {"status": "ok", "job_id": "job-a1b2c3d4e5f678901234567890abcdef", "pid": 4321}
 
   # Later turns: poll until done (handle mail/other work between polls):
-  bash(action="poll", job_id="job-a1b2c3d4", reminder=1800)
+  bash(action="poll", job_id="job-a1b2c3d4e5f678901234567890abcdef", reminder=1800)
   # → {"status": "running", …}   then eventually
   # → {"status": "done", "exit_code": 0, "ok": true, "command_status": "success", "stdout": "…", "stderr": "…"}
   #   On failure: {"status": "done", "exit_code": 1, "ok": false,
   #                "command_status": "failed", "warning": "command exited with code 1; …"}
 
   # Abandon it if needed:
-  bash(action="cancel", job_id="job-a1b2c3d4", reminder=1800)
+  bash(action="cancel", job_id="job-a1b2c3d4e5f678901234567890abcdef", reminder=1800)
   ```
 
 - **If repeated-call `_advisory` appears on `bash(action="poll")`, stop
@@ -237,20 +237,66 @@ reading the whole file when you only need recent events.
   and `cancel` also carry `reminder` because of that schema shape, but the field
   is meaningful and runtime-validated only for async `run`; sync commands,
   `poll`, and `cancel` ignore it.
-  When that delay expires, Bash publishes a `bash.reminder` event into
-  `.notification/system.json` unless the job has already been terminally polled
-  or cancelled. The normal completion notification still arrives through
-  `.notification/bash.json`; the reminder is separate and intentionally still
-  fires for an unpolled job even if the process already exited. Pick the delay
-  from the task's *expected* duration — not a fixed number; a 30 s scan and a
-  40 min build warrant different windows. When the reminder fires, health-check
-  rather than assume progress: poll the job, confirm the log is **growing**, the
-  PID/child is **alive** if still running, the output file/worktree shows
-  **progress**, and the job is not stuck on an interactive prompt or a
-  provider/model error. If there is no progress, do not keep waiting — cancel,
-  downgrade, or switch path, and report to the human. Use a separate
-  `.notification/cron.json` reminder or delayed self-email only for a broader
-  workflow wake that is not tied to one Bash async job.
+  The initial durable deadline is a crash fallback while the supervisor starts.
+  A bounded durable return-handoff guard prevents a relaunched/second manager from
+  publishing that fallback while the first manager is still before supervisor
+  `Popen`, or after the command is durably `running` but before async `run` has
+  completed its return transition. Successful `run` atomically resets the
+  deadline to `returned_at + reminder` and arms the guard, so startup latency does
+  not consume the interval you requested. Bash reports `status: ok` only when this
+  still-valid transition wins (or an exact completed/failed result already won
+  under the valid guard). If the owner resumes after expiry, it returns
+  `status: error` with the durable `job_id`/`pid` and an explicit "remains
+  pollable" recovery message rather than claiming false success. A live job keeps
+  the expired fallback; an expired launch or definitively dead supervisor becomes
+  explicit unrecoverable state instead.
+  If the job is still non-terminal when its final deadline expires, Bash publishes
+  a `bash.reminder` event into `.notification/system.json`.
+  The deadline and stable `bash.reminder:<job_id>` claim survive agent
+  stop/relaunch: Bash re-arms a future deadline or retries an overdue/stale claim.
+  Cancellation temporarily uses a bounded durable `suppressing` state; if the
+  manager crashes or the supervisor does not commit before it expires, reminder
+  publication becomes recoverable again. Exact supervisor terminal commit
+  suppresses a pending/publishing/suppressing `may still be running` watchdog and
+  publishes the authoritative completion wake through `.notification/bash.json`;
+  terminal poll and confirmed cancellation also suppress future reminder retries.
+  Final reminder publication and suppression are serialized, so a stale claim
+  that loses the job-state lock cannot publish. If the reminder sink write won
+  before terminal commit, that already-published event may remain as historical
+  evidence.
+  Do not treat either stable ref as a global exactly-once guarantee: a crash after
+  sink write before durable acknowledgement can retry after the bounded system
+  list evicts the reminder ref, while the latest-only Bash slot can be overwritten
+  by another completion. Pick the delay from the task's *expected* duration — not
+  a fixed number; a 30 s scan and a 40 min build warrant different windows. When
+  a reminder fires, health-check rather than assume progress: poll the job,
+  confirm the log is **growing**, the PID/child is **alive** if still running,
+  the output file/worktree shows **progress**, and the job is not stuck on an
+  interactive prompt or a provider/model error. If there is no progress, do not
+  keep waiting — cancel, downgrade, or switch path, and report to the human.
+  Use a separate `.notification/cron.json` reminder or delayed self-email only
+  for a broader workflow wake that is not tied to one Bash async job. Do not
+  conflate them: a Bash reminder belongs to one persisted `job_id`, while
+  `.notification/cron.json` is a separately scheduled workflow wake.
+
+- **Relaunch-safe status is still evidence, not PID guessing.** The launching
+  manager records the observed supervisor identity immediately; Bash's detached
+  supervisor confirms its incarnation and persists exact wait truth. A missing command PID
+  is not a terminal result while that supervisor may still commit: poll retries
+  briefly, then remains recoverably `running` unless the recorded supervisor is
+  definitively gone. A retained legacy job with a still-live recorded PID remains
+  conservatively `running` and uncancellable because Bash cannot prove that PID's
+  incarnation; after the PID dies, one poll may return `exit_status_known: false`
+  and `exit_code: null`. Unrecoverable durable state uses the same explicit unknown
+  shape. Bash never invents `-1` or calls that a command failure. Cancellation is
+  a durable request to the
+  supervisor that holds the unreaped child: it sends TERM, bounded KILL escalation
+  if needed, and the manager reports `cancelled` only after exact terminal commit.
+  A timeout/error leaves poll and the reminder available for recovery. Terminal
+  poll and successful cancel are atomic one-shot consumer actions; the durable
+  record remains for evidence, but any later poll/cancel returns `Job already
+  finished` instead of exposing a second result. New job IDs carry full UUID4 hex;
+  legacy eight-hex IDs are accepted only to read retained old records.
 
 - LingTai has no built-in recurring scheduler. Host schedulers wake agents by
   producing channel input, usually a mailbox-drop or notification file.

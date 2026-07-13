@@ -12,14 +12,25 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import re
-import signal
+import secrets
 import subprocess
+import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from ._async_supervisor import (
+    load_state,
+    process_identity,
+    process_identity_matches,
+    process_is_alive,
+    publish_reminder_if_claimed,
+    update_state,
+    write_initial_state,
+)
 
 
 if TYPE_CHECKING:
@@ -29,6 +40,16 @@ PROVIDERS = {"providers": [], "default": "builtin"}
 
 _DEFAULT_POLICY_FILE = Path(__file__).parent / "bash_policy.json"
 _DEFAULT_ASYNC_REMINDER_SECONDS = 1800.0
+_SUPERVISOR_START_LEASE_SECONDS = 3.0
+# The parent may spend one start lease launching the supervisor and another
+# waiting for its durable PID before it can atomically arm the user-visible
+# reminder from the successful-return boundary.  During that bounded handoff,
+# another manager must not publish the earlier crash-fallback deadline.
+_RETURN_HANDOFF_LEASE_SECONDS = _SUPERVISOR_START_LEASE_SECONDS * 2
+_RETURN_HANDOFF_RECHECK_SECONDS = 0.05
+_SUPERVISOR_COMMIT_GRACE_SECONDS = 0.25
+_CANCEL_COMMIT_TIMEOUT_SECONDS = 3.0
+_JOB_ID_RE = re.compile(r"job-(?:[0-9a-f]{32}|[0-9a-f]{8})\Z")
 
 # Length of the stderr tail surfaced in the failure warning. Short on purpose:
 # the full stderr is already present in the result; the tail just makes the
@@ -205,7 +226,7 @@ def get_schema(lang: str = "en") -> dict:
             },
             "reminder": {
                 "type": "number",
-                "description": "Last-resort async wake delay in seconds (default: 1800). For async run only: if the job has not been terminally polled or cancelled by then, publish a system notification reminding you to poll it.",
+                "description": "Last-resort async wake delay in seconds (default: 1800). For async run only: if the job is still non-terminal when the durable deadline expires, publish a system notification reminding you to poll it; exact completion suppresses this stale watchdog and publishes the Bash completion wake instead.",
                 "default": _DEFAULT_ASYNC_REMINDER_SECONDS,
             },
             "job_id": {
@@ -315,7 +336,7 @@ class BashPolicy:
 
 
 class BashManager:
-    """Manages shell command execution for an agent."""
+    """Manages shell commands; async terminal truth belongs to a durable child."""
 
     def __init__(
         self,
@@ -331,9 +352,15 @@ class BashManager:
         self._jobs_dir: Path | None = None
         self._reminder_lock = threading.Lock()
         self._reminder_cancel_events: dict[str, threading.Event] = {}
+        self._completion_lock = threading.Lock()
+        self._completion_watchers: set[str] = set()
+        self._rehydrate_async_jobs()
+
+    def _jobs_path(self) -> Path:
+        return self._jobs_dir or Path(self._working_dir) / "system" / "jobs"
 
     def _ensure_jobs_dir(self) -> Path:
-        """Create and return the jobs directory (lazy init)."""
+        """Create and return the jobs directory (only for an async run)."""
         if self._jobs_dir is None:
             self._jobs_dir = Path(self._working_dir) / "system" / "jobs"
         self._jobs_dir.mkdir(parents=True, exist_ok=True)
@@ -373,11 +400,10 @@ class BashManager:
 
     @staticmethod
     def _validate_job_id(job_id: str) -> dict | None:
-        """Validate job_id is safe (no path traversal). Returns error dict or None."""
-        if not job_id:
+        """Accept only retained full UUID IDs and the old eight-hex legacy form."""
+        if not isinstance(job_id, str) or not job_id:
             return {"status": "error", "message": "job_id is required"}
-        # Reject path traversal attempts
-        if "/" in job_id or "\\" in job_id or ".." in job_id:
+        if _JOB_ID_RE.fullmatch(job_id) is None:
             return {"status": "error", "message": f"Invalid job_id: {job_id}"}
         return None
 
@@ -392,11 +418,7 @@ class BashManager:
             delay = float(value)
         except (TypeError, ValueError):
             return None, {"status": "error", "message": "reminder must be a finite non-negative number of seconds"}
-        if (
-            delay < 0
-            or not math.isfinite(delay)
-            or delay > threading.TIMEOUT_MAX
-        ):
+        if delay < 0 or not math.isfinite(delay) or delay > threading.TIMEOUT_MAX:
             return None, {
                 "status": "error",
                 "message": (
@@ -408,12 +430,10 @@ class BashManager:
 
     def handle(self, args: dict) -> dict:
         action = args.get("action", "run")
-
         if action == "poll":
             return self._handle_poll(args)
         if action == "cancel":
             return self._handle_cancel(args)
-        # action == "run"
         return self._handle_run(args)
 
     def _handle_run(self, args: dict) -> dict:
@@ -421,19 +441,13 @@ class BashManager:
         err = self._validate_command(command)
         if err:
             return err
-
-        # Treat an empty/whitespace-only working_dir the same as omitting it:
-        # run in the agent working directory rather than failing the sandbox
-        # check (models commonly pass working_dir="" to mean "default").
         cwd = args.get("working_dir") or self._working_dir
         if isinstance(cwd, str) and not cwd.strip():
             cwd = self._working_dir
         err = self._validate_working_dir(cwd)
         if err:
             return err
-
-        is_async = args.get("async", False)
-        if is_async:
+        if args.get("async", False):
             reminder, err = self._validate_reminder(args.get("reminder"))
             if err:
                 return err
@@ -441,142 +455,486 @@ class BashManager:
         return self._run_sync(command, cwd, args.get("timeout", 30))
 
     def _run_sync(self, command: str, cwd: str, timeout: float) -> dict:
-        """Synchronous execution — original behavior, unchanged."""
+        """Synchronous execution remains intentionally unchanged."""
         try:
             result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=cwd,
+                command, shell=True, capture_output=True, text=True,
+                timeout=timeout, cwd=cwd,
             )
-            stdout = result.stdout
-            stderr = result.stderr
+            stdout, stderr = result.stdout, result.stderr
             if len(stdout) > self._max_output:
                 stdout = stdout[: self._max_output] + f"\n... (truncated, {len(result.stdout)} chars total)"
             if len(stderr) > self._max_output:
                 stderr = stderr[: self._max_output] + f"\n... (truncated, {len(result.stderr)} chars total)"
-
             return _augment_command_result({
-                "status": "ok",
-                "exit_code": result.returncode,
-                "stdout": stdout,
-                "stderr": stderr,
+                "status": "ok", "exit_code": result.returncode,
+                "stdout": stdout, "stderr": stderr,
             })
         except subprocess.TimeoutExpired:
             msg = f"Command timed out after {timeout}s"
             hint = _broad_scan_hint(command)
-            if hint:
-                msg = f"{msg}. {hint}"
-            return {"status": "error", "message": msg}
+            return {"status": "error", "message": f"{msg}. {hint}" if hint else msg}
         except Exception as e:
             return {"status": "error", "message": f"Command failed: {e}"}
 
-    def _run_async(self, command: str, cwd: str, reminder: float) -> dict:
-        """Start command in background, return job_id immediately."""
-        jobs_dir = self._ensure_jobs_dir()
-        job_id = f"job-{uuid.uuid4().hex[:8]}"
-        job_dir = jobs_dir / job_id
-        job_dir.mkdir()
+    @staticmethod
+    def _terminal(status: object) -> bool:
+        return status in {"completed", "unrecoverable"}
 
-        (job_dir / "command").write_text(command)
-        (job_dir / "status").write_text("running")
+    def _rehydrate_async_jobs(self) -> None:
+        """Restore deadline/completion publication work from durable job state."""
+        jobs_dir = self._jobs_path()
+        if not jobs_dir.is_dir():
+            return
+        for job_dir in jobs_dir.iterdir():
+            if not job_dir.is_dir() or _JOB_ID_RE.fullmatch(job_dir.name) is None:
+                continue
+            state = load_state(job_dir)
+            if state is None:
+                continue  # Legacy jobs remain readable by _handle_poll.
+            if not self._terminal(state.get("status")):
+                state = self._mark_unrecoverable_if_supervisor_gone(job_dir) or load_state(job_dir) or state
+            job_id = job_dir.name
+            reminder = state.get("reminder")
+            if self._terminal(state.get("status")):
+                # Completion owns the wake-up once terminal truth exists.  A
+                # watchdog saying the job "may still be running" is stale and
+                # must not be re-armed by a fresh manager.
+                def suppress_terminal_reminder(current: dict) -> dict:
+                    durable_reminder = current.get("reminder")
+                    if isinstance(durable_reminder, dict) and durable_reminder.get("state") in {
+                        "pending", "publishing", "suppressing"
+                    }:
+                        durable_reminder.update({
+                            "state": "suppressed",
+                            "suppressed_at": time.time(),
+                        })
+                        durable_reminder.pop("claim_token", None)
+                        durable_reminder.pop("suppressing_at", None)
+                        durable_reminder.pop("suppressing_until", None)
+                    return current
 
-        stdout_f = open(job_dir / "stdout.log", "w", encoding="utf-8")
-        stderr_f = open(job_dir / "stderr.log", "w", encoding="utf-8")
+                update_state(job_dir, suppress_terminal_reminder)
+                self._publish_completion_if_due(job_id, job_dir)
+            else:
+                if isinstance(reminder, dict) and reminder.get("state") in {"pending", "publishing", "suppressing"}:
+                    self._start_reminder_timer(job_id, job_dir)
+                self._start_completion_watcher(job_id, job_dir)
 
-        try:
-            proc = subprocess.Popen(
-                command,
-                shell=True,
-                stdout=stdout_f,
-                stderr=stderr_f,
-                cwd=cwd,
-                start_new_session=True,
-            )
-        except Exception as e:
-            stdout_f.close()
-            stderr_f.close()
-            # Clean up on launch failure
-            import shutil
-            shutil.rmtree(job_dir, ignore_errors=True)
-            return {"status": "error", "message": f"Failed to start async job: {e}"}
-
-        (job_dir / "pid").write_text(str(proc.pid))
-        # Store Popen + file handles in-process so we can reap and close them.
-        if not hasattr(self, "_open_handles"):
-            self._open_handles: dict[str, tuple] = {}
-        self._open_handles[job_id] = (proc, stdout_f, stderr_f)
-        self._start_reminder_timer(job_id, job_dir, reminder)
-
-        # Start background watcher — writes .notification/bash.json when
-        # the process exits, so the agent gets notified via the standard
-        # notification sync mechanism (same channel as email/soul/molt).
-        watcher = threading.Thread(
-            target=self._watch_async_job,
-            args=(job_id, command, proc, job_dir, stdout_f, stderr_f),
-            daemon=True,
-        )
-        watcher.start()
-
+    def _initial_async_state(self, job_id: str, command: str, cwd: str, reminder: float) -> dict:
+        now = time.time()
         return {
-            "status": "ok",
+            "version": 3,
             "job_id": job_id,
-            "pid": proc.pid,
-            "message": f'Job started. Use bash(action="poll", job_id="{job_id}") to check.',
+            "command": command,
+            "cwd": cwd,
+            "status": "launching",
+            "created_at": now,
+            "started_at": None,
+            "finished_at": None,
+            "pid": None,
+            "pid_identity": None,
+            "pid_start_time": None,
+            "process_group": None,
+            "supervisor_start_lease": {
+                "token": secrets.token_hex(16),
+                "deadline_at": now + _SUPERVISOR_START_LEASE_SECONDS,
+                "state": "pending",
+            },
+            "return_handoff": {
+                "state": "pending",
+                "deadline_at": now + _RETURN_HANDOFF_LEASE_SECONDS,
+            },
+            "exit_status_known": False,
+            "exit_code": None,
+            "terminal_polled": False,
+            "reminder": {
+                "deadline_at": now + reminder,
+                "state": "pending",
+                "ref_id": f"bash.reminder:{job_id}",
+            },
+            "completion": {
+                "state": "pending",
+                "ref_id": f"bash.completion:{job_id}",
+            },
         }
 
-    def _start_reminder_timer(self, job_id: str, job_dir: Path, delay: float) -> None:
-        """Arm the last-resort async poll reminder for a job."""
-        cancel_event = threading.Event()
-        with self._reminder_lock:
-            self._reminder_cancel_events[job_id] = cancel_event
-        timer = threading.Thread(
-            target=self._run_reminder_timer,
-            args=(job_id, job_dir, delay, cancel_event),
+    def _run_async(self, command: str, cwd: str, reminder: float) -> dict:
+        """Start a detached durable supervisor and return its command PID."""
+        jobs_dir = self._ensure_jobs_dir()
+        job_dir: Path | None = None
+        job_id = ""
+        # Retained records make collision handling a correctness requirement, not
+        # cleanup hygiene.  A full UUID has ample entropy; mkdir remains the
+        # collision-safe authority if a hostile or extraordinarily unlikely name
+        # is already present.
+        for _ in range(8):
+            candidate = f"job-{uuid.uuid4().hex}"
+            try:
+                candidate_dir = jobs_dir / candidate
+                candidate_dir.mkdir()
+            except FileExistsError:
+                continue
+            except OSError as exc:
+                return {"status": "error", "message": f"Failed to create async job: {exc}"}
+            job_id, job_dir = candidate, candidate_dir
+            break
+        if job_dir is None:
+            return {"status": "error", "message": "Failed to allocate a unique async job ID"}
+        initial_state = self._initial_async_state(job_id, command, cwd, reminder)
+        start_lease = initial_state["supervisor_start_lease"]
+        start_token = start_lease["token"]
+        try:
+            write_initial_state(job_dir, initial_state)
+        except Exception as exc:
+            return {"status": "error", "message": f"Failed to initialize async job: {exc}"}
+        try:
+            supervisor = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "lingtai.tools.bash._async_supervisor",
+                    str(job_dir),
+                    start_token,
+                ],
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as exc:
+            def mark_failed(state: dict) -> dict:
+                state.update({
+                    "status": "unrecoverable", "finished_at": time.time(),
+                    "supervisor_error": f"cannot start supervisor: {exc}",
+                })
+                return state
+            update_state(job_dir, mark_failed)
+            return {"status": "error", "message": f"Failed to start async job: {exc}"}
+
+        # Record the launched supervisor PID from the owning parent even when an
+        # OS incarnation identity cannot be observed.  The child must still claim
+        # the matching durable lease before it can spawn the command.
+        supervisor_identity = process_identity(supervisor.pid)
+
+        def record_supervisor(state: dict) -> dict:
+            lease = state.get("supervisor_start_lease")
+            if (
+                self._terminal(state.get("status"))
+                or not isinstance(lease, dict)
+                or lease.get("token") != start_token
+            ):
+                return state
+            state["supervisor_pid"] = supervisor.pid
+            if supervisor_identity is not None:
+                state["supervisor_identity"] = supervisor_identity
+            return state
+
+        update_state(job_dir, record_supervisor)
+
+        # If this owned supervisor exits before a terminal commit, its parent has
+        # stronger evidence than any PID heuristic and closes the state itself.
+        threading.Thread(
+            target=self._reap_supervisor,
+            args=(supervisor, job_dir),
             daemon=True,
-        )
-        timer.start()
+        ).start()
+
+        deadline = time.monotonic() + _SUPERVISOR_START_LEASE_SECONDS
+        state = load_state(job_dir)
+        while time.monotonic() < deadline:
+            state = load_state(job_dir)
+            pid = state.get("pid") if state else None
+            if isinstance(pid, int):
+                # Preserve the historical/user-facing meaning of `reminder=N`:
+                # the caller gets N seconds after a successful async-start return,
+                # rather than losing supervisor-startup time from that interval.
+                # The initial deadline remains a crash-safe fallback if this
+                # manager disappears before reaching the return path.
+                return_armed = False
+
+                def arm_from_return(current: dict) -> dict:
+                    # This lock-owned mutation is the successful-return boundary.
+                    # Success is conditional on winning the still-valid handoff:
+                    # after expiry another manager is entitled to publish the
+                    # crash fallback, and that already-published event cannot be
+                    # recalled by a late owner.
+                    nonlocal return_armed
+                    returned_at = time.time()
+                    return_handoff = current.get("return_handoff")
+                    handoff_pending = (
+                        isinstance(return_handoff, dict)
+                        and return_handoff.get("state") == "pending"
+                    )
+                    handoff_deadline = (
+                        return_handoff.get("deadline_at")
+                        if isinstance(return_handoff, dict)
+                        else None
+                    )
+                    handoff_valid = (
+                        handoff_pending
+                        and isinstance(handoff_deadline, (int, float))
+                        and not isinstance(handoff_deadline, bool)
+                        and returned_at < float(handoff_deadline)
+                    )
+                    if self._terminal(current.get("status")):
+                        # A very short command may finish exactly before the start
+                        # call returns.  That is still a successful start only when
+                        # exact terminal truth won while the handoff was valid; its
+                        # terminal commit already suppressed the fallback reminder.
+                        if (
+                            handoff_valid
+                            and current.get("status") in {"completed", "failed"}
+                            and current.get("exit_status_known") is True
+                        ):
+                            return_handoff.update({
+                                "state": "completed_before_return",
+                                "returned_at": returned_at,
+                            })
+                            return_armed = True
+                        elif handoff_pending:
+                            return_handoff.update({
+                                "state": "aborted",
+                                "resolved_at": returned_at,
+                            })
+                        return current
+                    if not handoff_pending:
+                        return current
+                    if not handoff_valid:
+                        return_handoff.update({
+                            "state": "expired",
+                            "expired_at": returned_at,
+                        })
+                        return current
+                    durable_reminder = current.get("reminder")
+                    if not (
+                        isinstance(durable_reminder, dict)
+                        and durable_reminder.get("state") in {
+                            "pending", "publishing", "suppressing"
+                        }
+                    ):
+                        return current
+                    durable_reminder["deadline_at"] = returned_at + reminder
+                    # A pre-return publisher should have been deferred by the
+                    # handoff guard.  Recover conservatively if a stale claim from
+                    # an older implementation nevertheless exists.
+                    if durable_reminder.get("state") == "publishing":
+                        durable_reminder["state"] = "pending"
+                        durable_reminder.pop("claim_token", None)
+                        durable_reminder.pop("claimed_at", None)
+                    return_handoff.update({
+                        "state": "armed",
+                        "returned_at": returned_at,
+                    })
+                    return_armed = True
+                    return current
+
+                update_state(job_dir, arm_from_return)
+                self._start_reminder_timer(job_id, job_dir)
+                self._start_completion_watcher(job_id, job_dir)
+                if not return_armed:
+                    return {
+                        "status": "error",
+                        "job_id": job_id,
+                        "pid": pid,
+                        "message": (
+                            "Async job started, but its successful-return handoff "
+                            "expired or was superseded. The job remains pollable "
+                            "by job_id and its crash-fallback reminder remains authoritative."
+                        ),
+                    }
+                return {
+                    "status": "ok", "job_id": job_id, "pid": pid,
+                    "message": f'Job started. Use bash(action="poll", job_id="{job_id}") to check.',
+                }
+            if state and self._terminal(state.get("status")):
+                break
+            time.sleep(0.01)
+        self._mark_unrecoverable_if_supervisor_gone(job_dir)
+        return {"status": "error", "message": "Failed to start async job supervisor"}
+
+    def _reap_supervisor(self, supervisor: subprocess.Popen, job_dir: Path) -> None:
+        try:
+            returncode = supervisor.wait()
+        except Exception:
+            return
+
+        def close_abandoned_start(state: dict) -> dict:
+            if self._terminal(state.get("status")):
+                return state
+            state.update({
+                "status": "unrecoverable",
+                "exit_status_known": False,
+                "exit_code": None,
+                "finished_at": time.time(),
+                "supervisor_error": (
+                    f"owned supervisor exited with code {returncode} before terminal commit"
+                ),
+            })
+            return state
+
+        update_state(job_dir, close_abandoned_start)
+
+    def _start_reminder_timer(self, job_id: str, job_dir: Path, delay: float | None = None) -> None:
+        """Arm/re-arm the persisted deadline; a new manager can resume it."""
+        if delay is None:
+            state = load_state(job_dir)
+            reminder = state.get("reminder") if state else None
+            if not isinstance(reminder, dict) or not isinstance(reminder.get("deadline_at"), (int, float)):
+                return
+            delay = max(0.0, float(reminder["deadline_at"]) - time.time())
+        with self._reminder_lock:
+            if job_id in self._reminder_cancel_events:
+                return
+            cancel_event = threading.Event()
+            self._reminder_cancel_events[job_id] = cancel_event
+        threading.Thread(
+            target=self._run_reminder_timer,
+            args=(job_id, job_dir, delay, cancel_event), daemon=True,
+        ).start()
 
     def _run_reminder_timer(
-        self,
-        job_id: str,
-        job_dir: Path,
-        delay: float,
-        cancel_event: threading.Event,
+        self, job_id: str, job_dir: Path, delay: float, cancel_event: threading.Event,
     ) -> None:
-        """Publish one reminder unless terminal poll/cancel handles the job first."""
         if cancel_event.wait(delay):
             return
-        if not self._claim_reminder_timer(job_id, job_dir, cancel_event):
+        claim_token = self._claim_reminder_timer(job_id, job_dir, cancel_event)
+        if claim_token is None:
             return
-        self._publish_async_reminder(job_id)
+        # The helper retains the cross-manager state lock through the final
+        # pre-publish suppression check, sink write, and acknowledgement.  A
+        # terminal claim which wins that lock makes this stale token a no-op.
+        self._publish_claimed_reminder(job_id, job_dir, claim_token)
 
     def _claim_reminder_timer(
-        self,
-        job_id: str,
-        job_dir: Path,
-        cancel_event: threading.Event,
-    ) -> bool:
-        """Atomically claim the reminder deadline before publishing."""
+        self, job_id: str, job_dir: Path, cancel_event: threading.Event,
+    ) -> str | None:
+        """Claim only a currently due reminder; stale timers defer to durable truth."""
         with self._reminder_lock:
             current = self._reminder_cancel_events.get(job_id)
             if current is not cancel_event or cancel_event.is_set() or not job_dir.is_dir():
-                return False
+                return None
             self._reminder_cancel_events.pop(job_id, None)
             cancel_event.set()
-            return True
+        state = load_state(job_dir)
+        if state is None:  # Compatibility for the original private race tests.
+            return "legacy-private-race"
+        claim_token = uuid.uuid4().hex
+        claimed = False
+        defer_seconds: float | None = None
+
+        def claim(current_state: dict) -> dict:
+            nonlocal claimed, defer_seconds
+            reminder = current_state.get("reminder")
+            if not isinstance(reminder, dict) or reminder.get("state") in {
+                "suppressed", "published"
+            }:
+                return current_state
+            now = time.time()
+            if reminder.get("state") == "suppressing":
+                suppressing_until = reminder.get("suppressing_until")
+                if (
+                    isinstance(suppressing_until, (int, float))
+                    and not isinstance(suppressing_until, bool)
+                    and float(suppressing_until) > now
+                ):
+                    defer_seconds = float(suppressing_until) - now
+                    return current_state
+                reminder["state"] = "pending"
+                reminder.pop("suppressing_at", None)
+                reminder.pop("suppressing_until", None)
+
+            return_handoff = current_state.get("return_handoff")
+            if (
+                isinstance(return_handoff, dict)
+                and return_handoff.get("state") == "pending"
+            ):
+                handoff_deadline = return_handoff.get("deadline_at")
+                if (
+                    isinstance(handoff_deadline, (int, float))
+                    and not isinstance(handoff_deadline, bool)
+                    and float(handoff_deadline) > now
+                ):
+                    # The manager which owns the synchronous start response has not
+                    # yet durably moved the reminder to returned_at + delay.  Check
+                    # the cross-process state again soon rather than sleeping until
+                    # the whole lease expires, so a crash immediately after arming
+                    # still recovers close to the requested deadline.
+                    defer_seconds = min(
+                        float(handoff_deadline) - now,
+                        _RETURN_HANDOFF_RECHECK_SECONDS,
+                    )
+                    return current_state
+                return_handoff.update({"state": "expired", "expired_at": now})
+
+                # Once the bounded handoff fails, do not emit a misleading
+                # may-still-be-running reminder for a start which is already known
+                # to be unrecoverable.  The completion channel owns that wake-up.
+                lease_expired = self._supervisor_start_lease_expired(current_state)
+                supervisor_gone = self._supervisor_definitively_gone(current_state)
+                if lease_expired or supervisor_gone:
+                    reason = (
+                        "supervisor start lease expired before command spawn"
+                        if lease_expired
+                        else "recorded supervisor is definitively gone before terminal commit"
+                    )
+                    current_state.update({
+                        "status": "unrecoverable",
+                        "exit_status_known": False,
+                        "exit_code": None,
+                        "finished_at": now,
+                        "supervisor_error": reason,
+                    })
+                    reminder.update({"state": "suppressed", "suppressed_at": now})
+                    reminder.pop("claim_token", None)
+                    reminder.pop("claimed_at", None)
+                    return current_state
+
+            deadline_at = reminder.get("deadline_at")
+            if (
+                isinstance(deadline_at, (int, float))
+                and not isinstance(deadline_at, bool)
+                and float(deadline_at) > now
+            ):
+                # Another manager may have moved the crash-fallback deadline to
+                # the successful-return boundary after this timer was armed.
+                # Revert any stale publishing claim and let a fresh timer own the
+                # later durable deadline.
+                reminder["state"] = "pending"
+                reminder.pop("claim_token", None)
+                reminder.pop("claimed_at", None)
+                defer_seconds = float(deadline_at) - now
+                return current_state
+            # A stale ``publishing`` claim is recoverable after a crash.  Replacing
+            # its token makes concurrent rehydrators mutually exclusive at the
+            # final publication gate below.
+            reminder.update({
+                "state": "publishing",
+                "claimed_at": now,
+                "claim_token": claim_token,
+            })
+            claimed = True
+            return current_state
+
+        update_state(job_dir, claim)
+        if defer_seconds is not None:
+            self._start_reminder_timer(job_id, job_dir, defer_seconds)
+        return claim_token if claimed else None
+
+    def _publish_claimed_reminder(self, job_id: str, job_dir: Path, claim_token: str) -> bool:
+        if claim_token == "legacy-private-race":
+            return self._publish_async_reminder(job_id) is not False
+        return publish_reminder_if_claimed(
+            job_dir, claim_token, lambda: self._publish_async_reminder(job_id),
+        )
 
     def _cancel_reminder_timer(self, job_id: str) -> None:
-        """Suppress and forget a pending reminder after terminal poll/cancel."""
+        """Stop this manager's local deadline worker; durable suppression is a terminal claim."""
         with self._reminder_lock:
             cancel_event = self._reminder_cancel_events.pop(job_id, None)
         if cancel_event is not None:
             cancel_event.set()
 
-    def _publish_async_reminder(self, job_id: str) -> None:
-        """Append the last-resort reminder to the durable multi-event system channel."""
+    def _publish_async_reminder(self, job_id: str) -> bool:
         body = (
             f"Bash async job {job_id} may still be running. "
             f"Poll it with bash(action=\"poll\", job_id=\"{job_id}\")."
@@ -585,239 +943,475 @@ class BashManager:
         if hasattr(agent, "_enqueue_system_notification"):
             try:
                 agent._enqueue_system_notification(
-                    source="bash.reminder",
-                    ref_id=f"bash.reminder:{job_id}",
-                    body=body,
-                    skip_if_ref_id_exists=True,
+                    source="bash.reminder", ref_id=f"bash.reminder:{job_id}",
+                    body=body, skip_if_ref_id_exists=True,
                 )
-                return
+                return True
             except Exception:
                 pass
-        # Fallback: use the agent's store directly via compare_update_channel.
-        self._append_system_notification_fallback(
-            source="bash.reminder",
-            ref_id=f"bash.reminder:{job_id}",
-            body=body,
-        )
+        try:
+            self._append_system_notification_fallback(
+                source="bash.reminder", ref_id=f"bash.reminder:{job_id}", body=body,
+            )
+            return True
+        except Exception:
+            return False
 
     def _append_system_notification_fallback(
-        self,
-        *,
-        source: str,
-        ref_id: str,
-        body: str,
+        self, *, source: str, ref_id: str, body: str,
     ) -> str:
-        """Append a system event using the agent's serialized store.
-
-        Uses compare_update_channel so serialization is store-owned.
-        """
+        """Append a system event using the agent's serialized store."""
         import secrets
-        import time
         from datetime import datetime, timezone
-
         from lingtai.kernel.notification_store import UNCONDITIONAL
 
-        agent = self._agent
-        store = agent._notification_store
-
+        store = self._agent._notification_store
         event_id = f"evt_{int(time.time()*1000):x}_{secrets.token_hex(8)}"
         received_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        def _mutator(current_payload: dict) -> tuple[dict | None, bool, str]:
+        def mutate(current_payload: dict) -> tuple[dict | None, bool, str]:
             current = current_payload if isinstance(current_payload, dict) else {}
             events = list(current.get("data", {}).get("events", []))
-            if any(isinstance(ev, dict) and ev.get("ref_id") == ref_id for ev in events):
+            if any(isinstance(event, dict) and event.get("ref_id") == ref_id for event in events):
                 return current_payload, False, ""
             events.append({
-                "event_id": event_id,
-                "source": source,
-                "ref_id": ref_id,
-                "body": body,
-                "at": received_at,
+                "event_id": event_id, "source": source, "ref_id": ref_id,
+                "body": body, "at": received_at,
             })
             events = events[-20:]
-            payload = {
-                "header": (
-                    f"{len(events)} system notification"
-                    f"{'s' if len(events) != 1 else ''}"
-                ),
-                "icon": "🔔",
-                "priority": "normal",
-                "published_at": received_at,
+            return ({
+                "header": f"{len(events)} system notification{'s' if len(events) != 1 else ''}",
+                "icon": "🔔", "priority": "normal", "published_at": received_at,
                 "data": {"events": events},
-            }
-            return payload, True, event_id
-
-        result = store.compare_update_channel("system", UNCONDITIONAL, _mutator)
+            }, True, event_id)
+        result = store.compare_update_channel("system", UNCONDITIONAL, mutate)
         return result.value if isinstance(result.value, str) else ""
 
-    def _watch_async_job(
-        self, job_id: str, command: str, proc: subprocess.Popen,
-        job_dir: Path, stdout_f, stderr_f,
-    ) -> None:
-        """Background thread: wait for async job, then write notification."""
-        try:
-            returncode = proc.wait()
-        except Exception:
-            returncode = -1
+    def _start_completion_watcher(self, job_id: str, job_dir: Path) -> None:
+        with self._completion_lock:
+            if job_id in self._completion_watchers:
+                return
+            self._completion_watchers.add(job_id)
+        threading.Thread(
+            target=self._watch_durable_job, args=(job_id, job_dir), daemon=True,
+        ).start()
 
-        # Close file handles
+    def _watch_durable_job(self, job_id: str, job_dir: Path) -> None:
         try:
-            stdout_f.close()
-            stderr_f.close()
-        except Exception:
-            pass
+            while True:
+                state = load_state(job_dir)
+                if state is None:
+                    return
+                if self._terminal(state.get("status")):
+                    self._publish_completion_if_due(job_id, job_dir)
+                    return
+                time.sleep(0.05)
+        finally:
+            with self._completion_lock:
+                self._completion_watchers.discard(job_id)
 
-        # Read stdout preview
-        stdout_preview = ""
-        try:
-            stdout_text = (job_dir / "stdout.log").read_text(encoding="utf-8", errors="replace")
-            stdout_preview = stdout_text[:200]
-        except Exception:
-            pass
+    def _publish_completion_if_due(self, job_id: str, job_dir: Path) -> None:
+        claimed = False
+        def claim(state: dict) -> dict:
+            nonlocal claimed
+            completion = state.get("completion")
+            if not self._terminal(state.get("status")) or not isinstance(completion, dict):
+                return state
+            if completion.get("state") == "published":
+                return state
+            completion["state"] = "publishing"
+            claimed = True
+            return state
+        state = update_state(job_dir, claim)
+        if not claimed or state is None:
+            return
+        if self._publish_async_completion(job_id, job_dir, state):
+            def published(current: dict) -> dict:
+                completion = current.get("completion")
+                if isinstance(completion, dict) and completion.get("state") == "publishing":
+                    completion["state"] = "published"
+                    completion["published_at"] = time.time()
+                return current
+            update_state(job_dir, published)
 
-        # Write notification to .notification/bash.json via the store.
+    def _publish_async_completion(self, job_id: str, job_dir: Path, state: dict) -> bool:
         try:
             from datetime import datetime, timezone
-            agent = self._agent
-            store = agent._notification_store
+            stdout, _ = self._read_logs(job_dir)
+            exit_code = state.get("exit_code") if state.get("exit_status_known") else None
             payload = {
-                "header": f"Job {job_id} completed (exit {returncode})",
-                "icon": "⚡",
-                "priority": "normal",
-                "published_at": datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                ),
+                "header": f"Job {job_id} completed (exit {exit_code})",
+                "icon": "⚡", "priority": "normal",
+                "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "data": {
                     "job_id": job_id,
-                    "command": command[:200],
-                    "exit_code": returncode,
-                    "stdout_preview": stdout_preview,
+                    "command": str(state.get("command", ""))[:200],
+                    "exit_code": exit_code,
+                    "exit_status_known": bool(state.get("exit_status_known")),
+                    "stdout_preview": stdout[:200],
+                    "ref_id": f"bash.completion:{job_id}",
                 },
             }
+            store = self._agent._notification_store
+            if hasattr(store, "compare_update_channel"):
+                from lingtai.kernel.notification_store import UNCONDITIONAL
+
+                ref_id = f"bash.completion:{job_id}"
+
+                def mutate(current_payload: dict) -> tuple[dict | None, bool, bool]:
+                    current = current_payload if isinstance(current_payload, dict) else {}
+                    data = current.get("data")
+                    if isinstance(data, dict) and data.get("ref_id") == ref_id:
+                        return current_payload, False, True
+                    return payload, True, True
+
+                result = store.compare_update_channel("bash", UNCONDITIONAL, mutate)
+                return bool(result.value)
             store.publish("bash", payload)
+            return True
         except Exception:
-            pass  # Notification failure should not break the job
+            return False
 
-    def _handle_poll(self, args: dict) -> dict:
-        """Check status of an async job."""
-        job_id = args.get("job_id", "")
-        err = self._validate_job_id(job_id)
-        if err:
-            return err
-
-        jobs_dir = self._ensure_jobs_dir()
-        job_dir = jobs_dir / job_id
-        if not job_dir.is_dir():
-            return {"status": "error", "message": f"Job not found: {job_id}"}
-
-        status = (job_dir / "status").read_text(encoding="utf-8").strip()
-        if status != "running":
-            return {"status": "error", "message": f"Job already finished ({status})"}
-
-        pid = int((job_dir / "pid").read_text(encoding="utf-8").strip())
-
-        # Use Popen.poll() if we have the handle (same process), else os.waitpid
-        handles = getattr(self, "_open_handles", {})
-        entry = handles.get(job_id)
-        if entry:
-            proc = entry[0]
-            returncode = proc.poll()
-        else:
-            # Fallback: try waitpid (different manager instance, same PID file)
-            try:
-                wpid, wait_status = os.waitpid(pid, os.WNOHANG)
-                returncode = os.waitstatus_to_exitcode(wait_status) if wpid != 0 else None
-            except ChildProcessError:
-                # Not our child — check if alive via signal 0
-                try:
-                    os.kill(pid, 0)
-                    returncode = None  # still alive
-                except OSError:
-                    returncode = -1  # dead but we can't get the code
-
-        if returncode is None:
-            return {"status": "running", "job_id": job_id, "pid": pid}
-
-        # Process finished — close file handles, read output
-        self._cancel_reminder_timer(job_id)
-        self._close_handles(job_id)
-
-        stdout = (job_dir / "stdout.log").read_text(encoding="utf-8", errors="replace")
-        stderr = (job_dir / "stderr.log").read_text(encoding="utf-8", errors="replace")
-
+    def _read_logs(self, job_dir: Path) -> tuple[str, str]:
+        try:
+            stdout = (job_dir / "stdout.log").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            stdout = ""
+        try:
+            stderr = (job_dir / "stderr.log").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            stderr = ""
         if len(stdout) > self._max_output:
             stdout = stdout[: self._max_output] + f"\n... (truncated, {len(stdout)} chars total)"
         if len(stderr) > self._max_output:
             stderr = stderr[: self._max_output] + f"\n... (truncated, {len(stderr)} chars total)"
+        return stdout, stderr
 
-        # Clean up
-        import shutil
-        shutil.rmtree(job_dir, ignore_errors=True)
+    def _already_finished(self, state: dict) -> dict:
+        label = "cancelled" if state.get("terminal_consumed_by") == "cancel" else state.get("status")
+        return {"status": "error", "message": f"Job already finished ({label})"}
 
-        return _augment_command_result({
-            "status": "done",
-            "exit_code": returncode,
-            "stdout": stdout,
-            "stderr": stderr,
-        })
+    def _claim_terminal(self, job_dir: Path, consumer: str) -> dict | None:
+        """Atomically consume a terminal result and suppress its reminder.
 
-    def _handle_cancel(self, args: dict) -> dict:
-        """Kill an async job."""
+        The conditional state transition is the one-shot linearization point for
+        both poll and cancel.  Suppression belongs in this same durable write so
+        no successful terminal consumer can leave a later deadline publication.
+        """
+        claimed = False
+
+        def claim(current: dict) -> dict:
+            nonlocal claimed
+            if not self._terminal(current.get("status")) or current.get("terminal_polled"):
+                return current
+            now = time.time()
+            current.update({
+                "terminal_polled": True,
+                "terminal_polled_at": now,
+                "terminal_consumed_by": consumer,
+            })
+            reminder = current.get("reminder")
+            if isinstance(reminder, dict):
+                # Even a previously published reminder is terminally suppressed
+                # for future retries; its published_at remains historical evidence.
+                reminder.update({"state": "suppressed", "suppressed_at": now})
+                reminder.pop("claim_token", None)
+                reminder.pop("suppressing_at", None)
+                reminder.pop("suppressing_until", None)
+            claimed = True
+            return current
+
+        state = update_state(job_dir, claim)
+        return state if claimed else None
+
+    def _terminal_result(self, job_id: str, job_dir: Path) -> dict | None:
+        state = self._claim_terminal(job_dir, "poll")
+        if state is None:
+            return None
+        self._cancel_reminder_timer(job_id)
+        stdout, stderr = self._read_logs(job_dir)
+        if state.get("exit_status_known") and isinstance(state.get("exit_code"), int):
+            return _augment_command_result({
+                "status": "done", "exit_status_known": True,
+                "exit_code": state["exit_code"], "stdout": stdout, "stderr": stderr,
+            })
+        return {
+            "status": "done", "job_id": job_id, "exit_status_known": False,
+            "exit_code": None, "stdout": stdout, "stderr": stderr,
+            "message": "Async job terminated but its exit status is unavailable",
+        }
+
+    def _claim_legacy_terminal(self, job_dir: Path) -> bool:
+        """Preserve old unknown-exit one-shot behavior without creating an exit code."""
+        try:
+            marker = job_dir / ".legacy-terminal-polled"
+            with marker.open("x", encoding="utf-8") as handle:
+                handle.write(f"{time.time()}\n")
+            return True
+        except FileExistsError:
+            return False
+        except OSError:
+            return False
+
+    def _legacy_unknown(self, job_id: str, job_dir: Path, message: str | None = None) -> dict:
+        if not self._claim_legacy_terminal(job_dir):
+            return {"status": "error", "message": "Job already finished (legacy unknown)"}
+        stdout, stderr = self._read_logs(job_dir)
+        return {
+            "status": "done", "job_id": job_id, "exit_status_known": False,
+            "exit_code": None, "stdout": stdout, "stderr": stderr,
+            "message": message or "Legacy async job has no recoverable exit status",
+        }
+
+    def _handle_legacy_poll(self, job_id: str, job_dir: Path) -> dict:
+        if (job_dir / ".legacy-terminal-polled").exists():
+            return {"status": "error", "message": "Job already finished (legacy unknown)"}
+        try:
+            status = (job_dir / "status").read_text(encoding="utf-8").strip()
+            pid = int((job_dir / "pid").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return self._legacy_unknown(job_id, job_dir)
+        if status != "running" or not process_is_alive(pid):
+            return self._legacy_unknown(job_id, job_dir)
+        # A legacy record cannot prove the PID incarnation, so it is never safe
+        # to signal.  But a still-live PID is not evidence that the old command
+        # has terminated either: keep the job pollable instead of consuming a
+        # fabricated unknown terminal result while it may still be running.
+        return {
+            "status": "running",
+            "job_id": job_id,
+            "pid": pid,
+            "message": "Legacy async job may still be running; cancellation is unavailable without durable supervisor ownership",
+        }
+
+    @staticmethod
+    def _supervisor_start_lease_expired(state: dict) -> bool:
+        """Whether a version-3 job missed its bounded pre-command start lease."""
+        if state.get("status") != "launching":
+            return False
+        lease = state.get("supervisor_start_lease")
+        if not isinstance(lease, dict) or lease.get("state") not in {"pending", "claimed"}:
+            return False
+        deadline_at = lease.get("deadline_at")
+        return (
+            isinstance(deadline_at, (int, float))
+            and not isinstance(deadline_at, bool)
+            and time.time() >= float(deadline_at)
+        )
+
+    @staticmethod
+    def _supervisor_definitively_gone(state: dict) -> bool:
+        """True when a recorded PID is absent, or its saved incarnation mismatches."""
+        pid = state.get("supervisor_pid")
+        if not isinstance(pid, int):
+            return False
+        # PID absence is proof even when identity capture failed.  Identity remains
+        # necessary only to distinguish a still-live PID from a recycled process.
+        if not process_is_alive(pid):
+            return True
+        saved_identity = state.get("supervisor_identity")
+        if not isinstance(saved_identity, str):
+            return False
+        observed_identity = process_identity(pid)
+        # ``None`` is an observation failure, not proof that the supervisor died.
+        return observed_identity is not None and observed_identity != saved_identity
+
+    def _mark_unrecoverable_if_supervisor_gone(self, job_dir: Path) -> dict | None:
+        """Resolve a lost supervisor or expired start lease under the state lock."""
+        marked = False
+
+        def mark(current: dict) -> dict:
+            nonlocal marked
+            if self._terminal(current.get("status")):
+                return current
+            lease_expired = self._supervisor_start_lease_expired(current)
+            supervisor_gone = self._supervisor_definitively_gone(current)
+            if not lease_expired and not supervisor_gone:
+                return current
+            reason = (
+                "supervisor start lease expired before command spawn"
+                if lease_expired
+                else "recorded supervisor is definitively gone before terminal commit"
+            )
+            current.update({
+                "status": "unrecoverable",
+                "exit_status_known": False,
+                "exit_code": None,
+                "finished_at": time.time(),
+                "supervisor_error": reason,
+            })
+            marked = True
+            return current
+
+        state = update_state(job_dir, mark)
+        return state if marked else None
+
+    def _await_supervisor_commit(self, job_dir: Path, timeout: float) -> dict | None:
+        """Reload terminal truth while a supervisor or valid start lease can commit."""
+        deadline = time.monotonic() + timeout
+        state = load_state(job_dir)
+        while state is not None:
+            if self._terminal(state.get("status")):
+                return state
+            resolved = self._mark_unrecoverable_if_supervisor_gone(job_dir)
+            if resolved is not None:
+                return resolved
+            if time.monotonic() >= deadline:
+                return state
+            time.sleep(0.01)
+            state = load_state(job_dir)
+        return None
+
+    def _running_result(self, job_id: str, state: dict) -> dict:
+        pid = state.get("pid")
+        identity = state.get("pid_identity")
+        if isinstance(pid, int) and process_identity_matches(pid, identity) and process_is_alive(pid):
+            return {"status": "running", "job_id": job_id, "pid": pid}
+        return {
+            "status": "running",
+            "job_id": job_id,
+            "message": "Awaiting the durable supervisor terminal commit",
+        }
+
+    def _handle_poll(self, args: dict) -> dict:
         job_id = args.get("job_id", "")
         err = self._validate_job_id(job_id)
         if err:
             return err
-
-        jobs_dir = self._ensure_jobs_dir()
-        job_dir = jobs_dir / job_id
+        job_dir = self._jobs_path() / job_id
         if not job_dir.is_dir():
             return {"status": "error", "message": f"Job not found: {job_id}"}
+        state = load_state(job_dir)
+        if state is None:
+            return self._handle_legacy_poll(job_id, job_dir)
+        if state.get("terminal_polled"):
+            return self._already_finished(state)
+        if self._terminal(state.get("status")):
+            result = self._terminal_result(job_id, job_dir)
+            return result if result is not None else self._already_finished(load_state(job_dir) or state)
 
-        status = (job_dir / "status").read_text(encoding="utf-8").strip()
-        if status != "running":
-            return {"status": "error", "message": f"Job already finished ({status})"}
+        pid = state.get("pid")
+        identity = state.get("pid_identity")
+        if (
+            isinstance(pid, int)
+            and process_identity_matches(pid, identity)
+            and process_is_alive(pid)
+        ):
+            return {"status": "running", "job_id": job_id, "pid": pid}
 
-        pid = int((job_dir / "pid").read_text(encoding="utf-8").strip())
+        # A dead/mismatched command PID is not terminal evidence: its detached
+        # supervisor may have already obtained the exact wait result but not yet
+        # committed it.  Give that verified supervisor a bounded commit window.
+        state = self._await_supervisor_commit(job_dir, _SUPERVISOR_COMMIT_GRACE_SECONDS) or state
+        if state.get("terminal_polled"):
+            return self._already_finished(state)
+        if self._terminal(state.get("status")):
+            result = self._terminal_result(job_id, job_dir)
+            return result if result is not None else self._already_finished(load_state(job_dir) or state)
+        return self._running_result(job_id, state)
 
-        # Kill the entire process group (start_new_session=True makes pid the pgid)
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass  # Already dead
+    def _handle_cancel(self, args: dict) -> dict:
+        job_id = args.get("job_id", "")
+        err = self._validate_job_id(job_id)
+        if err:
+            return err
+        job_dir = self._jobs_path() / job_id
+        if not job_dir.is_dir():
+            return {"status": "error", "message": f"Job not found: {job_id}"}
+        state = load_state(job_dir)
+        if state is None:
+            return {"status": "error", "message": "Cannot cancel legacy async job without durable supervisor ownership"}
+        if self._terminal(state.get("status")) or state.get("terminal_polled"):
+            return self._already_finished(state)
+        if not (
+            isinstance(state.get("supervisor_pid"), int)
+            and isinstance(state.get("supervisor_identity"), str)
+        ):
+            return {
+                "status": "error",
+                "message": "Cannot cancel async job: durable supervisor identity is unavailable",
+            }
+        if self._supervisor_definitively_gone(state):
+            self._mark_unrecoverable_if_supervisor_gone(job_dir)
+            return {
+                "status": "error",
+                "message": "Cannot cancel async job: recorded supervisor identity is no longer live; poll for the durable terminal result",
+            }
 
-        # Reap via Popen if we have the handle, to avoid zombies
-        handles = getattr(self, "_open_handles", {})
-        entry = handles.get(job_id)
-        if entry:
-            proc = entry[0]
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
+        requested = False
 
-        self._close_handles(job_id)
+        def request_cancel(current: dict) -> dict:
+            nonlocal requested
+            if self._terminal(current.get("status")) or current.get("terminal_polled"):
+                return current
+            now = time.time()
+            if not current.get("cancel_requested_at"):
+                current["cancel_requested_at"] = now
+            reminder = current.get("reminder")
+            if isinstance(reminder, dict) and reminder.get("state") in {
+                "pending", "publishing"
+            }:
+                reminder.update({
+                    "state": "suppressing",
+                    "suppressing_at": now,
+                    "suppressing_until": now + _CANCEL_COMMIT_TIMEOUT_SECONDS,
+                })
+                reminder.pop("claim_token", None)
+                reminder.pop("claimed_at", None)
+            requested = True
+            return current
+
+        state = update_state(job_dir, request_cancel)
+        if not requested or state is None:
+            return self._already_finished(state or {})
         self._cancel_reminder_timer(job_id)
 
-        # Clean up
-        import shutil
-        shutil.rmtree(job_dir, ignore_errors=True)
+        # The detached supervisor owns the unreaped Popen and performs TERM/KILL.
+        # A manager only requests that protocol, then waits for its exact commit.
+        state = self._await_supervisor_commit(job_dir, _CANCEL_COMMIT_TIMEOUT_SECONDS)
+        if state is not None and state.get("status") == "completed":
+            if state.get("cancellation_outcome") != "group_cancelled":
+                return {
+                    "status": "error",
+                    "message": (
+                        "Cancellation did not confirm process-group termination; "
+                        "poll for the exact durable terminal result"
+                    ),
+                }
+            claimed = self._claim_terminal(job_dir, "cancel")
+            if claimed is not None:
+                self._cancel_reminder_timer(job_id)
+                return {"status": "cancelled", "job_id": job_id}
+            return self._already_finished(load_state(job_dir) or state)
+        if state is not None and state.get("terminal_polled"):
+            return self._already_finished(state)
+        reminder_restored = False
 
-        return {"status": "cancelled", "job_id": job_id}
+        def restore_reminder(current: dict) -> dict:
+            nonlocal reminder_restored
+            if self._terminal(current.get("status")):
+                return current
+            reminder = current.get("reminder")
+            if isinstance(reminder, dict) and reminder.get("state") == "suppressing":
+                reminder["state"] = "pending"
+                reminder.pop("suppressing_at", None)
+                reminder.pop("suppressing_until", None)
+                reminder_restored = True
+            return current
+
+        update_state(job_dir, restore_reminder)
+        if reminder_restored:
+            self._start_reminder_timer(job_id, job_dir)
+        return {
+            "status": "error",
+            "message": (
+                "Cancellation requested; awaiting supervisor terminal commit. "
+                "The job remains pollable and its reminder remains recoverable."
+            ),
+        }
 
     def _close_handles(self, job_id: str) -> None:
-        """Close open file handles for a job if we hold them."""
-        handles = getattr(self, "_open_handles", {})
-        entry = handles.pop(job_id, None)
-        if entry:
-            # entry is (Popen, stdout_file, stderr_file)
-            for fh in entry[1:]:
-                try:
-                    fh.close()
-                except Exception:
-                    pass
-
+        """Compatibility no-op: durable supervisors own and close their logs."""
+        return None
 
 def setup(
     agent: "BaseAgent",

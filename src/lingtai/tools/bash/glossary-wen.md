@@ -12,6 +12,6 @@ language: wen
 - `timeout`：超时秒数（默认：30，唯同步执行时生效）
 - `working_dir`：指令之工作目录（可选）。留空或传空字符串即用 agent 工作目录。须在 agent 工作目录沙箱之内；沙箱外路径会被拒。若需操作外部仓库/路径，请令 working_dir 保持为 agent 目录，并在 command 中显式 cd，如 cd /absolute/path && ...
 - `async`：后台运行指令，即返 job_id（默认：false，唯 action='run' 时生效）
-- `reminder`：异步兜底唤醒之延迟秒数（默认 1800）。顶层 schema 要求此字段，故经 provider 校验之同步 run、poll、cancel 亦携之；运行时唯异步 run 用且校验之，余动作忽略。任务届时若未被终态 poll 或 cancel，则发 system 通知，促其 poll。
+- `reminder`：异步兜底唤醒之延迟秒数（默认 1800）。顶层 schema 要求此字段，故经 provider 校验之同步 run、poll、cancel 亦携之；运行时唯异步 run 用且校验之，余动作忽略。初期之限，惟崩溃兜底；有界且持久之 return-handoff，禁次 manager 于首 manager 尚未毕成功返转之际先发旧限。惟守尚有效而原子书 `returned_at + reminder`（或精确成败已于有效守内落盘），方报启成；守既逾期，后复之 owner 携 `job_id/pid` 明告“犹可 poll”之误，且存崩溃兜底。终限届而任务仍非终态，方发 system 通知促 poll。取消中之持久 suppressing 亦有界，逾期可复告。若已得精确终态，则抑“或仍在行”之旧告，改由 Bash completion 唤醒。
 - `job_id`：异步任务之号，用于 poll/cancel（由异步 run 所返）
 - `summary`：可选。默认 false。设 true 时，此 tool 照常运行，原始结果完存于持久日志（可凭 tool_call_id 取回）；然结果入尔上下文前，先以尔 `reasoning` 字段所驱之 LLM 摘要代之——故 `reasoning` 当明言所欲存者。唯料输出甚巨（逾一万字符）且无需精确原文时，方设 true。需精确之行/文件/diff/stderr 原文者，留 false。摘要非权威；原始结果逾五十万字符，则不生摘要，尔得一拒辞，指向所存之原始结果。

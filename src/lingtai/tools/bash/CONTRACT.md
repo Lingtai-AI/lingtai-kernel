@@ -1,10 +1,12 @@
 ---
 name: bash-contract
 tool: bash
-contract_version: 1
+contract_version: 3
 related_files:
   - src/lingtai/tools/bash/__init__.py
+  - src/lingtai/tools/bash/_async_supervisor.py
   - src/lingtai/tools/bash/ANATOMY.md
+  - src/lingtai/tools/bash/manual/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -66,8 +68,8 @@ for `command` and `job_id`. `action` defaults to `run`.
 |---|---|---|---|---|
 | `run` (sync) | Provider schema: `command`, `reminder`; runtime consumes `command` only | `working_dir`, `timeout` (default 30), `summary` | `{status: "ok", exit_code, stdout, stderr, ok, command_status, warning?}` | `{status: "error", message}` — empty command, policy-denied, cwd outside sandbox, timeout (with broad-scan hint), or spawn failure |
 | `run` (async) | Provider/runtime: `command`, `async: true`, `reminder` | `working_dir`, `summary` | `{status: "ok", job_id, pid, message}` | `{status: "error", message}` — same validation errors, invalid boolean/non-numeric/non-finite/negative/too-large `reminder`, plus `Failed to start async job: ...` |
-| `poll` | Provider schema: `job_id`, `reminder`; runtime consumes `job_id` only | — | running: `{status: "running", job_id, pid}`; finished: `{status: "done", exit_code, stdout, stderr, ok, command_status, warning?}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or `Job already finished (...)` |
-| `cancel` | Provider schema: `job_id`, `reminder`; runtime consumes `job_id` only | — | `{status: "cancelled", job_id}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or `Job already finished (...)` |
+| `poll` | Provider schema: `job_id`, `reminder`; runtime consumes `job_id` only | — | running: `{status: "running", job_id, pid?}` while the recorded supervisor may still commit; known finished: `{status: "done", exit_status_known: true, exit_code, stdout, stderr, ok, command_status, warning?}`; unrecoverable/legacy terminal: `{status: "done", exit_status_known: false, exit_code: null, stdout, stderr}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or an already terminal-consumed job |
+| `cancel` | Provider schema: `job_id`, `reminder`; runtime consumes `job_id` only | — | `{status: "cancelled", job_id}` only after the supervisor has committed the held child's exact terminal status and cancellation atomically consumes/suppresses the job | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, terminal job, legacy job, or a durable cancellation request still awaiting a terminal commit (which remains pollable/remindable) |
 
 Fidelity fields are additive and keyed off `exit_code`: `ok` is `True` only when
 `exit_code == 0`; `command_status` is `"success"`/`"failed"`; `warning` is
@@ -92,32 +94,80 @@ All paths are relative to the agent working directory (`<agent>/`):
 
 ```text
 <agent>/system/jobs/<job_id>/
-  command       # the command string
-  status        # "running" (dir is removed once poll/cancel reaps the job)
-  pid           # child PID (also the process-group id; see below)
-  stdout.log    # streamed child stdout
-  stderr.log    # streamed child stderr
-<agent>/.notification/bash.json   # written by the async watcher on job exit
-<agent>/.notification/system.json # appended by the last-resort async reminder
+  state.json    # atomically replaced authoritative state (command, cwd, timestamps,
+                # start/return handoff leases, supervisor/command PID identities,
+                # terminal result, reminder and completion publication claims)
+  .state.lock   # POSIX lock serializing manager and supervisor state transitions
+  stdout.log    # streamed child stdout, owned/closed by the supervisor
+  stderr.log    # streamed child stderr, owned/closed by the supervisor
+  command/status/pid  # legacy layout read only for honest unknown-exit recovery
+<agent>/.notification/bash.json   # manager-published durable completion wake
+<agent>/.notification/system.json # stable-ref last-resort async reminder events
 ```
 
-`job_id` is `job-<8 hex>`. On `poll`-to-completion or `cancel`, the job
-directory is removed with `shutil.rmtree(..., ignore_errors=True)`. The async
-watcher thread writes `.notification/bash.json` atomically (`.tmp` + rename) when
-the process exits, so completion reaches the agent through the same notification
-channel as email/soul/molt. `stdout`/`stderr` are truncated to `max_output`
-(default 50_000 chars) with a trailing `... (truncated, N chars total)` marker.
+New retained IDs are `job-<32 lowercase hex>` (a full UUID4 hex value). The
+strict reader also accepts only the old `job-<8 lowercase hex>` form so existing
+legacy records remain addressable; all other names are rejected before path use.
+Async run uses collision-safe directory creation and first atomically records
+`state.json`, including a tokenized finite supervisor-start lease and a bounded
+`return_handoff` guard, before starting a detached private supervisor
+(`_async_supervisor.py`). The launching manager immediately records the observed
+supervisor PID/identity; the supervisor must claim the matching unexpired lease,
+recheck it under the state lock immediately before `Popen`, then records its own
+incarnation and the command PID. An expired/terminal lease cannot spawn a command.
+The supervisor owns the unreaped `Popen` and `wait()` and atomically records the
+exact wait status. If it exits before terminal commit, the owning parent reaper
+marks the state unrecoverable; after parent loss, an expired launch lease or a
+definitively absent recorded supervisor gives a fresh manager equivalent proof.
 
-Async run also arms a daemon-threaded last-resort reminder. When `reminder`
-seconds elapse, the deadline path atomically claims the job under the same
-reminder lock used by terminal handling. If terminal `poll -> done` or
-successful `cancel` popped the job first, the reminder is suppressed; if the
-deadline claims first, the reminder legitimately wins and Bash appends one
-`bash.reminder` event to `.notification/system.json` with stable
-`ref_id="bash.reminder:<job_id>"` and a poll instruction. The reminder is
-intentionally **not** cancelled just because the process exits or the normal
-`.notification/bash.json` completion notification was written: an unpolled
-completed job still needs the fallback.
+A missing command PID is never terminal proof while the recorded supervisor is
+live/identifiable or cannot yet be disproved: poll reloads for a bounded commit
+window and remains `running` if necessary. It records `unrecoverable` only after
+the bounded start lease expires or the recorded supervisor incarnation is
+definitively gone. Terminal poll and successful cancellation use one conditional
+state claim (`terminal_polled` was false and state was terminal); that same atomic
+write suppresses the reminder, so only one concurrent manager receives the
+terminal response. Job directories and logs remain durable records.
+`stdout`/`stderr` are truncated to `max_output` (default 50,000 chars) only when
+returned, with a trailing `... (truncated, N chars total)` marker.
+Retention/compaction limits for these records and logs are an explicit future
+policy; this feature does not delete them.
+
+`reminder.deadline_at`, its publication state, and `return_handoff` are durable.
+Initial state records a crash-safe reminder deadline before supervisor launch and
+marks the successful-return transition pending. A second manager whose old timer
+becomes due while that bounded guard is valid must defer and re-read durable
+state; it cannot publish the fallback before the first manager returns. The
+successful-return mutation atomically writes `returned_at + reminder` and marks
+the handoff armed, so neither the pre-`Popen` window nor the durable-`running`
+/pre-return window consumes the caller's requested interval. The call may report
+`status: ok` only when that lock-owned pending-to-armed transition wins before
+expiry, or when exact completed/failed terminal truth wins under the still-valid
+guard. A live owner resuming after expiry returns an explicit `status: error`
+containing the durable `job_id`/`pid` and pollable-recovery message; it cannot
+recall an already-published fallback and cannot falsely report start success. If
+the bounded handoff expires, a live running job retains the crash fallback; an
+expired start lease or definitively gone supervisor becomes unrecoverable and
+completion owns the wake instead.
+
+On every manager construction, a future non-terminal deadline is re-armed and an
+overdue/stale publishing claim is retried. Cancellation uses a bounded durable
+`suppressing` state: claims defer through the supervisor's commit window, then an
+expired suppression returns to `pending` if the manager died or cancellation did
+not commit. The final reminder-sink write and its acknowledgement are serialized
+with terminal suppression by the job-state lock: after suppression wins, a stale
+claim cannot publish. Exact supervisor terminal commit suppresses any
+`pending`/`publishing`/`suppressing` watchdog, and the Bash completion channel owns
+that wake-up; a reminder whose sink write linearized first may remain as
+historical evidence, but terminal state prevents a later retry. A crash after a
+sink write but before its acknowledgement can still retry while the job is
+non-terminal. Stable `ref_id="bash.reminder:<job_id>"` deduplicates only while the
+bounded/current system sink retains that reference; it is not a global exactly-once
+ledger. Completion `ref_id="bash.completion:<job_id>"` likewise avoids an immediate
+same-slot rewrite, but the latest-only `bash` sink can be overwritten by another
+completion before a crash retry. Completion/ref IDs are correlation aids, not
+durable delivery acknowledgements across bounded/latest-only sinks. This is Bash
+job state, not a `.notification/cron.json` workflow reminder.
 
 ## Cross-platform invariants
 
@@ -125,15 +175,27 @@ DOCUMENT ONLY — do not change these assumptions and do not propose Windows wor
 
 - Sync execution uses `subprocess.run(command, shell=True, ...)` — POSIX shell
   string semantics.
-- Async execution uses `subprocess.Popen(command, shell=True,
-  start_new_session=True, ...)`, making the child PID its own process-group
-  leader (pgid == pid).
-- `cancel` relies on that invariant: it sends `SIGTERM` to the whole group via
-  `os.killpg(os.getpgid(pid), signal.SIGTERM)`, then reaps the `Popen` handle if
-  held (2s wait, then `kill()`), avoiding zombies and orphaned children.
-- `poll` falls back to `os.waitpid(pid, os.WNOHANG)` / `os.kill(pid, 0)` when the
-  in-process `Popen` handle is not held (different manager instance, same PID
-  file).
+- The detached private supervisor uses `subprocess.Popen(command, shell=True,
+  start_new_session=True, ...)`, making the command PID its own process-group
+  leader (pgid == pid), while its durable `wait()` result survives a manager
+  relaunch.
+- Before reporting a command PID as running, Bash compares its persisted OS
+  process-start identity with the live PID (Linux boot-id/start ticks; POSIX
+  `ps lstart` fallback). A mismatch/unavailable observation is never terminal
+  evidence while the recorded supervisor may still commit.
+- `cancel` is a durable request, not a manager-side signal. The supervisor holds
+  the direct child `Popen` unreaped through the full group `SIGTERM` grace, then
+  targets the original group with `SIGKILL` even if the outer shell already
+  exited. It reports `group_cancelled` only after proving no live non-zombie group
+  member remains and preserves the direct child's exact wait status otherwise.
+  Keeping the group leader unreaped prevents its PID/pgid from being recycled
+  during that signal sequence. POSIX still cannot promise control of processes
+  which deliberately leave the command group.
+- A legacy directory without durable supervisor state cannot prove PID identity
+  and is therefore never signalable. While its recorded PID is live it remains
+  conservatively `running`/uncancellable; after that PID is gone, its explicit
+  unknown terminal response is one-shot via a legacy consumption marker and never
+  invents `-1` or a false `command_status: failed`.
 
 These POSIX process-group, signal, and `shell=True` assumptions are load-bearing
 for cancellation correctness.
@@ -151,10 +213,11 @@ for cancellation correctness.
 | Allowlist mode permits only listed commands; denylist blocks listed ones | `src/lingtai/tools/bash/__init__.py` | `tests/test_layers_bash.py::test_allow_only`, `::test_deny_only`, `::test_pipe_awareness` |
 | Policy is enforced on async runs too | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_policy_applies_to_async` |
 | Async `reminder` defaults to 1800 for omitted direct calls while schema marks it required | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_schema_requires_reminder_with_runtime_default` |
-| Last-resort reminders survive process exit until terminal poll/cancel and append without overwriting close due jobs | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_async_reminder_publishes_after_delay_even_if_process_exited_unpolled`, `::test_async_reminder_does_not_overwrite_close_due_jobs`, `::test_terminal_poll_suppresses_async_reminder`, `::test_successful_cancel_suppresses_async_reminder` |
+| Last-resort deadlines are measured from successful async return, and a bounded durable handoff blocks both pre-`Popen` and durable-`running` pre-return publication windows while retaining crash fallback | `src/lingtai/tools/bash/__init__.py`, `_async_supervisor.py` | `tests/test_bash_async.py::test_reminder_deadline_starts_at_successful_async_return`, `::test_return_handoff_blocks_fallback_while_parent_popen_is_delayed`, `::test_return_handoff_blocks_fallback_after_running_before_return_arm`, `::test_owner_resuming_after_handoff_expiry_cannot_report_start_success`, `::test_stale_pre_return_reminder_timer_defers_to_latest_deadline` |
+| Supervisor terminal truth, bounded start-lease recovery, parent-reaper/fresh-manager handling of an actual preclaim supervisor exit, PID identity refusal, and sink-idempotent completion wake survive manager loss | `src/lingtai/tools/bash/_async_supervisor.py`, `__init__.py` | `tests/test_bash_async.py::TestBashAsyncRelaunchDurability`, `::test_owned_parent_reaps_actual_supervisor_exit_before_start_claim`, `::test_fresh_manager_recovers_actual_preclaim_exit_after_owner_loss`, `::test_legacy_live_pid_remains_running_and_uncancellable` |
 | Reminder validation rejects non-finite and backend-unsafe delays | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_async_reminder_rejects_invalid_values` |
-| Deadline claim and terminal handling have deterministic lock-owned ordering | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_terminal_pop_before_deadline_claim_suppresses_reminder`, `::test_deadline_claim_before_terminal_pop_publishes_once` |
-| Direct-manager fallback appends remain multi-event safe across managers | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_direct_manager_fallback_is_shared_across_managers` |
+| Deadline claim, bounded cancellation suppression/recovery, and terminal handling have deterministic lock-owned ordering | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_terminal_pop_before_deadline_claim_suppresses_reminder`, `::test_deadline_claim_before_terminal_pop_publishes_once`, `::test_expired_suppressing_reminder_recovers_after_manager_crash` |
+| Direct-manager fallback appends remain multi-event safe across managers | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_direct_manager_fallback_is_serialized_by_shared_store` |
 | `yolo=True` allows all commands | `src/lingtai/tools/bash/__init__.py` | `tests/test_layers_bash.py::test_add_capability_bash_yolo` |
 
 ## Verification matrix
