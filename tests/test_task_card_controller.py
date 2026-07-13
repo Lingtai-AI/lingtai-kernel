@@ -1,9 +1,10 @@
-"""Unit tests for the public kernel ``task_card`` controller (Jason #7258/#7259).
+"""Unit tests for the public Telegram-owned ``task_card`` controller (Jason #7258/#7259).
 
 Covers registration, exact-one schema-valid JSON, path containment, synchronous
 initial errors (timeout/nonzero/invalid-frame), the async watch lifecycle,
-inspect/retry/stop, and the deduped fail-loud LICC error/recovery wakes. No real
-Telegram or network — the reverse channel is a fake MCP client.
+inspect/retry/stop (including the truthful, retryable failed-stop path and the
+last-valid timestamp), and the deduped fail-loud LICC error/recovery wakes. No
+real Telegram or network — the reverse channel is a fake MCP client.
 """
 
 from __future__ import annotations
@@ -14,8 +15,9 @@ from pathlib import Path
 import pytest
 
 from lingtai.kernel.base_agent import _TASK_CARD_TOOL
-from lingtai.kernel.task_card_controller import (
+from lingtai.mcp_servers.telegram.task_card import (
     TaskCardController,
+    get_description,
     get_schema,
     setup,
 )
@@ -94,7 +96,7 @@ def test_setup_registers_public_tool(agent):
     assert isinstance(mgr, TaskCardController)
     name, schema, handler, _desc, glossary = agent.added_tools[0]
     assert name == "task_card"
-    assert glossary is None  # kernel tool: no lingtai.tools glossary package
+    assert glossary is None  # Telegram-owned tool: no lingtai.tools glossary package
     assert schema["properties"]["action"]["enum"] == [
         "start",
         "inspect",
@@ -106,6 +108,18 @@ def test_setup_registers_public_tool(agent):
 
 def test_schema_requires_action():
     assert get_schema()["required"] == ["action"]
+
+
+def test_description_routes_to_the_telegram_manual():
+    """The public tool description must discoverably route the model to the
+    Telegram manual and onward to the co-located Task Card manual."""
+    desc = get_description()
+    assert "manual" in desc.lower()
+    assert "telegram(action='manual')" in desc
+    assert "task_card/SKILL.md" in desc
+    # It still advertises the concrete action surface.
+    for action in ("start", "inspect", "retry", "stop"):
+        assert action in desc
 
 
 def test_wiring_registers_only_with_telegram_and_is_idempotent():
@@ -305,7 +319,7 @@ def test_same_code_refails_after_recovery_emits_new_durable_wake(agent, controll
 def test_join_timeout_is_truthful_against_reverse_call_timeout():
     """Stop/shutdown must be able to actually join a tick blocked in the reverse
     call, so the join budget must exceed the reverse-call timeout."""
-    from lingtai.kernel import task_card_controller as tc
+    from lingtai.mcp_servers.telegram.task_card import controller as tc
 
     assert tc._JOIN_TIMEOUT_S > tc._REVERSE_CALL_TIMEOUT_S
 
@@ -344,3 +358,92 @@ def test_stop_finalizes_and_forgets_watch(agent, controller):
     assert "card" not in last
     # The watch is gone; a second stop is a clean error, not a crash.
     assert controller.handle({"action": "stop", "watch_id": wid})["status"] == "error"
+
+
+def test_failed_stop_is_truthful_retryable_and_retains_watch(agent, controller):
+    """A failed programmable ``finalize`` must not report ``stopped`` or drop the
+    watch — the resident may still show the frame, so ``stop`` stays retryable."""
+    wid = controller.handle(
+        {
+            "action": "start",
+            "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
+            "interval_s": 3600,
+        }
+    )["watch_id"]
+    watch = controller._watches[wid]
+
+    # Backend rejects the finalize projection.
+    agent._client.fail = True
+    result = controller.handle({"action": "stop", "watch_id": wid})
+    assert result["status"] == "error"
+    assert result["state"] == "stop_failed"
+    assert result["error"]["code"] == "stop_finalize_failed"
+    assert result["error"]["retryable"] is True
+    # The watch is retained so stop can be retried...
+    assert wid in controller._watches
+    # ...but the renderer thread is already stopped (not "watching" with a live thread).
+    assert watch.thread is None or not watch.thread.is_alive()
+    inspect = controller.handle({"action": "inspect", "watch_id": wid})
+    assert inspect["state"] == "stop_failed"
+    assert inspect["error"]["code"] == "stop_finalize_failed"
+
+    # Retry only re-attempts finalization; on an accepted clear the watch is
+    # removed and ``stopped`` is returned.
+    agent._client.fail = False
+    retry = controller.handle({"action": "stop", "watch_id": wid})
+    assert retry["status"] == "ok"
+    assert retry["state"] == "stopped"
+    assert wid not in controller._watches
+    last = agent._client.calls[-1][1]
+    assert last["sub_action"] == "finalize"
+    assert "card" not in last
+
+
+def test_last_valid_frame_at_recorded_preserved_and_updated(agent, controller, monkeypatch):
+    """``last_valid_frame_at`` is a real UTC ISO-8601 timestamp: set on the first
+    accepted frame, unchanged across failures, and updated on recovery."""
+    from datetime import datetime
+
+    from lingtai.mcp_servers.telegram.task_card import controller as tc
+
+    stamps = [
+        "2020-01-01T00:00:00+00:00",
+        "2020-01-01T00:00:05+00:00",
+        "2020-01-01T00:00:09+00:00",
+    ]
+    box = {"i": 0}
+
+    def _fake_now() -> str:
+        value = stamps[min(box["i"], len(stamps) - 1)]
+        box["i"] += 1
+        return value
+
+    monkeypatch.setattr(tc, "_utc_now_iso", _fake_now)
+
+    renderer = agent._working_dir / "ts.py"
+    renderer.write_text(_OK_BODY)
+    wid = controller.handle(
+        {"action": "start", "renderer_path": str(renderer), "interval_s": 3600}
+    )["watch_id"]
+    watch = controller._watches[wid]
+
+    # Initial accepted frame stamped, and it is a real UTC ISO-8601 value.
+    first = controller.handle({"action": "inspect", "watch_id": wid})["last_valid_frame_at"]
+    assert first == "2020-01-01T00:00:00+00:00"
+    assert datetime.fromisoformat(first).tzinfo is not None
+
+    # A failed renderer attempt must NOT change it (and stamps nothing).
+    renderer.write_text("import sys; sys.exit(1)")
+    controller._tick(watch)
+    after_fail = controller.handle({"action": "inspect", "watch_id": wid})
+    assert after_fail["state"] == "error"
+    assert after_fail["last_valid_frame_at"] == first
+
+    # A recovered frame updates it to a strictly later stamp.
+    renderer.write_text(_OK_BODY)
+    controller._tick(watch)
+    after_recovery = controller.handle({"action": "inspect", "watch_id": wid})
+    assert after_recovery["state"] == "watching"
+    assert after_recovery["last_valid_frame_at"] == "2020-01-01T00:00:05+00:00"
+
+    controller.handle({"action": "stop", "watch_id": wid})

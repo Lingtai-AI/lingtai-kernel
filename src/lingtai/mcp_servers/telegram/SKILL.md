@@ -5,10 +5,10 @@ description: |
   you need detail beyond the one-line action descriptions: media.type='document'
   vs 'photo' for charts/reports/generated artifacts, placeholder/live-status
   messages, reply vs send, read/check/search, parse_mode/entities, chat_action, dynamic slash commands,
-  and error surfacing. Pulled on demand via action='manual'; you do not need to
-  call it before every send.
-version: 1.3.0
-last_changed_at: "2026-07-12T18:20:00-07:00"
+  the programmable Task Card (task_card tool), and error surfacing. Pulled on
+  demand via action='manual'; you do not need to call it before every send.
+version: 1.4.0
+last_changed_at: "2026-07-12T20:45:00-07:00"
 ---
 
 # Telegram MCP — usage manual (progressive disclosure)
@@ -167,6 +167,30 @@ Important behavior notes:
   programmable watcher projection may update the resident card again.
 - When answering whether Task Cards are on, use the explicit current `taskcard`
   value rather than inferring state from whether an old Task Card is visible.
+
+## PROGRAMMABLE TASK CARD (`task_card` tool)
+
+- The resident Task Card has two independent slots: the **automatic** tool-activity
+  slot (managed for you, described under **TASKCARD STATE**) and a **programmable**
+  slot you drive with the separate public `task_card` tool. With both present, the
+  programmable block appears under a `— WATCH —` header; updating one slot never
+  disturbs the other.
+- You bind live state to the programmable slot by supplying a small **Python
+  renderer** file inside your working directory whose stdout is exactly one Task
+  Card JSON object (`title` string, `lines` array of ≤20 strings, `footer` string;
+  at least one present). Telegram never runs your code — the controller runs the
+  renderer as a subprocess and forwards only the validated data.
+- Actions: `start` (validate + run once, then watch on an interval; returns a
+  `watch_id`), `inspect` (state + last valid frame), `retry` (re-run now), `stop`
+  (end the watch, clear only the programmable frame; renderer files are never
+  deleted). A bad first run is an immediate error and starts no watch; later
+  failures keep the last valid frame and raise a deduped fail-loud system wake.
+- `/taskcard off` hides delivery of **both** slots (see **TASKCARD STATE**) while
+  the renderer, watches, and last-valid bookkeeping keep running.
+- **Full manual (renderer contract, a safe runnable example, and the full
+  start|inspect|retry|stop walkthrough):** follow the relative path
+  `task_card/SKILL.md` from this manual's directory (the co-located Programmable
+  Task Card manual).
 
 ## ERROR SURFACING
 

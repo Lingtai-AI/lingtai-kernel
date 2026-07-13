@@ -1437,7 +1437,8 @@ class TelegramManager:
         return self._try_update_progress_message(compound_id, text) == _TASK_CARD_EDIT_OK
 
     # ------------------------------------------------------------------
-    # Private Task Card helpers (kernel-driven, not LLM-exposed)
+    # Private Task Card helpers (internally driven — by the kernel automatic
+    # driver and the Telegram-owned programmable controller — not LLM-exposed)
     # ------------------------------------------------------------------
 
     # Reasoning cap (Unicode code points) after secret redaction.
@@ -1452,6 +1453,13 @@ class TelegramManager:
     # Header for the appended programmable section; keeps the composed message
     # legible when both channels are present. English-only (Jason #7175/#7205).
     _TASK_CARD_PROGRAMMABLE_HEADER = "— WATCH —"
+    # Terminal presentation delivered when clearing a programmable-ONLY resident
+    # would otherwise compose to empty text. Telegram cannot edit a message to
+    # empty text, so a stable, nonempty, English-only marker is shown instead,
+    # leaving the one resident message reusable by a later automatic or
+    # programmable frame. It is presentation-only: the committed programmable slot
+    # is still cleared, so it never persists as stored channel state.
+    _TASK_CARD_WATCH_STOPPED = "— WATCH STOPPED —"
 
     def _channel_key(self, account: str, chat_id: int) -> str:
         return f"{account}:{chat_id}"
@@ -1503,6 +1511,7 @@ class TelegramManager:
     def _deliver_channel_frame(
         self, account: str, chat_id: int, channel: str, frame: str | None,
         *, error: str, resident_id: str | None = None,
+        empty_fallback: str | None = None,
     ) -> dict:
         """Deliver a proposed ``channel`` frame to the ONE resident card and
         commit it to ``_task_card_channels`` **only after** the edit/send/
@@ -1516,8 +1525,17 @@ class TelegramManager:
         Thus a later automatic or programmable compose can never resurrect a frame
         that was never delivered. Shared by every automatic mutation and the
         programmable channel.
+
+        ``empty_fallback`` supplies a nonempty terminal presentation for the case
+        where the composed text would be empty (clearing a programmable-only
+        resident). Telegram cannot edit/send empty text, so the fallback is
+        transported instead — the proposed ``frame`` (``None`` for finalize) is
+        still what gets committed on success, so the slot is really cleared and the
+        marker never becomes stored channel state.
         """
         text = self._compose_channels(account, chat_id, channel=channel, frame=frame)
+        if not text and empty_fallback is not None:
+            text = empty_fallback
         resident_id = resident_id or self._get_resident_task_card(account, chat_id)
         if resident_id:
             edit_outcome = self._try_update_progress_message(resident_id, text)
@@ -1574,7 +1592,8 @@ class TelegramManager:
         return text
 
     def _handle_task_card_update(self, args: dict) -> dict:
-        """Private internal action — kernel-driven Task Card projection.
+        """Private internal action — internally-driven Task Card projection
+        (the kernel automatic driver and the Telegram-owned programmable controller).
 
         Sub-actions:
           - create:  Project the resident 📋 TASK CARD for the current batch —
@@ -1598,6 +1617,17 @@ class TelegramManager:
         # and before transport, resident-id, or composed-slot mutation. Internal
         # automatic rows/heartbeats and programmable watches continue calling.
         if not self._taskcard_enabled():
+            # No transport while suppressed. But stopping a HIDDEN programmable
+            # watch must still clear its committed slot internally, or the stale
+            # frame would resurface the next time /taskcard on re-composes the
+            # resident. This is the smallest targeted internal finalization; it
+            # does not change ordinary hidden create/update (which stay
+            # non-committing) or the per-agent persistence/context contract.
+            if channel == "programmable" and sub_action == "finalize":
+                account = args.get("account")
+                chat_id = args.get("chat_id")
+                if account is not None and chat_id is not None:
+                    self._set_channel_frame(account, chat_id, "programmable", None)
             return {"status": "ok", "suppressed": True, "taskcard": False}
         try:
             if channel == "programmable":
@@ -1767,15 +1797,23 @@ class TelegramManager:
           - create / update:  render the validated ``card`` object into the
                               programmable frame, compose, and edit the resident.
           - finalize:         clear the programmable frame, compose, and edit the
-                              resident so the automatic channel remains.
+                              resident so the automatic channel remains. When the
+                              programmable slot is the ONLY resident content, the
+                              cleared compose is empty and a nonempty
+                              ``_TASK_CARD_WATCH_STOPPED`` terminal marker is
+                              delivered instead (Telegram cannot edit to empty),
+                              leaving the resident reusable while the slot is still
+                              committed clear on success.
 
         The caller supplies ``account`` and ``chat_id`` so both channels resolve
         to the same resident id; Telegram only ever receives validated data.
         """
         account = args["account"]
         chat_id = args["chat_id"]
+        empty_fallback: str | None = None
         if sub_action == "finalize":
             frame: str | None = None
+            empty_fallback = self._TASK_CARD_WATCH_STOPPED
         elif sub_action in ("create", "update"):
             card = args.get("card")
             if not isinstance(card, dict):
@@ -1788,7 +1826,8 @@ class TelegramManager:
         # a failed edit must leave the last delivered programmable frame in place
         # so a subsequent automatic compose cannot resurrect an unsent frame.
         return self._deliver_channel_frame(
-            account, chat_id, "programmable", frame, error="Failed to send task card")
+            account, chat_id, "programmable", frame,
+            error="Failed to send task card", empty_fallback=empty_fallback)
 
     @classmethod
     def _format_task_card_text(

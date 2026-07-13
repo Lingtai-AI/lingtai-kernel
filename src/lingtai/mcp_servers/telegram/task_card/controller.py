@@ -9,6 +9,14 @@ validated data to the private ``_lingtai_telegram_task_card`` reverse channel.
 ``TelegramManager`` stays the single render/compose/persistence owner (no
 competing system). Fail-loud is the kernel notification wake
 (``_enqueue_system_notification``); all model-facing copy is English-only.
+
+This unit is Telegram MCP-owned: registration is gated by the Telegram reverse
+route, projection targets ``_lingtai_telegram_task_card``, and the Telegram
+manager/server/service own the resident slots, in-place edits, toggle,
+persistence, transport, and rendering destination. The controller depends only
+on the narrow :class:`~.interface.TelegramTaskCardAgent` host surface, never on
+the concrete ``Agent`` class. See the co-located ``CONTRACT.md`` for the
+interface promise and ``SKILL.md`` for the model-facing manual.
 """
 
 from __future__ import annotations
@@ -17,11 +25,22 @@ import json
 import subprocess
 import sys
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .base_agent import BaseAgent
+    from .interface import TelegramTaskCardAgent
+
+
+def _utc_now_iso() -> str:
+    """Return the current instant as a UTC ISO-8601 string (``...+00:00``).
+
+    Timezone-aware and documented: the value stamped on every accepted frame and
+    surfaced as ``inspect``'s ``last_valid_frame_at``. Kept as a module function
+    so tests can substitute a deterministic clock.
+    """
+    return datetime.now(timezone.utc).isoformat()
 
 # Private, unlisted Telegram reverse-channel tool name — identical to
 # ``base_agent._TASK_CARD_TOOL`` and ``telegram/server.py:_PRIVATE_TASK_CARD_TOOL``.
@@ -80,11 +99,15 @@ def get_schema() -> dict:
 
 def get_description() -> str:
     return (
-        "Control a programmable Task Card watch. Provide a Python renderer file "
-        "under your working directory that prints exactly one Task Card JSON object "
-        "to stdout; the controller runs it on an interval and projects the output "
-        "onto the resident Task Card's programmable channel, alongside the automatic "
-        "tool-activity channel. Actions: start, inspect, retry, stop."
+        "Control a programmable Telegram Task Card watch. Provide a Python renderer "
+        "file under your working directory that prints exactly one Task Card JSON "
+        "object to stdout; the controller runs it on an interval and projects the "
+        "output onto the resident Task Card's programmable channel, alongside the "
+        "automatic tool-activity channel. Actions: start, inspect, retry, stop. "
+        "Full manual (renderer contract, a safe runnable example, and a "
+        "start|inspect|retry|stop walkthrough): call telegram(action='manual') and "
+        "follow its 'Programmable Task Card' section to the co-located task_card "
+        "manual (task_card/SKILL.md)."
     )
 
 
@@ -110,6 +133,7 @@ class _Watch:
         "error",
         "error_key",
         "error_epoch",
+        "stopping",
     )
 
     def __init__(
@@ -125,7 +149,14 @@ class _Watch:
         self.stop_event = threading.Event()
         self.lock = threading.RLock()
         self.last_valid_frame: dict | None = None
+        # UTC ISO-8601 timestamp of the last accepted frame (initial or later);
+        # unchanged across failed renderer/backend attempts.
         self.last_valid_at: str | None = None
+        # Set once ``stop`` is requested: the renderer thread is stopped and
+        # finalization is pending/failed. Kept sticky so ``inspect`` never reports
+        # ``watching`` for a watch with no running thread; a successful stop
+        # removes the watch entirely.
+        self.stopping: bool = False
         # Current error (or None when healthy); ``error_key`` is the dedup identity
         # of the last-emitted failure so identical repeats stay silent.
         self.error: dict | None = None
@@ -140,7 +171,7 @@ class _Watch:
 class TaskCardController:
     """Public controller for programmable Task Card watches (thin Core)."""
 
-    def __init__(self, agent: "BaseAgent") -> None:
+    def __init__(self, agent: TelegramTaskCardAgent) -> None:
         self._agent = agent
         self._watches: dict[str, _Watch] = {}
         self._lock = threading.RLock()
@@ -194,27 +225,60 @@ class TaskCardController:
             )
         with watch.lock:
             watch.last_valid_frame = frame
+            watch.last_valid_at = _utc_now_iso()
         self._spawn(watch)
         return {"status": "ok", "watch_id": watch_id, "state": "watching"}
 
     def _inspect(self, watch: _Watch) -> dict:
         with watch.lock:
+            # A watch whose stop failed has no running thread, so it must never
+            # read back as ``watching``; it exposes a truthful, retryable state.
+            if watch.stopping:
+                state = "stop_failed" if watch.error else "stopping"
+            elif watch.error:
+                state = "error"
+            else:
+                state = "watching"
             return {
                 "status": "ok",
                 "watch_id": watch.watch_id,
-                "state": "error" if watch.error else "watching",
+                "state": state,
                 "last_valid_frame": watch.last_valid_frame,
                 "last_valid_frame_at": watch.last_valid_at,
                 "error": watch.error,
             }
 
     def _stop(self, watch: _Watch) -> dict:
+        # Stop the renderer thread promptly and idempotently first, so a later
+        # ``stop`` retry only has to re-attempt finalization.
         watch.stop_event.set()
         if watch.thread is not None and watch.thread.is_alive():
             watch.thread.join(timeout=_JOIN_TIMEOUT_S)
-        # Clear only the programmable channel; the automatic channel is untouched.
-        # Renderer files are never deleted.
-        self._project(watch, "finalize", None)
+        with watch.lock:
+            watch.stopping = True
+        # Clear only the programmable channel (the automatic channel is untouched
+        # and renderer files are never deleted). Commit the watch removal ONLY
+        # after the backend durably accepts the clear — the manager preserves the
+        # old programmable frame on a transient/unknown edit failure, so reporting
+        # ``stopped`` and dropping the handle here would strand a visible frame
+        # with no way to retry.
+        if self._project(watch, "finalize", None).get("status") == "error":
+            error = {
+                "code": "stop_finalize_failed",
+                "retryable": True,
+                "message": (
+                    "task card backend rejected the stop/finalize; the watch is "
+                    "retained so stop can be retried"
+                ),
+            }
+            with watch.lock:
+                watch.error = error
+            return {
+                "status": "error",
+                "watch_id": watch.watch_id,
+                "state": "stop_failed",
+                "error": error,
+            }
         with self._lock:
             self._watches.pop(watch.watch_id, None)
         return {"status": "ok", "watch_id": watch.watch_id, "state": "stopped"}
@@ -285,6 +349,7 @@ class TaskCardController:
             watch.error = None
             watch.error_key = None
             watch.last_valid_frame = frame
+            watch.last_valid_at = _utc_now_iso()
         if was_errored:
             self._emit_event(watch, None, None, epoch=epoch, recovered=True)
 
@@ -516,10 +581,10 @@ class TaskCardController:
                 watch.thread.join(timeout=_JOIN_TIMEOUT_S)
 
 
-def setup(agent: "BaseAgent") -> TaskCardController:
+def setup(agent: TelegramTaskCardAgent) -> TaskCardController:
     """Register the public ``task_card`` controller tool on *agent*.
 
-    Kernel-owned (drives the kernel-owned Telegram reverse channel), so it adds
+    Telegram MCP-owned (it drives the Telegram-owned reverse channel), so it adds
     no ``lingtai.tools`` package and no glossary obligation (``glossary_package=None``).
     """
     mgr = TaskCardController(agent)
