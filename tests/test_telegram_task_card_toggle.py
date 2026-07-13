@@ -99,11 +99,11 @@ def test_taskcard_state_persists_false_and_true_across_service_instances(tmp_pat
     service = _service(tmp_path, "main")
     service.set_taskcard_enabled(False)
     state_path = tmp_path / "telegram" / "taskcard.json"
-    assert json.loads(state_path.read_text(encoding="utf-8")) == {"taskcard": False}
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {"taskcard": False, "normal_rows": 1}
     assert _service(tmp_path, "main").taskcard_enabled() is False
 
     service.set_taskcard_enabled(True)
-    assert json.loads(state_path.read_text(encoding="utf-8")) == {"taskcard": True}
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {"taskcard": True, "normal_rows": 1}
     assert _service(tmp_path, "main").taskcard_enabled() is True
 
 
@@ -245,7 +245,7 @@ def test_taskcard_invalid_help_and_unauthorized_forms_do_not_mutate(
             "update_id": update_id,
             "message": {"from": {"id": 7}, "chat": {"id": 10}, "text": text},
         })
-        assert replies[-1] == "❌ Usage: /taskcard on | /taskcard off"
+        assert replies[-1] == "❌ Usage: /taskcard on | /taskcard off | /taskcard N (1-10)"
         assert service.taskcard_enabled() is True
 
     account._process_update({
@@ -686,3 +686,84 @@ def test_old_message_projection_changes_with_current_state_without_record_rewrit
     service.set_taskcard_enabled(False)
     assert manager._read({"account": "main", "chat_id": 123})["messages"][0]["taskcard"] is False
     assert path.read_bytes() == before
+
+
+# Numeric normal-row preference
+
+def test_taskcard_normal_rows_persist_and_are_shared_across_accounts(tmp_path: Path) -> None:
+    service = _service(tmp_path, "one", "two")
+    assert service.taskcard_normal_rows() == 1
+    service.set_taskcard_normal_rows(7)
+    assert service.taskcard_normal_rows() == 7
+    assert service.get_account("one")._taskcard_normal_rows() == 7
+    assert service.get_account("two")._taskcard_normal_rows() == 7
+    assert json.loads((tmp_path / "telegram" / "taskcard.json").read_text()) == {
+        "taskcard": True,
+        "normal_rows": 7,
+    }
+    restored = _service(tmp_path, "one")
+    assert restored.taskcard_enabled() is True
+    assert restored.taskcard_normal_rows() == 7
+
+
+def test_taskcard_normal_rows_write_failure_preserves_memory_and_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import lingtai.mcp_servers.telegram.service as service_module
+
+    service = _service(tmp_path, "main")
+    service.set_taskcard_normal_rows(4)
+    state_path = tmp_path / "telegram" / "taskcard.json"
+    before = state_path.read_bytes()
+
+    monkeypatch.setattr(
+        service_module,
+        "atomic_write_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("fail")),
+    )
+    with pytest.raises(OSError):
+        service.set_taskcard_normal_rows(8)
+
+    assert service.taskcard_normal_rows() == 4
+    assert state_path.read_bytes() == before
+
+
+def test_taskcard_legacy_boolean_state_defaults_normal_rows_to_one(tmp_path: Path) -> None:
+    state_path = tmp_path / "telegram" / "taskcard.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text('{"taskcard": false}', encoding="utf-8")
+    service = _service(tmp_path, "main")
+    assert service.taskcard_enabled() is False
+    assert service.taskcard_normal_rows() == 1
+
+
+def test_taskcard_numeric_command_is_strict_and_does_not_toggle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _service(tmp_path, "main", allowed_users=[7])
+    account = service.get_account("main")
+    replies: list[str] = []
+    monkeypatch.setattr(
+        account,
+        "send_message",
+        lambda _chat_id, text, **_kwargs: replies.append(text) or {"message_id": 1},
+    )
+
+    account._process_update({
+        "update_id": 1,
+        "message": {"from": {"id": 7}, "chat": {"id": 10}, "text": "/taskcard 7"},
+    })
+    assert service.taskcard_enabled() is True
+    assert service.taskcard_normal_rows() == 7
+    assert "normal rows: 7" in replies[-1]
+
+    usage = "❌ Usage: /taskcard on | /taskcard off | /taskcard N (1-10)"
+    for update_id, value in enumerate(
+        ("0", "11", "-1", "1.5", "seven", "٧", "7 extra"), 2
+    ):
+        account._process_update({
+            "update_id": update_id,
+            "message": {"from": {"id": 7}, "chat": {"id": 10}, "text": f"/taskcard {value}"},
+        })
+        assert replies[-1] == usage
+        assert service.taskcard_normal_rows() == 7

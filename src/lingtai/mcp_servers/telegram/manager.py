@@ -86,7 +86,12 @@ _TASK_CARD_DELETE_MISSING_DESCRIPTIONS = frozenset({
 # last-behavior). Jason: never reply to the card; point directly to the local
 # command that controls its delivery. Kept short so it always fits under the
 # Telegram message-size bound even under multi-row length pressure.
-_TASK_CARD_FOOTER = "Don't reply to this Task Card. Use /taskcard on|off to toggle."
+_TASK_CARD_FOOTER = (
+    "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
+    "/taskcard N sets normal rows (1-10)."
+)
+_TASK_CARD_METADATA_MAX_CHARS = 150
+_TASK_CARD_METADATA_MAX_LINES = 2
 
 # Card-level time line prefix.  Jason #6894/#6899: the Task Card carries one
 # standalone time line (not a per-row inline suffix), rendered as its final line
@@ -1789,7 +1794,7 @@ class TelegramManager:
         chat_id = args["chat_id"]
         automatic = self._format_task_card_text(
             args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""),
-            rows=args.get("rows"))
+            rows=args.get("rows"), metadata=args.get("metadata"))
         # Compose with the proposed automatic frame + the live programmable slot,
         # deliver, and commit the automatic frame only once the edit/send/replace
         # succeeds (a failed edit must not poison the stored channel state).
@@ -1973,7 +1978,7 @@ class TelegramManager:
             return {"status": "error", "error": "Failed to update task card"}
         automatic = self._format_task_card_text(
             args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""),
-            rows=args.get("rows"))
+            rows=args.get("rows"), metadata=args.get("metadata"))
         # All automatic mutations share the same edit-first delivery discipline:
         # identical content is success, unknown transport failure fails loud, and
         # only a provider-confirmed edit-impossible condition may replace.
@@ -1999,7 +2004,9 @@ class TelegramManager:
         if card_message_id:
             rows = args.get("rows")
             if rows is not None:
-                automatic = self._format_task_card_text("", "", "", rows=rows)
+                automatic = self._format_task_card_text(
+                    "", "", "", rows=rows, metadata=args.get("metadata")
+                )
             else:
                 tool = args.get("tool", "")
                 if tool:
@@ -2074,7 +2081,7 @@ class TelegramManager:
     @classmethod
     def _format_task_card_text(
         cls, tool: str, action: str, reasoning: str,
-        *, rows: list | None = None,
+        *, rows: list | None = None, metadata: dict | None = None,
     ) -> str:
         """Render a Task Card: header, one line per tool row, fixed footer.
 
@@ -2098,7 +2105,7 @@ class TelegramManager:
         """
         if rows is None:
             return cls._format_scalar_task_card_text(tool, action, reasoning)
-        return cls._format_rows_task_card_text(rows)
+        return cls._format_rows_task_card_text(rows, metadata=metadata)
 
     @classmethod
     def _format_scalar_task_card_text(cls, tool: str, action: str, reasoning: str) -> str:
@@ -2114,8 +2121,81 @@ class TelegramManager:
             return f"{cls._TASK_CARD_HEADER}\n{label}: {excerpt}"
         return f"{cls._TASK_CARD_HEADER}\n{excerpt}" if excerpt else cls._TASK_CARD_HEADER
 
+    @staticmethod
+    def _format_task_card_count(value: object) -> str | None:
+        """Format a non-negative count compactly without float overflow."""
+        if type(value) is not int or value < 0:
+            return None
+        for threshold, suffix in (
+            (1_000_000_000_000, "T"),
+            (1_000_000_000, "B"),
+            (1_000_000, "M"),
+            (1_000, "k"),
+        ):
+            if value >= threshold:
+                tenths = (value * 10 + threshold // 2) // threshold
+                if suffix == "T":
+                    tenths = min(tenths, 9_999)
+                return f"{tenths // 10}.{tenths % 10}{suffix}"
+        return str(value)
+
     @classmethod
-    def _format_rows_task_card_text(cls, rows: list) -> str:
+    def _format_task_card_metadata(cls, metadata: object) -> list[str]:
+        """Render at most two compact session lines within a 150-char budget."""
+        if not isinstance(metadata, dict):
+            return []
+
+        session_parts: list[str] = []
+        cache_rate = metadata.get("session_cache_rate")
+        if (
+            type(cache_rate) in {int, float}
+            and not isinstance(cache_rate, bool)
+            and 0 <= cache_rate <= 1
+        ):
+            session_parts.append(f"cache {float(cache_rate):.1%}")
+        miss = cls._format_task_card_count(metadata.get("cache_miss_tokens"))
+        budget = cls._format_task_card_count(metadata.get("cache_miss_budget"))
+        if miss is not None:
+            session_parts.append(f"miss {miss}/{budget}" if budget is not None else f"miss {miss}")
+        calls = cls._format_task_card_count(metadata.get("api_calls"))
+        if calls is not None:
+            session_parts.append(f"calls {calls}")
+
+        context_parts: list[str] = []
+        context = cls._format_task_card_count(metadata.get("context_tokens"))
+        window = cls._format_task_card_count(metadata.get("context_window"))
+        if context is not None:
+            context_parts.append(f"{context}/{window}" if window is not None else context)
+        usage = metadata.get("context_usage")
+        if (
+            type(usage) in {int, float}
+            and not isinstance(usage, bool)
+            and 0 <= usage <= 1
+        ):
+            context_parts.append(f"{float(usage):.0%}")
+
+        lines: list[str] = []
+        if session_parts:
+            lines.append("session · " + " · ".join(session_parts))
+        if context_parts:
+            lines.append("ctx · " + " · ".join(context_parts))
+        lines = lines[:_TASK_CARD_METADATA_MAX_LINES]
+        if not lines:
+            return []
+
+        joined = "\n".join(lines)
+        if len(joined) <= _TASK_CARD_METADATA_MAX_CHARS:
+            return lines
+        # The field set is bounded, but keep the UI contract deterministic even
+        # for pathological numeric inputs: preserve line 1, then fit line 2.
+        first = lines[0][:_TASK_CARD_METADATA_MAX_CHARS]
+        remaining = _TASK_CARD_METADATA_MAX_CHARS - len(first) - 1
+        return [first] if remaining <= 0 or len(lines) == 1 else [first, lines[1][:remaining]]
+
+    @classmethod
+    def _format_rows_task_card_text(
+        cls, rows: list, *, metadata: dict | None = None,
+    ) -> str:
         from lingtai.kernel.trace_redaction import redact_text
 
         # Split tool rows (redacted, capped reasoning) from sanitized API-error
@@ -2151,8 +2231,11 @@ class TelegramManager:
                 card_started_at = started_at
             tool_prepared.append((idx, label, redacted, elapsed, done))
 
+        metadata_lines = cls._format_task_card_metadata(metadata)
         if not tool_prepared and not api_prepared:
-            return f"{cls._TASK_CARD_HEADER}\n\n{_TASK_CARD_FOOTER}"
+            lines = [cls._TASK_CARD_HEADER, "", _TASK_CARD_FOOTER]
+            lines.extend(metadata_lines)
+            return "\n".join(lines)
 
         # The single card-level time line, when any row carried a usable stamp,
         # is the card's final standalone line after the footer (omitted when no
@@ -2185,6 +2268,7 @@ class TelegramManager:
             len(cls._TASK_CARD_HEADER) + 1  # header + newline
             + 1                              # blank line before footer
             + len(_TASK_CARD_FOOTER)
+            + sum(len(line) + 1 for line in metadata_lines)
             + (len(time_line) + 1 if time_line else 0)  # time line + its newline
             + api_scaffold + tool_scaffold
         )
@@ -2210,24 +2294,49 @@ class TelegramManager:
         lines.extend(by_idx[i] for i in sorted(by_idx))
         lines.append("")
         lines.append(_TASK_CARD_FOOTER)
+        lines.extend(metadata_lines)
         if time_line:
             lines.append(time_line)
         return "\n".join(lines)
+
+    @staticmethod
+    def _task_card_machine_identifier(value: object, *, limit: int) -> str | None:
+        if not isinstance(value, str):
+            return None
+        value = value.strip()
+        if not value or len(value) > limit:
+            return None
+        safe_punctuation = frozenset("._:/-")
+        if not all(
+            ch.isascii() and (ch.isalnum() or ch in safe_punctuation)
+            for ch in value
+        ):
+            return None
+        return value
 
     @classmethod
     def _format_api_error_line(cls, row: dict) -> str:
         """Render a sanitized LLM/provider API-error row.
 
-        Shows only the numeric status and an already-allow-listed machine code
-        (both supplied pre-sanitized by the kernel), plus the lifecycle state
-        (retrying n/N, recovered, error).  Never renders any raw exception text —
-        there is no free-form field on an API-error row to leak.
+        Shows only bounded machine identifiers supplied by the kernel (exception
+        type, public provider/model, valid HTTP status, allow-listed code) plus
+        lifecycle state. Opaque external identifiers and raw exception text are
+        deliberately absent, so there is no free-form field to leak.
         """
         state = row.get("state")
         parts = ["API error"]
+        error_type = cls._task_card_machine_identifier(row.get("error_type"), limit=48)
+        if error_type is not None:
+            parts.append(error_type)
+        provider = cls._task_card_machine_identifier(row.get("provider"), limit=48)
+        model = cls._task_card_machine_identifier(row.get("model"), limit=80)
+        if provider is not None and model is not None:
+            parts.append(f"{provider}/{model}")
+        elif provider is not None or model is not None:
+            parts.append(provider or model or "")
         status = row.get("status")
-        if isinstance(status, int):
-            parts.append(str(status))
+        if type(status) is int and 100 <= status <= 599:
+            parts.append(f"HTTP {status}")
         code = row.get("code")
         if isinstance(code, str) and code:
             parts.append(code)
@@ -2240,9 +2349,14 @@ class TelegramManager:
         # retrying (default)
         attempt = row.get("attempt")
         max_attempts = row.get("max_attempts")
-        if isinstance(attempt, int) and isinstance(max_attempts, int):
+        if (
+            type(attempt) is int
+            and type(max_attempts) is int
+            and attempt > 0
+            and max_attempts > 0
+        ):
             return f"⚠️ {summary} · retrying {attempt}/{max_attempts}"
-        if isinstance(attempt, int):
+        if type(attempt) is int and attempt > 0:
             return f"⚠️ {summary} · retrying (attempt {attempt})"
         return f"⚠️ {summary} · retrying"
 

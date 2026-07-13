@@ -632,6 +632,8 @@ def test_teardown_finalizes_frozen_rows_not_generic_done():
     client = FakeMCPClient()
     clock = FakeClock()
     agent = _agent(client, clock)
+    metadata = {"session_cache_rate": 0.75, "cache_miss_tokens": 42}
+    agent._task_card_metadata = lambda: metadata
 
     agent._on_tool_pre_dispatch_hook(
         "bash", {"_reasoning": "build", "action": "run"}, tool_call_id="c1")
@@ -644,6 +646,7 @@ def test_teardown_finalizes_frozen_rows_not_generic_done():
     assert len(finals) == 1
     assert finals[0][1]["account"] == "mybot"
     assert finals[0][1]["chat_id"] == 123
+    assert all(call[1]["metadata"] == metadata for call in client.calls)
     rows = finals[0][1]["rows"]
     # Concrete last-behavior row, frozen, no generic DONE subject; the immutable
     # captured start stamp survives the freeze.
@@ -749,3 +752,38 @@ def test_real_heartbeat_thread_stops_on_teardown():
     agent._teardown_telegram_task_card()
     thread = None  # context is cleared; thread already joined inside teardown
     assert agent._telegram_task_card_context is None
+
+
+def test_persisted_normal_rows_override_env_and_preserve_api_rows(tmp_path, monkeypatch):
+    from lingtai.kernel.base_agent import BaseAgent, _task_card_max_tool_rows
+
+    state_path = tmp_path / "telegram" / "taskcard.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text('{"taskcard": true, "normal_rows": 3}', encoding="utf-8")
+    monkeypatch.setenv("LINGTAI_TASK_CARD_MAX_TOOL_ROWS", "9")
+    assert _task_card_max_tool_rows(tmp_path) == 3
+
+    agent = BaseAgent.__new__(BaseAgent)
+    agent._working_dir = tmp_path
+    rows = [
+        {"tool": "one"},
+        {"kind": "api_error", "done": False},
+        {"tool": "two"},
+        {"tool": "three"},
+        {"tool": "four"},
+    ]
+    agent._cap_task_card_tool_rows(rows)
+    assert [row.get("tool") for row in rows if row.get("kind") != "api_error"] == [
+        "two", "three", "four",
+    ]
+    assert sum(row.get("kind") == "api_error" for row in rows) == 1
+
+
+def test_invalid_persisted_normal_rows_fall_back_to_existing_env(tmp_path, monkeypatch):
+    from lingtai.kernel.base_agent import _task_card_max_tool_rows
+
+    state_path = tmp_path / "telegram" / "taskcard.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text('{"taskcard": true, "normal_rows": 11}', encoding="utf-8")
+    monkeypatch.setenv("LINGTAI_TASK_CARD_MAX_TOOL_ROWS", "4")
+    assert _task_card_max_tool_rows(tmp_path) == 4

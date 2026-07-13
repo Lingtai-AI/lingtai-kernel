@@ -5,7 +5,8 @@ Telegram-originated turn) must appear in the Task Card even though no tool call
 produced it.  One stable API-error row per turn/retry sequence; repeated failures
 update the same card; recovery marks it ``recovered``; a terminal failure freezes
 it as ``error``.  Reporting is observe-only/fail-open and the rendered summary is
-sanitized to status code + an allow-listed machine code only — never raw
+sanitized to bounded machine identifiers (type, public provider/model, valid
+HTTP status, allow-listed code, retry state) — never opaque external identifiers or raw
 exception text, body, URL, headers, tokens, prompts, traceback, or paths.
 """
 
@@ -122,6 +123,32 @@ def test_raw_exception_text_never_leaks_into_render():
     for leaked in ("https://", "token=", "bearer", "Bearer", "sk-xyz",
                    "/home/user", "traceback", "Authorization"):
         assert leaked not in text, f"leaked: {leaked!r}"
+
+
+def test_structured_diagnostics_project_from_exception_and_live_service():
+    client = FakeMCPClient()
+    agent = _agent(client)
+    agent.service = type(
+        "Service", (), {"provider": "codex-pool", "model": "gpt-5.6-sol"}
+    )()
+    exc = FakeServerError("raw response body with secret", status_code=504)
+    secret_request_id = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789"
+    exc.request_id = secret_request_id
+    exc.response = type("Response", (), {"headers": {"x-request-id": secret_request_id}})()
+
+    agent._report_task_card_api_error(exc, attempt=2, max_attempts=3, terminal=False)
+
+    [row] = client.last_rows()
+    assert row["error_type"] == "FakeServerError"
+    assert row["provider"] == "codex-pool"
+    assert row["model"] == "gpt-5.6-sol"
+    assert row["status"] == 504
+    assert "request_id" not in row
+    text = _rendered(client)
+    assert "codex-pool/gpt-5.6-sol" in text
+    assert "HTTP 504" in text
+    assert secret_request_id not in text
+    assert "raw response body" not in text
 
 
 def test_unlisted_machine_code_is_dropped_not_shown():
@@ -437,3 +464,39 @@ def test_report_hook_absent_agent_does_not_break_aed(tmp_path, monkeypatch):
     # reaches ASLEEP exactly as it would with the hooks present.
     turn._run_loop(agent)
     assert agent._asleep.is_set()
+
+
+def test_api_error_renders_structured_diagnostics_without_raw_text():
+    row = {
+        "kind": "api_error",
+        "error_type": "APITimeoutError",
+        "provider": "codex-pool",
+        "model": "gpt-5.6-sol",
+        "status": 504,
+        "code": "timeout",
+        "state": "retrying",
+        "attempt": 2,
+        "max_attempts": 3,
+        "done": False,
+    }
+    text = TelegramManager._format_api_error_line(row)
+    assert text == (
+        "⚠️ API error · APITimeoutError · codex-pool/gpt-5.6-sol · HTTP 504 · "
+        "timeout · retrying 2/3"
+    )
+    assert "response body" not in text
+
+
+def test_api_error_drops_malformed_machine_identifiers():
+    text = TelegramManager._format_api_error_line({
+        "kind": "api_error",
+        "error_type": "Timeout Error: token=secret",
+        "provider": "provider\nAuthorization: Bearer secret",
+        "model": "model with spaces",
+        "request_id": "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
+        "status": 503,
+        "state": "error",
+        "done": True,
+    })
+    assert text == "⚠️ API error · HTTP 503 · failed"
+    assert "secret" not in text

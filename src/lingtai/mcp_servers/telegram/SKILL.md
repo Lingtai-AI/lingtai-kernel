@@ -162,28 +162,36 @@ Important behavior notes:
 
 ## TASKCARD STATE
 
-- `/taskcard` reports the current setting. `/taskcard on` and `/taskcard off`
-  change it locally without an LLM call; `/taskcard@BotName on|off` works in
-  groups through Telegram's normal command-mention form.
-- The setting is one durable boolean for the current agent. It is shared by all
-  of that agent's configured Telegram accounts and chats, persists under the
-  agent workdir across refresh/restart, and is not project-, network-, session-,
-  or chat-scoped.
+- `/taskcard` reports both current preferences. `/taskcard on` and `/taskcard off`
+  change delivery locally without an LLM call. `/taskcard N` sets the rolling
+  normal-tool-row window to decimal `N=1..10` without changing delivery; invalid,
+  non-ASCII, extra-argument, and out-of-range forms return usage rather than being
+  clamped. Telegram's normal `/taskcard@BotName ...` mention form works in groups.
+- The preferences are agent-wide and shared by all configured Telegram accounts
+  and chats. They persist across refresh/restart in
+  `<workdir>/telegram/taskcard.json` as `{"taskcard": bool, "normal_rows": N}`;
+  legacy boolean-only files remain valid and default `normal_rows` to 1. Writes
+  are atomic + fsynced, and memory changes only after durable write success.
 - Every Telegram message representation shown to the agent carries the current
-  boolean: structured message objects use `taskcard: true|false`, and textual
-  preview message lines use `taskcard: True|False`. Check/read/search results
-  include it on every message item. It is derived when projected or read, so an
-  old stored message reflects the current setting without rewriting history.
+  delivery boolean: structured message objects use `taskcard: true|false`, and
+  textual preview lines use `taskcard: True|False`. Check/read/search items derive
+  it at projection time, so old stored messages reflect the current value without
+  history rewrites. `normal_rows` controls only automatic ordinary tool rows;
+  the single API-error row is never evicted by this window.
 - `taskcard: True` means automatic and programmable Task Cards may be sent to
-  Telegram. `taskcard: False` means delivery of **both** slots is hidden at the
-  Telegram presentation boundary. It does **not** mean work stopped: automatic
-  rows, heartbeats, reverse calls, renderers, watchers, retries, and last-valid
-  bookkeeping continue normally.
-- Turning delivery off does not retroactively delete or edit an already resident
-  Task Card. Turning it back on needs no restart; the next automatic heartbeat or
-  programmable watcher projection may update the resident card again.
-- When answering whether Task Cards are on, use the explicit current `taskcard`
-  value rather than inferring state from whether an old Task Card is visible.
+  Telegram. `taskcard: False` hides delivery of **both** slots at the presentation
+  boundary but does not stop rows, heartbeats, reverse calls, renderers, watchers,
+  retries, or bookkeeping. Turning delivery back on needs no restart.
+- Automatic cards render a fixed no-reply footer that mentions both command forms,
+  then at most two metadata lines (150 characters total), then the bare timestamp.
+  The metadata is a numeric projection of canonical session telemetry: cache rate,
+  cumulative cache miss/budget, API calls, and context usage. API failures render
+  only bounded machine fields (type, public provider/model, valid HTTP status,
+  allow-listed code, and retry/recovered/failed state), never opaque external
+  identifiers or raw exception text, response bodies, URLs, tokens, prompts,
+  paths, or tracebacks.
+- When answering whether Task Cards are on or how many normal rows they keep, use
+  the explicit current `/taskcard` status rather than inferring from a visible card.
 
 ## PROGRAMMABLE TASK CARD (`task_card` tool)
 

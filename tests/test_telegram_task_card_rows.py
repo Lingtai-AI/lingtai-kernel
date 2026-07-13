@@ -26,7 +26,8 @@ def _fmt(rows):
 
 def test_footer_constant_exact_text():
     assert _TASK_CARD_FOOTER == (
-        "Don't reply to this Task Card. Use /taskcard on|off to toggle."
+        "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
+        "/taskcard N sets normal rows (1-10)."
     )
 
 
@@ -298,3 +299,66 @@ def test_full_routing_rows_finalize_freezes_without_generic_done(tmp_path):
     assert "✓" in final_text
     assert "TASK CARD · DONE" not in final_text
     assert _TASK_CARD_FOOTER in final_text
+
+
+def test_metadata_is_two_lines_bounded_and_between_footer_and_timestamp():
+    text = TelegramManager._format_task_card_text(
+        "",
+        "",
+        "",
+        rows=[{
+            "tool": "bash",
+            "tool_action": "run",
+            "reasoning": "build",
+            "elapsed_s": 3,
+            "done": False,
+            "started_at": "12:34:56 UTC-07",
+        }],
+        metadata={
+            "session_cache_rate": 0.87803,
+            "cache_miss_tokens": 170631,
+            "cache_miss_budget": 1_000_000,
+            "api_calls": 13,
+            "context_tokens": 171246,
+            "context_window": 272000,
+            "context_usage": 0.62958,
+        },
+    )
+    lines = text.splitlines()
+    footer_idx = lines.index(_TASK_CARD_FOOTER)
+    time_idx = next(i for i, line in enumerate(lines) if "12:34:56 UTC-07" in line)
+    metadata_lines = lines[footer_idx + 1:time_idx]
+    assert metadata_lines == [
+        "session · cache 87.8% · miss 170.6k/1.0M · calls 13",
+        "ctx · 171.2k/272.0k · 63%",
+    ]
+    assert len(metadata_lines) <= 2
+    assert len("\n".join(metadata_lines)) <= 150
+
+
+def test_metadata_omits_untrusted_or_invalid_values():
+    lines = TelegramManager._format_task_card_metadata({
+        "session_cache_rate": "secret",
+        "cache_miss_tokens": True,
+        "cache_miss_budget": -1,
+        "api_calls": object(),
+        "context_tokens": "bad",
+        "context_window": None,
+        "context_usage": 7,
+    })
+    assert lines == []
+
+
+def test_metadata_pathological_counts_never_overflow_or_break_budget():
+    lines = TelegramManager._format_task_card_metadata({
+        "session_cache_rate": 1.0,
+        "cache_miss_tokens": 10**1000,
+        "cache_miss_budget": 10**1000,
+        "api_calls": 10**1000,
+        "context_tokens": 10**1000,
+        "context_window": 10**1000,
+        "context_usage": 1.0,
+    })
+    assert len(lines) == 2
+    assert len("\n".join(lines)) <= 150
+    assert "inf" not in "\n".join(lines).lower()

@@ -146,6 +146,8 @@ class TelegramAccount:
         commands: list[dict[str, str]] | None = None,
         taskcard_enabled: Callable[[], bool] | None = None,
         set_taskcard_enabled: Callable[[bool], None] | None = None,
+        taskcard_normal_rows: Callable[[], int] | None = None,
+        set_taskcard_normal_rows: Callable[[int], None] | None = None,
     ) -> None:
         self.alias = alias
         self._bot_token = bot_token
@@ -157,6 +159,8 @@ class TelegramAccount:
         # this account is one of several Telegram bots/chats.
         self._taskcard_enabled = taskcard_enabled or (lambda: True)
         self._set_taskcard_enabled = set_taskcard_enabled
+        self._taskcard_normal_rows = taskcard_normal_rows or (lambda: 1)
+        self._set_taskcard_normal_rows = set_taskcard_normal_rows
         # If commands is None, fall back to DEFAULT_COMMANDS at registration
         # time. An explicit empty list means "register no commands" and is
         # respected (Telegram clears the menu).
@@ -385,15 +389,26 @@ class TelegramAccount:
         return False
 
     def _cmd_taskcard(self, chat_id: int, text: str) -> None:
-        """Report or durably toggle agent-wide Telegram Task Card delivery."""
+        """Report or configure agent-wide Telegram Task Card presentation."""
+        usage = "❌ Usage: /taskcard on | /taskcard off | /taskcard N (1-10)"
         parts = text.split()
         args = parts[1:]
-        if len(args) > 1 or (args and args[0].lower() not in {"on", "off"}):
-            self.send_message(chat_id, "❌ Usage: /taskcard on | /taskcard off")
+        if len(args) > 1:
+            self.send_message(chat_id, usage)
             return
 
         if args:
-            setter = self._set_taskcard_enabled
+            arg = args[0].lower()
+            if arg in {"on", "off"}:
+                setter = self._set_taskcard_enabled
+                value: bool | int = arg == "on"
+            elif arg.isascii() and arg.isdecimal() and 1 <= int(arg) <= 10:
+                setter = self._set_taskcard_normal_rows
+                value = int(arg)
+            else:
+                self.send_message(chat_id, usage)
+                return
+
             if setter is None:
                 self.send_message(
                     chat_id,
@@ -401,7 +416,7 @@ class TelegramAccount:
                 )
                 return
             try:
-                setter(args[0].lower() == "on")
+                setter(value)
             except Exception:
                 logger.warning(
                     "Telegram account '%s' could not persist taskcard setting",
@@ -414,6 +429,7 @@ class TelegramAccount:
                 return
 
         enabled = self._taskcard_enabled()
+        normal_rows = self._taskcard_normal_rows()
         if enabled:
             description = (
                 "automatic and programmable Task Cards may be sent for this agent."
@@ -425,8 +441,8 @@ class TelegramAccount:
             )
         self.send_message(
             chat_id,
-            f"📋 taskcard: {enabled} — {description}\n"
-            "Usage: /taskcard on | /taskcard off",
+            f"📋 taskcard: {enabled} · normal rows: {normal_rows} — {description}\n"
+            "Usage: /taskcard on | /taskcard off | /taskcard N (1-10)",
         )
 
     def _cmd_kanban(self, chat_id: int) -> None:
