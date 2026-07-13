@@ -128,15 +128,30 @@ def test_description_routes_to_the_telegram_manual():
 def test_wiring_registers_only_with_telegram_and_is_idempotent():
     """The composition-root hook registers ``task_card`` exactly once, and only
     when a Telegram reverse channel is present."""
+    from types import SimpleNamespace
+
     from lingtai.agent import Agent
 
     class _Stub:
         def __init__(self, telegram):
             self._mcp_clients_by_tool = {"telegram": object()} if telegram else {}
+            self._tool_handlers: dict = {}
+            self._tool_schemas: list = []
             self.added: list = []
 
-        def add_tool(self, name, **_):
+        def add_tool(self, name, **kwargs):
             self.added.append(name)
+            self._tool_handlers[name] = kwargs["handler"]
+            self._tool_schemas = [s for s in self._tool_schemas if s.name != name]
+            self._tool_schemas.append(
+                SimpleNamespace(
+                    name=name,
+                    description=kwargs["description"],
+                    parameters=kwargs["schema"],
+                    system_prompt=kwargs.get("system_prompt", ""),
+                    glossary_package=kwargs["glossary_package"],
+                )
+            )
 
     no_tg = _Stub(telegram=False)
     Agent._maybe_setup_task_card_controller(no_tg)
@@ -147,6 +162,8 @@ def test_wiring_registers_only_with_telegram_and_is_idempotent():
     Agent._maybe_setup_task_card_controller(tg)
     assert tg.added == ["task_card"]
     assert hasattr(tg, "_task_card_controller")
+    assert getattr(tg._tool_handlers["task_card"], "__self__", None) is tg._task_card_controller
+    assert tg._tool_schemas[0].parameters == get_schema()
     Agent._maybe_setup_task_card_controller(tg)  # idempotent
     assert tg.added == ["task_card"]
 
