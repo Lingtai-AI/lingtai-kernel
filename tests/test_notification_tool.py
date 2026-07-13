@@ -94,6 +94,7 @@ def test_notification_schema_exposes_atomic_actions() -> None:
         "dismiss_channel",
         "dismiss_event",
         "dismiss_ref",
+        "manual",
     ]
     assert schema["required"] == ["action"]
     # Dismiss params present; summarize 'items' must NOT be here.
@@ -119,8 +120,12 @@ def test_notification_schema_is_canonical_english() -> None:
         assert notif_intrinsic.get_schema(lang) == base_schema
     # Descriptions are real prose, not raw i18n keys.
     assert base_desc and "notification" in base_desc.casefold()
+    assert "notification(action='manual')" in base_desc
+    assert "read-only" in base_desc.casefold()
     adesc = base_schema["properties"]["action"]["description"]
     assert adesc and "check" in adesc.casefold()
+    assert "notification(action='manual')" in adesc
+    assert "read-only" in adesc.casefold()
     cdesc = base_schema["properties"]["channel"]["description"]
     assert cdesc and "channel" in cdesc.casefold()
 
@@ -162,6 +167,75 @@ def test_system_rejects_dismiss_action(tmp_path: Path) -> None:
 
 def test_system_module_has_no_dismiss_callable() -> None:
     assert not hasattr(sys_intrinsic, "_dismiss")
+
+
+# ---------------------------------------------------------------------------
+# manual — installed progressive-disclosure body, strictly read-only.
+# ---------------------------------------------------------------------------
+
+
+def _notification_manual_path(workdir: Path) -> Path:
+    return (
+        workdir
+        / ".library"
+        / "intrinsic"
+        / "capabilities"
+        / "system-manual"
+        / "reference"
+        / "notification-manual"
+        / "SKILL.md"
+    )
+
+
+def test_manual_returns_installed_notification_manual_without_state_mutation(
+    tmp_path: Path,
+) -> None:
+    agent = _StubAgent(tmp_path)
+    manual_path = _notification_manual_path(tmp_path)
+    manual_path.parent.mkdir(parents=True)
+    manual_body = "---\nname: notification-manual\n---\n\n# Installed sentinel\n"
+    manual_path.write_text(manual_body, encoding="utf-8")
+
+    publish_test_payload(
+        tmp_path,
+        "system",
+        {"data": {"events": [{"event_id": "evt_keep", "ref_id": "keep"}]}},
+    )
+    before_state = snapshot_notifications(tmp_path)
+    before_fingerprint = fingerprint_notifications(tmp_path)
+    before_logs = list(agent._logs)
+
+    res = notif_intrinsic.handle(agent, {"action": "manual"})
+
+    assert res == {
+        "status": "ok",
+        "notification_manual": manual_body,
+        "manual_path": str(manual_path),
+    }
+    assert snapshot_notifications(tmp_path) == before_state
+    assert fingerprint_notifications(tmp_path) == before_fingerprint
+    assert agent._logs == before_logs
+
+
+def test_manual_missing_installed_file_returns_degraded_without_state_mutation(
+    tmp_path: Path,
+) -> None:
+    agent = _StubAgent(tmp_path)
+    manual_path = _notification_manual_path(tmp_path)
+
+    res = notif_intrinsic.handle(agent, {"action": "manual"})
+
+    assert res == {
+        "status": "degraded",
+        "notification_manual": "",
+        "manual_path": str(manual_path),
+        "error": (
+            "notification manual missing — initializer may have failed or "
+            "capability not installed correctly"
+        ),
+    }
+    assert not (tmp_path / ".notification").exists()
+    assert agent._logs == []
 
 
 # ---------------------------------------------------------------------------
