@@ -6,7 +6,7 @@ description: >
   completion semantics.
 version: 0.2.0
 tags: [lingtai, goal, notifications, reminders]
-last_changed_at: "2026-06-20T13:05:49-07:00"
+last_changed_at: "2026-07-12T20:20:43-07:00"
 ---
 
 # Goal Manual
@@ -148,4 +148,4 @@ check clears that stale `goal.reminder` system event.
 ## Cross-reference
 
 For notification channels, envelopes, allowlist behavior, and atomic system-event
-dismiss, read `reference/notification-manual/SKILL.md`.
+dismiss, read the first-level `notification-manual` skill.

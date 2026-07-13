@@ -2912,7 +2912,7 @@ def _is_notification_check_placeholder(content) -> bool:
 
     The ``notification`` intrinsic's ``check`` action returns a dict carrying
     ``_notification_placeholder: True`` (see
-    ``intrinsics/notification/__init__._check``).  A deliberate check is a read
+    ``tools/notification/__init__._check``).  A deliberate check is a read
     request: its result must receive the current notification payload even when
     the payload is materially unchanged, so the sparse change-gate is bypassed
     when the target is such a placeholder.  The IDLE/ASLEEP synthesized pair

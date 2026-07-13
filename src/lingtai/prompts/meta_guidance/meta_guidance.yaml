@@ -55,7 +55,7 @@ related_files:
       summarizes: the summarize/molt compression modes, when to summarize vs molt, and
       how to recover an original tool result. Crawl here for the deep rules behind the
       token/context-state guidance in this section.
-  - path: src/lingtai/intrinsic_skills/system-manual/reference/notification-manual/SKILL.md
+  - path: src/lingtai/intrinsic_skills/notification-manual/SKILL.md
     why: >
       Owns the expanded notification/read/dismiss semantics the resident guidance only
       summarizes. Crawl here for the deep rules behind this section's notification-handling

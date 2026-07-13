@@ -1,150 +1,144 @@
 ---
-name: notification-contract
-tool: notification
+name: notification-tool
 contract_version: 1
+root_contract: CONTRACT.md
 related_files:
-  - src/lingtai/tools/notification/__init__.py
   - src/lingtai/tools/notification/ANATOMY.md
+  - src/lingtai/tools/notification/__init__.py
+  - src/lingtai/tools/notification/schema.py
+  - src/lingtai/tools/registry.py
+  - src/lingtai/kernel/notifications.py
+  - src/lingtai/kernel/base_agent/turn.py
+  - src/lingtai/agent.py
+  - tests/test_notification_tool.py
+  - tests/test_system_dismiss.py
+  - tests/test_tools_package_data.py
+  - src/lingtai/tools/notification/glossary-en.md
+  - src/lingtai/tools/notification/glossary-zh.md
+  - src/lingtai/tools/notification/glossary-wen.md
+  - src/lingtai/intrinsic_skills/system-manual/SKILL.md
+  - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
+  - src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
+  - src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
 maintenance: |
-  Keep related_files as repo-relative paths to real files. If behavior and this
-  contract disagree, the code is the source of truth — fix the contract in the
-  same change and bump contract_version on breaking contract edits.
+  <!-- CANONICAL-MAINTENANCE v2 BEGIN -->
+  This component contract is governed by the root CONTRACT.md. Keep
+  related_files complete and repo-relative: the paired ANATOMY.md, Port, every
+  production Adapter, contract tests, and directly relevant component contracts
+  belong here. Re-read this contract whenever a linked boundary changes. Update
+  the Port, affected Adapters, contract tests, and this contract in the same
+  change; update the paired Anatomy when structure or composition also changes;
+  bump contract_version for a breaking Port-contract change. If code and contract
+  disagree, treat the disagreement as a defect—do not silently rewrite the
+  normative contract to match the implementation.
+  Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
+  <!-- CANONICAL-MAINTENANCE END -->
 ---
+# Notification Tool Contract
 
-# Notification capability contract
+## Purpose
 
-`notification` is the standalone notification surface: the **only**
-agent-callable home for reading the live notification payload and clearing
-notification mirrors. It owns `check` plus three *atomic* dismiss verbs — there
-is no kitchen-sink `dismiss`. The implementation lives in
-`src/lingtai/tools/notification/`; the code is the source of truth.
+The mandatory `notification` tool is the sole agent-callable notification
+surface. It exposes four operational actions for reading or atomically clearing
+notification mirrors plus one strictly read-only `manual` action for progressive
+disclosure. It owns no producer state and introduces no Notification Store
+operation.
 
-## Routing Card
+## Behavior
 
-**Use this when:**
-- You are editing the agent-facing notification verbs (`check`,
-  `dismiss_channel`, `dismiss_event`, `dismiss_ref`).
-- You are reviewing how `check` gets its live payload stamped, or how the three
-  dismiss verbs delegate to the shared guard.
+LingTai agents MUST use `manual` only to retrieve installed guidance, `check` to
+request current notification state, and the narrowest producer-specific or
+atomic dismiss action after handling a notification. They MUST NOT treat generic
+dismissal as mutation of producer canonical state, bypass protected channels, or
+route large-result compaction through this tool.
 
-**Do not use this for:**
-- Publishing notifications: producers call
-  `lingtai.kernel.notifications.submit`/`clear` (re-exported by `system` as
-  `publish_notification`/`clear_notification`). This tool only reads/clears.
-- `summarize` / large-result compaction: that is `system(action='summarize')`
-  (`src/lingtai/tools/system/CONTRACT.md`) — `summarize` is not a notification verb.
-- The decision logic behind dismissal (allowlists, protected channels,
-  stale-version guard): that lives in `lingtai.kernel.notifications.
-  dismiss_channel`, not here.
-- Code navigation only: read `src/lingtai/tools/notification/ANATOMY.md`.
+Coding agents MUST preserve all four operational actions, Store semantics,
+notification Core guards, producer state, and the absence of `system`
+notification/dismiss aliases. They MUST keep `manual` read-only, fixed to the
+installed per-agent path, and independent of check/dismiss delivery state.
+Procedures and safety explanations live in the linked notification manual and
+nested references rather than in this contract.
 
-**Fast paths:** action list -> §Tool surface; channel files -> §State &
-storage; delegation to the shared guard -> §Anchored claims.
+## Port
 
-## Scope
+The inbound agent-tool Port is named `notification`. Its input is an object with
+required canonical-English `action` and optional dismiss fields `channel`,
+`force`, `event_id`, `ref_id`, and `reason`. The action domain, in order, is:
+`check`, `dismiss_channel`, `dismiss_event`, `dismiss_ref`, `manual`.
 
-- Canonical tool name: `notification`.
-- Schema requires `action` (enum: `check`, `dismiss_channel`, `dismiss_event`,
-  `dismiss_ref`).
-- `system` exposes **no** notification/dismiss alias; those verbs live here
-  exclusively.
-- Non-goals: producer-side publish, summarize, mailbox actions.
+Observable action contracts are:
 
-## Tool surface
+- `check` returns `{_notification_placeholder: true, message}`; the turn-loop
+  adapter may stamp `_meta.notifications` and `_meta.notification_guidance` onto
+  that same dict.
+- `dismiss_channel` requires `channel`, rejects event/ref targets, and delegates
+  a whole-mirror clear to notification Core.
+- `dismiss_event` requires `event_id`; `dismiss_ref` requires `ref_id`; each
+  defaults `channel` to `system` and delegates targeted removal to Core.
+- `manual` reads only
+  `<agent>/.library/intrinsic/capabilities/notification-manual/SKILL.md`.
+  Success contains exactly `{status: "ok", notification_manual, manual_path}`.
+  Absence contains exactly `{status: "degraded", notification_manual: "",
+  manual_path, error}`, where `error` is `notification manual missing —
+  initializer may have failed or capability not installed correctly`. Other
+  filesystem/decoding errors propagate.
+- Unknown or absent actions return `{status: "error", message}` naming the
+  unknown notification action.
 
-Schema (`src/lingtai/tools/notification/schema.py`) and dispatch
-(`src/lingtai/tools/notification/__init__.py:handle`).
+There is no aggregate `dismiss`, no `summarize`, no `items` property, no source
+checkout fallback, and no compatibility alias.
 
-| Action | Required inputs | Optional inputs | Success output | Error shapes |
-|---|---|---|---|---|
-| `check` | — | — | `{_notification_placeholder: True, message}` — the live `_meta.notifications` + `_meta.notification_guidance` payload is stamped onto this same dict by the turn loop | — |
-| `dismiss_channel` | `channel` | `force`, `reason` | shared `dismiss_channel` result (`{status: "ok", ...}`) | `{status: "error", reason: "missing_channel"}`; `{status: "error", reason: "channel_dismiss_rejects_event_target"}` when `event_id`/`ref_id` is supplied |
-| `dismiss_event` | `event_id` | `channel` (default `system`), `force`, `reason` | shared `dismiss_channel` result | `{status: "error", reason: "missing_event_id"}` |
-| `dismiss_ref` | `ref_id` | `channel` (default `system`), `force`, `reason` | shared `dismiss_channel` result | `{status: "error", reason: "missing_ref_id"}` |
+## Adapters
 
-An unknown/absent `action` returns `{status: "error", message: "Unknown
-notification action: ..."}`. All three dismiss verbs delegate to
-`lingtai.kernel.notifications.dismiss_channel(..., invoked_by="notification")`,
-so the allowlist, post-molt ack-reason requirement, protected-channel refusal,
-generic-dismiss guard, and stale-channel-version refusal all hold here by
-construction.
+`lingtai.tools.registry.INTRINSICS` is the composition wiring that installs the
+package as a mandatory tool. `handle()` is the driving dispatch adapter for the
+five actions. The turn-loop notification post-hook completes `check` with the
+single canonical model-visible payload. The three dismiss handlers adapt tool
+arguments into `lingtai.kernel.notifications.dismiss_channel(...,
+invoked_by="notification")`, where notification Core owns allowlists, guards,
+stale checks, protected channels, acknowledgement policy, and Store use.
 
-## State & storage
+`_manual` is a bounded installed-resource adapter: it performs one `is_file`
+check and one UTF-8 read at the fixed path. It does not call notification Core,
+`NotificationStorePort`, the post-hook, a producer, or a shared loader. Agent
+initialization copies the bundled first-level `notification-manual` skill tree
+into the installed per-agent intrinsic library.
 
-This tool owns no storage of its own; it reads/clears producer-written mirrors
-under the agent working directory (`agent._working_dir`):
+## Contract rules
 
-```text
-.notification/<channel>.json   — per-channel notification mirror (e.g. email.json,
-                                 soul.json, post-molt.json, system.json). dismiss_channel
-                                 clears one whole file; dismiss_event/dismiss_ref remove a
-                                 single event by id from .notification/system.json.
-```
+- `manual` MUST NOT read, create, clear, fingerprint, acknowledge, or otherwise
+  mutate `.notification/` or producer state, and MUST NOT emit notification logs.
+- Missing installed guidance is degraded, never a silent successful empty body;
+  source-tree fallback and compatibility response aliases are forbidden.
+- `check` remains a write-free placeholder path. Dismiss behavior and result
+  shapes remain those of the canonical notification Core helper.
+- Dismissal affects notification mirrors only. Producer guards, non-force stale
+  refusal, protected-channel refusal, post-molt reasons, and unrelated-event
+  preservation remain in force.
+- `system` owns `summarize` and exposes no notification/dismiss alias. The
+  notification tool owns no producer publication action.
+- Schema descriptions are canonical English and language-independent. Action
+  identifiers and properties have no localized aliases. All three owned
+  glossaries require review when this enum changes; the additive `manual` action
+  introduces no new localized concept.
+- Adding `manual` is additive, so `contract_version` remains `1`; a future
+  breaking Port change follows the root version rule.
 
-`check` writes nothing — it returns a placeholder dict, and the turn loop's
-meta-block post-hook (`attach_active_notifications`) stamps the live payload onto
-the freshest dict-shaped tool result. Producer-owned state is never touched by
-dismissal; guarded mirrors refuse without `force`.
+## Contract tests
 
-## Cross-platform invariants
+`tests/test_notification_tool.py` proves mandatory registration and wiring, the
+ordered five-action schema, canonical description, absent aggregate actions,
+manual success/degraded envelopes and fixed path, read-only state/log behavior,
+check placeholder shape, all atomic dismiss semantics, Core guards, and absence
+of system compatibility aliases. `tests/test_system_dismiss.py` protects shared
+operational dismissal behavior. `tests/test_tools_package_data.py` verifies tool
+and documentation package data. Architecture, Anatomy drift, glossary, and skill
+validators cover the linked document and manual graphs.
 
-- No direct filesystem or subprocess work in this tool: `check` returns an
-  in-memory dict, and every dismiss verb delegates to the shared
-  `dismiss_channel` helper (which performs the pathlib-based, compare-and-clear
-  channel writes). DOCUMENT — no platform-specific behavior in this tool; all
-  file access is via `lingtai.kernel.notifications`.
-- No PTY/subprocess. DOCUMENT (do not change).
+## Maintenance
 
-## Anchored claims
-
-| Claim | Source | Test |
-|---|---|---|
-| `notification` is registered and wired into every agent like `system` | `src/lingtai/tools/notification/__init__.py`, `schema.py` | `tests/test_notification_tool.py::test_notification_is_registered_like_system`, `tests/test_notification_tool.py::test_notification_wired_into_every_agent` |
-| Schema exposes exactly the four atomic verbs (no kitchen-sink dismiss) | `src/lingtai/tools/notification/schema.py:get_schema` | `tests/test_notification_tool.py::test_notification_schema_exposes_atomic_actions`, `tests/test_notification_tool.py::test_notification_schema_has_no_kitchen_sink_dismiss` |
-| `check` returns a placeholder dict (so the meta-block can stamp it) | `src/lingtai/tools/notification/__init__.py:_check` | `tests/test_notification_tool.py::test_check_returns_placeholder_dict` |
-| Unknown actions error out | `src/lingtai/tools/notification/__init__.py:handle` | `tests/test_notification_tool.py::test_unknown_action_errors` |
-| `dismiss_channel` clears a whole surface and rejects event/ref targets | `src/lingtai/tools/notification/__init__.py:_dismiss_channel` | `tests/test_notification_tool.py::test_dismiss_channel_clears_surface`, `tests/test_notification_tool.py::test_dismiss_channel_rejects_event_target` |
-| `dismiss_channel` requires a channel | `src/lingtai/tools/notification/__init__.py:_dismiss_channel` | `tests/test_notification_tool.py::test_dismiss_channel_missing_channel` |
-| `dismiss_event` removes one event and defaults to the `system` channel | `src/lingtai/tools/notification/__init__.py:_dismiss_event` | `tests/test_notification_tool.py::test_dismiss_event_removes_one`, `tests/test_notification_tool.py::test_dismiss_event_defaults_to_system_channel` |
-| `dismiss_ref` removes events by ref_id | `src/lingtai/tools/notification/__init__.py:_dismiss_ref` | `tests/test_notification_tool.py::test_dismiss_ref_removes_by_ref`, `tests/test_notification_tool.py::test_dismiss_ref_missing_ref_id` |
-| `system` schema drops notification/dismiss; `summarize` is not a notification verb | `src/lingtai/tools/notification/schema.py`, `src/lingtai/tools/system/schema.py` | `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss`, `tests/test_notification_tool.py::test_summarize_is_not_a_notification_action` |
-| Guarded/protected channels refuse without `force`; the delegation preserves every guard | `src/lingtai/tools/notification/__init__.py` → `lingtai.kernel.notifications.dismiss_channel` | `tests/test_notification_tool.py::test_guarded_channel_refuses_without_force`, `tests/test_notification_tool.py::test_protected_goal_channel_refused` |
-
-## Verification matrix
-
-| Invariant | Automated test | Manual check | Risk if broken |
-|---|---|---|---|
-| Notification verbs live only here, not on `system` | `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss` | Call `system(action='check')` | Diverging duplicate notification surfaces |
-| Dismissal is atomic (no kitchen-sink `dismiss`) | `tests/test_notification_tool.py::test_notification_schema_has_no_kitchen_sink_dismiss` | Inspect the schema enum | Ambiguous clears wipe more than intended |
-| `check` stays a placeholder the meta-block can stamp | `tests/test_notification_tool.py::test_check_returns_placeholder_dict` | Call `check`, inspect `_meta.notifications` | Live payload never reaches the agent |
-| dismiss verbs preserve the shared guards | `tests/test_notification_tool.py::test_guarded_channel_refuses_without_force` / `test_protected_goal_channel_refused` | Dismiss a protected channel without force | Protected/producer state clobbered |
-| `dismiss_channel` refuses event/ref targets | `tests/test_notification_tool.py::test_dismiss_channel_rejects_event_target` | Pass `event_id` to `dismiss_channel` | Whole-channel wipe when a single event was meant |
-
-Run before merging notification changes:
-
-```bash
-python -m pytest tests/test_notification_tool.py tests/test_system_dismiss.py -q
-```
-
-## Schema and glossary ownership
-
-- **Canonical identifiers:** function names, JSON property names, action/enum
-  values, required fields, defaults, and bounds are canonical English literals.
-  The schema (`get_schema()`) and description (`get_description()`) are
-  language-independent; the optional `lang` argument is accepted for source
-  compatibility but ignored.
-- **Provider wire:** provider adapters send the global `WIRE_TOOL_DESCRIPTION`
-  constant as the top-level tool description; `FunctionSchema.description`
-  holds the full canonical prose rendered into `## tools`.
-- **Glossary resources:** this package owns `glossary-en.md`, `glossary-zh.md`,
-  and `glossary-wen.md`. Each has strict YAML frontmatter
-  (`kind: tool-glossary`, `schema_version: 1`, `tool_package: tools.<pkg>`,
-  `language: <lang>`). English body is empty; zh/wen bodies contain concise
-  terminology mappings that quote immutable English identifiers and never offer
-  localized aliases.
-- **Fallback:** exact normalized language lookup, then English, then no
-  appendix. Fail-closed for localized text; fail-open for tool availability.
-- **Update triggers:** changing a function name, action/enum value, property
-  name, or user-visible concept requires reviewing all three glossary files in
-  the same PR.
-- **Validation:** `python -m lingtai.tools.glossary_validator --check`.
+Read the paired Anatomy for current symbol locations, wiring, composition, state,
+and verified citations. Keep implementation, schema, registry wiring, focused
+tests, glossaries, and the manual/reference graph synchronized. Do not duplicate
+manual procedures here or expand this slice into Store, producer, system, or
+summarization changes.

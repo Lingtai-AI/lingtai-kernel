@@ -14,7 +14,7 @@ related_files:
   - "src/lingtai/prompts/principle/principle.md"
   - "src/lingtai/prompts/procedures/procedures.md"
   - "reference/substrate-manual/SKILL.md"
-  - "reference/notification-manual/SKILL.md"
+  - "src/lingtai/intrinsic_skills/notification-manual/SKILL.md"
 maintenance: >
   When editing this file, treat related_files as maintained inner links for the prompt/guidance
   source graph. Before changing behavior or prose, crawl the listed files, update any affected
@@ -179,5 +179,5 @@ dedicated `notification` tool (`check`, `dismiss_channel`, `dismiss_event`,
 `dismiss_ref`) — `system` owns no notification verb. For lifecycle actions
 (`refresh`, `presets`, `lull`, `interrupt`, `suspend`, `cpr`, `clear`,
 `nirvana`) and the full operating model, read the `system-manual` router; it
-routes substrate details to `reference/substrate-manual/SKILL.md` and
-notification details to `reference/notification-manual/SKILL.md`.
+routes substrate details to `reference/substrate-manual/SKILL.md`. For
+notification details, read the first-level `notification-manual` skill.

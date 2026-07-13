@@ -325,6 +325,32 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "name: sqlite-log-query" in system_manual_body
         assert "name: runtime-update-checks" in system_manual_body
         assert "Nested reference catalog" in system_manual_body
+        assert "location: reference/notification-manual/SKILL.md" not in system_manual_body
+
+        notification_manual_md = (
+            workdir
+            / ".library"
+            / "intrinsic"
+            / "capabilities"
+            / "notification-manual"
+            / "SKILL.md"
+        )
+        assert notification_manual_md.is_file()
+        notification_manual_body = notification_manual_md.read_text(encoding="utf-8")
+        assert "name: notification-manual" in notification_manual_body
+        assert "# Notification Manual" in notification_manual_body
+        assert "<agent>/.library/intrinsic/capabilities/notification-manual/SKILL.md" in notification_manual_body
+        assert "location: reference/channel-model/SKILL.md" in notification_manual_body
+        assert "location: reference/dismissal-safety/SKILL.md" in notification_manual_body
+        assert (
+            notification_manual_md.parent / "reference" / "channel-model" / "SKILL.md"
+        ).is_file()
+        assert (
+            notification_manual_md.parent / "reference" / "dismissal-safety" / "SKILL.md"
+        ).is_file()
+        assert not (
+            system_manual_md.parent / "reference" / "notification-manual"
+        ).exists()
 
         substrate_ref = system_manual_md.parent / "reference" / "substrate-manual" / "SKILL.md"
         assert substrate_ref.is_file()

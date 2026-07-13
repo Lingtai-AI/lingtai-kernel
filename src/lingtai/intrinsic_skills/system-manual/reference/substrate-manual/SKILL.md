@@ -12,7 +12,7 @@ description: >
   its folder may carry scripts/assets as the substrate reference grows.
 version: 1.0.2
 tags: [lingtai, system-manual, substrate, runtime, lifecycle, communication, memory, notifications, mcp]
-last_changed_at: "2026-07-09T22:24:00-07:00"
+last_changed_at: "2026-07-12T20:20:43-07:00"
 ---
 
 # Substrate Manual
@@ -138,7 +138,7 @@ contains human instructions. Read the producer channel.
 For channel allowlist, envelope shape, protected channels, stale-version/force
 semantics, and how large results are ranked via agent_meta and summarized (plus
 legacy `large_tool_result` dismiss), read
-`reference/notification-manual/SKILL.md`.
+the first-level `notification-manual` skill.
 
 ### Three context-compression / continuation modes
 
