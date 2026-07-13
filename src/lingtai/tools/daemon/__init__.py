@@ -2909,7 +2909,6 @@ class DaemonManager:
         # Pre-flight: resolve any per-task presets BEFORE scheduling.
         # If any preset is invalid, refuse the whole batch. Presets are
         # identified by path (~/foo.json, ./foo.json, or absolute).
-        from lingtai.presets import load_preset
         from lingtai.kernel.preset_connectivity import check_connectivity
 
         resolved_presets: list[dict | None] = []  # one entry per task — None means inherit
@@ -2918,9 +2917,11 @@ class DaemonManager:
             if not preset_name:
                 resolved_presets.append(None)
                 continue
-            # Validate preset exists and is loadable
+            # Validate preset exists and is loadable. Resolve through the agent's
+            # composed preset-loader hook so the daemon never constructs a
+            # migration workspace adapter itself.
             try:
-                preset = load_preset(preset_name, working_dir=self._agent._working_dir)
+                preset = self._agent.load_preset(preset_name)
             except (KeyError, ValueError) as e:
                 return {"status": "error",
                         "message": f"preset {preset_name!r} unloadable: {e}"}

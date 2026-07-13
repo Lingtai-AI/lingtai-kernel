@@ -6,9 +6,6 @@ from pathlib import Path
 import pytest
 
 from lingtai.presets import (
-    discover_presets,
-    discover_presets_in_dirs,
-    load_preset,
     default_presets_path,
     expand_inherit,
     home_shortened,
@@ -17,6 +14,14 @@ from lingtai.presets import (
     resolve_preset_name,
     resolve_allowed_presets,
     TIER_VALUES,
+)
+# The preset library's migration-capable entry points now require an injected
+# workspace runner/loader (no production default); these test wrappers supply
+# the production POSIX composition so behavior assertions stay unchanged.
+from tests._migration_workspace_helpers import (
+    discover_presets,
+    discover_presets_in_dirs,
+    load_preset,
 )
 
 
@@ -797,7 +802,7 @@ def test_tier_vocabulary_is_numeric_one_through_five():
 # pin that documented behavior so it stays explicit rather than surprising, and
 # guard the skills.paths carve-out against regressions.
 
-from lingtai.presets import materialize_active_preset
+from tests._migration_workspace_helpers import materialize_active_preset
 
 
 def _preset_content(name, llm, capabilities):

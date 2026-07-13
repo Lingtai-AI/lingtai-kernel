@@ -6,7 +6,7 @@ TUI's tier chip rendering. The new shape unifies these: `description` is
 a required object with `summary` (string) and optional `tier` (string in
 "1".."5"). Tags are gone.
 
-This migration walks every preset file in the library and:
+This migration walks every preset document the workspace enumerates and:
 
 1. If `description` is a non-empty string → wrap as `{"summary": <str>}`.
 2. If `description` is missing → set `{"summary": ""}`. Operators have
@@ -24,14 +24,15 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from lingtai.kernel.config_resolve import load_jsonc
+from lingtai.kernel.config_resolve import parse_jsonc
+
+if TYPE_CHECKING:
+    from .migrate import MigrationWorkspacePort
 
 log = logging.getLogger(__name__)
 
-_PRESET_SUFFIXES = (".json", ".jsonc")
 _TIER_PREFIX = "tier:"
 _TIER_VALUES = {"1", "2", "3", "4", "5"}
 
@@ -53,32 +54,29 @@ def _extract_tier(tags) -> str | None:
     return None
 
 
-def migrate_description_object(presets_path: Path) -> None:
-    """Walk preset files and rewrite description into structured form.
-
-    Args:
-        presets_path: directory containing the preset files. Must exist
-            (the caller checks).
+def migrate_description_object(workspace: MigrationWorkspacePort) -> None:
+    """Walk preset documents and rewrite description into structured form.
 
     Side effects:
-        Rewrites preset files in place atomically (tmp + os.replace).
-        Logs each rewrite at INFO level.
+        Rewrites preset documents through the workspace (atomic replace owned by
+        the adapter). Logs each rewrite at INFO level.
     """
+    from .migrate import MigrationWorkspaceError
+
     rewrote = 0
     skipped = 0
 
-    for entry in sorted(presets_path.iterdir()):
-        if not entry.is_file():
+    for ref in workspace.enumerate_entries():
+        text = workspace.read_entry(ref)
+        if text is None:
+            log.warning("m002: skipping unreadable preset %s", ref.name)
+            skipped += 1
             continue
-        if entry.suffix not in _PRESET_SUFFIXES:
-            continue
-        if entry.name.startswith("_"):
-            continue  # internal files like _kernel_meta.json
 
         try:
-            data = load_jsonc(entry)
-        except (OSError, json.JSONDecodeError) as e:
-            log.warning("m002: skipping unreadable preset %s: %s", entry, e)
+            data = parse_jsonc(text)
+        except json.JSONDecodeError as e:
+            log.warning("m002: skipping unreadable preset %s: %s", ref.name, e)
             skipped += 1
             continue
 
@@ -100,7 +98,7 @@ def migrate_description_object(presets_path: Path) -> None:
         elif not isinstance(desc, dict):
             log.warning(
                 "m002: %s has non-string non-object description (%r) — leaving unchanged",
-                entry, type(desc).__name__,
+                ref.name, type(desc).__name__,
             )
             skipped += 1
             continue
@@ -117,21 +115,15 @@ def migrate_description_object(presets_path: Path) -> None:
             continue
 
         try:
-            tmp = entry.with_suffix(entry.suffix + ".tmp")
-            tmp.write_text(
-                json.dumps(data, indent=2, ensure_ascii=False),
-                encoding="utf-8",
+            workspace.atomic_replace_entry(
+                ref, json.dumps(data, indent=2, ensure_ascii=False)
             )
-            os.replace(str(tmp), str(entry))
-        except OSError as e:
-            log.warning("m002: failed to rewrite %s: %s", entry, e)
+        except MigrationWorkspaceError as e:
+            log.warning("m002: failed to rewrite %s: %s", ref.name, e)
             skipped += 1
             continue
 
-        log.info("m002: promoted description in %s", entry.name)
+        log.info("m002: promoted description in %s", ref.name)
         rewrote += 1
 
-    log.info(
-        "m002 complete: rewrote=%d skipped=%d (presets_path=%s)",
-        rewrote, skipped, presets_path,
-    )
+    log.info("m002 complete: rewrote=%d skipped=%d", rewrote, skipped)

@@ -12,10 +12,13 @@ related_files:
   - src/lingtai/adapters/posix/mail.py
   - src/lingtai/adapters/posix/workdir_lease.py
   - src/lingtai/adapters/posix/notification_store.py
+  - src/lingtai/adapters/posix/migration_workspace.py
   - src/lingtai/kernel/workdir_lease/ANATOMY.md
   - src/lingtai/kernel/workdir_lease/CONTRACT.md
   - src/lingtai/kernel/snapshot/ANATOMY.md
   - src/lingtai/kernel/snapshot/CONTRACT.md
+  - src/lingtai/kernel/migrate/ANATOMY.md
+  - src/lingtai/kernel/migrate/CONTRACT.md
   - src/lingtai/kernel/services/logging.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
@@ -29,7 +32,8 @@ maintenance: |
 
 This narrow package contains production filesystem adapters for Core-owned Ports:
 the structured event journal, mail transport, notification store, workdir lease,
-and fixed-command snapshot/source-revision Git capability. It is an
+the fixed-command snapshot/source-revision Git capability, and the migration
+workspace. It is an
 implementation-only Anatomy with no independent local Contract; for the
 Anatomy/Contract pairing rule its unique owning component Contract is
 `src/lingtai/kernel/event_journal/CONTRACT.md` (this Anatomy is listed only in
@@ -75,6 +79,12 @@ co-located ANATOMY.md files for each component.
   atomic acknowledgement-set mutation
   (`src/lingtai/adapters/posix/notification_store.py:57-240`). Its internal lock
   spans each complete mutation; atomic writes use the shared `_fsutil` primitive.
+- `PosixMigrationWorkspaceAdapter`
+  (`src/lingtai/adapters/posix/migration_workspace.py`) implements all seven
+  `MigrationWorkspacePort` families for one bound `MigrationDomain`/root: availability,
+  entry→path mapping, raw reads, preset enumeration, PID-suffixed atomic replace
+  (every replacement, incl. preset m001/m002), version files, `system/migrations/`
+  archive + SHA-256 evidence, and best-effort `logs/events.jsonl` audit.
 
 ## Connections
 
@@ -89,9 +99,14 @@ inward on the kernel-owned `workdir_layout` for the `.agent.lock` path and on
 `WorkdirLeasePort` (`src/lingtai/adapters/posix/workdir_lease.py:23-24`). The
 notification-store adapter depends inward on `NotificationStorePort` and the
 kernel `_fsutil.atomic_write_json` helper
-(`src/lingtai/adapters/posix/notification_store.py:13-25`). It is imported by
+(`src/lingtai/adapters/posix/notification_store.py:13-25`). The migration-workspace
+adapter depends inward on `MigrationWorkspacePort` and the migrate value objects and
+reuses the Core `meta_filename()` name. It is imported by
 explicit composition modules, not exported from the package facade. Agent, CLI,
-and Telegram-server roots construct it; Core never imports this package.
+and Telegram-server roots construct these adapters; the CLI `load_init`, the
+wrapper `load_preset` / `_run_preset_library_migrations`, and `Agent._read_init`
+build a domain/root-bound `PosixMigrationWorkspaceAdapter` for the Core runners.
+Core never imports this package.
 
 ## Composition
 
@@ -99,8 +114,9 @@ and Telegram-server roots construct it; Core never imports this package.
 - **Port components:** `src/lingtai/kernel/event_journal/ANATOMY.md`,
   `src/lingtai/kernel/mail_transport/ANATOMY.md`,
   `src/lingtai/kernel/workdir_lease/ANATOMY.md`,
-  `src/lingtai/kernel/snapshot/ANATOMY.md`, and
-  `src/lingtai/kernel/notification_store/ANATOMY.md`.
+  `src/lingtai/kernel/snapshot/ANATOMY.md`,
+  `src/lingtai/kernel/notification_store/ANATOMY.md`, and
+  `src/lingtai/kernel/migrate/ANATOMY.md`.
 - **Storage primitives:** `src/lingtai/kernel/services/ANATOMY.md`.
 
 ## State
@@ -119,6 +135,9 @@ an uncertain live descriptor cannot create split-inode authority
 adapter owns the internal `threading.Lock` and the workdir path, and writes
 `.notification/<channel>.json` plus `.notification/large_result_acks.json`
 (`src/lingtai/adapters/posix/notification_store.py:63-66`, `src/lingtai/adapters/posix/notification_store.py:210-240`).
+The migration-workspace adapter owns only its bound `(domain, root)` pair and
+writes the domain's `_kernel_meta.json` version file, `system/migrations/` archive
+artifacts, and best-effort `logs/events.jsonl` audit through PID-suffixed temp + replace; it holds no long-lived handle or lock.
 
 ## Notes
 

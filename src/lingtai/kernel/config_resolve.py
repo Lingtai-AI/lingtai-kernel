@@ -13,16 +13,14 @@ from pathlib import Path
 _JSONC_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
 
 
-def load_jsonc(path: str | Path) -> dict:
-    """Load a JSON or JSONC file (strips // comments and trailing commas).
+def parse_jsonc(text: str) -> dict:
+    """Parse JSON or JSONC text (strips // comments and trailing commas).
 
-    Comment stripping is string-aware: // inside a quoted JSON string value
-    is never treated as a comment (preserving URLs like "https://host/...").
+    Pure text→object transform with no I/O, so callers holding raw text (e.g.
+    migration transforms) use it directly. Comment stripping is string-aware: //
+    inside a quoted string is never a comment (URLs like "https://host/..." survive).
     """
-    text = Path(path).read_text(encoding="utf-8")
-    # Strip // comments only when not inside a JSON string.
-    # Strategy: tokenise by alternating between string spans and non-string
-    # spans; within non-string spans, replace //...EOL with nothing.
+    # Tokenise into string / non-string spans; strip //...EOL only in non-string spans.
     parts: list[str] = []
     pos = 0
     for m in _JSONC_STRING_RE.finditer(text):
@@ -37,6 +35,15 @@ def load_jsonc(path: str | Path) -> dict:
     text = ''.join(parts)
     text = re.sub(r',\s*([}\]])', r'\1', text)
     return json.loads(text)
+
+
+def load_jsonc(path: str | Path) -> dict:
+    """Load a JSON or JSONC file (strips // comments and trailing commas).
+
+    Thin I/O wrapper: reads UTF-8 text from *path* and delegates the parse to
+    :func:`parse_jsonc`, which owns the comment/trailing-comma stripping rules.
+    """
+    return parse_jsonc(Path(path).read_text(encoding="utf-8"))
 
 
 def resolve_env(value: str | None, env_name: str | None) -> str | None:

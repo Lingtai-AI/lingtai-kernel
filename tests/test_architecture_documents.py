@@ -894,3 +894,85 @@ def test_snapshot_ports_keep_git_process_mechanism_outside_core() -> None:
     assert "def gc(" not in workdir
     assert "def diff(" not in workdir
     assert "def diff_and_commit(" not in workdir
+
+
+def test_migration_contract_names_required_component_files() -> None:
+    contract_path = ROOT / "src/lingtai/kernel/migrate/CONTRACT.md"
+    meta, _ = _read_document(contract_path)
+    assert meta["name"] == "migration-workspace"
+    assert {
+        "src/lingtai/kernel/migrate/ANATOMY.md",
+        "src/lingtai/kernel/migrate/migrate.py",
+        "src/lingtai/adapters/posix/migration_workspace.py",
+        "tests/_migration_workspace_helpers.py",
+        "tests/test_kernel_migrate.py",
+        "tests/test_architecture_documents.py",
+    } <= set(meta["related_files"])
+
+
+def test_migration_core_keeps_workspace_mechanism_outside_core() -> None:
+    migrate_dir = ROOT / "src/lingtai/kernel/migrate"
+    core_files = [
+        "migrate.py",
+        "m001_context_limit_relocation.py",
+        "m002_description_object.py",
+        "agent_m001_init_procedures_override.py",
+        "agent_m002_mcp_launch_args_rewrite.py",
+        "agent_m003_init_prompt_contract.py",
+    ]
+    # No filesystem/OS mechanism, path type, or adapter import/construction may
+    # leak into the migration Core — every such concern crosses the Port.
+    banned = (
+        "import os",
+        "import pathlib",
+        "from pathlib",
+        "os.replace",
+        "os.getpid",
+        ".read_text(",
+        ".write_text(",
+        ".iterdir(",
+        ".mkdir(",
+        "Path(",
+        "lingtai.adapters",
+        "PosixMigrationWorkspaceAdapter",
+    )
+    for name in core_files:
+        source = (migrate_dir / name).read_text(encoding="utf-8")
+        for token in banned:
+            assert token not in source, (name, token)
+
+    migrate_source = (migrate_dir / "migrate.py").read_text(encoding="utf-8")
+    # Exactly seven Port operation families — no eighth, no generic KV method.
+    assert migrate_source.count("@abstractmethod") == 7
+    for family in (
+        "def inspect(",
+        "def enumerate_entries(",
+        "def read_entry(",
+        "def atomic_replace_entry(",
+        "def store_version(",
+        "def archive(",
+        "def append_audit(",
+    ):
+        assert family in migrate_source, family
+    # Both runners require a bound Port — no nullable/path/default workspace and
+    # no dual path-based route.
+    assert "def run_migrations(workspace: MigrationWorkspacePort) -> None:" in migrate_source
+    assert "def run_agent_migrations(workspace: MigrationWorkspacePort) -> None:" in migrate_source
+    assert "Path | str" not in migrate_source
+    # A version step is one success unit: transform first, persist that version,
+    # then advance Core's in-memory current value (forward-only; no rollback).
+    transform_pos = migrate_source.index("fn(workspace)")
+    store_pos = migrate_source.index("workspace.store_version(version)")
+    advance_pos = migrate_source.index("current = version", store_pos)
+    assert transform_pos < store_pos < advance_pos
+
+    # The composition consumers require the injected runner/loader — no default.
+    presets_source = (ROOT / "src/lingtai/kernel/presets.py").read_text(encoding="utf-8")
+    assert "run_migrations: Callable[[Path], None]" in presets_source
+    assert "load_preset: Callable[..., dict]" in presets_source
+    assert "run_migrations=None" not in presets_source
+    assert "load_preset=None" not in presets_source
+
+    # Core exposes no Path-returning meta helper anymore.
+    init_source = (migrate_dir / "__init__.py").read_text(encoding="utf-8")
+    assert "agent_meta_relative_path" not in init_source

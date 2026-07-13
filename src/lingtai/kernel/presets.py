@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Callable
 
 from .config import THINKING_LEVELS, THINKING_PROVIDERS
 
@@ -175,6 +176,8 @@ def resolve_allowed_presets(manifest: dict, working_dir: Path) -> list[Path]:
 
 def discover_presets_in_dirs(
     dirs: Path | str | list[Path | str],
+    *,
+    run_migrations: Callable[[Path], None],
 ) -> dict[str, Path]:
     """Enumerate preset files across one or more library directories.
 
@@ -192,11 +195,10 @@ def discover_presets_in_dirs(
 
     Nonexistent directories are silently skipped — they're not an error.
 
-    Triggers any pending kernel-side preset migrations against each path
-    before listing — see lingtai.kernel.migrate. Migrations are idempotent
-    and process-cached, so repeated calls share the work.
+    ``run_migrations`` is the required caller-supplied preset-library runner: it
+    builds the adapter and runs pending migrations before listing (idempotent,
+    process-cached). See `lingtai.kernel.migrate`.
     """
-    from lingtai.kernel.migrate import run_migrations
     from lingtai.kernel.migrate.migrate import meta_filename
 
     if isinstance(dirs, (str, Path)):
@@ -230,6 +232,8 @@ discover_presets = discover_presets_in_dirs
 def load_preset(
     name: str,
     working_dir: Path | None = None,
+    *,
+    run_migrations: Callable[[Path], None],
 ) -> dict:
     """Load and validate a preset by **path name**.
 
@@ -242,6 +246,8 @@ def load_preset(
             include the extension — there is no implicit extension probing.
         working_dir: directory to resolve relative names against. Required
             iff `name` is relative. Pass `Path.cwd()` for one-off scripts.
+        run_migrations: the required caller-supplied preset-library runner — it
+            builds the adapter for the preset's directory and runs pending migrations.
 
     Returns:
         The parsed preset dict with shape {name, description, manifest: {...}}.
@@ -252,7 +258,6 @@ def load_preset(
             required fields are missing.
     """
     from .config_resolve import load_jsonc
-    from lingtai.kernel.migrate import run_migrations
 
     if not isinstance(name, str) or not name:
         raise ValueError(f"preset name must be a non-empty string, got {name!r}")
@@ -273,8 +278,7 @@ def load_preset(
     if not p.is_file():
         raise KeyError(f"preset not found: {name!r} (resolved to {p})")
 
-    # Run kernel migrations on the containing directory so legacy on-disk
-    # shapes are normalized before validation. Idempotent and process-cached.
+    # Run kernel migrations on the containing directory (idempotent, process-cached).
     if p.parent.is_dir():
         run_migrations(p.parent)
 
@@ -357,6 +361,8 @@ def materialize_active_preset(
     data: dict,
     working_dir: Path,
     core_defaults: dict | set | list | None = None,
+    *,
+    load_preset: Callable[..., dict],
 ) -> None:
     """Substitute the active preset's llm + capabilities into init.json data.
 
@@ -389,6 +395,10 @@ def materialize_active_preset(
     ``lingtai`` (not the kernel), so it is injected rather than imported —
     the kernel must not depend on the wrapper. When ``None`` (legacy callers
     and the no-core tests), only the per-key override layer runs.
+
+    ``load_preset`` is the required preset-loader callback supplied by Agent/CLI
+    (``Callable[[name, working_dir], dict]``): it resolves a preset, builds the
+    preset-library adapter, and calls Core ``load_preset`` — never constructed here.
 
     The ``skills.paths`` carve-out (init.json extras append to the preset's
     skills paths, deduped, preset defaults first) layers on top of both —

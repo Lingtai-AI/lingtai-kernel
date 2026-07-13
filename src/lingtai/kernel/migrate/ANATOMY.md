@@ -1,6 +1,7 @@
 ---
 related_files:
   - src/lingtai/kernel/ANATOMY.md
+  - src/lingtai/kernel/migrate/CONTRACT.md
   - src/lingtai/kernel/migrate/__init__.py
   - src/lingtai/kernel/migrate/agent_m001_init_procedures_override.py
   - src/lingtai/kernel/migrate/agent_m002_mcp_launch_args_rewrite.py
@@ -8,73 +9,62 @@ related_files:
   - src/lingtai/kernel/migrate/m001_context_limit_relocation.py
   - src/lingtai/kernel/migrate/m002_description_object.py
   - src/lingtai/kernel/migrate/migrate.py
+  - src/lingtai/adapters/posix/migration_workspace.py
+  - src/lingtai/kernel/config_resolve.py
+  - tests/_migration_workspace_helpers.py
   - tests/test_cli.py
   - tests/test_deep_refresh.py
   - tests/test_kernel_migrate.py
 maintenance: |
-  Keep related_files as repo-relative paths to real files. Include neighboring
-  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
-  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
-  maintenance field. If you notice drift between this anatomy and the code,
-  report it. See lingtai-dev-guide for details.
+  Keep related_files repo-relative, duplicate-free, and linked to real files.
+  Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
+  parent/child anatomy links bidirectional. Code is the structural source of
+  truth: update this anatomy in the same change that moves files, symbols,
+  connections, composition, or state. Verify every changed citation and run the
+  architecture-document validation before merge.
+  Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
 ---
 # migrate
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.
 
-Versioned, append-only, forward-only migrations for kernel-managed on-disk state. This folder is the kernel's migration system: when changing an on-disk shape owned by the kernel, look here first and extend the appropriate registry instead of adding an ad-hoc boot-time helper. The runner currently has two domains: **preset library** migrations over preset `.json`/`.jsonc` directories, and **agent workdir** migrations over one agent directory (including `init.json`). Each domain has its own version counter and append-only registry, but both use the same runner/validation/cache machinery.
+Versioned, append-only, forward-only migrations for kernel-managed on-disk state. This folder is the kernel's migration Core: when changing an on-disk shape owned by the kernel, look here first and extend the appropriate registry instead of adding an ad-hoc boot-time helper. The Core owns the domain policy — registries, current-version derivation, forward-only sequence, success-by-success durability — while one outbound `MigrationWorkspacePort` expresses every read, write, enumeration, version file, archive, and audit append. Normative promises (the seven families, composition rules, conformance, non-goals) live in the paired [`CONTRACT.md`](CONTRACT.md). Two domains share the Core: **preset library** migrations over preset `.json`/`.jsonc` directories, and **agent workdir** migrations over one agent directory (including `init.json`).
 
 ## Components
 
-- `__init__.py` — public migration facade. Exports preset-domain `CURRENT_VERSION` / `run_migrations`, agent-domain `AGENT_CURRENT_VERSION` / `run_agent_migrations`, plus meta helpers (`__init__.py:31-45`).
-- `migrate.py` — shared runner, registries, and version tracking.
-  - `_META_FILENAME = "_kernel_meta.json"` — preset-domain meta file name (`migrate.py:53`).
-  - `_AGENT_META_REL = Path("system") / "migrations" / _META_FILENAME` — agent-domain meta file path relative to the workdir (`migrate.py:57`).
-  - `_migrated: set[str]` — process-level guard keyed by `domain:resolved_path` (`migrate.py:61`).
-  - `_PRESET_MIGRATIONS` — append-only preset registry (`migrate.py:67-70`).
-  - `_AGENT_MIGRATIONS` — append-only agent/workdir registry (`migrate.py:72-76`).
-  - `_MIGRATIONS` — backwards-compatible alias for `_PRESET_MIGRATIONS`, retained for older internal tests/callers (`migrate.py:80`).
-  - `_validate_registry()` — import-time sanity check: contiguous, strictly-increasing, callable (`migrate.py:83-128`).
-  - `CURRENT_VERSION` / `AGENT_CURRENT_VERSION` — derived from the two registries; no hand-maintained constants (`migrate.py:131-132`).
-  - `meta_filename()` / `agent_meta_relative_path()` — expose on-disk meta locations (`migrate.py:135-142`).
-  - `_load_version(meta_path)` — reads a version file, returns 0 on missing/malformed (`migrate.py:145-166`).
-  - `_save_version(meta_path, version, domain=...)` — atomic PID-suffixed tmp + `os.replace`; accepts either a concrete meta file or a preset directory for compatibility (`migrate.py:170-196`).
-  - `_run_versioned_migrations(...)` — shared domain runner: version gate, future-version downgrade guard, failure abort, per-process cache (`migrate.py:201-256`).
-  - `run_migrations(presets_path)` — preset-domain entry point (`migrate.py:261-282`).
-  - `run_agent_migrations(working_dir)` — agent-domain entry point, called before `init.json` read/validation (`migrate.py:286-304`).
-  - `reset_process_cache()` — test-only; clears `_migrated` (`migrate.py:309-313`).
-- `m001_context_limit_relocation.py` — preset m001: moves `manifest.context_limit` → `manifest.llm.context_limit` (`m001_context_limit_relocation.py:27`). Uses the shared kernel JSONC reader (`config_resolve.load_jsonc`) so `//` inside strings is preserved (`m001_context_limit_relocation.py:20,51`).
-- `m002_description_object.py` — preset m002: promotes string `description` to `{summary, tier?}`; folds `tags:[tier:N]` into `description.tier`; deletes `tags` (`m002_description_object.py:56`). Uses the shared kernel JSONC reader (`config_resolve.load_jsonc`) (`m002_description_object.py:30,79`); `_extract_tier()` (`m002_description_object.py:39-53`).
-- `agent_m001_init_procedures_override.py` — agent m001: archives non-empty `init.json.procedures` to `<workdir>/system/migrations/init-procedures-<sha256>.md`, removes `procedures` and `procedures_file`, and best-effort logs `init_procedures_override_migrated` before the agent object exists (`agent_m001_init_procedures_override.py:62`).
-- `agent_m002_mcp_launch_args_rewrite.py` — agent m002: rewrites legacy `["-m", "lingtai_<name>"]` MCP launch module args to the canonical `lingtai.mcp_servers.<name>` form in `init.json` / `mcp_registry.jsonl` (`agent_m002_mcp_launch_args_rewrite.py:120`).
-- `agent_m003_init_prompt_contract.py` — agent m003: enforces the init-prompt contract (external prompt surface = `base_prompt`/`covenant`/`comment`). Archives non-empty inline `init.json.substrate`, removes retired `substrate`/`substrate_file`, removes deprecated `brief`/`brief_file` without seeding prompt content, and best-effort logs `init_prompt_contract_migrated` (`agent_m003_init_prompt_contract.py:82`).
+- `__init__.py` — public facade. Re-exports the Port and value objects (`MigrationWorkspacePort`, `MigrationDomain`, `MigrationEntryKind`/`MigrationEntryRef`, `MigrationWorkspaceState`, `MigrationArchiveKind`/`MigrationArchiveResult`, `MigrationWorkspaceError`, `INIT_DOCUMENT_REF`/`MCP_REGISTRY_REF`), the two runners (`run_migrations`/`run_agent_migrations`), `CURRENT_VERSION`/`AGENT_CURRENT_VERSION`, and `meta_filename`.
+- `migrate.py` — Core owner. Defines the technology-neutral domain values and the `MigrationWorkspacePort` (exactly seven abstract families: `inspect`, `enumerate_entries`, `read_entry`, `atomic_replace_entry`, `store_version`, `archive`, `append_audit`). Holds the append-only registries (`_PRESET_MIGRATIONS`, `_AGENT_MIGRATIONS`, back-compat alias `_MIGRATIONS`), the import-time `_validate_registry` (contiguous, strictly-increasing, callable), derived `CURRENT_VERSION`/`AGENT_CURRENT_VERSION`, the shared `_run_versioned_migrations` (inspect → cache gate → availability → forward-only/downgrade guard → per-transform run then `store_version`), and the `_migrated` process cache keyed by the adapter-provided opaque `cache_key`. `meta_filename()` names `_kernel_meta.json` so preset listing hides it. Imports no `os`/`pathlib` and constructs no adapter.
+- `m001_context_limit_relocation.py` — preset m001: moves `manifest.context_limit` → `manifest.llm.context_limit`. Consumes workspace-provided text via `config_resolve.parse_jsonc`, iterates `enumerate_entries()`, and writes back via `atomic_replace_entry`.
+- `m002_description_object.py` — preset m002: promotes string `description` to `{summary, tier?}`; folds `tags:[tier:N]` into `description.tier`; deletes `tags`. Same Port surface; `_extract_tier()` helper.
+- `agent_m001_init_procedures_override.py` — agent m001: archives non-empty `init.json.procedures` via `workspace.archive(INIT_PROCEDURES, ...)`, removes `procedures`/`procedures_file`, replaces `init.json`, and `append_audit`s `init_procedures_override_migrated` (or `…_failed`).
+- `agent_m002_mcp_launch_args_rewrite.py` — agent m002: rewrites legacy `["-m", "lingtai_<name>"]` MCP launch args to `lingtai.mcp_servers.<name>` in the `INIT_DOCUMENT` and `MCP_REGISTRY` entries; `append_audit`s on change.
+- `agent_m003_init_prompt_contract.py` — agent m003: archives non-empty inline `substrate` via `workspace.archive(INIT_SUBSTRATE, ...)`, removes retired `substrate`/`substrate_file` and deprecated `brief`/`brief_file`, replaces `init.json`, and `append_audit`s `init_prompt_contract_migrated`.
 
 ## Connections
 
-- **Inbound — preset domain:** `lingtai.presets.discover_presets_in_dirs` calls `run_migrations(p)` before listing presets (`presets.py:144,157`). `lingtai.presets.load_preset` calls `run_migrations(p.parent)` before reading a file (`presets.py:200,224`). Both paths import `meta_filename()` to skip `_kernel_meta.json` during directory scans (`presets.py:145`).
-- **Inbound — agent domain:** `lingtai.cli.load_init` calls `run_agent_migrations(working_dir)` before it reads `init.json` for process boot (`../lingtai/cli.py:32-39`). `lingtai.Agent._read_init` calls the same entry before live refresh/setup reads `init.json` (`../lingtai/agent.py:920-924`). This keeps boot and refresh on one migration path.
-- **Outbound — preset migrations:** Rewrite preset files in the target directory. Each migration uses atomic tmp + `os.replace` and the shared kernel JSONC parser; no imports from the wrapper package.
-- **Outbound — agent migrations:** Rewrite files under one agent workdir, including `init.json` and archive artifacts under `system/migrations/`. Agent migrations may best-effort append events to `logs/events.jsonl` because they run before `Agent` / `BaseAgent._log` may exist.
-- **Boundary contract:** Public imports come from `lingtai.kernel.migrate`: use `run_migrations` only for preset-library directories; use `run_agent_migrations` for per-agent workdirs/init migrations. Do not add one-off init cleanup in `Agent._read_init()` unless it is merely invoking this versioned runner.
+- **Port implementation:** `src/lingtai/adapters/posix/migration_workspace.py` `PosixMigrationWorkspaceAdapter` implements all seven families for the local filesystem, bound to a `MigrationDomain`/root. It owns availability, entry→path mapping, raw reads, top-level preset candidate enumeration, PID-suffixed atomic replace (including preset m001/m002), `_kernel_meta.json` version files, the `system/migrations/` archive layout + SHA-256 evidence, and the best-effort `logs/events.jsonl` audit append.
+- **JSONC:** preset transforms call `config_resolve.parse_jsonc(text)` (the pure parse extracted from `load_jsonc`) on adapter-provided text, never a path.
+- **Inbound — preset domain:** `lingtai.presets.discover_presets_in_dirs` and `load_preset` receive a preset-library migration runner from their caller and invoke it (per directory / on the file's parent) before listing/reading; the caller builds the adapter.
+- **Inbound — agent domain:** `lingtai.cli.load_init` and `lingtai.Agent._read_init` construct an `AGENT_WORKDIR` workspace and call `run_agent_migrations` before reading/validating `init.json`, keeping boot and refresh on one path.
+- **Boundary contract:** public imports come from `lingtai.kernel.migrate`; use `run_migrations` for preset-library workspaces and `run_agent_migrations` for agent workspaces. Do not add one-off init cleanup in `Agent._read_init()` unless it is merely invoking this versioned runner.
 
 ## Composition
 
 - **Parent:** `src/lingtai/kernel/` (see `src/lingtai/kernel/ANATOMY.md`).
+- **Paired contract:** [`CONTRACT.md`](CONTRACT.md).
+- **Composition roots:** `src/lingtai/cli.py` (`load_init`) and `src/lingtai/agent.py` (`Agent` / module-level `load_preset` + `_run_preset_library_migrations`) construct `PosixMigrationWorkspaceAdapter` instances and inject them into the Core runners; the adapter package is never imported by Core.
 - **Subfolders:** none.
 
 ## State
 
-- **Preset on-disk:** `<presets_dir>/_kernel_meta.json` — `{"version": N}`, persisted after each successful preset migration step (`migrate.py:279-282` via `_save_version`). Created only when at least one preset migration runs.
-- **Agent on-disk:** `<workdir>/system/migrations/_kernel_meta.json` — `{"version": N, "domain": "agent"}`, persisted after each successful agent migration step (`migrate.py:298-301` via `_save_version`). The same directory may hold migration artifacts such as `init-procedures-<sha256>.md`.
-- **Process-level:** `_migrated: set[str]` — `domain:resolved_path` keys already migrated this process. Checked in `_run_versioned_migrations` (`migrate.py:206-208`); populated on no-op/future/current/success paths (`migrate.py:212,225,229,256`).
-- **Ephemeral:** migrations rewrite target files in place (atomic tmp + `os.replace`). No rollback artifacts are left on success except intentional archives.
+- **Preset on-disk:** `<presets_dir>/_kernel_meta.json` — `{"version": N}`, written by the adapter's `store_version` after each successful preset migration step. Created only when at least one preset migration runs.
+- **Agent on-disk:** `<workdir>/system/migrations/_kernel_meta.json` — `{"version": N, "domain": "agent"}`, written after each successful agent migration step. The same directory holds archive artifacts such as `init-procedures-<sha256>.md` / `init-substrate-<sha256>.md`.
+- **Process-level:** `_migrated: set[str]` — adapter-provided `cache_key`s already migrated this process. Populated on no-op/current/future/success paths; a missing preset directory is cached, a workdir with no `init.json` is not.
+- **Ephemeral:** transforms rewrite target documents in place through the adapter (PID-suffixed sibling temp + replace). No rollback artifacts on success except intentional archives.
 
 ## Notes
 
-- **This is the reminder:** if you are about to change an on-disk kernel-owned shape (preset JSON, agent `init.json`, or another durable kernel file), first inspect/extend this migration system. Do not “just add a cleanup helper” in the boot path and call it a migration.
-- **Forward-only:** a meta file with version > current domain version (e.g. from a newer kernel later downgraded) is honored as-is; no migrations run; a warning is logged (`migrate.py:216-226`).
-- **Contiguity enforced per domain:** `_validate_registry` raises `RuntimeError` if a registry has gaps, duplicates, or non-callable entries (`migrate.py:76-126`).
-- **Concurrency safety:** PID-suffixed tmp files prevent parent + avatar processes sharing a target from clobbering each other's in-flight writes (`migrate.py:180`).
-- **Domain separation:** preset migrations should stay generic over preset directories and should not assume an agent workdir. Agent migrations may touch `init.json`, `system/`, `logs/`, and other workdir-local files, but must remain idempotent and version-gated.
-- **Validation ordering:** agent migrations run before `validate_init()` so retired keys can be removed/archived before schema validation; schema should mark migrated legacy keys as known-but-inactive only when stale files might still be observed.
-- **Tests:** runner/domain behavior lives in `tests/test_kernel_migrate.py`; boot/refresh integration behavior lives in `tests/test_deep_refresh.py` and `tests/test_cli.py`.
+- **This is the reminder:** if you are about to change an on-disk kernel-owned shape (preset JSON, agent `init.json`, or another durable kernel file), first inspect/extend this migration Core. Do not “just add a cleanup helper” in the boot path and call it a migration.
+- **Validation ordering:** agent migrations run before `validate_init()` so retired keys can be removed/archived before schema validation.
+- **Behavioral invariants** (forward-only, version-after-success, per-domain contiguity, PID-suffixed concurrency safety) are normative and live in [`CONTRACT.md`](CONTRACT.md).
+- **Tests:** runner/domain behavior and the shared fake/production seven-family conformance suite live in `tests/test_kernel_migrate.py` (with `tests/_migration_workspace_helpers.py`); boot/refresh integration lives in `tests/test_deep_refresh.py` and `tests/test_cli.py`.

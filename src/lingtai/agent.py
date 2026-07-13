@@ -11,10 +11,8 @@ from __future__ import annotations
 
 import contextlib
 import json
-
-from typing import Any
-
 from pathlib import Path
+from typing import Any
 
 from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
@@ -22,6 +20,30 @@ from lingtai.kernel._frontmatter import strip_frontmatter as _strip_frontmatter
 from lingtai.kernel.config import AgentConfig, THINKING_PROVIDERS
 from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 from lingtai.kernel.prompt import build_system_prompt
+
+
+def _run_preset_library_migrations(directory: Path) -> None:
+    """Composition glue: build the preset-library POSIX adapter and run Core (bound Port, never a path)."""
+    from lingtai.adapters.posix.migration_workspace import (
+        PosixMigrationWorkspaceAdapter,
+    )
+    from lingtai.kernel.migrate import MigrationDomain, run_migrations
+
+    run_migrations(
+        PosixMigrationWorkspaceAdapter(MigrationDomain.PRESET_LIBRARY, Path(directory))
+    )
+
+
+def load_preset(name: str, working_dir: "Path | None" = None) -> dict:
+    """Wrapper-level preset-loader: Core ``load_preset`` wired to the POSIX runner.
+    The single shared implementation — CLI, each `Agent`'s ``_preset_loader`` hook,
+    and `Agent`'s own preset paths call it, so nothing else builds a workspace.
+    """
+    from lingtai.kernel.presets import load_preset as _core_load_preset
+
+    return _core_load_preset(
+        name, working_dir=working_dir, run_migrations=_run_preset_library_migrations
+    )
 
 
 def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig:
@@ -164,6 +186,10 @@ class Agent(BaseAgent):
             # Store combo name before super().__init__ (not forwarded to BaseAgent)
             self._combo_name = combo_name
             super().__init__(*args, **kwargs)
+            # Compose the preset-loader hook so daemon/system tools resolve
+            # presets through the wrapper implementation instead of importing
+            # Core load_preset or constructing a migration workspace adapter.
+            self._preset_loader = load_preset
         except Exception:
             if owned_event_journal is not None:
                 with contextlib.suppress(Exception):
@@ -1132,11 +1158,18 @@ class Agent(BaseAgent):
         import json
         from .init_schema import strip_deprecated, validate_init
         from lingtai.kernel.config_resolve import resolve_paths
-        from lingtai.kernel.migrate import run_agent_migrations
+        from lingtai.kernel.migrate import MigrationDomain, run_agent_migrations
+        from lingtai.adapters.posix.migration_workspace import (
+            PosixMigrationWorkspaceAdapter,
+        )
         from .presets import expand_inherit, materialize_active_preset
         from lingtai.tools.registry import CORE_DEFAULTS
 
-        run_agent_migrations(self._working_dir)
+        run_agent_migrations(
+            PosixMigrationWorkspaceAdapter(
+                MigrationDomain.AGENT_WORKDIR, self._working_dir
+            )
+        )
 
         init_path = self._working_dir / "init.json"
         if not init_path.is_file():
@@ -1166,7 +1199,8 @@ class Agent(BaseAgent):
         # the schema validates is the fully-resolved one the agent will run on.
         try:
             materialize_active_preset(data, self._working_dir,
-                                      core_defaults=CORE_DEFAULTS)
+                                      core_defaults=CORE_DEFAULTS,
+                                      load_preset=load_preset)
         except (KeyError, ValueError) as e:
             self._log("refresh_init_error",
                       error=f"preset materialization failed: {e}")
@@ -1221,12 +1255,12 @@ class Agent(BaseAgent):
         """
         import json
         import os
-        from .presets import load_preset
 
         init_path = self._working_dir / "init.json"
         data = json.loads(init_path.read_text(encoding="utf-8"))
         manifest = data.setdefault("manifest", {})
 
+        # Use the wrapper preset-loader so migrations run through the POSIX adapter.
         preset = load_preset(name, working_dir=self._working_dir)
         preset_manifest = preset.get("manifest", {})
 

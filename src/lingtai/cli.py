@@ -35,9 +35,16 @@ def load_init(working_dir: Path) -> dict:
     from lingtai.presets import materialize_active_preset
     from lingtai.tools.registry import CORE_DEFAULTS
 
-    from lingtai.kernel.migrate import run_agent_migrations
+    from lingtai.kernel.migrate import MigrationDomain, run_agent_migrations
+    from lingtai.adapters.posix.migration_workspace import (
+        PosixMigrationWorkspaceAdapter,
+    )
+    from lingtai.agent import load_preset
 
-    run_agent_migrations(working_dir)
+    # CLI is a composition root: build the agent-workdir adapter and inject it.
+    run_agent_migrations(
+        PosixMigrationWorkspaceAdapter(MigrationDomain.AGENT_WORKDIR, working_dir)
+    )
 
     init_path = working_dir / "init.json"
     if not init_path.is_file():
@@ -51,7 +58,8 @@ def load_init(working_dir: Path) -> dict:
         sys.exit(1)
 
     try:
-        materialize_active_preset(data, working_dir, core_defaults=CORE_DEFAULTS)
+        materialize_active_preset(data, working_dir, core_defaults=CORE_DEFAULTS,
+                                  load_preset=load_preset)
     except (KeyError, ValueError) as e:
         print(f"error: failed to materialize active preset: {e}", file=sys.stderr)
         sys.exit(1)
