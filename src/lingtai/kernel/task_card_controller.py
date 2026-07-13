@@ -1,7 +1,7 @@
 """Public ``task_card`` controller — programmable Telegram Task Card watches.
 
-Model-facing controller for the *programmable* slot of the single resident
-Telegram Task Card (Jason #7258/#7259). Telegram never executes code: the agent
+Model-facing controller for the *programmable* slot of Telegram's one tracked
+resident Task Card target (Jason #7258/#7259). Telegram never executes code: the agent
 writes a Python renderer file under its own workdir whose stdout is exactly one
 schema-valid Task Card JSON object; the controller runs it with the runtime
 interpreter under a strict timeout, validates the JSON, and forwards only
@@ -489,7 +489,7 @@ class TaskCardController:
 
     def _resolve_route(self) -> tuple[str, int]:
         """Resolve the current Telegram (account, chat_id) from the automatic
-        driver's turn-local route, so both slots share one resident message."""
+        driver's turn-local route, so both slots share one tracked resident target."""
         ctx = getattr(self._agent, "_telegram_task_card_context", None)
         if (
             isinstance(ctx, dict)

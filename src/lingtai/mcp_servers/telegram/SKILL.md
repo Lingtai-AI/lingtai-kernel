@@ -46,23 +46,25 @@ descriptions; you do not need to call it before every send.
   chat's last message, automatic, programmable, heartbeat, and final frames edit
   that one stable resident message ID in place; an identical Telegram edit is a
   successful no-op. See **TASKCARD STATE** below.
-- The Task Card resides as the last message. When a newer message has arrived
-  below it — your own durable send/reply, or an incoming user message — the addon
-  rotates the card back to the bottom: it sends a fresh Task Card first, then
-  deletes only the exact previous Task Card message. It never deletes a normal
-  message, and it only rotates when it deterministically knows a newer message
-  exists. An unknown latest-message mark keeps a correctly bound resident on
-  the edit-in-place path; malformed or cross-bound resident IDs and transient
-  transport failures fail loud without sending or deleting.
-- The addon also replaces the resident when Telegram explicitly reports the
-  message missing or uneditable. In both the rotation and the replacement paths
-  the new card is sent before the old one is removed, so a failed send never
-  destroys the only card. Automatic and programmable delivery is serialized per
-  account+chat; the exact old card is deleted only after the new resident write is
-  acknowledged. Persistence or stale-delete failures retain the new ID, preserve
-  any old card that is not safe to remove, and surface a partial-failure signal to
-  both automatic and programmable callers. Unknown/transient edit failures retain
-  the resident ID and last delivered slots instead of sending/retracting.
+- The Task Card's tracked resident target is kept as the last message. When a
+  newer message has arrived below it — your own durable send/reply, or an incoming
+  user message — the addon same-content-probes the exact old resident with its last committed
+  render when available. After a cold in-memory start, the exact delete result is
+  itself the existence/removal probe. Unknown/transient probe failures fail closed
+  and send nothing.
+- Before injecting a replacement, the exact old resident must be confirmed deleted
+  or Telegram must explicitly report it already missing. A delete failure blocks
+  the new send. Only then is the fresh card sent and persisted, so tracked rotation
+  never deliberately displays two cards. A later send failure may leave zero and
+  is reported explicitly; a new-id persistence failure retains the in-process id
+  and surfaces a partial durability failure. Malformed/cross-bound resident ids
+  never reach transport, ordinary messages are never deletion candidates, and
+  unknown historical orphan cards are not scanned or deleted. The durable map is
+  one tracked target per account+chat, not proof of global chat-history cardinality.
+- Automatic and programmable delivery shares one per-account+chat transaction.
+  While the tracked resident remains latest it is edited in place; an identical
+  Telegram edit is a successful no-op. An unknown latest-message high-water stays
+  conservative and does not authorize rotation or deletion.
 - For very fast responses (under ~5s), native Telegram typing/👀 presence is
   enough — skip the placeholder.
 

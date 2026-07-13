@@ -75,6 +75,12 @@ _TASK_CARD_EDIT_IMPOSSIBLE_DESCRIPTIONS = frozenset({
     "bad request: message can't be edited",
     "bad request: message can not be edited",
 })
+_TASK_CARD_DELETE_OK = "ok"
+_TASK_CARD_DELETE_MISSING = "missing"
+_TASK_CARD_DELETE_FAILED = "failed"
+_TASK_CARD_DELETE_MISSING_DESCRIPTIONS = frozenset({
+    "bad request: message to delete not found",
+})
 
 # Fixed human warning shown on every Task Card render (running and frozen
 # last-behavior). Jason: never reply to the card; point directly to the local
@@ -424,8 +430,8 @@ class TelegramManager:
         # Duplicate send protection: (account, chat_id, text) → count
         self._last_sent: dict[tuple[str, int, str], int] = {}
         self._dup_free_passes = 2
-        # Resident Task Card composition (Jason #7258/#7259): ONE resident message
-        # per account+chat composed from two independent channels — "automatic"
+        # Resident Task Card composition (Jason #7258/#7259): one tracked resident
+        # target per account+chat, composed from two independent channels — "automatic"
         # (turn-local tool rows) and "programmable" (the public task_card renderer
         # output). Each channel owns only its own frame; updating one never
         # overwrites the other. Keyed by ``"{account}:{chat_id}"``.
@@ -1406,6 +1412,19 @@ class TelegramManager:
             return _TASK_CARD_EDIT_IMPOSSIBLE
         return _TASK_CARD_EDIT_FAILED
 
+    @staticmethod
+    def _task_card_delete_error_outcome(exc: Exception) -> str:
+        """Classify only explicit not-found as an already-absent old card."""
+        detail = str(exc)
+        if not detail.startswith(_TELEGRAM_API_ERROR_PREFIX):
+            return _TASK_CARD_DELETE_FAILED
+        description = " ".join(
+            detail[len(_TELEGRAM_API_ERROR_PREFIX):].split()
+        ).casefold()
+        if description in _TASK_CARD_DELETE_MISSING_DESCRIPTIONS:
+            return _TASK_CARD_DELETE_MISSING
+        return _TASK_CARD_DELETE_FAILED
+
     def _try_update_progress_message(
         self,
         compound_id: str,
@@ -1522,7 +1541,7 @@ class TelegramManager:
         self, account: str, chat_id: int, channel: str, frame: str | None,
         *, error: str, resident_id: str | None = None,
     ) -> dict:
-        """Deliver a proposed ``channel`` frame to the ONE resident card and
+        """Deliver a proposed ``channel`` frame to the tracked resident target and
         commit it to ``_task_card_channels`` **only after** the edit/send/
         replacement succeeds.
 
@@ -1575,8 +1594,8 @@ class TelegramManager:
                 # Unknown, transient, network, and provider failures do not prove
                 # that replacement is safe. Preserve both resident and slot state.
                 return {"status": "error", "error": error}
-            # The provider confirmed that this specific message cannot be edited.
-            # Only this outcome permits send-new/persist-new/delete-stale recovery.
+            # The provider confirmed this exact message is missing/uneditable.
+            # Confirm exact delete-or-missing before any replacement send.
             recovered = self._recover_task_card_by_replacement(
                 account, chat_id, resident_id, text, error=error)
             if recovered.get("status") == "ok":
@@ -1636,9 +1655,10 @@ class TelegramManager:
           - finalize: Freeze the card on its concrete last batch (legacy scalar
                      form marks ✅ TASK CARD · DONE).
 
-        One resident card per account+chat, composed from the "automatic" and
-        "programmable" channels (Jason #7258/#7259); no cumulative history, no
-        continuation/overflow.  Not in SCHEMA — LLM cannot call.
+        One tracked resident target per account+chat, composed from the
+        "automatic" and "programmable" channels (Jason #7258/#7259); unknown
+        historical orphan cards are not enumerated or deleted. Not in SCHEMA —
+        LLM cannot call.
         """
         sub_action = args.get("sub_action", "update")
         channel = args.get("channel", self._TASK_CARD_DEFAULT_CHANNEL)
@@ -1676,14 +1696,17 @@ class TelegramManager:
         place through Telegram and return the SAME compound id, sending nothing
         new and deleting nothing.
 
-        A replacement send/delete happens only as fail-loud last-resort recovery:
-        if there is no persisted resident (first card of the chat), send and persist
-        the first card normally; if Telegram explicitly reports the persisted
-        message edit-impossible (stale/deleted), recovery sends a replacement,
-        persists its id, and best-effort deletes the exact stale id. Identical
-        content is a successful no-op; unknown/transient edit failure returns an
-        error without sending. A failed replacement send preserves the old card and
-        id and deletes nothing; stale delete failure never rolls the new id back.
+        Replacement is fail-loud and old-first: if there is no persisted resident
+        (first card of the chat), send and persist the first card normally. Otherwise
+        the last committed render is used for a same-content existence probe when
+        available; after a cold in-memory start, exact delete is the probe. Before any
+        replacement send, the old id must be confirmed deleted or explicitly missing.
+        Unknown probe or delete failure returns an error without sending. A send
+        failure after a confirmed old delete may leave zero cards and reports that
+        state explicitly.
+        Persistence failure retains the new in-process id and surfaces a partial
+        durability failure. Unknown historical orphan cards are never guessed at or
+        deleted.
         """
         account = args["account"]
         chat_id = args["chat_id"]
@@ -1699,30 +1722,45 @@ class TelegramManager:
     def _recover_task_card_by_replacement(
         self, account: str, chat_id: int, stale_id: str, text: str, *, error: str,
     ) -> dict:
-        """Replace an un-editable resident card, preserving the singleton rules.
+        """Replace a provider-confirmed edit-impossible resident, old-first.
 
-        Shared by ``create`` and ``update`` recovery.  Send the replacement
-        first; only after a successful send persist the new id as the resident
-        and best-effort delete the exact ``stale_id``.  If the replacement send
-        fails, the old card and its persisted id are left untouched and nothing
-        is deleted.  The stale-id delete is fail-open: a failure never rolls the
-        new id back nor blocks the turn.
+        The failed edit is the exact-id existence probe.  Before injecting a new
+        card, confirm that deleting the tracked old resident succeeded or that
+        Telegram explicitly reports it already missing.  Unknown delete failure
+        aborts the send.  A replacement-send failure after a confirmed old delete
+        may therefore leave zero cards, which is reported explicitly rather than
+        manufacturing a duplicate resident.
         """
+        return self._replace_task_card_after_probe(
+            account, chat_id, stale_id, text, error=error
+        )
+
+    def _replace_task_card_after_probe(
+        self, account: str, chat_id: int, stale_id: str, text: str, *, error: str,
+    ) -> dict:
+        """Delete/missing-confirm the exact old resident, then send and persist."""
+        delete_outcome = self._delete_task_card_message_outcome(stale_id)
+        if delete_outcome == _TASK_CARD_DELETE_FAILED:
+            return {
+                "status": "error",
+                "error": error,
+                "stale_delete_failed": True,
+            }
+
         result = self.send_progress_message(account, chat_id, text)
         if result is None:
-            # Replacement send failed: preserve the stale card + id, delete nothing.
-            return {"status": "error", "error": error}
-        new_id = result["message_id"]
-        # Delete is authorized only after the new resident write is acknowledged.
-        # On persistence failure both visible cards remain and the partial outcome
-        # lets the caller adopt the new in-memory id without hiding the failure.
-        persisted = self._set_resident_task_card(account, chat_id, new_id)
-        outcome: dict = {"status": "ok", "message_id": new_id}
-        if not persisted:
-            outcome["resident_persist_failed"] = True
+            outcome: dict = {"status": "error", "error": error}
+            if delete_outcome == _TASK_CARD_DELETE_OK:
+                outcome["old_resident_deleted"] = True
             return outcome
-        if new_id != stale_id and not self._delete_task_card_message(stale_id):
-            outcome["stale_delete_failed"] = True
+
+        new_id = result["message_id"]
+        persisted = self._set_resident_task_card(account, chat_id, new_id)
+        outcome = {"status": "ok", "message_id": new_id}
+        if not persisted:
+            # The new card is the only visible tracked candidate in this process;
+            # surface the durability gap so callers never claim a clean result.
+            outcome["resident_persist_failed"] = True
         return outcome
 
     def _get_last_message_id(self, account: str, chat_id: int) -> int | None:
@@ -1769,45 +1807,30 @@ class TelegramManager:
     def _rotate_task_card_to_latest(
         self, account: str, chat_id: int, stale_id: str, text: str, *, error: str,
     ) -> dict:
-        """Rotate the resident card to the bottom of the chat, create-new-first.
+        """Probe the exact old resident, then delete/missing-confirm before send.
 
-        Ordering is send-new-then-delete-old, never the reverse: if we deleted
-        the old card first and the replacement send then failed, the chat would be
-        left with ZERO cards — the only resident lost. Create-new-first guarantees
-        at least one card exists at every intermediate point.
+        When this process still knows the last committed render, a same-content
+        edit/no-op is the remote existence probe required before injecting another
+        card. A cold process may know only the persisted resident id; in that case
+        the exact delete itself is the existence/removal probe. Its success or
+        explicit not-found must be confirmed before a new send. Unknown probe or
+        delete failures abort without sending.
 
-        Partial-failure states:
-          - replacement send fails -> keep the old resident and its id, delete
-            nothing, return an error (the old card is still editable next turn);
-          - send succeeds, delete of the exact old card fails -> the new card is
-            the tracked latest resident (do NOT roll back to a card that is no
-            longer last), but fail loud: ``stale_delete_failed`` is set and the
-            leftover is logged, never pretending a clean single-card success.
-
-        The new id is persisted as resident BEFORE the delete so a crash between
-        send and delete still leaves the visible new card tracked. Only the exact
-        ``stale_id`` (the owned old resident) is ever deleted — never a normal
-        message.
+        Deleting first intentionally chooses the hard at-most-one direction: a
+        later send failure can leave zero resident cards, reported by
+        ``old_resident_deleted``, but tracked rotation never deliberately creates
+        two visible cards. Unknown historical orphans remain out of scope.
         """
-        result = self.send_progress_message(account, chat_id, text)
-        if result is None:
-            return {"status": "error", "error": error}
-        new_id = result["message_id"]
-        persisted = self._set_resident_task_card(account, chat_id, new_id)
-        outcome: dict = {"status": "ok", "message_id": new_id}
-        if not persisted:
-            # Never delete the only acknowledged resident until the replacement's
-            # resident write is confirmed. The new card remains visible/current.
-            outcome["resident_persist_failed"] = True
-            return outcome
-        if new_id != stale_id:
-            if not self._delete_task_card_message(stale_id):
-                log.warning(
-                    "Task card rotated to latest but the old resident could not "
-                    "be deleted; leftover card remains above the new resident"
-                )
-                outcome["stale_delete_failed"] = True
-        return outcome
+        committed_text = self._compose_channels(account, chat_id)
+        if committed_text:
+            probe_outcome = self._try_update_progress_message(
+                stale_id, committed_text
+            )
+            if probe_outcome == _TASK_CARD_EDIT_FAILED:
+                return {"status": "error", "error": error}
+        return self._replace_task_card_after_probe(
+            account, chat_id, stale_id, text, error=error
+        )
 
     def _get_resident_task_card(self, account: str, chat_id: int) -> str | None:
         """Read the persisted resident card id for (account, chat); fail-open."""
@@ -1820,7 +1843,7 @@ class TelegramManager:
     def _set_resident_task_card(
         self, account: str, chat_id: int, compound_id: str,
     ) -> bool:
-        """Persist the resident id and acknowledge success before any old delete."""
+        """Persist the newly sent resident id and acknowledge durable success."""
         try:
             self._service.get_account(account).set_task_card(chat_id, compound_id)
             return True
@@ -1828,24 +1851,32 @@ class TelegramManager:
             log.warning("Failed to persist resident task card id: %s", e)
             return False
 
-    def _delete_task_card_message(self, compound_id: str) -> bool:
-        """Best-effort delete of the specifically tracked prior card message.
+    def _delete_task_card_message_outcome(self, compound_id: str) -> str:
+        """Delete the exact tracked old card, distinguishing explicit absence.
 
-        Only ever deletes the exact ``account:chat:message`` this id names — it
-        never crosses chats/accounts and never touches an untracked message.  A
-        failure is swallowed (logged content-free) and reported as ``False`` so a
-        caller that must fail loud (rotation-to-latest) can surface the leftover
-        without rolling back the already-delivered new resident.  Returns ``True``
-        when the delete call completed without error.
+        ``missing`` is returned only for Telegram's exact not-found response; all
+        malformed ids, unknown provider responses, network errors, and permission
+        failures are ``failed`` so callers cannot inject a second card on a guess.
         """
         try:
             account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
             acct = self._service.get_account(account)
             acct.delete_message(chat_id=chat_id, message_id=tg_msg_id)
-            return True
-        except Exception as e:
-            log.debug("Failed to delete prior task card message: %s", e)
-            return False
+            return _TASK_CARD_DELETE_OK
+        except Exception as exc:
+            outcome = self._task_card_delete_error_outcome(exc)
+            if outcome == _TASK_CARD_DELETE_MISSING:
+                log.debug("Prior task card was already missing")
+            else:
+                log.debug(
+                    "Failed to delete prior task card message (error_type=%s)",
+                    type(exc).__name__,
+                )
+            return outcome
+
+    def _delete_task_card_message(self, compound_id: str) -> bool:
+        """Compatibility bool for exact tracked-card deletion."""
+        return self._delete_task_card_message_outcome(compound_id) == _TASK_CARD_DELETE_OK
 
     def _task_card_update(self, args: dict) -> dict:
         card_message_id = args["card_message_id"]
@@ -1915,7 +1946,7 @@ class TelegramManager:
         """Update or clear the programmable channel of the resident card.
 
         The programmable channel is the public ``task_card`` controller's output.
-        It shares the ONE resident message and composes alongside the automatic
+        It shares the tracked resident target and composes alongside the automatic
         channel (Jason #7258/#7259): updating it replaces only the programmable
         frame; ``finalize`` clears only the programmable frame and leaves the
         automatic channel — and the message itself — intact.

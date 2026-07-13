@@ -3,13 +3,15 @@
 Behavior B: when the resident Task Card is already the chat's last message the
 addon keeps editing that exact message in place (preserves #891). When a newer
 chat message exists below the resident — an inbound user message or an ordinary
-outbound bot/final reply — the addon rotates: it sends a fresh Task Card so the
-card becomes the last message, then deletes only the exact old resident card.
+outbound bot/final reply — the addon same-content-probes the exact old resident when its last committed
+render is known, then confirms deletion/absence before sending a fresh Task Card
+at the bottom. On a cold in-memory state, exact delete success/not-found is itself
+the existence/removal probe.
 
-Sequencing is create-new-first, delete-old-after: the addon never destroys the
-only resident card before a replacement is confirmed sent, so a partial failure
-can never leave the chat with zero cards. Unknown/malformed latest-message state
-and transient failures never authorize a delete.
+Sequencing is probe-old (when possible), delete-old, send-new. This prevents
+tracked rotation from intentionally displaying two cards; a later send failure
+may leave zero and is reported explicitly. Unknown/malformed latest-message state
+and transient probe/delete failures never authorize a new send or deletion guess.
 """
 
 from __future__ import annotations
@@ -75,6 +77,8 @@ class FakeAccount:
         self.calls.append(("edit", chat_id, message_id, text))
         if self.edit_error is not None:
             raise self.edit_error
+        if message_id not in self.messages:
+            raise RuntimeError("Telegram API error: Bad Request: message to edit not found")
         self.messages[message_id] = text
         return {"ok": True}
 
@@ -82,7 +86,9 @@ class FakeAccount:
         self.calls.append(("delete", chat_id, message_id))
         if self.delete_error is not None:
             raise self.delete_error
-        self.messages.pop(message_id, None)
+        if message_id not in self.messages:
+            raise RuntimeError("Telegram API error: Bad Request: message to delete not found")
+        self.messages.pop(message_id)
         return {"ok": True}
 
     def get_task_card(self, chat_id):
@@ -169,6 +175,7 @@ def test_newer_user_message_rotates_and_deletes_only_old(tmp_path):
     manager, account = _manager(tmp_path)
     created = _automatic(manager, "create", reasoning="first")
     assert created["message_id"] == "mybot:55:100"
+    committed_text = account.messages[100]
 
     # A user message arrives below the resident card.
     account.observe_incoming(55, 200)
@@ -176,16 +183,68 @@ def test_newer_user_message_rotates_and_deletes_only_old(tmp_path):
     rotated = _automatic(
         manager, "update", card_message_id="mybot:55:100", reasoning="second")
 
-    # New card sent (id 201, since 200 was only observed, not sent), old deleted.
+    # Exact old is probed, deleted, then the new card is sent (id 201).
     assert rotated["status"] == "ok"
     assert rotated["message_id"] == "mybot:55:201"
-    assert _calls(account, "send") and account.calls[-1][0] == "delete"
-    assert account.calls[-1] == ("delete", 55, 100)
-    # Exactly one delete, of exactly the old resident.
+    rotation_calls = account.calls[1:]
+    assert [call[0] for call in rotation_calls] == ["edit", "delete", "send"]
+    assert rotation_calls[0][1:3] == (55, 100)
+    assert rotation_calls[0][3] == committed_text
+    assert "first" in rotation_calls[0][3]
+    assert "second" not in rotation_calls[0][3]
+    assert rotation_calls[1] == ("delete", 55, 100)
     assert _calls(account, "delete") == [("delete", 55, 100)]
     assert account.get_task_card(55) == "mybot:55:201"
     # The new card is now the latest message.
     assert account.get_last_message_id(55) == 201
+
+
+def test_superseded_missing_old_is_confirmed_before_new_send(tmp_path):
+    manager, account = _manager(tmp_path)
+    _automatic(manager, "create", reasoning="first")  # mybot:55:100
+    account.messages.pop(100)  # deleted outside this process; durable id is stale
+    account.observe_incoming(55, 200)
+
+    result = _automatic(
+        manager, "update", card_message_id="mybot:55:100", reasoning="second")
+
+    assert result == {"status": "ok", "message_id": "mybot:55:201"}
+    assert [call[0] for call in account.calls[1:]] == ["edit", "delete", "send"]
+    assert set(account.messages) == {201}
+
+
+def test_superseded_transient_probe_failure_blocks_delete_and_send(tmp_path):
+    manager, account = _manager(tmp_path)
+    _automatic(manager, "create", reasoning="first")  # mybot:55:100
+    account.observe_incoming(55, 200)
+    account.edit_error = RuntimeError("connection reset")
+
+    result = _automatic(
+        manager, "update", card_message_id="mybot:55:100", reasoning="second")
+
+    assert result["status"] == "error"
+    assert len(_calls(account, "send")) == 1
+    assert not _calls(account, "delete")
+    assert account.calls[-1][0] == "edit"
+    assert set(account.messages) == {100}
+
+
+def test_cold_state_uses_exact_delete_as_existence_probe(tmp_path):
+    manager, account = _manager(tmp_path)
+    account.messages[100] = "persisted card from the previous process"
+    account.resident[55] = "mybot:55:100"
+    account.next_id = 101
+    account._note(55, 100)
+    account.observe_incoming(55, 200)
+
+    result = _automatic(
+        manager, "update", card_message_id="mybot:55:100", reasoning="second")
+
+    assert result == {"status": "ok", "message_id": "mybot:55:201"}
+    assert [call[0] for call in account.calls] == ["delete", "send"]
+    assert not _calls(account, "edit")
+    assert account.get_task_card(55) == "mybot:55:201"
+    assert set(account.messages) == {201}
 
 
 # ---------------------------------------------------------------------------
@@ -211,9 +270,9 @@ def test_newer_bot_final_reply_rotates_on_finalize(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 4. create-new failure -> do NOT delete old card
+# 4. send-new failure after confirmed delete -> explicit zero-card outcome
 # ---------------------------------------------------------------------------
-def test_create_new_failure_preserves_old_card(tmp_path):
+def test_create_new_failure_reports_deleted_old_card(tmp_path):
     manager, account = _manager(tmp_path)
     _automatic(manager, "create", reasoning="first")  # mybot:55:100
     account.observe_incoming(55, 200)
@@ -223,31 +282,35 @@ def test_create_new_failure_preserves_old_card(tmp_path):
         manager, "update", card_message_id="mybot:55:100", reasoning="second")
 
     assert result["status"] == "error"
-    # The only resident card is never destroyed when the replacement send fails.
-    assert not _calls(account, "delete")
+    assert result.get("old_resident_deleted") is True
+    assert _calls(account, "delete") == [("delete", 55, 100)]
+    assert len(_calls(account, "send")) == 1  # only the initial card succeeded
+    assert account.calls[-1] == ("delete", 55, 100)
+    assert 100 not in account.messages
+    # Durable state is stale but safe: the next attempt must probe it as missing.
     assert account.get_task_card(55) == "mybot:55:100"
 
 
 # ---------------------------------------------------------------------------
-# 5. delete-old failure after successful creation -> fail loud, no rollback
+# 5. delete-old failure -> fail closed and never send a second card
 # ---------------------------------------------------------------------------
-def test_delete_old_failure_after_creation_fails_loud(tmp_path):
+def test_delete_old_failure_blocks_new_card(tmp_path):
     manager, account = _manager(tmp_path)
     _automatic(manager, "create", reasoning="first")  # mybot:55:100
+    committed_text = account.messages[100]
     account.observe_incoming(55, 200)
 
     account.delete_error = RuntimeError("bad request: message can't be deleted")
     result = _automatic(
         manager, "update", card_message_id="mybot:55:100", reasoning="second")
 
-    # The new latest card was delivered and tracked — do NOT roll back to a card
-    # that is no longer the last message — but the stale-delete failure is loud.
-    assert result["status"] == "ok"
-    assert result["message_id"] == "mybot:55:201"
+    assert result["status"] == "error"
     assert result.get("stale_delete_failed") is True
-    assert account.get_task_card(55) == "mybot:55:201"
-    # The delete of exactly the old resident was attempted.
-    assert ("delete", 55, 100) in account.calls
+    assert account.get_task_card(55) == "mybot:55:100"
+    assert len(_calls(account, "send")) == 1
+    assert [call[0] for call in account.calls[-2:]] == ["edit", "delete"]
+    assert account.calls[-2][3] == committed_text
+    assert account.messages == {100: committed_text}
 
 
 # ---------------------------------------------------------------------------
@@ -372,9 +435,9 @@ def test_malformed_resident_id_never_deletes(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 12. resident persistence must be acknowledged before old-card deletion
+# 12. persistence failure is explicit after old-first replacement
 # ---------------------------------------------------------------------------
-def test_persistence_failure_never_deletes_acknowledged_old_resident(tmp_path):
+def test_persistence_failure_keeps_only_new_visible_card_and_fails_loud(tmp_path):
     manager, account = _manager(tmp_path)
     _automatic(manager, "create", reasoning="first")  # mybot:55:100
     account.observe_incoming(55, 200)
@@ -389,7 +452,8 @@ def test_persistence_failure_never_deletes_acknowledged_old_resident(tmp_path):
         "resident_persist_failed": True,
     }
     assert account.resident[55] == "mybot:55:201"  # in-memory current
-    assert not _calls(account, "delete")            # old visible card retained
+    assert _calls(account, "delete") == [("delete", 55, 100)]
+    assert set(account.messages) == {201}
     assert len(_calls(account, "send")) == 2
 
 
