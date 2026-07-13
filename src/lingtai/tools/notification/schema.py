@@ -1,12 +1,10 @@
 """Schema — tool registration for the standalone ``notification`` tool.
 
-The notification tool exposes only the notification-facing verbs: ``check``
-plus the three atomic dismiss verbs (``dismiss_channel``, ``dismiss_event``,
-``dismiss_ref``).  ``summarize`` is *not* here — it remains a ``system`` action.
-
-Where a parameter is shared in spirit with the ``system`` tool (``channel``,
-``force``, ``event_id``, ``ref_id``, ``reason``), a notification-owned i18n
-string is used so the notification tool documents its own behavior.
+The notification tool exposes ``check``, the three atomic dismiss verbs
+(``dismiss_channel``, ``dismiss_event``, ``dismiss_ref``), and the strictly
+read-only progressive-disclosure action ``manual``. ``summarize`` is *not* here
+— it remains a ``system`` action. Schema prose is canonical English; ``lang`` is
+accepted for source compatibility and does not select localized aliases.
 """
 from __future__ import annotations
 
@@ -27,7 +25,7 @@ LARGE_RESULT_FORCE_NOTE = (
 
 
 def get_description(lang: str = "en") -> str:
-    return "Notification surface — read and clear the agent's notification channels. Self-actions, no permissions needed.\n\nThis is the only tool that exposes notification verbs; the system tool no longer offers notification or dismiss aliases.\n\nUse check to read all channels, dismiss_channel to clear one channel whole, and dismiss_event / dismiss_ref to remove a single system event by event_id / ref_id. To compress a large tool result, use system(action=summarize). See system-manual / notification-manual."
+    return "Notification surface — read and clear the agent's notification channels. Self-actions, no permissions needed.\n\nThis is the only tool that exposes notification verbs; the system tool no longer offers notification or dismiss aliases.\n\nUse check to read all channels, dismiss_channel to clear one channel whole, and dismiss_event / dismiss_ref to remove a single system event by event_id / ref_id. Use notification(action='manual') to return the installed notification manual; this action is strictly read-only and does not change notification state. To compress a large tool result, use system(action=summarize)."
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -36,8 +34,8 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["check", "dismiss_channel", "dismiss_event", "dismiss_ref"],
-                "description": "check: read all notification channels. Returns a placeholder; the live payload is stamped onto this same result under `_meta.notifications` and `_meta.notification_guidance`. Replace-only — do not call voluntarily after handling; dismiss instead. Prefer coalescing the dismiss with other tool work you already need this turn when safe; dismiss alone only when there is no useful coalesced work or safety requires it.\n\ndismiss_channel: clear one notification channel whole (channel=<name>). Use producer-specific verbs first (for email, use email(read/dismiss)); guarded channels require force=true only for stale mirrors. Rejects event_id/ref_id — use dismiss_event/dismiss_ref for those.\n\ndismiss_event: remove a single system event by event_id from .notification/system.json (channel defaults to 'system').\n\ndismiss_ref: remove system event(s) by ref_id from .notification/system.json (channel defaults to 'system')." + "\n\n" + LARGE_RESULT_DISMISS_ACTION_NOTE,
+                "enum": ["check", "dismiss_channel", "dismiss_event", "dismiss_ref", "manual"],
+                "description": "check: read all notification channels. Returns a placeholder; the live payload is stamped onto this same result under `_meta.notifications` and `_meta.notification_guidance`. Replace-only — do not call voluntarily after handling; dismiss instead. Prefer coalescing the dismiss with other tool work you already need this turn when safe; dismiss alone only when there is no useful coalesced work or safety requires it.\n\ndismiss_channel: clear one notification channel whole (channel=<name>). Use producer-specific verbs first (for email, use email(read/dismiss)); guarded channels require force=true only for stale mirrors. Rejects event_id/ref_id — use dismiss_event/dismiss_ref for those.\n\ndismiss_event: remove a single system event by event_id from .notification/system.json (channel defaults to 'system').\n\ndismiss_ref: remove system event(s) by ref_id from .notification/system.json (channel defaults to 'system').\n\nmanual: call notification(action='manual') to return the installed notification-manual skill body. This action is strictly read-only and does not read or change notification state." + "\n\n" + LARGE_RESULT_DISMISS_ACTION_NOTE,
             },
             "channel": {
                 "type": "string",

@@ -68,6 +68,12 @@ _BACKEND_MANUAL = (
     "lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/{backend}/SKILL.md"
 )
 
+_NOTIFICATION_MANUAL_FILES = (
+    "lingtai/intrinsic_skills/notification-manual/SKILL.md",
+    "lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md",
+    "lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md",
+)
+
 # The three per-tool glossary languages that each package must ship.
 _GLOSSARY_LANGS = ("en", "zh", "wen")
 
@@ -181,6 +187,11 @@ def test_wheel_keeps_daemon_backend_manuals(wheel_entries: set[str]):
         if _BACKEND_MANUAL.format(backend=backend) not in wheel_entries
     ]
     assert not missing, "daemon backend manuals missing from wheel: %r" % missing
+
+
+def test_wheel_ships_first_level_notification_manual(wheel_entries: set[str]):
+    missing = [path for path in _NOTIFICATION_MANUAL_FILES if path not in wheel_entries]
+    assert not missing, "notification manual files missing from wheel: %r" % missing
 
 
 # ---------------------------------------------------------------------------

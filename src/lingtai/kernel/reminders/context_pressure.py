@@ -471,3 +471,28 @@ def render_forced_rebuild_warning(
         f"is still above the {recovery_text} recovery target, tend durable stores and "
         f"molt. See meta_guidance, substrate, and procedures."
     )
+
+
+def render_forced_rebuild_failed_warning(usage: float) -> str:
+    """Render the persistent post-forced-rebuild hard-boundary overflow warning.
+
+    Distinct from :func:`render_forced_rebuild_warning` (the one-shot channel-A
+    reconstruction warning describing a before→after rebuild): this is the fixed
+    human-authored sentence (Jason, 2026-07-12) that stays on EVERY
+    ``_meta.tool_meta.context.molt`` result while the automatic one-shot forced
+    provider-context rebuild has already fired for the current ``>= 1.0`` episode
+    and the post-rebuild provider context is STILL strictly above the full-context
+    boundary — i.e. the forced rebuild failed to clear the overflow.
+
+    The wording is a verbatim contract and MUST NOT be paraphrased; only the
+    percentage is interpolated. Unlike the sentence-prose renderers above (which
+    drop a trailing ``.0`` via :func:`_format_ratio_percent`), the percentage here
+    is pinned to exactly ONE decimal place — e.g. ``1.012 -> "(101.2 %)"`` and
+    ``1.05 -> "(105.0 %)"`` — matching the current context prose the maintainer
+    specified. Only ever called with a strictly-``> 1.0`` usage (the
+    ``context_overflow_status`` gate guarantees it).
+    """
+    return (
+        "100% context Forced Rebuild Failed to Bring Usage Below 100%. Context overflowed!! "
+        f"({float(usage) * 100:.1f} %) Molt IMMEDIATELY!!"
+    )

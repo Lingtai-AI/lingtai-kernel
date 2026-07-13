@@ -1,7 +1,7 @@
 """Narrow host-agent interface for the programmable Telegram Task Card controller.
 
-The controller drives the *programmable* slot of the single resident Telegram
-Task Card, but it must not import or name the concrete outer ``Agent``
+The controller drives the *programmable* slot of Telegram's one tracked resident
+Task Card target, but it must not import or name the concrete outer ``Agent``
 (``src/lingtai/agent.py``) or the kernel ``BaseAgent``. This ``Protocol`` is the
 only surface the controller depends on; the real agent satisfies it
 *structurally*, so the unit stays decoupled from the composition root and is
@@ -35,7 +35,7 @@ class TelegramTaskCardAgent(Protocol):
     _mcp_clients_by_tool: dict[str, Any]
     #: Turn-local automatic-driver route (``{"account": str, "chat_id": int, ...}``)
     #: or ``None`` when no Telegram turn is active. Both slots share this route so
-    #: they compose into one resident message.
+    #: they compose into the one tracked resident target.
     _telegram_task_card_context: dict | None
     #: Set at agent teardown so watcher loops exit promptly (optional).
     _shutdown: threading.Event

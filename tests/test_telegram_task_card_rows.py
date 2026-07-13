@@ -25,9 +25,9 @@ def _fmt(rows):
 # ---------------------------------------------------------------------------
 
 def test_footer_constant_exact_text():
-    assert "⚠️ Progress only — don't reply to this Task Card." in _TASK_CARD_FOOTER
-    # Also redirects the human to the real conversation.
-    assert "reply" in _TASK_CARD_FOOTER.lower()
+    assert _TASK_CARD_FOOTER == (
+        "Don't reply to this Task Card. Use /taskcard on|off to toggle."
+    )
 
 
 def test_running_render_has_footer():

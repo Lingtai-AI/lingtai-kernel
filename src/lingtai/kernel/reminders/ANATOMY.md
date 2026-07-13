@@ -73,10 +73,18 @@ which values applied and tests can inject variants.
 ## File layout
 
 - `context_pressure.py` — `ContextPressureReminder` plus the pure prose
-  renderers `render_current_molt_context(...)` and `render_reconstruction_molt(...)`.
-  The renderers are the single source of truth for the wording and are shared by
-  the class methods and by `meta_block`'s compatibility fallback (see below).
-- `__init__.py` — re-exports `ContextPressureReminder` and the two renderers.
+  renderers `render_current_molt_context(...)`, `render_reconstruction_molt(...)`,
+  `render_forced_rebuild_warning(...)` (the one-shot channel-A reconstruction
+  warning), and `render_forced_rebuild_failed_warning(usage)` (the persistent
+  post-forced-rebuild overflow line — the fixed human-authored `100% context
+  Forced Rebuilt Failed. … (xxx %) Molt IMMEDIATELY!!` sentence, one-decimal
+  percentage). The renderers are the single source of truth for the wording and are
+  shared by the class methods and by `meta_block` (its compatibility fallback and
+  the overflow-warning merge, see below).
+- `__init__.py` — re-exports `ContextPressureReminder`, the emission descriptors,
+  and the two molt renderers (`render_current_molt_context` /
+  `render_reconstruction_molt`); the two forced-rebuild renderers are imported
+  directly from `context_pressure` by `meta_block`.
 - `ANATOMY.md` — this file.
 
 ## Connections
@@ -105,6 +113,16 @@ which values applied and tests can inject variants.
   `build_reconstruction_tool_meta` keeps the event assembly (molt text stays on
   `tool_meta.reconstruction.molt`). Both emission events fire only on a real
   attach.
+- **Persistent forced-rebuild overflow warning** — the Codex adapter
+  (`CodexResponsesSession`) owns a one-shot forced-rebuild latch + post-rebuild
+  verification and exposes `context_overflow_status()` (default `None` on the
+  `ChatSession` base, forwarded through the gate proxy).
+  `meta_block.build_context_overflow_warning` reads it via `session.chat` and, when
+  active, renders `render_forced_rebuild_failed_warning(usage)` and merges the fixed
+  sentence into the SAME permanent `tool_meta.context.molt` channel (its own
+  newline, preserving any coexisting sustained-pressure / cache-miss lines). This is
+  a current-state warning, not an event route — it attaches no
+  `_tool_meta_context_event`.
 - `tool_executor.py` — `ToolExecutor._attach_tool_block` promotes the transit
   keys into permanent `tool_meta.context` and emits both reminder events via
   `self._log` (best-effort, never breaks a turn). The current-molt event is
@@ -124,6 +142,13 @@ which values applied and tests can inject variants.
   old immediate `>= 0.60` trip-wire stays retired.
 - The reconstruction event is one-shot permanent evidence (channel A) at
   `tool_meta.reconstruction`, distinct from the current-state reminder (channel B).
+- The persistent `Forced Rebuilt Failed` overflow warning is a current-state line
+  on `tool_meta.context.molt`, gated by the adapter's one-shot forced-rebuild latch
+  + post-rebuild verification (active only when the forced rebuild fired, its first
+  post-rebuild provider response was observed, and current provider usage is
+  strictly `> 1.0`; exactly `1.0` carries no warning). It coexists on its own
+  newline with the sustained-pressure and cache-miss-budget molt lines and emits no
+  event.
 - Reminder prose and thresholds are unchanged. The one `_meta` contract change:
   the current sustained-pressure reminder moved from `agent_meta.context.molt`
   to PERMANENT `tool_meta.context.molt` (so it persists on every result while

@@ -388,6 +388,8 @@ def test_hook_second_tool_edits_same_card():
     assert client.calls[0][0] == _TASK_CARD_TOOL  # private tool name
     assert client.calls[0][1]["sub_action"] == "update"
     assert "action" not in client.calls[0][1]  # server forces the action
+    assert client.calls[0][1]["account"] == "mybot"
+    assert client.calls[0][1]["chat_id"] == 123
     assert client.calls[0][1]["card_message_id"] == "mybot:123:789"
     rows = client.calls[0][1]["rows"]
     assert rows == [{
@@ -599,6 +601,70 @@ def test_create_raised_exception_is_observable_and_fail_open(caplog):
     assert "RuntimeError" in blob
     assert "Simulated MCP failure" not in blob
     assert "secret-42" not in blob
+
+
+
+
+def test_update_stale_delete_error_keeps_old_id_and_warns(caplog):
+    """A stale-delete failure is pre-send: no replacement id can be adopted."""
+    client = _FakeMCPClient({_TASK_CARD_TOOL: {
+        "status": "error",
+        "stale_delete_failed": True,
+    }})
+    agent = _agent_with_card_context(client, card_message_id="mybot:123:789")
+    with caplog.at_level("WARNING", logger="lingtai"):
+        agent._on_tool_pre_dispatch_hook(
+            "read", {"_reasoning": "stale-secret", "action": ""},
+            tool_call_id="c2",
+        )
+    assert agent._telegram_task_card_context["card_message_id"] == "mybot:123:789"
+    blob = _warning_blob(caplog)
+    assert blob
+    assert "partial" not in blob
+    assert "stale-secret" not in blob
+    assert "123" not in blob
+
+
+def test_update_rejects_impossible_stale_delete_success_payload(caplog):
+    """A contradictory stale-delete payload cannot authorize id adoption."""
+    client = _FakeMCPClient({_TASK_CARD_TOOL: {
+        "status": "ok",
+        "message_id": "mybot:123:999",
+        "stale_delete_failed": True,
+    }})
+    agent = _agent_with_card_context(client, card_message_id="mybot:123:789")
+    with caplog.at_level("WARNING", logger="lingtai"):
+        agent._on_tool_pre_dispatch_hook(
+            "read", {"_reasoning": "impossible-secret", "action": ""},
+            tool_call_id="c2",
+        )
+    assert agent._telegram_task_card_context["card_message_id"] == "mybot:123:789"
+    blob = _warning_blob(caplog)
+    assert blob
+    assert "partial" not in blob
+    assert "impossible-secret" not in blob
+    assert "123" not in blob
+
+
+def test_update_resident_persist_partial_adopts_new_id_and_warns(caplog):
+    """Only post-send persistence failure is a successful partial delivery."""
+    client = _FakeMCPClient({_TASK_CARD_TOOL: {
+        "status": "ok",
+        "message_id": "mybot:123:999",
+        "resident_persist_failed": True,
+    }})
+    agent = _agent_with_card_context(client, card_message_id="mybot:123:789")
+    with caplog.at_level("WARNING", logger="lingtai"):
+        agent._on_tool_pre_dispatch_hook(
+            "read", {"_reasoning": "partial-secret", "action": ""},
+            tool_call_id="c2",
+        )
+    assert agent._telegram_task_card_context["card_message_id"] == "mybot:123:999"
+    blob = _warning_blob(caplog)
+    assert "partial" in blob
+    assert "resident_persist_failed" in blob
+    assert "partial-secret" not in blob
+    assert "123" not in blob
 
 
 def test_create_success_result_still_sets_card_id(caplog):

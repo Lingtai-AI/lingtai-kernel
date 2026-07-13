@@ -460,3 +460,28 @@ def test_reconstruction_molt_emission_descriptor_missing_before_is_none():
     payload = reconstruction_molt_emission_descriptor(event, message="t")["payload"]
     assert payload["before_usage"] is None
     assert payload["after_source"] is None
+
+
+# ---------------------------------------------------------------------------
+# Persistent post-forced-rebuild overflow warning (Jason, 2026-07-12). The exact
+# sentence is a fixed human contract; only the percentage is interpolated, pinned
+# to ONE decimal (e.g. 1.012 -> "(101.2 %)"), even for round percentages.
+# ---------------------------------------------------------------------------
+
+
+def test_render_forced_rebuild_failed_warning_exact_wording_one_decimal():
+    from lingtai.kernel.reminders.context_pressure import (
+        render_forced_rebuild_failed_warning,
+    )
+
+    assert render_forced_rebuild_failed_warning(1.012) == (
+        "100% context Forced Rebuild Failed to Bring Usage Below 100%. Context overflowed!! "
+        "(101.2 %) Molt IMMEDIATELY!!"
+    )
+    # One decimal is pinned even when the percentage is round.
+    assert render_forced_rebuild_failed_warning(1.05) == (
+        "100% context Forced Rebuild Failed to Bring Usage Below 100%. Context overflowed!! "
+        "(105.0 %) Molt IMMEDIATELY!!"
+    )
+    # A hair over the boundary still renders one decimal.
+    assert "(100.1 %)" in render_forced_rebuild_failed_warning(1.001)

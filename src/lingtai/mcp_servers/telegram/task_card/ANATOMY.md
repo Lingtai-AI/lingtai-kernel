@@ -20,29 +20,38 @@ maintenance: |
 ---
 # Telegram Programmable Task Card Anatomy
 
-The Telegram-owned unit that drives the *programmable* slot of the single
-resident Telegram Task Card. The model-facing `task_card` tool runs an
+The Telegram-owned unit that drives the *programmable* slot of Telegram's one
+tracked resident Task Card target. The model-facing `task_card` tool runs an
 agent-supplied Python renderer and projects its validated output onto the
 Telegram-owned reverse channel; `TelegramManager` remains the single
-render/compose/persistence owner. Normative promises live in the paired
-[`CONTRACT.md`](CONTRACT.md).
+render/compose/persistence/transport owner (including the hard-at-most-one /
+last-message resident transport) and this unit only normalizes those outcomes.
+Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 
 ## Components
 
 - `get_schema` / `get_description` — the `task_card` tool schema (`start` /
   `inspect` / `retry` / `stop`) and the description that routes to the manual
-  (`controller.py:48`, `controller.py:89`).
+  (`controller.py:59`, `controller.py:100`).
 - `TaskCardController` — thin Core: dispatch, synchronous first frame, watch
-  registry, fail-loud/recovery wakes (`controller.py:152`). Key methods:
-  `handle` (`controller.py:161`), `_start` (`controller.py:180`), `_run_renderer`
-  (`controller.py:358`), `_validate_frame` (`controller.py:384`), `_project`
-  (`controller.py:431`), `_validate_renderer_path` (`controller.py:456`),
-  `_resolve_route` (`controller.py:495`), `shutdown_for_agent_stop`
-  (`controller.py:520`).
-- `_Watch` — per-watch in-memory state: thread, last-valid frame, deduped
-  error/epoch bookkeeping (`controller.py:107`).
+  registry, fail-loud/recovery wakes (`controller.py:179`). Key methods:
+  `handle` (`controller.py:188`), `_start` (`controller.py:213`), `_inspect`
+  (`controller.py:246`), `_run_renderer` (`controller.py:562`), `_validate_frame`
+  (`controller.py:588`), `_project` (`controller.py:635`),
+  `_validate_renderer_path` (`controller.py:674`), `_resolve_route`
+  (`controller.py:713`), `shutdown_for_agent_stop` (`controller.py:738`).
+- Stop lifecycle (never finalize/remove/`stopped` while the watcher thread is
+  alive): `_stop` (`controller.py:266`), the post-projection late-`update` guard
+  and compensation in `_tick` (`controller.py:391`), and
+  `_compensate_stop_finalize` (`controller.py:442`) with the `finalized`
+  watcher↔public-stop handshake. `_project` (`controller.py:635`) also normalizes
+  the manager's `resident_persist_failed` (→ observable partial) and pre-send
+  `stale_delete_failed` (→ error, no adopted id) outcomes.
+- `_Watch` — per-watch in-memory state: thread, last-valid frame + timestamp,
+  sticky `stopping`, `finalized` handshake flag, deduped error/epoch bookkeeping
+  (`controller.py:118`).
 - `setup(agent)` — registers the `task_card` tool with `glossary_package=None`
-  (`controller.py:531`).
+  (`controller.py:749`).
 - `TelegramTaskCardAgent` — the narrow host Protocol the controller depends on
   instead of the concrete `Agent` (`interface.py:23`).
 
@@ -57,7 +66,13 @@ render/compose/persistence owner. Normative promises live in the paired
   `agent._mcp_clients_by_tool`, consumed by
   `TelegramManager._handle_task_card_update` (`src/lingtai/mcp_servers/telegram/manager.py`).
 - Route: `_resolve_route` reads the automatic driver's turn-local
-  `agent._telegram_task_card_context` so both slots share one resident message.
+  `agent._telegram_task_card_context` so both slots resolve to the one tracked
+  resident target for that account+chat.
+- Transport ownership: the manager (`_deliver_channel_frame_locked`,
+  `_rotate_task_card_to_latest`, `_replace_task_card_after_probe`) owns the
+  hard-at-most-one / last-message resident transport; `_project` only reads its
+  normalized `{status}`/`partial`/`resident_persist_failed`/`stale_delete_failed`
+  outcome.
 - Fail-loud: after-handle failures call `agent._enqueue_system_notification`.
 
 ## Composition

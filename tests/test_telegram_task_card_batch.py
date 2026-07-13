@@ -642,6 +642,8 @@ def test_teardown_finalizes_frozen_rows_not_generic_done():
 
     finals = [c for c in client.calls if c[1].get("sub_action") == "finalize"]
     assert len(finals) == 1
+    assert finals[0][1]["account"] == "mybot"
+    assert finals[0][1]["chat_id"] == 123
     rows = finals[0][1]["rows"]
     # Concrete last-behavior row, frozen, no generic DONE subject; the immutable
     # captured start stamp survives the freeze.

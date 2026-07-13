@@ -7,16 +7,16 @@ description: |
   Task Card JSON object. Covers the renderer contract, a safe runnable example,
   the start | inspect | retry | stop lifecycle, path/timeout/validation rules,
   fail-loud error wakes, and how the /taskcard toggle interacts.
-last_changed_at: "2026-07-12T23:10:00-07:00"
+last_changed_at: "2026-07-12T23:55:00-07:00"
 ---
 
 # Programmable Telegram Task Card — manual (what / how / why)
 
-The `task_card` tool lets you attach your own live view to the single resident
-Telegram Task Card. You write a small Python **renderer** file under your working
+The `task_card` tool lets you attach your own live view to Telegram's one tracked
+resident Task Card. You write a small Python **renderer** file under your working
 directory; the controller runs it on an interval and projects its output onto the
 Task Card's **programmable** slot, side by side with the automatic tool-activity
-slot. One resident message carries both.
+slot. The one tracked resident target carries both slots.
 
 ## WHAT it is
 
@@ -148,9 +148,12 @@ rejected; retry `stop`). Both are retryable.
   as a normal subprocess and forwards only a **validated data object** to Telegram
   over the private reverse channel. Telegram renders text, never executes a
   function. This keeps a clear trust boundary: the transport sees data, not code.
-- **One owner, one resident message.** `TelegramManager` remains the single
-  render / compose / persistence owner. The controller is a thin driver; there is
-  no competing rendering system and no cross-channel abstraction.
+- **One owner, one tracked resident target.** `TelegramManager` remains the single
+  render / compose / persistence / transport owner, including the hard-at-most-one
+  resident that stays at the chat's last message (it rotates old-first when a newer
+  message appears below it, and can briefly leave zero cards rather than two). The
+  controller is a thin driver; there is no competing rendering system and no
+  cross-channel abstraction.
 - **Synchronous first frame, fail-loud after.** A bad renderer fails *before* you
   get a handle, so a broken watch never lingers. After the handle exists,
   failures are surfaced as deduped wakes rather than silently dropping the card,

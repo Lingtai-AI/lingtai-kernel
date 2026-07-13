@@ -2492,10 +2492,14 @@ class BaseAgent:
                 self._log_task_card_reverse_failure("create", "batch", result)
             else:
                 ctx["card_message_id"] = message_id
+            if self._task_card_result_partial_failure(result):
+                self._log_task_card_reverse_partial("create", "batch", result)
         else:
             try:
                 result = ctx["mcp_client"].call_tool(_TASK_CARD_TOOL, {
                     "sub_action": "update",
+                    "account": ctx["account"],
+                    "chat_id": ctx["chat_id"],
                     "card_message_id": ctx["card_message_id"],
                     "rows": payload_rows,
                 }, timeout=5.0)
@@ -2509,6 +2513,8 @@ class BaseAgent:
                 self._log_task_card_reverse_failure("update", "batch", result)
             elif new_id != ctx["card_message_id"]:
                 ctx["card_message_id"] = new_id
+            if self._task_card_result_partial_failure(result):
+                self._log_task_card_reverse_partial("update", "batch", result)
 
     @staticmethod
     def _task_card_clock(ctx: dict):
@@ -2846,9 +2852,14 @@ class BaseAgent:
         The MCP client surfaces tool-level failures as an error *dict* rather
         than raising (see ``lingtai.services.mcp.MCPClient.call_tool``), so the
         Task Card hook must inspect the payload instead of relying on
-        exceptions.
+        exceptions. ``stale_delete_failed`` is specifically the Telegram
+        manager's pre-send error result; treating it as an error also fails
+        closed if a malformed payload contradicts that contract with ``ok``.
         """
-        return isinstance(result, dict) and result.get("status") == "error"
+        return isinstance(result, dict) and (
+            result.get("status") == "error"
+            or result.get("stale_delete_failed") is True
+        )
 
     @staticmethod
     def _task_card_result_suppressed(result: object) -> bool:
@@ -2864,13 +2875,44 @@ class BaseAgent:
     def _task_card_result_message_id(result: object) -> str | None:
         """Extract a card ``message_id`` from a successful reverse-call result.
 
-        Returns ``None`` for error results or any payload without a usable
-        message id, so an error dict can never be mistaken for a created card.
+        Returns ``None`` unless the manager's successful ``status: ok`` contract
+        carries a usable id. In particular, ``stale_delete_failed`` is a
+        pre-send error, so it cannot authorize adoption even in a contradictory
+        payload that also supplies an id.
         """
-        if not isinstance(result, dict) or result.get("status") == "error":
+        if (
+            not isinstance(result, dict)
+            or result.get("status") != "ok"
+            or result.get("stale_delete_failed") is True
+        ):
             return None
         message_id = result.get("message_id")
         return message_id if isinstance(message_id, str) and message_id else None
+
+    @staticmethod
+    def _task_card_result_partial_failure(result: object) -> bool:
+        """Whether a successful result exposes post-send persistence failure."""
+        return (
+            isinstance(result, dict)
+            and result.get("status") == "ok"
+            and result.get("stale_delete_failed") is not True
+            and result.get("resident_persist_failed") is True
+            and BaseAgent._task_card_result_message_id(result) is not None
+        )
+
+    @staticmethod
+    def _log_task_card_reverse_partial(
+        phase: str, tool_name: str, result: object,
+    ) -> None:
+        """Log the content-free post-send persistence partial result."""
+        flags = ",".join(
+            flag for flag in ("resident_persist_failed",)
+            if isinstance(result, dict) and result.get(flag) is True
+        )
+        logger.warning(
+            "telegram task-card reverse call partial phase=%s tool=%s flags=%s",
+            phase, tool_name, flags or "unknown",
+        )
 
     @staticmethod
     def _log_task_card_reverse_failure(
@@ -3010,6 +3052,8 @@ class BaseAgent:
                 # freezes on the concrete last behavior.
                 result = ctx["mcp_client"].call_tool(_TASK_CARD_TOOL, {
                     "sub_action": "finalize",
+                    "account": ctx["account"],
+                    "chat_id": ctx["chat_id"],
                     "card_message_id": ctx["card_message_id"],
                     "rows": payload_rows,
                 }, timeout=5.0)
@@ -3017,6 +3061,8 @@ class BaseAgent:
                 # card left un-finalized is observable (still never blocking).
                 if self._task_card_result_error(result):
                     self._log_task_card_reverse_failure("finalize", "", result)
+                elif self._task_card_result_partial_failure(result):
+                    self._log_task_card_reverse_partial("finalize", "", result)
         except Exception:
             # Fail-open, but observable: the finalize reverse call itself raised.
             self._log_task_card_reverse_exception("finalize", "")

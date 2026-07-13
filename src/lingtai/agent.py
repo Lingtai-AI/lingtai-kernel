@@ -12,8 +12,6 @@ from __future__ import annotations
 import contextlib
 import json
 
-import json
-
 from typing import Any
 
 from pathlib import Path

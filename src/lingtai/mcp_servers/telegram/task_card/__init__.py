@@ -1,13 +1,14 @@
 """Telegram-owned programmable Task Card unit.
 
-The model-facing ``task_card`` tool drives the *programmable* slot of the single
-resident Telegram Task Card, composed alongside the automatic tool-activity slot
-into one resident message owned by ``TelegramManager`` (Jason #7258/#7259). This
-capability is Telegram MCP-owned: registration is gated by the Telegram reverse
-route, projection targets ``_lingtai_telegram_task_card``, and rendering,
-in-place edits, the ``/taskcard`` toggle, persistence, and transport all live in
-the Telegram manager/server/service. There is no cross-channel port and no
-second implementation.
+The model-facing ``task_card`` tool drives the *programmable* slot of Telegram's
+one tracked resident Task Card target, composed alongside the automatic
+tool-activity slot into that one tracked resident owned by ``TelegramManager``
+(Jason #7258/#7259). This capability is Telegram MCP-owned: registration is gated
+by the Telegram reverse route, projection targets ``_lingtai_telegram_task_card``,
+and rendering, in-place edits, the ``/taskcard`` toggle, persistence, and the
+hard-at-most-one / last-message transport all live in the Telegram
+manager/server/service. There is no cross-channel port and no second
+implementation.
 
 Public surface (intentionally small):
 

@@ -29,6 +29,7 @@ class _FakeClient:
     def __init__(self) -> None:
         self.calls: list = []
         self.fail = False
+        self.result = None
 
     def call_tool(self, name, args, timeout=None):
         self.calls.append((name, dict(args), timeout))
@@ -37,6 +38,8 @@ class _FakeClient:
         assert args.get("channel") == "programmable"
         if self.fail:
             return {"status": "error", "error": "backend down"}
+        if self.result is not None:
+            return dict(self.result)
         return {"status": "ok", "message_id": "acct:42:100"}
 
 
@@ -239,6 +242,52 @@ def test_start_without_route_errors(tmp_path):
         {"action": "start", "renderer_path": _write_renderer(tmp_path, _OK_BODY)}
     )
     assert result["status"] == "error"
+
+
+
+
+def test_project_surfaces_partial_telegram_failure(agent, controller):
+    start = controller.handle({
+        "action": "start",
+        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
+        "interval_s": 3600,
+    })
+    watch = controller._watches[start["watch_id"]]
+    agent._client.result = {
+        "status": "ok",
+        "message_id": "acct:42:101",
+        "resident_persist_failed": True,
+    }
+
+    result = controller._project(watch, "update", {"title": "T"})
+
+    assert result == {
+        "status": "error",
+        "partial": True,
+        "resident_persist_failed": True,
+    }
+    agent._client.result = None
+    controller.handle({"action": "stop", "watch_id": watch.watch_id})
+
+
+def test_project_rejects_impossible_stale_delete_success_payload(agent, controller):
+    start = controller.handle({
+        "action": "start",
+        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
+        "interval_s": 3600,
+    })
+    watch = controller._watches[start["watch_id"]]
+    agent._client.result = {
+        "status": "ok",
+        "message_id": "acct:42:101",
+        "stale_delete_failed": True,
+    }
+
+    result = controller._project(watch, "update", {"title": "T"})
+
+    assert result == {"status": "error"}
+    agent._client.result = None
+    controller.handle({"action": "stop", "watch_id": watch.watch_id})
 
 
 # -- unknown action / watch -----------------------------------------------

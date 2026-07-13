@@ -24,6 +24,8 @@ Actions:
                      ``.notification/system.json``.
     dismiss_ref    — remove ``system`` event(s) by ``ref_id`` from
                      ``.notification/system.json``.
+    manual         — return the installed notification manual body. Read-only;
+                     notification and producer state are not touched.
 
 All three dismiss verbs delegate to the single canonical
 :func:`lingtai.kernel.notifications.dismiss_channel` with
@@ -65,6 +67,33 @@ def _check(agent, args: dict) -> dict:
     return {
         "_notification_placeholder": True,
         "message": _CHECK_PLACEHOLDER_MESSAGE,
+    }
+
+
+def _manual(agent, args: dict) -> dict:
+    """Return only the installed notification manual; never touch notification state."""
+    manual_path = (
+        agent._working_dir
+        / ".library"
+        / "intrinsic"
+        / "capabilities"
+        / "notification-manual"
+        / "SKILL.md"
+    )
+    if not manual_path.is_file():
+        return {
+            "status": "degraded",
+            "notification_manual": "",
+            "manual_path": str(manual_path),
+            "error": (
+                "notification manual missing — initializer may have failed or "
+                "capability not installed correctly"
+            ),
+        }
+    return {
+        "status": "ok",
+        "notification_manual": manual_path.read_text(encoding="utf-8"),
+        "manual_path": str(manual_path),
     }
 
 
@@ -150,6 +179,7 @@ def handle(agent, args: dict) -> dict:
         "dismiss_channel": _dismiss_channel,
         "dismiss_event": _dismiss_event,
         "dismiss_ref": _dismiss_ref,
+        "manual": _manual,
     }.get(action)
     if handler is None:
         return {
