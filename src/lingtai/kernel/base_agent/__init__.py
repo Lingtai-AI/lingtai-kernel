@@ -43,6 +43,7 @@ from ..meta_block import (
     TOOL_META_CONTEXT_EVENT_PENDING_KEY,
     TOOL_META_CONTEXT_PENDING_KEY,
     build_meta,
+    build_tool_meta_token_usage,
     build_notification_payload,
     build_notification_persistent_payload,
     formal_tool_result_preview,
@@ -57,7 +58,7 @@ from ..meta_block import (
 from ..session import SessionManager
 from ..tc_inbox import TCInbox
 from ..token_ledger import append_token_entry
-from .._fsutil import atomic_write_json, atomic_write_text
+from .._fsutil import atomic_write_json, atomic_write_text, read_json
 from ..trace_redaction import redact_for_trajectory
 from ..runtime_identity import runtime_identity_event_fields
 
@@ -80,18 +81,33 @@ _TASK_CARD_TOOL = "_lingtai_telegram_task_card"
 # flag, or persistent state.
 _TASK_CARD_MAX_TOOL_ROWS_ENV = "LINGTAI_TASK_CARD_MAX_TOOL_ROWS"
 _TASK_CARD_DEFAULT_MAX_TOOL_ROWS = 1
+_TASK_CARD_MIN_PERSISTED_TOOL_ROWS = 1
+_TASK_CARD_MAX_PERSISTED_TOOL_ROWS = 10
 
 
-def _task_card_max_tool_rows() -> int:
-    """Number of ordinary tool rows the Task Card displays (rolling window).
+def _task_card_max_tool_rows(working_dir: Path | None = None) -> int:
+    """Return the rolling normal-row window for the automatic Task Card.
 
-    Reads ``LINGTAI_TASK_CARD_MAX_TOOL_ROWS`` from ``os.environ`` on each call
-    (not cached at import).  A positive integer N shows the latest N tool rows;
-    missing, empty, non-integer, zero, and negative values fail safely to the
-    default of 1.  Whitespace around an integer is tolerated.  N is not otherwise
-    clamped — a very large N renders that many rows and can exceed the render
-    budget / Telegram transport limit (see ``_format_rows_task_card_text``).
+    A valid agent-local ``telegram/taskcard.json`` ``normal_rows`` value (1-10)
+    takes precedence so ``/taskcard N`` applies without a restart. Legacy agents
+    without that field retain the existing environment-variable behavior: a
+    positive ``LINGTAI_TASK_CARD_MAX_TOOL_ROWS`` value is accepted without an
+    additional clamp, and invalid or missing values fall back to 1.
     """
+    if working_dir is not None:
+        try:
+            data = read_json(Path(working_dir) / "telegram" / "taskcard.json", expect=dict)
+            persisted = data.get("normal_rows")
+            if (
+                type(persisted) is int
+                and _TASK_CARD_MIN_PERSISTED_TOOL_ROWS
+                <= persisted
+                <= _TASK_CARD_MAX_PERSISTED_TOOL_ROWS
+            ):
+                return persisted
+        except (OSError, ValueError, TypeError):
+            pass
+
     raw = os.environ.get(_TASK_CARD_MAX_TOOL_ROWS_ENV)
     if raw is None:
         return _TASK_CARD_DEFAULT_MAX_TOOL_ROWS
@@ -2437,8 +2453,7 @@ class BaseAgent:
             self._cap_task_card_tool_rows(rows)
             self._render_task_card(ctx)
 
-    @staticmethod
-    def _cap_task_card_tool_rows(rows: list) -> None:
+    def _cap_task_card_tool_rows(self, rows: list) -> None:
         """Evict oldest tool rows in place, keeping the newest window.
 
         Caps ordinary tool rows to ``_task_card_max_tool_rows()`` (env-configurable,
@@ -2451,7 +2466,9 @@ class BaseAgent:
         tool_indices = [
             i for i, r in enumerate(rows) if r.get("kind") != "api_error"
         ]
-        surplus = len(tool_indices) - _task_card_max_tool_rows()
+        surplus = len(tool_indices) - _task_card_max_tool_rows(
+            getattr(self, "_working_dir", None)
+        )
         if surplus <= 0:
             return
         # Drop the oldest surplus tool rows (lowest indices) in place.
@@ -2469,6 +2486,36 @@ class BaseAgent:
         except Exception:
             return ""
 
+    def _task_card_metadata(self) -> dict:
+        """Project canonical, bounded session telemetry for Task Card rendering."""
+        try:
+            token_usage = build_tool_meta_token_usage(self) or {}
+            session = token_usage.get("session")
+            if not isinstance(session, dict):
+                return {}
+            metadata: dict[str, int | float] = {}
+            for key in (
+                "api_calls",
+                "cache_miss_tokens",
+                "cache_miss_budget",
+                "context_tokens",
+                "context_window",
+            ):
+                value = session.get(key)
+                if type(value) is int and value >= 0:
+                    metadata[key] = value
+            for key in ("session_cache_rate", "context_usage"):
+                value = session.get(key)
+                if (
+                    type(value) in {int, float}
+                    and not isinstance(value, bool)
+                    and value >= 0
+                ):
+                    metadata[key] = float(value)
+            return metadata
+        except Exception:
+            return {}
+
     def _render_task_card(self, ctx: dict) -> None:
         """Send the current batch rows to the card (create lazily, else edit).
 
@@ -2477,6 +2524,7 @@ class BaseAgent:
         raising into tool execution.  A recovery re-create adopts the new id.
         """
         payload_rows = self._task_card_payload_rows(ctx["rows"])
+        metadata = self._task_card_metadata()
         if ctx.get("card_message_id") is None:
             try:
                 result = ctx["mcp_client"].call_tool(_TASK_CARD_TOOL, {
@@ -2484,6 +2532,7 @@ class BaseAgent:
                     "account": ctx["account"],
                     "chat_id": ctx["chat_id"],
                     "rows": payload_rows,
+                    "metadata": metadata,
                 }, timeout=5.0)
             except Exception:
                 self._log_task_card_reverse_exception("create", "batch")
@@ -2505,6 +2554,7 @@ class BaseAgent:
                     "chat_id": ctx["chat_id"],
                     "card_message_id": ctx["card_message_id"],
                     "rows": payload_rows,
+                    "metadata": metadata,
                 }, timeout=5.0)
             except Exception:
                 self._log_task_card_reverse_exception("update", "batch")
@@ -2595,6 +2645,9 @@ class BaseAgent:
                     "kind": "api_error",
                     "status": r.get("status"),
                     "code": r.get("code"),
+                    "error_type": r.get("error_type"),
+                    "provider": r.get("provider"),
+                    "model": r.get("model"),
                     "state": r.get("state"),
                     "attempt": r.get("attempt"),
                     "max_attempts": r.get("max_attempts"),
@@ -2641,20 +2694,20 @@ class BaseAgent:
 
     @staticmethod
     def _task_card_api_status(exc: object) -> int | None:
-        """Best-effort HTTP-ish status code from a provider exception.
+        """Return a structured HTTP status from a provider exception, if valid.
 
-        Reads only structured integer attributes (``status_code``/``status``/
-        ``code``, or ``response.status_code``) — never the message/body — so the
-        surfaced value is machine-safe.
+        Reads only integer attributes (``status_code``/``status``/``code``, or
+        ``response.status_code``) — never the message/body — and accepts only the
+        HTTP status range 100-599. Boolean and out-of-range values are omitted.
         """
         for attr in ("status_code", "status", "code"):
             value = getattr(exc, attr, None)
-            if isinstance(value, int):
+            if type(value) is int and 100 <= value <= 599:
                 return value
         response = getattr(exc, "response", None)
         if response is not None:
             value = getattr(response, "status_code", None)
-            if isinstance(value, int):
+            if type(value) is int and 100 <= value <= 599:
                 return value
         return None
 
@@ -2684,6 +2737,32 @@ class BaseAgent:
                 return cand
         return None
 
+    @staticmethod
+    def _task_card_safe_identifier(value: object, *, limit: int = 64) -> str | None:
+        """Return a bounded ASCII machine identifier, never free-form text."""
+        if not isinstance(value, str):
+            return None
+        value = value.strip()
+        if not value or len(value) > limit:
+            return None
+        safe_punctuation = frozenset("._:/-")
+        if not all(ch.isascii() and (ch.isalnum() or ch in safe_punctuation) for ch in value):
+            return None
+        return value
+
+    def _task_card_api_identity(self) -> tuple[str | None, str | None]:
+        """Return bounded public provider/model fields from the live service."""
+        try:
+            service = getattr(self, "service", None)
+            provider = getattr(service, "provider", None)
+            model = getattr(service, "model", None)
+        except Exception:
+            return None, None
+        return (
+            self._task_card_safe_identifier(provider, limit=48),
+            self._task_card_safe_identifier(model, limit=80),
+        )
+
     def _report_task_card_api_error(
         self,
         exc: object,
@@ -2702,8 +2781,10 @@ class BaseAgent:
         One stable API-error row per turn/retry sequence is upserted into the
         current batch and the same card is created (lazily) or edited — repeated
         failures update the row rather than sending a card per error.  The row
-        carries only a sanitized machine summary (status code + allow-listed
-        code); ``terminal`` freezes it as the concrete last behavior.
+        carries only bounded machine fields (exception type, public provider/model,
+        valid HTTP status, allow-listed code, and retry state); externally supplied
+        opaque identifiers are deliberately omitted.
+        ``terminal`` freezes it as the concrete last behavior.
         """
         ctx = self._telegram_task_card_context
         if ctx is None:
@@ -2711,6 +2792,8 @@ class BaseAgent:
         try:
             status = self._task_card_api_status(exc)
             code = self._task_card_api_code(exc)
+            error_type = self._task_card_safe_identifier(type(exc).__name__, limit=48)
+            provider, model = self._task_card_api_identity()
             with ctx["_lock"]:
                 rows = ctx.setdefault("rows", [])
                 row = self._find_api_error_row(rows)
@@ -2722,6 +2805,9 @@ class BaseAgent:
                     rows.append(row)
                 row["status"] = status
                 row["code"] = code
+                row["error_type"] = error_type
+                row["provider"] = provider
+                row["model"] = model
                 row["attempt"] = attempt
                 row["max_attempts"] = max_attempts
                 row["state"] = "error" if terminal else "retrying"
@@ -3050,6 +3136,7 @@ class BaseAgent:
                             r["elapsed_s"] = self._task_card_elapsed(now, r["started"])
                             r["done"] = True
                     payload_rows = self._task_card_payload_rows(ctx.get("rows", []))
+                    metadata = self._task_card_metadata()
                 # Reverse-call the private tool name (no ``action`` — the server
                 # forces the task-card action). Send the frozen rows so the card
                 # freezes on the concrete last behavior.
@@ -3059,6 +3146,7 @@ class BaseAgent:
                     "chat_id": ctx["chat_id"],
                     "card_message_id": ctx["card_message_id"],
                     "rows": payload_rows,
+                    "metadata": metadata,
                 }, timeout=5.0)
                 # A tool-level failure returns an error dict; surface it so a
                 # card left un-finalized is observable (still never blocking).
