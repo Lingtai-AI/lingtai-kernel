@@ -5,10 +5,12 @@ description: |
   you need detail beyond the one-line action descriptions: media.type='document'
   vs 'photo' for charts/reports/generated artifacts, placeholder/live-status
   messages, reply vs send, read/check/search, parse_mode/entities, chat_action, dynamic slash commands,
-  the programmable Task Card (task_card tool), and error surfacing. Pulled on
-  demand via action='manual'; you do not need to call it before every send.
-version: 1.4.0
-last_changed_at: "2026-07-12T20:45:00-07:00"
+  the programmable Task Card (task_card tool) — including the default to add a
+  human-visible watcher for long-running bash-async/daemon work — and error
+  surfacing. Pulled on demand via action='manual'; you do not need to call it
+  before every send.
+version: 1.5.1
+last_changed_at: "2026-07-13T12:15:00-07:00"
 ---
 
 # Telegram MCP — usage manual (progressive disclosure)
@@ -195,16 +197,26 @@ Important behavior notes:
 
 ## PROGRAMMABLE TASK CARD (`task_card` tool)
 
+- **Default during Telegram-originated turns: when you launch a meaningful
+  long-running `bash(async=true)` job or daemon task and then go idle to await it,
+  create a human-visible programmable Task Card watcher for it** so the person
+  watching Telegram sees the latest reported snapshot instead of a silent gap
+  (you refresh that snapshot after launch, after meaningful polls/checks, and at
+  the terminal result). Two ready, copy-and-adapt renderer templates cover exactly
+  these two cases (`render_bash_async.py` and `render_daemon.py`); the full manual
+  below routes to them and explains how to copy an asset into your working
+  directory. Skip the watcher only for quick or invisible jobs.
 - The resident Task Card has two independent slots: the **automatic** tool-activity
   slot (managed for you, described under **TASKCARD STATE**) and a **programmable**
   slot you drive with the separate public `task_card` tool. With both present, the
   programmable block appears under a `— WATCH —` header; updating one slot never
   disturbs the other.
-- You bind live state to the programmable slot by supplying a small **Python
-  renderer** file inside your working directory whose stdout is exactly one Task
-  Card JSON object (`title` string, `lines` array of ≤20 strings, `footer` string;
-  at least one present). Telegram never runs your code — the controller runs the
-  renderer as a subprocess and forwards only the validated data.
+- You surface your latest reported snapshot on the programmable slot by supplying
+  a small **Python renderer** file inside your working directory whose stdout is
+  exactly one Task Card JSON object (`title` string, `lines` array of ≤20 strings,
+  `footer` string; at least one present). Telegram never runs your code — the
+  controller runs the renderer as a subprocess and forwards only the validated
+  data.
 - Actions: `start` (validate + run once, then watch on an interval; returns a
   `watch_id`), `inspect` (state + last valid frame), `retry` (re-run now), `stop`
   (end the watch, clear only the programmable frame; renderer files are never
@@ -212,10 +224,13 @@ Important behavior notes:
   failures keep the last valid frame and raise a deduped fail-loud system wake.
 - `/taskcard off` hides delivery of **both** slots (see **TASKCARD STATE**) while
   the renderer, watches, and last-valid bookkeeping keep running.
-- **Full manual (renderer contract, a safe runnable example, and the full
-  start|inspect|retry|stop walkthrough):** follow the relative path
-  `task_card/SKILL.md` from this manual's directory (the co-located Programmable
-  Task Card manual).
+- **Full manual (renderer contract, the two ready bash-async/daemon renderer
+  templates, the snapshot truthfulness model, and the full start|inspect|retry|stop
+  walkthrough):** follow the relative path `task_card/SKILL.md` from this manual's
+  directory (the co-located Programmable Task Card manual). Starting a watch drives
+  the programmable slot of the `TelegramManager`-owned single resident card,
+  reusing the tracked resident or creating its one resident if none exists yet; it
+  does not start another manager or a second card.
 
 ## ERROR SURFACING
 
