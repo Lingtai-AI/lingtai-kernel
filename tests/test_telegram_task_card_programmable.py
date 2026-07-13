@@ -210,28 +210,27 @@ def test_programmable_render_redacts_secrets(tmp_path):
 
 
 def test_failed_edit_does_not_poison_channel_state(tmp_path):
-    """A programmable update whose edit AND recovery send both fail must leave
-    the committed programmable frame at the last successfully delivered value —
-    and a later automatic update must not resurrect the unsent frame."""
+    """A programmable update whose transient edit fails must not replace or
+    commit; a later automatic update must not resurrect the unsent frame."""
     manager, acct = _manager(tmp_path)
     _auto(manager, reasoning="base")
     _prog(manager, "update", {"lines": ["v1"]})  # delivered + committed
     assert "• v1" in _current(acct)
     committed = manager._task_card_channels["mybot:55"]["programmable"]
 
-    # Edit fails, and the recovery replacement send also fails: total delivery
-    # failure, so the proposed frame must NOT be committed.
+    # An unknown/transient edit failure is not proof that replacement is safe:
+    # fail loud without a send and do not commit the proposed frame.
     acct.fail_edit = True
-    acct.fail_send = True
+    sends_before = sum(1 for call in acct.calls if call[0] == "send")
     result = _prog(manager, "update", {"lines": ["UNSENT"]})
     assert result["status"] == "error"
+    assert sum(1 for call in acct.calls if call[0] == "send") == sends_before
     assert manager._task_card_channels["mybot:55"]["programmable"] == committed
     assert "UNSENT" not in committed
 
     # A later successful automatic update composes only the last delivered
     # programmable frame — the unsent "UNSENT" frame can never be resurrected.
     acct.fail_edit = False
-    acct.fail_send = False
     manager._handle_task_card_update(
         {
             "sub_action": "update",
@@ -248,18 +247,18 @@ def test_failed_edit_does_not_poison_channel_state(tmp_path):
 
 
 def test_failed_automatic_edit_does_not_poison_channel_state(tmp_path):
-    """Same discipline on the automatic slot: a failed create edit+send leaves no
-    committed automatic frame, so a later programmable compose stays clean."""
+    """Same discipline on the automatic slot: a transient failed edit neither
+    replaces nor commits, so a later programmable compose stays clean."""
     manager, acct = _manager(tmp_path)
     _auto(manager, reasoning="delivered")  # resident created + committed
     acct.fail_edit = True
-    acct.fail_send = True
-    res = _auto(manager, reasoning="POISON")  # edit + recovery send both fail
+    sends_before = sum(1 for call in acct.calls if call[0] == "send")
+    res = _auto(manager, reasoning="POISON")
     assert res["status"] == "error"
+    assert sum(1 for call in acct.calls if call[0] == "send") == sends_before
     assert manager._task_card_channels["mybot:55"]["automatic"] != ""
     assert "POISON" not in manager._task_card_channels["mybot:55"]["automatic"]
     acct.fail_edit = False
-    acct.fail_send = False
     _prog(manager, "update", {"lines": ["w"]})  # succeeds, composes clean
     text = _current(acct)
     assert "delivered" in text and "• w" in text

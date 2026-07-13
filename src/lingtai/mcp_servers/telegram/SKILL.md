@@ -7,8 +7,8 @@ description: |
   messages, reply vs send, read/check/search, parse_mode/entities, chat_action, dynamic slash commands,
   and error surfacing. Pulled on demand via action='manual'; you do not need to
   call it before every send.
-version: 1.2.0
-last_changed_at: "2026-07-11T17:47:00-07:00"
+version: 1.2.1
+last_changed_at: "2026-07-12T18:05:00-07:00"
 ---
 
 # Telegram MCP — usage manual (progressive disclosure)
@@ -41,7 +41,12 @@ descriptions; you do not need to call it before every send.
   or `action='reply'`. Do **not** edit the placeholder into the final answer;
   the placeholder shows progress only (it may optionally be deleted).
 - An automatic Task Card updates separately during Telegram-originated turns
-  (you do not manage it; use send/reply for your own messages).
+  (you do not manage it; use send/reply for your own messages). Automatic,
+  programmable, heartbeat, and final frames edit one stable resident message ID
+  in place; an identical Telegram edit is a successful no-op.
+- The addon replaces that resident only after Telegram explicitly reports the
+  message missing or uneditable. Unknown/transient edit failures are surfaced and
+  retain the resident ID and last delivered slots instead of sending/retracting.
 - For very fast responses (under ~5s), native Telegram typing/👀 presence is
   enough — skip the placeholder.
 
