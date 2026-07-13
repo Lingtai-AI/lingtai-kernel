@@ -435,15 +435,22 @@ class TaskCardController:
             )
         except Exception:
             return {"status": "error"}
-        if not isinstance(result, dict) or result.get("status") == "error":
+        if not isinstance(result, dict) or result.get("status") != "ok":
             return {"status": "error"}
-        partial = {
-            flag: True
-            for flag in ("resident_persist_failed", "stale_delete_failed")
-            if result.get(flag) is True
-        }
-        if partial:
-            return {"status": "error", "partial": True, **partial}
+        # ``stale_delete_failed`` is the manager's pre-send error condition,
+        # never a successful partial delivery. Reject contradictory payloads
+        # rather than claiming a new resident was adopted.
+        if result.get("stale_delete_failed") is True:
+            return {"status": "error"}
+        if result.get("resident_persist_failed") is True:
+            message_id = result.get("message_id")
+            if isinstance(message_id, str) and message_id:
+                return {
+                    "status": "error",
+                    "partial": True,
+                    "resident_persist_failed": True,
+                }
+            return {"status": "error"}
         return {"status": "ok"}
 
     # -- validation + route helpers ----------------------------------------

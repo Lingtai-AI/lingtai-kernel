@@ -1215,11 +1215,15 @@ class TelegramAccount:
         send path, so a not-fully-constructed account (missing lock/map) is a
         silent no-op rather than an error.
         """
-        try:
-            chat = int(chat_id)
-            mid = int(message_id)
-        except (TypeError, ValueError):
+        if (
+            not isinstance(chat_id, int)
+            or isinstance(chat_id, bool)
+            or not isinstance(message_id, int)
+            or isinstance(message_id, bool)
+        ):
             return
+        chat = chat_id
+        mid = message_id
         lock = getattr(self, "_state_lock", None)
         marks = getattr(self, "_last_message_ids", None)
         if lock is None or marks is None:

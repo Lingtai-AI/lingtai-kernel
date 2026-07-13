@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from lingtai.mcp_servers.telegram.account import TelegramAccount
 
 
@@ -59,6 +61,28 @@ def test_last_message_id_is_per_chat_isolated(tmp_path):
     acct._note_chat_message_id(777, 99)
     assert acct.get_last_message_id(555) == 10
     assert acct.get_last_message_id(777) == 99
+
+
+@pytest.mark.parametrize(
+    ("chat_id", "message_id"),
+    [
+        (555.9, 200),
+        ("555", 200),
+        (True, 200),
+        (555, 200.9),
+        (555, "200"),
+        (555, True),
+    ],
+)
+def test_last_message_id_ignores_non_integer_observations(
+    tmp_path, chat_id, message_id,
+):
+    acct = _account(tmp_path)
+    acct._note_chat_message_id(555, 100)
+
+    acct._note_chat_message_id(chat_id, message_id)
+
+    assert acct._last_message_ids == {555: 100}
 
 
 def test_edited_message_does_not_bump_last_message_id(tmp_path):

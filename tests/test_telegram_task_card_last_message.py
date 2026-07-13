@@ -48,6 +48,13 @@ class FakeAccount:
 
     # -- high-water mark ---------------------------------------------------
     def _note(self, chat_id, message_id):
+        if (
+            not isinstance(chat_id, int)
+            or isinstance(chat_id, bool)
+            or not isinstance(message_id, int)
+            or isinstance(message_id, bool)
+        ):
+            return
         prev = self._last_message_ids.get(chat_id, 0)
         if message_id > prev:
             self._last_message_ids[chat_id] = message_id
@@ -328,6 +335,22 @@ def test_unknown_latest_message_state_is_conservative(tmp_path):
     assert not _calls(account, "delete")
     assert len(_calls(account, "send")) == 1
     assert account.get_task_card(55) == "mybot:55:100"
+
+
+def test_malformed_latest_observation_cannot_authorize_rotation(tmp_path):
+    manager, account = _manager(tmp_path)
+    _automatic(manager, "create", reasoning="first")  # mybot:55:100
+
+    # The owning account rejects both malformed values rather than converting
+    # them into a newer high-water fact for this chat.
+    account.observe_incoming(55.9, 200.9)
+    result = _automatic(
+        manager, "update", card_message_id="mybot:55:100", reasoning="second")
+
+    assert result == {"status": "ok", "message_id": "mybot:55:100"}
+    assert account._last_message_ids == {55: 100}
+    assert not _calls(account, "delete")
+    assert len(_calls(account, "send")) == 1
 
 
 # ---------------------------------------------------------------------------

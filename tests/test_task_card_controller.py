@@ -256,6 +256,26 @@ def test_project_surfaces_partial_telegram_failure(agent, controller):
     controller.handle({"action": "stop", "watch_id": watch.watch_id})
 
 
+def test_project_rejects_impossible_stale_delete_success_payload(agent, controller):
+    start = controller.handle({
+        "action": "start",
+        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
+        "interval_s": 3600,
+    })
+    watch = controller._watches[start["watch_id"]]
+    agent._client.result = {
+        "status": "ok",
+        "message_id": "acct:42:101",
+        "stale_delete_failed": True,
+    }
+
+    result = controller._project(watch, "update", {"title": "T"})
+
+    assert result == {"status": "error"}
+    agent._client.result = None
+    controller.handle({"action": "stop", "watch_id": watch.watch_id})
+
+
 # -- unknown action / watch -----------------------------------------------
 
 

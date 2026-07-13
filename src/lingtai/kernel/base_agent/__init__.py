@@ -2852,9 +2852,14 @@ class BaseAgent:
         The MCP client surfaces tool-level failures as an error *dict* rather
         than raising (see ``lingtai.services.mcp.MCPClient.call_tool``), so the
         Task Card hook must inspect the payload instead of relying on
-        exceptions.
+        exceptions. ``stale_delete_failed`` is specifically the Telegram
+        manager's pre-send error result; treating it as an error also fails
+        closed if a malformed payload contradicts that contract with ``ok``.
         """
-        return isinstance(result, dict) and result.get("status") == "error"
+        return isinstance(result, dict) and (
+            result.get("status") == "error"
+            or result.get("stale_delete_failed") is True
+        )
 
     @staticmethod
     def _task_card_result_suppressed(result: object) -> bool:
@@ -2870,29 +2875,38 @@ class BaseAgent:
     def _task_card_result_message_id(result: object) -> str | None:
         """Extract a card ``message_id`` from a successful reverse-call result.
 
-        Returns ``None`` for error results or any payload without a usable
-        message id, so an error dict can never be mistaken for a created card.
+        Returns ``None`` unless the manager's successful ``status: ok`` contract
+        carries a usable id. In particular, ``stale_delete_failed`` is a
+        pre-send error, so it cannot authorize adoption even in a contradictory
+        payload that also supplies an id.
         """
-        if not isinstance(result, dict) or result.get("status") == "error":
+        if (
+            not isinstance(result, dict)
+            or result.get("status") != "ok"
+            or result.get("stale_delete_failed") is True
+        ):
             return None
         message_id = result.get("message_id")
         return message_id if isinstance(message_id, str) and message_id else None
 
     @staticmethod
     def _task_card_result_partial_failure(result: object) -> bool:
-        """Whether delivery succeeded with an observable resident cleanup fault."""
-        return isinstance(result, dict) and any(
-            result.get(flag) is True
-            for flag in ("resident_persist_failed", "stale_delete_failed")
+        """Whether a successful result exposes post-send persistence failure."""
+        return (
+            isinstance(result, dict)
+            and result.get("status") == "ok"
+            and result.get("stale_delete_failed") is not True
+            and result.get("resident_persist_failed") is True
+            and BaseAgent._task_card_result_message_id(result) is not None
         )
 
     @staticmethod
     def _log_task_card_reverse_partial(
         phase: str, tool_name: str, result: object,
     ) -> None:
-        """Log content-free partial-delivery flags while retaining the new id."""
+        """Log the content-free post-send persistence partial result."""
         flags = ",".join(
-            flag for flag in ("resident_persist_failed", "stale_delete_failed")
+            flag for flag in ("resident_persist_failed",)
             if isinstance(result, dict) and result.get(flag) is True
         )
         logger.warning(
