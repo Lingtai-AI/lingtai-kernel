@@ -14,6 +14,14 @@ Read this skill before every development task in this repository. It owns the
 **workflow**, not the architecture facts or interface promises. Follow its links
 instead of copying the root documents into this file.
 
+Above all, the root [`CONTRACT.md`](../CONTRACT.md) `## Design principles`
+section is mandatory reading, and you MUST apply those principles to every
+change: gate any new or expanded i18n on explicit human confirmation, prefer
+progressive disclosure, ensure every capability you touch is taught by a manual
+(what/how/why), and keep that manual discoverable from **both** the corresponding
+`CONTRACT.md` and its paired `ANATOMY.md` (`related_files` on both twins) — one
+edge alone is a defect.
+
 ## First establish the task and baseline
 
 1. Re-read the latest human or maintainer instruction. Separate the requested
@@ -36,7 +44,11 @@ Use progressive disclosure in this order:
    the nearest child
    anatomy until cited code answers where the relevant files, connections,
    composition, and state live.
-2. Read root [`CONTRACT.md`](../CONTRACT.md). If the component is
+2. Read root [`CONTRACT.md`](../CONTRACT.md), **beginning with its
+   `## Design principles` section, and apply those principles to every change**
+   (i18n gate, progressive disclosure, every-capability-has-a-manual, and manual
+   discoverability from both the corresponding Contract and Anatomy). If the
+   component is
    governed, read its
    paired local contract before changing its interface or expected behavior.
 3. Read the cited code and narrow tests. Anatomy is navigation, not evidence in

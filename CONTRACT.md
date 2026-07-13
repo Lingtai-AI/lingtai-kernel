@@ -1,6 +1,6 @@
 ---
 name: component-contract-convention
-contract_version: 2
+contract_version: 3
 related_files:
   - ANATOMY.md
   - src/lingtai/kernel/event_journal/CONTRACT.md
@@ -25,6 +25,43 @@ maintenance: |
   convention change.
 ---
 # Component Contract Convention
+
+## Design principles
+
+These repository-wide design principles are normative for every capability,
+Contract, Anatomy, manual, and skill in this repository. Read and apply them
+before any change. They stay concise here by design: the deeper how and why live
+in the manuals and references they point to (progressive disclosure), not inline.
+
+1. **User-facing-only i18n, gated by human confirmation.** LingTai considers
+   internationalization only for genuinely *user-facing* surfaces. Existing
+   user-facing i18n is not disabled by this rule. Internal, code-level, or
+   agent-only surfaces MUST NOT acquire i18n by default. Before adding or
+   expanding i18n on any surface, an agent MUST ask the human to confirm that
+   i18n belongs there.
+2. **Progressive disclosure wherever possible.** Prefer a concise entry that
+   routes to depth over one exhaustive document, especially for agent-consumed
+   material for both coding agents and LingTai agents. Each layer states its rule
+   once and links onward instead of copying downstream detail upward.
+3. **Every capability is taught by a manual.** EVERY capability MUST have a
+   corresponding manual that explains what to do, how it works, and why it is
+   designed that way. The why and deeper detail MAY route through progressively
+   disclosed manual references rather than sitting inline. This does not blur the
+   layers: a Contract still defines the capability's obligations and behavior,
+   while its manual teaches the procedure to carry them out.
+4. **Manuals are discoverable from both owner twins.** ALL manuals MUST be
+   connected through the corresponding capability `CONTRACT.md` **and** its
+   paired/owning `ANATOMY.md` — both edges, not either one. Where those documents
+   carry a `related_files` schema, the manual (or its manual reference) MUST
+   appear in the `related_files` of both the capability Contract and its paired
+   Anatomy, so an agent descending either the interface graph or the navigation
+   graph reaches it. A missing Contract→manual edge or a missing Anatomy→manual
+   edge is a defect; global reachability through only one side does not satisfy
+   this rule.
+5. **The dev guide enforces these principles.** `dev-guide-skill/SKILL.md` MUST
+   strongly emphasize reading and applying this section before every development
+   task and route each change to the manual that teaches the capability it
+   touches.
 
 ## Purpose
 
@@ -219,8 +256,15 @@ order:
 3. `root_contract`: literal repo-relative path `CONTRACT.md`.
 4. `related_files`: non-empty duplicate-free list of repo-relative regular
    files. It includes the co-located paired `ANATOMY.md`, the Port, every
-   production Adapter, contract tests, public exports, and directly relevant
-   component contracts.
+   production Adapter, contract tests, public exports, directly relevant
+   component contracts, and — per Design principles 3 and 4 — the corresponding
+   manual(s) or manual reference for every capability the governed component
+   exposes. Every exposed capability MUST have such a manual (a component that
+   exposes no capability need not invent one, but no actual capability may opt
+   out). The paired `ANATOMY.md` MUST link the same manual(s) so both owner twins
+   carry the edge; the Contract lists the manual as the capability's interface
+   owner, while the Anatomy lists it as a navigation target, without copying the
+   manual's content into either.
 5. `maintenance`: the **canonical Maintenance block**, copied byte-for-byte
    from the single source of truth in this root contract's `## Template`
    section. Component authors MUST NOT paraphrase, reword, reindent, or
@@ -240,8 +284,8 @@ itself changes; that bump is a convention change that also bumps the root
 
 ## Body contract
 
-The root body headings are exactly the nine `##` sections in this file, in
-this order.
+The root body headings are exactly the ten `##` sections in this file, in
+this order, beginning with `## Design principles`.
 
 Every governed child body has these `##` headings, once and in this order:
 
@@ -298,6 +342,14 @@ every production Adapter, contract tests, public exports, and related component
 contracts that own the boundary. Contract-to-contract links are reciprocal when
 either contract depends on the other's normative rules. Unrelated children do
 not link to each other or copy each other's promises.
+
+Every capability's corresponding manual — required to exist by Design principle 3
+— carries that manual on **both** owner twins per Design principle 4: the
+capability `CONTRACT.md` `related_files` lists it as the interface owner, and the
+paired `ANATOMY.md` `related_files` lists the same manual as a navigation target.
+Missing either edge is a defect. The two jobs stay distinct — Contract owns the
+promise, Anatomy owns the route — and neither twin copies the manual's procedural
+content.
 
 ## Maintenance contract
 
@@ -364,6 +416,7 @@ related_files:
   - <repo-relative Port file>
   - <repo-relative production Adapter file>
   - <repo-relative contract-test file>
+  - <repo-relative capability manual or manual reference>
 maintenance: |
   <!-- CANONICAL-MAINTENANCE v2 BEGIN -->
   This component contract is governed by the root CONTRACT.md. Keep
