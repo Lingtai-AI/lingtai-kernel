@@ -28,6 +28,7 @@ from lingtai.kernel.base_agent import BaseAgent
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
 from tests._notification_store_helpers import notification_store_for
+from tests._agent_presence_helpers import make_test_presence_store
 
 
 def _persist_inbox_email(working_dir: Path, *, sender="sender", subject="hi",
@@ -63,7 +64,7 @@ def make_mock_service():
 
 def test_cancel_event_always_created(tmp_path):
     """Agent should always have _cancel_event (no external injection)."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     assert isinstance(agent._cancel_event, threading.Event)
     assert not agent._cancel_event.is_set()
 
@@ -75,7 +76,7 @@ def test_cancel_event_always_created(tmp_path):
 
 def test_admin_dict_stored_defaults_empty(tmp_path):
     """Agent without admin= should have an empty _admin dict."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="a", working_dir=tmp_path / "t1", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "t1"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="a", working_dir=tmp_path / "t1", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "t1"))
     assert agent._admin == {}
 
 
@@ -85,7 +86,7 @@ def test_karma_admin_stored(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="b", working_dir=tmp_path / "t2",
         admin={"karma": True}, workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "t2"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "t2"),
     )
     assert agent._admin.get("karma") is True
 
@@ -96,7 +97,7 @@ def test_nirvana_admin_stored(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="c", working_dir=tmp_path / "t3",
         admin={"nirvana": True}, workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "t3"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "t3"),
     )
     assert agent._admin.get("nirvana") is True
 
@@ -107,7 +108,7 @@ def test_old_admin_keys_ignored(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="d", working_dir=tmp_path / "t4",
         admin={"silence": True, "kill": True}, workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "t4"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "t4"),
     )
     # Old keys are stored as-is (agent just persists the dict), but they do
     # not map to karma/nirvana authority — those gates check for those keys.
@@ -126,7 +127,7 @@ def test_sequential_execution_stops_on_cancel(tmp_path):
     from lingtai.kernel.tool_executor import ToolExecutor
     from lingtai.llm import ToolCall
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     agent._cancel_event.set()
 
     tc = ToolCall(name="system", args={"action": "sleep"}, id="tc1")
@@ -166,7 +167,7 @@ def test_normal_email_notifies_inbox(tmp_path):
     """
     from tests._notification_store_helpers import snapshot_notifications
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     _persist_inbox_email(agent.working_dir, sender="colleague", subject="hello", message="hi there")
     agent._on_mail_received({
         "_mailbox_id": "test123",
@@ -184,7 +185,7 @@ def test_non_admin_can_send_normal_mail(tmp_path):
     agent = BaseAgent(
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", admin={}, workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     mock_mail = MagicMock()
     mock_mail.address = "127.0.0.1:8000"
@@ -208,7 +209,7 @@ def test_mail_type_silence_treated_as_normal(tmp_path):
     does not set cancel."""
     from tests._notification_store_helpers import snapshot_notifications
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     assert not agent._cancel_event.is_set()
     _persist_inbox_email(agent.working_dir, sender="boss", subject="shh", message="be quiet")
 
@@ -231,7 +232,7 @@ def test_mail_type_kill_treated_as_normal(tmp_path):
     does not set cancel or shutdown."""
     from tests._notification_store_helpers import snapshot_notifications
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     assert not agent._cancel_event.is_set()
     _persist_inbox_email(agent.working_dir, sender="boss", subject="die", message="terminate")
 

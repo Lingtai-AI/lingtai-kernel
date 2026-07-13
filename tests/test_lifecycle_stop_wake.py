@@ -26,6 +26,7 @@ from __future__ import annotations
 import queue
 import threading
 
+from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
 from lingtai.kernel import BaseAgent, AgentState
 from lingtai.kernel.message import _make_message, MSG_TC_WAKE
 from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
@@ -49,6 +50,7 @@ def _make_agent(tmp_path):
         snapshot_port=make_test_snapshot_port(),
         source_revision_port=make_test_source_revision_port(),
         notification_store=notification_store_for(workdir),
+        agent_presence=PosixAgentPresenceStoreAdapter(workdir),
     )
 
 

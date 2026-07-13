@@ -79,7 +79,7 @@ avatar/__init__.py
 - **No identity inheritance:** Avatars get no name (`agent_name` is set to the avatar name), no admin privileges, no comment, no brief, no addons (IMAP/Telegram). The inherited `lingtai` seed is blanked; the first turn still arrives via a separate `.prompt` signal file.
 - **Preset stability:** Avatars always spawn on the parent's DEFAULT preset, not its currently-active one. Materialized `llm` + `capabilities` are stripped so the avatar re-materializes from the preset on first boot.
 - **Relative path re-rooting:** Preset paths (`default`, `active`, `allowed`) that are relative are re-rooted against the parent's working dir so they remain valid from the avatar's different directory.
-- **Liveness check:** Before spawning, existing ledger entries are checked via `handshake.is_alive()`. If a live avatar with the same name exists, the spawn is refused with `already_active`.
+- **Liveness check:** Before spawning, existing ledger entries are observed through a target-bound `PosixAgentPresenceStoreAdapter` and Core `observe_alive()` policy. If a live avatar with the same name exists, the spawn is refused with `already_active`.
 - **Boot verification:** After launching, `_wait_for_boot()` polls for `.agent.heartbeat` or process exit within 5 seconds. If the process exits before handshaking, stderr is captured and the failure is reported.
 - **Deep copy scope guard:** `_prepare_deep()` asserts `dst.parent == src.parent` to prevent rmtree from reaching outside the network root.
 - **Mission-quality gate (issue #33):** Before any filesystem mutation, `_spawn` runs `_mission_looks_unsafe(reasoning)` — empty / sub-20-char / debug-placeholder missions return `{"status": "confirmation_needed", ...}` unless `confirm=true`. The dry-run path is exempt (its purpose is preview without commitment).
@@ -88,7 +88,8 @@ avatar/__init__.py
 ## Dependencies
 
 - `lingtai.i18n` — `t()` for localized strings
-- `lingtai.kernel.handshake` — `is_alive()` for liveness checks, `resolve_address()` for ledger-based tree walking
+- `lingtai.kernel.agent_presence` + `lingtai.adapters.posix.agent_presence` — ordered Core liveness policy and the target-bound production presence adapter
+- `lingtai.kernel.handshake` — `resolve_address()` for ledger-based tree walking
 - `lingtai.venv_resolve` — `resolve_venv()`, `venv_python()` for resolving the Python executable to launch the avatar
 - `lingtai.agent.Agent` — parent agent type (TYPE_CHECKING only)
 

@@ -400,6 +400,56 @@ def test_snapshot_contract_names_every_required_component_test() -> None:
     } <= set(meta["related_files"])
 
 
+def test_agent_presence_contract_names_required_component_files() -> None:
+    contract_path = ROOT / "src/lingtai/kernel/agent_presence/CONTRACT.md"
+    meta, _ = _read_document(contract_path)
+    assert meta["name"] == "agent-presence-store"
+    assert {
+        "src/lingtai/kernel/agent_presence/ANATOMY.md",
+        "src/lingtai/kernel/agent_presence/__init__.py",
+        "src/lingtai/adapters/posix/agent_presence.py",
+        "src/lingtai/kernel/base_agent/__init__.py",
+        "src/lingtai/kernel/base_agent/lifecycle.py",
+        "src/lingtai/kernel/handshake.py",
+        "tests/_agent_presence_helpers.py",
+        "tests/test_agent_presence.py",
+        "tests/test_architecture_documents.py",
+    } <= set(meta["related_files"])
+
+
+def test_agent_presence_port_keeps_filesystem_mechanism_outside_core() -> None:
+    port = (ROOT / "src/lingtai/kernel/agent_presence/__init__.py").read_text(encoding="utf-8")
+    # Core Port/domain/policy expose no filesystem, JSON, POSIX, clock, or
+    # threading mechanism, and never import or construct the concrete adapter.
+    for banned in (
+        "import os",
+        "import json",
+        "from pathlib",
+        "import pathlib",
+        "import time",
+        "import threading",
+        ".agent.json",
+        ".agent.heartbeat",
+        "lingtai.adapters",
+        "PosixAgentPresenceStoreAdapter",
+    ):
+        assert banned not in port, banned
+    # Exactly four Port operations — no fifth family, no address argument.
+    assert port.count("@abstractmethod") == 4
+    for op in (
+        "def observe_manifest(self)",
+        "def observe_heartbeat(self)",
+        "def publish_heartbeat(self, wall_seconds: float)",
+        "def withdraw_heartbeat(self)",
+    ):
+        assert op in port, op
+    # handshake retains only resolve_address; the presence functions are gone.
+    handshake = (ROOT / "src/lingtai/kernel/handshake.py").read_text(encoding="utf-8")
+    assert "def resolve_address(" in handshake
+    for removed in ("def is_agent(", "def is_alive(", "def is_human(", "def manifest("):
+        assert removed not in handshake, removed
+
+
 def test_governed_child_contracts_have_reciprocal_anatomy_pairs() -> None:
     root_meta, _ = _read_document(ROOT_CONTRACT)
     child_contracts = [

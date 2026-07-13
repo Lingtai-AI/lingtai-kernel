@@ -12,7 +12,9 @@ related_files:
   - src/lingtai/adapters/posix/mail.py
   - src/lingtai/adapters/posix/workdir_lease.py
   - src/lingtai/adapters/posix/notification_store.py
+  - src/lingtai/adapters/posix/agent_presence.py
   - src/lingtai/adapters/posix/migration_workspace.py
+  - src/lingtai/kernel/agent_presence/ANATOMY.md
   - src/lingtai/kernel/workdir_lease/ANATOMY.md
   - src/lingtai/kernel/workdir_lease/CONTRACT.md
   - src/lingtai/kernel/snapshot/ANATOMY.md
@@ -32,8 +34,8 @@ maintenance: |
 
 This narrow package contains production filesystem adapters for Core-owned Ports:
 the structured event journal, mail transport, notification store, workdir lease,
-the fixed-command snapshot/source-revision Git capability, and the migration
-workspace. It is an
+agent presence, the fixed-command snapshot/source-revision Git capability, and
+the migration workspace. It is an
 implementation-only Anatomy with no independent local Contract; for the
 Anatomy/Contract pairing rule its unique owning component Contract is
 `src/lingtai/kernel/event_journal/CONTRACT.md` (this Anatomy is listed only in
@@ -79,6 +81,12 @@ co-located ANATOMY.md files for each component.
   atomic acknowledgement-set mutation
   (`src/lingtai/adapters/posix/notification_store.py:57-240`). Its internal lock
   spans each complete mutation; atomic writes use the shared `_fsutil` primitive.
+- `PosixAgentPresenceStoreAdapter` implements all four `AgentPresenceStorePort`
+  operations on one working directory's `.agent.json` / `.agent.heartbeat`
+  (`src/lingtai/adapters/posix/agent_presence.py`): tri-state manifest/heartbeat
+  observation, byte-exact `str(wall_seconds)`-no-newline heartbeat publication,
+  and best-effort idempotent withdrawal. Bound to a `WorkdirLayout` at
+  construction; holds no long-lived handle or lock.
 - `PosixMigrationWorkspaceAdapter`
   (`src/lingtai/adapters/posix/migration_workspace.py`) implements all seven
   `MigrationWorkspacePort` families for one bound `MigrationDomain`/root: availability,
@@ -92,9 +100,9 @@ The event-journal adapter depends inward on `EventJournalPort` and
 `JournalPosition`, and on the existing logging primitives for byte serialization,
 redaction, primary-first ordering, and SQLite fail-open behavior
 (`src/lingtai/adapters/posix/event_journal.py:7-12`). The mail adapter depends
-inward on `MailTransportPort`, kernel `handshake` liveness helpers, and the
-kernel-owned `_new_mailbox_id`
-(`src/lingtai/adapters/posix/mail.py:27-29`). The workdir-lease adapter depends
+inward on `MailTransportPort`, Core `agent_presence` liveness policy,
+`handshake.resolve_address`, and the kernel-owned `_new_mailbox_id`
+(`src/lingtai/adapters/posix/mail.py:27-33`). The workdir-lease adapter depends
 inward on the kernel-owned `workdir_layout` for the `.agent.lock` path and on
 `WorkdirLeasePort` (`src/lingtai/adapters/posix/workdir_lease.py:23-24`). The
 notification-store adapter depends inward on `NotificationStorePort` and the
@@ -115,7 +123,8 @@ Core never imports this package.
   `src/lingtai/kernel/mail_transport/ANATOMY.md`,
   `src/lingtai/kernel/workdir_lease/ANATOMY.md`,
   `src/lingtai/kernel/snapshot/ANATOMY.md`,
-  `src/lingtai/kernel/notification_store/ANATOMY.md`, and
+  `src/lingtai/kernel/notification_store/ANATOMY.md`,
+  `src/lingtai/kernel/agent_presence/ANATOMY.md`, and
   `src/lingtai/kernel/migrate/ANATOMY.md`.
 - **Storage primitives:** `src/lingtai/kernel/services/ANATOMY.md`.
 

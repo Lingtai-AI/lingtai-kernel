@@ -1,6 +1,13 @@
 """Karma-gated lifecycle actions — sleep, lull, suspend, cpr, interrupt, clear, nirvana."""
 from __future__ import annotations
 
+import time
+
+from lingtai.kernel.agent_presence import (
+    AgentPresenceStorePort,
+    is_agent as _presence_is_agent,
+    observe_alive as _presence_observe_alive,
+)
 from lingtai.kernel.handshake import resolve_address
 
 
@@ -12,8 +19,27 @@ _KARMA_ACTIONS = {"interrupt", "lull", "suspend", "cpr", "clear"}
 _NIRVANA_ACTIONS = {"nirvana"}
 
 
+def _presence_for(target) -> AgentPresenceStorePort:
+    """Build a target-bound POSIX presence adapter for a resolved agent dir."""
+    from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
+    return PosixAgentPresenceStoreAdapter(target)
+
+
+def _is_agent(target) -> bool:
+    """Foreign-address agent check via the presence store + Core policy."""
+    return _presence_is_agent(_presence_for(target).observe_manifest())
+
+
+def _is_alive(target, threshold: float = 2.0) -> bool:
+    """Foreign-address liveness check via the presence store + Core policy."""
+    return _presence_observe_alive(
+        _presence_for(target),
+        wall_now=time.time(),
+        threshold=threshold,
+    )
+
+
 def _check_karma_gate(agent, action: str, args: dict) -> dict | None:
-    from lingtai.kernel.handshake import is_agent
     if action in _KARMA_ACTIONS and not agent._admin.get("karma"):
         return {"error": True, "message": f"Not authorized for {action} (requires admin.karma=True)"}
     if action in _NIRVANA_ACTIONS and not (agent._admin.get("karma") and agent._admin.get("nirvana")):
@@ -26,7 +52,7 @@ def _check_karma_gate(agent, action: str, args: dict) -> dict | None:
     resolved = resolve_address(address, base_dir)
     if str(resolved) == str(agent._working_dir):
         return {"error": True, "message": f"Cannot {action} self"}
-    if not is_agent(resolved):
+    if not _is_agent(resolved):
         return {"error": True, "message": f"No agent at {address}"}
     # Store resolved path for downstream use
     args["_resolved_address"] = resolved
@@ -94,13 +120,12 @@ def _sleep(agent, args: dict) -> dict:
 
 def _lull(agent, args: dict) -> dict:
     """Lull another agent to sleep — karma-gated."""
-    from lingtai.kernel.handshake import is_alive
     err = _check_karma_gate(agent, "lull", args)
     if err:
         return err
     address = args["address"]
     resolved = args["_resolved_address"]
-    if not is_alive(resolved):
+    if not _is_alive(resolved):
         return {"error": True, "message": f"Agent at {address} is not running — already asleep?"}
     (resolved / ".sleep").write_text("")
     agent._log("karma_lull", target=address)
@@ -109,13 +134,12 @@ def _lull(agent, args: dict) -> dict:
 
 def _suspend(agent, args: dict) -> dict:
     """Suspend another agent — karma-gated."""
-    from lingtai.kernel.handshake import is_alive
     err = _check_karma_gate(agent, "suspend", args)
     if err:
         return err
     address = args["address"]
     resolved = args["_resolved_address"]
-    if not is_alive(resolved):
+    if not _is_alive(resolved):
         return {"error": True, "message": f"Agent at {address} is not running — already suspended?"}
     (resolved / ".suspend").write_text("")
     agent._log("karma_suspend", target=address)
@@ -123,13 +147,12 @@ def _suspend(agent, args: dict) -> dict:
 
 
 def _cpr(agent, args: dict) -> dict:
-    from lingtai.kernel.handshake import is_alive
     err = _check_karma_gate(agent, "cpr", args)
     if err:
         return err
     address = args["address"]
     resolved = args["_resolved_address"]
-    if is_alive(resolved):
+    if _is_alive(resolved):
         return {"error": True, "message": f"Agent at {address} is already running"}
     resuscitated = agent._cpr_agent(str(resolved))
     if resuscitated is None:
@@ -145,13 +168,12 @@ def _cpr(agent, args: dict) -> dict:
 
 
 def _interrupt(agent, args: dict) -> dict:
-    from lingtai.kernel.handshake import is_alive
     err = _check_karma_gate(agent, "interrupt", args)
     if err:
         return err
     address = args["address"]
     resolved = args["_resolved_address"]
-    if not is_alive(resolved):
+    if not _is_alive(resolved):
         return {"error": True, "message": f"Agent at {address} is not running"}
     (resolved / ".interrupt").write_text("")
     agent._log("karma_interrupt", target=address)
@@ -165,13 +187,12 @@ def _clear(agent, args: dict) -> dict:
     invokes psyche.context_forget, which archives chat history and injects
     a system-authored recovery summary pointing at pad/knowledge/inbox.
     """
-    from lingtai.kernel.handshake import is_alive
     err = _check_karma_gate(agent, "clear", args)
     if err:
         return err
     address = args["address"]
     resolved = args["_resolved_address"]
-    if not is_alive(resolved):
+    if not _is_alive(resolved):
         return {"error": True, "message": f"Agent at {address} is not running"}
     # Content of .clear becomes the `source` tag in the recovery summary.
     # Default to the calling agent's name so targets can see who forced it.
@@ -183,13 +204,12 @@ def _clear(agent, args: dict) -> dict:
 
 def _nirvana(agent, args: dict) -> dict:
     import shutil
-    from lingtai.kernel.handshake import is_alive
     err = _check_karma_gate(agent, "nirvana", args)
     if err:
         return err
     address = args["address"]
     resolved = args["_resolved_address"]
-    if is_alive(resolved):
+    if _is_alive(resolved):
         # Write .suspend (not .sleep) so the process actually shuts down.
         # .sleep sets _asleep — heartbeat continues, is_alive() stays True,
         # and the wait loop below would always time out.
@@ -198,11 +218,11 @@ def _nirvana(agent, args: dict) -> dict:
         import time as _time
         deadline = _time.time() + 10.0
         while _time.time() < deadline:
-            if not is_alive(resolved):
+            if not _is_alive(resolved):
                 break
             _time.sleep(0.5)
         else:
-            if is_alive(resolved):
+            if _is_alive(resolved):
                 return {"error": True, "message": f"Agent at {address} did not shut down within timeout"}
     shutil.rmtree(resolved)
     agent._log("karma_nirvana", target=address)

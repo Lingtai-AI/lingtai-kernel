@@ -24,11 +24,22 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from lingtai.kernel.handshake import is_agent, is_alive, manifest, resolve_address
+from lingtai.kernel.agent_presence import (
+    is_agent as _presence_is_agent,
+    observe_alive as _presence_observe_alive,
+)
+from lingtai.kernel.handshake import resolve_address
 from lingtai.kernel.mail_transport import MailTransportPort
 from lingtai.kernel.services.mail import _new_mailbox_id
 
 logger = logging.getLogger(__name__)
+
+
+def _presence_store_for(recipient_dir: Path):
+    """Build a target-bound POSIX presence adapter for a recipient directory."""
+    from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
+
+    return PosixAgentPresenceStoreAdapter(recipient_dir)
 
 
 class PosixFilesystemMailAdapter(MailTransportPort):
@@ -108,10 +119,17 @@ class PosixFilesystemMailAdapter(MailTransportPort):
             recipient_dir = resolve_address(address, base_dir)
 
         # --- handshake ------------------------------------------------
-        if not is_agent(recipient_dir):
+        # Observe the recipient's presence through a target-bound presence store
+        # and apply Core policy (a malformed manifest still counts as an agent;
+        # a fresh non-human heartbeat under the 2s window counts as alive).
+        recipient_presence = _presence_store_for(recipient_dir)
+        if not _presence_is_agent(recipient_presence.observe_manifest()):
             return f"No agent at {address}"
 
-        if not is_alive(recipient_dir):
+        if not _presence_observe_alive(
+            recipient_presence,
+            wall_now=time.time(),
+        ):
             return f"Agent at {address} is not running"
 
         # --- create inbox entry ---------------------------------------

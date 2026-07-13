@@ -19,6 +19,7 @@ from lingtai.kernel.state import AgentState
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
 from tests._notification_store_helpers import notification_store_for
+from tests._agent_presence_helpers import make_test_presence_store
 
 
 def _service():
@@ -79,7 +80,7 @@ def test_bare_agent_config_and_base_agent_defaults(tmp_path):
         agent_name="bare-agent",
         working_dir=tmp_path / "bare-agent",
         workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "bare-agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "bare-agent"),
     )
 
     assert agent._config.stamina == 86400.0
@@ -100,7 +101,7 @@ def test_hidden_idle_timeout_moves_idle_agent_to_asleep(tmp_path, monkeypatch):
         agent_name="idle-timeout-agent",
         working_dir=tmp_path / "idle-timeout-agent",
         workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "idle-timeout-agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "idle-timeout-agent"),
     )
     saved: list[bool] = []
     monkeypatch.setattr(agent, "_save_chat_history", lambda: saved.append(True))
