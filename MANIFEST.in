@@ -63,3 +63,4 @@ graft src/lingtai/tools/bash/manual
 graft src/lingtai/tools/avatar/manual
 graft src/lingtai/tools/daemon/manual
 graft src/lingtai/tools/mcp/manual
+graft src/lingtai/tools/task_card/manual

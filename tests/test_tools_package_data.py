@@ -51,6 +51,12 @@ _BUILTIN_TOOLS = [
     "write",
 ]
 
+# Governed tool packages that own a top-level CONTRACT.md but are NOT registry
+# BUILTIN_TOOLS and — being agent-only, English-only — ship no glossary. The
+# programmable Task Card tool (`task_card`) is registered by the composition root
+# only when a Telegram MCP client exists; its CONTRACT.md ships like the others.
+_GOVERNED_EXTRA_TOOL_CONTRACTS = ["task_card"]
+
 # The nine daemon CLI-backend manuals that must continue to ship unchanged.
 _DAEMON_BACKENDS = [
     "claude-p",
@@ -156,18 +162,23 @@ def test_wheel_ships_every_tool_contract(wheel_entries: set[str]):
     assert not missing, "tool contracts missing from wheel: %r" % missing
 
 
-def test_wheel_ships_exactly_eighteen_tool_contracts(wheel_entries: set[str]):
-    # No nested/manual CONTRACT.md should sneak in alongside the 18 top-level
-    # ones — guard against an over-broad glob silently widening the manifest.
+def test_wheel_ships_exactly_nineteen_tool_contracts(wheel_entries: set[str]):
+    # No nested/manual CONTRACT.md should sneak in alongside the top-level ones —
+    # guard against an over-broad glob silently widening the manifest. The set is
+    # the 18 built-in tools plus the governed, composition-root-registered
+    # `task_card` tool (glossary-exempt) = 19.
     contracts = {
         e
         for e in wheel_entries
         if e.endswith("/CONTRACT.md") and e.startswith("lingtai/tools/")
     }
-    assert len(contracts) == len(_BUILTIN_TOOLS), (
+    expected = len(_BUILTIN_TOOLS) + len(_GOVERNED_EXTRA_TOOL_CONTRACTS)
+    assert len(contracts) == expected, (
         "expected exactly %d tool contracts, wheel has %d: %r"
-        % (len(_BUILTIN_TOOLS), len(contracts), sorted(contracts))
+        % (expected, len(contracts), sorted(contracts))
     )
+    for tool in _GOVERNED_EXTRA_TOOL_CONTRACTS:
+        assert f"lingtai/tools/{tool}/CONTRACT.md" in contracts, tool
 
 
 def test_wheel_ships_daemon_contract(wheel_entries: set[str]):

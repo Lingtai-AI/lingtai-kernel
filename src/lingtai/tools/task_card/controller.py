@@ -9,6 +9,14 @@ validated data to the private ``_lingtai_telegram_task_card`` reverse channel.
 ``TelegramManager`` stays the single render/compose/persistence owner (no
 competing system). Fail-loud is the kernel notification wake
 (``_enqueue_system_notification``); all model-facing copy is English-only.
+
+Ownership: this concrete tool lives in ``lingtai.tools`` (the concrete built-in
+tool package), not in ``lingtai.kernel`` machinery. The kernel owns the tool
+*machinery* (schema build, dispatch, guard, executor) and the private Telegram
+reverse channel + automatic Task Card driver; this package owns the concrete
+public ``task_card`` tool surface and its watch lifecycle. Registration is a
+composition-root concern (``Agent._maybe_setup_task_card_controller``), gated on
+a live Telegram MCP client — no Telegram means no public ``task_card`` tool.
 """
 
 from __future__ import annotations
@@ -21,10 +29,43 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .base_agent import BaseAgent
+    from typing import Protocol
 
-# Private, unlisted Telegram reverse-channel tool name — identical to
-# ``base_agent._TASK_CARD_TOOL`` and ``telegram/server.py:_PRIVATE_TASK_CARD_TOOL``.
+    class _TaskCardAgent(Protocol):
+        """The narrow, injected agent seam this controller consumes.
+
+        Declared locally so the concrete tool does NOT type-depend on the outer
+        composition root ``lingtai.agent.Agent``. It names only the kernel-owned
+        attributes plus the wrapper-owned ``_mcp_clients_by_tool`` map the
+        controller actually reads: ``_working_dir`` is read directly, the rest are
+        read defensively via ``getattr`` with a default. ``BaseAgent`` cannot stand
+        in because ``_mcp_clients_by_tool`` is created by the wrapper ``Agent``, not
+        the kernel base class.
+        """
+
+        _working_dir: Any
+        _mcp_clients_by_tool: dict[str, Any]
+        _telegram_task_card_context: dict | None
+        _shutdown: threading.Event
+
+        def _enqueue_system_notification(self, **kwargs: Any) -> Any: ...
+
+        def add_tool(
+            self,
+            name: str,
+            *,
+            schema: dict,
+            handler: Any,
+            description: str,
+            glossary_package: Any,
+        ) -> Any: ...
+
+# Private, unlisted Telegram reverse-channel tool name. This literal is the
+# three-way sync point with ``base_agent._TASK_CARD_TOOL`` and
+# ``mcp_servers/telegram/server.py:_PRIVATE_TASK_CARD_TOOL``. The kernel and the
+# Telegram server each keep their own copy of the literal on purpose (the kernel
+# must not import ``lingtai.mcp_servers``, and this tool package must not force a
+# reverse dependency either); keep the three in sync if the name ever changes.
 _TASK_CARD_TOOL = "_lingtai_telegram_task_card"
 _DEFAULT_TIMEOUT_S = 10.0
 _DEFAULT_INTERVAL_S = 5.0
@@ -84,7 +125,10 @@ def get_description() -> str:
         "under your working directory that prints exactly one Task Card JSON object "
         "to stdout; the controller runs it on an interval and projects the output "
         "onto the resident Task Card's programmable channel, alongside the automatic "
-        "tool-activity channel. Actions: start, inspect, retry, stop."
+        "tool-activity channel. Actions: start, inspect, retry, stop. Before your "
+        "first start, read the manual at src/lingtai/tools/task_card/manual/SKILL.md "
+        "(renderer protocol, the path-only workdir confinement / not-sandboxed trust "
+        "boundary, and start-time vs after-start failure and recovery behavior)."
     )
 
 
@@ -140,7 +184,7 @@ class _Watch:
 class TaskCardController:
     """Public controller for programmable Task Card watches (thin Core)."""
 
-    def __init__(self, agent: "BaseAgent") -> None:
+    def __init__(self, agent: "_TaskCardAgent") -> None:
         self._agent = agent
         self._watches: dict[str, _Watch] = {}
         self._lock = threading.RLock()
@@ -516,11 +560,16 @@ class TaskCardController:
                 watch.thread.join(timeout=_JOIN_TIMEOUT_S)
 
 
-def setup(agent: "BaseAgent") -> TaskCardController:
+def setup(agent: "_TaskCardAgent") -> TaskCardController:
     """Register the public ``task_card`` controller tool on *agent*.
 
-    Kernel-owned (drives the kernel-owned Telegram reverse channel), so it adds
-    no ``lingtai.tools`` package and no glossary obligation (``glossary_package=None``).
+    ``glossary_package=None`` on purpose: the ``task_card`` surface is agent-only
+    and English-only, so per the root ``CONTRACT.md`` design principles it carries
+    no localized (zh/wen) glossary and takes no i18n obligation. Registration is a
+    composition-root concern driven by ``Agent._maybe_setup_task_card_controller``
+    once a Telegram MCP client exists — this tool is deliberately NOT a
+    ``registry.BUILTIN_TOOLS`` capability, because no Telegram means no public
+    ``task_card`` tool.
     """
     mgr = TaskCardController(agent)
     agent.add_tool(

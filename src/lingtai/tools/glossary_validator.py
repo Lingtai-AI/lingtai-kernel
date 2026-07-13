@@ -56,9 +56,26 @@ def _contract_packages() -> set[str]:
     return packages
 
 
+# Packages that own a CONTRACT.md but are intentionally EXEMPT from the localized
+# tool-glossary system. ``task_card`` is the public programmable-Task-Card tool:
+# it is agent-only and English-only, so per the root CONTRACT.md ``## Design
+# principles`` (no i18n on an agent-only surface without human confirmation) it
+# ships no ``glossary-{en,zh,wen}.md``. It is registered by the composition root,
+# not by ``registry.BUILTIN_TOOLS``, so it is never a registry glossary owner
+# either — excluding it here keeps the validator from demanding a glossary the
+# design principles deliberately withhold.
+_GLOSSARY_EXEMPT = frozenset({"task_card"})
+
+
 def discover_packages() -> list[str]:
-    """Discover glossary owners from registry plus CONTRACT package resources."""
-    return sorted(_registry_packages() | _contract_packages())
+    """Discover glossary owners from registry plus CONTRACT package resources.
+
+    Glossary-exempt packages (``_GLOSSARY_EXEMPT`` — English-only, agent-only
+    tools that carry no localized glossary) are excluded so the validator does not
+    require ``glossary-{en,zh,wen}.md`` from a surface the root design principles
+    keep out of the i18n system.
+    """
+    return sorted((_registry_packages() | _contract_packages()) - _GLOSSARY_EXEMPT)
 
 
 def _validate_resource(resource, full_pkg: str, lang: str) -> list[str]:

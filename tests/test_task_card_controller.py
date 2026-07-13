@@ -1,9 +1,13 @@
-"""Unit tests for the public kernel ``task_card`` controller (Jason #7258/#7259).
+"""Unit tests for the public ``task_card`` controller (Jason #7258/#7259).
 
-Covers registration, exact-one schema-valid JSON, path containment, synchronous
-initial errors (timeout/nonzero/invalid-frame), the async watch lifecycle,
-inspect/retry/stop, and the deduped fail-loud LICC error/recovery wakes. No real
-Telegram or network — the reverse channel is a fake MCP client.
+The controller is owned by the concrete tool package ``lingtai.tools.task_card``;
+these tests import it from there. Covers registration, exact-one schema-valid
+JSON, path containment, synchronous initial errors (timeout/nonzero/invalid-frame),
+the async watch lifecycle, inspect/retry/stop, and the deduped fail-loud LICC
+error/recovery wakes. No real Telegram or network — the reverse channel is a fake
+MCP client. The test imports the kernel's deliberately mirrored ``_TASK_CARD_TOOL``
+copy; kernel, concrete tool, and Telegram server keep that private-route literal
+in sync without introducing forbidden cross-layer imports.
 """
 
 from __future__ import annotations
@@ -14,8 +18,9 @@ from pathlib import Path
 import pytest
 
 from lingtai.kernel.base_agent import _TASK_CARD_TOOL
-from lingtai.kernel.task_card_controller import (
+from lingtai.tools.task_card import (
     TaskCardController,
+    get_description,
     get_schema,
     setup,
 )
@@ -94,7 +99,7 @@ def test_setup_registers_public_tool(agent):
     assert isinstance(mgr, TaskCardController)
     name, schema, handler, _desc, glossary = agent.added_tools[0]
     assert name == "task_card"
-    assert glossary is None  # kernel tool: no lingtai.tools glossary package
+    assert glossary is None  # agent-only, English-only surface: no localized glossary
     assert schema["properties"]["action"]["enum"] == [
         "start",
         "inspect",
@@ -106,6 +111,26 @@ def test_setup_registers_public_tool(agent):
 
 def test_schema_requires_action():
     assert get_schema()["required"] == ["action"]
+
+
+def test_description_routes_to_co_located_manual():
+    """The model-facing tool description points at the co-located manual so the
+    tool surface itself is discoverable, not only the architecture documents —
+    without inlining the manual body."""
+    desc = get_description()
+    assert "src/lingtai/tools/task_card/manual/SKILL.md" in desc
+    assert "```" not in desc  # routes to the manual, does not copy it in
+
+
+def test_task_card_is_glossary_exempt():
+    """``task_card`` is an agent-only, English-only surface: it registers with
+    ``glossary_package=None`` and is intentionally excluded from the localized
+    glossary owner set (root CONTRACT.md design principle 1 — no i18n here). This
+    pins the exemption directly, not via a package-data comment."""
+    from lingtai.tools import glossary_validator as gv
+
+    assert "task_card" in gv._GLOSSARY_EXEMPT
+    assert "task_card" not in gv.discover_packages()
 
 
 def test_wiring_registers_only_with_telegram_and_is_idempotent():
@@ -305,7 +330,7 @@ def test_same_code_refails_after_recovery_emits_new_durable_wake(agent, controll
 def test_join_timeout_is_truthful_against_reverse_call_timeout():
     """Stop/shutdown must be able to actually join a tick blocked in the reverse
     call, so the join budget must exceed the reverse-call timeout."""
-    from lingtai.kernel import task_card_controller as tc
+    from lingtai.tools.task_card import controller as tc
 
     assert tc._JOIN_TIMEOUT_S > tc._REVERSE_CALL_TIMEOUT_S
 

@@ -4,11 +4,12 @@ description: |
   Progressive-disclosure usage manual for the Telegram MCP tool. Read this when
   you need detail beyond the one-line action descriptions: media.type='document'
   vs 'photo' for charts/reports/generated artifacts, placeholder/live-status
-  messages, reply vs send, read/check/search, parse_mode/entities, chat_action, dynamic slash commands,
+  messages, the programmable Task Card (the public task_card tool), reply vs send,
+  read/check/search, parse_mode/entities, chat_action, dynamic slash commands,
   and error surfacing. Pulled on demand via action='manual'; you do not need to
   call it before every send.
-version: 1.2.0
-last_changed_at: "2026-07-11T17:47:00-07:00"
+version: 1.3.0
+last_changed_at: "2026-07-12T09:00:00-07:00"
 ---
 
 # Telegram MCP — usage manual (progressive disclosure)
@@ -44,6 +45,56 @@ descriptions; you do not need to call it before every send.
   (you do not manage it; use send/reply for your own messages).
 - For very fast responses (under ~5s), native Telegram typing/👀 presence is
   enough — skip the placeholder.
+
+## PROGRAMMABLE TASK CARD: task_card tool
+
+Beyond the automatic card above, the public `task_card` tool lets you drive a
+**programmable slot** of the same single resident Task Card message. It exists
+only when Telegram is connected. It is a real top-level tool — call it as
+`task_card(action=...)`; there is no `agent.task_card.*` Python API.
+
+- You write a small Python **renderer** file inside your working directory. The
+  controller runs it locally with the runtime interpreter (Telegram never runs
+  your code), validates the output, and projects only validated data onto the
+  card. `renderer_path` is confined to the working directory after symlink
+  resolution — a path escaping the workdir (via `..`, an absolute path, or an
+  external symlink) is rejected. That confines the **path** only: the renderer's
+  code is **not** sandboxed and runs with the runtime process's full
+  host/filesystem/network permissions, so run only trusted renderer code.
+- Each renderer run must print **exactly one** JSON object to stdout with any of
+  `title` (string), `lines` (array of strings, ≤20), `footer` (string). Anything
+  else — extra logging, multiple JSON values, a non-object, wrong types, empty
+  stdout, nonzero exit, or timeout — is a frame error.
+- Automatic and programmable slots compose into **one** resident message; your
+  `start`/`stop` touch only the programmable slot.
+
+Safe renderer (`task_card_status.py`, inside the workdir — read your own state,
+never shell-evaluate untrusted input):
+
+```python
+import json
+from pathlib import Path
+
+done = len(list(Path("reports").glob("*.md"))) if Path("reports").is_dir() else 0
+print(json.dumps({"title": "Nightly audit", "lines": [f"reports: {done}"]}))
+```
+
+Actions:
+- `task_card(action="start", renderer_path="task_card_status.py", interval_s=15)`
+  — runs the renderer once synchronously (a first-run failure is an immediate
+  error and starts **no** watch), then watches it and returns a `watch_id`.
+- `task_card(action="inspect", watch_id=...)` — status + `last_valid_frame`.
+- `task_card(action="retry", watch_id=...)` — re-run now after fixing a renderer.
+- `task_card(action="stop", watch_id=...)` — clear only the programmable slot
+  (renderer files are never deleted).
+
+After start, a failing run **keeps the last valid frame** on the card and raises
+one deduped `task_card.error` system notification per distinct error code, then
+one recovery notification after the next valid frame — never raw renderer output
+or secrets. Do not: point outside the workdir, log/print more than one JSON value
+to stdout, put secrets in the card, or assume `task_card` exists without Telegram.
+For the full procedure and rationale, read the tool's own manual at
+`src/lingtai/tools/task_card/manual/SKILL.md`.
 
 ## REPLY vs SEND
 

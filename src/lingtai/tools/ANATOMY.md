@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/tools/registry.py
   - src/lingtai/tools/glossary_validator.py
   - src/lingtai/tools/i18n/__init__.py
+  - src/lingtai/tools/task_card/ANATOMY.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -40,7 +41,10 @@ composes them.
 (the five mandatory intrinsics); `knowledge/`, `skills/`, `bash/`, `avatar/`,
 `daemon/`, `mcp/`, `read/`, `write/`, `edit/`, `glob/`, `grep/` (always-on
 floor); `vision/`, `web_search/` (opt-in). `avatar/` registers two tools
-(`avatar_spawn`, `avatar_rules`).
+(`avatar_spawn`, `avatar_rules`). `task_card/` is the one **composition-root-registered,
+Telegram-gated** tool: it is NOT in `registry.BUILTIN_TOOLS`; the outer `Agent`
+wires it via `_maybe_setup_task_card_controller` only when a Telegram MCP client
+exists (see `task_card/ANATOMY.md`).
 
 ## Connections
 
@@ -77,3 +81,8 @@ each tool's own `ANATOMY.md` and `CONTRACT.md`.
 - `CORE_DEFAULTS` is the always-on floor; `vision`/`web_search` stay opt-in.
 - Each `tools/<name>/` carries `__init__.py` (+ submodules), `ANATOMY.md`,
   `CONTRACT.md`, and an optional `manual/`.
+- `task_card/` is the one **root-governed** tool component (its `CONTRACT.md` is
+  registered in the root `CONTRACT.md` and paired with its `ANATOMY.md`), and the
+  one **glossary-exempt** package: it is agent-only and English-only, so per the
+  root design principles it ships no `glossary-{en,zh,wen}.md` and
+  `glossary_validator.py` excludes it from the localized-glossary owner set.
