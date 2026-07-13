@@ -7,7 +7,7 @@ description: |
   Task Card JSON object. Covers the renderer contract, a safe runnable example,
   the start | inspect | retry | stop lifecycle, path/timeout/validation rules,
   fail-loud error wakes, and how the /taskcard toggle interacts.
-last_changed_at: "2026-07-12T23:55:00-07:00"
+last_changed_at: "2026-07-13T00:45:00-07:00"
 ---
 
 # Programmable Telegram Task Card — manual (what / how / why)
@@ -98,7 +98,14 @@ As your job rewrites `job_status.txt`, the card's programmable slot follows it.
   immediate tool error and **no watch is created**. On success the first frame is
   projected and a background watch begins; you receive a `watch_id`. Optional
   `interval_s` (seconds between runs, minimum 1; default 5) and `timeout_s`
-  (per-run timeout; default 10).
+  (per-run timeout; default 10). **Initial partial:** if the first frame was sent
+  and is visible but its resident id could not be durably saved, `start` still
+  returns `status: ok` with your `watch_id`, plus `partial: true`,
+  `resident_persist_failed: true`, and the sent `message_id` — the watch is fully
+  usable (`inspect`/`retry`/`stop` all work) and the error clears on the next
+  accepted update. A send that returns no usable message id (or a
+  malformed/cross-route id) is instead a plain error with **no** watch — the addon
+  never invents or adopts an unknown card.
 - **inspect** — report a watch's state (`watching`, `error`, `stopping`, or
   `stop_failed`), its `last_valid_frame`, `last_valid_frame_at` (a UTC ISO-8601
   timestamp of when that frame was captured — set on the first accepted frame and
@@ -137,10 +144,12 @@ identical failures inside one episode stay silent; the next good frame emits one
 and `retry`.
 
 Failure codes you may see: `renderer_timeout`, `renderer_nonzero_exit`,
-`invalid_frame`, `renderer_failed`, `backend_edit_failed`, and — for a `stop`
+`invalid_frame`, `renderer_failed`, `backend_edit_failed`,
+`resident_persist_failed` (the card is visible but its resident id was not durably
+saved — retryable; clears on the next accepted update), and — for a `stop`
 that is not yet complete — `stop_thread_alive` (the renderer thread is still
 running; retry `stop` once quiescent) or `stop_finalize_failed` (the clear was
-rejected; retry `stop`). Both are retryable.
+rejected; retry `stop`). All are retryable.
 
 ## WHY it is designed this way
 

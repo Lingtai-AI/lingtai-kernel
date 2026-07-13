@@ -19,6 +19,8 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
+import pytest
+
 from lingtai.mcp_servers.telegram.manager import TelegramManager
 from tests._notification_store_helpers import FakeNotificationStore
 
@@ -45,6 +47,10 @@ class FakeAccount:
         self.persist_error: Exception | None = None
         self._last_message_ids: dict[int, int] = {}
         self.report_unknown_latest = False
+        # When set, ``send_message`` returns this exact object instead of a
+        # well-formed ``{"message_id": <int>}`` — used to simulate a top-level-ok
+        # response whose result shape carries no usable message id.
+        self.send_result_override: object | None = "__unset__"
 
     # -- high-water mark ---------------------------------------------------
     def _note(self, chat_id, message_id):
@@ -71,6 +77,10 @@ class FakeAccount:
     def send_message(self, chat_id, text, reply_to_message_id=None, **kwargs):
         if self.send_error is not None:
             raise self.send_error
+        if self.send_result_override != "__unset__":
+            # A top-level-ok send whose result carries no usable message id.
+            self.calls.append(("send", chat_id, None, text))
+            return self.send_result_override
         # Telegram message ids are monotonic per chat: a new send always exceeds
         # the chat's current latest id.
         message_id = max(self.next_id, self._last_message_ids.get(chat_id, 0) + 1)
@@ -538,3 +548,80 @@ def test_concurrent_channels_serialize_one_rotation(tmp_path):
     assert _calls(account, "delete") == [("delete", 55, 100)]
     assert account.resident[55] == "mybot:55:201"
     assert all(result["message_id"] == "mybot:55:201" for result in results)
+
+
+# ---------------------------------------------------------------------------
+# Malformed / missing send id at the transport boundary (indeterminate send).
+# A send whose result carries no real positive-int message id must NEVER be
+# formatted/adopted/persisted as a resident id, must never claim a successful
+# ``resident_persist_failed`` partial, and must preserve a prior confirmed
+# ``old_resident_deleted`` truth. It is an explicit indeterminate error.
+# ---------------------------------------------------------------------------
+
+_MALFORMED_SEND_RESULTS = [
+    {},                     # missing message_id
+    {"message_id": True},   # bool
+    {"message_id": False},  # bool
+    {"message_id": 1.5},    # float
+    {"message_id": "100"},  # string
+    {"message_id": 0},      # zero
+    {"message_id": -5},     # negative
+    {"message_id": None},   # explicit None
+    "not-a-dict",           # non-dict result
+    None,                   # non-dict result
+]
+
+
+@pytest.mark.parametrize("bad_result", _MALFORMED_SEND_RESULTS)
+def test_cold_send_malformed_id_is_indeterminate_never_adopted(tmp_path, bad_result):
+    manager, account = _manager(tmp_path)
+    account.send_result_override = bad_result
+    # A would-be persistence failure IF the fake id were adopted — it must not be.
+    account.persist_error = RuntimeError("disk full")
+
+    result = _automatic(manager, "create", chat_id=55)
+
+    assert result["status"] == "error"
+    assert result.get("indeterminate_send") is True
+    assert "message_id" not in result               # no fake compound id formed
+    assert result.get("resident_persist_failed") is not True  # not a partial
+    assert account.resident == {}                   # nothing persisted (no :0 etc.)
+    assert not _calls(account, "delete")            # nothing deleted
+
+
+def test_cold_send_valid_id_with_persist_failure_is_the_only_partial(tmp_path):
+    """Contrast: a VALID new id whose durable persist fails IS the sole allowed
+    successful partial (validated new resident id present)."""
+    manager, account = _manager(tmp_path)
+    account.persist_error = RuntimeError("disk full")
+
+    result = _automatic(manager, "create", chat_id=55)
+
+    assert result["status"] == "ok"
+    assert result["message_id"] == "mybot:55:100"
+    assert result.get("resident_persist_failed") is True
+    assert "indeterminate_send" not in result
+
+
+@pytest.mark.parametrize("bad_result", _MALFORMED_SEND_RESULTS)
+def test_rotate_replacement_malformed_send_reports_deleted_and_indeterminate(
+    tmp_path, bad_result
+):
+    manager, account = _manager(tmp_path)
+    created = _automatic(manager, "create", reasoning="first")
+    resident_id = created["message_id"]  # mybot:55:100
+    # A newer user message arrives below the resident -> deterministically superseded.
+    account.observe_incoming(55, 500)
+    # The replacement send returns a malformed / missing id.
+    account.send_result_override = bad_result
+
+    result = _automatic(manager, "update", card_message_id=resident_id, reasoning="second")
+
+    assert result["status"] == "error"
+    # Old-first ordering already deleted the exact old resident before the send.
+    assert result.get("old_resident_deleted") is True
+    assert result.get("indeterminate_send") is True
+    assert "message_id" not in result
+    assert ("delete", 55, 100) in account.calls     # exact old deleted
+    # Never adopts/persists a fake new id; the resident map is not advanced.
+    assert account.resident[55] == resident_id

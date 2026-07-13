@@ -36,22 +36,30 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 - `TaskCardController` — thin Core: dispatch, synchronous first frame, watch
   registry, fail-loud/recovery wakes (`controller.py:179`). Key methods:
   `handle` (`controller.py:188`), `_start` (`controller.py:213`), `_inspect`
-  (`controller.py:246`), `_run_renderer` (`controller.py:562`), `_validate_frame`
-  (`controller.py:588`), `_project` (`controller.py:635`),
-  `_validate_renderer_path` (`controller.py:674`), `_resolve_route`
-  (`controller.py:713`), `shutdown_for_agent_stop` (`controller.py:738`).
+  (`controller.py:281`), `_run_renderer` (`controller.py:597`), `_validate_frame`
+  (`controller.py:623`), `_project` (`controller.py:670`),
+  `_validate_renderer_path` (`controller.py:746`), `_resolve_route`
+  (`controller.py:785`), `shutdown_for_agent_stop` (`controller.py:810`).
+  `_start` (`controller.py:213`) also keeps the watch addressable on a validated
+  initial persistence-partial (`resident_persist_failed` with a route-matching id)
+  rather than discarding it, and discards on any other first-frame error.
 - Stop lifecycle (never finalize/remove/`stopped` while the watcher thread is
-  alive): `_stop` (`controller.py:266`), the post-projection late-`update` guard
-  and compensation in `_tick` (`controller.py:391`), and
-  `_compensate_stop_finalize` (`controller.py:442`) with the `finalized`
-  watcher↔public-stop handshake. `_project` (`controller.py:635`) also normalizes
-  the manager's `resident_persist_failed` (→ observable partial) and pre-send
-  `stale_delete_failed` (→ error, no adopted id) outcomes.
+  alive): `_stop` (`controller.py:301`), the post-projection late-`update` guard
+  and compensation in `_tick` (`controller.py:426`), and
+  `_compensate_stop_finalize` (`controller.py:477`) with the `finalized`
+  watcher↔public-stop handshake.
+- Outcome validation: `_project` (`controller.py:670`) normalizes the manager's
+  `resident_persist_failed` (→ observable partial surfacing the validated
+  `message_id`) and treats pre-send `stale_delete_failed` / `indeterminate_send` /
+  any malformed id as a plain error (no adopted id). `_route_matched_message_id`
+  (`controller.py:720`) independently validates every returned compound id — route
+  match to `watch.account`/`watch.chat_id` plus a positive-integer terminal id —
+  for both clean and partial outcomes.
 - `_Watch` — per-watch in-memory state: thread, last-valid frame + timestamp,
   sticky `stopping`, `finalized` handshake flag, deduped error/epoch bookkeeping
   (`controller.py:118`).
 - `setup(agent)` — registers the `task_card` tool with `glossary_package=None`
-  (`controller.py:749`).
+  (`controller.py:821`).
 - `TelegramTaskCardAgent` — the narrow host Protocol the controller depends on
   instead of the concrete `Agent` (`interface.py:23`).
 
@@ -71,8 +79,10 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 - Transport ownership: the manager (`_deliver_channel_frame_locked`,
   `_rotate_task_card_to_latest`, `_replace_task_card_after_probe`) owns the
   hard-at-most-one / last-message resident transport; `_project` only reads its
-  normalized `{status}`/`partial`/`resident_persist_failed`/`stale_delete_failed`
-  outcome.
+  normalized `{status}`/`partial`/`resident_persist_failed`/`stale_delete_failed`/
+  `indeterminate_send` outcome. The manager's `send_progress_message` forms a
+  compound id only after `_sent_message_id_or_none` confirms a real positive `int`,
+  else returns `indeterminate_send` so cold-send/old-first replacement fail closed.
 - Fail-loud: after-handle failures call `agent._enqueue_system_notification`.
 
 ## Composition

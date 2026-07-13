@@ -1381,7 +1381,17 @@ class TelegramManager:
     ) -> dict | None:
         """Send a progress message that can be edited later.
 
-        Returns the compound message_id for later editing, or None on failure.
+        Returns one of:
+
+        - ``{"status": "sent", "message_id": <compound>}`` ONLY when the provider
+          returned a real, positive, non-boolean integer message id; the compound
+          id is formed from that validated id.
+        - ``{"status": "indeterminate_send"}`` when the send did not raise but
+          returned no usable message id (a malformed result under top-level
+          ``ok=true``): a card may be visible but its exact id is unknown, so a
+          fake id (e.g. ``:0``) is never formed, adopted, persisted, or deleted.
+        - ``None`` when the send raised (no card was sent).
+
         Best-effort — never blocks or fails the main task.
         """
         try:
@@ -1390,12 +1400,35 @@ class TelegramManager:
                 chat_id, text,
                 reply_to_message_id=reply_to_message_id,
             )
-            tg_message_id = result.get("message_id", 0)
-            compound_id = f"{account_alias}:{chat_id}:{tg_message_id}"
-            return {"status": "sent", "message_id": compound_id}
         except Exception as e:
             log.debug("Failed to send progress message: %s", e)
             return None
+        tg_message_id = self._sent_message_id_or_none(result)
+        if tg_message_id is None:
+            # Top-level ``ok`` may be true while the result carries no usable id.
+            # Never invent a fake id: report an explicit indeterminate send so
+            # callers fail closed instead of adopting/persisting an unknown card.
+            log.warning(
+                "Task card send returned no valid message id; treating as "
+                "indeterminate (no id adopted/persisted/deleted)")
+            return {"status": "indeterminate_send"}
+        compound_id = f"{account_alias}:{chat_id}:{tg_message_id}"
+        return {"status": "sent", "message_id": compound_id}
+
+    @staticmethod
+    def _sent_message_id_or_none(result: object) -> int | None:
+        """Extract a real positive Telegram message id from a send result.
+
+        Returns ``None`` for any malformed shape — missing, non-dict, ``bool``,
+        non-``int`` (float/str), zero, or negative — so a fake resident id can
+        never be formed at the transport boundary.
+        """
+        if not isinstance(result, dict):
+            return None
+        mid = result.get("message_id")
+        if isinstance(mid, bool) or not isinstance(mid, int) or mid <= 0:
+            return None
+        return mid
 
     @staticmethod
     def _task_card_edit_error_outcome(exc: Exception) -> str:
@@ -1628,12 +1661,19 @@ class TelegramManager:
             return recovered
 
         result = self.send_progress_message(account, chat_id, text)
-        if result is None:
-            return {"status": "error", "error": error}
+        if result is None or result.get("status") != "sent":
+            # No prior resident here, so nothing was deleted. A raised send is a
+            # plain failure; an ``indeterminate_send`` means a card may be visible
+            # with an unknown id — either way NEVER form/adopt/persist a fake id or
+            # delete an unknown card. Surface the indeterminate case explicitly.
+            outcome: dict = {"status": "error", "error": error}
+            if result is not None and result.get("status") == "indeterminate_send":
+                outcome["indeterminate_send"] = True
+            return outcome
         new_id = result["message_id"]
         self._set_channel_frame(account, chat_id, channel, frame)
         persisted = self._set_resident_task_card(account, chat_id, new_id)
-        outcome: dict = {"status": "ok", "message_id": new_id}
+        outcome = {"status": "ok", "message_id": new_id}
         if not persisted:
             # The sent card remains visible and in-memory current, but the durable
             # resident write was not acknowledged. No prior resident exists here.
@@ -1785,10 +1825,17 @@ class TelegramManager:
             }
 
         result = self.send_progress_message(account, chat_id, text)
-        if result is None:
+        if result is None or result.get("status") != "sent":
+            # Replacement send failed or returned no usable id. Preserve the truth
+            # that the exact old resident was already deleted (may leave zero
+            # cards); an ``indeterminate_send`` additionally means a new card may be
+            # visible with an unknown id. Fail closed either way — no fake id is
+            # formed, adopted, persisted, or deleted.
             outcome: dict = {"status": "error", "error": error}
             if delete_outcome == _TASK_CARD_DELETE_OK:
                 outcome["old_resident_deleted"] = True
+            if result is not None and result.get("status") == "indeterminate_send":
+                outcome["indeterminate_send"] = True
             return outcome
 
         new_id = result["message_id"]

@@ -261,10 +261,13 @@ def test_project_surfaces_partial_telegram_failure(agent, controller):
 
     result = controller._project(watch, "update", {"title": "T"})
 
+    # The validated, route-matching new id is surfaced so ``_start`` can keep the
+    # partial watch handle addressable (initial-partial correction).
     assert result == {
         "status": "error",
         "partial": True,
         "resident_persist_failed": True,
+        "message_id": "acct:42:101",
     }
     agent._client.result = None
     controller.handle({"action": "stop", "watch_id": watch.watch_id})
@@ -288,6 +291,176 @@ def test_project_rejects_impossible_stale_delete_success_payload(agent, controll
     assert result == {"status": "error"}
     agent._client.result = None
     controller.handle({"action": "stop", "watch_id": watch.watch_id})
+
+
+# -- _project independent message_id validation (route + positive int) -----
+
+# The fixture route is account="acct", chat_id=42 (see _FakeAgent).
+_BAD_MESSAGE_IDS = [
+    "not-a-compound-id",  # unparseable
+    "other:42:101",       # cross account
+    "acct:99:101",        # cross chat
+    "acct:42:0",          # zero terminal
+    "acct:42:-5",         # negative terminal
+    "acct:42:abc",        # non-int terminal
+    "acct:42",            # too few parts
+    "acct:42:101:extra",  # (rsplit keeps 'acct:42' as account -> account mismatch)
+    "",                   # empty
+    123,                  # non-string
+    None,                 # missing
+]
+
+
+@pytest.mark.parametrize("bad_id", _BAD_MESSAGE_IDS)
+def test_project_rejects_malformed_or_cross_route_partial_id(agent, controller, bad_id):
+    """A ``resident_persist_failed`` partial REQUIRES a validated route-matching
+    positive-int id; a malformed/cross-route/absent id is a plain error, never a
+    partial (an unknown card is never adopted)."""
+    start = controller.handle({
+        "action": "start",
+        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
+        "interval_s": 3600,
+    })
+    watch = controller._watches[start["watch_id"]]
+    agent._client.result = {
+        "status": "ok",
+        "message_id": bad_id,
+        "resident_persist_failed": True,
+    }
+    assert controller._project(watch, "update", {"title": "T"}) == {"status": "error"}
+    agent._client.result = None
+    controller.handle({"action": "stop", "watch_id": watch.watch_id})
+
+
+# A clean ``ok`` legitimately omits the id (suppressed/no-op), so ``None`` is not a
+# malformed clean id — only a PRESENT id must be route-validated.
+_BAD_PRESENT_MESSAGE_IDS = [i for i in _BAD_MESSAGE_IDS if i is not None]
+
+
+@pytest.mark.parametrize("bad_id", _BAD_PRESENT_MESSAGE_IDS)
+def test_project_rejects_malformed_or_cross_route_clean_id(agent, controller, bad_id):
+    """A clean ``ok`` that carries a message_id must also be route-validated
+    (defense in depth); a cross-route/malformed present clean id becomes an error."""
+    start = controller.handle({
+        "action": "start",
+        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
+        "interval_s": 3600,
+    })
+    watch = controller._watches[start["watch_id"]]
+    agent._client.result = {"status": "ok", "message_id": bad_id}
+    assert controller._project(watch, "update", {"title": "T"}) == {"status": "error"}
+    agent._client.result = None
+    controller.handle({"action": "stop", "watch_id": watch.watch_id})
+
+
+def test_project_suppressed_ok_without_id_is_accepted(agent, controller):
+    """A suppressed/no-op ``ok`` legitimately carries no message_id and stays ok."""
+    start = controller.handle({
+        "action": "start",
+        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
+        "interval_s": 3600,
+    })
+    watch = controller._watches[start["watch_id"]]
+    agent._client.result = {"status": "ok", "suppressed": True, "taskcard": False}
+    assert controller._project(watch, "update", {"title": "T"}) == {"status": "ok"}
+    agent._client.result = None
+    controller.handle({"action": "stop", "watch_id": watch.watch_id})
+
+
+# -- initial successful-partial keeps the watch handle (Blocker 2) ----------
+
+
+def test_start_initial_persistence_partial_keeps_watch_and_stops(agent, controller):
+    """A validated-new-id persistence failure on the FIRST frame keeps the watch
+    addressable (does not collapse to generic rejection): the card was sent and is
+    visible, the partial is observable, the accepted frame/timestamp are committed,
+    and ``stop`` finalizes it without rerendering or losing the handle."""
+    agent._client.result = {
+        "status": "ok",
+        "message_id": "acct:42:101",  # route-matching, positive terminal
+        "resident_persist_failed": True,
+    }
+    start = controller.handle({
+        "action": "start",
+        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
+        "interval_s": 3600,
+    })
+    # Documented initial-partial shape: a started watch (status ok) with explicit
+    # partial flags, the validated id, a watch_id handle, and truthful error state.
+    assert start["status"] == "ok"
+    assert start["partial"] is True
+    assert start["resident_persist_failed"] is True
+    assert start["message_id"] == "acct:42:101"
+    assert start["state"] == "error"
+    assert start["error"]["code"] == "resident_persist_failed"
+    assert start["error"]["retryable"] is True
+    wid = start["watch_id"]
+    assert wid in controller._watches  # handle retained, not popped
+
+    # inspect: truthful retryable error + committed accepted frame/timestamp.
+    inspect = controller.handle({"action": "inspect", "watch_id": wid})
+    assert inspect["state"] == "error"
+    assert inspect["error"]["code"] == "resident_persist_failed"
+    assert inspect["last_valid_frame"] == {"lines": ["a", "b"], "title": "T"}
+    assert inspect["last_valid_frame_at"]
+    # A fail-loud wake surfaced the durability gap.
+    assert any(w["extra"].get("code") == "resident_persist_failed" for w in agent.wakes)
+
+    # stop finalizes and removes the handle without rerendering.
+    agent._client.result = None  # later projections are clean ok
+    stop = controller.handle({"action": "stop", "watch_id": wid})
+    assert stop["status"] == "ok"
+    assert stop["state"] == "stopped"
+    assert wid not in controller._watches
+    assert agent._client.calls[-1][1]["sub_action"] == "finalize"
+
+
+def test_start_partial_error_clears_only_on_accepted_recovery(agent, controller):
+    """The initial persistence error is retryable and clears only after a real
+    accepted projection (an ok result), never on a failing one."""
+    agent._client.result = {
+        "status": "ok",
+        "message_id": "acct:42:101",
+        "resident_persist_failed": True,
+    }
+    start = controller.handle({
+        "action": "start",
+        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
+        "interval_s": 3600,
+    })
+    wid = start["watch_id"]
+    watch = controller._watches[wid]
+
+    # A failing projection does NOT clear the error.
+    agent._client.fail = True
+    controller._tick(watch)
+    assert controller.handle({"action": "inspect", "watch_id": wid})["state"] == "error"
+
+    # A genuinely accepted projection clears it -> watching.
+    agent._client.fail = False
+    agent._client.result = None  # clean ok with a route-matching default id
+    controller._tick(watch)
+    assert controller.handle({"action": "inspect", "watch_id": wid})["state"] == "watching"
+    controller.handle({"action": "stop", "watch_id": wid})
+
+
+def test_start_malformed_partial_id_discards_watch(agent, controller):
+    """A malformed/cross-route id on the initial partial is a HARD error (not a
+    partial): the watch is discarded and no unknown card is adopted."""
+    agent._client.result = {
+        "status": "ok",
+        "message_id": "not-a-compound-id",
+        "resident_persist_failed": True,
+    }
+    result = controller.handle({
+        "action": "start",
+        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
+        "interval_s": 3600,
+    })
+    assert result["status"] == "error"
+    assert "partial" not in result
+    assert "watch_id" not in result
+    assert controller._watches == {}
 
 
 # -- unknown action / watch -----------------------------------------------

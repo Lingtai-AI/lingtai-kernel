@@ -229,9 +229,44 @@ class TaskCardController:
                 watch_id, renderer_path, interval_s, timeout_s, account, chat_id
             )
             self._watches[watch_id] = watch
-        # Project the first valid frame; a reverse-call failure here is synchronous
-        # and the (unstarted) watch is discarded — no bogus handle is returned.
-        if self._project(watch, "create", frame).get("status") == "error":
+        # Project the first valid frame.
+        project_result = self._project(watch, "create", frame)
+        if project_result.get("status") == "error":
+            if project_result.get("partial") is True:
+                # Initial successful-partial: the first frame was SENT and is
+                # visible (validated route-matching new id), but the durable
+                # resident id write failed. Keep the watch addressable so later
+                # inspect/retry/stop can recover or finalize it — commit the
+                # accepted frame/timestamp, mark a truthful retryable persistence
+                # error (cleared only by a later accepted projection), and spawn the
+                # watcher. Return status ``ok`` with explicit partial flags rather
+                # than collapsing into generic backend rejection.
+                persist_error = {
+                    "code": "resident_persist_failed",
+                    "retryable": True,
+                    "message": (
+                        "the first Task Card frame was sent and is visible, but its "
+                        "resident id was not durably persisted; it recovers on the "
+                        "next accepted projection, or can be stopped"
+                    ),
+                }
+                with watch.lock:
+                    watch.last_valid_frame = frame
+                    watch.last_valid_at = _utc_now_iso()
+                self._mark_error(watch, persist_error)
+                self._spawn(watch)
+                return {
+                    "status": "ok",
+                    "watch_id": watch_id,
+                    "state": "error",
+                    "partial": True,
+                    "resident_persist_failed": True,
+                    "message_id": project_result.get("message_id"),
+                    "error": persist_error,
+                }
+            # Any other first-frame failure (backend reject, or a malformed /
+            # cross-route / indeterminate send with no adoptable id) discards the
+            # (unstarted) watch — no bogus handle is returned.
             with self._lock:
                 self._watches.pop(watch_id, None)
             raise TaskCardControllerError(
@@ -658,16 +693,53 @@ class TaskCardController:
         # rather than claiming a new resident was adopted.
         if result.get("stale_delete_failed") is True:
             return {"status": "error"}
+        message_id = result.get("message_id")
         if result.get("resident_persist_failed") is True:
-            message_id = result.get("message_id")
-            if isinstance(message_id, str) and message_id:
+            # The ONE allowed successful partial. It REQUIRES a validated,
+            # route-matching new resident id (positive-int terminal). A malformed,
+            # cross-route, or absent id is an indeterminate error, never a partial —
+            # an unknown card is never adopted, so later recovery can always address
+            # exactly the sent card. The validated id is surfaced so ``_start`` can
+            # keep the watch handle addressable.
+            if self._route_matched_message_id(watch, message_id):
                 return {
                     "status": "error",
                     "partial": True,
                     "resident_persist_failed": True,
+                    "message_id": message_id,
                 }
             return {"status": "error"}
+        # Clean success: if the manager returned a resident id, it must be a
+        # validated route-matched compound (a suppressed/no-op ``ok`` carries none),
+        # so a malformed/cross-route id is never accepted as clean either.
+        if message_id is not None and not self._route_matched_message_id(watch, message_id):
+            return {"status": "error"}
         return {"status": "ok"}
+
+    @staticmethod
+    def _route_matched_message_id(watch: _Watch, message_id: object) -> bool:
+        """True only for a compound id ``account:chat_id:message_id`` whose account
+        and chat match this watch's route and whose terminal Telegram id is a real
+        positive integer.
+
+        Rejects non-string, empty, wrong-shape, cross-route, and non-positive
+        terminal ids so a malformed/fake manager result can never be adopted as a
+        resident. (Group chat ids are negative, so only the terminal message id is
+        required positive.)"""
+        if not isinstance(message_id, str) or not message_id:
+            return False
+        parts = message_id.rsplit(":", 2)
+        if len(parts) != 3:
+            return False
+        acct, chat, tg = parts
+        if acct != str(watch.account):
+            return False
+        try:
+            chat_id = int(chat)
+            tg_id = int(tg)
+        except (TypeError, ValueError):
+            return False
+        return chat_id == int(watch.chat_id) and tg_id > 0
 
     # -- validation + route helpers ----------------------------------------
 
