@@ -983,15 +983,37 @@ class Agent(BaseAgent):
         ``lingtai.mcp_servers.telegram.task_card``, not in ``lingtai.tools``, so it
         carries no glossary package. This method is only the Composition Root: it
         detects the Telegram route and invokes the Telegram-owned ``setup``.
-        Idempotent: a no-op after the first registration and when no Telegram
-        client is present, so reconnects/reconciles never double-register.
+        Idempotent: a no-op when the current controller owns the public handler
+        and its exact schema, and when no Telegram client is present. A full
+        refresh clears those public registries but retains active controller
+        watches, so reconnect re-registers that same controller rather than
+        starting a second manager.
         """
-        if hasattr(self, "_task_card_controller"):
-            return
         if "telegram" not in getattr(self, "_mcp_clients_by_tool", {}):
             return
-        from .mcp_servers.telegram.task_card import setup as _setup_task_card
-        self._task_card_controller = _setup_task_card(self)
+        from .mcp_servers.telegram.task_card import (
+            get_description as _get_task_card_description,
+            get_schema as _get_task_card_schema,
+            setup as _setup_task_card,
+        )
+
+        controller = getattr(self, "_task_card_controller", None)
+        if controller is not None:
+            schemas = [
+                schema for schema in self._tool_schemas if schema.name == "task_card"
+            ]
+            handler = self._tool_handlers.get("task_card")
+            has_public_registration = (
+                getattr(handler, "__self__", None) is controller
+                and len(schemas) == 1
+                and schemas[0].description == _get_task_card_description()
+                and schemas[0].parameters == _get_task_card_schema()
+                and schemas[0].system_prompt == ""
+                and schemas[0].glossary_package is None
+            )
+            if has_public_registration:
+                return
+        self._task_card_controller = _setup_task_card(self, controller=controller)
 
     def connect_mcp_http(
         self,
@@ -1315,6 +1337,10 @@ class Agent(BaseAgent):
             except Exception:
                 pass
         self._mcp_clients = []
+        # Reverse routes belong to the closed clients above. Rebuild this mapping
+        # only from successfully connected clients during the following MCP load;
+        # a retained Task Card controller must never select a prior runtime route.
+        self._mcp_clients_by_tool = {}
 
         self._sealed = False
         self._tool_handlers.clear()

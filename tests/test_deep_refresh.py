@@ -917,3 +917,332 @@ def test_refresh_watcher_receives_parent_captured_runtime_identity(tmp_path):
         "runtime_identity_event_fields",
     }.isdisjoint(names | attributes | imported_symbols)
     agent._workdir_lease.release()
+
+
+def test_deep_refresh_re_registers_telegram_task_card_without_leaking_watcher(
+    tmp_path, monkeypatch
+):
+    """The real reconstruct path reconnects Telegram and exposes one public
+    ``task_card`` tool again while reusing the existing controller and watcher.
+
+    This exercises ``_setup_from_init`` -> ``_load_mcp_from_workdir`` ->
+    ``connect_mcp`` rather than mocking the task-card composition helper. The
+    MCP transport is local/fake only so the regression has no subprocess or
+    network dependency.
+    """
+    from lingtai.agent import Agent
+    from lingtai.kernel.config import AgentConfig
+    from lingtai.services import mcp as mcp_module
+
+    class _FakeTelegramMCPClient:
+        instances: list["_FakeTelegramMCPClient"] = []
+
+        def __init__(self, command, args=None, env=None):
+            self.command = command
+            self.args = args
+            self.env = env
+            self.closed = False
+            self.calls: list[tuple[str, dict]] = []
+            type(self).instances.append(self)
+
+        def start(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+        def list_tools(self):
+            return [{
+                "name": "telegram",
+                "schema": {
+                    "type": "object",
+                    "properties": {"action": {"type": "string"}},
+                    "required": ["action"],
+                },
+                "description": "fake Telegram MCP tool",
+            }]
+
+        def call_tool(self, name, args, timeout=None):
+            assert name == "_lingtai_telegram_task_card"
+            assert args["channel"] == "programmable"
+            self.calls.append((name, dict(args)))
+            return {"status": "ok", "message_id": "acct:42:100"}
+
+    monkeypatch.setattr(mcp_module, "MCPClient", _FakeTelegramMCPClient)
+    (tmp_path / "init.json").write_text(json.dumps(_make_init()))
+    mcp_dir = tmp_path / "mcp"
+    mcp_dir.mkdir()
+    (mcp_dir / "servers.json").write_text(json.dumps({
+        "telegram": {"command": "fake-telegram"},
+    }))
+
+    service = MagicMock()
+    service.provider = "openai"
+    service.model = "gpt-4o"
+    service._base_url = None
+    agent = Agent(
+        service,
+        agent_name="test-agent",
+        working_dir=tmp_path,
+        config=AgentConfig(),
+    )
+    old_controller = None
+    try:
+        old_controller = agent._task_card_controller
+        assert [s.name for s in agent._build_tool_schemas()].count("task_card") == 1
+        assert list(agent._tool_handlers).count("task_card") == 1
+
+        agent._telegram_task_card_context = {"account": "acct", "chat_id": 42}
+        renderer = tmp_path / "task-card-renderer.py"
+        renderer.write_text(
+            "import json; print(json.dumps({'title': 'refresh'}))",
+            encoding="utf-8",
+        )
+        started = agent._tool_handlers["task_card"]({
+            "action": "start", "renderer_path": str(renderer), "interval_s": 3600,
+        })
+        old_watch = old_controller._watches[started["watch_id"]]
+        assert old_watch.thread is not None and old_watch.thread.is_alive()
+
+        agent._setup_from_init()
+
+        # The provider-facing schema is rebuilt from the same public tool
+        # registration as dispatch, not merely retained in a mock helper.
+        assert "task_card" in agent._tool_handlers
+        assert getattr(agent._tool_handlers["task_card"], "__self__", None) is old_controller
+        assert [s.name for s in agent._build_tool_schemas()].count("task_card") == 1
+        assert [s.name for s in agent._tool_schemas].count("task_card") == 1
+
+        # Full reconstruction closes the old MCP, but the controller is agent
+        # state rather than client state: reuse it so its active watcher survives
+        # and later projects through the freshly connected Telegram client.
+        assert _FakeTelegramMCPClient.instances[0].closed is True
+        assert old_watch.thread.is_alive()
+        assert agent._task_card_controller is old_controller
+        assert len(_FakeTelegramMCPClient.instances) == 2
+        agent._tool_handlers["task_card"]({
+            "action": "retry", "watch_id": started["watch_id"],
+        })
+        assert _FakeTelegramMCPClient.instances[1].calls
+
+        agent._maybe_setup_task_card_controller()
+        assert agent._task_card_controller is old_controller
+        assert list(agent._tool_handlers).count("task_card") == 1
+        assert [s.name for s in agent._tool_schemas].count("task_card") == 1
+    finally:
+        for controller in (old_controller, getattr(agent, "_task_card_controller", None)):
+            if controller is not None:
+                controller.shutdown_for_agent_stop(reason="test_cleanup")
+        agent._workdir_lease.release()
+
+
+def test_deep_refresh_drops_removed_telegram_route_before_unrelated_mcp_load(
+    tmp_path, monkeypatch
+):
+    """A full reconstruction never reuses a closed Telegram reverse route.
+
+    The retained controller/watch policy is deliberately narrow: removing Telegram
+    does not stop watches here, but it must leave them without a route rather than
+    recreate a public tool or project through the closed client.
+    """
+    from lingtai.agent import Agent
+    from lingtai.kernel.config import AgentConfig
+    from lingtai.services import mcp as mcp_module
+
+    class _FakeMCPClient:
+        instances: list["_FakeMCPClient"] = []
+
+        def __init__(self, command, args=None, env=None):
+            self.command = command
+            self.args = args
+            self.env = env
+            self.closed = False
+            self.calls: list[tuple[str, dict]] = []
+            type(self).instances.append(self)
+
+        def start(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+        def list_tools(self):
+            if self.command == "fake-telegram":
+                return [{
+                    "name": "telegram",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"action": {"type": "string"}},
+                        "required": ["action"],
+                    },
+                    "description": "fake Telegram MCP tool",
+                }]
+            assert self.command == "fake-unrelated"
+            return [{
+                "name": "unrelated",
+                "schema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+                "description": "fake unrelated MCP tool",
+            }]
+
+        def call_tool(self, name, args, timeout=None):
+            self.calls.append((name, dict(args)))
+            assert self.command == "fake-telegram"
+            assert name == "_lingtai_telegram_task_card"
+            return {"status": "ok", "message_id": "acct:42:100"}
+
+    monkeypatch.setattr(mcp_module, "MCPClient", _FakeMCPClient)
+    (tmp_path / "init.json").write_text(json.dumps(_make_init()))
+    mcp_dir = tmp_path / "mcp"
+    mcp_dir.mkdir()
+    servers_path = mcp_dir / "servers.json"
+    servers_path.write_text(json.dumps({"telegram": {"command": "fake-telegram"}}))
+
+    service = MagicMock()
+    service.provider = "openai"
+    service.model = "gpt-4o"
+    service._base_url = None
+    agent = Agent(
+        service,
+        agent_name="test-agent",
+        working_dir=tmp_path,
+        config=AgentConfig(),
+    )
+    old_controller = None
+    try:
+        old_controller = agent._task_card_controller
+        agent._telegram_task_card_context = {"account": "acct", "chat_id": 42}
+        renderer = tmp_path / "task-card-renderer.py"
+        renderer.write_text(
+            "import json; print(json.dumps({'title': 'removed-route'}))",
+            encoding="utf-8",
+        )
+        started = agent._tool_handlers["task_card"]({
+            "action": "start", "renderer_path": str(renderer), "interval_s": 3600,
+        })
+        watch = old_controller._watches[started["watch_id"]]
+        old_telegram = _FakeMCPClient.instances[0]
+        calls_before_refresh = len(old_telegram.calls)
+
+        # Remove Telegram while retaining an unrelated MCP. Its connection still
+        # invokes the real composition-root hook during reconstruction.
+        servers_path.write_text(
+            json.dumps({"unrelated": {"command": "fake-unrelated"}})
+        )
+        agent._setup_from_init()
+
+        assert old_telegram.closed is True
+        assert len(_FakeMCPClient.instances) == 2
+        unrelated = _FakeMCPClient.instances[1]
+        assert agent._mcp_clients_by_tool == {"unrelated": unrelated}
+        assert "telegram" not in agent._mcp_clients_by_tool
+        assert "task_card" not in agent._tool_handlers
+        assert all(schema.name != "task_card" for schema in agent._tool_schemas)
+        assert all(schema.name != "task_card" for schema in agent._build_tool_schemas())
+
+        # The retained watch fails closed against the absent route. It must not
+        # select the closed Telegram client or the unrelated MCP client.
+        assert old_controller._project(watch, "update", {"title": "no route"}) == {
+            "status": "error"
+        }
+        assert len(old_telegram.calls) == calls_before_refresh
+        assert unrelated.calls == []
+    finally:
+        for controller in (old_controller, getattr(agent, "_task_card_controller", None)):
+            if controller is not None:
+                controller.shutdown_for_agent_stop(reason="test_cleanup")
+        agent._workdir_lease.release()
+
+
+def test_telegram_registration_reclaims_foreign_task_card_on_collision_and_reconnect(
+    tmp_path, monkeypatch
+):
+    """Telegram-owned registration wins over a colliding MCP tool in either order."""
+    from lingtai.agent import Agent
+    from lingtai.kernel.config import AgentConfig
+    from lingtai.mcp_servers.telegram.task_card import get_description, get_schema
+    from lingtai.services import mcp as mcp_module
+
+    class _FakeMCPClient:
+        instances: list["_FakeMCPClient"] = []
+
+        def __init__(self, command, args=None, env=None):
+            self.command = command
+            self.args = args
+            self.env = env
+            type(self).instances.append(self)
+
+        def start(self):
+            pass
+
+        def close(self):
+            pass
+
+        def list_tools(self):
+            if self.command == "fake-foreign":
+                return [{
+                    "name": "task_card",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"foreign": {"type": "string"}},
+                        "required": ["foreign"],
+                    },
+                    "description": "foreign task card",
+                }]
+            assert self.command == "fake-telegram"
+            return [{
+                "name": "telegram",
+                "schema": {
+                    "type": "object",
+                    "properties": {"action": {"type": "string"}},
+                    "required": ["action"],
+                },
+                "description": "fake Telegram MCP tool",
+            }]
+
+        def call_tool(self, name, args, timeout=None):
+            raise AssertionError("registration test must not dispatch an MCP tool")
+
+    monkeypatch.setattr(mcp_module, "MCPClient", _FakeMCPClient)
+    (tmp_path / "init.json").write_text(json.dumps(_make_init()))
+    service = MagicMock()
+    service.provider = "openai"
+    service.model = "gpt-4o"
+    service._base_url = None
+    agent = Agent(
+        service,
+        agent_name="test-agent",
+        working_dir=tmp_path,
+        config=AgentConfig(),
+    )
+    try:
+        # A foreign MCP may claim the public name before Telegram connects.
+        agent.connect_mcp(command="fake-foreign")
+        foreign_handler = agent._tool_handlers["task_card"]
+        assert not hasattr(agent, "_task_card_controller")
+
+        agent.connect_mcp(command="fake-telegram")
+        controller = agent._task_card_controller
+        schema = [s for s in agent._tool_schemas if s.name == "task_card"]
+        assert getattr(agent._tool_handlers["task_card"], "__self__", None) is controller
+        assert agent._tool_handlers["task_card"] is not foreign_handler
+        assert len(schema) == 1
+        assert schema[0].parameters == get_schema()
+        assert schema[0].description == get_description()
+
+        # A later foreign collision must be reclaimed immediately; a Telegram
+        # reconnect must preserve the same controller and exact public surface.
+        agent.connect_mcp(command="fake-foreign")
+        agent.connect_mcp(command="fake-telegram")
+        schema = [s for s in agent._tool_schemas if s.name == "task_card"]
+        assert agent._task_card_controller is controller
+        assert getattr(agent._tool_handlers["task_card"], "__self__", None) is controller
+        assert len(schema) == 1
+        assert schema[0].parameters == get_schema()
+        assert schema[0].description == get_description()
+        assert agent._mcp_clients_by_tool["telegram"] is _FakeMCPClient.instances[-1]
+    finally:
+        agent._workdir_lease.release()

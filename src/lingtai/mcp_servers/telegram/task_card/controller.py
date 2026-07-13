@@ -818,13 +818,19 @@ class TaskCardController:
                 watch.thread.join(timeout=_JOIN_TIMEOUT_S)
 
 
-def setup(agent: TelegramTaskCardAgent) -> TaskCardController:
+def setup(
+    agent: TelegramTaskCardAgent,
+    *,
+    controller: TaskCardController | None = None,
+) -> TaskCardController:
     """Register the public ``task_card`` controller tool on *agent*.
 
     Telegram MCP-owned (it drives the Telegram-owned reverse channel), so it adds
     no ``lingtai.tools`` package and no glossary obligation (``glossary_package=None``).
+    A refresh may retain an active controller while rebuilding the sealed public
+    tool surface; in that case the Composition Root supplies it for re-registration.
     """
-    mgr = TaskCardController(agent)
+    mgr = controller if controller is not None else TaskCardController(agent)
     agent.add_tool(
         "task_card",
         schema=get_schema(),

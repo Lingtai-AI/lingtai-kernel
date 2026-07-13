@@ -58,7 +58,9 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 - `_Watch` — per-watch in-memory state: thread, last-valid frame + timestamp,
   sticky `stopping`, `finalized` handshake flag, deduped error/epoch bookkeeping
   (`controller.py:118`).
-- `setup(agent)` — registers the `task_card` tool with `glossary_package=None`
+- `setup(agent, controller=...)` — registers the controller-bound `task_card`
+  handler and its schema with `glossary_package=None`, reusing an existing
+  controller when a full Agent refresh rebuilds the public tool registries
   (`controller.py:821`).
 - `TelegramTaskCardAgent` — the narrow host Protocol the controller depends on
   instead of the concrete `Agent` (`interface.py:23`).
@@ -66,7 +68,11 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 ## Connections
 
 - Composition root: `Agent._maybe_setup_task_card_controller` calls `setup`
-  once a Telegram MCP client exists (`src/lingtai/agent.py:977`).
+  only after the newly rebuilt reverse-route map contains Telegram; it
+  re-registers the same controller after a full refresh clears the public tool
+  surface or a colliding MCP overwrites it, verifying the handler binding and
+  owned schema rather than a name/count alone (`src/lingtai/agent.py:975`,
+  `src/lingtai/agent.py:1330`).
 - Renderer: `_run_renderer` runs `sys.executable <renderer>` with the agent
   workdir as `cwd`; `_validate_renderer_path` confines the path to that workdir.
 - Reverse channel: `_project` calls the private `_lingtai_telegram_task_card`
