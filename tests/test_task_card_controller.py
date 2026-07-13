@@ -461,10 +461,14 @@ def test_stop_with_in_flight_renderer_never_finalizes_while_alive(
     assert not watch.thread.is_alive()
     subs_after_stop = [c[1]["sub_action"] for c in agent._client.calls[calls_before:]]
     assert "update" not in subs_after_stop
-    assert (
-        controller.handle({"action": "inspect", "watch_id": "tc_1"})["state"]
-        == "stop_failed"
-    )
+    inspect_after = controller.handle({"action": "inspect", "watch_id": "tc_1"})
+    assert inspect_after["state"] == "stop_failed"
+    # The seeded last-valid frame/timestamp and the stop error code are preserved
+    # verbatim after the dropped renderer returns (Contract's three explicit
+    # post-render claims, not inferred from "no projection" alone).
+    assert inspect_after["error"]["code"] == "stop_thread_alive"
+    assert inspect_after["last_valid_frame"] == {"lines": ["ok"]}
+    assert inspect_after["last_valid_frame_at"] == "2020-01-01T00:00:00+00:00"
 
     # A later stop retry now finds the thread quiescent, finalizes exactly once,
     # and removes the watch.
@@ -523,6 +527,153 @@ def test_public_retry_after_failed_stop_continues_stop_only(
     assert retry_ok["state"] == "stopped"
     assert "tc_1" not in controller._watches
     assert agent._client.calls[-1][1]["sub_action"] == "finalize"
+
+
+def test_late_update_after_stop_timeout_is_dropped_and_compensated(
+    agent, controller, monkeypatch
+):
+    """Post-guard/in-flight-``update`` race: an ``update`` authorized just before
+    stop blocks past the join budget (the reverse call has no total-time bound).
+    Stop returns retained ``stop_failed``/``stop_thread_alive`` with OLD
+    frame/timestamp preserved and no finalize while alive. When the update finally
+    returns, its state mutation is dropped and the live watcher thread compensates
+    by clearing the slot; ``inspect`` never regresses to ``stopping``/error-null/
+    LATE, and a later retry removes the watch without rerunning the renderer or a
+    duplicate reverse clear. Deterministic: shrunk join budget + Event-blocked
+    projection (no multi-second success path)."""
+    from lingtai.mcp_servers.telegram.task_card import controller as tc
+
+    monkeypatch.setattr(tc, "_JOIN_TIMEOUT_S", 0.05)
+
+    watch = tc._Watch("tc_1", agent._working_dir / "r.py", 0.01, 1.0, "acct", 42)
+    with watch.lock:
+        watch.last_valid_frame = {"lines": ["OLD"]}
+        watch.last_valid_at = "2020-01-01T00:00:00+00:00"
+    controller._watches["tc_1"] = watch
+
+    monkeypatch.setattr(
+        controller, "_run_renderer", lambda *_a, **_k: {"lines": ["LATE"]}
+    )
+
+    projected: list[str] = []
+    update_entered = threading.Event()
+    update_release = threading.Event()
+
+    def _fake_project(_w, sub_action, _frame):
+        projected.append(sub_action)
+        if sub_action == "update":
+            update_entered.set()
+            assert update_release.wait(5)  # blocks AFTER the pre-projection guard
+            return {"status": "ok"}  # the late update lands
+        return {"status": "ok"}
+
+    monkeypatch.setattr(controller, "_project", _fake_project)
+
+    watch.thread = threading.Thread(target=controller._tick, args=(watch,), daemon=True)
+    watch.thread.start()
+    assert update_entered.wait(2)  # the update projection is in flight
+
+    # Stop times out with the update in flight: retained stop_failed, no finalize.
+    result = controller.handle({"action": "stop", "watch_id": "tc_1"})
+    assert result["state"] == "stop_failed"
+    assert result["error"]["code"] == "stop_thread_alive"
+    assert "tc_1" in controller._watches
+    assert watch.thread.is_alive()
+    assert "finalize" not in projected
+    before = controller.handle({"action": "inspect", "watch_id": "tc_1"})
+    assert before["last_valid_frame"] == {"lines": ["OLD"]}
+    assert before["last_valid_frame_at"] == "2020-01-01T00:00:00+00:00"
+    assert before["error"]["code"] == "stop_thread_alive"
+
+    # Release the late update: it lands, the tick drops its state mutation, and the
+    # live thread compensates by finalizing (clearing the late frame).
+    update_release.set()
+    watch.thread.join(2)
+    assert not watch.thread.is_alive()
+    assert projected == ["update", "finalize"]  # exactly one compensating clear
+    after = controller.handle({"action": "inspect", "watch_id": "tc_1"})
+    assert after["state"] == "stop_failed"  # never stopping/error-null
+    assert after["error"]["code"] == "stop_thread_alive"
+    assert after["last_valid_frame"] == {"lines": ["OLD"]}  # never overwritten to LATE
+    assert after["last_valid_frame_at"] == "2020-01-01T00:00:00+00:00"
+
+    # A later retry removes the watch without rerunning the renderer or a second
+    # reverse clear (the slot was already compensated).
+    retry = controller.handle({"action": "stop", "watch_id": "tc_1"})
+    assert retry["state"] == "stopped"
+    assert "tc_1" not in controller._watches
+    assert projected == ["update", "finalize"]  # no duplicate finalize on retry
+
+
+def test_late_update_compensating_finalize_failure_is_retryable(
+    agent, controller, monkeypatch
+):
+    """Same post-guard interleaving, but the compensating finalize fails/unknown:
+    the watch stays a precise retryable ``stop_finalize_failed`` with OLD state
+    preserved, and a later retry (clear now accepted) removes it truthfully
+    without rerunning the renderer."""
+    from lingtai.mcp_servers.telegram.task_card import controller as tc
+
+    monkeypatch.setattr(tc, "_JOIN_TIMEOUT_S", 0.05)
+
+    watch = tc._Watch("tc_1", agent._working_dir / "r.py", 0.01, 1.0, "acct", 42)
+    with watch.lock:
+        watch.last_valid_frame = {"lines": ["OLD"]}
+        watch.last_valid_at = "2020-01-01T00:00:00+00:00"
+    controller._watches["tc_1"] = watch
+
+    ran = {"count": 0}
+
+    def _render(*_a, **_k):
+        ran["count"] += 1
+        return {"lines": ["LATE"]}
+
+    monkeypatch.setattr(controller, "_run_renderer", _render)
+
+    projected: list[str] = []
+    update_entered = threading.Event()
+    update_release = threading.Event()
+    finalize_fail = {"on": True}
+
+    def _fake_project(_w, sub_action, _frame):
+        projected.append(sub_action)
+        if sub_action == "update":
+            update_entered.set()
+            assert update_release.wait(5)
+            return {"status": "ok"}
+        if sub_action == "finalize" and finalize_fail["on"]:
+            return {"status": "error"}  # compensating clear rejected/unknown
+        return {"status": "ok"}
+
+    monkeypatch.setattr(controller, "_project", _fake_project)
+
+    watch.thread = threading.Thread(target=controller._tick, args=(watch,), daemon=True)
+    watch.thread.start()
+    assert update_entered.wait(2)
+    ran_after_render = ran["count"]
+
+    assert (
+        controller.handle({"action": "stop", "watch_id": "tc_1"})["state"]
+        == "stop_failed"
+    )
+
+    # Release: the compensating finalize is rejected -> precise retryable state.
+    update_release.set()
+    watch.thread.join(2)
+    assert not watch.thread.is_alive()
+    failed = controller.handle({"action": "inspect", "watch_id": "tc_1"})
+    assert failed["state"] == "stop_failed"
+    assert failed["error"]["code"] == "stop_finalize_failed"
+    assert failed["last_valid_frame"] == {"lines": ["OLD"]}
+    assert failed["last_valid_frame_at"] == "2020-01-01T00:00:00+00:00"
+    assert "tc_1" in controller._watches
+
+    # A later retry (clear now accepted) finalizes and removes — no renderer rerun.
+    finalize_fail["on"] = False
+    retry = controller.handle({"action": "stop", "watch_id": "tc_1"})
+    assert retry["state"] == "stopped"
+    assert "tc_1" not in controller._watches
+    assert ran["count"] == ran_after_render  # renderer never rerun after stop
 
 
 def test_last_valid_frame_at_recorded_preserved_and_updated(agent, controller, monkeypatch):

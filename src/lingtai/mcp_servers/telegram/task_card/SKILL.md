@@ -7,7 +7,7 @@ description: |
   Task Card JSON object. Covers the renderer contract, a safe runnable example,
   the start | inspect | retry | stop lifecycle, path/timeout/validation rules,
   fail-loud error wakes, and how the /taskcard toggle interacts.
-last_changed_at: "2026-07-12T22:15:00-07:00"
+last_changed_at: "2026-07-12T23:10:00-07:00"
 ---
 
 # Programmable Telegram Task Card — manual (what / how / why)
@@ -113,13 +113,16 @@ As your job rewrites `job_status.txt`, the card's programmable slot follows it.
   the automatic slot and the resident message remain, and renderer files are
   **never** deleted. The watch is removed and `stopped` is returned **only after**
   the watcher thread has actually stopped **and** the clear is accepted — `stop`
-  never reports `stopped` while a renderer is still running. If the renderer has
-  not stopped yet (still running past the join budget) or the clear fails (a
+  never reports `stopped` while a renderer or an in-flight update is still
+  running. If the renderer, or an update projection, has not stopped yet (still
+  running past the join budget) or the clear fails (a
   transient backend edit failure), `stop` returns a truthful, retryable
   `stop_failed` error and **keeps** the watch; call `stop` again (or `retry`) to
-  re-check quiescence and re-attempt the clear — it never re-runs your renderer,
-  and a renderer that returns after you asked to stop cannot project a late
-  update. When the programmable slot is the only content on the card, stopping
+  re-check quiescence and re-attempt the clear — it never re-runs your renderer.
+  A renderer or an update that returns after you asked to stop cannot resurrect
+  the watch: its result is dropped, and an update that may already have landed is
+  cleared for you so the late frame does not linger. When the programmable slot
+  is the only content on the card, stopping
   shows a stable `— WATCH STOPPED —` marker (an empty Telegram message is not
   allowed) and leaves the resident message reusable. Pass the `watch_id`.
 

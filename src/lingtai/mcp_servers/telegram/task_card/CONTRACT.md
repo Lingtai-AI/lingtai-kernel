@@ -61,12 +61,17 @@ the procedure lives in [`SKILL.md`](SKILL.md), not here:
    **only** the programmable frame and removes the watch (returning `stopped`)
    **only after** the watcher thread is quiescent **and** the backend durably
    accepts the clear. `stop` never finalizes, removes, or reports `stopped` while
-   the watcher thread is still alive: a renderer still running past the join
-   budget yields a truthful, retryable `stop_failed` (`stop_thread_alive`) with
-   the watch retained, and a transient clear failure yields a retryable
-   `stop_failed` (`stop_finalize_failed`). A renderer that returns after stop was
-   requested is dropped — no late `update`, no last-valid overwrite, no
-   stop-error clear. When the programmable slot is the only resident content,
+   the watcher thread is still alive: a renderer — or an `update` projection whose
+   reverse call has no total-time bound (a stale-resource restart+retry can exceed
+   the per-attempt timeout) — still running past the join budget yields a
+   truthful, retryable `stop_failed` (`stop_thread_alive`) with the watch
+   retained, and a transient clear failure yields a retryable `stop_failed`
+   (`stop_finalize_failed`). A renderer or update that returns after stop was
+   requested is dropped — no late-`update` follow-through, no last-valid
+   overwrite, no stop-error clear; and if an already-authorized update may have
+   landed, the watcher thread compensates by clearing the slot itself so the late
+   frame cannot linger, after which a later retry removes the watch without a
+   second reverse clear. When the programmable slot is the only resident content,
    finalize delivers a stable nonempty `— WATCH STOPPED —` terminal marker
    (Telegram cannot edit to empty) so the resident stays reusable. Renderer files
    are never deleted.

@@ -134,6 +134,7 @@ class _Watch:
         "error_key",
         "error_epoch",
         "stopping",
+        "finalized",
     )
 
     def __init__(
@@ -152,11 +153,18 @@ class _Watch:
         # UTC ISO-8601 timestamp of the last accepted frame (initial or later);
         # unchanged across failed renderer/backend attempts.
         self.last_valid_at: str | None = None
-        # Set once ``stop`` is requested: the renderer thread is stopped and
-        # finalization is pending/failed. Kept sticky so ``inspect`` never reports
-        # ``watching`` for a watch with no running thread; a successful stop
-        # removes the watch entirely.
+        # Set once ``stop`` is requested. Kept sticky so ``inspect`` never reports
+        # ``watching`` after a stop request; a successful stop removes the watch
+        # entirely. NOTE: a retained ``stop_thread_alive`` state still has a LIVE
+        # watcher thread — an update authorized just before stop may still be in
+        # flight — so ``stopping`` does NOT imply the renderer thread is stopped.
         self.stopping: bool = False
+        # True once the programmable slot has been cleared (a ``finalize`` was
+        # accepted), whether by the public ``_stop`` path or by the watcher thread
+        # compensating a late in-flight update. It is the stop/compensation
+        # handshake: a later public stop/retry removes the watch WITHOUT a second
+        # reverse clear once this is set.
+        self.finalized: bool = False
         # Current error (or None when healthy); ``error_key`` is the dedup identity
         # of the last-emitted failure so identical repeats stay silent.
         self.error: dict | None = None
@@ -237,8 +245,9 @@ class TaskCardController:
 
     def _inspect(self, watch: _Watch) -> dict:
         with watch.lock:
-            # A watch whose stop failed has no running thread, so it must never
-            # read back as ``watching``; it exposes a truthful, retryable state.
+            # After a stop request the watch must never read back as ``watching``
+            # (even while a ``stop_thread_alive`` handle still has a live watcher
+            # thread); it exposes a truthful, retryable state instead.
             if watch.stopping:
                 state = "stop_failed" if watch.error else "stopping"
             elif watch.error:
@@ -258,45 +267,64 @@ class TaskCardController:
         """Advance the stop lifecycle and finalize exactly once when quiescent.
 
         Idempotent and retryable: both the ``stop`` action and ``retry`` on an
-        already-stopping watch route here. The invariant is that the watch is
-        never finalized, removed, or reported ``stopped`` while its watcher thread
-        is still alive — otherwise an in-flight renderer could project a late
-        ``update`` after ``stopped`` was returned and the handle was dropped.
+        already-stopping watch route here. Invariants:
+
+        - The watch is never finalized, removed, or reported ``stopped`` while its
+          watcher thread is still alive. An update authorized just before stop may
+          still be in flight (the reverse ``call_tool`` has no total-time bound
+          because a stale-resource restart+retry can exceed the per-attempt
+          timeout), so waiting for the thread is what makes the clear/removal safe.
+        - The programmable clear happens exactly once per stop attempt. If the
+          watcher thread already compensated an in-flight update by finalizing
+          (``watch.finalized``), this path removes the watch WITHOUT a second
+          reverse clear; the watcher and public stop never finalize concurrently
+          because public stop refuses to finalize while the thread is alive.
         """
-        # Request stop and mark stopping BEFORE waiting, so an in-flight renderer
-        # observes it (see ``_stop_requested``) and drops its result instead of
-        # projecting a late update.
-        watch.stop_event.set()
+        # Mark stopping BEFORE setting the event so a tick that observes the event
+        # (see ``_stop_requested``) also observes the explicit-stop intent and can
+        # compensate a landed update.
         with watch.lock:
             watch.stopping = True
+        watch.stop_event.set()
         thread = watch.thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=_JOIN_TIMEOUT_S)
         # If the thread has not gone quiescent within the join budget (e.g. a
-        # renderer running past it), do NOT finalize/remove/report stopped. Keep a
-        # truthful, retryable handle so stop can be retried once it is quiescent.
+        # renderer, or an in-flight update projection, running past it), do NOT
+        # finalize/remove/report stopped. Keep a truthful, retryable handle so stop
+        # can be retried once it is quiescent; the live thread compensates any
+        # landed update itself.
         if thread is not None and thread.is_alive():
             error = {
                 "code": "stop_thread_alive",
                 "retryable": True,
                 "message": (
-                    "the watcher thread has not stopped yet (renderer still "
-                    "running); retry stop once it is quiescent"
+                    "the watcher thread has not stopped yet (renderer or an "
+                    "in-flight update still running); retry stop once quiescent"
                 ),
             }
             with watch.lock:
-                watch.error = error
+                if not watch.finalized:
+                    watch.error = error
             return {
                 "status": "error",
                 "watch_id": watch.watch_id,
                 "state": "stop_failed",
                 "error": error,
             }
-        # Quiescent: clear only the programmable channel (the automatic channel is
-        # untouched and renderer files are never deleted). Commit the watch removal
-        # ONLY after the backend durably accepts the clear — the manager preserves
-        # the old programmable frame on a transient/unknown edit failure, so
-        # reporting ``stopped`` and dropping the handle would strand a visible
+        # Quiescent. If the watcher thread already cleared the programmable slot
+        # (compensating a late update), there is nothing more to send: just remove.
+        with watch.lock:
+            already_cleared = watch.finalized
+        if already_cleared:
+            with self._lock:
+                self._watches.pop(watch.watch_id, None)
+            return {"status": "ok", "watch_id": watch.watch_id, "state": "stopped"}
+        # Otherwise clear only the programmable channel now (the automatic channel
+        # is untouched and renderer files are never deleted). Commit the watch
+        # removal ONLY after the backend durably accepts the clear — the manager
+        # preserves the old programmable frame on a transient/unknown edit failure,
+        # so reporting ``stopped`` and dropping the handle would strand a visible
         # frame with no way to retry.
         if self._project(watch, "finalize", None).get("status") == "error":
             error = {
@@ -308,13 +336,16 @@ class TaskCardController:
                 ),
             }
             with watch.lock:
-                watch.error = error
+                if not watch.finalized:
+                    watch.error = error
             return {
                 "status": "error",
                 "watch_id": watch.watch_id,
                 "state": "stop_failed",
                 "error": error,
             }
+        with watch.lock:
+            watch.finalized = True
         with self._lock:
             self._watches.pop(watch.watch_id, None)
         return {"status": "ok", "watch_id": watch.watch_id, "state": "stopped"}
@@ -344,12 +375,13 @@ class TaskCardController:
     def _stop_requested(self, watch: _Watch) -> bool:
         """True once stop or agent shutdown was requested for this watch.
 
-        The renderer is a blocking subprocess, so stop can arrive while a tick is
-        mid-render. A tick that finishes after stop was requested MUST drop its
-        result: it must not project an ``update``, overwrite the last valid
-        frame/timestamp, or clear a pending stop error. Checking ``stop_event``
-        (set atomically by ``_stop``/``shutdown_for_agent_stop`` before the join)
-        makes that observable.
+        Both the blocking renderer and the (restart-retryable, not time-bounded)
+        ``update`` reverse call can straddle a stop. ``_tick`` checks this twice —
+        before projecting (drop; nothing was sent) and after projecting (drop the
+        state mutation: no ``update`` follow-through, no last-valid overwrite, no
+        stop-error clear). Checking ``stop_event`` (set by
+        ``_stop``/``shutdown_for_agent_stop``) makes the request observable to the
+        watcher thread.
         """
         if watch.stop_event.is_set():
             return True
@@ -359,9 +391,12 @@ class TaskCardController:
     def _tick(self, watch: _Watch) -> None:
         """Run the renderer once and reconcile the watch's error/frame state.
 
-        If stop/shutdown was requested while the (blocking) renderer ran, the
-        completed tick is dropped without projecting, overwriting the last valid
-        frame/timestamp, or clearing a pending stop error."""
+        Stop can straddle either blocking step. If it was requested while the
+        renderer ran, the tick is dropped before projecting (nothing was sent). If
+        it arrived while the ``update`` projection was in flight, the tick drops
+        its state mutation (no last-valid overwrite, no stop-error clear) and — for
+        an explicit stop — compensates by clearing the slot, since that update may
+        already have landed."""
         try:
             frame = self._run_renderer(watch.renderer_path, watch.timeout_s)
         except TaskCardControllerError as e:
@@ -370,8 +405,24 @@ class TaskCardController:
             self._mark_error(watch, self._error_from_exc(e))
             return
         if self._stop_requested(watch):
-            return  # stop observed after render: no update, no overwrite, no clear
-        if self._project(watch, "update", frame).get("status") == "error":
+            # Stop/shutdown observed BEFORE projecting: drop. Nothing was sent, so
+            # there is no late frame to compensate — the public stop clears the
+            # slot's prior frame once this (about-to-exit) thread is quiescent.
+            return
+        result = self._project(watch, "update", frame)
+        if self._stop_requested(watch):
+            # Stop/shutdown arrived DURING the update projection. Because the
+            # reverse call has no total-time bound (a stale-resource restart+retry
+            # can exceed the per-attempt timeout), the update may already have
+            # landed. Drop the tick's normal state mutation — no
+            # ``_mark_recovered``/``_mark_error``, hence no last-valid overwrite and
+            # no stop-error clear. For an EXPLICIT stop (not a shutdown, which keeps
+            # its intentional no-finalize policy) the live watcher thread
+            # compensates by clearing the slot so the late frame cannot linger.
+            if watch.stopping and not self._shutdown_requested():
+                self._compensate_stop_finalize(watch)
+            return
+        if result.get("status") == "error":
             self._mark_error(
                 watch,
                 {
@@ -382,6 +433,47 @@ class TaskCardController:
             )
             return
         self._mark_recovered(watch, frame)
+
+    def _shutdown_requested(self) -> bool:
+        """True once the agent's global shutdown was requested (no-finalize path)."""
+        shutdown = getattr(self._agent, "_shutdown", None)
+        return bool(shutdown is not None and shutdown.is_set())
+
+    def _compensate_stop_finalize(self, watch: _Watch) -> None:
+        """Watcher-thread compensation for an update that landed after stop.
+
+        Runs on the live watcher thread when an explicit stop was observed after
+        an ``update`` projection. Public ``_stop`` deferred the programmable clear
+        because this thread was mid-projection, so clear it here. The reverse call
+        runs with NO lock held; the outcome is recorded under the watch lock so a
+        later public stop/retry can remove the watch without a second reverse clear
+        (accepted) or re-attempt the clear (failed). No duplicate/concurrent
+        finalize is possible: public stop/retry refuse to finalize while this
+        thread is alive."""
+        accepted = self._project(watch, "finalize", None).get("status") != "error"
+        with watch.lock:
+            if accepted:
+                watch.finalized = True
+                # Keep a truthful, retryable error (never clear it to None, which
+                # would misreport a non-error ``stopping`` state) so ``inspect``
+                # reports ``stop_failed`` until a retry removes the handle.
+                watch.error = {
+                    "code": "stop_thread_alive",
+                    "retryable": True,
+                    "message": (
+                        "stop requested; the in-flight update was cleared and the "
+                        "programmable slot finalized — retry stop to remove the watch"
+                    ),
+                }
+            elif not watch.finalized:
+                watch.error = {
+                    "code": "stop_finalize_failed",
+                    "retryable": True,
+                    "message": (
+                        "stop requested; clearing the in-flight update failed — "
+                        "retry stop to re-attempt the clear"
+                    ),
+                }
 
     # -- fail-loud / recovery transitions ----------------------------------
 
