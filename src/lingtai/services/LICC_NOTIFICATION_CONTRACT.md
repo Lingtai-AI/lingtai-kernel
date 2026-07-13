@@ -124,10 +124,11 @@ where they share the `.notification/` filesystem protocol.
    current-agent boolean `taskcard`; it is derived at producer projection time
    (including old/referenced messages) and means Task Card delivery is allowed or
    hidden, not that automatic or programmable mechanics have stopped
-   (`src/lingtai/mcp_servers/telegram/manager.py:967-1007`,
-   `src/lingtai/mcp_servers/telegram/manager.py:1063-1102`). Telegram's textual
+   (`src/lingtai/mcp_servers/telegram/manager.py:950-985`,
+   `src/lingtai/mcp_servers/telegram/manager.py:1032-1055`). Telegram's textual
    notification body likewise labels every rendered message/reply-target line
-   with the current `taskcard: True|False`, including its degraded fallback; the WeChat
+   with the current `taskcard: True|False`, including its degraded fallback
+   (`src/lingtai/mcp_servers/telegram/manager.py:1075-1114`); the WeChat
    MCP supplies `recent_messages` and `latest_incoming` built from its merged
    inbox+sent preview window with per-message text bounded at 500 chars
    (`src/lingtai/mcp_servers/wechat/manager.py:835-956`); Feishu supplies the
