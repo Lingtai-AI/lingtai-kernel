@@ -288,12 +288,17 @@ def test_taskcard_command_write_failure_warns_without_false_success(
 
 @pytest.mark.parametrize("channel", ["automatic", "programmable"])
 @pytest.mark.parametrize("sub_action", ["create", "update", "finalize"])
-def test_disabled_manager_suppresses_both_slots_without_transport_or_state_mutation(
+def test_disabled_manager_suppresses_transport_and_state_except_hidden_programmable_finalize(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     channel: str,
     sub_action: str,
 ) -> None:
+    """While hidden, NO Telegram transport ever runs. State is also untouched —
+    with exactly one targeted exception (requirement #7): a hidden programmable
+    FINALIZE clears its committed slot internally (still no transport) so a
+    stopped hidden watch cannot resurface after /taskcard on; the automatic slot
+    and the resident id are preserved."""
     service = _service(tmp_path, "main")
     service.set_taskcard_enabled(False)
     manager = _manager(tmp_path, service)
@@ -305,12 +310,17 @@ def test_disabled_manager_suppresses_both_slots_without_transport_or_state_mutat
     before_channels = deepcopy(manager._task_card_channels)
 
     def unexpected(*_args, **_kwargs):
-        raise AssertionError("Telegram transport/slot path must not run while hidden")
+        raise AssertionError("Telegram transport must not run while hidden")
 
+    # Transport is forbidden in every hidden case.
     monkeypatch.setattr(manager, "send_progress_message", unexpected)
     monkeypatch.setattr(manager, "update_progress_message", unexpected)
     monkeypatch.setattr(manager, "_delete_task_card_message", unexpected)
-    monkeypatch.setattr(manager, "_set_channel_frame", unexpected)
+
+    hidden_finalize_clears = channel == "programmable" and sub_action == "finalize"
+    if not hidden_finalize_clears:
+        # Every other hidden case mutates no committed slot state at all.
+        monkeypatch.setattr(manager, "_set_channel_frame", unexpected)
 
     args: dict[str, Any] = {
         "sub_action": sub_action,
@@ -326,7 +336,13 @@ def test_disabled_manager_suppresses_both_slots_without_transport_or_state_mutat
         "suppressed": True,
         "taskcard": False,
     }
-    assert manager._task_card_channels == before_channels
+    if hidden_finalize_clears:
+        # The programmable slot is cleared internally; the automatic slot and the
+        # resident id survive.
+        assert "programmable" not in manager._task_card_channels["main:123"]
+        assert manager._task_card_channels["main:123"]["automatic"] == "old auto"
+    else:
+        assert manager._task_card_channels == before_channels
     assert account.get_task_card(123) == "main:123:77"
 
 
@@ -406,7 +422,10 @@ def test_base_agent_treats_suppression_as_success_and_keeps_mechanics(
 def test_programmable_watch_keeps_rendering_while_hidden_and_projects_after_reenable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from lingtai.kernel.task_card_controller import TaskCardController, _Watch
+    from lingtai.mcp_servers.telegram.task_card.controller import (
+        TaskCardController,
+        _Watch,
+    )
 
     service = _service(tmp_path, "main")
     manager = _manager(tmp_path, service)
@@ -444,6 +463,92 @@ def test_programmable_watch_keeps_rendering_while_hidden_and_projects_after_reen
     assert watch.last_valid_frame == {"lines": ["visible latest"]}
     assert watch.error is None and events == []
     assert len(sends) == 1 and "visible latest" in sends[0]
+
+
+def test_stopping_a_hidden_programmable_watch_does_not_resurface_after_reenable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stopping a HIDDEN programmable watch must clear its committed slot
+    internally (no transport), so the stale frame cannot resurface once
+    /taskcard is turned back on. Ordinary hidden create/update stay untouched."""
+    service = _service(tmp_path, "main")
+    manager = _manager(tmp_path, service)
+    account = service.get_account("main")
+    rendered: dict[int, str] = {}
+
+    def _send(_chat_id, text, **_kwargs):
+        message_id = 200 + len(rendered)
+        rendered[message_id] = text
+        return {"message_id": message_id}
+
+    def _edit(_chat_id, message_id, text, **_kwargs):
+        rendered[message_id] = text
+        return {"ok": True}
+
+    monkeypatch.setattr(account, "send_message", _send)
+    monkeypatch.setattr(account, "edit_message", _edit)
+
+    def prog(sub_action, card=None):
+        args = {
+            "sub_action": sub_action,
+            "channel": "programmable",
+            "account": "main",
+            "chat_id": 123,
+        }
+        if card is not None:
+            args["card"] = card
+        return manager._handle_task_card_update(args)
+
+    # A visible programmable resident is created and committed.
+    assert prog("create", {"lines": ["live watch"]})["status"] == "ok"
+    assert manager._task_card_channels["main:123"].get("programmable")
+
+    # Hide delivery, then STOP (finalize) the hidden watch: no transport occurs,
+    # but the committed slot is cleared internally.
+    service.set_taskcard_enabled(False)
+    sends_before = len(rendered)
+    result = prog("finalize")
+    assert result.get("suppressed") is True
+    assert len(rendered) == sends_before  # no transport while suppressed
+    assert "programmable" not in manager._task_card_channels.get("main:123", {})
+
+    # Re-enable and drive an automatic update: the stale watch frame is gone.
+    service.set_taskcard_enabled(True)
+    manager._handle_task_card_update(
+        {
+            "sub_action": "update",
+            "card_message_id": manager._get_resident_task_card("main", 123),
+            "tool": "read",
+            "tool_action": "open",
+            "reasoning": "after reenable",
+        }
+    )
+    latest = rendered[max(rendered)]
+    assert "after reenable" in latest
+    assert "live watch" not in latest
+    assert "— WATCH —" not in latest
+
+
+def test_hidden_programmable_create_still_does_not_commit_its_slot(
+    tmp_path: Path,
+) -> None:
+    """The targeted hidden-finalize clear must NOT change ordinary hidden
+    create/update: those stay non-committing under suppression."""
+    service = _service(tmp_path, "main")
+    manager = _manager(tmp_path, service)
+    service.set_taskcard_enabled(False)
+    result = manager._handle_task_card_update(
+        {
+            "sub_action": "create",
+            "channel": "programmable",
+            "account": "main",
+            "chat_id": 123,
+            "card": {"lines": ["hidden"]},
+        }
+    )
+    assert result.get("suppressed") is True
+    # No committed slot state was written for a hidden create.
+    assert "programmable" not in manager._task_card_channels.get("main:123", {})
 
 
 # Every agent-visible message representation ---------------------------------------

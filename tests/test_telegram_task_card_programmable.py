@@ -263,3 +263,62 @@ def test_failed_automatic_edit_does_not_poison_channel_state(tmp_path):
     text = _current(acct)
     assert "delivered" in text and "• w" in text
     assert "POISON" not in text
+
+
+# -- programmable-only finalize: nonempty terminal marker, reusable resident ---
+
+
+def test_programmable_only_finalize_shows_watch_stopped_marker(tmp_path):
+    """Finalizing a programmable-ONLY resident must never edit to empty text; it
+    delivers a stable nonempty terminal marker and leaves the resident reusable."""
+    manager, acct = _manager(tmp_path)
+    _prog(manager, "create", {"lines": ["watch content"]})  # programmable-only send
+    result = _prog(manager, "finalize")
+    assert result["status"] == "ok"
+    text = _current(acct)
+    assert text.strip() != ""  # never an empty Telegram edit
+    assert "— WATCH STOPPED —" in text
+    assert "watch content" not in text  # the watch frame is gone
+    # The committed slot is really cleared, and the marker is NOT stored state.
+    assert "programmable" not in manager._task_card_channels.get("mybot:55", {})
+    # Resident reusable: a later automatic create composes clean over the marker,
+    # editing the SAME message (no resend).
+    _auto(manager, reasoning="fresh work")
+    text2 = _current(acct)
+    assert "fresh work" in text2
+    assert "WATCH STOPPED" not in text2
+    assert sum(1 for c in acct.calls if c[0] == "send") == 1
+
+
+def test_programmable_only_finalize_transient_failure_is_retryable_no_resend(tmp_path):
+    """A transient edit failure during a programmable-only finalize must not resend
+    or commit the clear; the slot is preserved and a retry clears it to the marker."""
+    manager, acct = _manager(tmp_path)
+    _prog(manager, "create", {"lines": ["live"]})
+    committed = manager._task_card_channels["mybot:55"]["programmable"]
+    acct.fail_edit = True
+    sends_before = sum(1 for c in acct.calls if c[0] == "send")
+    result = _prog(manager, "finalize")
+    assert result["status"] == "error"
+    assert sum(1 for c in acct.calls if c[0] == "send") == sends_before  # no resend
+    assert manager._task_card_channels["mybot:55"]["programmable"] == committed  # preserved
+    # Retry after recovery clears the slot and shows the terminal marker.
+    acct.fail_edit = False
+    retry = _prog(manager, "finalize")
+    assert retry["status"] == "ok"
+    assert "programmable" not in manager._task_card_channels.get("mybot:55", {})
+    assert "— WATCH STOPPED —" in _current(acct)
+
+
+def test_programmable_finalize_with_automatic_leaves_automatic_byte_for_byte(tmp_path):
+    """When an automatic slot exists, a successful programmable finalize leaves the
+    automatic text byte-for-byte as the composed resident (never the marker)."""
+    manager, acct = _manager(tmp_path)
+    _auto(manager, reasoning="keep exactly")
+    automatic_text = _current(acct)  # automatic-only composed content
+    _prog(manager, "update", {"lines": ["temp"]})
+    assert "— WATCH —" in _current(acct)
+    result = _prog(manager, "finalize")
+    assert result["status"] == "ok"
+    assert _current(acct) == automatic_text  # byte-for-byte automatic
+    assert "— WATCH STOPPED —" not in _current(acct)  # marker is programmable-only

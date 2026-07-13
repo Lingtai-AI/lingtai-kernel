@@ -170,3 +170,21 @@ def test_mcp_skill_package_data_keeps_reference_and_asset_sidecars_packaged():
         assert "SKILL.md" in entries
         assert "reference/**/*" in entries
         assert "assets/**/*" in entries
+
+
+def test_telegram_task_card_subpackage_ships_manual_and_architecture_docs():
+    """The Telegram-owned programmable Task Card is its own subpackage, so the
+    parent ``lingtai.mcp_servers.telegram`` glob does NOT recurse into it. Its
+    manual and architecture documents need an explicit package-data key or the
+    wheel/sdist would install the code and silently drop them."""
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    package_data = tomllib.loads(pyproject.read_text())["tool"]["setuptools"]["package-data"]
+    entries = package_data["lingtai.mcp_servers.telegram.task_card"]
+    for document in ("SKILL.md", "ANATOMY.md", "CONTRACT.md"):
+        assert document in entries, document
+    # The nested unit is a real subpackage, so the parent glob cannot cover it:
+    # a bare ``SKILL.md`` in the parent entry only matches ``telegram/SKILL.md``.
+    assert (
+        pyproject.parent
+        / "src/lingtai/mcp_servers/telegram/task_card/__init__.py"
+    ).is_file()

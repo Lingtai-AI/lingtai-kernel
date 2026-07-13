@@ -9,6 +9,14 @@ validated data to the private ``_lingtai_telegram_task_card`` reverse channel.
 ``TelegramManager`` stays the single render/compose/persistence owner (no
 competing system). Fail-loud is the kernel notification wake
 (``_enqueue_system_notification``); all model-facing copy is English-only.
+
+This unit is Telegram MCP-owned: registration is gated by the Telegram reverse
+route, projection targets ``_lingtai_telegram_task_card``, and the Telegram
+manager/server/service own the resident slots, in-place edits, toggle,
+persistence, transport, and rendering destination. The controller depends only
+on the narrow :class:`~.interface.TelegramTaskCardAgent` host surface, never on
+the concrete ``Agent`` class. See the co-located ``CONTRACT.md`` for the
+interface promise and ``SKILL.md`` for the model-facing manual.
 """
 
 from __future__ import annotations
@@ -17,11 +25,22 @@ import json
 import subprocess
 import sys
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .base_agent import BaseAgent
+    from .interface import TelegramTaskCardAgent
+
+
+def _utc_now_iso() -> str:
+    """Return the current instant as a UTC ISO-8601 string (``...+00:00``).
+
+    Timezone-aware and documented: the value stamped on every accepted frame and
+    surfaced as ``inspect``'s ``last_valid_frame_at``. Kept as a module function
+    so tests can substitute a deterministic clock.
+    """
+    return datetime.now(timezone.utc).isoformat()
 
 # Private, unlisted Telegram reverse-channel tool name — identical to
 # ``base_agent._TASK_CARD_TOOL`` and ``telegram/server.py:_PRIVATE_TASK_CARD_TOOL``.
@@ -80,11 +99,15 @@ def get_schema() -> dict:
 
 def get_description() -> str:
     return (
-        "Control a programmable Task Card watch. Provide a Python renderer file "
-        "under your working directory that prints exactly one Task Card JSON object "
-        "to stdout; the controller runs it on an interval and projects the output "
-        "onto the resident Task Card's programmable channel, alongside the automatic "
-        "tool-activity channel. Actions: start, inspect, retry, stop."
+        "Control a programmable Telegram Task Card watch. Provide a Python renderer "
+        "file under your working directory that prints exactly one Task Card JSON "
+        "object to stdout; the controller runs it on an interval and projects the "
+        "output onto the resident Task Card's programmable channel, alongside the "
+        "automatic tool-activity channel. Actions: start, inspect, retry, stop. "
+        "Full manual (renderer contract, a safe runnable example, and a "
+        "start|inspect|retry|stop walkthrough): call telegram(action='manual') and "
+        "follow its 'Programmable Task Card' section to the co-located task_card "
+        "manual (task_card/SKILL.md)."
     )
 
 
@@ -110,6 +133,8 @@ class _Watch:
         "error",
         "error_key",
         "error_epoch",
+        "stopping",
+        "finalized",
     )
 
     def __init__(
@@ -125,7 +150,21 @@ class _Watch:
         self.stop_event = threading.Event()
         self.lock = threading.RLock()
         self.last_valid_frame: dict | None = None
+        # UTC ISO-8601 timestamp of the last accepted frame (initial or later);
+        # unchanged across failed renderer/backend attempts.
         self.last_valid_at: str | None = None
+        # Set once ``stop`` is requested. Kept sticky so ``inspect`` never reports
+        # ``watching`` after a stop request; a successful stop removes the watch
+        # entirely. NOTE: a retained ``stop_thread_alive`` state still has a LIVE
+        # watcher thread — an update authorized just before stop may still be in
+        # flight — so ``stopping`` does NOT imply the renderer thread is stopped.
+        self.stopping: bool = False
+        # True once the programmable slot has been cleared (a ``finalize`` was
+        # accepted), whether by the public ``_stop`` path or by the watcher thread
+        # compensating a late in-flight update. It is the stop/compensation
+        # handshake: a later public stop/retry removes the watch WITHOUT a second
+        # reverse clear once this is set.
+        self.finalized: bool = False
         # Current error (or None when healthy); ``error_key`` is the dedup identity
         # of the last-emitted failure so identical repeats stay silent.
         self.error: dict | None = None
@@ -140,7 +179,7 @@ class _Watch:
 class TaskCardController:
     """Public controller for programmable Task Card watches (thin Core)."""
 
-    def __init__(self, agent: "BaseAgent") -> None:
+    def __init__(self, agent: TelegramTaskCardAgent) -> None:
         self._agent = agent
         self._watches: dict[str, _Watch] = {}
         self._lock = threading.RLock()
@@ -155,6 +194,12 @@ class TaskCardController:
                 return self._inspect(self._require_watch(args.get("watch_id")))
             if action == "retry":
                 watch = self._require_watch(args.get("watch_id"))
+                # Once stop has been requested, ``retry`` continues the stop path
+                # only (re-check quiescence, then retry finalize). It must NEVER
+                # run the renderer again or project a fresh update, so a stopped
+                # watch cannot be resurrected into a visible frame.
+                if watch.stopping:
+                    return self._stop(watch)
                 self._tick(watch)
                 return self._inspect(watch)
             if action == "stop":
@@ -184,9 +229,44 @@ class TaskCardController:
                 watch_id, renderer_path, interval_s, timeout_s, account, chat_id
             )
             self._watches[watch_id] = watch
-        # Project the first valid frame; a reverse-call failure here is synchronous
-        # and the (unstarted) watch is discarded — no bogus handle is returned.
-        if self._project(watch, "create", frame).get("status") == "error":
+        # Project the first valid frame.
+        project_result = self._project(watch, "create", frame)
+        if project_result.get("status") == "error":
+            if project_result.get("partial") is True:
+                # Initial successful-partial: the first frame was SENT and is
+                # visible (validated route-matching new id), but the durable
+                # resident id write failed. Keep the watch addressable so later
+                # inspect/retry/stop can recover or finalize it — commit the
+                # accepted frame/timestamp, mark a truthful retryable persistence
+                # error (cleared only by a later accepted projection), and spawn the
+                # watcher. Return status ``ok`` with explicit partial flags rather
+                # than collapsing into generic backend rejection.
+                persist_error = {
+                    "code": "resident_persist_failed",
+                    "retryable": True,
+                    "message": (
+                        "the first Task Card frame was sent and is visible, but its "
+                        "resident id was not durably persisted; it recovers on the "
+                        "next accepted projection, or can be stopped"
+                    ),
+                }
+                with watch.lock:
+                    watch.last_valid_frame = frame
+                    watch.last_valid_at = _utc_now_iso()
+                self._mark_error(watch, persist_error)
+                self._spawn(watch)
+                return {
+                    "status": "ok",
+                    "watch_id": watch_id,
+                    "state": "error",
+                    "partial": True,
+                    "resident_persist_failed": True,
+                    "message_id": project_result.get("message_id"),
+                    "error": persist_error,
+                }
+            # Any other first-frame failure (backend reject, or a malformed /
+            # cross-route / indeterminate send with no adoptable id) discards the
+            # (unstarted) watch — no bogus handle is returned.
             with self._lock:
                 self._watches.pop(watch_id, None)
             raise TaskCardControllerError(
@@ -194,27 +274,113 @@ class TaskCardController:
             )
         with watch.lock:
             watch.last_valid_frame = frame
+            watch.last_valid_at = _utc_now_iso()
         self._spawn(watch)
         return {"status": "ok", "watch_id": watch_id, "state": "watching"}
 
     def _inspect(self, watch: _Watch) -> dict:
         with watch.lock:
+            # After a stop request the watch must never read back as ``watching``
+            # (even while a ``stop_thread_alive`` handle still has a live watcher
+            # thread); it exposes a truthful, retryable state instead.
+            if watch.stopping:
+                state = "stop_failed" if watch.error else "stopping"
+            elif watch.error:
+                state = "error"
+            else:
+                state = "watching"
             return {
                 "status": "ok",
                 "watch_id": watch.watch_id,
-                "state": "error" if watch.error else "watching",
+                "state": state,
                 "last_valid_frame": watch.last_valid_frame,
                 "last_valid_frame_at": watch.last_valid_at,
                 "error": watch.error,
             }
 
     def _stop(self, watch: _Watch) -> dict:
+        """Advance the stop lifecycle and finalize exactly once when quiescent.
+
+        Idempotent and retryable: both the ``stop`` action and ``retry`` on an
+        already-stopping watch route here. Invariants:
+
+        - The watch is never finalized, removed, or reported ``stopped`` while its
+          watcher thread is still alive. An update authorized just before stop may
+          still be in flight (the reverse ``call_tool`` has no total-time bound
+          because a stale-resource restart+retry can exceed the per-attempt
+          timeout), so waiting for the thread is what makes the clear/removal safe.
+        - The programmable clear happens exactly once per stop attempt. If the
+          watcher thread already compensated an in-flight update by finalizing
+          (``watch.finalized``), this path removes the watch WITHOUT a second
+          reverse clear; the watcher and public stop never finalize concurrently
+          because public stop refuses to finalize while the thread is alive.
+        """
+        # Mark stopping BEFORE setting the event so a tick that observes the event
+        # (see ``_stop_requested``) also observes the explicit-stop intent and can
+        # compensate a landed update.
+        with watch.lock:
+            watch.stopping = True
         watch.stop_event.set()
-        if watch.thread is not None and watch.thread.is_alive():
-            watch.thread.join(timeout=_JOIN_TIMEOUT_S)
-        # Clear only the programmable channel; the automatic channel is untouched.
-        # Renderer files are never deleted.
-        self._project(watch, "finalize", None)
+        thread = watch.thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=_JOIN_TIMEOUT_S)
+        # If the thread has not gone quiescent within the join budget (e.g. a
+        # renderer, or an in-flight update projection, running past it), do NOT
+        # finalize/remove/report stopped. Keep a truthful, retryable handle so stop
+        # can be retried once it is quiescent; the live thread compensates any
+        # landed update itself.
+        if thread is not None and thread.is_alive():
+            error = {
+                "code": "stop_thread_alive",
+                "retryable": True,
+                "message": (
+                    "the watcher thread has not stopped yet (renderer or an "
+                    "in-flight update still running); retry stop once quiescent"
+                ),
+            }
+            with watch.lock:
+                if not watch.finalized:
+                    watch.error = error
+            return {
+                "status": "error",
+                "watch_id": watch.watch_id,
+                "state": "stop_failed",
+                "error": error,
+            }
+        # Quiescent. If the watcher thread already cleared the programmable slot
+        # (compensating a late update), there is nothing more to send: just remove.
+        with watch.lock:
+            already_cleared = watch.finalized
+        if already_cleared:
+            with self._lock:
+                self._watches.pop(watch.watch_id, None)
+            return {"status": "ok", "watch_id": watch.watch_id, "state": "stopped"}
+        # Otherwise clear only the programmable channel now (the automatic channel
+        # is untouched and renderer files are never deleted). Commit the watch
+        # removal ONLY after the backend durably accepts the clear — the manager
+        # preserves the old programmable frame on a transient/unknown edit failure,
+        # so reporting ``stopped`` and dropping the handle would strand a visible
+        # frame with no way to retry.
+        if self._project(watch, "finalize", None).get("status") == "error":
+            error = {
+                "code": "stop_finalize_failed",
+                "retryable": True,
+                "message": (
+                    "task card backend rejected the stop/finalize; the watch is "
+                    "retained so stop can be retried"
+                ),
+            }
+            with watch.lock:
+                if not watch.finalized:
+                    watch.error = error
+            return {
+                "status": "error",
+                "watch_id": watch.watch_id,
+                "state": "stop_failed",
+                "error": error,
+            }
+        with watch.lock:
+            watch.finalized = True
         with self._lock:
             self._watches.pop(watch.watch_id, None)
         return {"status": "ok", "watch_id": watch.watch_id, "state": "stopped"}
@@ -241,14 +407,57 @@ class TaskCardController:
                 return
             self._tick(watch)
 
+    def _stop_requested(self, watch: _Watch) -> bool:
+        """True once stop or agent shutdown was requested for this watch.
+
+        Both the blocking renderer and the (restart-retryable, not time-bounded)
+        ``update`` reverse call can straddle a stop. ``_tick`` checks this twice —
+        before projecting (drop; nothing was sent) and after projecting (drop the
+        state mutation: no ``update`` follow-through, no last-valid overwrite, no
+        stop-error clear). Checking ``stop_event`` (set by
+        ``_stop``/``shutdown_for_agent_stop``) makes the request observable to the
+        watcher thread.
+        """
+        if watch.stop_event.is_set():
+            return True
+        shutdown = getattr(self._agent, "_shutdown", None)
+        return bool(shutdown is not None and shutdown.is_set())
+
     def _tick(self, watch: _Watch) -> None:
-        """Run the renderer once and reconcile the watch's error/frame state."""
+        """Run the renderer once and reconcile the watch's error/frame state.
+
+        Stop can straddle either blocking step. If it was requested while the
+        renderer ran, the tick is dropped before projecting (nothing was sent). If
+        it arrived while the ``update`` projection was in flight, the tick drops
+        its state mutation (no last-valid overwrite, no stop-error clear) and — for
+        an explicit stop — compensates by clearing the slot, since that update may
+        already have landed."""
         try:
             frame = self._run_renderer(watch.renderer_path, watch.timeout_s)
         except TaskCardControllerError as e:
+            if self._stop_requested(watch):
+                return  # stop observed: drop this late failure, keep stop state
             self._mark_error(watch, self._error_from_exc(e))
             return
-        if self._project(watch, "update", frame).get("status") == "error":
+        if self._stop_requested(watch):
+            # Stop/shutdown observed BEFORE projecting: drop. Nothing was sent, so
+            # there is no late frame to compensate — the public stop clears the
+            # slot's prior frame once this (about-to-exit) thread is quiescent.
+            return
+        result = self._project(watch, "update", frame)
+        if self._stop_requested(watch):
+            # Stop/shutdown arrived DURING the update projection. Because the
+            # reverse call has no total-time bound (a stale-resource restart+retry
+            # can exceed the per-attempt timeout), the update may already have
+            # landed. Drop the tick's normal state mutation — no
+            # ``_mark_recovered``/``_mark_error``, hence no last-valid overwrite and
+            # no stop-error clear. For an EXPLICIT stop (not a shutdown, which keeps
+            # its intentional no-finalize policy) the live watcher thread
+            # compensates by clearing the slot so the late frame cannot linger.
+            if watch.stopping and not self._shutdown_requested():
+                self._compensate_stop_finalize(watch)
+            return
+        if result.get("status") == "error":
             self._mark_error(
                 watch,
                 {
@@ -259,6 +468,47 @@ class TaskCardController:
             )
             return
         self._mark_recovered(watch, frame)
+
+    def _shutdown_requested(self) -> bool:
+        """True once the agent's global shutdown was requested (no-finalize path)."""
+        shutdown = getattr(self._agent, "_shutdown", None)
+        return bool(shutdown is not None and shutdown.is_set())
+
+    def _compensate_stop_finalize(self, watch: _Watch) -> None:
+        """Watcher-thread compensation for an update that landed after stop.
+
+        Runs on the live watcher thread when an explicit stop was observed after
+        an ``update`` projection. Public ``_stop`` deferred the programmable clear
+        because this thread was mid-projection, so clear it here. The reverse call
+        runs with NO lock held; the outcome is recorded under the watch lock so a
+        later public stop/retry can remove the watch without a second reverse clear
+        (accepted) or re-attempt the clear (failed). No duplicate/concurrent
+        finalize is possible: public stop/retry refuse to finalize while this
+        thread is alive."""
+        accepted = self._project(watch, "finalize", None).get("status") != "error"
+        with watch.lock:
+            if accepted:
+                watch.finalized = True
+                # Keep a truthful, retryable error (never clear it to None, which
+                # would misreport a non-error ``stopping`` state) so ``inspect``
+                # reports ``stop_failed`` until a retry removes the handle.
+                watch.error = {
+                    "code": "stop_thread_alive",
+                    "retryable": True,
+                    "message": (
+                        "stop requested; the in-flight update was cleared and the "
+                        "programmable slot finalized — retry stop to remove the watch"
+                    ),
+                }
+            elif not watch.finalized:
+                watch.error = {
+                    "code": "stop_finalize_failed",
+                    "retryable": True,
+                    "message": (
+                        "stop requested; clearing the in-flight update failed — "
+                        "retry stop to re-attempt the clear"
+                    ),
+                }
 
     # -- fail-loud / recovery transitions ----------------------------------
 
@@ -285,6 +535,7 @@ class TaskCardController:
             watch.error = None
             watch.error_key = None
             watch.last_valid_frame = frame
+            watch.last_valid_at = _utc_now_iso()
         if was_errored:
             self._emit_event(watch, None, None, epoch=epoch, recovered=True)
 
@@ -442,16 +693,53 @@ class TaskCardController:
         # rather than claiming a new resident was adopted.
         if result.get("stale_delete_failed") is True:
             return {"status": "error"}
+        message_id = result.get("message_id")
         if result.get("resident_persist_failed") is True:
-            message_id = result.get("message_id")
-            if isinstance(message_id, str) and message_id:
+            # The ONE allowed successful partial. It REQUIRES a validated,
+            # route-matching new resident id (positive-int terminal). A malformed,
+            # cross-route, or absent id is an indeterminate error, never a partial —
+            # an unknown card is never adopted, so later recovery can always address
+            # exactly the sent card. The validated id is surfaced so ``_start`` can
+            # keep the watch handle addressable.
+            if self._route_matched_message_id(watch, message_id):
                 return {
                     "status": "error",
                     "partial": True,
                     "resident_persist_failed": True,
+                    "message_id": message_id,
                 }
             return {"status": "error"}
+        # Clean success: if the manager returned a resident id, it must be a
+        # validated route-matched compound (a suppressed/no-op ``ok`` carries none),
+        # so a malformed/cross-route id is never accepted as clean either.
+        if message_id is not None and not self._route_matched_message_id(watch, message_id):
+            return {"status": "error"}
         return {"status": "ok"}
+
+    @staticmethod
+    def _route_matched_message_id(watch: _Watch, message_id: object) -> bool:
+        """True only for a compound id ``account:chat_id:message_id`` whose account
+        and chat match this watch's route and whose terminal Telegram id is a real
+        positive integer.
+
+        Rejects non-string, empty, wrong-shape, cross-route, and non-positive
+        terminal ids so a malformed/fake manager result can never be adopted as a
+        resident. (Group chat ids are negative, so only the terminal message id is
+        required positive.)"""
+        if not isinstance(message_id, str) or not message_id:
+            return False
+        parts = message_id.rsplit(":", 2)
+        if len(parts) != 3:
+            return False
+        acct, chat, tg = parts
+        if acct != str(watch.account):
+            return False
+        try:
+            chat_id = int(chat)
+            tg_id = int(tg)
+        except (TypeError, ValueError):
+            return False
+        return chat_id == int(watch.chat_id) and tg_id > 0
 
     # -- validation + route helpers ----------------------------------------
 
@@ -530,10 +818,10 @@ class TaskCardController:
                 watch.thread.join(timeout=_JOIN_TIMEOUT_S)
 
 
-def setup(agent: "BaseAgent") -> TaskCardController:
+def setup(agent: TelegramTaskCardAgent) -> TaskCardController:
     """Register the public ``task_card`` controller tool on *agent*.
 
-    Kernel-owned (drives the kernel-owned Telegram reverse channel), so it adds
+    Telegram MCP-owned (it drives the Telegram-owned reverse channel), so it adds
     no ``lingtai.tools`` package and no glossary obligation (``glossary_package=None``).
     """
     mgr = TaskCardController(agent)

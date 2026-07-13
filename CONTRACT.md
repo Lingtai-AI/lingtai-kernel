@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/kernel/notification_store/CONTRACT.md
   - src/lingtai/tools/notification/CONTRACT.md
   - src/lingtai/kernel/snapshot/CONTRACT.md
+  - src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md
   - CONTRIBUTING.md
   - README.md
   - dev-guide-skill/SKILL.md

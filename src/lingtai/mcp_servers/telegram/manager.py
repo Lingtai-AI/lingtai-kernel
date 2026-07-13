@@ -1381,7 +1381,17 @@ class TelegramManager:
     ) -> dict | None:
         """Send a progress message that can be edited later.
 
-        Returns the compound message_id for later editing, or None on failure.
+        Returns one of:
+
+        - ``{"status": "sent", "message_id": <compound>}`` ONLY when the provider
+          returned a real, positive, non-boolean integer message id; the compound
+          id is formed from that validated id.
+        - ``{"status": "indeterminate_send"}`` when the send did not raise but
+          returned no usable message id (a malformed result under top-level
+          ``ok=true``): a card may be visible but its exact id is unknown, so a
+          fake id (e.g. ``:0``) is never formed, adopted, persisted, or deleted.
+        - ``None`` when the send raised (no card was sent).
+
         Best-effort — never blocks or fails the main task.
         """
         try:
@@ -1390,12 +1400,35 @@ class TelegramManager:
                 chat_id, text,
                 reply_to_message_id=reply_to_message_id,
             )
-            tg_message_id = result.get("message_id", 0)
-            compound_id = f"{account_alias}:{chat_id}:{tg_message_id}"
-            return {"status": "sent", "message_id": compound_id}
         except Exception as e:
             log.debug("Failed to send progress message: %s", e)
             return None
+        tg_message_id = self._sent_message_id_or_none(result)
+        if tg_message_id is None:
+            # Top-level ``ok`` may be true while the result carries no usable id.
+            # Never invent a fake id: report an explicit indeterminate send so
+            # callers fail closed instead of adopting/persisting an unknown card.
+            log.warning(
+                "Task card send returned no valid message id; treating as "
+                "indeterminate (no id adopted/persisted/deleted)")
+            return {"status": "indeterminate_send"}
+        compound_id = f"{account_alias}:{chat_id}:{tg_message_id}"
+        return {"status": "sent", "message_id": compound_id}
+
+    @staticmethod
+    def _sent_message_id_or_none(result: object) -> int | None:
+        """Extract a real positive Telegram message id from a send result.
+
+        Returns ``None`` for any malformed shape — missing, non-dict, ``bool``,
+        non-``int`` (float/str), zero, or negative — so a fake resident id can
+        never be formed at the transport boundary.
+        """
+        if not isinstance(result, dict):
+            return None
+        mid = result.get("message_id")
+        if isinstance(mid, bool) or not isinstance(mid, int) or mid <= 0:
+            return None
+        return mid
 
     @staticmethod
     def _task_card_edit_error_outcome(exc: Exception) -> str:
@@ -1458,7 +1491,8 @@ class TelegramManager:
         return self._try_update_progress_message(compound_id, text) == _TASK_CARD_EDIT_OK
 
     # ------------------------------------------------------------------
-    # Private Task Card helpers (kernel-driven, not LLM-exposed)
+    # Private Task Card helpers (internally driven — by the kernel automatic
+    # driver and the Telegram-owned programmable controller — not LLM-exposed)
     # ------------------------------------------------------------------
 
     # Reasoning cap (Unicode code points) after secret redaction.
@@ -1473,6 +1507,13 @@ class TelegramManager:
     # Header for the appended programmable section; keeps the composed message
     # legible when both channels are present. English-only (Jason #7175/#7205).
     _TASK_CARD_PROGRAMMABLE_HEADER = "— WATCH —"
+    # Terminal presentation delivered when clearing a programmable-ONLY resident
+    # would otherwise compose to empty text. Telegram cannot edit a message to
+    # empty text, so a stable, nonempty, English-only marker is shown instead,
+    # leaving the one resident message reusable by a later automatic or
+    # programmable frame. It is presentation-only: the committed programmable slot
+    # is still cleared, so it never persists as stored channel state.
+    _TASK_CARD_WATCH_STOPPED = "— WATCH STOPPED —"
 
     def _channel_key(self, account: str, chat_id: int) -> str:
         return f"{account}:{chat_id}"
@@ -1530,16 +1571,19 @@ class TelegramManager:
     def _deliver_channel_frame(
         self, account: str, chat_id: int, channel: str, frame: str | None,
         *, error: str, resident_id: str | None = None,
+        empty_fallback: str | None = None,
     ) -> dict:
         """Serialize and deliver one channel-frame transaction for this route."""
         with self._task_card_delivery_lock(account, chat_id):
             return self._deliver_channel_frame_locked(
-                account, chat_id, channel, frame, error=error, resident_id=resident_id
+                account, chat_id, channel, frame, error=error,
+                resident_id=resident_id, empty_fallback=empty_fallback,
             )
 
     def _deliver_channel_frame_locked(
         self, account: str, chat_id: int, channel: str, frame: str | None,
         *, error: str, resident_id: str | None = None,
+        empty_fallback: str | None = None,
     ) -> dict:
         """Deliver a proposed ``channel`` frame to the tracked resident target and
         commit it to ``_task_card_channels`` **only after** the edit/send/
@@ -1553,8 +1597,21 @@ class TelegramManager:
         Thus a later automatic or programmable compose can never resurrect a frame
         that was never delivered. Shared by every automatic mutation and the
         programmable channel.
+
+        ``empty_fallback`` supplies a nonempty terminal presentation for the case
+        where the composed text would be empty (clearing a programmable-only
+        resident). Telegram cannot edit/send empty text, so the fallback is
+        transported instead — the proposed ``frame`` (``None`` for finalize) is
+        still what gets committed on success, so the slot is really cleared and the
+        marker never becomes stored channel state.
         """
         text = self._compose_channels(account, chat_id, channel=channel, frame=frame)
+        # Programmable-only finalize clears the slot: the composed text is empty
+        # and Telegram cannot edit/send empty text, so substitute the nonempty
+        # terminal marker for transport while ``frame`` (``None``) is still what
+        # commits on success (#898 WATCH STOPPED).
+        if not text and empty_fallback is not None:
+            text = empty_fallback
         # Re-read the resident *inside* the route transaction. A concurrently
         # queued caller may carry the prior id while the first caller has already
         # rotated and persisted a new resident; durable/in-memory state is newer.
@@ -1574,9 +1631,10 @@ class TelegramManager:
                 return {"status": "error", "error": error}
             # Jason #5272/#5273/#5275: the resident card must reside as the chat's
             # LAST message. When we deterministically know a newer message exists
-            # below the resident, rotate — send a fresh card so it becomes last,
-            # then delete only the exact old resident — instead of editing it in
-            # place (which would leave it stranded above the newer message). When
+            # below the resident, rotate old-first: probe the exact resident,
+            # require confirmed exact-old delete/missing, then send a fresh card so
+            # it becomes last — instead of editing it in place (which would leave
+            # it stranded above the newer message). When
             # the resident is still the last message, or the latest-message state
             # is unknown/malformed, we fall through to the in-place edit path
             # (#891) and never delete anything on unknown/transient state.
@@ -1603,12 +1661,19 @@ class TelegramManager:
             return recovered
 
         result = self.send_progress_message(account, chat_id, text)
-        if result is None:
-            return {"status": "error", "error": error}
+        if result is None or result.get("status") != "sent":
+            # No prior resident here, so nothing was deleted. A raised send is a
+            # plain failure; an ``indeterminate_send`` means a card may be visible
+            # with an unknown id — either way NEVER form/adopt/persist a fake id or
+            # delete an unknown card. Surface the indeterminate case explicitly.
+            outcome: dict = {"status": "error", "error": error}
+            if result is not None and result.get("status") == "indeterminate_send":
+                outcome["indeterminate_send"] = True
+            return outcome
         new_id = result["message_id"]
         self._set_channel_frame(account, chat_id, channel, frame)
         persisted = self._set_resident_task_card(account, chat_id, new_id)
-        outcome: dict = {"status": "ok", "message_id": new_id}
+        outcome = {"status": "ok", "message_id": new_id}
         if not persisted:
             # The sent card remains visible and in-memory current, but the durable
             # resident write was not acknowledged. No prior resident exists here.
@@ -1645,7 +1710,8 @@ class TelegramManager:
         return text
 
     def _handle_task_card_update(self, args: dict) -> dict:
-        """Private internal action — kernel-driven Task Card projection.
+        """Private internal action — internally-driven Task Card projection
+        (the kernel automatic driver and the Telegram-owned programmable controller).
 
         Sub-actions:
           - create:  Project the resident 📋 TASK CARD for the current batch —
@@ -1670,6 +1736,17 @@ class TelegramManager:
         # and before transport, resident-id, or composed-slot mutation. Internal
         # automatic rows/heartbeats and programmable watches continue calling.
         if not self._taskcard_enabled():
+            # No transport while suppressed. But stopping a HIDDEN programmable
+            # watch must still clear its committed slot internally, or the stale
+            # frame would resurface the next time /taskcard on re-composes the
+            # resident. This is the smallest targeted internal finalization; it
+            # does not change ordinary hidden create/update (which stay
+            # non-committing) or the per-agent persistence/context contract.
+            if channel == "programmable" and sub_action == "finalize":
+                account = args.get("account")
+                chat_id = args.get("chat_id")
+                if account is not None and chat_id is not None:
+                    self._set_channel_frame(account, chat_id, "programmable", None)
             return {"status": "ok", "suppressed": True, "taskcard": False}
         try:
             if channel == "programmable":
@@ -1748,10 +1825,17 @@ class TelegramManager:
             }
 
         result = self.send_progress_message(account, chat_id, text)
-        if result is None:
+        if result is None or result.get("status") != "sent":
+            # Replacement send failed or returned no usable id. Preserve the truth
+            # that the exact old resident was already deleted (may leave zero
+            # cards); an ``indeterminate_send`` additionally means a new card may be
+            # visible with an unknown id. Fail closed either way — no fake id is
+            # formed, adopted, persisted, or deleted.
             outcome: dict = {"status": "error", "error": error}
             if delete_outcome == _TASK_CARD_DELETE_OK:
                 outcome["old_resident_deleted"] = True
+            if result is not None and result.get("status") == "indeterminate_send":
+                outcome["indeterminate_send"] = True
             return outcome
 
         new_id = result["message_id"]
@@ -1955,15 +2039,23 @@ class TelegramManager:
           - create / update:  render the validated ``card`` object into the
                               programmable frame, compose, and edit the resident.
           - finalize:         clear the programmable frame, compose, and edit the
-                              resident so the automatic channel remains.
+                              resident so the automatic channel remains. When the
+                              programmable slot is the ONLY resident content, the
+                              cleared compose is empty and a nonempty
+                              ``_TASK_CARD_WATCH_STOPPED`` terminal marker is
+                              delivered instead (Telegram cannot edit to empty),
+                              leaving the resident reusable while the slot is still
+                              committed clear on success.
 
         The caller supplies ``account`` and ``chat_id`` so both channels resolve
         to the same resident id; Telegram only ever receives validated data.
         """
         account = args["account"]
         chat_id = args["chat_id"]
+        empty_fallback: str | None = None
         if sub_action == "finalize":
             frame: str | None = None
+            empty_fallback = self._TASK_CARD_WATCH_STOPPED
         elif sub_action in ("create", "update"):
             card = args.get("card")
             if not isinstance(card, dict):
@@ -1976,7 +2068,8 @@ class TelegramManager:
         # a failed edit must leave the last delivered programmable frame in place
         # so a subsequent automatic compose cannot resurrect an unsent frame.
         return self._deliver_channel_frame(
-            account, chat_id, "programmable", frame, error="Failed to send task card")
+            account, chat_id, "programmable", frame,
+            error="Failed to send task card", empty_fallback=empty_fallback)
 
     @classmethod
     def _format_task_card_text(

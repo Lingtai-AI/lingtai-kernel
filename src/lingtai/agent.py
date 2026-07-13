@@ -12,8 +12,6 @@ from __future__ import annotations
 import contextlib
 import json
 
-import json
-
 from typing import Any
 
 from pathlib import Path
@@ -975,13 +973,16 @@ class Agent(BaseAgent):
         return registered
 
     def _maybe_setup_task_card_controller(self) -> None:
-        """Register the kernel-owned public ``task_card`` controller once a
+        """Register the Telegram-owned public ``task_card`` controller once a
         Telegram reverse channel exists (Jason #7258/#7259).
 
         The controller drives the *programmable* slot of the single resident
         Telegram Task Card, sharing the one resident message with the automatic
-        slot. It lives in the kernel (it drives the kernel-owned Telegram reverse
-        channel), not in ``lingtai.tools``, so it carries no glossary package.
+        slot. It is Telegram MCP-owned (it drives the Telegram-owned reverse
+        channel ``_lingtai_telegram_task_card``) and lives under
+        ``lingtai.mcp_servers.telegram.task_card``, not in ``lingtai.tools``, so it
+        carries no glossary package. This method is only the Composition Root: it
+        detects the Telegram route and invokes the Telegram-owned ``setup``.
         Idempotent: a no-op after the first registration and when no Telegram
         client is present, so reconnects/reconciles never double-register.
         """
@@ -989,7 +990,7 @@ class Agent(BaseAgent):
             return
         if "telegram" not in getattr(self, "_mcp_clients_by_tool", {}):
             return
-        from .kernel.task_card_controller import setup as _setup_task_card
+        from .mcp_servers.telegram.task_card import setup as _setup_task_card
         self._task_card_controller = _setup_task_card(self)
 
     def connect_mcp_http(
