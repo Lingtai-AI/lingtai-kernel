@@ -236,7 +236,16 @@ summarize would discard cache benefit.
   Do not loop rebuild/summarize calls.
 - **At 1.0 of the context window (the full-context HARD boundary):** the runtime
   **forces** a provider-context rebuild / fresh replay on the next request
-  **regardless of whether pending summaries exist**. If pending summaries exist,
+  **regardless of whether pending summaries exist**, but only **once per
+  continuous full-context episode**. The automatic forced rebuild fires a single
+  time when provider-reported usage first reaches `1.0` (inclusive); it does NOT
+  re-force while usage stays at/above `1.0` (including exactly `1.0`), and it
+  re-arms only after a later provider round drops usage strictly below `1.0`, so a
+  future crossing can force exactly once again. Both automatic paths — the
+  pre-request boundary check and the immediate post-`summarize` release — share
+  this one latch, so they cannot double-fire. (Explicit
+  `system(action="summarize", rebuild=true)` is independent and always available.)
+  If pending summaries exist,
   they are applied and their markers marked done. If none exist, the fresh replay
   still sheds stale timely transient `_meta` copies (agent_meta/guidance
   and notifications/notification_guidance) — model-facing serialization keeps
@@ -248,6 +257,20 @@ summarize would discard cache benefit.
   above the 0.6 recovery target you should tend durable stores and molt. This is
   one unified warning — it does not branch on whether context dropped low or stayed
   high.
+- **If the forced rebuild does NOT clear the overflow:** the persistent
+  `Forced Rebuilt Failed` warning activates. Once the forced fresh replay's own
+  first provider response is observed and that post-rebuild provider input is still
+  **strictly above** `1.0` (a failed forced request keeps verification pending
+  until a successful provider-usage result exists), EVERY following result carries
+  a permanent `_meta.tool_meta.context.molt` line, verbatim:
+  `100% context Forced Rebuild Failed to Bring Usage Below 100%. Context overflowed!! (xxx %) Molt IMMEDIATELY!!`
+  (`xxx` = the current measured percentage, one decimal). It rides the same
+  permanent current-state channel as the sustained-pressure and cache-miss-budget
+  molt reminders (each preserved on its own line when several coexist). Because the
+  runtime will NOT keep force-rebuilding while you stay overflowed, this line is
+  the signal that the emergency rebuild could not recover the context — molt
+  immediately. At exactly `1.0` after the rebuild there is no repeat rebuild and no
+  overflow warning (the warning is for strictly `> 1.0`).
 
 Waiting for the 1.0 forced boundary is the emergency path — prefer the proactive
 0.75 rebuild. If no summary is pending, the forced rebuild has nothing to apply,

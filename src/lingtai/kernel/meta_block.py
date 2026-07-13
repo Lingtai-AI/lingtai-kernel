@@ -66,6 +66,7 @@ from .i18n import t as _t
 from .reminders.context_pressure import (
     current_molt_emission_descriptor,
     render_current_molt_context,
+    render_forced_rebuild_failed_warning,
     render_forced_rebuild_warning,
     render_reconstruction_molt,
 )
@@ -1164,6 +1165,45 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
     )
 
 
+def build_context_overflow_warning(agent) -> str | None:
+    """Return the persistent post-forced-rebuild overflow warning, or ``None``.
+
+    Distinct from the sustained-pressure reminder (:func:`build_molt_context`,
+    the 3-round streak) and the one-shot reconstruction event
+    (:func:`build_reconstruction_tool_meta`, a historical A→B rebuild record):
+    this is the human-authored hard-boundary warning that stays on EVERY
+    ``_meta.tool_meta.context.molt`` result while the automatic one-shot forced
+    provider-context rebuild has already fired for the current ``>= 1.0`` episode,
+    its first post-rebuild provider response has been observed, and current
+    provider-reported usage is still STRICTLY above 1.0 (the forced rebuild failed
+    to clear the overflow).
+
+    The adapter owns the one-shot latch + verification state and exposes the
+    numeric status via ``session.chat.context_overflow_status()`` (forwarded
+    through the gate proxy); this function only renders the fixed sentence with the
+    measured percentage. Returns ``None`` whenever the status is absent — it never
+    invents a warning.
+    """
+    session = getattr(agent, "_session", None)
+    if session is None:
+        return None
+    chat = getattr(session, "chat", None)
+    status_fn = getattr(chat, "context_overflow_status", None)
+    if not callable(status_fn):
+        return None
+    try:
+        status = status_fn()
+    except Exception:
+        return None
+    if not isinstance(status, dict):
+        return None
+    try:
+        usage = float(status.get("usage"))
+    except (TypeError, ValueError):
+        return None
+    return render_forced_rebuild_failed_warning(usage)
+
+
 def _resolve_cache_miss_budget(agent) -> int | None:
     """Return the configured positive-int cache-miss budget, or ``None``.
 
@@ -1785,6 +1825,25 @@ def build_meta(agent) -> dict:
         event = _current_molt_emission_event(agent, usage=usage, message=molt)
         if event is not None:
             meta[TOOL_META_CONTEXT_EVENT_PENDING_KEY] = event
+
+    # Persistent post-forced-rebuild overflow warning — the human-authored hard
+    # boundary sentence, routed to the SAME permanent ``tool_meta.context.molt``
+    # channel.  It is a current-state warning (the adapter owns the one-shot latch
+    # + verification), NOT a new event route, so it never attaches a
+    # ``_tool_meta_context_event``.  When the sustained-pressure reminder is also
+    # active, PRESERVE both: append the overflow line on its own newline rather
+    # than replacing the sustained-pressure prose (the cache-miss budget line, if
+    # any, is appended after this below).
+    overflow_warning = build_context_overflow_warning(agent)
+    if overflow_warning:
+        existing_context = meta.get(TOOL_META_CONTEXT_PENDING_KEY)
+        if isinstance(existing_context, dict):
+            prior_molt = existing_context.get("molt")
+            existing_context["molt"] = (
+                f"{prior_molt}\n{overflow_warning}" if prior_molt else overflow_warning
+            )
+        else:
+            meta[TOOL_META_CONTEXT_PENDING_KEY] = {"molt": overflow_warning}
 
     # Cache-miss budget guard — rides the SAME ``_tool_meta_context`` transit
     # sub-object as the sustained-pressure reminder.  When both are active we

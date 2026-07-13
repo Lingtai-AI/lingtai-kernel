@@ -234,6 +234,24 @@ class ChatSession(ABC):
         """
         return None
 
+    def context_overflow_status(self) -> dict | None:
+        """Return the persistent hard-boundary overflow status, or ``None``.
+
+        A session with an automatic one-shot forced provider-context rebuild
+        (codex's ``_reset_ws_epoch("summarize_delayed")``) returns a small status
+        dict ``{"usage": <float>}`` when that rebuild has already fired for the
+        current continuous provider-usage ``>= 1.0`` episode, its first
+        post-rebuild provider response has been observed, and current
+        provider-reported usage is still STRICTLY above ``1.0`` — i.e. the forced
+        rebuild failed to clear the overflow. The kernel renders the fixed
+        human-authored ``Forced Rebuilt Failed`` warning from ``usage`` and keeps
+        it on every ``_meta.tool_meta.context.molt`` result while active (a pure,
+        idempotent read — unlike the one-shot
+        :meth:`take_pending_reconstruction_event`). Default: no such machinery, so
+        ``None``.
+        """
+        return None
+
     def on_notification_dismissed(self, channel: str | None = None) -> None:
         """Hook called after a notification dismiss/cleanup mutates the surface.
 
