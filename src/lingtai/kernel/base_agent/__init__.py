@@ -200,7 +200,6 @@ def _build_identity_section(manifest_data: dict, mailbox_name: str | None = None
     agent_id = manifest_data.get("agent_id") or ""
     address = manifest_data.get("address") or ""
     created = manifest_data.get("created_at") or ""
-    started = manifest_data.get("started_at") or ""
     admin = manifest_data.get("admin") or {}
     soul_delay = manifest_data.get("soul_delay")
     molt_count = manifest_data.get("molt_count", 0)
@@ -218,14 +217,12 @@ def _build_identity_section(manifest_data: dict, mailbox_name: str | None = None
     if address:
         lines.append(f"Your address is `{address}`.")
 
-    # Origins — birth, awakening, molts.
-    origins: list[str] = []
+    # Origin — birth only. `started_at` (session start) is deliberately
+    # excluded: it changes on every process restart, including a plain
+    # refresh with no source/config change, and would otherwise invalidate
+    # the prompt-cache prefix this section is designed to stay stable in.
     if created:
-        origins.append(f"born {created}")
-    if started:
-        origins.append(f"woken {started} for this session")
-    if origins:
-        lines.append("You were " + ", ".join(origins) + ".")
+        lines.append(f"You were born {created}.")
     if molt_count > 0:
         lines.append(
             f"You have undergone {molt_count} molt"

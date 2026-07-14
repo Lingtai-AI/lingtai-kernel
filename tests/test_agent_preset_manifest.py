@@ -210,6 +210,23 @@ def test_identity_section_silent_when_preset_active_absent():
     assert "active preset" not in text
 
 
+def test_identity_section_renders_created_at_but_omits_started_at():
+    """`started_at` (session start) changes on every process restart,
+    including a plain refresh with no source/config change, and would
+    otherwise invalidate the cached system-prompt prefix. `created_at` is
+    stable across refreshes and must remain model-facing; `started_at` must
+    not be rendered at all, and no "woken" text should appear."""
+    text = _build_identity_section({
+        "agent_name": "alice",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "started_at": "2026-07-14T12:00:00+00:00",
+    })
+    assert "2026-01-01T00:00:00+00:00" in text
+    assert "born" in text
+    assert "2026-07-14T12:00:00+00:00" not in text
+    assert "woken" not in text
+
+
 def test_manifest_never_contains_api_key(tmp_path):
     workdir = tmp_path / "leaky"
     _write_init(
