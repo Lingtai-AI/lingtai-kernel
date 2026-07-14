@@ -656,11 +656,12 @@ class InteractionsChatSession(ChatSession):
         - list of ToolResultBlock → converted to FunctionResultContentParam dicts
         - list of FunctionResultContentParam dicts → passed as-is
 
-        Tool results here are the current turn's batch — for any timely
-        transient ``_meta`` family they carry, they ARE the newest occurrence
-        by construction, so the shared stale-copy filter does not apply.
-        Full-history replay (the ``seed_turns`` resume path) serializes via
-        ``interface_converters.to_gemini``, which does filter stale copies.
+        Tool results here are the current turn's batch and are converted
+        directly. Full-history replay (the ``seed_turns`` resume path)
+        serializes via ``interface_converters.to_gemini``; that shared
+        converter preserves every historical holder's content and does not
+        strip timely-transient ``_meta`` keys. Only the newest emitted holder
+        per family represents current state.
         """
         if isinstance(message, str):
             return [{"type": "text", "text": message}]

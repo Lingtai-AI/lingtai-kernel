@@ -165,11 +165,14 @@ molt. At context usage `1.0` (the full-context hard boundary) the runtime
 **regardless of
 whether pending summaries exist**, but only **once per continuous full-context
 episode** (it does not re-force while context stays at/above `1.0`, and re-arms
-only after context later drops below `1.0`): pending markers are applied and marked done,
-and even with no pending summaries the fresh replay sheds stale timely
-transient `_meta` copies (agent_meta/guidance and notifications/notification_guidance)
-— model-facing serialization keeps only the newest copy per family, on every
-provider, without rewriting recorded history. Every `1.0`
+only after context later drops below `1.0`): pending markers are applied and marked done.
+`summarize` is the only historical tool-result body replacement a rebuild applies;
+the fresh replay otherwise preserves each historical timely-transient holder and
+does not strip its agent_meta/guidance or notifications/notification_guidance
+keys on any provider, without rewriting recorded history — only the LATEST
+holder per family
+is current state, older holders are historical traces and must not be acted on.
+Every `1.0`
 forced rebuild ALWAYS attaches a one-shot `reconstruction.warning`
 (before→after context, proactive-`0.75`-rebuild advice, and "if still above the
 `0.6` recovery target, molt"). If that one forced rebuild does NOT clear the

@@ -85,10 +85,14 @@ rebuild/summarize. At context usage 1.0 (the full-context hard boundary) the
 runtime forces a rebuild on the next request regardless of whether pending
 summaries exist, but only ONCE per continuous full-context episode (it does not
 re-force while context stays at/above 1.0, and re-arms only after context later
-drops below 1.0): pending markers are applied and marked done, and with no pending
-summaries the fresh replay still sheds stale timely transient `_meta` copies —
-model-facing serialization keeps only the newest copy per family, on every
-provider, without rewriting recorded history. Every 1.0 forced rebuild
+drops below 1.0): pending markers are applied and marked done. `summarize` is
+the only historical tool-result body replacement a rebuild applies; the fresh
+replay otherwise preserves each historical timely-transient holder and does
+not strip its `agent_meta`/`guidance` or
+`notifications`/`notification_guidance` keys, on every provider, without
+rewriting recorded history — only the LATEST holder
+per family represents current state, older holders are historical traces and
+must not be acted on. Every 1.0 forced rebuild
 ALWAYS carries a one-shot `reconstruction.warning` (before→after context,
 proactive-0.75-rebuild advice, and "if still above the 0.6 recovery target, molt").
 If that one forced rebuild does NOT clear the overflow (post-rebuild context stays
