@@ -698,8 +698,6 @@ def _perform_refresh(
     phase can complete.
     """
     import os
-    import subprocess
-    import sys
 
     # When the worker interface is poisoned, the in-memory ChatInterface may
     # still be mutated by a stuck worker thread — saving it would serialize
@@ -728,6 +726,20 @@ def _perform_refresh(
     if cmd is None:
         agent._log("refresh_no_launch_cmd")
         return
+
+    # A real launch command means this refresh will actually spawn a watcher.
+    # Fail loudly here, before any handshake or shutdown mutation, if the
+    # agent has no RefreshWatcherPort — raw BaseAgent construction allows
+    # omitting it (see kernel/refresh_watcher/CONTRACT.md), but an omitted
+    # Port must never orphan an agent mid-handshake or leave it silently
+    # unable to relaunch.
+    if agent._refresh_watcher is None:
+        raise RuntimeError(
+            "_perform_refresh requires a RefreshWatcherPort to spawn the "
+            "relaunch watcher, but this agent was constructed without one "
+            "(refresh_watcher=None). Inject a RefreshWatcherPort (e.g. "
+            "PosixRefreshWatcherAdapter) at BaseAgent construction."
+        )
 
     working_dir = agent._working_dir
     refresh_path = working_dir / ".refresh"
@@ -1150,14 +1162,7 @@ def _perform_refresh(
         "log('refresh_failed_permanent', alert_id=alert_id, **meta)\n"
     )
     watcher_env = {**os.environ, "LINGTAI_REFRESH_ENV_OVERWRITE": "1"}
-    subprocess.Popen(
-        [sys.executable, "-c", relaunch_script],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        env=watcher_env,
-    )
+    agent._refresh_watcher.spawn_detached(relaunch_script, env=watcher_env)
     agent._log("refresh_deferred_relaunch",
                cmd=cmd[0], handshake=handshake_source)
     # Lock-clear signaling — direct callers (intrinsic system tool call,
