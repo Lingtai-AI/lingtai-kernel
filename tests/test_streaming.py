@@ -169,6 +169,77 @@ def test_finish_tool_noop_when_no_pending():
     assert result.tool_calls == []
 
 
+# -- Done-only / terminal fallback tool args -------------------------------
+
+
+def test_set_tool_args_if_empty_reconstructs_done_only_arguments():
+    """A complete terminal value fills a pending tool with no deltas."""
+    acc = StreamingAccumulator()
+    acc.start_tool(id="call_done", name="echo_value")
+    acc.set_tool_args_if_empty('{"value":"done"}')
+    acc.finish_tool()
+
+    result = acc.finalize()
+    assert result.tool_calls[0].args == {"value": "done"}
+    assert result.tool_calls[0].id == "call_done"
+
+
+def test_set_tool_args_if_empty_is_first_non_empty_wins():
+    """A terminal fallback never appends to or overwrites accumulated deltas."""
+    acc = StreamingAccumulator()
+    acc.start_tool(id="call_first", name="echo_value")
+    acc.add_tool_args('{"value":"delta"}')
+    acc.set_tool_args_if_empty('{"value":"done"}')
+    acc.set_tool_args_if_empty("{malformed")
+    acc.finish_tool()
+
+    result = acc.finalize()
+    assert result.tool_calls[0].args == {"value": "delta"}
+
+
+def test_set_tool_args_if_empty_is_idempotent_across_terminal_sources():
+    """Args-done followed by item-done does not duplicate the complete JSON."""
+    acc = StreamingAccumulator()
+    acc.start_tool(id="call_terminal", name="echo_value")
+    acc.set_tool_args_if_empty('{"value":"done"}')
+    acc.set_tool_args_if_empty('{"value":"done"}')
+    acc.finish_tool()
+
+    result = acc.finalize()
+    assert result.tool_calls[0].args == {"value": "done"}
+
+
+def test_set_tool_args_if_empty_ignores_empty_or_missing_terminal_values():
+    """Empty terminal values cannot clobber a real delta buffer."""
+    acc = StreamingAccumulator()
+    acc.start_tool(id="call_empty", name="echo_value")
+    acc.add_tool_args('{"value":"delta"}')
+    acc.set_tool_args_if_empty("")
+    acc.set_tool_args_if_empty(None)
+    acc.finish_tool()
+
+    result = acc.finalize()
+    assert result.tool_calls[0].args == {"value": "delta"}
+
+
+def test_done_only_sequential_tools_preserve_order_and_ids():
+    """Multiple terminal-only tools retain order, IDs, names, and arguments."""
+    acc = StreamingAccumulator()
+    for call_id, name, args in [
+        ("call_1", "first", '{"order":1}'),
+        ("call_2", "second", '{"order":2}'),
+    ]:
+        acc.start_tool(id=call_id, name=name)
+        acc.set_tool_args_if_empty(args)
+        acc.finish_tool()
+
+    result = acc.finalize()
+    assert [(tool.id, tool.name, tool.args) for tool in result.tool_calls] == [
+        ("call_1", "first", {"order": 1}),
+        ("call_2", "second", {"order": 2}),
+    ]
+
+
 # -- Index-keyed tool calls (OpenAI Completions) ----------------------------
 
 def test_index_keyed_single():

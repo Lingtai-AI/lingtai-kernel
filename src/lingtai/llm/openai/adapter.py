@@ -1986,11 +1986,18 @@ class OpenAIResponsesSession(ChatSession):
                         on_chunk(event.delta)
                 elif event.type == "response.function_call_arguments.delta":
                     acc.add_tool_args(event.delta)
+                elif event.type == "response.function_call_arguments.done":
+                    # Spark may emit complete args without any deltas.
+                    acc.set_tool_args_if_empty(getattr(event, "arguments", None))
                 elif event.type == "response.output_item.added":
                     if getattr(event.item, "type", None) == "function_call":
                         acc.start_tool(id=event.item.call_id, name=event.item.name)
                 elif event.type == "response.output_item.done":
                     if getattr(event.item, "type", None) == "function_call":
+                        # Use the final item as a second complete-args fallback.
+                        acc.set_tool_args_if_empty(
+                            getattr(event.item, "arguments", None)
+                        )
                         acc.finish_tool()
                 elif event.type == "response.completed":
                     response_id = event.response.id
@@ -4145,11 +4152,18 @@ class CodexResponsesSession(OpenAIResponsesSession):
                         on_chunk(event.delta)
                 elif event.type == "response.function_call_arguments.delta":
                     acc.add_tool_args(event.delta)
+                elif event.type == "response.function_call_arguments.done":
+                    # Spark may emit complete args without any deltas.
+                    acc.set_tool_args_if_empty(getattr(event, "arguments", None))
                 elif event.type == "response.output_item.added":
                     if getattr(event.item, "type", None) == "function_call":
                         acc.start_tool(id=event.item.call_id, name=event.item.name)
                 elif event.type == "response.output_item.done":
                     if getattr(event.item, "type", None) == "function_call":
+                        # Use the final item as a second complete-args fallback.
+                        acc.set_tool_args_if_empty(
+                            getattr(event.item, "arguments", None)
+                        )
                         acc.finish_tool()
                 elif event.type == "response.completed":
                     response_id = event.response.id
