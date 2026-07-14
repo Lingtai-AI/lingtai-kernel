@@ -342,27 +342,39 @@ def _canonicalize_working_dir(working_dir: str) -> str:
     return str(p.resolve())
 
 
-def _validate_owned_run_ids(owned_run_ids) -> tuple:
+def _validate_owned_run_ids(owned_run_ids, *, reason_prefix: str = "") -> tuple:
     """Validate a run-id set: non-empty strings, no duplicates, no path shapes.
 
     Run ids are meant to be existing ``DaemonRunDir`` folder-name-shaped ids
     (see ``run_dir.py``'s ``f"{handle}-{timestamp}-{hash6}"`` convention) — a
     plain single path component, never a separator or ``..`` segment.
+
+    Shared by both :class:`RefreshHostMarker` (whose own recorded
+    ``owned_run_ids`` is the sole authority on what it owns) and
+    :class:`ExecutionOwner` (a per-run tag whose own, self-reported
+    ``owned_run_ids`` field must be exactly as well-formed as the marker's —
+    an empty or duplicate-containing tag is malformed evidence regardless of
+    whether ``proves_membership_of`` ever ends up trusting its content).
+    ``reason_prefix`` namespaces the raised reason tag per caller (e.g.
+    ``"execution_owner_"``) so the two callers' error reasons stay in their
+    own distinct, already-established namespaces.
     """
+    empty_reason = f"{reason_prefix}empty_run_ids"
+    malformed_reason = f"{reason_prefix}malformed_run_ids"
     ids = tuple(owned_run_ids)
     if not ids:
-        raise MarkerValidationError("empty_run_ids", "owned_run_ids must be non-empty")
+        raise MarkerValidationError(empty_reason, "owned_run_ids must be non-empty")
     for r in ids:
         if not isinstance(r, str) or not r.strip():
             raise MarkerValidationError(
-                "malformed_run_ids", f"owned_run_ids entries must be non-empty strings, got {r!r}"
+                malformed_reason, f"owned_run_ids entries must be non-empty strings, got {r!r}"
             )
         if os.path.basename(r) != r or r in (".", ".."):
             raise MarkerValidationError(
-                "malformed_run_ids", f"owned_run_ids entry is not a plain path component: {r!r}"
+                malformed_reason, f"owned_run_ids entry is not a plain path component: {r!r}"
             )
     if len(set(ids)) != len(ids):
-        raise MarkerValidationError("malformed_run_ids", "owned_run_ids contains duplicates")
+        raise MarkerValidationError(malformed_reason, "owned_run_ids contains duplicates")
     return ids
 
 
@@ -398,6 +410,29 @@ def _validate_start_ticks(start_ticks: int) -> int:
             "malformed_start_ticks", f"start_ticks must be a positive int, got {start_ticks!r}"
         )
     return start_ticks
+
+
+def _validate_schema_version(schema_version, *, reason: str, label: str) -> int:
+    """Reject non-int, bool, or wrong-value schema versions.
+
+    ``bool`` is an ``int`` subclass in Python, so a bare
+    ``schema_version != MARKER_SCHEMA_VERSION`` check lets ``True`` through
+    whenever ``MARKER_SCHEMA_VERSION == 1``, since ``True == 1``. Every
+    durable record's schema-version field is a fixed literal, never a
+    user-meaningful boolean, so this rejects ``bool`` explicitly rather than
+    relying on value equality alone — mirroring ``_validate_pid``'s and
+    ``_validate_start_ticks``' own non-coercive posture for the same
+    Python quirk.
+    """
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version != MARKER_SCHEMA_VERSION
+    ):
+        raise MarkerValidationError(
+            reason, f"{label} schema_version={schema_version!r}, expected {MARKER_SCHEMA_VERSION}"
+        )
+    return schema_version
 
 
 def _validate_prepared_at(prepared_at: str) -> str:
@@ -584,11 +619,7 @@ def _parse_marker_dict(data: object, *, source: str) -> RefreshHostMarker:
     """
     if not isinstance(data, dict):
         raise MarkerValidationError("not_a_dict", f"{source}: marker is not a JSON object")
-    if data.get("schema_version") != MARKER_SCHEMA_VERSION:
-        raise MarkerValidationError(
-            "schema_mismatch",
-            f"{source}: schema_version={data.get('schema_version')!r}, expected {MARKER_SCHEMA_VERSION}",
-        )
+    _validate_schema_version(data.get("schema_version"), reason="schema_mismatch", label=f"{source}:")
     missing = [k for k in _REQUIRED_MARKER_KEYS if k not in data]
     if missing:
         raise MarkerValidationError("missing_fields", f"{source}: missing fields {missing}")
@@ -1094,6 +1125,21 @@ class ExecutionOwner:
 
     @classmethod
     def from_dict(cls, data: dict) -> "ExecutionOwner":
+        """Strictly, non-coercively validate a raw execution-owner tag dict.
+
+        Mirrors :func:`_parse_marker_dict`'s posture exactly — an
+        ``ExecutionOwner`` tag is durably persisted onto a run's own
+        ``daemon.json`` and later read back by a successor's
+        ``proves_membership_of`` check, so a hand-edited or corrupted tag
+        must be rejected exactly as strictly as a malformed marker file: an
+        unknown schema version, a ``bool`` masquerading as ``pid`` (``bool``
+        is an ``int`` subclass in Python), a non-positive ``start_ticks``/
+        ``sequence``, or a generation string that does not match the
+        canonical marker-generation shape are all rejected rather than
+        silently coerced or accepted.
+        """
+        if not isinstance(data, dict):
+            raise MarkerValidationError("execution_owner_not_a_dict", "execution_owner is not a JSON object")
         missing = [k for k in _REQUIRED_EXECUTION_OWNER_KEYS if k not in data]
         if missing:
             raise MarkerValidationError(
@@ -1105,19 +1151,46 @@ class ExecutionOwner:
                 "execution_owner_unexpected_fields",
                 f"execution_owner unexpected fields {sorted(extra)}",
             )
+        _validate_schema_version(
+            data.get("schema_version"),
+            reason="execution_owner_schema_mismatch", label="execution_owner",
+        )
+        generation = data["generation"]
+        if not isinstance(generation, str) or not _GENERATION_RE.match(generation):
+            raise MarkerValidationError(
+                "execution_owner_malformed_generation",
+                f"execution_owner malformed generation {generation!r}",
+            )
+        nonce = data["nonce"]
+        if not isinstance(nonce, str) or len(nonce) != 32:
+            raise MarkerValidationError("execution_owner_malformed_nonce", "execution_owner malformed nonce")
+        try:
+            int(nonce, 16)
+        except ValueError:
+            raise MarkerValidationError(
+                "execution_owner_malformed_nonce", "execution_owner nonce is not valid hex"
+            ) from None
+        pid = _validate_pid(data["pid"])
+        start_ticks = _validate_start_ticks(data["start_ticks"])
+        sequence = data["sequence"]
+        if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence <= 0:
+            raise MarkerValidationError(
+                "execution_owner_malformed_sequence", f"execution_owner malformed sequence {sequence!r}"
+            )
         owned_run_ids = data["owned_run_ids"]
         if not isinstance(owned_run_ids, list) or not all(isinstance(r, str) for r in owned_run_ids):
             raise MarkerValidationError(
                 "execution_owner_malformed_run_ids", "execution_owner owned_run_ids malformed"
             )
+        validated_run_ids = _validate_owned_run_ids(owned_run_ids, reason_prefix="execution_owner_")
         return cls(
             schema_version=data["schema_version"],
-            generation=data["generation"],
-            nonce=data["nonce"],
-            pid=data["pid"],
-            start_ticks=data["start_ticks"],
-            sequence=data["sequence"],
-            owned_run_ids=tuple(owned_run_ids),
+            generation=generation,
+            nonce=nonce,
+            pid=pid,
+            start_ticks=start_ticks,
+            sequence=sequence,
+            owned_run_ids=validated_run_ids,
         )
 
     @classmethod
@@ -1133,19 +1206,45 @@ class ExecutionOwner:
         )
 
     def proves_membership_of(self, run_id: str, marker: RefreshHostMarker) -> bool:
-        """True only if this tag was produced by exactly ``marker`` (same
-        generation AND nonce — the nonce is the actual anti-forgery/anti-
-        reuse identity; generation alone is only a human-forensic label)
-        AND ``run_id`` is in the recorded owned set. A tag whose generation/
-        nonce does not match the marker currently being checked against is
-        never proof of anything for that marker — this is what stops a
-        later host from silently inheriting an earlier host's run via a
-        stale or mismatched tag.
+        """True only if this tag was produced by exactly ``marker`` AND
+        ``run_id`` is genuinely in ``marker``'s own recorded owned set.
+
+        "Produced by exactly ``marker``" requires EVERY one of the marker's
+        own identity fields to match — schema_version, generation, nonce
+        (the actual anti-forgery/anti-reuse identity; generation alone is
+        only a human-forensic label), pid, start_ticks, sequence, AND the
+        COMPLETE ``owned_run_ids`` set — not merely generation+nonce, and
+        not merely "the marker happens to also own this one run_id". A tag
+        that copies a real marker's generation/nonce but carries a
+        different pid/start_ticks/sequence is not a tag this marker
+        actually produced; trusting it on generation+nonce alone would
+        accept a forged tag as long as it copied those two fields.
+        Likewise, a tag whose OWN ``owned_run_ids`` differs at all from
+        ``marker.owned_run_ids`` — even if it happens to still list the
+        queried ``run_id`` — is not the tag ``tag_owned_runs`` actually
+        produced from this exact marker (see ``ExecutionOwner.from_marker``,
+        which always sets ``owned_run_ids=marker.owned_run_ids`` verbatim);
+        any observed difference is itself proof of tampering or a stale/
+        cross-generation tag, independent of which specific run_id was
+        queried.
+
+        Final membership is checked against ``marker.owned_run_ids`` — the
+        one authoritative record of what this marker actually owns — never
+        solely against ``self.owned_run_ids`` (the tag's own, self-reported
+        set), even though the exact-set-equality check above means the two
+        already agree by this point for any tag that passes it. This is
+        what stops a later host from silently inheriting an earlier host's
+        run via a stale, mismatched, or outright forged tag.
         """
         return (
-            self.generation == marker.generation
+            self.schema_version == marker.schema_version
+            and self.generation == marker.generation
             and self.nonce == marker.nonce
-            and run_id in self.owned_run_ids
+            and self.pid == marker.pid
+            and self.start_ticks == marker.start_ticks
+            and self.sequence == marker.sequence
+            and self.owned_run_ids == marker.owned_run_ids
+            and run_id in marker.owned_run_ids
         )
 
 
@@ -1183,16 +1282,46 @@ def tag_owned_runs(marker: RefreshHostMarker, run_dirs: dict) -> dict:
     lighter stand-in — this function only depends on that two-method
     surface, not on the concrete run-dir implementation).
 
+    If ``set_execution_owner`` itself raises
+    ``run_dir.ExecutionOwnerWriteStateUnknownError`` (the setter's own write
+    failed AND the resulting on-disk state could not even be read back to
+    reconcile in-memory truth — see that exception's own docstring), THIS
+    run's tag state is unknown, not merely "not yet tagged": rolling back
+    every EARLIER successfully-tagged run is still correct (their own state
+    is known-tagged, by construction), but the failing run itself cannot be
+    compensated by an ordinary ``clear_execution_owner_on_rollback()`` call —
+    there is no known ground truth to reconcile against — so it is
+    immediately escalated to :class:`OwnerTaggingAmbiguousError` rather than
+    letting the raw ``ExecutionOwnerWriteStateUnknownError`` propagate as if
+    it were an ordinary "nothing was written" failure a caller might
+    otherwise safely treat as "no tag exists, safe to retry cleanly."
+
+    For every OTHER (ordinary) ``set_execution_owner`` failure — including
+    the case where the underlying write performed a REAL durable replace and
+    THEN raised (e.g. a post-replace directory-fsync failure) — the setter's
+    own reconciliation (``run_dir._write_execution_owner_transaction``)
+    already leaves this run's in-memory state matching whatever ground truth
+    actually landed on disk. That means the currently failing run's own tag
+    is exactly as compensable as any earlier successfully-tagged run's, and
+    it MUST be compensated the same way: a marker plus an incompletely-tagged
+    run set (including the one run whose own write is what failed) must
+    never be allowed to reach :func:`commit_marker`. Leaving the failing
+    run's own now-durably-landed tag in place while only rolling back
+    EARLIER runs would not be an all-or-nothing transaction — it would be
+    "all runs except the one that happened to raise."
+
     On success, returns ``{run_id: True}`` for every owned run id. On any
-    tag-write failure, rolls back every run this call already tagged
-    successfully (in the same order they were tagged, most-recent first),
-    then re-raises the original exception — so a caller sees the same
-    exception type/message it would have seen without any rollback logic,
-    and no run is left claiming membership in a marker whose tagging never
-    completed. If a rollback itself fails, raises
-    :class:`OwnerTaggingAmbiguousError` instead (never continues, never
-    silently drops the ambiguity) — this must always propagate, so a caller
-    that catches it must not proceed to :func:`commit_marker`.
+    ordinary tag-write failure, rolls back every run this call already
+    tagged successfully (in the same order they were tagged, most-recent
+    first) AND the currently failing run itself, then re-raises the original
+    exception — so a caller sees the same exception type/message it would
+    have seen without any rollback logic, and no run (earlier OR the one
+    that failed) is left claiming membership in a marker whose tagging never
+    completed. If any rollback in that set fails — an earlier run's or the
+    failing run's own — raises :class:`OwnerTaggingAmbiguousError` instead
+    (never continues, never silently drops the ambiguity) — this must always
+    propagate, so a caller that catches it must not proceed to
+    :func:`commit_marker`.
 
     A published marker plus a mismatched/incomplete run-tag set must never
     authorize execution — this function is the reason that invariant holds:
@@ -1200,6 +1329,8 @@ def tag_owned_runs(marker: RefreshHostMarker, run_dirs: dict) -> dict:
     the only durable "the marker exists" signal, and it is never reached
     unless every owned run was successfully tagged first.
     """
+    from .run_dir import ExecutionOwnerWriteStateUnknownError  # noqa: PLC0415 — avoid a module-level cross-import for one narrow escalation check
+
     owner = ExecutionOwner.from_marker(marker)
     owner_dict = owner.to_dict()
     tagged_run_ids: list = []
@@ -1207,8 +1338,29 @@ def tag_owned_runs(marker: RefreshHostMarker, run_dirs: dict) -> dict:
         run_dir = run_dirs[run_id]
         try:
             run_dir.set_execution_owner(owner_dict)
-        except Exception as tag_error:
+        except ExecutionOwnerWriteStateUnknownError as tag_error:
+            # This run's OWN tag state is unknowable — no ground truth
+            # exists to compensate it against, so it cannot go through the
+            # ordinary rollback loop below. Earlier runs are still known-
+            # tagged by construction and are rolled back exactly as before.
             for rolled_back_id in reversed(tagged_run_ids):
+                rolled_back_dir = run_dirs[rolled_back_id]
+                try:
+                    rolled_back_dir.clear_execution_owner_on_rollback()
+                except Exception as rollback_error:
+                    raise OwnerTaggingAmbiguousError(
+                        rolled_back_id, cause=rollback_error
+                    ) from tag_error
+            raise OwnerTaggingAmbiguousError(run_id, cause=tag_error) from tag_error
+        except Exception as tag_error:
+            # Ordinary failure — the setter's own reconciliation already
+            # leaves this run's in-memory (and disk) state at known ground
+            # truth, whether or not the underlying write actually landed
+            # before raising. Compensate every earlier tagged run AND this
+            # run itself, in the same most-recent-first order, so the
+            # transaction is genuinely all-or-nothing rather than excluding
+            # the one run whose own write is what failed.
+            for rolled_back_id in reversed([*tagged_run_ids, run_id]):
                 rolled_back_dir = run_dirs[rolled_back_id]
                 try:
                     rolled_back_dir.clear_execution_owner_on_rollback()
@@ -1234,9 +1386,25 @@ def tag_owned_runs(marker: RefreshHostMarker, run_dirs: dict) -> dict:
 _CONTROL_DIRNAME = "control"
 _CONTROL_REQUESTS_DIRNAME = "requests"
 _CONTROL_ACKS_DIRNAME = "acks"
+_CONTROL_CLAIMS_DIRNAME = "claims"
 
 _ALLOWED_CONTROL_OPERATIONS = ("ask", "reclaim", "timeout")
-_ALLOWED_ACK_STATUSES = ("accepted", "pending", "already-terminal", "rejected", "host-lost")
+_ALLOWED_ACK_STATUSES = (
+    "accepted", "pending", "already-terminal", "rejected", "host-lost",
+    "effect-applied-ack-lost",
+)
+# The exact subset of `_ALLOWED_ACK_STATUSES` that represents a genuinely
+# FINISHED disposition for a request — "nobody will ever act on this request
+# again, for better or worse." `pending` is deliberately excluded: it means
+# "an attempt is or was in flight," never "this request is done," so an ack
+# with this status must NEVER suppress a request from
+# `read_pending_control_requests`'s scan (see that function's own docstring
+# and P1-6/A-6's ack-binding contract) — treating `pending` as terminal is
+# exactly the defect that let a crashed/lost claim silently swallow a
+# request with zero real executions.
+TERMINAL_ACK_STATUSES = frozenset(
+    {"accepted", "already-terminal", "rejected", "host-lost", "effect-applied-ack-lost"}
+)
 
 _REQUIRED_CONTROL_REQUEST_KEYS = (
     "schema_version", "request_id", "generation", "nonce", "target_run_ids",
@@ -1249,6 +1417,110 @@ _REQUIRED_CONTROL_ACK_KEYS = (
 )
 
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,128}$")
+
+
+_CLOSED_MARKER_FILENAME = "CLOSED"
+_REQUIRED_CLOSED_MARKER_KEYS = ("schema_version", "generation", "closed_at")
+
+
+def _generation_dir(parent_working_dir: Path, generation: str) -> Path:
+    return refresh_hosts_dir(parent_working_dir) / generation
+
+
+def closed_marker_path(parent_working_dir: Path, generation: str) -> Path:
+    """Return the durable, typed CLOSED-state marker path for ``generation``.
+
+    Distinct from the per-generation ``control/`` subdirectory (requests/
+    acks/claims) — this lives directly under the generation's own
+    directory, alongside where a future non-control-plane per-generation
+    state might also live, and is the ONE file both the drain host (writer)
+    and any requester (reader) agree names "this generation's control plane
+    is permanently closed."
+    """
+    return _generation_dir(parent_working_dir, generation) / _CLOSED_MARKER_FILENAME
+
+
+def write_closed_marker(parent_working_dir: Path, marker: RefreshHostMarker) -> Path:
+    """Durably, atomically publish a typed CLOSED-state marker for
+    ``marker.generation`` — the fail-closed P1-9/A-9 handshake's actual
+    durable signal.
+
+    Unlike the pre-v7 zero-byte ``touch()``, this is a real typed record
+    (schema_version + generation + closed_at), written via the same
+    temp-file-then-``os.link`` exclusive-publish pattern every other
+    durable control-plane record in this module uses (never
+    ``os.replace``, which would silently allow a second writer to
+    overwrite an already-published CLOSED marker) — fsynced before link,
+    with the containing directory fsynced after, so the marker's own
+    existence survives a crash immediately after this call returns. Raises
+    ``FileExistsError`` if a CLOSED marker already exists for this
+    generation (there is exactly one legitimate writer — the drain loop
+    that owns this generation — and it calls this exactly once, from its
+    own ``finally`` block, so a second call can only mean a bug, not a
+    legitimate retry).
+    """
+    generation_directory = _generation_dir(parent_working_dir, marker.generation)
+    generation_directory.mkdir(parents=True, exist_ok=True)
+    target = closed_marker_path(parent_working_dir, marker.generation)
+    payload = {
+        "schema_version": MARKER_SCHEMA_VERSION,
+        "generation": marker.generation,
+        "closed_at": RefreshHostMarker._now_iso(),
+    }
+    tmp = atomic_write_json(
+        generation_directory / f".{_CLOSED_MARKER_FILENAME}.{os.getpid()}.{secrets.token_hex(6)}.tmp",
+        payload, ensure_ascii=False, indent=2, fsync=True,
+    )
+    try:
+        os.link(str(tmp), str(target))
+    except FileExistsError:
+        raise
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    _fsync_dir(generation_directory)
+    return target
+
+
+def read_closed_marker(parent_working_dir: Path, generation: str):
+    """Return the parsed CLOSED-marker dict for ``generation``, or ``None``
+    if no valid CLOSED marker exists yet.
+
+    Fail-closed-per-item like every other reader in this module: a
+    missing file, unreadable file, or malformed/mismatched content all
+    return ``None`` (treated as "not yet closed, still draining, keep
+    waiting") rather than raising — a requester polling for closure must
+    never crash on a transient read race with the writer's own atomic
+    publish. Content is cross-checked against ``generation`` (the
+    directory it was found under) exactly like every other durable record
+    here, so a marker somehow misplaced under the wrong generation
+    directory is not trusted.
+    """
+    path = closed_marker_path(parent_working_dir, generation)
+    try:
+        data = read_json(path)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    missing = [k for k in _REQUIRED_CLOSED_MARKER_KEYS if k not in data]
+    if missing:
+        return None
+    if data.get("schema_version") != MARKER_SCHEMA_VERSION or isinstance(data.get("schema_version"), bool):
+        return None
+    if data.get("generation") != generation:
+        return None
+    return data
+
+
+def is_generation_closed(parent_working_dir: Path, generation: str) -> bool:
+    """True only if a valid, content-checked CLOSED marker exists for
+    ``generation`` — the sole predicate a requester may use to stop
+    waiting for an ack and treat a generation as permanently unserviceable.
+    """
+    return read_closed_marker(parent_working_dir, generation) is not None
 
 
 def control_dir(parent_working_dir: Path, generation: str) -> Path:
@@ -1269,6 +1541,140 @@ def _requests_dir(parent_working_dir: Path, generation: str) -> Path:
 
 def _acks_dir(parent_working_dir: Path, generation: str) -> Path:
     return control_dir(parent_working_dir, generation) / _CONTROL_ACKS_DIRNAME
+
+
+def _claims_dir(parent_working_dir: Path, generation: str) -> Path:
+    return control_dir(parent_working_dir, generation) / _CONTROL_CLAIMS_DIRNAME
+
+
+CLAIM_STATUS_CLAIMED = "claimed"
+CLAIM_STATUS_DISPATCHED = "dispatched"
+_ALLOWED_CLAIM_STATUSES = (CLAIM_STATUS_CLAIMED, CLAIM_STATUS_DISPATCHED)
+
+
+def _claim_path(parent_working_dir: Path, generation: str, request_id: str) -> Path:
+    return _claims_dir(parent_working_dir, generation) / f"{request_id}.json"
+
+
+def read_control_request_claim_status(parent_working_dir: Path, generation: str, request_id: str):
+    """Return the durable claim's current ``status`` string, or ``None`` if
+    no (readable, well-formed) claim exists for ``request_id``.
+
+    A missing file, an unreadable/corrupt file, or a file whose content does
+    not have exactly ``{"status": <one of _ALLOWED_CLAIM_STATUSES>}`` shape
+    all return ``None`` — fail-closed to "no claim exists," mirroring this
+    module's existing per-item fail-closed posture. This is a private read
+    helper (not a public API): callers reason about claim state only through
+    :func:`claim_control_request`/:func:`mark_control_request_dispatched`'s
+    own return values and this function together, never by independently
+    re-deriving claim semantics elsewhere.
+    """
+    path = _claim_path(parent_working_dir, generation, request_id)
+    try:
+        data = read_json(path)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    status = data.get("status")
+    if status not in _ALLOWED_CLAIM_STATUSES:
+        return None
+    return status
+
+
+def claim_control_request(parent_working_dir: Path, generation: str, request_id: str) -> bool:
+    """Durably, exclusively claim ``request_id`` for dispatch. Returns
+    ``True`` only if THIS call won the claim (no prior claim existed, of
+    either state); returns ``False`` if a claim already exists in EITHER
+    the ``claimed`` or ``dispatched`` state.
+
+    This is the exactly-once primitive dispatch-before-ack alone does not
+    provide: the current-generation control loop applies a request's real
+    side effect (e.g. appending to a followup buffer, setting a
+    cancel/timeout event) BEFORE ``write_control_ack`` is ever called, so a
+    crash between "effect applied" and "ack durably published" would
+    otherwise leave the request looking unserviced (no valid ack exists yet)
+    to a retrying/restarted drain loop, which would dispatch it again and
+    apply the side effect a SECOND time — silently violating exactly-once
+    for any non-idempotent operation (e.g. an ``ask`` message delivered
+    twice).
+
+    The claim is a TWO-STATE durable record, not a bare exists/does-not-
+    exist marker — see :func:`mark_control_request_dispatched` for the
+    ``claimed`` → ``dispatched`` transition. This distinguishes the two
+    genuinely different crash windows a single-threaded-per-generation
+    drain loop can actually land in (see ``_run_drain_loop``'s own
+    docstring: exactly one thread ever processes a given generation's
+    requests, so "an earlier attempt is still concurrently in flight right
+    now" cannot happen — the only real interruption is THIS SAME process
+    crashing and a successor drain loop later resuming the same
+    generation):
+
+    - claim exists at ``claimed``: an earlier attempt won the claim but the
+      process crashed BEFORE the real side effect ever ran — nothing was
+      executed, so it is safe (and necessary — otherwise the request would
+      be silently lost forever) to resume dispatch now. A caller MUST NOT
+      treat this the same as "already handled."
+    - claim exists at ``dispatched``: an earlier attempt's real side effect
+      already ran, but the process crashed before the resulting ack could
+      be durably published. The side effect must NEVER be re-applied; the
+      caller's job is to publish a truthful terminal ack that says exactly
+      this (the operation was applied but its original response detail is
+      unrecoverable), never to silently drop the request or fabricate a
+      response as if the original dispatch's actual result were known.
+
+    Exclusive-create (``O_CREAT | O_EXCL``) makes the INITIAL claim durable
+    and race-safe across real concurrent processes/threads, not merely an
+    in-memory flag — the same posture ``write_control_request``/
+    ``write_control_ack`` already use for their own idempotency guarantees.
+    """
+    claims_directory = _claims_dir(parent_working_dir, generation)
+    claims_directory.mkdir(parents=True, exist_ok=True)
+    claim_path = _claim_path(parent_working_dir, generation, request_id)
+    tmp = atomic_write_json(
+        claims_directory / f".{request_id}.{os.getpid()}.{secrets.token_hex(6)}.tmp",
+        {"status": CLAIM_STATUS_CLAIMED},
+        ensure_ascii=False, indent=2, fsync=True,
+    )
+    try:
+        os.link(str(tmp), str(claim_path))
+    except FileExistsError:
+        return False
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    _fsync_dir(claims_directory)
+    return True
+
+
+def mark_control_request_dispatched(parent_working_dir: Path, generation: str, request_id: str) -> None:
+    """Durably transition an existing ``claimed`` claim to ``dispatched``.
+
+    MUST be called strictly AFTER the request's real side effect has
+    actually run and strictly BEFORE ``write_control_ack`` is called for it
+    — this ordering is what makes the ``dispatched`` state a truthful,
+    durable record of "the effect definitely already happened," so a crash
+    at any point after this call returns can never cause the effect to be
+    silently re-applied by a later claim attempt.
+
+    Unlike the initial claim (which must be exclusive-create, since two
+    independent callers could otherwise both believe they won it), this is
+    an ordinary idempotent overwrite: only the same caller that already won
+    the ``claimed`` state ever calls this, immediately after running the
+    effect it alone is responsible for, so there is no concurrent writer to
+    race against — the single-drain-thread-per-generation invariant
+    documented on :func:`claim_control_request` applies here identically.
+    """
+    claims_directory = _claims_dir(parent_working_dir, generation)
+    claims_directory.mkdir(parents=True, exist_ok=True)
+    claim_path = _claim_path(parent_working_dir, generation, request_id)
+    atomic_write_json(
+        claim_path, {"status": CLAIM_STATUS_DISPATCHED},
+        ensure_ascii=False, indent=2, fsync=True,
+    )
+    _fsync_dir(claims_directory)
 
 
 def _validate_request_id(request_id: str) -> str:
@@ -1303,6 +1709,25 @@ class ControlRequest:
 
     def __post_init__(self):
         _validate_request_id(self.request_id)
+        _validate_schema_version(
+            self.schema_version,
+            reason="control_request_schema_mismatch", label="control request",
+        )
+        if not isinstance(self.generation, str) or not _GENERATION_RE.match(self.generation):
+            raise MarkerValidationError(
+                "control_request_malformed_generation",
+                f"control request malformed generation {self.generation!r}",
+            )
+        if not isinstance(self.nonce, str) or len(self.nonce) != 32:
+            raise MarkerValidationError(
+                "control_request_malformed_nonce", "control request malformed nonce"
+            )
+        try:
+            int(self.nonce, 16)
+        except ValueError:
+            raise MarkerValidationError(
+                "control_request_malformed_nonce", "control request nonce is not valid hex"
+            ) from None
         if self.operation not in _ALLOWED_CONTROL_OPERATIONS:
             raise MarkerValidationError(
                 "malformed_operation",
@@ -1312,8 +1737,37 @@ class ControlRequest:
             raise MarkerValidationError(
                 "empty_target_run_ids", "target_run_ids must be a non-empty tuple"
             )
+        if not all(isinstance(r, str) and r for r in self.target_run_ids):
+            raise MarkerValidationError(
+                "malformed_target_run_ids", "target_run_ids entries must be non-empty strings"
+            )
         if not isinstance(self.payload, dict):
             raise MarkerValidationError("malformed_payload", "payload must be a dict")
+        # `bool` is an `int` subclass in Python, so `isinstance(x, int)`
+        # alone would let `True`/`False` through as `requester_pid=1`/`0` —
+        # the same non-coercive posture `_validate_pid` enforces for marker
+        # PIDs, mirrored here rather than re-imported since ControlRequest's
+        # error reasons are its own namespace.
+        if (
+            not isinstance(self.requester_pid, int)
+            or isinstance(self.requester_pid, bool)
+            or self.requester_pid <= 0
+        ):
+            raise MarkerValidationError(
+                "malformed_requester_pid",
+                f"requester_pid must be a positive int, got {self.requester_pid!r}",
+            )
+        if (
+            not isinstance(self.requester_start_ticks, int)
+            or isinstance(self.requester_start_ticks, bool)
+            or self.requester_start_ticks <= 0
+        ):
+            raise MarkerValidationError(
+                "malformed_requester_start_ticks",
+                f"requester_start_ticks must be a positive int, got {self.requester_start_ticks!r}",
+            )
+        _validate_prepared_at(self.created_at)
+        _validate_prepared_at(self.deadline_at)
 
     def to_dict(self) -> dict:
         return {
@@ -1380,6 +1834,15 @@ class ControlAck:
 
     def __post_init__(self):
         _validate_request_id(self.request_id)
+        _validate_schema_version(
+            self.schema_version,
+            reason="control_ack_schema_mismatch", label="control ack",
+        )
+        if not isinstance(self.generation, str) or not _GENERATION_RE.match(self.generation):
+            raise MarkerValidationError(
+                "control_ack_malformed_generation",
+                f"control ack malformed generation {self.generation!r}",
+            )
         if self.status not in _ALLOWED_ACK_STATUSES:
             raise MarkerValidationError(
                 "malformed_status",
@@ -1389,8 +1852,13 @@ class ControlAck:
             raise MarkerValidationError(
                 "empty_target_run_ids", "target_run_ids must be a non-empty tuple"
             )
+        if not all(isinstance(r, str) and r for r in self.target_run_ids):
+            raise MarkerValidationError(
+                "malformed_target_run_ids", "target_run_ids entries must be non-empty strings"
+            )
         if not isinstance(self.detail, dict):
             raise MarkerValidationError("malformed_detail", "detail must be a dict")
+        _validate_prepared_at(self.responded_at)
 
     def to_dict(self) -> dict:
         return {
@@ -1482,27 +1950,112 @@ def write_control_request(parent_working_dir: Path, request: ControlRequest) -> 
     return target
 
 
+def validated_acks_by_request_id(parent_working_dir: Path, generation: str) -> dict:
+    """Return ``{request_id: ControlAck}`` for every GENUINE, content-valid
+    ack under ``generation`` — the full validated object, not merely its id,
+    so a caller can bind the ack's own ``target_run_ids``/``status`` back to
+    the specific request it claims to answer (see
+    :func:`read_pending_control_requests`, which is the reason this returns
+    full objects rather than a bare id set: "a file with the right name
+    exists" is not proof of anything without checking WHAT it says).
+
+    An ack's filename stem alone is not proof anything was actually
+    serviced — a corrupt/unparseable file (a crash mid-write, disk
+    corruption, or an unrelated file colliding with the naming convention)
+    or a syntactically-valid-but-mismatched ``ControlAck`` (whose own
+    ``request_id``/``generation`` fields do not match the location it was
+    found at) must not suppress a real pending request from
+    :func:`read_pending_control_requests`'s scan. Each ack file is parsed,
+    validated via :meth:`ControlAck.from_dict` (the same strict, non-
+    coercive schema every other durable record in this module uses), and
+    its own ``request_id``/``generation`` are cross-checked against the
+    filename stem and the ``generation`` being scanned before it counts as
+    a real, binding ack for that request id. A single malformed/mismatched
+    ack file is skipped (excluded from the returned mapping, not raised) —
+    mirroring this module's existing fail-closed-per-item posture.
+    """
+    acks_directory = _acks_dir(parent_working_dir, generation)
+    if not acks_directory.is_dir():
+        return {}
+    validated: dict = {}
+    for path in acks_directory.glob("*.json"):
+        try:
+            data = read_json(path)
+            ack = ControlAck.from_dict(data)
+        except Exception:
+            continue
+        if ack.request_id != path.stem:
+            continue
+        if ack.generation != generation:
+            continue
+        validated[path.stem] = ack
+    return validated
+
+
+def validated_acked_request_ids(parent_working_dir: Path, generation: str) -> set:
+    """Return the set of request ids that have a GENUINE, content-valid,
+    TERMINAL ack — a thin id-only projection of
+    :func:`validated_acks_by_request_id` for callers that only need
+    membership, not the ack's own content.
+
+    A ``pending`` ack is deliberately excluded from this set (see
+    :data:`TERMINAL_ACK_STATUSES`): it represents "an attempt is or was in
+    flight," never "this request is finished," so it must never suppress a
+    request the way a genuinely terminal ack does. This projection does NOT
+    check ``target_run_ids`` binding — callers who need that (i.e.
+    :func:`read_pending_control_requests`, which knows each request's own
+    real target set at the point it needs to check) use
+    :func:`validated_acks_by_request_id` directly instead.
+    """
+    return {
+        request_id for request_id, ack in
+        validated_acks_by_request_id(parent_working_dir, generation).items()
+        if ack.status in TERMINAL_ACK_STATUSES
+    }
+
+
 def read_pending_control_requests(parent_working_dir: Path, generation: str):
     """Yield every :class:`ControlRequest` under ``generation`` that has no
-    published ack yet, sorted by request id. A request whose own file is
-    malformed is skipped (never raises out of this scan — one bad request
-    file must not block the host from seeing every other valid one), mirroring
+    published, content-valid, TERMINAL, target-bound ack yet, sorted by
+    request id. A request whose own file is malformed is skipped (never
+    raises out of this scan — one bad request file must not block the host
+    from seeing every other valid one), mirroring
     :func:`verified_refresh_host_pids`'s fail-closed-per-item posture.
+
+    An ack suppresses its request from this scan only if ALL of the
+    following hold — this is the full A-6 binding contract, not merely "an
+    ack exists at the right filename stem":
+
+    - it parses and validates as a well-formed :class:`ControlAck`
+      (:func:`validated_acks_by_request_id`'s own content-validation);
+    - its own ``request_id`` and ``generation`` match the filename stem and
+      the generation being scanned (also enforced by
+      :func:`validated_acks_by_request_id`);
+    - its ``target_run_ids`` EXACTLY equals the real request's own
+      ``target_run_ids`` — a syntactically valid ack for a different
+      request that happens to reuse this request's id/generation (e.g. a
+      forged or misdirected file) must not suppress the real request;
+    - its ``status`` is genuinely terminal (see
+      :data:`TERMINAL_ACK_STATUSES`) — a ``pending`` ack means an attempt
+      is or was in flight, not that the request is finished, so it must
+      never suppress the request from a retry/later tick.
     """
     requests_dir = _requests_dir(parent_working_dir, generation)
     if not requests_dir.is_dir():
         return
-    acked_ids = set()
-    acks_directory = _acks_dir(parent_working_dir, generation)
-    if acks_directory.is_dir():
-        acked_ids = {p.stem for p in acks_directory.glob("*.json")}
+    acks_by_id = validated_acks_by_request_id(parent_working_dir, generation)
     for path in sorted(requests_dir.glob("*.json")):
-        if path.stem in acked_ids:
-            continue
         try:
             data = read_json(path)
             request = ControlRequest.from_dict(data)
         except Exception:
+            continue
+        ack = acks_by_id.get(path.stem)
+        if (
+            ack is not None
+            and ack.target_run_ids == request.target_run_ids
+            and ack.status in TERMINAL_ACK_STATUSES
+        ):
             continue
         yield request
 

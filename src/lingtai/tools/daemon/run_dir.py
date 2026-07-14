@@ -22,6 +22,34 @@ from lingtai.kernel.token_ledger import (
 )
 
 
+class ExecutionOwnerWriteStateUnknownError(Exception):
+    """``set_execution_owner``/``clear_execution_owner_on_rollback`` raised
+    AND the resulting on-disk ``daemon.json`` content could not even be read
+    back to determine ground truth (missing file, corrupt JSON, a separate
+    read failure).
+
+    This is deliberately distinct from an ordinary ``OSError`` propagating
+    from the write itself: an ordinary write failure whose on-disk content
+    CAN be read back is fully reconciled by
+    ``DaemonRunDir._write_execution_owner_transaction`` before it re-raises
+    (memory is set to match whatever ground truth the read-back proved).
+    This exception means that reconciliation itself was impossible — the
+    true on-disk state for this one run is genuinely unknown. Callers (
+    ``refresh_host.tag_owned_runs``, ``daemon._prepare_refresh_host``) MUST
+    treat this the same as a rollback-confirmation failure — i.e. escalate
+    to ``refresh_host.OwnerTaggingAmbiguousError`` — rather than an ordinary
+    "nothing was written, safe to treat as untagged" failure.
+    """
+
+    def __init__(self, run_id: str, *, cause: BaseException):
+        super().__init__(
+            f"execution_owner write for run {run_id!r} raised and the resulting "
+            f"on-disk state could not be read back to confirm ground truth: {cause!r}"
+        )
+        self.run_id = run_id
+        self.cause = cause
+
+
 class DaemonRunDir:
     """Filesystem-backed mini-avatar log surface for one daemon emanation.
 
@@ -72,6 +100,23 @@ class DaemonRunDir:
         self._log_callback = log_callback
         self._started_monotonic = time.monotonic()
         self._terminal_notification_lock = threading.Lock()
+        # Serializes every read-modify-write mutator against every other:
+        # each mutator reads one or more `self._state` fields, computes an
+        # update, and durably rewrites the WHOLE daemon.json snapshot via
+        # `_atomic_write_json`. Without a shared lock, two concurrent
+        # mutators (e.g. an active worker's `set_current_tool` racing a
+        # refresh-drain PREPARE's `set_execution_owner`) can interleave
+        # their own `atomic_write_json` calls — whichever call's
+        # `os.replace` lands LAST on disk wins, silently discarding the
+        # OTHER mutator's update from the durable file even though both are
+        # still correctly reflected in the shared in-memory `self._state`
+        # dict. Atomic rename alone only guarantees each individual write's
+        # OWN content is internally consistent; it does not serialize
+        # concurrent writers against each other. This lock is separate from
+        # `_terminal_notification_lock` (which protects only the narrower
+        # terminal-notification claim/publish state machine) because every
+        # ordinary state mutator needs this protection, not only that one.
+        self._state_lock = threading.Lock()
         started_at_iso = self._now_iso()
 
         # New daemon-manager callers pass a compact id as ``run_id`` so the
@@ -273,13 +318,23 @@ class DaemonRunDir:
         append_jsonl(path, entry, ensure_ascii=False)
 
     def _safe(self, op: str, fn) -> None:
-        """Run `fn`; swallow OSError (best-effort policy for mutation writes).
+        """Run `fn` under ``_state_lock``; swallow OSError (best-effort
+        policy for mutation writes).
 
-        If a log_callback was provided at construction, the swallowed error is
-        forwarded so the parent agent can record it without breaking the run.
+        Every mutator's ``fn`` closure reads/updates ``self._state`` and
+        durably rewrites the whole ``daemon.json`` snapshot — the lock
+        serializes that read-modify-write sequence against every OTHER
+        mutator (including ``set_execution_owner``/
+        ``clear_execution_owner_on_rollback``, which acquire the same lock
+        directly since they intentionally do not route through ``_safe``)
+        so concurrent writers' updates cannot silently overwrite each other
+        on disk. If a log_callback was provided at construction, a
+        swallowed error is forwarded so the parent agent can record it
+        without breaking the run.
         """
         try:
-            fn()
+            with self._state_lock:
+                fn()
         except OSError as e:
             if self._log_callback is not None:
                 try:
@@ -914,6 +969,70 @@ class DaemonRunDir:
         """Watchdog timeout. Sets state=timeout."""
         self._mark_terminal("timeout", "daemon_timeout")
 
+    def _write_execution_owner_transaction(self, execution_owner) -> None:
+        """Shared transaction body for ``set_execution_owner``/
+        ``clear_execution_owner_on_rollback``: attempt a durable write of
+        ``pending_state`` (a copy of ``self._state`` with ``execution_owner``
+        set to the given value) and reconcile in-memory state with GROUND
+        TRUTH — never merely "what we assumed happened" — regardless of
+        whether the write call itself raises.
+
+        ``atomic_write_text`` performs a real ``os.replace`` durably onto
+        the target path; if the underlying ``atomic_write_json`` call raises
+        AFTER that replace has already landed (e.g. a directory-fsync
+        failure in a caller-supplied variant, or any other post-replace
+        failure), the exception alone does not prove the write never
+        happened — the OLD "assume any exception means nothing was written"
+        posture would then leave ``self._state`` claiming NO owner while
+        disk durably records one, which is exactly the opposite divergence
+        from the one this method's copy-before-mutate design was built to
+        prevent (memory-ahead-of-disk). Ground truth is always the disk
+        content actually observed after the fact, not the exception's mere
+        presence or absence:
+
+        - write call raises AND the on-disk content still matches
+          ``pending_state`` (rare, but possible — the underlying replace
+          landed, then something else in the write path raised): memory is
+          set to ``pending_state`` — matching disk — and the original
+          exception still propagates, since the caller's own contract
+          (``tag_owned_runs``'s rollback bookkeeping,
+          ``_prepare_refresh_host``'s ambiguity handling) depends on seeing
+          it;
+        - write call raises AND the on-disk content does NOT match
+          ``pending_state`` (the ordinary case — the write genuinely never
+          landed): memory is left unchanged (matching disk), and the
+          original exception propagates;
+        - write call raises AND the on-disk content cannot even be read
+          back (missing file, corrupt JSON, a different read failure): the
+          true state is genuinely unknowable from here — this method raises
+          a fresh exception chained from the original, tagged so callers
+          (``tag_owned_runs``/``_prepare_refresh_host``) can recognize a
+          disk-state-unknown failure and escalate to
+          ``OwnerTaggingAmbiguousError`` rather than treating it as an
+          ordinary "nothing was written" failure;
+        - write call succeeds: memory is set to ``pending_state`` exactly
+          as before this fix — the ordinary, most common path.
+        """
+        pending_state = dict(self._state)
+        pending_state["execution_owner"] = execution_owner
+        try:
+            self._atomic_write_json(self.daemon_json_path, pending_state)
+        except Exception as write_error:
+            try:
+                on_disk = json.loads(self.daemon_json_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError) as read_error:
+                raise ExecutionOwnerWriteStateUnknownError(
+                    self._run_id, cause=write_error
+                ) from read_error
+            if on_disk == pending_state:
+                # The write's own durable replace actually landed before
+                # something else in the write path raised — memory must
+                # reflect that reality, not the exception's mere presence.
+                self._state = pending_state
+            raise write_error
+        else:
+            self._state = pending_state
+
     def set_execution_owner(self, execution_owner: dict) -> None:
         """Durably tag this run with an ``ExecutionOwner`` dict (see
         ``refresh_host.ExecutionOwner.to_dict()``), as part of committing one
@@ -924,11 +1043,26 @@ class DaemonRunDir:
         propagating as a real exception here, not being swallowed — a
         caller that never sees the failure could not know to roll back the
         other runs it already tagged in the same call. This is the one
-        mutator in this class that must raise ``OSError`` rather than
+        mutator in this class that must raise ``OSError`` (or, on a
+        disk-state-unknown failure, ``ExecutionOwnerWriteStateUnknownError``
+        — see ``_write_execution_owner_transaction``) rather than
         best-effort log it.
+
+        See ``_write_execution_owner_transaction`` for the exact write/
+        reconciliation contract: in-memory state is always left matching
+        GROUND-TRUTH disk content after this call returns OR raises, never
+        merely "what a bare exists/does-not-except check would have
+        assumed."
+
+        Acquires the same ``_state_lock`` every ``_safe``-routed mutator
+        uses, so this write is serialized against a concurrent worker-
+        progress update (e.g. ``set_current_tool``) racing on the SAME
+        ``daemon.json`` — without this, whichever mutator's
+        ``atomic_write_json`` call lands last on disk would silently
+        discard the other's update from the durable file (see P1-10).
         """
-        self._state["execution_owner"] = execution_owner
-        self._atomic_write_json(self.daemon_json_path, self._state)
+        with self._state_lock:
+            self._write_execution_owner_transaction(execution_owner)
 
     def clear_execution_owner_on_rollback(self) -> None:
         """Undo a ``set_execution_owner`` call whose enclosing marker commit
@@ -940,9 +1074,19 @@ class DaemonRunDir:
         ``_safe`` — ``tag_owned_runs`` must see a real rollback failure to
         raise ``OwnerTaggingAmbiguousError`` rather than silently believing
         the rollback succeeded.
+
+        Same write/reconciliation contract as ``set_execution_owner`` (see
+        ``_write_execution_owner_transaction``): in-memory state always
+        matches ground-truth disk content after this call returns or
+        raises, so the caller's own exception handling (which raises
+        ``OwnerTaggingAmbiguousError`` on a rollback failure) is reasoning
+        about a state that genuinely matches what is unknown/known on disk.
+
+        Acquires the same ``_state_lock`` as ``set_execution_owner`` and
+        every ``_safe``-routed mutator, for the same P1-10 reason.
         """
-        self._state["execution_owner"] = None
-        self._atomic_write_json(self.daemon_json_path, self._state)
+        with self._state_lock:
+            self._write_execution_owner_transaction(None)
 
     def set_deadline(self, deadline_at: str) -> None:
         """Persist an absolute UTC watchdog/timeout deadline for this run, so
@@ -965,49 +1109,98 @@ class DaemonRunDir:
         time; failed enqueue clears the claim so the terminal notification
         remains retryable. A crash with only a pending claim is intentionally
         treated as unpublished by startup reconciliation.
+
+        The mutation and its durable write happen inside ONE ``_state_lock``
+        acquisition (nested inside the outer ``_terminal_notification_lock``
+        that serializes claim semantics) — not a mutation now, deferred
+        write later via a separate ``_safe(...)`` call. Splitting those two
+        steps left a real, easily-reproducible (200/200 under a
+        thread-``Barrier``) lost-update window: a concurrent
+        ``set_execution_owner``/``clear_execution_owner_on_rollback`` call
+        can copy ``self._state`` BEFORE this method's mutation lands, write
+        and durably reassign ``self._state`` to that copy (which does NOT
+        include the mutation), and this method's own later write then reads
+        the REASSIGNED object — silently losing the mutation it made to the
+        now-orphaned original dict a moment earlier, even though both
+        mutations independently "succeeded" from each caller's own
+        perspective (P1-10/A-10 whole-snapshot synchronization).
         """
         with self._terminal_notification_lock:
-            if self._state.get("terminal_notified") is True:
-                return None
-            if isinstance(self._state.get("terminal_notification_claim"), dict):
-                return None
-            key = self.terminal_notification_idempotency_key(self._run_id)
-            self._state["terminal_notification_claim"] = {
-                "status": "pending",
-                "terminal_status": status,
-                "idempotency_key": key,
-                "claimed_at": self._now_iso(),
-            }
-            self._safe(
-                "claim_terminal_notification",
-                lambda: self._atomic_write_json(self.daemon_json_path, self._state),
-            )
-            return key
+            with self._state_lock:
+                if self._state.get("terminal_notified") is True:
+                    return None
+                if isinstance(self._state.get("terminal_notification_claim"), dict):
+                    return None
+                key = self.terminal_notification_idempotency_key(self._run_id)
+                self._state["terminal_notification_claim"] = {
+                    "status": "pending",
+                    "terminal_status": status,
+                    "idempotency_key": key,
+                    "claimed_at": self._now_iso(),
+                }
+                try:
+                    self._atomic_write_json(self.daemon_json_path, self._state)
+                except OSError as e:
+                    if self._log_callback is not None:
+                        try:
+                            self._log_callback(
+                                "daemon_fs_error", em_id=self._handle, run_id=self._run_id,
+                                op="claim_terminal_notification", error=str(e),
+                            )
+                        except Exception:
+                            pass
+                return key
 
     def clear_terminal_notification_claim(self) -> None:
-        """Clear a failed pending terminal-notification attempt."""
+        """Clear a failed pending terminal-notification attempt.
+
+        Same single-``_state_lock``-acquisition mutate-then-write posture as
+        ``claim_terminal_notification`` — see that method's docstring for
+        the exact lost-update window this closes.
+        """
         with self._terminal_notification_lock:
-            if self._state.get("terminal_notified") is True:
-                return
-            self._state["terminal_notification_claim"] = None
-            self._safe(
-                "clear_terminal_notification_claim",
-                lambda: self._atomic_write_json(self.daemon_json_path, self._state),
-            )
+            with self._state_lock:
+                if self._state.get("terminal_notified") is True:
+                    return
+                self._state["terminal_notification_claim"] = None
+                try:
+                    self._atomic_write_json(self.daemon_json_path, self._state)
+                except OSError as e:
+                    if self._log_callback is not None:
+                        try:
+                            self._log_callback(
+                                "daemon_fs_error", em_id=self._handle, run_id=self._run_id,
+                                op="clear_terminal_notification_claim", error=str(e),
+                            )
+                        except Exception:
+                            pass
 
     def mark_terminal_notification_published(self, idempotency_key: str) -> None:
-        """Persist the durable terminal-notification receipt after publication."""
+        """Persist the durable terminal-notification receipt after publication.
+
+        Same single-``_state_lock``-acquisition mutate-then-write posture as
+        ``claim_terminal_notification`` — see that method's docstring for
+        the exact lost-update window this closes.
+        """
         with self._terminal_notification_lock:
-            self._state["terminal_notified"] = True
-            self._state["terminal_notification_claim"] = None
-            self._state["terminal_notification_receipt"] = {
-                "idempotency_key": idempotency_key,
-                "published_at": self._now_iso(),
-            }
-            self._safe(
-                "mark_terminal_notification_published",
-                lambda: self._atomic_write_json(self.daemon_json_path, self._state),
-            )
+            with self._state_lock:
+                self._state["terminal_notified"] = True
+                self._state["terminal_notification_claim"] = None
+                self._state["terminal_notification_receipt"] = {
+                    "idempotency_key": idempotency_key,
+                    "published_at": self._now_iso(),
+                }
+                try:
+                    self._atomic_write_json(self.daemon_json_path, self._state)
+                except OSError as e:
+                    if self._log_callback is not None:
+                        try:
+                            self._log_callback(
+                                "daemon_fs_error", em_id=self._handle, run_id=self._run_id,
+                                op="mark_terminal_notification_published", error=str(e),
+                            )
+                        except Exception:
+                            pass
 
     @classmethod
     def mark_terminal_notification_published_on_disk(

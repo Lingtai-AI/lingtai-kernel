@@ -17,8 +17,10 @@ import re
 import secrets
 import subprocess
 import sys
+import textwrap
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -2552,6 +2554,147 @@ def test_tag_owned_runs_real_rollback_leaves_daemon_json_untagged_on_mid_failure
     assert first_daemon_json["execution_owner"] is None
 
 
+def test_v8_a2_tag_owned_runs_excludes_current_failing_run_from_rollback_real_write(
+    tmp_path, monkeypatch
+):
+    """v8 A2 product-level counterexample (parent contract Stage A2 item 1-2):
+    v7's setter-level fix (test_v7_atomic_rollback_setter_real_write_then_raises_
+    reconciles_memory_with_disk above) only proves that ONE run's own in-memory
+    state reconciles to match disk after its OWN real write lands then raises.
+    It says nothing about the tag_owned_runs TRANSACTION: when the run whose
+    write performs a real durable replace and then raises is not the first run
+    processed, tag_owned_runs' rollback loop only walks `tagged_run_ids` —
+    populated exclusively by runs that returned normally from
+    set_execution_owner (see refresh_host.py's tag_owned_runs, the `tagged_run_ids.
+    append(run_id)` line is reached only after the try block, never inside the
+    except branch) — so the CURRENTLY FAILING run's own now-durably-landed tag
+    is never rolled back. A real DaemonRunDir + the real atomic_write_json used
+    exactly as _prepare_refresh_host would (never a _FakeRunDir stand-in) proves
+    this on an actual daemon.json file, not merely an in-memory assertion."""
+    parent = tmp_path / "agent"
+    parent.mkdir()
+    run_ids = ["em-real-first", "em-real-failing"]
+    real_run_dirs = {
+        rid: _make_real_daemon_run_dir(parent, handle=rid, run_id=rid) for rid in run_ids
+    }
+    identity = probe_process_start_identity(os.getpid())
+    marker = RefreshHostMarker.build(
+        pid=os.getpid(), start_ticks=identity.start_ticks, command_label="module",
+        working_dir=str(parent), owned_run_ids=run_ids,
+    )
+
+    import lingtai.tools.daemon.run_dir as run_dir_module
+
+    real_atomic_write_json = run_dir_module.atomic_write_json
+    call_count = {"n": 0}
+
+    def _second_write_lands_then_raises(path, data, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            # Perform the REAL durable write for the SECOND (currently
+            # failing) run first — exactly the parent's mechanical
+            # counterexample: tag_owned_runs invoked with the real
+            # atomic_write_json, a real replace lands, THEN it raises.
+            real_atomic_write_json(path, data, **kwargs)
+            raise OSError("simulated post-replace failure on second run's own write")
+        return real_atomic_write_json(path, data, **kwargs)
+
+    monkeypatch.setattr(run_dir_module, "atomic_write_json", _second_write_lands_then_raises)
+
+    with pytest.raises(OSError, match="simulated post-replace failure on second run's own write"):
+        tag_owned_runs(marker, real_run_dirs)
+
+    first_daemon_json = json.loads(
+        (parent / "daemons" / "em-real-first" / "daemon.json").read_text()
+    )
+    failing_daemon_json = json.loads(
+        (parent / "daemons" / "em-real-failing" / "daemon.json").read_text()
+    )
+    assert first_daemon_json["execution_owner"] is None, (
+        "the earlier successfully-tagged run must still be rolled back"
+    )
+    assert failing_daemon_json["execution_owner"] is None, (
+        "the CURRENTLY FAILING run's own real durable write landed before "
+        "set_execution_owner raised — its in-memory state was already "
+        "reconciled to match that landed disk content (the v7 setter fix), "
+        "but tag_owned_runs never compensates for it: this run is never "
+        "added to tagged_run_ids (only successful returns are), so the "
+        "rollback loop skips it entirely and it is left durably claiming "
+        "an execution_owner for a marker that tag_owned_runs' own raised "
+        "exception says was never fully tagged. A transaction that lets "
+        "the run whose OWN write is what failed keep its tag is not an "
+        "all-or-nothing transaction."
+    )
+
+
+def test_v8_a2_two_run_case_run_a_success_run_b_real_write_then_raise_both_compensated(
+    tmp_path, monkeypatch
+):
+    """Parent contract Stage A2 item 3 (the exact two-run case): run A tags
+    successfully, run B performs a REAL write then raises. Both A and B must
+    end up compensated (no owner tag on either, in memory or on disk), or —
+    if compensation cannot be durably confirmed — the exact uncertain run
+    must produce a typed OwnerTaggingAmbiguousError naming it, never a silent
+    'looks fine' outcome. This test's failure path (ordinary rollback
+    succeeds for both) exercises the non-ambiguous branch; the ambiguous
+    branch is already covered by test_v7_owner_tag_transaction_write_state_
+    unknown_escalates_to_ambiguous and test_tag_owned_runs_raises_ambiguous_
+    when_rollback_itself_fails above."""
+    parent = tmp_path / "agent"
+    parent.mkdir()
+    run_ids = ["em-run-a", "em-run-b"]
+    real_run_dirs = {
+        rid: _make_real_daemon_run_dir(parent, handle=rid, run_id=rid) for rid in run_ids
+    }
+    identity = probe_process_start_identity(os.getpid())
+    marker = RefreshHostMarker.build(
+        pid=os.getpid(), start_ticks=identity.start_ticks, command_label="module",
+        working_dir=str(parent), owned_run_ids=run_ids,
+    )
+
+    import lingtai.tools.daemon.run_dir as run_dir_module
+
+    real_atomic_write_json = run_dir_module.atomic_write_json
+    run_b_write_count = {"n": 0}
+
+    def _run_b_first_write_lands_then_raises(path, data, **kwargs):
+        # em-run-a's daemon.json path is written first (dict iteration order
+        # follows marker.owned_run_ids); em-run-b's FIRST write (the initial
+        # tag attempt) lands durably and then raises — a single transient
+        # post-replace failure, mirroring the parent's exact product
+        # counterexample. Em-run-b's SUBSEQUENT write (its own compensating
+        # rollback) must succeed normally, or this fake would indistinguishably
+        # simulate "this path can never be written to" instead of "one write
+        # attempt hit a post-replace failure."
+        real_atomic_write_json(path, data, **kwargs)
+        if "em-run-b" in str(path):
+            run_b_write_count["n"] += 1
+            if run_b_write_count["n"] == 1:
+                raise OSError("simulated post-replace failure for run B")
+
+    monkeypatch.setattr(run_dir_module, "atomic_write_json", _run_b_first_write_lands_then_raises)
+
+    with pytest.raises(OSError, match="simulated post-replace failure for run B"):
+        tag_owned_runs(marker, real_run_dirs)
+
+    run_a_disk = json.loads((parent / "daemons" / "em-run-a" / "daemon.json").read_text())
+    run_b_disk = json.loads((parent / "daemons" / "em-run-b" / "daemon.json").read_text())
+    assert run_a_disk["execution_owner"] is None, "run A (earlier, ordinary rollback) must be compensated"
+    assert run_b_disk["execution_owner"] is None, (
+        "run B (the run whose OWN write landed then raised) must ALSO be "
+        "compensated — a clean rollback must leave no owner in either "
+        "memory or disk for the currently failing run, not just runs "
+        "processed before it"
+    )
+    assert real_run_dirs["em-run-a"].state_snapshot()["execution_owner"] is None
+    assert real_run_dirs["em-run-b"].state_snapshot()["execution_owner"] is None, (
+        "in-memory state for the failing run must match the compensated "
+        "disk state too — the v7 setter-level fix reconciled memory TO the "
+        "landed tag; a transaction-level rollback must reconcile it back "
+        "to untagged, not leave memory and disk both still showing the tag"
+    )
+
+
 # ---------------------------------------------------------------------------
 # DaemonManager._prepare_refresh_host — the PREPARE state transition itself,
 # on a REAL DaemonManager (via the shared _daemon_helpers fixtures), not a
@@ -2595,6 +2738,141 @@ def _mock_own_cmdline_module_form(monkeypatch, working_dir):
     monkeypatch.setattr(
         refresh_host_module, "_read_cmdline",
         lambda pid: f"python -m lingtai run {working_dir}" if pid == os.getpid() else None,
+    )
+
+
+def test_v7_prepare_refresh_host_stamps_real_deadline_for_owned_run(tmp_path, monkeypatch):
+    """B-4 write side: _prepare_refresh_host must persist a REAL absolute
+    deadline (this run's own start_time + timeout_s) into the run's
+    daemon.json — pre-v7, deadline_at was schema-ready but nothing ever
+    wrote a genuine value into it (the parent contract's own words: "the
+    current deadline_at field is inert")."""
+    from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir, register_daemon_entry
+
+    agent = make_daemon_agent(tmp_path)
+    _mock_own_cmdline_module_form(monkeypatch, agent._working_dir)
+    mgr = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(agent, em_id="em-live")
+    register_daemon_entry(mgr, "em-live", run_dir)
+    mgr._emanations["em-live"]["start_time"] = time.time()
+    mgr._emanations["em-live"]["timeout_s"] = 3600.0
+
+    marker = mgr._prepare_refresh_host()
+    assert marker is not None
+
+    on_disk = json.loads(run_dir.daemon_json_path.read_text())
+    deadline_at = on_disk.get("deadline_at")
+    assert isinstance(deadline_at, str) and deadline_at, (
+        "deadline_at must be a real, non-empty stamped value after PREPARE"
+    )
+    deadline_dt = datetime.strptime(deadline_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    # The deadline must be roughly start_time + timeout_s (3600s ahead of
+    # now, within a generous tolerance for test wall-clock slop) — not
+    # "now" (the pre-v7 defect in _route_ask_through_control_plane, a
+    # DIFFERENT inert stamp this test does not exercise) and not some
+    # arbitrary/zero value.
+    assert timedelta(seconds=3000) < (deadline_dt - now) < timedelta(seconds=3900), (
+        f"deadline_at={deadline_at!r} is not ~3600s ahead of now — expected "
+        f"start_time+timeout_s, got a deadline {(deadline_dt - now).total_seconds():.1f}s ahead"
+    )
+
+
+def test_v7_successor_initiates_real_timeout_for_overdue_owned_run(tmp_path, monkeypatch):
+    """B-4 read side + real vertical-slice proof: a fresh successor
+    DaemonManager construction (the exact real product entry point every
+    successor process's __init__ goes through) must notice a nonterminal,
+    execution-owner-tagged, verified-LIVE-host run whose deadline_at has
+    genuinely passed and submit a real durable ControlRequest(operation=
+    'timeout') for it — the actual read side of B-4, proven through
+    DaemonManager.__init__ itself, not a directly-called internal helper.
+
+    Uses the SAME _write_owned_daemon_json pattern as the existing
+    _reap_host_lost_daemon_records tests (not make_daemon_run_dir +
+    register_daemon_entry, whose auto-generated long-form run_id would not
+    match marker.owned_run_ids' short key unless run_id= is passed
+    explicitly — this method reads run_id back from the durable
+    daemon.json file, exactly like a real successor with no in-memory
+    _emanations entry for this run would)."""
+    from tests._daemon_helpers import make_daemon_agent
+    import lingtai.tools.daemon as daemon_module
+
+    agent = make_daemon_agent(tmp_path)
+    working_dir = agent._working_dir
+    _mock_own_cmdline_module_form(monkeypatch, working_dir)
+    identity = probe_process_start_identity(os.getpid())
+    marker = RefreshHostMarker.build(
+        pid=os.getpid(), start_ticks=identity.start_ticks, command_label="module",
+        working_dir=str(working_dir), owned_run_ids=["em-overdue-1"],
+    )
+    commit_marker(working_dir, marker)
+    owner = ExecutionOwner.from_marker(marker).to_dict()
+    overdue_deadline = (datetime.now(timezone.utc) - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    daemon_json_path = _write_owned_daemon_json(
+        working_dir, "em-overdue-1", execution_owner=owner, parent_pid=os.getpid(),
+    )
+    state = json.loads(daemon_json_path.read_text())
+    state["deadline_at"] = overdue_deadline
+    daemon_json_path.write_text(json.dumps(state), encoding="utf-8")
+
+    # A fresh successor DaemonManager construction — the REAL entry point
+    # (not a directly-invoked internal helper) that every successor
+    # process's own __init__ runs through, alongside host-lost reaping.
+    # Bound to the SAME agent (a real second Agent() on this working_dir
+    # would correctly fail the exclusive workdir lease this exact test is
+    # not about) — a fresh DaemonManager still exercises the real __init__
+    # entry point with an empty in-memory _emanations, exactly like a
+    # genuine successor process would have.
+    successor_mgr = daemon_module.DaemonManager(agent)
+
+    pending = list(read_pending_control_requests(working_dir, marker.generation))
+    assert len(pending) == 1, (
+        f"expected exactly one real timeout ControlRequest to be initiated "
+        f"for the overdue run; got {[(r.request_id, r.operation) for r in pending]}"
+    )
+    assert pending[0].operation == "timeout"
+    assert pending[0].target_run_ids == ("em-overdue-1",)
+
+    # Idempotency: a SECOND successor construction (or a retry) must not
+    # submit a duplicate timeout signal for the same already-initiated run.
+    successor_mgr2 = daemon_module.DaemonManager(agent)
+    pending_again = list(read_pending_control_requests(working_dir, marker.generation))
+    assert len(pending_again) == 1, (
+        "a repeated successor construction must not duplicate the already-"
+        "initiated timeout request for the same overdue run"
+    )
+
+
+def test_v7_successor_does_not_initiate_timeout_for_run_not_yet_overdue(tmp_path, monkeypatch):
+    """Positive control: a run whose deadline has NOT yet passed must not
+    have a timeout initiated — the check is genuinely time-gated, not
+    unconditional for every owned run."""
+    from tests._daemon_helpers import make_daemon_agent
+    import lingtai.tools.daemon as daemon_module
+
+    agent = make_daemon_agent(tmp_path)
+    working_dir = agent._working_dir
+    _mock_own_cmdline_module_form(monkeypatch, working_dir)
+    identity = probe_process_start_identity(os.getpid())
+    marker = RefreshHostMarker.build(
+        pid=os.getpid(), start_ticks=identity.start_ticks, command_label="module",
+        working_dir=str(working_dir), owned_run_ids=["em-not-overdue-1"],
+    )
+    commit_marker(working_dir, marker)
+    owner = ExecutionOwner.from_marker(marker).to_dict()
+    future_deadline = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    daemon_json_path = _write_owned_daemon_json(
+        working_dir, "em-not-overdue-1", execution_owner=owner, parent_pid=os.getpid(),
+    )
+    state = json.loads(daemon_json_path.read_text())
+    state["deadline_at"] = future_deadline
+    daemon_json_path.write_text(json.dumps(state), encoding="utf-8")
+
+    successor_mgr = daemon_module.DaemonManager(agent)
+    pending = list(read_pending_control_requests(working_dir, marker.generation))
+    assert pending == [], (
+        "a run whose deadline has not yet passed must not have a timeout "
+        "initiated by successor startup"
     )
 
 
@@ -2939,6 +3217,14 @@ def test_run_drain_loop_processes_multiple_requests_across_ticks(tmp_path, monke
     agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
     real_future = Future()
     mgr._emanations["em-live"]["future"] = real_future
+    # Captured BEFORE the drain loop runs to quiescence — B-5's real
+    # resource-shutdown-on-quiescence removes this entry from
+    # self._emanations once the owned set is genuinely done (see
+    # _finish_drain_host_exit), but the dict OBJECT this reference points
+    # to is unaffected by being unlinked from that container; its own
+    # mutations (the followup_buffer appends the real dispatch path makes)
+    # remain observable through this reference exactly as before.
+    entry = mgr._emanations["em-live"]
 
     req1 = _build_request(
         marker, request_id="req-multi-1", operation="ask",
@@ -2962,7 +3248,6 @@ def test_run_drain_loop_processes_multiple_requests_across_ticks(tmp_path, monke
     mgr._run_drain_loop(marker, poll_interval=0.01, max_ticks=500)
     releaser.join(timeout=5)
 
-    entry = mgr._emanations["em-live"]
     assert "first" in entry["followup_buffer"]
     assert "second" in entry["followup_buffer"]
     acks_dir = control_dir(agent._working_dir, marker.generation) / "acks"
@@ -4036,3 +4321,2781 @@ def test_crash_after_terminal_state_before_receipt_reconciles_exactly_once(tmp_p
         "a second fresh manager construction must never re-publish an "
         "already-durably-receipted terminal notification"
     )
+
+
+# ---------------------------------------------------------------------------
+# v6 correction stage — failing-first regressions for every P0/P1 defect the
+# parent audit (scratch/daemon-refresh-survival-20260714/
+# parent-v5-draft-checkpoint-audit.md) mechanically proved against the v5
+# draft checkpoint. Each test below is written to demonstrate the exact
+# counterexample the audit describes BEFORE any corrective code exists for
+# it, then the corresponding fix is implemented until it passes.
+# ---------------------------------------------------------------------------
+
+
+def test_p0_freeze_ordering_prevents_concurrent_emanate_escape(tmp_path, monkeypatch):
+    """P0-1: _prepare_refresh_host must set _refresh_prepare_frozen BEFORE it
+    reads the owned run-id set, not after — otherwise a concurrent emanate
+    landing in that exact window creates a new _emanations entry that the
+    snapshot never sees, so that new run is never tagged/owned by the
+    committed marker yet keeps running after interactive liveness is
+    withdrawn (the exact escape the audit's counterexample describes).
+
+    Proven by monkeypatching `dict.items` is too invasive; instead we patch
+    a hook that fires exactly once, at the moment _prepare_refresh_host reads
+    self._emanations to build its snapshot, and use it to inject a brand new
+    nonterminal entry into self._emanations from "concurrent" code. If the
+    freeze flag is set STRICTLY BEFORE that read, the injected entry must
+    still be excluded from the marker's owned set (freezing doesn't retroactively
+    un-create it, but it stops the injection from being interpreted as
+    legitimate — the real fix must ensure the ordering guarantees no reader
+    can observe `_refresh_prepare_frozen is False` while a snapshot is being
+    taken, and _handle_emanate itself, called back-to-back inside the
+    snapshot window, must observe the freeze and refuse)."""
+    from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir, register_daemon_entry
+
+    agent = make_daemon_agent(tmp_path)
+    _mock_own_cmdline_module_form(monkeypatch, agent._working_dir)
+    mgr = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(agent, em_id="em-live")
+    register_daemon_entry(mgr, "em-live", run_dir)
+
+    observed_frozen_during_snapshot = []
+    real_emanations = mgr._emanations
+
+    class _WatchedEmanations(dict):
+        def items(self):
+            # Fires exactly once, at the point _prepare_refresh_host reads
+            # self._emanations.items() to build its owned_run_ids snapshot.
+            observed_frozen_during_snapshot.append(mgr._refresh_prepare_frozen)
+            # Simulate a concurrent _handle_emanate landing in the exact
+            # window between snapshot-read and freeze-flag-set: a real
+            # racing thread would call _handle_emanate, which (once fixed)
+            # must consult the freeze flag BEFORE mutating self._emanations.
+            # We emulate the pre-fix vulnerability directly by attempting the
+            # same mutation _handle_emanate would perform, gated on the SAME
+            # flag the real entry-point check uses, so this test exercises
+            # the ordering invariant itself rather than duplicating
+            # _handle_emanate's full body.
+            if not mgr._refresh_prepare_frozen:
+                concurrent_run_dir = make_daemon_run_dir(agent, em_id="em-concurrent-escape")
+                register_daemon_entry(mgr, "em-concurrent-escape", concurrent_run_dir)
+            return super().items()
+
+    watched = _WatchedEmanations(real_emanations)
+    mgr._emanations = watched
+
+    marker = mgr._prepare_refresh_host()
+
+    assert observed_frozen_during_snapshot == [True], (
+        "_refresh_prepare_frozen must already be True at the moment the "
+        "owned-run-id snapshot is read — freezing after the read leaves a "
+        "window where a concurrent emanate is invisible to the snapshot "
+        "yet not rejected by the freeze check either"
+    )
+    assert marker is not None
+    assert "em-concurrent-escape" not in marker.owned_run_ids
+
+
+def test_v7_emanate_admission_barrier_real_thread_past_check_race_lingtai_backend(tmp_path, monkeypatch):
+    """A-1 real-thread barrier reproduction (LingTai backend): v6's own P0-1
+    test above only proves the SNAPSHOT read observes the freeze flag as
+    True — it synchronously injects the "concurrent" registration from
+    INSIDE the snapshot's own dict.items() call, on the SAME thread, which
+    cannot model a call that already evaluated _handle_emanate's entry
+    check as False on a REAL SEPARATE THREAD microseconds earlier and is
+    now genuinely still executing (unlocked preset/MCP/tool-surface setup)
+    when PREPARE begins. This test drives that exact scenario: a real
+    background thread is deliberately paused, via a monkeypatched hook,
+    AFTER passing _handle_emanate's entry-point freeze check but BEFORE
+    reaching its own registration-time re-check under
+    _emanate_admission_lock (the new lock this stage adds); a real
+    threading.Barrier hands control to a real _prepare_refresh_host() call
+    on the main thread while the background thread is paused exactly
+    there; the background thread is then released. If the fix is correct,
+    the background thread's OWN registration-time re-check (now genuinely
+    concurrent with, and correctly excluded by, PREPARE's snapshot) must
+    refuse to register — proving no call can land outside the exact
+    marker-owned set the snapshot captured, regardless of what its
+    entry-point check observed."""
+    from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir, register_daemon_entry
+
+    agent = make_daemon_agent(tmp_path)
+    _mock_own_cmdline_module_form(monkeypatch, agent._working_dir)
+    mgr = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(agent, em_id="em-live")
+    register_daemon_entry(mgr, "em-live", run_dir)
+
+    reached_past_check = threading.Event()
+    release_past_check = threading.Event()
+    real_task_mcp_registrations = mgr._task_mcp_registrations
+
+    def _paused_task_mcp_registrations(spec):
+        # Fires once per task, well after _handle_emanate's own entry-point
+        # freeze check (already passed as False at this point — the real
+        # TOCTOU window) and well before the registration-time re-check
+        # deep inside the same call's per-task loop.
+        reached_past_check.set()
+        release_past_check.wait(timeout=5)
+        return real_task_mcp_registrations(spec)
+
+    monkeypatch.setattr(mgr, "_task_mcp_registrations", _paused_task_mcp_registrations)
+
+    emanate_result = {}
+
+    def _run_emanate_on_background_thread():
+        emanate_result["value"] = mgr._handle_emanate(
+            [{"task": "concurrent escape attempt", "tools": []}]
+        )
+
+    bg_thread = threading.Thread(target=_run_emanate_on_background_thread)
+    bg_thread.start()
+    assert reached_past_check.wait(timeout=5), (
+        "test setup: the background thread must reach the paused hook "
+        "(past its own entry-point check) before PREPARE runs"
+    )
+
+    # The background thread has ALREADY observed _refresh_prepare_frozen as
+    # False (it passed the entry check to get here) and is now paused
+    # mid-flight, genuinely unregistered. PREPARE now runs for real.
+    marker = mgr._prepare_refresh_host()
+    assert marker is not None
+    assert marker.owned_run_ids == ("em-live",), (
+        "PREPARE's snapshot must contain only the genuinely-already-"
+        "registered run — the paused background thread must not be in it, "
+        "since it had not registered yet at snapshot time"
+    )
+
+    # Release the background thread — it should now hit its OWN
+    # registration-time re-check under _emanate_admission_lock and see the
+    # (now True) freeze flag, refusing to register rather than silently
+    # landing outside the marker's already-committed owned set.
+    release_past_check.set()
+    bg_thread.join(timeout=5)
+    assert not bg_thread.is_alive()
+
+    result = emanate_result["value"]
+    assert result["status"] == "error", (
+        "the background thread's own registration-time re-check must "
+        "refuse once the freeze flag is True, even though its ENTRY-POINT "
+        "check observed it as False microseconds earlier — this is the "
+        "exact TOCTOU window a bare bool check-once-at-entry cannot close"
+    )
+    assert "em-concurrent-escape" not in mgr._emanations
+    # No run_id from this refused batch (whatever id _new_emanation_id
+    # assigned) must have been registered — the ONLY registered run must
+    # still be the original em-live.
+    assert set(mgr._emanations.keys()) == {"em-live"}
+
+
+def test_v7_emanate_admission_barrier_real_thread_past_check_race_cli_backend(tmp_path, monkeypatch):
+    """A-1 real-thread barrier reproduction (CLI backend): the same
+    past-check race as the LingTai-backend test above, but through
+    _handle_emanate_cli's own separate registration site — proving the
+    fix closes the race for BOTH registration paths, not only the
+    in-process LingTai one."""
+    from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir, register_daemon_entry
+
+    agent = make_daemon_agent(tmp_path)
+    _mock_own_cmdline_module_form(monkeypatch, agent._working_dir)
+    mgr = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(agent, em_id="em-live")
+    register_daemon_entry(mgr, "em-live", run_dir)
+
+    reached_past_check = threading.Event()
+    release_past_check = threading.Event()
+    real_task_system_prompt = mgr._task_system_prompt
+
+    def _paused_task_system_prompt(spec):
+        reached_past_check.set()
+        release_past_check.wait(timeout=5)
+        return real_task_system_prompt(spec)
+
+    monkeypatch.setattr(mgr, "_task_system_prompt", _paused_task_system_prompt)
+
+    emanate_result = {}
+
+    def _run_emanate_cli_on_background_thread():
+        emanate_result["value"] = mgr._handle_emanate(
+            [{"task": "concurrent CLI escape attempt", "tools": []}],
+            backend="claude",
+        )
+
+    bg_thread = threading.Thread(target=_run_emanate_cli_on_background_thread)
+    bg_thread.start()
+    assert reached_past_check.wait(timeout=5), (
+        "test setup: the background thread must reach the paused hook "
+        "before PREPARE runs"
+    )
+
+    marker = mgr._prepare_refresh_host()
+    assert marker is not None
+    assert marker.owned_run_ids == ("em-live",)
+
+    release_past_check.set()
+    bg_thread.join(timeout=5)
+    assert not bg_thread.is_alive()
+
+    result = emanate_result["value"]
+    assert result["status"] == "error", (
+        "the CLI-backend background thread's own registration-time "
+        "re-check must also refuse once the freeze flag is True — the "
+        "same admission barrier protects both registration paths"
+    )
+    assert set(mgr._emanations.keys()) == {"em-live"}
+
+
+def test_p0_atomic_rollback_setter_writes_then_raises_leaves_no_tag(tmp_path):
+    """P0-2a: DaemonRunDir.set_execution_owner mutates in-memory state before
+    the atomic file write. If the write itself raises (e.g. OSError), the
+    in-memory self._state must not be left claiming an owner the disk never
+    recorded — tag_owned_runs' rollback contract depends on being able to
+    trust that a raised exception means "nothing was durably tagged," but if
+    the setter mutates self._state UNCONDITIONALLY before attempting the
+    write, a post-write failure leaves the in-memory object claiming
+    ownership even though the file write failed and the caller's rollback
+    loop (which calls clear_execution_owner_on_rollback expecting to erase a
+    tag that actually landed) can't fix a tag that was never durably
+    persisted to disk in the first place — the real defect is that the
+    in-memory state and disk state can diverge on this exact failure path."""
+    from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir
+
+    agent = make_daemon_agent(tmp_path)
+    run_dir = make_daemon_run_dir(agent, em_id="em-1")
+    marker = RefreshHostMarker.build(
+        pid=os.getpid(), start_ticks=1, command_label="module",
+        working_dir=str(agent._working_dir), owned_run_ids=["em-1"],
+    )
+    owner_dict = ExecutionOwner.from_marker(marker).to_dict()
+
+    import lingtai.tools.daemon.run_dir as run_dir_module
+
+    def _boom(path, data, **kwargs):
+        raise OSError("simulated post-write failure")
+
+    original_atomic_write_json = run_dir_module.atomic_write_json
+    run_dir_module.atomic_write_json = _boom
+    try:
+        with pytest.raises(OSError):
+            run_dir.set_execution_owner(owner_dict)
+    finally:
+        run_dir_module.atomic_write_json = original_atomic_write_json
+
+    assert run_dir.state_snapshot()["execution_owner"] is None, (
+        "a write failure inside set_execution_owner must leave the "
+        "in-memory state exactly as it was before the call — mutating "
+        "self._state before attempting the durable write means a failed "
+        "write still leaves the object claiming an owner tag that was "
+        "never persisted to disk"
+    )
+    on_disk = json.loads(run_dir.daemon_json_path.read_text())
+    assert on_disk.get("execution_owner") is None
+
+
+def test_v7_atomic_rollback_setter_real_write_then_raises_reconciles_memory_with_disk(tmp_path):
+    """v7 isolated counterexample: the parent's exact mechanical proof
+    (setter_write_then_raise_in_memory_owner=null,
+    setter_write_then_raise_on_disk_owner_is_none=false against pre-v7
+    code). v6's own test above uses a `_boom` that raises WITHOUT ever
+    writing — it never proves the setter handles a write call that performs
+    the REAL durable os.replace and THEN raises (e.g. a post-replace
+    directory-fsync failure in some other write path). Under the pre-v7
+    copy-before-mutate design, that exact ordering left self._state at None
+    while the real on-disk daemon.json durably recorded the tag — the
+    OPPOSITE divergence direction from what v6 fixed (disk-ahead-of-memory
+    instead of memory-ahead-of-disk), and just as dangerous: a caller that
+    trusts in-memory state to decide whether a rollback is needed would
+    wrongly believe this run was never tagged, even though it durably is."""
+    from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir
+
+    agent = make_daemon_agent(tmp_path)
+    run_dir = make_daemon_run_dir(agent, em_id="em-2")
+    marker = RefreshHostMarker.build(
+        pid=os.getpid(), start_ticks=1, command_label="module",
+        working_dir=str(agent._working_dir), owned_run_ids=["em-2"],
+    )
+    owner_dict = ExecutionOwner.from_marker(marker).to_dict()
+
+    import lingtai.tools.daemon.run_dir as run_dir_module
+
+    real_atomic_write_json = run_dir_module.atomic_write_json
+
+    def _write_then_boom(path, data, **kwargs):
+        # Perform the REAL durable write first (unlike the v6 test's
+        # `_boom`, which never writes anything), then raise — this is the
+        # exact ordering the parent's mechanical counterexample targets.
+        real_atomic_write_json(path, data, **kwargs)
+        raise OSError("simulated post-write failure, e.g. a directory fsync")
+
+    run_dir_module.atomic_write_json = _write_then_boom
+    try:
+        with pytest.raises(OSError):
+            run_dir.set_execution_owner(owner_dict)
+    finally:
+        run_dir_module.atomic_write_json = real_atomic_write_json
+
+    on_disk = json.loads(run_dir.daemon_json_path.read_text())
+    in_memory = run_dir.state_snapshot()
+    disk_has_owner = on_disk.get("execution_owner") is not None
+    memory_has_owner = in_memory.get("execution_owner") is not None
+    assert disk_has_owner is True, "test setup: the real write must have actually landed"
+    assert memory_has_owner == disk_has_owner, (
+        "when the underlying write call's own durable os.replace genuinely "
+        "landed before something else in the write path raised, in-memory "
+        "state must be reconciled to match — leaving memory at None while "
+        "disk durably records the tag is exactly the divergence this test "
+        "proves is now closed"
+    )
+
+
+def test_p0_atomic_rollback_marker_commit_failure_clears_successful_tags(tmp_path, monkeypatch):
+    """P0-2b: even when every tag_owned_runs write succeeds, if the
+    SUBSEQUENT commit_marker call fails with an ordinary (non-ambiguous)
+    error, _prepare_refresh_host's docstring claims "no run was left
+    mid-tagged, and no marker was left partially committed" — but the actual
+    code only unfreezes and re-raises; it never calls
+    clear_execution_owner_on_rollback for the runs tag_owned_runs already
+    tagged. This proves those runs are left durably claiming an owner whose
+    marker was never actually committed."""
+    from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir, register_daemon_entry
+
+    agent = make_daemon_agent(tmp_path)
+    _mock_own_cmdline_module_form(monkeypatch, agent._working_dir)
+    mgr = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(agent, em_id="em-live")
+    register_daemon_entry(mgr, "em-live", run_dir)
+
+    import lingtai.tools.daemon as daemon_module
+
+    def _boom_commit(parent_working_dir, marker):
+        raise MarkerValidationError("simulated_ordinary_failure", "simulated ordinary commit failure")
+
+    monkeypatch.setattr(daemon_module, "commit_marker", _boom_commit)
+
+    with pytest.raises(MarkerValidationError):
+        mgr._prepare_refresh_host()
+
+    on_disk = json.loads(run_dir.daemon_json_path.read_text())
+    assert on_disk.get("execution_owner") is None, (
+        "an ordinary (non-ambiguous) marker-commit failure after all tags "
+        "succeeded must roll back every tag this call applied — leaving a "
+        "run durably claiming an execution_owner for a marker that was "
+        "never committed contradicts _prepare_refresh_host's own "
+        "'no tag/marker residue on failure' docstring claim"
+    )
+
+
+def test_v7_owner_tag_transaction_write_state_unknown_escalates_to_ambiguous(tmp_path):
+    """When set_execution_owner itself raises
+    run_dir.ExecutionOwnerWriteStateUnknownError (the setter's own write
+    failed AND the resulting on-disk state could not even be read back to
+    reconcile truth), tag_owned_runs must escalate the FAILING run to
+    OwnerTaggingAmbiguousError — not let the raw
+    ExecutionOwnerWriteStateUnknownError propagate as if it were an
+    ordinary 'nothing was written, safe to treat as untagged' failure a
+    caller might otherwise retry cleanly. Earlier successfully-tagged runs
+    in the same call are still correctly rolled back (their own state is
+    known), proving this escalation is scoped to the one run whose state is
+    genuinely unknown, not the whole batch."""
+    from lingtai.tools.daemon.run_dir import ExecutionOwnerWriteStateUnknownError
+
+    marker = RefreshHostMarker.build(
+        pid=os.getpid(), start_ticks=1, command_label="module",
+        working_dir=str(tmp_path.resolve()), owned_run_ids=["run-a", "run-b"],
+    )
+
+    rolled_back: list = []
+
+    class _GoodRunDir:
+        def __init__(self, run_id):
+            self.run_id = run_id
+            self.tagged = False
+
+        def set_execution_owner(self, owner_dict):
+            self.tagged = True
+
+        def clear_execution_owner_on_rollback(self):
+            self.tagged = False
+            rolled_back.append(self.run_id)
+
+    class _UnknownStateRunDir:
+        def set_execution_owner(self, owner_dict):
+            raise ExecutionOwnerWriteStateUnknownError(
+                "run-b", cause=OSError("simulated unreadable disk state")
+            )
+
+    run_a_dir = _GoodRunDir("run-a")
+    run_dirs = {"run-a": run_a_dir, "run-b": _UnknownStateRunDir()}
+
+    with pytest.raises(OwnerTaggingAmbiguousError) as exc_info:
+        tag_owned_runs(marker, run_dirs)
+
+    assert exc_info.value.run_id == "run-b", (
+        "the escalated OwnerTaggingAmbiguousError must name the run whose "
+        "OWN write-state is unknown, not an earlier run's rollback"
+    )
+    assert rolled_back == ["run-a"], (
+        "the earlier successfully-tagged run must still be rolled back "
+        "(its own state IS known — it was tagged, then cleanly untagged) "
+        "even though the later run's own failure is what's ambiguous"
+    )
+    assert run_a_dir.tagged is False
+
+
+def test_p0_membership_proof_rejects_tampered_tag_with_wrong_owned_run_ids(tmp_path):
+    """P0-3: the parent audit's exact mechanical counterexample. A marker
+    owns only ('run-a',). A tampered tag copies the marker's real generation
+    and nonce (the two fields the current proves_membership_of checks) but
+    claims wrong PID/start_ticks/sequence and a DIFFERENT owned_run_ids
+    containing 'run-b'. proves_membership_of must NOT let this tampered tag
+    prove 'run-b' is a member of anything, and must not accept it as a
+    legitimate tag for 'run-a' either, since a real tag's full identity
+    (pid/start_ticks/sequence) and owned_run_ids must match the marker's OWN
+    recorded values exactly — generation+nonce equality alone is not
+    sufficient proof that the tag's OTHER fields are trustworthy."""
+    marker = RefreshHostMarker.build(
+        pid=os.getpid(), start_ticks=12345, command_label="module",
+        working_dir=str(Path("/tmp").resolve()), owned_run_ids=["run-a"],
+    )
+    tampered_tag = ExecutionOwner(
+        schema_version=marker.schema_version,
+        generation=marker.generation,  # copied — matches
+        nonce=marker.nonce,  # copied — matches
+        pid=999,  # forged — does NOT match marker.pid
+        start_ticks=999,  # forged — does NOT match marker.start_ticks
+        sequence=999,  # forged — does NOT match marker.sequence
+        owned_run_ids=("run-b",),  # forged — does NOT match marker.owned_run_ids
+    )
+    assert tampered_tag.proves_membership_of("run-b", marker) is False, (
+        "a tampered tag must never prove membership for a run_id that is "
+        "not in the MARKER's own owned_run_ids, regardless of what the "
+        "tag itself claims to own"
+    )
+    assert tampered_tag.proves_membership_of("run-a", marker) is False, (
+        "a tag whose pid/start_ticks/sequence does not match the marker's "
+        "own recorded identity must not be trusted even for a run_id the "
+        "marker DOES own — generation+nonce equality alone is not full "
+        "identity proof"
+    )
+
+
+def test_v7_membership_proof_rejects_same_full_identity_wrong_owned_run_ids_set(tmp_path):
+    """v7 isolated counterexample: v6's own test above changes BOTH the full
+    identity (pid/start_ticks/sequence) AND owned_run_ids at once, so the
+    identity mismatch alone is sufficient to make it pass — it never proves
+    owned_run_ids equality was actually enforced. This test changes ONLY
+    owned_run_ids, keeping schema_version/generation/nonce/pid/start_ticks/
+    sequence byte-identical to the real marker (this is exactly the parent's
+    mechanical counterexample: same_identity_wrong_set_proves_run_a=true
+    against pre-v7 code — a tag can have every other field genuinely correct
+    and still not be the tag tag_owned_runs actually produced for this exact
+    marker if its owned_run_ids differs even by one extra entry)."""
+    marker = RefreshHostMarker.build(
+        pid=os.getpid(), start_ticks=12345, command_label="module",
+        working_dir=str(Path("/tmp").resolve()), owned_run_ids=["run-a"],
+    )
+    same_identity_wrong_set = ExecutionOwner(
+        schema_version=marker.schema_version,
+        generation=marker.generation,      # matches
+        nonce=marker.nonce,                # matches
+        pid=marker.pid,                    # matches
+        start_ticks=marker.start_ticks,    # matches
+        sequence=marker.sequence,          # matches
+        owned_run_ids=("run-a", "run-b"),  # does NOT match marker.owned_run_ids=("run-a",)
+    )
+    assert same_identity_wrong_set.proves_membership_of("run-a", marker) is False, (
+        "a tag whose owned_run_ids does not exactly equal the marker's own "
+        "owned_run_ids must not prove membership even for a run_id that IS "
+        "genuinely in the marker's set and even when every OTHER identity "
+        "field matches exactly — pre-v7, this exact case (isolated from any "
+        "identity mismatch) incorrectly returned True"
+    )
+
+
+def test_p0_target_isolation_reclaim_one_run_does_not_kill_owned_sibling_cli_group(tmp_path, monkeypatch):
+    """P0-4: _maybe_kill_exclusive_cli_groups must scope its kill decision to
+    the REQUEST's target_run_ids, not the whole marker-owned set. Two runs
+    ('em-a', 'em-b') share one CLI group_id and are BOTH in the marker's
+    owned set. A reclaim request targets ONLY 'em-a'. The untargeted
+    sibling 'em-b' (same group, also owned, but NOT named by this request)
+    must not have its CLI process group killed — _dispatch_control_request's
+    own docstring promises 'exact target run(s)' scoping."""
+    from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir, register_daemon_entry
+
+    agent = make_daemon_agent(tmp_path)
+    _mock_own_cmdline_module_form(monkeypatch, agent._working_dir)
+    mgr = agent.get_capability("daemon")
+
+    shared_group_id = "dg-shared-group"
+    run_dir_a = make_daemon_run_dir(agent, em_id="em-a")
+    register_daemon_entry(mgr, "em-a", run_dir_a)
+    mgr._emanations["em-a"]["group_id"] = shared_group_id
+    run_dir_b = make_daemon_run_dir(agent, em_id="em-b")
+    register_daemon_entry(mgr, "em-b", run_dir_b)
+    mgr._emanations["em-b"]["group_id"] = shared_group_id
+
+    marker = mgr._prepare_refresh_host()
+    assert marker is not None
+    assert set(marker.owned_run_ids) == {"em-a", "em-b"}
+
+    killed_groups = []
+    monkeypatch.setattr(mgr, "_kill_cli_group", lambda group_id, reason="timeout": killed_groups.append(group_id))
+
+    req = _build_request(marker, request_id="req-scoped-reclaim", operation="reclaim", target_run_ids=["em-a"])
+    ack = mgr._dispatch_control_request(req, marker)
+    assert ack.status == "accepted"
+
+    assert killed_groups == [], (
+        "a reclaim targeting only 'em-a' must NOT kill the shared CLI "
+        "group, because 'em-b' — also in that group and also owned by "
+        "the marker, but NOT named by this request — would be killed too; "
+        "the kill decision must be scoped to request.target_run_ids, not "
+        "marker.owned_run_ids"
+    )
+    assert mgr._emanations["em-a"]["cancel_event"].is_set()
+    assert not mgr._emanations["em-b"]["cancel_event"].is_set()
+
+
+def test_p0_target_isolation_reclaim_all_targeted_group_members_still_kills(tmp_path, monkeypatch):
+    """Companion positive case for P0-4: when a request targets EVERY member
+    of a shared CLI group, the group must still be killed exactly as before
+    — the fix must scope to the intersection of "owned" AND "targeted",
+    not simply disable group-kill altogether."""
+    from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir, register_daemon_entry
+
+    agent = make_daemon_agent(tmp_path)
+    _mock_own_cmdline_module_form(monkeypatch, agent._working_dir)
+    mgr = agent.get_capability("daemon")
+
+    shared_group_id = "dg-shared-group-2"
+    run_dir_a = make_daemon_run_dir(agent, em_id="em-a2")
+    register_daemon_entry(mgr, "em-a2", run_dir_a)
+    mgr._emanations["em-a2"]["group_id"] = shared_group_id
+    run_dir_b = make_daemon_run_dir(agent, em_id="em-b2")
+    register_daemon_entry(mgr, "em-b2", run_dir_b)
+    mgr._emanations["em-b2"]["group_id"] = shared_group_id
+
+    marker = mgr._prepare_refresh_host()
+    assert marker is not None
+
+    killed_groups = []
+    monkeypatch.setattr(mgr, "_kill_cli_group", lambda group_id, reason="timeout": killed_groups.append(group_id))
+
+    req = _build_request(
+        marker, request_id="req-full-group-reclaim", operation="reclaim",
+        target_run_ids=["em-a2", "em-b2"],
+    )
+    ack = mgr._dispatch_control_request(req, marker)
+    assert ack.status == "accepted"
+    assert killed_groups == [shared_group_id]
+
+
+# ---------------------------------------------------------------------------
+# P1-5: strict, non-coercive schema validation for ControlRequest/ControlAck
+# ---------------------------------------------------------------------------
+
+
+def _valid_control_request_kwargs():
+    return dict(
+        schema_version=1, request_id="req-strict-1", generation="20260101-000000-aaaaaa",
+        nonce="a" * 32, target_run_ids=("em-1",), operation="ask",
+        payload={"message": "hi"}, requester_pid=123, requester_start_ticks=456,
+        created_at="2026-01-01T00:00:00Z", deadline_at="2026-01-01T00:05:00Z",
+    )
+
+
+def test_p1_control_request_rejects_unknown_schema_version():
+    kwargs = _valid_control_request_kwargs()
+    kwargs["schema_version"] = 999
+    with pytest.raises(MarkerValidationError):
+        ControlRequest(**kwargs)
+
+
+def test_p1_control_request_rejects_bool_as_int_requester_pid():
+    kwargs = _valid_control_request_kwargs()
+    kwargs["requester_pid"] = True
+    with pytest.raises(MarkerValidationError):
+        ControlRequest(**kwargs)
+
+
+def test_p1_control_request_rejects_nonpositive_requester_start_ticks():
+    kwargs = _valid_control_request_kwargs()
+    kwargs["requester_start_ticks"] = 0
+    with pytest.raises(MarkerValidationError):
+        ControlRequest(**kwargs)
+
+
+def test_p1_control_request_rejects_non_time_created_at():
+    kwargs = _valid_control_request_kwargs()
+    kwargs["created_at"] = "not-a-time"
+    with pytest.raises(MarkerValidationError):
+        ControlRequest(**kwargs)
+
+
+def test_p1_control_request_rejects_non_time_deadline_at():
+    kwargs = _valid_control_request_kwargs()
+    kwargs["deadline_at"] = "also-not-a-time"
+    with pytest.raises(MarkerValidationError):
+        ControlRequest(**kwargs)
+
+
+def test_p1_control_request_rejects_nonpositive_or_bool_generation_mismatch_shape():
+    """generation must match the canonical marker-generation shape — a
+    control request cannot embed an arbitrary string as its generation
+    binding, since write_control_request's own generation-existence check
+    depends on being able to look up a real marker file by this exact
+    string."""
+    kwargs = _valid_control_request_kwargs()
+    kwargs["generation"] = "not-a-real-generation-shape"
+    with pytest.raises(MarkerValidationError):
+        ControlRequest(**kwargs)
+
+
+def test_p1_control_request_from_dict_rejects_malformed_fields():
+    """The full malformed shape from the parent audit's mechanical proof
+    must be rejected end-to-end through from_dict, not only via the
+    dataclass constructor directly."""
+    malformed = {
+        "schema_version": 999,
+        "request_id": "req-x",
+        "generation": "20260101-000000-aaaaaa",
+        "nonce": "a" * 32,
+        "target_run_ids": ["em-1"],
+        "operation": "ask",
+        "payload": {},
+        "requester_pid": True,
+        "requester_start_ticks": 0,
+        "created_at": "not-a-time",
+        "deadline_at": "also-not-a-time",
+    }
+    with pytest.raises(MarkerValidationError):
+        ControlRequest.from_dict(malformed)
+
+
+def _valid_control_ack_kwargs():
+    return dict(
+        schema_version=1, request_id="req-strict-1", generation="20260101-000000-aaaaaa",
+        target_run_ids=("em-1",), status="accepted",
+        responded_at="2026-01-01T00:00:01Z", detail={},
+    )
+
+
+def test_p1_control_ack_rejects_unknown_schema_version():
+    kwargs = _valid_control_ack_kwargs()
+    kwargs["schema_version"] = 999
+    with pytest.raises(MarkerValidationError):
+        ControlAck(**kwargs)
+
+
+def test_p1_control_ack_rejects_non_time_responded_at():
+    kwargs = _valid_control_ack_kwargs()
+    kwargs["responded_at"] = "not-a-time"
+    with pytest.raises(MarkerValidationError):
+        ControlAck(**kwargs)
+
+
+def test_p1_control_ack_rejects_malformed_generation_shape():
+    kwargs = _valid_control_ack_kwargs()
+    kwargs["generation"] = "not-a-real-generation-shape"
+    with pytest.raises(MarkerValidationError):
+        ControlAck(**kwargs)
+
+
+def test_p1_execution_owner_from_dict_rejects_unknown_schema_version():
+    data = {
+        "schema_version": 999, "generation": "20260101-000000-aaaaaa", "nonce": "a" * 32,
+        "pid": 1, "start_ticks": 1, "sequence": 1, "owned_run_ids": ["em-1"],
+    }
+    with pytest.raises(MarkerValidationError):
+        ExecutionOwner.from_dict(data)
+
+
+def test_p1_execution_owner_from_dict_rejects_bool_as_int_pid():
+    data = {
+        "schema_version": 1, "generation": "20260101-000000-aaaaaa", "nonce": "a" * 32,
+        "pid": True, "start_ticks": 1, "sequence": 1, "owned_run_ids": ["em-1"],
+    }
+    with pytest.raises(MarkerValidationError):
+        ExecutionOwner.from_dict(data)
+
+
+def test_p1_execution_owner_from_dict_rejects_nonpositive_start_ticks():
+    data = {
+        "schema_version": 1, "generation": "20260101-000000-aaaaaa", "nonce": "a" * 32,
+        "pid": 1, "start_ticks": 0, "sequence": 1, "owned_run_ids": ["em-1"],
+    }
+    with pytest.raises(MarkerValidationError):
+        ExecutionOwner.from_dict(data)
+
+
+def test_p1_execution_owner_from_dict_rejects_malformed_generation_shape():
+    data = {
+        "schema_version": 1, "generation": "not-a-real-generation-shape", "nonce": "a" * 32,
+        "pid": 1, "start_ticks": 1, "sequence": 1, "owned_run_ids": ["em-1"],
+    }
+    with pytest.raises(MarkerValidationError):
+        ExecutionOwner.from_dict(data)
+
+
+def test_p1_execution_owner_from_dict_rejects_nonpositive_sequence():
+    data = {
+        "schema_version": 1, "generation": "20260101-000000-aaaaaa", "nonce": "a" * 32,
+        "pid": 1, "start_ticks": 1, "sequence": 0, "owned_run_ids": ["em-1"],
+    }
+    with pytest.raises(MarkerValidationError):
+        ExecutionOwner.from_dict(data)
+
+
+def test_v7_marker_rejects_bool_true_as_schema_version():
+    """v6's schema check was `schema_version != MARKER_SCHEMA_VERSION` — since
+    `bool` is an `int` subclass in Python and `True == 1 == MARKER_SCHEMA_VERSION`,
+    that comparison alone lets `schema_version=True` through as if it were the
+    literal int `1`. This is the parent's mechanical counterexample
+    (`bool_schema_request_accepted: true`) reproduced directly against
+    `_parse_marker_dict`, isolated from every other field."""
+    import lingtai.tools.daemon.refresh_host as _refresh_host_module
+
+    data = {
+        "schema_version": True, "generation": "20260101-000000-aaaaaa", "nonce": "a" * 32,
+        "pid": 1, "start_ticks": 1, "sequence": 1, "command_label": "module",
+        "working_dir": str(Path("/tmp").resolve()), "owned_run_ids": ["em-1"],
+        "state": "draining", "prepared_at": "2026-01-01T00:00:00Z",
+    }
+    with pytest.raises(MarkerValidationError):
+        _refresh_host_module._parse_marker_dict(data, source="test")
+
+
+def test_v7_control_request_rejects_bool_true_as_schema_version():
+    kwargs = _valid_control_request_kwargs()
+    kwargs["schema_version"] = True
+    with pytest.raises(MarkerValidationError):
+        ControlRequest(**kwargs)
+
+
+def test_v7_control_ack_rejects_bool_true_as_schema_version():
+    kwargs = _valid_control_ack_kwargs()
+    kwargs["schema_version"] = True
+    with pytest.raises(MarkerValidationError):
+        ControlAck(**kwargs)
+
+
+def test_v7_execution_owner_from_dict_rejects_bool_true_as_schema_version():
+    data = {
+        "schema_version": True, "generation": "20260101-000000-aaaaaa", "nonce": "a" * 32,
+        "pid": 1, "start_ticks": 1, "sequence": 1, "owned_run_ids": ["em-1"],
+    }
+    with pytest.raises(MarkerValidationError):
+        ExecutionOwner.from_dict(data)
+
+
+def test_v7_execution_owner_from_dict_rejects_empty_owned_run_ids():
+    """Unlike RefreshHostMarker, ExecutionOwner.from_dict never validated its
+    own owned_run_ids for emptiness/duplicates before v7 — a hand-edited or
+    corrupted tag could carry an empty or duplicate-containing set and still
+    parse as a well-formed ExecutionOwner."""
+    data = {
+        "schema_version": 1, "generation": "20260101-000000-aaaaaa", "nonce": "a" * 32,
+        "pid": 1, "start_ticks": 1, "sequence": 1, "owned_run_ids": [],
+    }
+    with pytest.raises(MarkerValidationError):
+        ExecutionOwner.from_dict(data)
+
+
+def test_v7_execution_owner_from_dict_rejects_duplicate_owned_run_ids():
+    data = {
+        "schema_version": 1, "generation": "20260101-000000-aaaaaa", "nonce": "a" * 32,
+        "pid": 1, "start_ticks": 1, "sequence": 1, "owned_run_ids": ["em-1", "em-1"],
+    }
+    with pytest.raises(MarkerValidationError):
+        ExecutionOwner.from_dict(data)
+
+
+def test_p1_dispatch_control_request_rejects_non_string_ask_message_payload(tmp_path, monkeypatch):
+    """Ask payload/message typing must be checked before _handle_ask, per the
+    audit: 'Ask payload/message typing is also unchecked before
+    _handle_ask().' A non-string message must be rejected with a 'rejected'
+    ack, not silently passed through to _handle_ask (which expects a str and
+    would misbehave or crash on e.g. a dict/list/int)."""
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+    req = _build_request(
+        marker, request_id="req-bad-payload", operation="ask",
+        target_run_ids=["em-live"], payload={"message": {"not": "a string"}},
+    )
+    ack = mgr._dispatch_control_request(req, marker)
+    assert ack.status == "rejected"
+
+
+def test_v7_truthful_ask_dispatch_does_not_report_accepted_when_handle_ask_returns_error(
+    tmp_path, monkeypatch,
+):
+    """A-11: _dispatch_control_request's ask branch must bind its outer
+    ControlAck.status to what _handle_ask actually returned per target, not
+    unconditionally report 'accepted' merely because the dispatch call
+    itself didn't raise. _handle_ask can and does return
+    {"status": "error", ...} for a real failure (unsupported backend,
+    malformed session, etc.) without ever raising an exception — pre-v7,
+    that per-target error was silently swallowed inside detail["results"]
+    while the outer status still said 'accepted', which is exactly what
+    _route_ask_through_control_plane's `if ack.status == "accepted"` check
+    (the successor's ONLY signal for its own product-level {"status":
+    "sent"} response) trusted blindly, making a successor believe its ask
+    was delivered when it was not."""
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+
+    def _fake_handle_ask_returns_real_error(em_id, message):
+        return {"status": "error", "id": em_id, "message": "ask not supported for this backend"}
+
+    monkeypatch.setattr(mgr, "_handle_ask", _fake_handle_ask_returns_real_error)
+
+    req = _build_request(
+        marker, request_id="req-truthful-ask", operation="ask",
+        target_run_ids=["em-live"], payload={"message": "hi"},
+    )
+    ack = mgr._dispatch_control_request(req, marker)
+
+    assert ack.status != "accepted", (
+        "the outer ack status must not claim 'accepted' when the real "
+        "per-target _handle_ask result was an explicit error — this is "
+        "the exact envelope the successor's _route_ask_through_control_plane "
+        "trusts to decide whether to report 'sent' back to its own caller"
+    )
+    assert ack.detail["results"]["em-live"]["status"] == "error"
+
+
+def test_v7_truthful_ask_dispatch_still_reports_accepted_when_handle_ask_succeeds(
+    tmp_path, monkeypatch,
+):
+    """Positive control: a genuinely successful _handle_ask result must
+    still produce an 'accepted' ack — the fix narrows truthfulness, it does
+    not disable the accepted status altogether."""
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+    req = _build_request(
+        marker, request_id="req-truthful-ask-ok", operation="ask",
+        target_run_ids=["em-live"], payload={"message": "hi"},
+    )
+    ack = mgr._dispatch_control_request(req, marker)
+    assert ack.status == "accepted"
+    assert ack.detail["results"]["em-live"]["status"] == "sent"
+
+
+# ---------------------------------------------------------------------------
+# P1-6: ack validation — an arbitrary/corrupt/mismatched ack filename stem
+# must not suppress a request; read_pending_control_requests must parse and
+# validate ack CONTENT and its binding to the request, not just check
+# whether *some* file with a matching stem exists under acks/.
+# ---------------------------------------------------------------------------
+
+
+def test_p1_ack_validation_corrupt_ack_file_does_not_suppress_pending_request(tmp_path):
+    parent = tmp_path / "agent"
+    parent.mkdir()
+    marker = _build_and_commit_marker(parent, pid=os.getpid(), owned_run_ids=["em-1"])
+    req = ControlRequest(
+        schema_version=1, request_id="req-corrupt-ack", generation=marker.generation,
+        nonce=marker.nonce, target_run_ids=("em-1",), operation="ask",
+        payload={"message": "hi"}, requester_pid=os.getpid(), requester_start_ticks=1,
+        created_at="2026-01-01T00:00:00Z", deadline_at="2026-01-01T00:05:00Z",
+    )
+    write_control_request(parent, req)
+
+    # Write a CORRUPT (unparseable) file at the exact stem an ack would use —
+    # simulating a crash mid-write, disk corruption, or a filename collision
+    # with unrelated data — not a real, valid ControlAck.
+    acks_dir = control_dir(parent, marker.generation) / "acks"
+    acks_dir.mkdir(parents=True, exist_ok=True)
+    (acks_dir / "req-corrupt-ack.json").write_text("{ this is not valid json", encoding="utf-8")
+
+    pending = list(read_pending_control_requests(parent, marker.generation))
+    assert any(r.request_id == "req-corrupt-ack" for r in pending), (
+        "a corrupt/unparseable file at an ack's filename stem must not "
+        "suppress the request from the pending scan — the host must still "
+        "see and (re-)service this request, since the corrupt file is not "
+        "proof any real ack was ever durably published"
+    )
+
+
+def test_p1_ack_validation_mismatched_generation_ack_does_not_suppress_request(tmp_path):
+    """An ack file that parses as valid JSON/ControlAck shape but whose
+    OWN generation field does not match the generation directory it was
+    found under (or whose request_id doesn't match the filename) must not
+    count as a real ack for this request either — content must be
+    validated and bound to the request, not merely 'a file exists here'."""
+    parent = tmp_path / "agent"
+    parent.mkdir()
+    marker = _build_and_commit_marker(parent, pid=os.getpid(), owned_run_ids=["em-1"])
+    req = ControlRequest(
+        schema_version=1, request_id="req-mismatched-ack", generation=marker.generation,
+        nonce=marker.nonce, target_run_ids=("em-1",), operation="ask",
+        payload={"message": "hi"}, requester_pid=os.getpid(), requester_start_ticks=1,
+        created_at="2026-01-01T00:00:00Z", deadline_at="2026-01-01T00:05:00Z",
+    )
+    write_control_request(parent, req)
+
+    acks_dir = control_dir(parent, marker.generation) / "acks"
+    acks_dir.mkdir(parents=True, exist_ok=True)
+    # Valid ControlAck JSON shape, but for a DIFFERENT request_id than the
+    # filename claims, and a different target_run_ids than the real request.
+    bogus_ack = ControlAck(
+        schema_version=1, request_id="req-a-totally-different-request",
+        generation=marker.generation, target_run_ids=("em-999-not-real",),
+        status="accepted", responded_at="2026-01-01T00:00:01Z", detail={},
+    )
+    (acks_dir / "req-mismatched-ack.json").write_text(
+        json.dumps(bogus_ack.to_dict()), encoding="utf-8",
+    )
+
+    pending = list(read_pending_control_requests(parent, marker.generation))
+    assert any(r.request_id == "req-mismatched-ack" for r in pending), (
+        "an ack file whose OWN request_id does not match the filename it "
+        "was found under (or whose target_run_ids don't match the real "
+        "request) must not be trusted as proof this request was actually "
+        "serviced — content must be validated and bound, not merely "
+        "'some file exists at this stem'"
+    )
+
+
+# ---------------------------------------------------------------------------
+# P1-7: exactly-once control handling — dispatch-before-ack is not an
+# exactly-once guarantee. A crash between "effect applied" and "ack
+# published" must not cause a silent double-dispatch on retry/restart, and
+# a crash before any effect is applied must still eventually get serviced
+# (never silently suppressed).
+# ---------------------------------------------------------------------------
+
+
+def test_p1_exactly_once_reclaim_request_processed_twice_does_not_double_dispatch(tmp_path, monkeypatch):
+    """Simulates the crash window: a request is processed through the real
+    per-request product path (``_process_one_control_request`` — the same
+    method ``_run_drain_loop`` calls per pending request), its real effect
+    takes place, but we simulate the ack publish being interrupted (mirrors
+    a process crash between "effect applied" and "ack durably published")
+    by deleting any ack this call happened to publish before the second
+    attempt. A second, independent processing attempt for the SAME
+    request_id (the next drain-loop tick, or a fresh successor process
+    restart re-reading the same still-apparently-unacked request from disk)
+    must not apply the underlying operation's side effect a SECOND time —
+    the effect here (_handle_ask appending to the followup buffer) would
+    otherwise be applied twice, which is not acceptable even though a
+    reclaim's cancel_event.set() alone would be naturally idempotent."""
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+    req = _build_request(
+        marker, request_id="req-exactly-once-ask", operation="ask",
+        target_run_ids=["em-live"], payload={"message": "only once please"},
+    )
+
+    # First processing attempt through the real per-request product path.
+    mgr._process_one_control_request(req, marker)
+    first_buffer = mgr._emanations["em-live"]["followup_buffer"]
+    assert first_buffer.count("only once please") == 1
+
+    # Simulate "the ack publish was interrupted by a crash": remove
+    # whatever ack this call durably published, so a naive re-read of
+    # pending requests (ack-exclusion only) would see this request_id as
+    # still unacked and eligible for re-dispatch — exactly the crash window
+    # the durable claim (not the ack file) must protect against.
+    ack_path = control_dir(agent._working_dir, marker.generation) / "acks" / "req-exactly-once-ask.json"
+    if ack_path.exists():
+        ack_path.unlink()
+
+    # A second, independent attempt (the next drain-loop tick, or a fresh
+    # successor process restart) re-processes the SAME apparently-still-
+    # unacked request_id through the same real per-request product path.
+    mgr._process_one_control_request(req, marker)
+    second_buffer = mgr._emanations["em-live"]["followup_buffer"]
+    assert second_buffer.count("only once please") == 1, (
+        "processing the SAME request_id twice (the exact crash window "
+        "between effect-applied and ack-published) must not apply the "
+        "underlying operation's side effect twice — this requires a "
+        "durable per-request claim/state transition, not merely relying "
+        "on write_control_ack's exclusive-create as the only safeguard, "
+        "since the effect here (_handle_ask appending to the followup "
+        "buffer) already happened before write_control_ack is ever called"
+    )
+
+
+def test_p1_exactly_once_run_drain_loop_never_dispatches_same_request_twice_within_one_run(tmp_path, monkeypatch):
+    """Within a single _run_drain_loop invocation, if a tick's ack-publish
+    for a request raises something other than FileExistsError (e.g. a
+    transient OSError) between two ticks, the SAME request must not be
+    re-dispatched on the next tick once its ack has already been durably
+    written by a previous, successful attempt.
+
+    Checks the followup_buffer AFTER the first (bounded, non-quiescent)
+    call and BEFORE the second (genuinely quiescent) one — B-5's real
+    resource-shutdown-on-quiescence now correctly clears self._emanations
+    once the owned set is genuinely done (see _finish_drain_host_exit),
+    so a post-quiescence read of the same entry is no longer meaningful;
+    the double-dispatch proof itself is about the SECOND call not
+    re-applying the effect, which is what the buffer's own unchanged
+    count (read once, before either resource teardown could occur) still
+    proves."""
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+    req = _build_request(
+        marker, request_id="req-drain-once", operation="ask",
+        target_run_ids=["em-live"], payload={"message": "count me exactly once"},
+    )
+    write_control_request(agent._working_dir, req)
+
+    mgr._run_drain_loop(marker, poll_interval=0.01, max_ticks=1)
+    buffer_after_first_call = mgr._emanations["em-live"]["followup_buffer"]
+    assert buffer_after_first_call.count("count me exactly once") == 1
+
+    # Force quiescence so a second drain-loop call terminates immediately
+    # after (if anything) re-scanning — proving the SAME already-acked
+    # request is not re-dispatched even if read_pending_control_requests is
+    # called again. This second call IS genuinely quiescent, so it
+    # correctly runs B-5's real resource-shutdown sequence afterward.
+    mgr._emanations["em-live"]["future"] = _completed_future_helper("done")
+    mgr._run_drain_loop(marker, poll_interval=0.01, max_ticks=1)
+
+    # The real durable evidence (the ack) proves the second call did not
+    # re-dispatch: exactly one terminal ack exists for this request_id.
+    from lingtai.tools.daemon.refresh_host import validated_acked_request_ids as _validated_acked_request_ids
+    acked = _validated_acked_request_ids(agent._working_dir, marker.generation)
+    assert "req-drain-once" in acked
+
+
+def _completed_future_helper(result):
+    from tests._daemon_helpers import completed_future
+    return completed_future(result)
+
+
+def test_v7_exactly_once_claim_created_before_dispatch_then_crash_still_dispatches(tmp_path, monkeypatch):
+    """v7 isolated counterexample: v6's own exactly-once tests only cover
+    effect-applied -> ack-lost (deleting the ACK between two attempts, claim
+    file untouched). None of them cover claim-created -> dispatch-never-
+    started — the parent's exact mechanical counterexample
+    (pre_dispatch_claim_retry_ack_effect_count=0,
+    pre_dispatch_claim_retry_request_still_pending=false against pre-v7
+    code): a claim durably exists (a prior attempt crashed BEFORE the real
+    side effect ever ran), and a naive retry that treats "claim already
+    held" as "already handled" would publish a fake terminal ack with the
+    real effect applied ZERO times, silently losing the request forever.
+    v7's claim state machine distinguishes `claimed` (never dispatched —
+    must resume) from `dispatched` (already applied — must not re-run) so
+    this exact case now dispatches for real."""
+    from lingtai.tools.daemon.refresh_host import (
+        claim_control_request,
+        validated_acked_request_ids,
+    )
+
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+    req = _build_request(
+        marker, request_id="req-preclaim-crash", operation="ask",
+        target_run_ids=["em-live"], payload={"message": "must not be lost"},
+    )
+
+    # Simulate: an earlier attempt won the claim but crashed strictly
+    # BEFORE _dispatch_control_request ever ran — no side effect, no ack.
+    won = claim_control_request(agent._working_dir, marker.generation, "req-preclaim-crash")
+    assert won is True, "test setup: this call must be the one that wins the claim"
+
+    # Retry through the real per-request product path.
+    mgr._process_one_control_request(req, marker)
+
+    buffer = mgr._emanations["em-live"]["followup_buffer"]
+    assert "must not be lost" in buffer, (
+        "a claim that exists but was never actually dispatched (the "
+        "process crashed between winning the claim and running the real "
+        "side effect) must be resumed and dispatched for real on retry — "
+        "treating 'claim already held' as 'already handled, nothing to "
+        "do' silently drops the request with the effect applied zero times"
+    )
+    acked = validated_acked_request_ids(agent._working_dir, marker.generation)
+    assert "req-preclaim-crash" in acked, (
+        "after a genuine dispatch, a real terminal ack must exist — not "
+        "merely a fabricated 'pending' placeholder that removes the "
+        "request from the pending scan without ever answering it"
+    )
+
+
+def test_v7_exactly_once_dispatched_claim_with_lost_ack_gets_truthful_recovery_ack_not_redispatch(
+    tmp_path, monkeypatch,
+):
+    """The companion real crash window: a prior attempt's claim reached
+    `dispatched` (the real side effect DID run) but crashed before its ack
+    was durably published. Retrying must NEVER re-run the side effect (that
+    would be a real double-dispatch, not a false one), and must publish a
+    truthful `effect-applied-ack-lost` terminal ack rather than silently
+    leaving the request forever unacked or fabricating an `accepted`
+    response as if the original dispatch's actual detail were still known."""
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+    req = _build_request(
+        marker, request_id="req-dispatched-ack-lost", operation="ask",
+        target_run_ids=["em-live"], payload={"message": "exactly once, truthfully"},
+    )
+
+    mgr._process_one_control_request(req, marker)
+    first_buffer = mgr._emanations["em-live"]["followup_buffer"]
+    assert first_buffer.count("exactly once, truthfully") == 1
+
+    ack_path = (
+        control_dir(agent._working_dir, marker.generation) / "acks" / "req-dispatched-ack-lost.json"
+    )
+    assert ack_path.exists()
+    ack_path.unlink()  # simulate: effect applied, ack write itself never landed
+
+    mgr._process_one_control_request(req, marker)
+    second_buffer = mgr._emanations["em-live"]["followup_buffer"]
+    assert second_buffer.count("exactly once, truthfully") == 1, (
+        "a claim already at 'dispatched' must never be re-dispatched — the "
+        "real side effect already ran in the earlier attempt"
+    )
+
+    recovered = json.loads(ack_path.read_text())
+    assert recovered["status"] == "effect-applied-ack-lost", (
+        "the recovery ack must honestly state the effect was already "
+        "applied and its original response detail is unrecoverable — "
+        "never silently absent, and never a fabricated 'accepted' as if "
+        "the original dispatch's real result were still known"
+    )
+
+
+def test_v7_error_containment_dispatch_exception_leaves_claim_retryable_not_permanently_dispatched(
+    tmp_path, monkeypatch,
+):
+    """A dispatch exception must never advance the claim to `dispatched` —
+    doing so would permanently suppress retry for an operation that never
+    actually completed, converting a transient failure into silent,
+    unrecoverable request loss (the exact defect A-8 names: 'do not convert
+    a dispatch exception into a permanent claim that suppresses retry')."""
+    from lingtai.tools.daemon.refresh_host import read_control_request_claim_status
+
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+    req = _build_request(
+        marker, request_id="req-dispatch-boom", operation="ask",
+        target_run_ids=["em-live"], payload={"message": "hi"},
+    )
+
+    def _boom(request, marker):
+        raise RuntimeError("simulated dispatch failure")
+
+    monkeypatch.setattr(mgr, "_dispatch_control_request", _boom)
+    mgr._process_one_control_request(req, marker)
+
+    claim_status = read_control_request_claim_status(
+        agent._working_dir, marker.generation, "req-dispatch-boom"
+    )
+    assert claim_status == "claimed", (
+        "a dispatch exception must leave the claim at 'claimed' (never "
+        "attempted) so a later retry can genuinely resume dispatch — "
+        "advancing to 'dispatched' here would permanently suppress the "
+        "request even though its real side effect never ran"
+    )
+
+    # A later retry (dispatch no longer raising) must actually apply the
+    # effect — proving the claim truly stayed retryable, not just that its
+    # on-disk status string looked right.
+    monkeypatch.undo()
+    mgr._process_one_control_request(req, marker)
+    buffer = mgr._emanations["em-live"]["followup_buffer"]
+    assert "hi" in buffer
+
+
+# ---------------------------------------------------------------------------
+# P1-8: error containment — malformed requests, ask/dispatch failures, ack
+# publication failures, and one request's failure must not kill the
+# draining host loop or starve other valid requests.
+# ---------------------------------------------------------------------------
+
+
+def test_p1_error_containment_one_dispatch_exception_does_not_kill_drain_loop(tmp_path, monkeypatch):
+    """If _dispatch_control_request raises for one request (e.g. _handle_ask
+    itself raises an unexpected exception), _run_drain_loop must not
+    propagate that exception out and die — it must contain the failure for
+    that one request and continue draining/servicing every OTHER valid
+    pending request in the same and subsequent ticks."""
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+
+    good_req = _build_request(
+        marker, request_id="req-good", operation="ask",
+        target_run_ids=["em-live"], payload={"message": "this one should still work"},
+    )
+    bad_req = _build_request(
+        marker, request_id="req-bad", operation="ask",
+        target_run_ids=["em-live"], payload={"message": "this one explodes"},
+    )
+    write_control_request(agent._working_dir, good_req)
+    write_control_request(agent._working_dir, bad_req)
+
+    real_dispatch = mgr._dispatch_control_request
+
+    def _flaky_dispatch(request, marker):
+        if request.request_id == "req-bad":
+            raise RuntimeError("simulated unexpected dispatch failure")
+        return real_dispatch(request, marker)
+
+    monkeypatch.setattr(mgr, "_dispatch_control_request", _flaky_dispatch)
+
+    # max_ticks bounds the loop; the run stays non-terminal throughout so
+    # both requests are genuinely dispatched (not short-circuited to
+    # already-terminal before the flaky dispatch monkeypatch even runs).
+    mgr._run_drain_loop(marker, poll_interval=0.01, max_ticks=3)
+
+    buffer = mgr._emanations["em-live"]["followup_buffer"]
+    assert "this one should still work" in buffer, (
+        "one request's dispatch exception must not prevent a different, "
+        "valid pending request from being serviced in the same drain loop"
+    )
+    good_ack_path = control_dir(agent._working_dir, marker.generation) / "acks" / "req-good.json"
+    assert good_ack_path.exists()
+
+
+def test_p1_error_containment_ack_publish_oserror_does_not_kill_drain_loop(tmp_path, monkeypatch):
+    """_run_drain_loop currently catches ONLY FileExistsError from
+    write_control_ack. An ordinary OSError (e.g. disk full, permission
+    error) from that same call must also not crash the loop or prevent
+    other requests from being serviced."""
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+
+    bad_req = _build_request(
+        marker, request_id="req-ack-fails", operation="ask",
+        target_run_ids=["em-live"], payload={"message": "ack write explodes"},
+    )
+    good_req = _build_request(
+        marker, request_id="req-ack-ok", operation="ask",
+        target_run_ids=["em-live"], payload={"message": "ack write succeeds"},
+    )
+    write_control_request(agent._working_dir, bad_req)
+    write_control_request(agent._working_dir, good_req)
+
+    import lingtai.tools.daemon as daemon_module
+    real_write_control_ack = daemon_module.write_control_ack
+
+    def _flaky_write_control_ack(parent_working_dir, ack):
+        if ack.request_id == "req-ack-fails":
+            raise OSError("simulated ack publish failure")
+        return real_write_control_ack(parent_working_dir, ack)
+
+    monkeypatch.setattr(daemon_module, "write_control_ack", _flaky_write_control_ack)
+    mgr._emanations["em-live"]["future"] = _completed_future_helper("done")
+
+    mgr._run_drain_loop(marker, poll_interval=0.01, max_ticks=3)
+
+    good_ack_path = control_dir(agent._working_dir, marker.generation) / "acks" / "req-ack-ok.json"
+    assert good_ack_path.exists(), (
+        "an OSError publishing one request's ack must not prevent a "
+        "different request's ack from being published in the same "
+        "drain-loop run"
+    )
+
+
+def test_p1_error_containment_malformed_request_file_does_not_block_valid_requests(tmp_path, monkeypatch):
+    """A malformed request file dropped directly into requests/ (already
+    covered at the read_pending_control_requests layer per its own
+    docstring) must, end-to-end through the real drain loop, still let a
+    separate valid request in the same directory be serviced."""
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+
+    good_req = _build_request(
+        marker, request_id="req-valid-alongside-malformed", operation="ask",
+        target_run_ids=["em-live"], payload={"message": "still gets serviced"},
+    )
+    write_control_request(agent._working_dir, good_req)
+
+    requests_dir = control_dir(agent._working_dir, marker.generation) / "requests"
+    (requests_dir / "req-malformed-drop.json").write_text("not json at all {{{", encoding="utf-8")
+
+    mgr._run_drain_loop(marker, poll_interval=0.01, max_ticks=3)
+
+    buffer = mgr._emanations["em-live"]["followup_buffer"]
+    assert "still gets serviced" in buffer
+
+
+# ---------------------------------------------------------------------------
+# P1-9: quiescence/exit race — a request arriving after a scan but before
+# host exit cannot be left forever unacked.
+# ---------------------------------------------------------------------------
+
+
+def test_p1_quiescence_race_request_arriving_between_scan_and_quiescence_check_is_serviced(tmp_path, monkeypatch):
+    """The narrowest version of the race: a request is written DURING the
+    same tick, after read_pending_control_requests has already returned its
+    (now stale) list but before _owned_runs_quiescent is checked. The CURRENT
+    implementation drains requests THEN checks quiescence, so if the run
+    becomes terminal in between the scan and a request landing, the loop
+    exits with that request never seen. This test drives the loop with
+    max_ticks=1 and a run that is ALREADY terminal, proving a request
+    written just before the call is still serviced at least once before
+    the loop honors quiescence and exits — the real fix needs a fail-closed
+    HOST_EXITING/closed-generation handshake so a request that truly loses
+    the race gets an honest rejection/host-lost ack instead of silence,
+    rather than a request landing before the FIRST scan being silently
+    dropped by an already-quiescent loop that never scans at all."""
+    from tests._daemon_helpers import completed_future
+
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+    # Run is ALREADY terminal before the loop even starts.
+    mgr._emanations["em-live"]["future"] = completed_future("done")
+
+    req = _build_request(
+        marker, request_id="req-race-window", operation="ask",
+        target_run_ids=["em-live"], payload={"message": "arrived right at the edge"},
+    )
+    write_control_request(agent._working_dir, req)
+
+    mgr._run_drain_loop(marker, poll_interval=0.01, max_ticks=1)
+
+    ack_path = control_dir(agent._working_dir, marker.generation) / "acks" / "req-race-window.json"
+    assert ack_path.exists(), (
+        "a request already durably written before _run_drain_loop's first "
+        "tick must receive SOME honest ack (accepted, already-terminal, "
+        "or a fail-closed host-lost/rejected state) even when the owned "
+        "run set is already quiescent at loop entry — the loop must not "
+        "check quiescence before ever draining the first tick's requests"
+    )
+
+
+def test_p1_quiescence_race_late_request_after_loop_exit_gets_fail_closed_handling(tmp_path, monkeypatch):
+    """Once _run_drain_loop has genuinely returned (the host is exiting),
+    a request written AFTER that point must eventually be observable as
+    unserviceable (e.g. via a HOST_EXITING/closed-generation marker state,
+    or via the next successor's own host-lost reconciliation) rather than
+    sitting forever with no ack and no other honest signal a requester
+    could poll for. This test proves the loop, upon returning, leaves an
+    on-disk signal a requester can distinguish from 'still draining,
+    keep waiting.'"""
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+    mgr._emanations["em-live"]["future"] = _completed_future_helper("done")
+
+    mgr._run_drain_loop(marker, poll_interval=0.01, max_ticks=None)
+
+    generation_dir = refresh_hosts_dir(agent._working_dir) / marker.generation
+    closed_marker_paths = list(generation_dir.glob("*CLOSED*")) + list(generation_dir.glob("*closed*"))
+    control_dir_path = control_dir(agent._working_dir, marker.generation)
+    host_exiting_markers = (
+        list(control_dir_path.glob("*HOST_EXITING*"))
+        + list(control_dir_path.glob("*host_exiting*"))
+        + list(control_dir_path.glob("*closed*"))
+    )
+    assert closed_marker_paths or host_exiting_markers, (
+        "once _run_drain_loop returns because the owned set is quiescent, "
+        "there must be a durable, discoverable on-disk signal that this "
+        "generation's control plane is now closed — a late request writer "
+        "polling for an ack otherwise has no honest way to distinguish "
+        "'host still draining, keep waiting' from 'host exited, nobody is "
+        "listening anymore, and never will be'"
+    )
+
+
+def test_v7_close_handshake_marker_is_typed_and_content_valid(tmp_path, monkeypatch):
+    """A-9: the pre-v7 CLOSED marker was a bare zero-byte touch() with no
+    schema, no fsync of its own content, and no reader/writer contract
+    beyond 'a file exists here.' v7's write_closed_marker/read_closed_marker
+    must produce a real typed record any reader can validate — not merely
+    decoration a test's own glob happens to match."""
+    from lingtai.tools.daemon.refresh_host import read_closed_marker, is_generation_closed
+
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+    mgr._emanations["em-live"]["future"] = _completed_future_helper("done")
+
+    assert is_generation_closed(agent._working_dir, marker.generation) is False, (
+        "must not be closed before the drain loop actually runs/exits"
+    )
+
+    mgr._run_drain_loop(marker, poll_interval=0.01, max_ticks=None)
+
+    closed = read_closed_marker(agent._working_dir, marker.generation)
+    assert closed is not None
+    assert closed["schema_version"] == 1
+    assert closed["generation"] == marker.generation
+    assert isinstance(closed["closed_at"], str) and closed["closed_at"]
+    assert is_generation_closed(agent._working_dir, marker.generation) is True
+
+
+def test_v7_close_handshake_request_racing_strictly_between_fence_scan_and_publish_gets_host_lost_ack(
+    tmp_path, monkeypatch,
+):
+    """A-9 real race reproduction: a request written strictly BETWEEN the
+    drain loop's final fencing scan and its CLOSED-marker publish (the
+    exact narrow window pre-v7's bare touch() never fenced against at all)
+    must still receive a truthful, terminal 'host-lost' ack through the
+    real per-request claim/dispatch machinery — never silently left
+    unanswered forever, and never fabricated as 'accepted' since the
+    effect was genuinely never applied."""
+    import lingtai.tools.daemon as daemon_module
+
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+    mgr._emanations["em-live"]["future"] = _completed_future_helper("done")
+
+    real_read_pending = daemon_module.read_pending_control_requests
+    call_count = {"n": 0}
+
+    def _injecting_read_pending(parent_working_dir, generation):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # This IS the fence scan's call inside
+            # _close_generation_control_plane. Return what's really
+            # pending (nothing), then write a request that lands strictly
+            # after this scan returns but before the CLOSED marker is
+            # published moments later.
+            result = list(real_read_pending(parent_working_dir, generation))
+            req = _build_request(
+                marker, request_id="req-scan-close-race", operation="ask",
+                target_run_ids=["em-live"], payload={"message": "raced the close"},
+            )
+            write_control_request(parent_working_dir, req)
+            return iter(result)
+        return real_read_pending(parent_working_dir, generation)
+
+    monkeypatch.setattr(daemon_module, "read_pending_control_requests", _injecting_read_pending)
+
+    from lingtai.tools.daemon.refresh_host import validated_acked_request_ids as _validated_acked_request_ids
+
+    mgr._close_generation_control_plane(marker)
+
+    acked = _validated_acked_request_ids(agent._working_dir, marker.generation)
+    assert "req-scan-close-race" in acked, (
+        "a request racing strictly between the fence scan and the CLOSED "
+        "publish must still receive a real terminal ack — silence here "
+        "means the pre-v9 decoration-only CLOSED marker regressed back in"
+    )
+    ack_path = control_dir(agent._working_dir, marker.generation) / "acks" / "req-scan-close-race.json"
+    ack_data = json.loads(ack_path.read_text())
+    assert ack_data["status"] == "host-lost", (
+        "the racing request's ack must honestly say the effect was never "
+        "applied (host-lost), never a fabricated 'accepted'"
+    )
+    # The real per-request effect must NOT have been applied — this proves
+    # the reject path went through the honest host-lost ack, not a genuine
+    # (and therefore double-risking) dispatch.
+    assert "raced the close" not in mgr._emanations["em-live"]["followup_buffer"]
+
+
+def test_v7_close_handshake_request_submitted_before_fence_scan_still_gets_real_dispatch(
+    tmp_path, monkeypatch,
+):
+    """Positive control: a request submitted BEFORE the close handshake
+    even begins (the ordinary case, not a race) must still be genuinely
+    dispatched through the fence scan — proving the fence scan is real
+    work, not merely a formality before the CLOSED publish. The target run
+    is deliberately left NON-terminal (unlike the other tests in this
+    section, which need terminal state for _owned_runs_quiescent) — this
+    test calls _close_generation_control_plane directly, not the full
+    drain loop, and a terminal target would be rejected as
+    'already-terminal' before ever reaching the ordinary dispatch path
+    this test means to prove."""
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+
+    req = _build_request(
+        marker, request_id="req-before-close", operation="ask",
+        target_run_ids=["em-live"], payload={"message": "ordinary pre-close request"},
+    )
+    write_control_request(agent._working_dir, req)
+
+    from lingtai.tools.daemon.refresh_host import validated_acked_request_ids as _validated_acked_request_ids
+
+    mgr._close_generation_control_plane(marker)
+
+    assert "ordinary pre-close request" in mgr._emanations["em-live"]["followup_buffer"]
+    acked = _validated_acked_request_ids(agent._working_dir, marker.generation)
+    assert "req-before-close" in acked
+    ack_path = control_dir(agent._working_dir, marker.generation) / "acks" / "req-before-close.json"
+    ack_data = json.loads(ack_path.read_text())
+    assert ack_data["status"] == "accepted"
+
+
+def test_v7_close_handshake_successor_ask_poll_stops_early_on_closed_generation(tmp_path, monkeypatch):
+    """_route_ask_through_control_plane (the successor-side consumer) must
+    actually consult is_generation_closed during its poll loop and stop
+    waiting once the generation closes, rather than blindly polling the
+    full 10s window even when the generation is provably, durably closed
+    the whole time."""
+    from lingtai.tools.daemon.refresh_host import write_closed_marker
+
+    agent, mgr, marker, run_dir = _prepared_manager_with_marker(tmp_path, monkeypatch)
+    # Publish CLOSED for this generation BEFORE the ask is ever routed —
+    # simulating a successor asking a generation that already fully closed
+    # (e.g. it discovered the marker just as/after the host finished).
+    write_closed_marker(agent._working_dir, marker)
+
+    started = time.monotonic()
+    result = mgr._route_ask_through_control_plane("em-live", "hello", marker)
+    elapsed = time.monotonic() - started
+
+    assert result["status"] == "error"
+    assert elapsed < 5.0, (
+        f"polling took {elapsed:.2f}s — the successor must recognize the "
+        f"generation is already closed and stop waiting well before the "
+        f"full blind 10s timeout, not treat CLOSED the same as silence"
+    )
+
+
+# ---------------------------------------------------------------------------
+# P1-10: run-state synchronization — owner-tag writes and active worker
+# progress/terminal updates must share an explicit synchronization
+# invariant so read-modify-write updates cannot overwrite each other.
+# ---------------------------------------------------------------------------
+
+
+def test_p1_run_state_sync_concurrent_owner_tag_and_progress_write_do_not_lose_updates(tmp_path):
+    """Real-thread reproduction: one thread repeatedly calls set_current_tool
+    (simulating active worker progress) while another calls
+    set_execution_owner (simulating PREPARE tagging the SAME run mid-flight)
+    — both against the SAME real DaemonRunDir/daemon.json. Without a shared
+    synchronization invariant across these two mutators, the daemon.json
+    ends up on disk missing one side's update (either the tool-progress
+    field or the execution_owner field, depending purely on write-ordering
+    luck) even though both are still correctly reflected in the in-memory
+    self._state dict acting as the source of truth for BOTH writers.
+    Repeated several times to make a timing-dependent race observable
+    rather than relying on exactly one lucky/unlucky interleaving."""
+    from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir
+
+    agent = make_daemon_agent(tmp_path)
+
+    for attempt in range(25):
+        run_dir = make_daemon_run_dir(agent, em_id=f"em-race-{attempt}")
+        marker = RefreshHostMarker.build(
+            pid=os.getpid(), start_ticks=1, command_label="module",
+            working_dir=str(agent._working_dir), owned_run_ids=[f"em-race-{attempt}"],
+        )
+        owner_dict = ExecutionOwner.from_marker(marker).to_dict()
+
+        stop = threading.Event()
+
+        def _worker_progress():
+            i = 0
+            while not stop.is_set():
+                run_dir.set_current_tool(f"tool-{i}", {})
+                i += 1
+
+        def _tag_owner():
+            run_dir.set_execution_owner(owner_dict)
+
+        progress_thread = threading.Thread(target=_worker_progress)
+        progress_thread.start()
+        time.sleep(0.002)
+        _tag_owner()
+        stop.set()
+        progress_thread.join(timeout=5)
+
+        on_disk = json.loads(run_dir.daemon_json_path.read_text())
+        assert on_disk.get("execution_owner") is not None, (
+            f"attempt {attempt}: a concurrent worker-progress write raced "
+            "out the execution_owner tag on disk — set_execution_owner and "
+            "set_current_tool must share an explicit synchronization "
+            "invariant (e.g. a per-run-dir lock around the read-serialize-"
+            "write sequence), since atomic rename alone only guarantees "
+            "the FILE CONTENT at write time is internally consistent, not "
+            "that concurrent writers' updates are never lost to each other"
+        )
+
+
+def test_v7_whole_snapshot_sync_terminal_notification_claim_vs_owner_tag_barrier(tmp_path):
+    """A-10 deterministic barrier reproduction (not a timing loop): v6's own
+    P1-10 fix only covered set_current_tool vs set_execution_owner — both of
+    which route their mutation AND write through the same _state_lock
+    acquisition. claim_terminal_notification (and its two siblings)
+    pre-v7 mutated self._state under ONLY _terminal_notification_lock, then
+    deferred its durable write to a LATER, separate _safe(...) call that
+    re-acquires _state_lock fresh. That split let a concurrent
+    set_execution_owner's own dict(self._state) copy + write + reassign
+    land BETWEEN the mutation and the deferred write: the copy captured
+    self._state BEFORE the mutation, so the reassigned self._state object
+    the deferred write later reads back does not contain the mutation at
+    all — even though the mutation genuinely happened moments earlier on
+    the (now-orphaned) previous object. A threading.Barrier makes both
+    threads start their respective critical sections at effectively the
+    same instant, every run, deterministically hitting this exact window
+    instead of relying on repeated attempts to get occasionally lucky."""
+    from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir
+
+    agent = make_daemon_agent(tmp_path)
+    marker = RefreshHostMarker.build(
+        pid=os.getpid(), start_ticks=1, command_label="module",
+        working_dir=str(agent._working_dir), owned_run_ids=["em-barrier"],
+    )
+    owner_dict = ExecutionOwner.from_marker(marker).to_dict()
+
+    lost_trials = []
+    trials = 20
+    for trial in range(trials):
+        run_dir = make_daemon_run_dir(agent, em_id=f"em-barrier-{trial}")
+        barrier = threading.Barrier(2)
+        results = {}
+
+        def _claim():
+            barrier.wait()
+            results["key"] = run_dir.claim_terminal_notification("done")
+
+        def _tag():
+            barrier.wait()
+            run_dir.set_execution_owner(owner_dict)
+
+        t_claim = threading.Thread(target=_claim)
+        t_tag = threading.Thread(target=_tag)
+        t_claim.start()
+        t_tag.start()
+        t_claim.join(timeout=5)
+        t_tag.join(timeout=5)
+
+        on_disk = json.loads(run_dir.daemon_json_path.read_text())
+        in_memory = run_dir.state_snapshot()
+        disk_ok = (
+            isinstance(on_disk.get("terminal_notification_claim"), dict)
+            and on_disk.get("execution_owner") is not None
+        )
+        memory_ok = (
+            isinstance(in_memory.get("terminal_notification_claim"), dict)
+            and in_memory.get("execution_owner") is not None
+        )
+        if not (disk_ok and memory_ok):
+            lost_trials.append(
+                (trial, disk_ok, memory_ok, on_disk.get("terminal_notification_claim"), on_disk.get("execution_owner"))
+            )
+
+    assert lost_trials == [], (
+        f"{len(lost_trials)}/{trials} trials lost an update under a real "
+        f"thread barrier — claim_terminal_notification's mutation and its "
+        f"durable write must happen inside ONE _state_lock acquisition, not "
+        f"a mutation now / deferred write later split that a concurrent "
+        f"set_execution_owner's copy-then-reassign can land between. "
+        f"Failing trials: {lost_trials}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase B — real lifecycle wiring acceptance: drives the ACTUAL
+# lifecycle._stop() / _shutdown_daemon_runtime path (a real .refresh.taken
+# handshake, not a manually-driven _prepare_refresh_host()/_run_drain_loop()
+# call), and a successor's DIRECT daemon(action="ask") call (not the raw
+# control-plane primitives), proving both pieces of new Phase B wiring work
+# end-to-end across real separate OS processes.
+# ---------------------------------------------------------------------------
+
+_REAL_LIFECYCLE_HOST_SCRIPT = """
+import json, os, sys, threading, time
+sys.path.insert(0, {src_path!r})
+from unittest.mock import MagicMock
+from pathlib import Path
+
+from lingtai.agent import Agent
+from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.base_agent import lifecycle as lifecycle_module
+import lingtai.llm.service as service_mod
+from lingtai.kernel.llm.base import ToolCall
+
+working_dir = Path({working_dir!r})
+side_effect_marker = Path({side_effect_marker!r})
+release_file = Path({release_file!r})
+host_ready_file = Path({host_ready_file!r})
+host_pid_file = Path({host_pid_file!r})
+host_generation_file = Path({host_generation_file!r})
+host_stop_file = Path({host_stop_file!r})
+
+svc = MagicMock()
+svc.provider = "mock"
+svc.model = "mock-model"
+agent = Agent(svc, working_dir=working_dir, capabilities=["daemon"], config=AgentConfig())
+
+_em_id_holder = {{}}
+
+def _blocking_side_effect_handler(args):
+    deadline = time.time() + 30.0
+    while not release_file.exists():
+        if time.time() > deadline:
+            raise TimeoutError("release_file never appeared")
+        time.sleep(0.02)
+    side_effect_marker.write_text(str(os.getpid()), encoding="utf-8")
+    completion_path = working_dir / "daemons" / _em_id_holder["em_id"] / "daemon_completion.json"
+    completion_path.write_text(
+        json.dumps({{"status": "done", "run_id": _em_id_holder["em_id"],
+                    "summary": "released and recorded"}}),
+        encoding="utf-8",
+    )
+    return {{"content": "released and recorded"}}
+
+agent.add_tool(
+    "blocking_side_effect",
+    schema={{"type": "object", "properties": {{}}}},
+    handler=_blocking_side_effect_handler,
+    description="Blocks until release_file exists, then records a side effect.",
+)
+
+mgr = agent.get_capability("daemon")
+
+# Same real-cmdline-observation seam as the other real-subprocess tests in
+# this file (see _HOST_PROCESS_SCRIPT) — this process's actual argv is
+# `python -c <script>`, which correctly does not match any real agent-run
+# launch form, so only this ONE seam is faked; every other identity check
+# still runs for real against this real PID.
+import lingtai.tools.daemon.refresh_host as _refresh_host_module
+_real_read_cmdline = _refresh_host_module._read_cmdline
+def _patched_read_cmdline(pid):
+    if pid == os.getpid():
+        return "python -m lingtai run " + str(working_dir)
+    return _real_read_cmdline(pid)
+_refresh_host_module._read_cmdline = _patched_read_cmdline
+
+service_mod.LLMService = lambda **kwargs: agent.service
+resp1 = MagicMock()
+resp1.text = "calling blocking tool"
+resp1.tool_calls = [ToolCall(name="blocking_side_effect", args={{}}, id="tc-1")]
+resp1.usage = MagicMock(input_tokens=0, output_tokens=0, thinking_tokens=0, cached_tokens=0)
+
+_send_call_count = {{"n": 0}}
+
+def _mock_send(*args, **kwargs):
+    _send_call_count["n"] += 1
+    if _send_call_count["n"] == 1:
+        return resp1
+    resp = MagicMock()
+    resp.text = "Task done."
+    resp.tool_calls = []
+    resp.usage = MagicMock(input_tokens=0, output_tokens=0, thinking_tokens=0, cached_tokens=0)
+    return resp
+
+mock_session = MagicMock()
+mock_session.send = MagicMock(side_effect=_mock_send)
+agent.service.create_session = MagicMock(return_value=mock_session)
+agent.service.make_tool_result = MagicMock(return_value="mock_result")
+
+result = mgr._handle_emanate([{{"task": "do the blocking thing", "tools": ["blocking_side_effect"]}}])
+assert result["status"] == "dispatched", result
+em_id = result["ids"][0]
+_em_id_holder["em_id"] = em_id
+
+# --- Drive the REAL lifecycle path, not a manually-called PREPARE/drain. ---
+# _perform_refresh's own handshake normalization is what creates
+# .refresh.taken in the real product path; this test creates it directly
+# (the SAME file _shutdown_daemon_runtime checks for) to isolate the
+# teardown-ordering piece this test is actually proving — _stop()'s real
+# choice to enter PREPARE/drain instead of shutdown_for_agent_stop — from
+# _perform_refresh's separate watcher-spawn/relaunch machinery, which is
+# not what this acceptance category is about.
+(working_dir / ".refresh.taken").touch()
+
+# The real lifecycle._stop() call: sets _shutdown, joins the run thread
+# (there is none here — a bare mock Agent has no _thread), calls the REAL
+# _shutdown_daemon_runtime (which must now PREPARE + enter drain instead of
+# shutdown_for_agent_stop), closes the session, persists the manifest,
+# stops the heartbeat, and releases the workdir lease — the EXACT same
+# function a real refresh/stop path calls, unmodified for this test.
+lifecycle_module._stop(agent, timeout=1.0)
+
+# After _stop() returns, the lease is released (real successor Agent()
+# construction becomes possible) and — because a marker was committed —
+# the daemon work is still alive on a background drain thread in THIS
+# process, not killed by shutdown_for_agent_stop.
+assert not side_effect_marker.exists(), "side effect must not have been killed by ordinary shutdown"
+
+daemon_json_path = working_dir / "daemons" / em_id / "daemon.json"
+daemon_json = json.loads(daemon_json_path.read_text())
+assert daemon_json["state"] == "running", daemon_json
+assert daemon_json.get("execution_owner") is not None, (
+    "the real lifecycle._stop() path must have committed a real "
+    "execution_owner tag via PREPARE, not merely left the run running "
+    "with no ownership binding"
+)
+marker_generation = daemon_json["execution_owner"]["generation"]
+
+host_pid_file.write_text(str(os.getpid()), encoding="utf-8")
+host_generation_file.write_text(marker_generation, encoding="utf-8")
+host_ready_file.write_text("ready", encoding="utf-8")
+
+deadline = time.time() + 30.0
+while not host_stop_file.exists():
+    if time.time() > deadline:
+        os._exit(4)
+    time.sleep(0.05)
+# Give the background drain thread (spawned by the real
+# _shutdown_daemon_runtime, non-daemon) a bounded moment to notice
+# quiescence and return before this process exits.
+for t in threading.enumerate():
+    if t.name == "daemon-refresh-drain-host":
+        t.join(timeout=15.0)
+sys.exit(0)
+"""
+
+_REAL_LIFECYCLE_SUCCESSOR_ASK_SCRIPT = """
+import json, os, sys
+sys.path.insert(0, {src_path!r})
+from unittest.mock import MagicMock
+from pathlib import Path
+
+from lingtai.agent import Agent
+from lingtai.kernel.config import AgentConfig
+
+working_dir = Path({working_dir!r})
+em_id = {em_id!r}
+host_pid = {host_pid!r}
+result_file = Path({result_file!r})
+
+import lingtai.tools.daemon.refresh_host as _refresh_host_module
+_real_read_cmdline = _refresh_host_module._read_cmdline
+def _patched_read_cmdline(pid):
+    if pid == host_pid:
+        return "python -m lingtai run " + str(working_dir)
+    return _real_read_cmdline(pid)
+_refresh_host_module._read_cmdline = _patched_read_cmdline
+
+svc = MagicMock()
+svc.provider = "mock"
+svc.model = "mock-model"
+agent = Agent(svc, working_dir=working_dir, capabilities=["daemon"], config=AgentConfig())
+mgr = agent.get_capability("daemon")
+
+# The successor's OWN fresh DaemonManager has an EMPTY _emanations for
+# em_id — this DIRECT daemon(action="ask") call (the exact product-level
+# tool-dispatch path, calling handle() itself, not a raw
+# ControlRequest/write_control_request primitive) must route through the
+# control plane to the still-draining host rather than immediately
+# returning "Unknown emanation" merely because em_id isn't in this
+# process's own in-memory registry.
+result = mgr.handle({{"action": "ask", "id": em_id, "message": "still there?"}})
+result_file.write_text(json.dumps(result), encoding="utf-8")
+sys.exit(0 if result.get("status") in ("sent",) else 1)
+"""
+
+_REAL_LIFECYCLE_SELF_EXIT_HOST_SCRIPT = """
+import json, os, sys, time
+sys.path.insert(0, {src_path!r})
+from unittest.mock import MagicMock
+from pathlib import Path
+
+from lingtai.agent import Agent
+from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.base_agent import lifecycle as lifecycle_module
+import lingtai.llm.service as service_mod
+from lingtai.kernel.llm.base import ToolCall
+
+working_dir = Path({working_dir!r})
+release_file = Path({release_file!r})
+host_ready_file = Path({host_ready_file!r})
+
+svc = MagicMock()
+svc.provider = "mock"
+svc.model = "mock-model"
+agent = Agent(svc, working_dir=working_dir, capabilities=["daemon"], config=AgentConfig())
+
+_em_id_holder = {{}}
+
+def _blocking_handler(args):
+    deadline = time.time() + 30.0
+    while not release_file.exists():
+        if time.time() > deadline:
+            raise TimeoutError("release_file never appeared")
+        time.sleep(0.02)
+    completion_path = working_dir / "daemons" / _em_id_holder["em_id"] / "daemon_completion.json"
+    completion_path.write_text(
+        json.dumps({{"status": "done", "run_id": _em_id_holder["em_id"], "summary": "released"}}),
+        encoding="utf-8",
+    )
+    return {{"content": "released"}}
+
+agent.add_tool(
+    "blocking_side_effect", schema={{"type": "object", "properties": {{}}}},
+    handler=_blocking_handler, description="Blocks until release_file exists.",
+)
+
+mgr = agent.get_capability("daemon")
+
+import lingtai.tools.daemon.refresh_host as _refresh_host_module
+_real_read_cmdline = _refresh_host_module._read_cmdline
+def _patched_read_cmdline(pid):
+    if pid == os.getpid():
+        return "python -m lingtai run " + str(working_dir)
+    return _real_read_cmdline(pid)
+_refresh_host_module._read_cmdline = _patched_read_cmdline
+
+service_mod.LLMService = lambda **kwargs: agent.service
+resp1 = MagicMock()
+resp1.text = "calling blocking tool"
+resp1.tool_calls = [ToolCall(name="blocking_side_effect", args={{}}, id="tc-1")]
+resp1.usage = MagicMock(input_tokens=0, output_tokens=0, thinking_tokens=0, cached_tokens=0)
+_send_call_count = {{"n": 0}}
+def _mock_send(*args, **kwargs):
+    _send_call_count["n"] += 1
+    if _send_call_count["n"] == 1:
+        return resp1
+    resp = MagicMock()
+    resp.text = "Task done."
+    resp.tool_calls = []
+    resp.usage = MagicMock(input_tokens=0, output_tokens=0, thinking_tokens=0, cached_tokens=0)
+    return resp
+mock_session = MagicMock()
+mock_session.send = MagicMock(side_effect=_mock_send)
+agent.service.create_session = MagicMock(return_value=mock_session)
+agent.service.make_tool_result = MagicMock(return_value="mock_result")
+
+result = mgr._handle_emanate([{{"task": "block then finish", "tools": ["blocking_side_effect"]}}])
+assert result["status"] == "dispatched", result
+em_id = result["ids"][0]
+_em_id_holder["em_id"] = em_id
+
+(working_dir / ".refresh.taken").touch()
+
+# The REAL lifecycle._stop() path — NOT self-exiting here. Once _stop()
+# returns, the run is still in-flight (blocked on release_file), so the
+# real drain thread (self_exit_process=True, wired into the actual
+# lifecycle.py drain-thread spawn) must be the ONLY thing that ever
+# terminates this process — no explicit os._exit/sys.exit call anywhere
+# below this point, and no external "please stop now" signal file this
+# test polls, unlike the other real-lifecycle acceptance test.
+lifecycle_module._stop(agent, timeout=1.0)
+
+host_ready_file.write_text(str(os.getpid()), encoding="utf-8")
+
+# Deliberately do nothing further and do NOT exit — if self-exit fails,
+# this process will still be alive when the test's own bounded wait times
+# out, which the test asserts as a hard failure.
+time.sleep(60)
+os._exit(97)  # sentinel: reaching this line means self-exit did NOT fire
+"""
+
+
+def test_real_lifecycle_drain_host_self_exits_once_genuinely_quiescent(tmp_path):
+    """B-5 real vertical-slice acceptance: the REAL drain-host subprocess
+    (driven through the actual lifecycle._stop() path, exactly like the
+    other real-lifecycle acceptance test) must terminate ITSELF via
+    os._exit(0) once its owned run genuinely finishes — with NO external
+    stop signal, no test-side os.kill, and no explicit exit call anywhere
+    in the host script after _stop() returns. This is the actual proof
+    B-5 asks for: 'old-process self-exit,' not merely a unit-level check
+    that _finish_drain_host_exit's self_exit_process branch calls
+    os._exit when invoked directly."""
+    working_dir = tmp_path / "agent-workdir"
+    working_dir.mkdir()
+    release_file = tmp_path / "release_file"
+    host_ready_file = tmp_path / "host_ready"
+    src_path = str(Path(__file__).resolve().parents[1] / "src")
+
+    host_script = _REAL_LIFECYCLE_SELF_EXIT_HOST_SCRIPT.format(
+        src_path=src_path, working_dir=str(working_dir),
+        release_file=str(release_file), host_ready_file=str(host_ready_file),
+    )
+    env = {**os.environ, "PYTHONPATH": src_path}
+    host_proc = subprocess.Popen(
+        [sys.executable, "-c", host_script],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+    )
+    try:
+        deadline = time.monotonic() + 20.0
+        while not host_ready_file.exists():
+            assert time.monotonic() < deadline, "host process never became ready"
+            assert host_proc.poll() is None, f"host process exited early: {host_proc.poll()}"
+            time.sleep(0.02)
+
+        # Still alive — the run is genuinely blocked, nothing to quiesce yet.
+        assert host_proc.poll() is None, (
+            "host must still be alive while its owned run is genuinely "
+            "blocked — self-exit must not fire before real quiescence"
+        )
+
+        release_file.write_text("go", encoding="utf-8")
+
+        exit_deadline = time.monotonic() + 20.0
+        while host_proc.poll() is None:
+            assert time.monotonic() < exit_deadline, (
+                "the real drain-host process did NOT self-exit within the "
+                "bounded window after its owned run genuinely finished — "
+                "B-5 self-exit is not actually wired into the real "
+                "lifecycle._stop() drain-thread spawn"
+            )
+            time.sleep(0.05)
+
+        assert host_proc.returncode == 0, (
+            f"expected a clean os._exit(0) from the real drain host; got "
+            f"{host_proc.returncode}. stdout={host_proc.stdout.read()!r} "
+            f"stderr={host_proc.stderr.read()!r}"
+        )
+    finally:
+        if host_proc.poll() is None:
+            host_proc.kill()
+            host_proc.wait(timeout=5)
+
+
+def test_real_lifecycle_stop_enters_drain_and_successor_direct_ask_routes_to_host(tmp_path):
+    """Phase B end-to-end acceptance: a real host subprocess drives the
+    ACTUAL lifecycle._stop() function (with a real .refresh.taken file
+    present, exactly as a genuine refresh handoff would leave it) and
+    proves _shutdown_daemon_runtime's new PREPARE branch — not a manually-
+    invoked _prepare_refresh_host()/_run_drain_loop() call — commits a real
+    marker and keeps the blocked daemon run alive on a background drain
+    thread instead of killing it via shutdown_for_agent_stop. A separate
+    real successor subprocess then makes a DIRECT daemon(action="ask")
+    tool-dispatch call (not a raw control-plane primitive) for that same
+    em_id and must have it routed to and accepted by the still-draining
+    host — proving the _handle_ask Unknown-emanation gap is closed for the
+    real product-level ask path, not only for the internal control-plane
+    helper functions."""
+    working_dir = tmp_path / "agent-workdir"
+    working_dir.mkdir()
+    side_effect_marker = tmp_path / "side_effect_marker"
+    release_file = tmp_path / "release_file"
+    host_ready_file = tmp_path / "host_ready"
+    host_pid_file = tmp_path / "host_pid"
+    host_generation_file = tmp_path / "host_generation"
+    host_stop_file = tmp_path / "host_stop"
+    src_path = str(Path(__file__).resolve().parents[1] / "src")
+
+    host_script = _REAL_LIFECYCLE_HOST_SCRIPT.format(
+        src_path=src_path, working_dir=str(working_dir),
+        side_effect_marker=str(side_effect_marker), release_file=str(release_file),
+        host_ready_file=str(host_ready_file), host_pid_file=str(host_pid_file),
+        host_generation_file=str(host_generation_file), host_stop_file=str(host_stop_file),
+    )
+    env = {**os.environ, "PYTHONPATH": src_path}
+    host_proc = subprocess.Popen(
+        [sys.executable, "-c", host_script],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+    )
+    try:
+        deadline = time.monotonic() + 20.0
+        while not host_ready_file.exists():
+            assert time.monotonic() < deadline, "host process never became ready"
+            assert host_proc.poll() is None, f"host process exited early: {host_proc.poll()}"
+            time.sleep(0.02)
+
+        host_pid = int(host_pid_file.read_text(encoding="utf-8"))
+        assert host_pid == host_proc.pid
+        # The real Python process is STILL ALIVE after its own lifecycle._stop()
+        # returned — proving the drain thread, not process exit, is what keeps
+        # this in-flight daemon work reachable.
+        assert host_proc.poll() is None
+
+        daemon_dirs = [d for d in (working_dir / "daemons").iterdir() if d.is_dir() and d.name.startswith("em-")]
+        assert len(daemon_dirs) == 1, daemon_dirs
+        em_id = daemon_dirs[0].name
+
+        successor_result_file = tmp_path / "successor_ask_result"
+        successor_script = _REAL_LIFECYCLE_SUCCESSOR_ASK_SCRIPT.format(
+            src_path=src_path, working_dir=str(working_dir), em_id=em_id,
+            host_pid=host_pid, result_file=str(successor_result_file),
+        )
+        successor_proc = subprocess.run(
+            [sys.executable, "-c", successor_script],
+            capture_output=True, text=True, env=env, timeout=30,
+        )
+        assert successor_proc.returncode == 0, (
+            f"successor stdout={successor_proc.stdout!r} stderr={successor_proc.stderr!r}"
+        )
+        successor_out = json.loads(successor_result_file.read_text(encoding="utf-8"))
+        assert successor_out["status"] == "sent", successor_out
+        assert successor_out.get("async") is True, successor_out
+
+        # Release the blocking tool and confirm the side effect still
+        # completes, by the ORIGINAL host PID, on the SAME drain-host
+        # process the real lifecycle._stop() path kept alive.
+        release_file.write_text("go", encoding="utf-8")
+        deadline = time.monotonic() + 20.0
+        while not side_effect_marker.exists():
+            assert time.monotonic() < deadline, "side effect never occurred after release"
+            assert host_proc.poll() is None, "host process died before completing the side effect"
+            time.sleep(0.02)
+        assert int(side_effect_marker.read_text(encoding="utf-8")) == host_pid
+    finally:
+        try:
+            host_stop_file.write_text("stop", encoding="utf-8")
+            host_proc.wait(timeout=15)
+        except Exception:
+            host_proc.kill()
+            host_proc.wait(timeout=5)
+        if host_proc.returncode not in (0, None):
+            print("HOST STDOUT:", host_proc.stdout.read() if host_proc.stdout else None)
+            print("HOST STDERR:", host_proc.stderr.read() if host_proc.stderr else None)
+
+
+# ---------------------------------------------------------------------------
+# v8 B1/B2 — the ONE remaining gap the two _REAL_LIFECYCLE_* tests above
+# deliberately left open (see their own docstrings/comments, e.g. line
+# 6058-6065's explicit rationale): both manufacture `.refresh.taken` via a
+# bare `.touch()` to isolate `_stop()`'s teardown-branch choice from
+# `_perform_refresh`'s separate watcher-spawn/relaunch machinery. This
+# section drives the FULL real chain in one process: real `.refresh` file
+# -> real `Agent._perform_refresh()` (handshake normalization + real
+# detached watcher subprocess spawn) -> real `lifecycle_module._stop()`
+# entering the real PREPARE/drain branch -> the real drain loop reaching
+# genuine quiescence and self-exiting via os._exit(0) -> meanwhile the
+# REAL watcher subprocess (not mocked, not string-inspected) observes
+# `.agent.lock` clear and relaunches a hermetic successor, which the test
+# process independently confirms actually started.
+# ---------------------------------------------------------------------------
+
+
+_REAL_LIFECYCLE_REFRESH_HOST_SCRIPT = """
+import json, os, sys, threading, time
+sys.path.insert(0, {src_path!r})
+from unittest.mock import MagicMock
+from pathlib import Path
+
+from lingtai.agent import Agent
+from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.base_agent import lifecycle as lifecycle_module
+import lingtai.llm.service as service_mod
+from lingtai.kernel.llm.base import ToolCall
+
+working_dir = Path({working_dir!r})
+release_file = Path({release_file!r})
+host_ready_file = Path({host_ready_file!r})
+host_pid_file = Path({host_pid_file!r})
+successor_started_marker = Path({successor_started_marker!r})
+successor_launch_code = {successor_launch_code!r}
+effect_log_path = Path({effect_log_path!r})
+pre_stop_marker_path = Path({pre_stop_marker_path!r})
+
+svc = MagicMock()
+svc.provider = "mock"
+svc.model = "mock-model"
+agent = Agent(svc, working_dir=working_dir, capabilities=["daemon"], config=AgentConfig())
+
+# Real heartbeat: the ONLY way to get a genuine, product-written
+# `.agent.heartbeat` (not a hand-forged one) without running the full
+# `agent.start()` run-loop/MailService/soul-timer stack this bare-service
+# fixture cannot support. `_start_heartbeat` is the exact internal seam
+# `agent.start()` itself calls -- same thread target, same
+# `_write_heartbeat_tick` -> `PosixAgentPresenceStoreAdapter.publish_heartbeat`
+# real product path, just invoked directly instead of through the full
+# lifecycle `_start`.
+agent._start_heartbeat()
+heartbeat_seed_deadline = time.time() + 5.0
+while not (working_dir / ".agent.heartbeat").exists():
+    assert time.time() < heartbeat_seed_deadline, "real heartbeat never published"
+    time.sleep(0.02)
+
+_em_id_holder = {{}}
+
+def _blocking_side_effect_handler(args):
+    # The real, product-path release signal: this handler blocks until the
+    # real refresh-drain control plane has durably ACKED a real `ask`
+    # ControlRequest targeting this run -- i.e. until the real watcher's
+    # real hermetic successor has itself, from a distinct OS process,
+    # submitted and had dispatched a real ControlRequest through
+    # `write_control_request` / the real `_run_drain_loop` already running
+    # on this same host's drain thread. Nothing outside that real product
+    # chain ever creates this ack file, so this is not a parent-touched
+    # release file -- it is the mechanical trace of the successor's own
+    # real control-plane action.
+    from lingtai.tools.daemon.refresh_host import (
+        iter_marker_paths as _iter_marker_paths,
+        validated_acks_by_request_id as _validated_acks_by_request_id,
+    )
+    deadline = time.time() + 30.0
+    generation = None
+    while True:
+        if time.time() > deadline:
+            raise TimeoutError(
+                "no real ask ControlRequest targeting this run was ever "
+                "acked -- the successor never drove a real control-plane "
+                "action against this host for THIS run_id"
+            )
+        if generation is None:
+            marker_paths = list(_iter_marker_paths(working_dir))
+            if marker_paths:
+                generation = marker_paths[0].stem
+        if generation is not None:
+            acks = _validated_acks_by_request_id(working_dir, generation)
+            if any(
+                _em_id_holder.get("em_id") in ack.target_run_ids
+                and ack.status == "accepted"
+                for ack in acks.values()
+            ):
+                break
+        time.sleep(0.02)
+    # Replay-sensitive effect accounting: append+fsync one token per ACTUAL
+    # invocation of this handler, rather than an overwrite-only write. A
+    # second invocation (replay/duplicate dispatch) is mechanically
+    # detectable by more than one line ever existing in this file -- an
+    # overwrite-only write could silently absorb a second call and still
+    # show exactly one final byte-shape on disk.
+    with open(effect_log_path, "a", encoding="utf-8") as ef:
+        ef.write(json.dumps({{"invocation": time.time(), "pid": os.getpid()}}) + "\\n")
+        ef.flush()
+        os.fsync(ef.fileno())
+    completion_path = working_dir / "daemons" / _em_id_holder["em_id"] / "daemon_completion.json"
+    completion_path.write_text(
+        json.dumps({{"status": "done", "run_id": _em_id_holder["em_id"],
+                    "summary": "released and recorded"}}),
+        encoding="utf-8",
+    )
+    return {{"content": "released and recorded"}}
+
+agent.add_tool(
+    "blocking_side_effect",
+    schema={{"type": "object", "properties": {{}}}},
+    handler=_blocking_side_effect_handler,
+    description="Blocks until the real control plane acks a real ask targeting this run.",
+)
+
+mgr = agent.get_capability("daemon")
+
+# Same real-cmdline-observation seam as the other real-subprocess tests in
+# this file — this process's actual argv is `python -c <script>`, which
+# correctly does not match any real agent-run launch form, so only this
+# ONE seam is faked; every other identity check still runs for real.
+import lingtai.tools.daemon.refresh_host as _refresh_host_module
+_real_read_cmdline = _refresh_host_module._read_cmdline
+def _patched_read_cmdline(pid):
+    if pid == os.getpid():
+        return "python -m lingtai run " + str(working_dir)
+    return _real_read_cmdline(pid)
+_refresh_host_module._read_cmdline = _patched_read_cmdline
+
+# The ONE seam standing in for the real `lingtai-agent run <working_dir>`
+# console command: `_build_launch_cmd`'s real implementation resolves a
+# venv from init.json, which this bare temp workdir does not have. Every
+# OTHER piece of `_perform_refresh` (handshake normalization, watcher
+# subprocess spawn, the watcher's own phase-1/phase-2/phase-3 polling
+# logic) is the real, unmodified product code — only the launch COMMAND
+# itself is hermetic, exactly the seam `_make_agent_with_launch_cmd` uses
+# in tests/test_perform_refresh_handshake.py.
+agent._build_launch_cmd = lambda: [sys.executable, "-c", successor_launch_code]
+
+service_mod.LLMService = lambda **kwargs: agent.service
+resp1 = MagicMock()
+resp1.text = "calling blocking tool"
+resp1.tool_calls = [ToolCall(name="blocking_side_effect", args={{}}, id="tc-1")]
+resp1.usage = MagicMock(input_tokens=0, output_tokens=0, thinking_tokens=0, cached_tokens=0)
+
+_send_call_count = {{"n": 0}}
+
+def _mock_send(*args, **kwargs):
+    _send_call_count["n"] += 1
+    if _send_call_count["n"] == 1:
+        return resp1
+    resp = MagicMock()
+    resp.text = "Task done."
+    resp.tool_calls = []
+    resp.usage = MagicMock(input_tokens=0, output_tokens=0, thinking_tokens=0, cached_tokens=0)
+    return resp
+
+mock_session = MagicMock()
+mock_session.send = MagicMock(side_effect=_mock_send)
+agent.service.create_session = MagicMock(return_value=mock_session)
+agent.service.make_tool_result = MagicMock(return_value="mock_result")
+
+result = mgr._handle_emanate([{{"task": "do the blocking thing", "tools": ["blocking_side_effect"]}}])
+assert result["status"] == "dispatched", result
+em_id = result["ids"][0]
+_em_id_holder["em_id"] = em_id
+
+# --- Drive the REAL .refresh -> _perform_refresh handshake + watcher spawn,
+# not a manually-touched .refresh.taken. This is the exact gap the other
+# two _REAL_LIFECYCLE_* tests in this file deliberately left open (see
+# their own comments) — closing it is this stage's whole point.
+
+# Contract step 2 -- mechanically prove the OLD real .agent.lock and
+# .agent.heartbeat both genuinely exist RIGHT NOW, before refresh/stop
+# ever runs, and record it for the outer test process (which cannot
+# observe this instant directly -- `host_ready_file` is only written
+# after `_stop()` has already withdrawn both). Capture the old heartbeat's
+# exact bytes so the outer test can later prove the successor's new
+# heartbeat is a genuinely fresh value, not a byte-identical leftover.
+old_lock_existed = (working_dir / ".agent.lock").exists()
+old_heartbeat_existed = (working_dir / ".agent.heartbeat").exists()
+old_heartbeat_value = (
+    (working_dir / ".agent.heartbeat").read_text(encoding="utf-8")
+    if old_heartbeat_existed else None
+)
+pre_stop_marker_path.write_text(
+    json.dumps({{
+        "old_lock_existed": old_lock_existed,
+        "old_heartbeat_existed": old_heartbeat_existed,
+        "old_heartbeat_value": old_heartbeat_value,
+    }}),
+    encoding="utf-8",
+)
+assert old_lock_existed and old_heartbeat_existed, (
+    f"the old host must genuinely hold its own real lock/heartbeat before "
+    f"refresh/stop: lock_existed={{old_lock_existed}} "
+    f"heartbeat_existed={{old_heartbeat_existed}}"
+)
+
+(working_dir / ".refresh").touch()
+agent._perform_refresh()
+assert (working_dir / ".refresh.taken").exists(), (
+    "the real _perform_refresh handshake must have normalized "
+    ".refresh -> .refresh.taken before spawning the watcher"
+)
+assert not (working_dir / ".refresh").exists(), (
+    "the real handshake must consume .refresh so the heartbeat loop "
+    "(not running in this test, but the invariant must still hold) "
+    "would never spawn a duplicate watcher on its next tick"
+)
+
+# The real lifecycle._stop() call: closes the session, persists the
+# manifest, stops the heartbeat (real .agent.heartbeat withdrawal via the
+# real PosixAgentPresenceStoreAdapter this bare-service Agent() composed
+# for itself), releases the real .agent.lock (real PosixWorkdirLeaseAdapter
+# flock release) -- which is exactly the signal the REAL watcher subprocess
+# spawned above is polling for in its own phase 2 -- and (because
+# .refresh.taken exists) enters the real PREPARE+drain branch instead of
+# shutdown_for_agent_stop, keeping the still-blocked daemon run alive on a
+# background drain thread in THIS process.
+lifecycle_module._stop(agent, timeout=1.0)
+
+daemon_json_path = working_dir / "daemons" / em_id / "daemon.json"
+daemon_json = json.loads(daemon_json_path.read_text())
+assert daemon_json["state"] == "running", daemon_json
+assert daemon_json.get("execution_owner") is not None, (
+    "the real lifecycle._stop() path must have committed a real "
+    "execution_owner tag via PREPARE"
+)
+
+host_pid_file.write_text(str(os.getpid()), encoding="utf-8")
+host_ready_file.write_text("ready", encoding="utf-8")
+
+# Deliberately do nothing further and do NOT exit -- the real drain
+# thread (self_exit_process=True) is the only thing that may ever
+# terminate this process from here on.
+time.sleep(60)
+os._exit(97)  # sentinel: reaching this line means self-exit did NOT fire
+"""
+
+
+def test_v9_b1_b2_real_successor_observes_and_controls_persisted_run(tmp_path):
+    """v9 Stage B1/B2 acceptance (correction of the v8 headline claim): drives
+    the actual product entry point `Agent._perform_refresh` through its real
+    filesystem handshake AND spawns its real detached watcher subprocess,
+    which in turn launches a REAL hermetic successor -- a distinct OS process
+    that imports and constructs a real `Agent`/`DaemonManager` on the same
+    working_dir (not a `python -c` marker+sleep stand-in) -- while a
+    genuinely in-flight LingTai daemon run (real `_handle_emanate` dispatch)
+    survives the handoff on the old host's real drain thread and completes
+    exactly once, released ONLY by the successor's own real `ask`
+    `ControlRequest` reaching the old host's real control plane. Mechanically
+    observes, from OUTSIDE both subprocesses:
+
+    1. real `.refresh` -> `.refresh.taken` ownership transfer;
+    2. the old host's real `.agent.lock` AND real `.agent.heartbeat` exist
+       and are captured BEFORE refresh/stop, then both are observably
+       withdrawn before the successor ever constructs anything;
+    3. real successor process startup -- constructs a real `Agent`, whose
+       construction succeeding is itself the mechanical proof of real lock
+       re-acquisition, and whose own `_start_heartbeat()` publishes a real
+       new heartbeat;
+    4. the successor uses a real, freshly-constructed `DaemonManager` to
+       send a real `ask` `ControlRequest` at the still-running old host
+       through the product control plane (`_handle_ask` ->
+       `_route_ask_through_control_plane`), and the old host's blocking
+       tool call only completes once that real ack lands -- never a
+       parent-touched release file;
+    5. exactly one replay-sensitive effect-log entry, exactly one terminal
+       daemon result (`daemon.json.state == "done"`, exactly one
+       `daemon_completion.json`), and a durable terminal-notification
+       receipt (`terminal_notified is True` + non-null
+       `terminal_notification_receipt`) matched by exactly one real system
+       notification event in `.notification/system.json` -- no replay, no
+       duplicate execution;
+    6. the old host reaching quiescence and self-exiting for real
+       (`os._exit(0)`, not the `os._exit(97)` never-reached sentinel).
+    """
+    working_dir = tmp_path / "agent-workdir"
+    working_dir.mkdir()
+    release_file = tmp_path / "release_file_unused_legacy_param"
+    host_ready_file = tmp_path / "host_ready"
+    host_pid_file = tmp_path / "host_pid"
+    successor_started_marker = tmp_path / "successor_started"
+    successor_preflight_marker = tmp_path / "successor_preflight"
+    successor_ask_result_marker = tmp_path / "successor_ask_result"
+    effect_log_path = tmp_path / "effect_log.jsonl"
+    pre_stop_marker_path = tmp_path / "pre_stop_marker.json"
+    src_path = str(Path(__file__).resolve().parents[1] / "src")
+
+    # The hermetic "successor" the real watcher subprocess will actually
+    # `subprocess.Popen` in its own phase 3 -- writes an independent
+    # startup marker (proves real exec, not merely "the watcher decided
+    # to try") AND a real-shaped `.agent.heartbeat` file (str(epoch), no
+    # trailing newline -- the exact format `PosixAgentPresenceStoreAdapter.
+    # publish_heartbeat` writes) so the watcher's own real health-check
+    # (reads `.agent.heartbeat`, checks the age) reports success and the
+    # watcher exits 0 on its FIRST relaunch attempt rather than retrying.
+    #
+    # This is a REAL hermetic successor, not a marker+sleep stand-in: it
+    # imports and constructs a real `Agent` (capabilities=["daemon"]) on
+    # the SAME working_dir, which is itself the mechanical proof of real
+    # lock re-acquisition (`BaseAgent.__init__`'s own
+    # `self._workdir_lease.acquire(10)` -- would raise if the old host
+    # still held the flock), starts a real heartbeat thread via the same
+    # `_start_heartbeat` seam the host uses, and gets a real freshly
+    # constructed `DaemonManager` via `get_capability("daemon")` (whose
+    # own `__init__` runs the real `_reap_host_lost_daemon_records` et al.
+    # against the still-live old marker and correctly leaves it alone).
+    # It then drives a real `ask` `ControlRequest` at the still-running old
+    # host through `mgr._handle_ask`, which -- since this run_id is not in
+    # THIS manager's own `_emanations` -- routes through the real
+    # `_load_execution_owner_for_run` / `_route_ask_through_control_plane`
+    # product path rather than any test-only shortcut.
+    successor_launch_code = textwrap.dedent(
+        f"""
+        import json, os, sys, time
+        sys.path.insert(0, {src_path!r})
+        from pathlib import Path
+        from unittest.mock import MagicMock
+
+        from lingtai.agent import Agent
+        from lingtai.kernel.config import AgentConfig
+
+        wd = Path({str(working_dir)!r})
+        started_marker = Path({str(successor_started_marker)!r})
+        preflight_marker = Path({str(successor_preflight_marker)!r})
+        ask_result_marker = Path({str(successor_ask_result_marker)!r})
+
+        # Discover the owned run_id from disk itself -- the successor's
+        # own real observation, not a value handed to it by the parent
+        # test process. Exactly one `em-*` run directory is expected (the
+        # single blocking daemon this test dispatches on the old host).
+        daemons_dir = wd / "daemons"
+        em_dirs = [
+            p.name for p in daemons_dir.iterdir()
+            if p.is_dir() and p.name.startswith("em-")
+        ] if daemons_dir.is_dir() else []
+        if len(em_dirs) != 1:
+            raise RuntimeError(f"expected exactly one owned run, found {{em_dirs}}")
+        em_id = em_dirs[0]
+
+        # Same real-cmdline-observation seam as the host script itself
+        # uses (and the other real-subprocess tests in this file): THIS
+        # process's own actual argv is `python -c <script>`, which
+        # correctly does not match any real agent-run launch form. Since
+        # `verify_marker_live` is what `DaemonManager.__init__`'s own
+        # `_reap_host_lost_daemon_records` (and later
+        # `_load_execution_owner_for_run`) calls to confirm the OLD host
+        # is still real, and that check reads the OLD host's PID's
+        # cmdline via THIS process's own fresh import of `refresh_host`
+        # (not shared with the host process's own patched module object),
+        # this patch MUST be applied BEFORE constructing `Agent(...)`
+        # below -- `capabilities=["daemon"]` constructs a real
+        # `DaemonManager` synchronously during `Agent.__init__`, which
+        # would otherwise reap this run as `DaemonHostLost` before this
+        # script ever gets a chance to patch anything. Discovered from
+        # the real, disk-persisted `execution_owner.pid` this run's real
+        # `daemon.json` carries, not a value handed to it out-of-band.
+        daemon_json_path = wd / "daemons" / em_id / "daemon.json"
+        owner_state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
+        old_host_pid = owner_state["execution_owner"]["pid"]
+        import lingtai.tools.daemon.refresh_host as _refresh_host_module
+        _real_read_cmdline = _refresh_host_module._read_cmdline
+        # `verify_marker_live` matches the observed cmdline against the
+        # marker's own `working_dir`, which `_canonicalize_working_dir`
+        # stores fully `.resolve()`d (on macOS, `/var/folders/...` resolves
+        # through a symlink to `/private/var/folders/...`) -- the fake
+        # cmdline must embed that SAME resolved form, not `wd` as handed
+        # to this script, or the match silently fails on any platform
+        # where the temp dir is itself a symlink.
+        def _patched_read_cmdline(pid, _old_host_pid=old_host_pid):
+            if pid == _old_host_pid:
+                return "python -m lingtai run " + str(wd.resolve())
+            return _real_read_cmdline(pid)
+        _refresh_host_module._read_cmdline = _patched_read_cmdline
+
+        # Contract step 4 (before construction): the old real .agent.lock
+        # and .agent.heartbeat must both be OBSERVABLY ABSENT before this
+        # process constructs anything -- a real, non-vacuous precondition
+        # check, not asserted only after the fact.
+        old_lock_gone = not (wd / ".agent.lock").exists()
+        old_heartbeat_gone = not (wd / ".agent.heartbeat").exists()
+        preflight_marker.write_text(
+            json.dumps({{"old_lock_gone": old_lock_gone,
+                        "old_heartbeat_gone": old_heartbeat_gone}}),
+            encoding="utf-8",
+        )
+        if not (old_lock_gone and old_heartbeat_gone):
+            # Fail loud rather than silently proceeding to construct a
+            # second real Agent against a workdir the old host might
+            # still legitimately hold -- Agent()'s own lease acquire
+            # would raise anyway, but this makes the precondition explicit
+            # and independently observable by the outer test.
+            raise RuntimeError(
+                f"old lock/heartbeat not withdrawn before successor "
+                f"construction: lock_gone={{old_lock_gone}} "
+                f"heartbeat_gone={{old_heartbeat_gone}}"
+            )
+
+        svc = MagicMock()
+        svc.provider = "mock"
+        svc.model = "mock-model"
+        # Real Agent construction on the SAME working_dir: succeeds only
+        # because the real PosixWorkdirLeaseAdapter flock is genuinely
+        # free (BaseAgent.__init__ calls self._workdir_lease.acquire(10)
+        # unconditionally) -- this call itself IS the mechanical proof of
+        # real lock re-acquisition by a distinct new identity. Its
+        # `capabilities=["daemon"]` construction also runs
+        # `DaemonManager.__init__`'s own `_reap_host_lost_daemon_records`
+        # synchronously (with the cmdline patch above already active), so
+        # it correctly leaves the still-live old marker's run alone.
+        agent = Agent(svc, working_dir=wd, capabilities=["daemon"], config=AgentConfig())
+        agent._start_heartbeat()
+        hb_deadline = time.time() + 5.0
+        while not (wd / ".agent.heartbeat").exists():
+            if time.time() > hb_deadline:
+                raise RuntimeError("successor's own real heartbeat never published")
+            time.sleep(0.02)
+
+        # Independent startup marker -- proves real exec of a distinct OS
+        # process, written only AFTER the real Agent+DaemonManager exist.
+        started_marker.write_text(json.dumps({{"pid": os.getpid()}}), encoding="utf-8")
+
+        mgr = agent.get_capability("daemon")
+
+        # Real observe-then-control: this run_id is a HISTORICAL run this
+        # fresh manager never registered itself, so `_handle_ask` must
+        # route through `_load_execution_owner_for_run` (verifies the old
+        # marker is still live, proving membership) then
+        # `_route_ask_through_control_plane` (writes a real
+        # `ControlRequest`, polls for a real `ControlAck`) -- the real
+        # product "successor observes and controls a persisted in-flight
+        # run" path, not a parent-touched file.
+        result = mgr._handle_ask(em_id, "successor-observed-and-controlling")
+        ask_result_marker.write_text(json.dumps(result), encoding="utf-8")
+        if result.get("status") != "sent":
+            raise RuntimeError(f"real ask to old host was not accepted: {{result}}")
+
+        # Wait through the real persisted terminal state before exiting --
+        # the successor must observe genuine product completion, not just
+        # fire-and-forget its own ask.
+        term_deadline = time.time() + 25.0
+        daemon_json_path = wd / "daemons" / em_id / "daemon.json"
+        while True:
+            if time.time() > term_deadline:
+                raise RuntimeError("old host's run never reached a terminal state")
+            try:
+                state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                state = {{}}
+            if state.get("state") in ("done", "failed", "cancelled", "timeout"):
+                break
+            time.sleep(0.05)
+        """
+    )
+
+    host_script = _REAL_LIFECYCLE_REFRESH_HOST_SCRIPT.format(
+        src_path=src_path, working_dir=str(working_dir),
+        release_file=str(release_file), host_ready_file=str(host_ready_file),
+        host_pid_file=str(host_pid_file),
+        successor_started_marker=str(successor_started_marker),
+        successor_launch_code=successor_launch_code,
+        effect_log_path=str(effect_log_path),
+        pre_stop_marker_path=str(pre_stop_marker_path),
+    )
+    env = {**os.environ, "PYTHONPATH": src_path}
+    host_proc = subprocess.Popen(
+        [sys.executable, "-c", host_script],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+    )
+    try:
+        deadline = time.monotonic() + 20.0
+        while not host_ready_file.exists():
+            assert time.monotonic() < deadline, (
+                f"host process never became ready. "
+                f"poll={host_proc.poll()}"
+            )
+            assert host_proc.poll() is None, f"host process exited early: {host_proc.poll()}"
+            time.sleep(0.02)
+
+        host_pid = int(host_pid_file.read_text(encoding="utf-8"))
+        assert host_pid == host_proc.pid
+        # The real Python process is STILL ALIVE after its own real
+        # lifecycle._stop() returned -- the drain thread, not process
+        # exit, is what keeps the in-flight daemon work reachable, and
+        # the real detached watcher subprocess (spawned by the real
+        # _perform_refresh call inside the host script) is now polling
+        # for THIS process's real .agent.lock to clear.
+        assert host_proc.poll() is None
+
+        daemon_dirs = [d for d in (working_dir / "daemons").iterdir() if d.is_dir() and d.name.startswith("em-")]
+        assert len(daemon_dirs) == 1, daemon_dirs
+        em_id = daemon_dirs[0].name
+
+        # Contract step 2: mechanically prove the OLD real .agent.lock and
+        # .agent.heartbeat both genuinely existed BEFORE refresh/stop ever
+        # ran -- this test previously let both withdrawal assertions pass
+        # vacuously by never checking pre-existence. This instant cannot
+        # be observed directly from outside the host process (by the time
+        # `host_ready_file` appears, `_stop()` has already withdrawn both),
+        # so the host script itself captured this fact into
+        # `pre_stop_marker_path` immediately before calling `_perform_refresh`/
+        # `_stop`, using the same real filesystem checks this test would
+        # otherwise run too late to observe.
+        pre_stop = json.loads(pre_stop_marker_path.read_text(encoding="utf-8"))
+        assert pre_stop == {
+            "old_lock_existed": True,
+            "old_heartbeat_existed": True,
+            "old_heartbeat_value": pre_stop.get("old_heartbeat_value"),
+        }, pre_stop
+        assert isinstance(pre_stop.get("old_heartbeat_value"), str) and pre_stop["old_heartbeat_value"], pre_stop
+        old_heartbeat_value = pre_stop["old_heartbeat_value"]
+
+        # The real watcher's phase-2 poll (`while os.path.exists(lock)`)
+        # must observe the REAL .agent.lock actually clear -- proving the
+        # real PosixWorkdirLeaseAdapter.release() call inside the host's
+        # own lifecycle._stop() is what unblocks it, not a test-side
+        # shortcut. The lock file itself is removed by a successful
+        # release (see PosixWorkdirLeaseAdapter.release's unlink-on-
+        # confirmed-close), so its absence is the mechanical proof.
+        lock_clear_deadline = time.monotonic() + 15.0
+        while (working_dir / ".agent.lock").exists():
+            assert time.monotonic() < lock_clear_deadline, (
+                "the real .agent.lock was never released by the host's "
+                "real lifecycle._stop() -- the real watcher subprocess "
+                "can never proceed past its own phase-2 poll"
+            )
+            time.sleep(0.02)
+
+        # `_stop()`'s own ordering withdraws the heartbeat strictly BEFORE
+        # releasing the lock (see lifecycle._stop's docstring), so by the
+        # time the lock has cleared the heartbeat must already be gone
+        # too -- checked here, not merely assumed.
+        assert not (working_dir / ".agent.heartbeat").exists(), (
+            "the old host's real .agent.heartbeat must be withdrawn no "
+            "later than its .agent.lock release"
+        )
+
+        # Real successor startup: the marker is written only by code
+        # running INSIDE the process the real watcher subprocess actually
+        # exec'd via subprocess.Popen(cmd, ...) in its own phase 3 -- not
+        # hand-created by this test and not inferable from log text alone.
+        successor_deadline = time.monotonic() + 20.0
+        while not successor_started_marker.exists():
+            assert time.monotonic() < successor_deadline, (
+                "the real detached watcher subprocess never actually "
+                "started the hermetic successor process -- real "
+                "watcher/relaunch + real successor startup is not proven"
+            )
+            assert host_proc.poll() is None, (
+                "host process died before the successor could start"
+            )
+            time.sleep(0.05)
+        successor_info = json.loads(successor_started_marker.read_text(encoding="utf-8"))
+        assert isinstance(successor_info.get("pid"), int)
+        assert successor_info["pid"] != host_pid, (
+            "the successor must be a DIFFERENT real OS process from the "
+            "old drain host, not the same process relaunching itself in place"
+        )
+
+        # The successor's own preflight check (asserted BEFORE it
+        # constructed its Agent) must have observed both the old lock and
+        # old heartbeat as genuinely absent -- never vacuously true
+        # because nothing was ever checked.
+        preflight_deadline = time.monotonic() + 5.0
+        while not successor_preflight_marker.exists():
+            assert time.monotonic() < preflight_deadline
+            time.sleep(0.02)
+        preflight = json.loads(successor_preflight_marker.read_text(encoding="utf-8"))
+        assert preflight == {"old_lock_gone": True, "old_heartbeat_gone": True}, preflight
+
+        # The successor's real Agent construction succeeding is itself the
+        # mechanical proof it holds a NEW, distinct real lock -- and its
+        # own real heartbeat thread must have published a fresh value that
+        # is not byte-identical to the withdrawn old one.
+        new_heartbeat_deadline = time.monotonic() + 10.0
+        while not (working_dir / ".agent.heartbeat").exists():
+            assert time.monotonic() < new_heartbeat_deadline, (
+                "the successor's own real _start_heartbeat() never "
+                "published a new .agent.heartbeat"
+            )
+            time.sleep(0.02)
+        new_heartbeat_value = (working_dir / ".agent.heartbeat").read_text(encoding="utf-8")
+        assert new_heartbeat_value != old_heartbeat_value, (
+            "the new heartbeat must be a fresh value from the successor's "
+            "own real heartbeat thread, not a byte-identical leftover"
+        )
+
+        # The successor's own real `ask` ControlRequest, routed through
+        # `mgr._handle_ask` -> `_route_ask_through_control_plane`, must
+        # have been accepted by the old host's real, already-running
+        # drain loop -- this IS the real product observe-and-control path,
+        # not a parent-touched release file.
+        ask_result_deadline = time.monotonic() + 15.0
+        while not successor_ask_result_marker.exists():
+            assert time.monotonic() < ask_result_deadline, (
+                "the successor never recorded the result of its real ask "
+                "ControlRequest against the old host"
+            )
+            assert host_proc.poll() is None, (
+                "host process died before acking the successor's real ask"
+            )
+            time.sleep(0.05)
+        ask_result = json.loads(successor_ask_result_marker.read_text(encoding="utf-8"))
+        assert ask_result.get("status") == "sent", ask_result
+
+        # The blocked in-flight LingTai daemon run on the OLD host must
+        # complete, exactly once, on the drain thread the real
+        # lifecycle._stop() path kept alive -- released ONLY by the real
+        # ack the successor's own control-plane action produced (see the
+        # host script's `_blocking_side_effect_handler`), never by this
+        # test writing to a release file.
+        completion_deadline = time.monotonic() + 20.0
+        completion_path = working_dir / "daemons" / em_id / "daemon_completion.json"
+        while not completion_path.exists():
+            assert time.monotonic() < completion_deadline, (
+                "the in-flight daemon run never completed on the old "
+                "drain host after the successor's real ask was acked"
+            )
+            assert host_proc.poll() is None or host_proc.poll() == 0, (
+                f"host process died abnormally before completing the "
+                f"in-flight run: {host_proc.poll()}"
+            )
+            time.sleep(0.02)
+        completion = json.loads(completion_path.read_text(encoding="utf-8"))
+        assert completion["status"] == "done"
+        assert completion["run_id"] == em_id
+
+        # Replay-sensitive effect accounting: exactly one line, proving
+        # the blocking handler's real side effect ran exactly once --
+        # unlike an overwrite-only file, a second invocation would append
+        # a second line and be mechanically detectable.
+        effect_lines = [
+            ln for ln in effect_log_path.read_text(encoding="utf-8").splitlines() if ln.strip()
+        ]
+        assert len(effect_lines) == 1, effect_lines
+
+        # Exactly one terminal result: the old host's drain loop must
+        # reach genuine quiescence and self-exit -- os._exit(0), never
+        # the os._exit(97) sentinel that would mean self-exit never fired.
+        exit_deadline = time.monotonic() + 20.0
+        while host_proc.poll() is None:
+            assert time.monotonic() < exit_deadline, (
+                "the real drain-host process did not self-exit within "
+                "the bounded window after its owned run genuinely finished"
+            )
+            time.sleep(0.05)
+        assert host_proc.returncode == 0, (
+            f"expected a clean os._exit(0) self-exit from the real drain "
+            f"host after genuine quiescence; got {host_proc.returncode} "
+            f"(97 would mean self-exit never fired -- the process only "
+            f"reached its own never-reached sentinel line). "
+            f"stdout={host_proc.stdout.read()!r} stderr={host_proc.stderr.read()!r}"
+        )
+
+        # Durable terminal-notification proof: a published receipt, not
+        # merely "no claim is dangling" (which is also vacuously true when
+        # no notification was ever published).
+        final_daemon_json = json.loads(
+            (working_dir / "daemons" / em_id / "daemon.json").read_text(encoding="utf-8")
+        )
+        assert final_daemon_json.get("terminal_notification_claim") is None, (
+            "no pending terminal-notification claim may be left dangling "
+            "once the run and the drain host have both genuinely finished"
+        )
+        assert final_daemon_json.get("terminal_notified") is True, final_daemon_json
+        receipt = final_daemon_json.get("terminal_notification_receipt")
+        assert isinstance(receipt, dict), receipt
+        assert isinstance(receipt.get("idempotency_key"), str) and receipt["idempotency_key"], receipt
+        assert isinstance(receipt.get("published_at"), str) and receipt["published_at"], receipt
+
+        # Exactly one real system notification event matches this run and
+        # this exact idempotency key/status -- inspected from the real
+        # `.notification/system.json` store, not merely inferred from the
+        # daemon.json receipt existing.
+        system_notification_path = working_dir / ".notification" / "system.json"
+        system_payload = json.loads(system_notification_path.read_text(encoding="utf-8"))
+        # Real on-disk shape written by PosixNotificationStoreAdapter.publish:
+        # {"header": ..., "data": {"events": [...]}} -- see
+        # `_enqueue_system_notification`'s own payload construction.
+        events = (system_payload.get("data") or {}).get("events") if isinstance(system_payload, dict) else None
+        assert isinstance(events, list), system_payload
+        matching_events = [
+            e for e in events
+            if isinstance(e, dict)
+            and e.get("ref_id") == em_id
+            and e.get("idempotency_key") == receipt["idempotency_key"]
+        ]
+        assert len(matching_events) == 1, (matching_events, events)
+        matching_event = matching_events[0]
+        assert "done" in (matching_event.get("body") or ""), matching_event
+    finally:
+        if host_proc.poll() is None:
+            host_proc.kill()
+            host_proc.wait(timeout=5)

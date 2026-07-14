@@ -302,8 +302,71 @@ def _stop(agent, timeout: float = 5.0) -> None:
     agent._workdir_lease.release()
 
 
+#: Exception class names that mean "``_prepare_refresh_host`` (or the
+#: ``refresh_host``/``run_dir`` primitives it calls) could not durably
+#: confirm whether draining authority was actually granted" — the true
+#: on-disk marker/tag state is genuinely UNKNOWN, not merely "an ordinary
+#: precommit failure occurred and nothing was left behind." ``lifecycle.py``
+#: is kernel-level code and must not import from ``tools/daemon`` (kernel
+#: never depends on tools — see the repository's own layering), so this
+#: recognizes the two ambiguous-failure types by class name alone, the same
+#: duck-typed-capability posture every other daemon-manager access in this
+#: function already uses (``getattr(mgr, "_prepare_refresh_host", None)``,
+#: etc.) rather than a structural type check.
+_AMBIGUOUS_REFRESH_PREPARE_EXCEPTION_NAMES = frozenset(
+    {"CommitAmbiguousError", "OwnerTaggingAmbiguousError"}
+)
+
+
 def _shutdown_daemon_runtime(agent, *, reason: str) -> None:
-    """Best-effort daemon cleanup before parent liveness is released."""
+    """Best-effort daemon cleanup before parent liveness is released.
+
+    Same-agent refresh survival: if this teardown was triggered by a real
+    ``.refresh`` handoff (signaled by ``.refresh.taken`` already existing —
+    ``_perform_refresh`` creates/renames it to that path strictly before
+    setting ``_shutdown``, so its presence here reliably distinguishes a
+    refresh-triggered stop from an ordinary user stop/sleep/suspend, which
+    all funnel through this SAME ``_stop()``/``_shutdown_daemon_runtime``
+    path with no other distinguishing signal), the daemon manager is given
+    the chance to become a refresh-drain host (``_prepare_refresh_host``)
+    instead of performing its ordinary ``shutdown_for_agent_stop`` teardown.
+    Draining only makes sense for a refresh — a plain stop/sleep/suspend has
+    no successor process ever arriving to route control requests to, so it
+    must keep the existing ordinary-shutdown behavior unchanged.
+
+    On a real committed marker: a background, non-daemon thread runs the
+    real ``_run_drain_loop`` — non-daemon so the Python interpreter stays
+    alive purely because this thread is still running, exactly the
+    "bounded draining host" the owning invariant requires, even after the
+    rest of ``_stop()`` releases the workdir lease and lets a successor
+    start. ``shutdown_for_agent_stop`` is skipped entirely for this case —
+    calling it would kill the exact in-flight daemon work PREPARE just
+    committed to keep running.
+
+    On ``None`` (ordinary refresh — nothing nonterminal to protect) or an
+    ORDINARY exception from ``_prepare_refresh_host`` (a plain precommit
+    failure, already unfrozen/re-raised by that method — the on-disk state
+    is provably clean): falls through to today's exact ordinary
+    ``shutdown_for_agent_stop`` path, unchanged.
+
+    On an AMBIGUOUS exception from ``_prepare_refresh_host``
+    (``CommitAmbiguousError``/``OwnerTaggingAmbiguousError`` — see
+    :data:`_AMBIGUOUS_REFRESH_PREPARE_EXCEPTION_NAMES`): the true on-disk
+    marker/tag state is genuinely unknown, so this function does NEITHER
+    of the two normal branches — it does not start a drain loop (there is
+    no confirmed committed marker to drain for) AND it does NOT fall
+    through to ``shutdown_for_agent_stop`` either, since that would risk
+    killing in-flight daemon work that may already be durably tagged as
+    owned by a marker this process can no longer prove does or does not
+    exist. This is a deliberate fail-closed outcome that preserves
+    whatever work/evidence currently exists on disk rather than either
+    branch's normal cleanup — the daemon runtime is left exactly as it
+    was, loudly logged, and this function returns without touching it
+    further. A later independent re-probe of the on-disk state (not
+    performed by this function) is the only correct way to resolve the
+    ambiguity, per ``CommitAmbiguousError``'s and
+    ``OwnerTaggingAmbiguousError``'s own documented contracts.
+    """
     mgr = None
     try:
         get_capability = getattr(agent, "get_capability", None)
@@ -317,6 +380,58 @@ def _shutdown_daemon_runtime(agent, *, reason: str) -> None:
         except Exception:
             pass
         return
+
+    working_dir = getattr(agent, "_working_dir", None)
+    is_refresh_handoff = working_dir is not None and (Path(working_dir) / ".refresh.taken").exists()
+    prepare_refresh_host = getattr(mgr, "_prepare_refresh_host", None)
+    if is_refresh_handoff and callable(prepare_refresh_host):
+        try:
+            marker = prepare_refresh_host()
+        except Exception as e:
+            is_ambiguous = type(e).__name__ in _AMBIGUOUS_REFRESH_PREPARE_EXCEPTION_NAMES
+            try:
+                agent._log(
+                    "daemon_refresh_host_prepare_failed", reason=reason, error=str(e),
+                    ambiguous=is_ambiguous,
+                )
+            except Exception:
+                pass
+            if is_ambiguous:
+                # Fail-closed: the true on-disk marker/tag state is unknown.
+                # Do NOT fall through to ordinary shutdown_for_agent_stop
+                # (which could kill in-flight work this process can no
+                # longer prove is safe to kill) and do NOT start a drain
+                # loop (there is no confirmed committed marker to drain
+                # for). Preserve whatever exists on disk untouched.
+                return
+            marker = None
+        if marker is not None:
+            run_drain_loop = getattr(mgr, "_run_drain_loop", None)
+            if callable(run_drain_loop):
+                try:
+                    agent._log(
+                        "daemon_refresh_host_draining_started",
+                        generation=marker.generation, owned_run_ids=list(marker.owned_run_ids),
+                    )
+                except Exception:
+                    pass
+                # self_exit_process=True: the REAL drain-host product path.
+                # Once this loop genuinely quiesces (every owned run
+                # terminal) and its own control-plane close/resource-
+                # shutdown sequence completes (see DaemonManager's
+                # _run_drain_loop/_finish_drain_host_exit — B-5), this
+                # thread's own call terminates the WHOLE process via
+                # os._exit(0). This non-daemon thread is otherwise the
+                # ONLY thing keeping this process's interpreter alive once
+                # _stop()'s other teardown steps (session close, manifest
+                # persist, heartbeat stop, lease release) all finish.
+                drain_thread = threading.Thread(
+                    target=run_drain_loop, args=(marker,),
+                    kwargs={"self_exit_process": True},
+                    name="daemon-refresh-drain-host", daemon=False,
+                )
+                drain_thread.start()
+                return
 
     shutdown = getattr(mgr, "shutdown_for_agent_stop", None)
     if not callable(shutdown):
