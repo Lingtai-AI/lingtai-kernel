@@ -11,7 +11,9 @@ related_files:
   - src/lingtai/llm/openai/codex_ws.py
   - src/lingtai/llm/openai/defaults.py
   - src/lingtai/llm/service.py
+  - src/lingtai/tools/daemon/ANATOMY.md
   - tests/test_codex_prompt_cache_key.py
+  - tests/test_codex_standalone_compaction.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -40,7 +42,7 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `OpenAIChatSession` | `adapter.py:1210` | Chat Completions session with context overflow auto-recovery; sends optional `prompt_cache_key` |
 | `OpenAIResponsesSession` | `adapter.py:1725` | Responses API session. Official OpenAI mode is server-stateful via `previous_response_id`; custom/OpenAI-compatible mode can be internally stateless (`stateless_replay=True`) and replays full canonical history via `to_responses_input` while recording assistant turns and exposing no resume id (`adapter.py:1749-1750`, `adapter.py:1881-1886`, `adapter.py:1917-1918`, `adapter.py:1928-1929`, `adapter.py:2035-2046`). |
 | `OpenAIAdapter` | `adapter.py:2069` | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key`; carries the internal `_responses_stateless_replay` constructor mode into Responses sessions (`adapter.py:2092`, `adapter.py:2127`, `adapter.py:2264-2277`). |
-| `CodexResponsesSession` | `adapter.py:2492` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include/replay, encrypted-reasoning self-heal, cache-affinity headers, honest client/account identity, and honest Codex metadata envelope. |
+| `CodexResponsesSession` | `adapter.py:2513` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include/replay, encrypted-reasoning self-heal, cache-affinity headers, honest client/account identity, honest Codex metadata envelope, and standalone daemon-task-triggered compaction via `POST /responses/compact` (`adapter.py:3350-3460`; see "Standalone Codex compaction" below). |
 | `CodexOpenAIAdapter` | `adapter.py:4307` | Codex provider specialization: forces Responses mode, derives stable per-agent cache/session ids plus a LingTai installation id from the configured anchor, and wires account/metadata hints into Codex sessions. Maps an omitted/`default` thinking level to an explicit `reasoning.effort = "xhigh"` in its `_create_responses_session` (Codex-only default — omitting the field would fall back to the backend's lower default; explicit levels pass through unchanged, and the generic `OpenAIAdapter` keeps omit-on-default). `codex-pool` reuses this adapter, so it inherits the same default. |
 
 ### adapter.py helpers
@@ -51,7 +53,8 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `_codex_session_id()` | `adapter.py:135` | Derive the 8-char Codex cache-affinity id (issue #378): `sha256(f"{anchor}\0{molt_count}").hexdigest()[:8]`, lowercase hex, where `anchor` MUST be a per-agent identity (the resolved `init.json` path) and `molt_count` is the agent's current molt count. The same value is used byte-identically for `session_id`, `thread_id`, and the default `prompt_cache_key` on the root/main path. No time/epoch — stable across restarts WITHIN a molt segment, and intentionally changes at each molt boundary |
 | `_codex_installation_id()` | `adapter.py:248` | Derives a UUID-shaped, non-secret LingTai installation id for Codex `client_metadata` from the same local anchor/id; never reuses `~/.codex/installation_id`. |
 | `_codex_identity_headers()` | `adapter.py:261` | Builds Codex client identity headers (`originator`, `User-Agent`): default requests identify as LingTai via the shared `llm/identity_headers.py` User-Agent helper, while the official Codex CLI-shaped identity remains an explicit local diagnostic opt-in. |
-| `_validate_compact_threshold()` | `adapter.py:771` | Validates/normalizes OpenAI Responses auto-compaction threshold; positive `int` or explicit `None` (disable) only |
+| `_validate_compact_threshold()` | `adapter.py:772` | Validates/normalizes OpenAI Responses auto-compaction threshold; positive `int` or explicit `None` (disable) only |
+| `_validate_codex_compact_token_limit()` | `adapter.py:788` | Validates/normalizes the Codex-only standalone-compaction context-token threshold (daemon task `context_token_limit`); positive `int` or `None` (no explicit task override — falls back to `context_window()`) only; bool rejected |
 | `_codex_responses_trace_path()` / `_codex_responses_trace_record()` | `adapter.py:799`, `adapter.py:825` | Opt-in Codex Responses stream diagnostic trace helpers; safe metadata only, default off |
 | `_build_http_timeout()` | `adapter.py:896` | `httpx.Timeout` per-phase caps (connect≤30s, read≤60s, pool=10s) |
 | `_build_tools()` | `adapter.py:918` | `FunctionSchema` → OpenAI CC tool format (`{type, function: {name, description, parameters}}`) |
@@ -158,7 +161,86 @@ transport-qualified `codex_request_mode` (`rest_full` / `rest_incremental` /
 `ws_full` / `ws_incremental` / `rest_full_fallback` / `rest_full_self_heal` / `stateless_full_self_heal`), plus the safe delta-decision
 diagnostic (`codex_ws_delta_reason` and counts — never prompt/secret content). The
 WS-named `codex_ws_*` diagnostic keys are reused on REST (transport-neutral
-metadata); `codex_request_mode` never reads `ws_*` on a REST request.
+metadata); `codex_request_mode` never reads `ws_*` on a REST request. When
+standalone compaction is active, `codex_compacted` (`"true"`) and
+`codex_compacted_delta_entries` (the additive entry count since compaction)
+are also recorded — safe structural metadata only, never opaque content
+(`adapter.py:2905-2909`, `_usage_extra`).
+
+### Standalone Codex compaction (`context_token_limit`)
+
+A separate axis from the hard-boundary forced-rebuild machinery above:
+forced rebuild discards local pressure by re-sending the FULL canonical
+history with no server help; standalone compaction asks Codex itself
+(`POST /responses/compact`, the SDK's `client.responses.compact(...)`) to
+fold prior context into an opaque `compaction_summary` + trailing `message`
+pair, which then replays as the new provider-context prefix with only
+strict-additive entries appended on top. This is the daemon task
+`context_token_limit` feature (`src/lingtai/tools/daemon/__init__.py`
+`context_token_limit` → `_daemon_provider_defaults` →
+`codex_compact_token_limit` → `CodexOpenAIAdapter` →
+`CodexResponsesSession(compact_token_limit=...)`).
+
+Never `context_management`: Codex's backend rejects that field entirely (see
+`_create_responses_session`, `adapter.py:4801-4835`, which always forces
+`compact_threshold=None`/`context_management` unset for Codex). Standalone
+compaction is a wholly separate request (`responses.compact`, not
+`responses.create`) with its own SDK method signature — notably **no
+`store` parameter at all** (unlike `responses.create`, which needs
+`store=false` because Codex rejects `store=true`); passing `store=` to
+`compact()` raises `TypeError` and silently disables compaction forever
+behind a broad exception guard, which is why `_compact_now` (`adapter.py:3390`)
+omits it and a dedicated test binds the sent kwargs against the real SDK
+signature (`tests/test_codex_standalone_compaction.py::
+test_compact_request_kwargs_bind_against_real_sdk_signature`).
+
+Trigger and lifecycle (`adapter.py:3350-3460`):
+- `_effective_compact_token_limit()` — an explicit per-task threshold wins;
+  omitted, falls back to the session's resolved `context_window()` (the
+  parent service's context window, threaded through unchanged from
+  `LLMService.create_session(context_window=...)`); no window configured
+  disables compaction (`None`).
+- `_maybe_compact_before_send()` — called once per turn, before building the
+  request. Triggers strictly from `_last_provider_input_tokens` (the last
+  REAL provider-reported input-token count — the same provider-visible
+  ruler the hard-boundary mechanism uses), never cumulative spend. No-ops
+  when compaction is already active (`_compacted_items is not None`) so a
+  session compacts once per over-threshold episode, not every turn.
+- `_compact_now()` — calls `client.responses.compact(model=, input=, ` `
+  instructions=, prompt_cache_key=, extra_headers=)` with the full frozen
+  Responses input built the same way a full replay would be. On success,
+  normalizes the returned `output` items (`message` + `compaction_summary`)
+  into plain dicts and stores them as `_compacted_items`, with
+  `_compacted_at_entry_count` recording the canonical `ChatInterface` entry
+  count at that moment. On ANY failure (network, malformed output), skips
+  compaction for this turn without raising — compaction is an optimization,
+  not a correctness requirement.
+- `_compacted_replay_input()` — while active, returns `_compacted_items`
+  verbatim followed by the strict-additive delta (canonical interface
+  entries added since the snapshot, converted via
+  `_interface_entries_to_responses_input` — the same machinery the
+  WebSocket incremental delta reuses). `send_stream` substitutes this for
+  the ordinary `_frozen_responses_input(self._interface)` full replay when
+  active, and routes that turn through REST (`ws_enabled_this_turn = False`)
+  since compaction and the WS delta/`previous_response_id` machinery both
+  assume the full converted interface as their comparison baseline.
+- Invalidation: `_reset_ws_epoch` (every reason — `turn_count`,
+  `summarize_delayed`, `summarize_rebuild_only`,
+  `encrypted_reasoning_self_heal`) clears `_compacted_items`/
+  `_compacted_at_entry_count`, since any local-history rewrite or remote
+  epoch rebase makes a previously compacted prefix untrustworthy as a
+  replay basis. The encrypted-reasoning self-heal retry path additionally
+  invalidates explicitly when its rejected request carried a compacted
+  replay, since that retry falls back to full local history and must not
+  let the next turn silently diverge by replaying a now-stale compacted
+  base. Compaction re-triggers fresh, once the threshold is reached again,
+  after any invalidation.
+
+Daemon-only wiring: `codex_compact_token_limit` reaches the adapter only
+through `_daemon_provider_defaults`'s Codex-only bucket
+(`src/lingtai/tools/daemon/__init__.py`) — every other provider and every
+external CLI backend (`claude-p`, `opencode`, the `codex` CLI backend, …)
+never sees this field and is behaviorally unchanged.
 
 ### Prompt cache key (`prompt_cache_key`)
 

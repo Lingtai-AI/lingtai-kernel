@@ -785,6 +785,26 @@ def _validate_compact_threshold(value: int | None) -> int | None:
     return value
 
 
+def _validate_codex_compact_token_limit(value: int | None) -> int | None:
+    """Normalize the Codex standalone-compaction context-token threshold.
+
+    Distinct from ``compact_threshold``/``context_management`` (the generic
+    OpenAI Responses auto-compaction the Codex backend rejects — see
+    ``_create_responses_session``). ``None`` means "no explicit task limit";
+    the caller resolves the effective threshold from the session's
+    ``context_window()``. A concrete value must be a positive integer; bool is
+    rejected explicitly because it is an ``int`` subclass in Python but not a
+    valid token count.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("context_token_limit must be a positive int or None")
+    if value <= 0:
+        raise ValueError("context_token_limit must be > 0 or None")
+    return value
+
+
 def _responses_reasoning_kwargs(thinking: str | None) -> dict[str, dict[str, str]]:
     """Return OpenAI Responses reasoning kwargs for a configured thinking level."""
     if thinking in (None, "default"):
@@ -2527,9 +2547,29 @@ class CodexResponsesSession(OpenAIResponsesSession):
         ws_transport_factory: "Callable[[str, dict[str, str]], Any] | None" = None,
         base_url: str | None = None,
         api_key: str | None = None,
+        compact_token_limit: int | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        # Standalone Codex compaction (daemon task ``context_token_limit``).
+        # Distinct axis from ``compact_threshold``/``context_management``,
+        # which Codex never receives (see ``_create_responses_session``).
+        # ``None`` -> no explicit task limit; the effective threshold falls
+        # back to ``context_window()`` at check time (see
+        # ``_effective_compact_token_limit``). Validated once here so an
+        # invalid daemon task value fails at session construction.
+        self._compact_token_limit = _validate_codex_compact_token_limit(compact_token_limit)
+        # Opaque post-compaction replay basis: the exact ``output`` items
+        # (``message`` + ``compaction_summary``) the standalone
+        # ``/responses/compact`` call returned, replayed verbatim as the new
+        # provider-context prefix. ``None`` -> compaction not active (never
+        # triggered, or invalidated by a history rewrite).
+        self._compacted_items: list[dict[str, Any]] | None = None
+        # Canonical ``ChatInterface`` entry count at the moment compaction was
+        # taken. Entries at/after this index are the strict-additive delta
+        # replayed on top of ``_compacted_items``; entries before it are the
+        # ones the compaction call already folded into the opaque summary.
+        self._compacted_at_entry_count: int = 0
         # Transport axis (REST vs WebSocket). Both transports run the SAME
         # full->incremental planner (``_codex_plan_continuation``); this only
         # selects HOW the planned request is sent. Resolution priority:
@@ -2862,6 +2902,11 @@ class CodexResponsesSession(OpenAIResponsesSession):
             ):
                 if ws_diag.get(key) is not None:
                     extra[f"codex_ws_{key}"] = str(ws_diag[key])[:240]
+        if self._compacted_items is not None:
+            extra["codex_compacted"] = "true"
+            extra["codex_compacted_delta_entries"] = str(
+                max(len(self._interface.entries) - self._compacted_at_entry_count, 0)
+            )
         return extra
 
     def send(self, message) -> LLMResponse:
@@ -3197,6 +3242,17 @@ class CodexResponsesSession(OpenAIResponsesSession):
             except Exception:
                 pass
 
+        # Invalidate any active standalone compaction: every reset reason here
+        # (turn_count / summarize_delayed / summarize_rebuild_only /
+        # encrypted_reasoning_self_heal) means local history was rewritten or
+        # the remote epoch chain was rebased, so a previously compacted prefix
+        # can no longer be trusted as a valid replay basis. Fail safe by
+        # rebuilding from the full canonical interface (existing full-replay
+        # behavior) rather than silently keeping a stale compacted prefix;
+        # compaction re-triggers fresh once the threshold is reached again.
+        self._compacted_items = None
+        self._compacted_at_entry_count = 0
+
         self._close_ws_transport()
         self._ws_session = _CodexWebsocketSession()
         self._ws_pending_baseline_input = None
@@ -3279,6 +3335,129 @@ class CodexResponsesSession(OpenAIResponsesSession):
             ),
             "current_context_usage": usage,
         }
+
+    # -- Standalone Codex compaction (daemon task ``context_token_limit``) ---
+    #
+    # Separate axis from the hard-boundary forced-rebuild machinery above:
+    # forced rebuild discards local pressure by re-sending the FULL canonical
+    # history (no server-side help); standalone compaction asks Codex itself
+    # (``POST /responses/compact``) to fold prior context into an opaque
+    # ``compaction_summary`` + trailing ``message`` pair, which is then
+    # replayed as the new provider-context prefix, with only strict-additive
+    # entries appended on top — never ``context_management`` (Codex rejects
+    # it; see ``_create_responses_session``).
+
+    def _effective_compact_token_limit(self) -> int | None:
+        """Return the resolved compaction threshold, or ``None`` if disabled.
+
+        An explicit per-task ``context_token_limit`` (``self._compact_token_limit``)
+        wins. When the task omitted it, the effective threshold falls back to
+        this session's resolved ``context_window()`` — the parent service's
+        context window, per daemon task contract. A session with no window
+        configured (``context_window() <= 0``) has compaction disabled.
+        """
+        if self._compact_token_limit is not None:
+            return self._compact_token_limit
+        try:
+            window = int(self.context_window())
+        except Exception:
+            return None
+        return window if window > 0 else None
+
+    def _maybe_compact_before_send(self) -> None:
+        """Compact provider context via standalone ``/responses/compact`` if due.
+
+        Triggers strictly from the last real provider-reported input-token
+        count (``_last_provider_input_tokens`` — the same provider-visible
+        signal the hard-boundary mechanism uses), never from cumulative
+        token spend. A no-op when: no threshold is configured, no provider
+        usage has been observed yet, usage is below the threshold, or
+        compaction is already active for the current canonical-history
+        prefix (so a session never recompacts every turn once triggered —
+        it only ever compacts again after ``_reset_ws_epoch`` invalidates the
+        prior compacted state on a history rewrite).
+        """
+        if self._compacted_items is not None:
+            return
+        limit = self._effective_compact_token_limit()
+        if limit is None:
+            return
+        current_tokens = self._last_provider_input_tokens
+        if not current_tokens or current_tokens < limit:
+            return
+        self._compact_now()
+
+    def _compact_now(self) -> None:
+        """Call standalone Codex compaction and store the opaque replay basis.
+
+        On any failure, compaction is skipped for this turn (falls back to
+        the existing full-replay behavior) rather than raising — compaction is
+        an optimization, not a correctness requirement, and a transient
+        failure must not block the turn. Never logs or persists
+        ``encrypted_content``/opaque summary text; only structural item
+        types/counts are safe to record.
+        """
+        entry_count = len(self._interface.entries)
+        full_input = self._frozen_responses_input(self._interface)
+        if not full_input:
+            return
+        try:
+            compacted = self._client.responses.compact(
+                model=self._model,
+                input=full_input,
+                instructions=self._instructions,
+                # No ``store`` kwarg: unlike ``responses.create``, the standalone
+                # ``responses.compact`` SDK method is keyword-only with no
+                # ``store`` parameter at all (it has no wire equivalent) —
+                # passing it raises ``TypeError`` before the request is even
+                # built, silently defeating every compaction attempt.
+                prompt_cache_key=self._prompt_cache_key,
+                extra_headers={
+                    **_codex_identity_headers(),
+                    **self._cache_affinity_headers(),
+                },
+            )
+        except Exception as exc:
+            logger.info(
+                "codex.compact_failed",
+                extra={"error_type": type(exc).__name__, "entry_count": entry_count},
+            )
+            return
+        output_items = list(getattr(compacted, "output", None) or [])
+        if not output_items:
+            return
+        normalized: list[dict[str, Any]] = []
+        for item in output_items:
+            if hasattr(item, "model_dump"):
+                normalized.append(item.model_dump(mode="json", exclude_none=True))
+            elif isinstance(item, dict):
+                normalized.append(dict(item))
+        if not normalized:
+            return
+        self._compacted_items = normalized
+        self._compacted_at_entry_count = entry_count
+        logger.info(
+            "codex.compact_applied",
+            extra={
+                "output_item_types": [item.get("type") for item in normalized],
+                "entry_count": entry_count,
+            },
+        )
+
+    def _compacted_replay_input(self) -> list[dict[str, Any]] | None:
+        """Return the compacted replay basis for THIS turn, or ``None`` if inactive.
+
+        The replay is the opaque compacted items verbatim, followed by the
+        strict-additive delta: canonical interface entries added since the
+        compaction snapshot, converted the SAME way the WebSocket incremental
+        delta is (``_interface_entries_to_responses_input`` — reuses the
+        existing strict-additive machinery rather than a new conversion path).
+        """
+        if self._compacted_items is None:
+            return None
+        delta_entries = self._interface.entries[self._compacted_at_entry_count:]
+        delta_items = self._interface_entries_to_responses_input(delta_entries)
+        return [*self._compacted_items, *delta_items]
 
     def _fire_boundary_forced_rebuild(self) -> bool:
         """Fire the once-per-episode automatic forced rebuild, honoring the latch.
@@ -3820,8 +3999,24 @@ class CodexResponsesSession(OpenAIResponsesSession):
 
             if self._continuation_enabled:
                 self._maybe_reset_ws_epoch()
-            full_replay_input_items = self._frozen_responses_input(self._interface)
-            full_replay_input_items.extend(prebuilt_items)
+            self._maybe_compact_before_send()
+            compacted_replay = self._compacted_replay_input()
+            if compacted_replay is not None:
+                # Standalone compaction is active: replay the opaque compacted
+                # prefix plus the strict-additive delta instead of re-converting
+                # the full canonical interface. Compaction and the WebSocket
+                # delta/`previous_response_id` machinery both assume the full
+                # converted interface as their comparison baseline, so route a
+                # compacted turn through the REST full-replay path (REST is the
+                # hardcoded normal-runtime transport; WebSocket is a test-only
+                # opt-in — see ``_CODEX_TRANSPORT_DEFAULT``).
+                full_replay_input_items = compacted_replay
+                full_replay_input_items.extend(prebuilt_items)
+                ws_enabled_this_turn = False
+            else:
+                full_replay_input_items = self._frozen_responses_input(self._interface)
+                full_replay_input_items.extend(prebuilt_items)
+                ws_enabled_this_turn = self._ws_enabled
 
             delta_entries = self._interface.entries[interface_start:]
             delta_input_items = self._interface_entries_to_responses_input(delta_entries)
@@ -3837,7 +4032,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
             # cache-epoch annotation only and the full input is always sent.
             previous_response_id: str | None = None
             input_items = full_replay_input_items
-            request_mode = "ws_full" if self._ws_enabled else "rest_full"
+            request_mode = "ws_full" if ws_enabled_this_turn else "rest_full"
 
             kwargs: dict[str, Any] = {
                 "model": self._model,
@@ -3942,7 +4137,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
             # ``_CodexWsFallback`` internally and drop to the HTTP path below.
             # ``store`` stays ``false``.
             ws_stream = None
-            if self._ws_enabled:
+            if ws_enabled_this_turn:
                 try:
                     ws_stream, ws_mode, ws_prev_id = self._codex_ws_open(
                         kwargs,
@@ -3985,14 +4180,23 @@ class CodexResponsesSession(OpenAIResponsesSession):
                     rest_full_request = self._ws_frame_request(
                         kwargs, full_replay_input_items
                     )
-                    request_mode, _planned_delta_input, _planned_previous_response_id = (
-                        self._codex_plan_continuation(
-                            rest_full_request,
-                            full_replay_input_items,
-                            full_mode="rest_full",
-                            incremental_mode="rest_incremental",
+                    if compacted_replay is not None:
+                        # A freshly-compacted (or still-active) replay basis is
+                        # a new provider-context epoch by construction — it
+                        # does not extend the pre-compaction ``last_request``
+                        # baseline, so label it ``rest_full`` rather than
+                        # running the strict prefix-match planner against an
+                        # unrelated baseline.
+                        request_mode = "rest_full"
+                    else:
+                        request_mode, _planned_delta_input, _planned_previous_response_id = (
+                            self._codex_plan_continuation(
+                                rest_full_request,
+                                full_replay_input_items,
+                                full_mode="rest_full",
+                                incremental_mode="rest_incremental",
+                            )
                         )
-                    )
                     # REST incremental is a cache/epoch semantic, not a wire-delta
                     # semantic: the REST API still receives the full converted input
                     # so it is self-contained, while WebSocket incremental is the
@@ -4023,6 +4227,17 @@ class CodexResponsesSession(OpenAIResponsesSession):
                                     "Codex encrypted reasoning replay failed; stripped %s raw reasoning item(s) and retrying full replay",
                                     stripped_reasoning_items,
                                 )
+                                if compacted_replay is not None:
+                                    # The rejected replay carried the compacted
+                                    # prefix; a compacted ``compaction_summary``
+                                    # item's own encrypted_content cannot be
+                                    # stripped (it isn't a raw ``reasoning`` item),
+                                    # so this retry falls back to full local
+                                    # history. Invalidate rather than silently
+                                    # diverge: the next turn must re-derive its
+                                    # replay basis from what was actually sent.
+                                    self._compacted_items = None
+                                    self._compacted_at_entry_count = 0
                                 retry_full_replay_input_items = self._frozen_responses_input(
                                     self._interface
                                 )
@@ -4324,9 +4539,21 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         codex_auth_path_source: str | None = None,
         codex_base_urls: object = None,
         codex_molt_count: int | None = None,
+        codex_compact_token_limit: int | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        # Standalone Codex compaction threshold (daemon task
+        # ``context_token_limit``), Codex-only and orthogonal to the generic
+        # ``compact_threshold``/``context_management`` this adapter always
+        # forces to ``None`` in ``_create_responses_session`` (Codex rejects
+        # that parameter). ``None`` here means "no explicit override"; the
+        # session resolves its effective threshold from its own
+        # ``context_window()`` at check time. Validated eagerly so an invalid
+        # daemon task value fails at adapter construction, before any request.
+        self._codex_compact_token_limit = _validate_codex_compact_token_limit(
+            codex_compact_token_limit
+        )
         # Codex REST cache-affinity identity: ONE per-agent value used
         # byte-identically for ``session_id``, ``thread_id``, and the default
         # ``prompt_cache_key``. It is a deterministic hash of the agent's durable
@@ -4609,4 +4836,5 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             installation_id=self._codex_installation_id,
             base_url=self.base_url,
             api_key=self._client_kwargs.get("api_key"),
+            compact_token_limit=self._codex_compact_token_limit,
         )
