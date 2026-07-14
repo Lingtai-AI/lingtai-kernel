@@ -11,11 +11,20 @@ names; this module deliberately carries no ``subprocess``, ``os``, POSIX, or
 interpreter-path vocabulary. The watcher program's own source is rendered by
 ``lingtai.kernel.refresh_watcher.watcher_program`` from a
 ``RefreshWatcherRequest``, not built ad hoc by callers.
+
+``encode_request``/``decode_request`` give a transport a compact,
+deterministic JSON wire shape for a ``RefreshWatcherRequest`` — the data a
+concrete adapter carries across a process boundary (e.g. as a single
+argument to an ``-m``-invoked entrypoint module) instead of raw generated
+program source. Both are pure and technology-neutral: they know only the
+request's field shape, never how a transport delivers the encoded string
+(argv, a file, stdin, ...).
 """
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 
 @dataclass(frozen=True)
@@ -65,6 +74,91 @@ class RefreshWatcherRequest:
     env_overwrite: bool = True
 
 
+_REQUEST_FIELDS = (
+    "taken_path",
+    "lock_path",
+    "events_path",
+    "stderr_log",
+    "working_dir",
+    "cmd",
+    "agent_name",
+    "address",
+    "identity_fields_json",
+    "env_overwrite",
+)
+
+
+def encode_request(request: RefreshWatcherRequest) -> str:
+    """Serialize ``request`` to a compact, deterministic JSON string.
+
+    This is the technology-neutral wire shape a transport (e.g. the POSIX
+    adapter's ``-m`` entrypoint invocation) carries across a process
+    boundary in place of raw generated program source. ``cmd`` — a tuple in
+    the dataclass so it is genuinely immutable (see the field's docstring
+    above) — becomes a JSON array; JSON has no tuple type, so
+    ``decode_request`` restores it to a tuple on the way back. Field order is
+    fixed (``_REQUEST_FIELDS``) and ``sort_keys`` is not used, so the same
+    request always encodes to the same bytes, making the wire payload
+    directly diffable/testable rather than dict-iteration-order-dependent.
+    """
+    payload = asdict(request)
+    ordered = {name: payload[name] for name in _REQUEST_FIELDS}
+    return json.dumps(ordered, separators=(",", ":"))
+
+
+def decode_request(payload: str) -> RefreshWatcherRequest:
+    """Decode+validate an ``encode_request`` payload back to a request.
+
+    Fails loudly (``ValueError``) on invalid JSON, a non-object top-level
+    value, a missing/extra field, or a field of the wrong shape, rather than
+    silently constructing a malformed request the rendered watcher program
+    would then embed. This is the one place a transport's decoded wire data
+    is trusted to become a typed ``RefreshWatcherRequest`` again.
+    """
+    try:
+        decoded = json.loads(payload)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"RefreshWatcherRequest payload is not valid JSON: {payload!r}") from exc
+    if not isinstance(decoded, dict):
+        raise ValueError(
+            "RefreshWatcherRequest payload must decode to a JSON object, "
+            f"got {type(decoded).__name__}: {payload!r}"
+        )
+    missing = [name for name in _REQUEST_FIELDS if name not in decoded]
+    if missing:
+        raise ValueError(f"RefreshWatcherRequest payload missing fields: {missing!r}")
+    extra = [name for name in decoded if name not in _REQUEST_FIELDS]
+    if extra:
+        raise ValueError(f"RefreshWatcherRequest payload has unexpected fields: {extra!r}")
+    cmd = decoded["cmd"]
+    if not isinstance(cmd, list) or not all(isinstance(item, str) for item in cmd):
+        raise ValueError(f"RefreshWatcherRequest payload 'cmd' must be a list of strings, got {cmd!r}")
+    for name in (
+        "taken_path", "lock_path", "events_path", "stderr_log", "working_dir",
+        "agent_name", "address", "identity_fields_json",
+    ):
+        if not isinstance(decoded[name], str):
+            raise ValueError(
+                f"RefreshWatcherRequest payload {name!r} must be a string, got {decoded[name]!r}"
+            )
+    if not isinstance(decoded["env_overwrite"], bool):
+        raise ValueError(
+            f"RefreshWatcherRequest payload 'env_overwrite' must be a bool, got {decoded['env_overwrite']!r}"
+        )
+    return RefreshWatcherRequest(
+        taken_path=decoded["taken_path"],
+        lock_path=decoded["lock_path"],
+        events_path=decoded["events_path"],
+        stderr_log=decoded["stderr_log"],
+        working_dir=decoded["working_dir"],
+        cmd=tuple(cmd),
+        agent_name=decoded["agent_name"],
+        address=decoded["address"],
+        identity_fields_json=decoded["identity_fields_json"],
+        env_overwrite=decoded["env_overwrite"],
+    )
+
+
 class RefreshWatcherPort(ABC):
     """Detached process-supervision boundary owned by Core.
 
@@ -83,12 +177,13 @@ class RefreshWatcherPort(ABC):
         """Launch the watcher program described by ``request`` as a detached
         process supervising relaunch.
 
-        The adapter renders the program source from ``request`` via the
-        Core-owned, technology-neutral
-        ``watcher_program.render_watcher_script`` (see
-        ``lingtai.kernel.refresh_watcher.watcher_program``), then builds the
-        concrete process environment and launches it using adapter-owned
-        mechanism this Port does not name. The launched process MUST survive
+        The adapter encodes ``request`` using the Core-owned,
+        technology-neutral ``encode_request`` wire shape, then launches its
+        owned entrypoint using adapter-specific process/environment mechanics
+        this Port does not name. The entrypoint decodes the request and renders
+        the program via ``watcher_program.render_watcher_script`` (see
+        ``lingtai.kernel.refresh_watcher.watcher_program``). The launched
+        process MUST survive
         the caller's exit and MUST NOT inherit the caller's stdio. The call
         returns once the process has been started; it does not wait for the
         process to complete and does not return the process identity. The
@@ -98,4 +193,4 @@ class RefreshWatcherPort(ABC):
         ...
 
 
-__all__ = ["RefreshWatcherPort", "RefreshWatcherRequest"]
+__all__ = ["RefreshWatcherPort", "RefreshWatcherRequest", "encode_request", "decode_request"]

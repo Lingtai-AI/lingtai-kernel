@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/kernel/refresh_watcher/MANUAL.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/adapters/posix/ANATOMY.md
+  - src/lingtai/adapters/posix/refresh_watcher_entrypoint.py
   - src/lingtai/kernel/base_agent/lifecycle.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
@@ -51,6 +52,13 @@ what/how/why walkthrough.
   `identity_fields_json` via `_decode_identity_fields` for the rendered
   literal shape); performs no OS calls
   (`src/lingtai/kernel/refresh_watcher/watcher_program.py:87-476`).
+- `encode_request(request)` / `decode_request(payload)` — pure Core-owned,
+  technology-neutral functions defining a compact deterministic JSON wire
+  shape for a `RefreshWatcherRequest` (fixed field order; `cmd` round-trips
+  through a JSON array back to a `tuple`) and validating it on decode,
+  failing loudly (`ValueError`) on malformed input. They know nothing about
+  how a transport delivers the encoded string
+  (`src/lingtai/kernel/refresh_watcher/__init__.py`).
 
 ## Connections
 
@@ -70,8 +78,14 @@ what/how/why walkthrough.
 - The only production adapter is `PosixRefreshWatcherAdapter`
   (`src/lingtai/adapters/posix/refresh_watcher.py`), mapped structurally by
   [`src/lingtai/adapters/posix/ANATOMY.md`](../../adapters/posix/ANATOMY.md).
-  It calls `render_watcher_script(request)` for the program text and its own
-  `build_watcher_env(request)` for the process environment before launching.
+  It calls `encode_request(request)` for the wire payload and its own
+  `build_watcher_env(request)` for the process environment before launching
+  `sys.executable -m lingtai.adapters.posix.refresh_watcher_entrypoint
+  <payload>`. The owned entrypoint module
+  (`src/lingtai/adapters/posix/refresh_watcher_entrypoint.py`, also mapped by
+  the POSIX adapter Anatomy) is the process that actually decodes the
+  payload via `decode_request` and calls `render_watcher_script(request)` for
+  the program text before executing it.
 - The composition roots `src/lingtai/agent.py` and `src/lingtai/cli.py`
   construct and inject the adapter.
 
@@ -95,12 +109,18 @@ any fact about its later state.
 ## Notes
 
 This is a navigation-only Port anatomy; the concrete `subprocess`/POSIX
-detachment mechanism and full-environment construction are normative in the
-paired `CONTRACT.md` and live in the adapter, not here.
+detachment mechanism, the `-m` entrypoint-module transport, and
+full-environment construction are normative in the paired `CONTRACT.md` and
+live in the adapter package (`src/lingtai/adapters/posix/`), not here.
 For Core-produced requests, `watcher_program.render_watcher_script` preserves
 the previously inline `lifecycle.py` script's runtime behavior (handshake
 deadlines, relaunch retry, stale-duplicate cleanup, redaction) without claiming
 textual byte identity — this Port and its renderer govern only the hand-off to a
 detached process, not a redesign of that policy. `base_agent/ANATOMY.md`
 still narrates that behavior in its `lifecycle.py` entry for readers
-descending from `base_agent/`.
+descending from `base_agent/`. The transport that carries a
+`RefreshWatcherRequest` across the process boundary (`encode_request`/
+`decode_request` plus the POSIX adapter's `-m` invocation of
+`refresh_watcher_entrypoint`) replaced the earlier `-c <script>` argv
+transport without changing what crosses the Port itself — `spawn_detached`
+still takes exactly one `RefreshWatcherRequest` and returns `None`.
