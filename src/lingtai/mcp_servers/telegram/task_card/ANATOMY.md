@@ -41,7 +41,8 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   (`controller.py:281`), `_run_renderer` (`controller.py:597`), `_validate_frame`
   (`controller.py:623`), `_project` (`controller.py:670`),
   `_validate_renderer_path` (`controller.py:746`), `_resolve_route`
-  (`controller.py:785`), `shutdown_for_agent_stop` (`controller.py:810`).
+  (`controller.py:785`), `_fallback_route` (`controller.py:813`),
+  `shutdown_for_agent_stop` (`controller.py:847`).
   `_start` (`controller.py:213`) also keeps the watch addressable on a validated
   initial persistence-partial (`resident_persist_failed` with a route-matching id)
   rather than discarding it, and discards on any other first-frame error.
@@ -63,7 +64,7 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 - `setup(agent, controller=...)` — registers the controller-bound `task_card`
   handler and its schema with `glossary_package=None`, reusing an existing
   controller when a full Agent refresh rebuilds the public tool registries
-  (`controller.py:821`).
+  (`controller.py:858`).
 - `TelegramTaskCardAgent` — the narrow host Protocol the controller depends on
   instead of the concrete `Agent` (`interface.py:23`).
 
@@ -83,9 +84,19 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   tool with `channel="programmable"` on the `telegram` MCP client from
   `agent._mcp_clients_by_tool`, consumed by
   `TelegramManager._handle_task_card_update` (`src/lingtai/mcp_servers/telegram/manager.py`).
-- Route: `_resolve_route` reads the automatic driver's turn-local
+- Route: `_resolve_route` first reads the automatic driver's turn-local
   `agent._telegram_task_card_context` so both slots resolve to the one tracked
-  resident target for that account+chat.
+  resident target for that account+chat. When that context is absent (process
+  refresh/molt/system recovery, or a programmable-only turn), `_fallback_route`
+  queries the same reverse channel with `sub_action="resolve_fallback_route"`
+  (channel-independent, no `card`/`channel` payload), consumed by
+  `TelegramManager._resolve_task_card_fallback_route`, which validates the
+  single durable `task_card_route.json` slot against the live
+  `TelegramService` accounts. `TelegramManager.on_incoming` is the only producer:
+  `_reserve_task_card_fallback_route` assigns manager-wide order as soon as a
+  valid message/callback route is derived, before slow media work, and
+  `_persist_task_card_fallback_route` conditionally commits after inbox persistence
+  only while that reservation remains newest. Inline callbacks have no chat route.
 - Transport ownership: the manager (`_deliver_channel_frame_locked`,
   `_rotate_task_card_to_latest`, `_replace_task_card_after_probe`) owns the
   hard-at-most-one / last-message resident transport; `_project` only reads its
@@ -118,8 +129,11 @@ last-valid frames, error epochs). It writes no files and deletes none — the
 renderer files it runs are the agent's own working-dir copies (the shipped
 `assets/` templates are read-only starting points the agent copies and adapts).
 Durable Task Card state (resident message id per account+chat, composed slots,
-the `/taskcard` delivery boolean) is owned by the Telegram adapter, not here
-(see `src/lingtai/mcp_servers/ANATOMY.md`).
+the `/taskcard` delivery boolean, and the single-slot latest-genuine-inbound
+route fallback at `working_dir/telegram/task_card_route.json`) is owned by the
+Telegram adapter, not here (see `src/lingtai/mcp_servers/ANATOMY.md`). The
+controller never writes that file directly — it only queries the validated
+result through the reverse channel.
 
 ## Notes
 

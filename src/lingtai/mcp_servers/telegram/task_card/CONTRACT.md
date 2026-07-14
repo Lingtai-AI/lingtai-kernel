@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card
-contract_version: 3
+contract_version: 4
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -13,6 +13,7 @@ related_files:
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/mcp_servers/telegram/account.py
   - src/lingtai/mcp_servers/telegram/server.py
+  - src/lingtai/kernel/_fsutil.py
   - src/lingtai/agent.py
   - pyproject.toml
   - tests/test_task_card_controller.py
@@ -23,6 +24,7 @@ related_files:
   - tests/test_telegram_task_card_singleton.py
   - tests/test_telegram_task_card_last_message.py
   - tests/test_telegram_account_last_message_id.py
+  - tests/test_task_card_active_route.py
 maintenance: |
   <!-- CANONICAL-MAINTENANCE v2 BEGIN -->
   This component contract is governed by the root CONTRACT.md. Keep
@@ -155,7 +157,34 @@ the procedure lives in [`SKILL.md`](SKILL.md), not here:
    truthfully. Provider-confirmed edit-impossible recovery follows the same
    delete/missing-confirm-before-send rule. Unknown historical orphan cards and
    ordinary Telegram messages are never enumerated, guessed at, or deleted.
-9. Agents must read the manual before authoring a renderer and MUST NOT weaken
+9. **Route resolution: active turn-local context first, durable single-slot
+   fallback second.** `start` resolves `(account, chat_id)` via `_resolve_route`
+   (`controller.py:785`). First priority is `agent._telegram_task_card_context`
+   (turn-local, set only for a fresh Telegram-originated turn — see
+   `base_agent/ANATOMY.md`). When that is absent (e.g. after a process
+   refresh/molt/system recovery, or a programmable-only turn with no active
+   Telegram turn), `_resolve_route` falls back to exactly ONE durable,
+   producer-owned pointer: the Telegram manager's latest genuine accepted
+   inbound route, queried read-only via the private reverse channel
+   (`sub_action="resolve_fallback_route"`, channel-independent, never gated by
+   `/taskcard`). That pointer is written ONLY by `TelegramManager.on_incoming`
+   for an accepted `message` or route-bearing `callback_query` update — never by
+   `telegram.read`, outbound `send`, an `edited_message` or inline callback with
+   no chat route, this controller, or any model-visible prompt/history parsing —
+   and is ordered by manager-wide ingress reservation: each valid route-bearing
+   inbound reserves before media download/transcription, then after inbox
+   persistence only the still-newest reservation may replace the pointer as one
+   whole atomic record. A slow older account thread therefore cannot overwrite a
+   later inbound, and account/chat fields can never mix. The manager
+   validates the persisted pointer against its currently loaded accounts
+   before returning it (unknown/removed account, non-`int`/missing/zero `chat_id`,
+   or corrupt/malformed state all fail the query). If both the active context
+   and a valid fallback are absent, `_resolve_route` raises the same exact
+   `TaskCardControllerError("no active Telegram chat to attach a Task Card
+   to")` as before this fallback existed — there is no TTL/expiry/config
+   toggle: "latest inbound route remains current until a newer inbound route
+   supersedes it" is the whole deterministic policy.
+10. Agents must read the manual before authoring a renderer and MUST NOT weaken
    these promises to match implementation drift.
 
 ## Port
@@ -166,8 +195,11 @@ is the `TelegramTaskCardAgent` Protocol in `interface.py`: `_working_dir`,
 `_mcp_clients_by_tool`, `_telegram_task_card_context`, `_shutdown`, `add_tool`,
 and `_enqueue_system_notification`. Core's outbound rendering dependency is the
 private Telegram reverse channel `_lingtai_telegram_task_card` invoked with
-`channel="programmable"`. No concrete `Agent` or `BaseAgent` type crosses either
-boundary; the controller reads only the Protocol members.
+`channel="programmable"` for card projection, and with
+`sub_action="resolve_fallback_route"` (no `channel`) for the read-only durable
+route-fallback query consumed by `_resolve_route`. No concrete `Agent` or
+`BaseAgent` type crosses either boundary; the controller reads only the
+Protocol members.
 
 ## Adapters
 
@@ -204,6 +236,25 @@ boundary; the controller reads only the Protocol members.
   account's own sends, and `get_last_message_id` returns that `int` or `None`
   (conservative, not persisted — refresh starts unknown). The manager reads it
   through `_get_last_message_id` (int-or-`None`) to decide `_resident_superseded`.
+- **Durable route-fallback state (manager-owned, single global slot).**
+  `TelegramManager._reserve_task_card_fallback_route` reserves a monotonic order
+  under the slot lock immediately after `on_incoming` derives a valid route-bearing
+  `message` or `callback_query`, before media download/transcription.
+  `_persist_task_card_fallback_route` runs after that inbound's inbox persistence
+  and, under the same lock, writes `working_dir/telegram/task_card_route.json`
+  (`{account, chat_id}`) via the canonical
+  `lingtai.kernel._fsutil.atomic_write_json` helper only if its reservation is
+  still newest. Thus a delayed older account thread cannot overwrite a later
+  accepted inbound. Neither helper establishes authority for `edited_message`,
+  an inline callback with no chat route, or any read/send/controller path.
+  `TelegramManager._resolve_task_card_fallback_route` reads it back via
+  `lingtai.kernel._fsutil.read_json` and validates: parses as a `dict`;
+  `account` is a non-empty `str` present in `self._service.list_accounts()`
+  (rejecting unknown/removed accounts against the currently loaded config);
+  `chat_id` is a real nonzero `int` (negative group ids remain valid). Any failure returns
+  `{"status": "error"}`. This is a single global slot (not per-account), so a
+  newer inbound message from a different account/chat fully replaces the
+  record rather than merging fields.
 
 ## Contract rules
 
@@ -243,6 +294,21 @@ boundary; the controller reads only the Protocol members.
    old-first with confirmed-delete-before-send, may truthfully leave zero cards
    (`old_resident_deleted`), accepts only `int` last-message high-water, and never
    deletes unknown historical orphans.
+8. Durable route fallback (Behavior 9): the single global
+   `task_card_route.json` slot MUST be written only from
+   `TelegramManager.on_incoming` for an accepted `message` or route-bearing
+   `callback_query` (never `edited_message`, an inline callback with no chat
+   route, `telegram.read`, outbound `send`, or this controller). Valid routes MUST
+   reserve one manager-wide monotonic order before slow media/transcription; after
+   inbox persistence, only the still-newest reservation may replace the slot as
+   one atomic whole record (no stale overwrite and no field mixing across
+   accounts/chats). The persisted route MUST be validated
+   against the currently loaded `TelegramService` accounts on every read
+   (`_resolve_task_card_fallback_route`). `_resolve_route` MUST try the active
+   turn-local `agent._telegram_task_card_context` first and only consult this
+   fallback when that is absent; on failure of both it MUST raise the same
+   `"no active Telegram chat to attach a Task Card to"` error. No TTL, expiry,
+   or config flag may gate the fallback.
 
 ## Contract tests
 
@@ -283,6 +349,18 @@ partial, `old_resident_deleted` preserved
 `test_rotate_replacement_malformed_send_reports_deleted_and_indeterminate`).
 `tests/test_telegram_account_last_message_id.py` locks the int-only,
 edit/delete-immune, non-persisted last-message high-water.
+`tests/test_task_card_active_route.py` locks the durable single-slot route
+fallback end to end: no active context + no durable route fails with the exact
+original error; a genuine accepted `on_incoming` inbound establishes the route
+and a subsequent `start` through a refresh-equivalent new controller/agent with
+NO injected active context uses that exact account/chat; an active turn-local
+context overrides a persisted fallback; a later genuine inbound from a
+different account/chat atomically supersedes the earlier one with no field
+mixing; a deterministic two-account interleaving proves a slow earlier inbound
+cannot overwrite the later reservation; a realistic negative supergroup id is
+accepted; `edited_message` and an orphan edit never establish or overwrite the
+route; `telegram.read` and outbound `send` never create or overwrite it; and
+corrupt/malformed/unknown-account/invalid-chat_id persisted state fails closed.
 
 Packaging traceability: `tests/test_mcp_skill_manuals.py` checks that
 `pyproject.toml`
@@ -311,7 +389,8 @@ Verification commands (repo venv):
   tests/test_telegram_task_card_last_message.py \
   tests/test_telegram_account_last_message_id.py \
   tests/test_telegram_task_card_in_place.py \
-  tests/test_telegram_task_card_templates.py
+  tests/test_telegram_task_card_templates.py \
+  tests/test_task_card_active_route.py
 .venv/bin/python -m pytest -q tests/test_architecture_documents.py \
   tests/test_mcp_skill_manuals.py
 ```

@@ -25,6 +25,8 @@ from uuid import uuid4
 import logging
 import threading
 
+from lingtai.kernel._fsutil import atomic_write_json, read_json
+
 from .. import _skill
 
 if TYPE_CHECKING:
@@ -473,9 +475,101 @@ class TelegramManager:
         # different threads but must still share one resident-card transaction.
         self._task_card_delivery_locks: dict[str, threading.RLock] = {}
         self._task_card_delivery_locks_guard = threading.Lock()
+        # Order the one durable fallback-route slot by accepted inbound ingress,
+        # not by whichever account thread finishes media/transcription first.
+        # Reservations are monotonic for this manager lifetime; only the newest
+        # reservation may commit the atomic whole-record replacement.
+        self._task_card_route_order_lock = threading.Lock()
+        self._task_card_route_reservation = 0
 
     def _account_dir(self, account: str) -> Path:
         return self._working_dir / "telegram" / account
+
+    def _task_card_route_path(self) -> Path:
+        """Single durable slot for the latest genuine inbound Telegram route.
+
+        Manager-owned (not per-account), so a newer inbound message from any
+        configured account atomically replaces the whole record — account and
+        chat fields can never be mixed across two different inbound routes.
+        """
+        return self._working_dir / "telegram" / "task_card_route.json"
+
+    def _reserve_task_card_fallback_route(
+        self, account: str, chat_id: int
+    ) -> int | None:
+        """Reserve accepted-inbound order for one valid route-bearing update."""
+        if (
+            not isinstance(account, str)
+            or not account
+            or type(chat_id) is not int
+            or chat_id == 0
+        ):
+            log.debug(
+                "Skipping invalid Task Card fallback route account=%r chat_id=%r",
+                account,
+                chat_id,
+            )
+            return None
+        with self._task_card_route_order_lock:
+            self._task_card_route_reservation += 1
+            return self._task_card_route_reservation
+
+    def _persist_task_card_fallback_route(
+        self, account: str, chat_id: int, reservation: int | None
+    ) -> None:
+        """Commit a route only while its accepted-inbound reservation is latest.
+
+        ``on_incoming`` reserves immediately after deriving a valid route-bearing
+        ``message`` or ``callback_query``, before media download/transcription.
+        After inbox persistence, this method uses the same slot lock to suppress
+        an older slow account thread once a newer inbound has reserved the slot.
+        The winning route is still replaced as one atomic whole record. Best-effort:
+        a write failure must not block delivering the inbound message to the agent.
+        """
+        if reservation is None:
+            return
+        with self._task_card_route_order_lock:
+            if reservation != self._task_card_route_reservation:
+                log.debug(
+                    "Skipping stale Task Card fallback route reservation=%s latest=%s",
+                    reservation,
+                    self._task_card_route_reservation,
+                )
+                return
+            try:
+                atomic_write_json(
+                    self._task_card_route_path(),
+                    {"account": account, "chat_id": chat_id},
+                    fsync=True,
+                )
+            except Exception as exc:
+                log.warning("Failed to persist Task Card fallback route: %s", exc)
+
+    def _resolve_task_card_fallback_route(self) -> dict:
+        """Return the current validated fallback route, or a fail-closed error.
+
+        Validates the persisted pointer against the currently loaded Telegram
+        manager/accounts before use: missing/corrupt/malformed state, an
+        unknown/removed account, or an invalid (non-int, bool, or absent)
+        chat_id all fail closed. This is the ONLY read path the Task Card
+        controller may consult after its active turn-local context is absent.
+        """
+        data = read_json(self._task_card_route_path(), default=None)
+        if not isinstance(data, dict):
+            return {"status": "error"}
+        account = data.get("account")
+        chat_id = data.get("chat_id")
+        if not isinstance(account, str) or not account:
+            return {"status": "error"}
+        if type(chat_id) is not int or chat_id == 0:
+            return {"status": "error"}
+        try:
+            known_accounts = self._service.list_accounts()
+        except Exception:
+            return {"status": "error"}
+        if account not in known_accounts:
+            return {"status": "error"}
+        return {"status": "ok", "account": account, "chat_id": chat_id}
 
     def _resolve_account(self, args: dict) -> str:
         """Get account alias from args, defaulting to first account."""
@@ -580,11 +674,15 @@ class TelegramManager:
             account = None
         chat_id = None
         tg_message_id = None
+        route_reservation = None
 
         # Extract message data based on update type
         if "message" in update:
             tg_msg = update["message"]
             chat_id = tg_msg["chat"]["id"]
+            route_reservation = self._reserve_task_card_fallback_route(
+                account_alias, chat_id
+            )
             tg_message_id = tg_msg["message_id"]
             compound_id = f"{account_alias}:{chat_id}:{tg_message_id}"
             sender = tg_msg.get("from", {})
@@ -646,6 +744,9 @@ class TelegramManager:
             sender = cq.get("from", {})
             chat = tg_msg.get("chat", {})
             chat_id = chat.get("id", 0)
+            route_reservation = self._reserve_task_card_fallback_route(
+                account_alias, chat_id
+            )
             tg_message_id = tg_msg.get("message_id", 0)
             compound_id = f"{account_alias}:{chat_id}:{tg_message_id}"
             payload = {
@@ -712,6 +813,13 @@ class TelegramManager:
         if "edited_message" not in update:
             (msg_dir / "message.json").write_text(
                 json.dumps(payload, indent=2, default=str), encoding="utf-8",
+            )
+            # Task Card active-route fallback (single durable slot, producer-owned):
+            # every valid route-bearing inbound reserves order at ingress; after
+            # its inbox entry is durable, only the still-latest reservation may
+            # atomically replace the whole account/chat route record.
+            self._persist_task_card_fallback_route(
+                account_alias, chat_id, route_reservation
             )
 
         # Forward to host via LICC. Body is a conversation preview showing the
@@ -1766,6 +1874,13 @@ class TelegramManager:
           - update:  Edit the same card to show the current batch.
           - finalize: Freeze the card on its concrete last batch (legacy scalar
                      form marks ✅ TASK CARD · DONE).
+          - resolve_fallback_route: Read-only. Returns the validated durable
+                     single-slot latest-genuine-inbound-route fallback (see
+                     ``_resolve_task_card_fallback_route``) so the programmable
+                     controller can attach a Task Card after a refresh/molt with
+                     no active turn-local route. Channel-independent and never
+                     gated by the ``/taskcard`` presentation toggle (it mutates
+                     no state and sends nothing).
 
         One tracked resident target per account+chat, composed from the
         "automatic" and "programmable" channels (Jason #7258/#7259); unknown
@@ -1773,6 +1888,8 @@ class TelegramManager:
         LLM cannot call.
         """
         sub_action = args.get("sub_action", "update")
+        if sub_action == "resolve_fallback_route":
+            return self._resolve_task_card_fallback_route()
         channel = args.get("channel", self._TASK_CARD_DEFAULT_CHANNEL)
         if channel not in self._TASK_CARD_CHANNELS:
             return {"status": "error", "error": f"Unknown channel: {channel}"}

@@ -35,6 +35,12 @@ class _FakeClient:
         self.calls.append((name, dict(args), timeout))
         assert name == _TASK_CARD_TOOL
         assert "action" not in args  # server forces the private action
+        if args.get("sub_action") == "resolve_fallback_route":
+            # Route-fallback probe: channel-independent, no durable route in
+            # this fixture by default (unit tests inject an active turn-local
+            # context instead — see test_task_card_active_route.py for the
+            # durable-fallback integration coverage).
+            return {"status": "error"}
         assert args.get("channel") == "programmable"
         if self.fail:
             return {"status": "error", "error": "backend down"}

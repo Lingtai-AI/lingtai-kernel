@@ -783,8 +783,19 @@ class TaskCardController:
         return v
 
     def _resolve_route(self) -> tuple[str, int]:
-        """Resolve the current Telegram (account, chat_id) from the automatic
-        driver's turn-local route, so both slots share one tracked resident target."""
+        """Resolve the current Telegram (account, chat_id).
+
+        First priority is the automatic driver's turn-local route
+        (``agent._telegram_task_card_context``), so both slots share one
+        tracked resident target for a fresh Telegram-originated turn. When no
+        active context exists (e.g. after a refresh/molt/system recovery, or a
+        programmable-only turn), fall back to the single durable, producer-owned
+        latest-genuine-inbound-route pointer maintained by the Telegram manager
+        (see ``TelegramManager._resolve_task_card_fallback_route``) — never
+        established by ``telegram.read``, outbound ``send``, or this
+        controller. On any absence/validation failure of both, fail closed with
+        the same exact error as before this fallback existed.
+        """
         ctx = getattr(self._agent, "_telegram_task_card_context", None)
         if (
             isinstance(ctx, dict)
@@ -792,9 +803,35 @@ class TaskCardController:
             and ctx.get("chat_id") is not None
         ):
             return str(ctx["account"]), int(ctx["chat_id"])
+        fallback = self._fallback_route()
+        if fallback is not None:
+            return fallback
         raise TaskCardControllerError(
             "no active Telegram chat to attach a Task Card to"
         )
+
+    def _fallback_route(self) -> tuple[str, int] | None:
+        """Query the durable single-slot inbound-route fallback via the
+        private reverse channel; ``None`` on any error/validation failure."""
+        client = getattr(self._agent, "_mcp_clients_by_tool", {}).get("telegram")
+        if client is None:
+            return None
+        try:
+            result = client.call_tool(
+                _TASK_CARD_TOOL,
+                {"sub_action": "resolve_fallback_route"},
+                timeout=_REVERSE_CALL_TIMEOUT_S,
+            )
+        except Exception:
+            return None
+        if not isinstance(result, dict) or result.get("status") != "ok":
+            return None
+        account, chat_id = result.get("account"), result.get("chat_id")
+        if not isinstance(account, str) or not account:
+            return None
+        if type(chat_id) is not int or chat_id == 0:
+            return None
+        return account, chat_id
 
     def _require_watch(self, watch_id: Any) -> _Watch:
         if not isinstance(watch_id, str):
