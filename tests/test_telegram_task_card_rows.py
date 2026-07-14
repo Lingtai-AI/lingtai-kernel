@@ -27,8 +27,19 @@ def _fmt(rows):
 def test_footer_constant_exact_text():
     assert _TASK_CARD_FOOTER == (
         "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
-        "/taskcard N sets normal rows (1-10)."
+        "/taskcard N sets normal rows (1-10"
     )
+
+
+def test_footer_renders_with_current_row_count_suffix():
+    text = _fmt([
+        {"tool": "bash", "tool_action": "run", "reasoning": "compile",
+         "elapsed_s": 3, "done": False},
+    ])
+    assert (
+        "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
+        "/taskcard N sets normal rows (1-10, current: 1)."
+    ) in text
 
 
 def test_running_render_has_footer():
@@ -325,8 +336,8 @@ def test_metadata_is_two_lines_bounded_and_between_footer_and_timestamp():
         },
     )
     lines = text.splitlines()
-    footer_idx = lines.index(_TASK_CARD_FOOTER)
-    time_idx = next(i for i, line in enumerate(lines) if "12:34:56 UTC-07" in line)
+    footer_idx = next(i for i, line in enumerate(lines) if _TASK_CARD_FOOTER in line)
+    time_idx = next(i for i, line in enumerate(lines) if line.startswith("Current Time: "))
     metadata_lines = lines[footer_idx + 1:time_idx]
     assert metadata_lines == [
         "session · cache 87.8% · miss 170.6k/1.0M · calls 13",

@@ -85,21 +85,48 @@ _TASK_CARD_DELETE_MISSING_DESCRIPTIONS = frozenset({
 # Fixed human warning shown on every Task Card render (running and frozen
 # last-behavior). Jason: never reply to the card; point directly to the local
 # command that controls its delivery. Kept short so it always fits under the
-# Telegram message-size bound even under multi-row length pressure.
+# Telegram message-size bound even under multi-row length pressure. The
+# "current: X" suffix is appended per-render from the manager's live
+# normal-row setting; see ``_task_card_footer``.
 _TASK_CARD_FOOTER = (
     "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
-    "/taskcard N sets normal rows (1-10)."
+    "/taskcard N sets normal rows (1-10"
 )
+_TASK_CARD_DEFAULT_NORMAL_ROWS = 1
 _TASK_CARD_METADATA_MAX_CHARS = 150
 _TASK_CARD_METADATA_MAX_LINES = 2
 
-# Card-level time line prefix.  Jason #6894/#6899: the Task Card carries one
-# standalone time line (not a per-row inline suffix), rendered as its final line
-# after the fixed footer.  Jason #7213/#7216: that line is the bare stamp with NO
-# label — no ``时间``, no ``Time``, no other prefix — e.g. ``12:37:32 UTC-07``.
-# The stamp value itself is captured and shaped kernel-side (``HH:MM:SS UTC±HH``);
-# the renderer emits it verbatim, so the prefix is the empty string.
-_TASK_CARD_TIME_PREFIX = ""
+# Card-level "current time" line prefix.  Jason: the Task Card's final
+# standalone line reports the render instant (not any row's start instant) as
+# ``Current Time: HH:MM:SS UTC±HH``, always present — unlike the retired
+# started_at-derived line, it never depends on any row carrying a stamp.
+_TASK_CARD_TIME_PREFIX = "Current Time: "
+
+
+def _task_card_footer(normal_rows: int) -> str:
+    """Build the fixed footer with the live normal-row setting appended.
+
+    ``normal_rows`` is trusted to already be validated to ``1-10`` by the
+    caller (``TelegramManager._taskcard_normal_rows``); this only formats it.
+    """
+    return f"{_TASK_CARD_FOOTER}, current: {normal_rows})."
+
+
+def _format_task_card_current_time(now: datetime) -> str:
+    """Render a render-time instant as ``HH:MM:SS UTC±HH`` (hour-only offset).
+
+    Mirrors the kernel's per-row ``_format_task_card_timestamp`` shape so the
+    bottom line and each row's own stamp read consistently. Returns ``""`` for
+    a naive ``datetime`` (no usable offset) so the render simply omits the
+    line rather than raising.
+    """
+    offset = now.utcoffset()
+    if offset is None:
+        return ""
+    total = offset.total_seconds()
+    sign = "-" if total < 0 else "+"
+    hours = int(abs(total) // 3600)
+    return f"{now.strftime('%H:%M:%S')} UTC{sign}{hours:02d}"
 
 
 def _safe_document_download_reason(exc: Exception) -> str:
@@ -462,6 +489,20 @@ class TelegramManager:
         """
         getter = getattr(self._service, "taskcard_enabled", None)
         return bool(getter()) if callable(getter) else True
+
+    def _taskcard_normal_rows(self) -> int:
+        """Read the current normal-row setting (1-10) at projection time.
+
+        The fallback preserves compatibility for narrow test/third-party service
+        doubles; the production TelegramService always provides the durable getter.
+        """
+        getter = getattr(self._service, "taskcard_normal_rows", None)
+        if not callable(getter):
+            return _TASK_CARD_DEFAULT_NORMAL_ROWS
+        value = getter()
+        if type(value) is not int or not 1 <= value <= 10:
+            return _TASK_CARD_DEFAULT_NORMAL_ROWS
+        return value
 
     @staticmethod
     def _parse_compound_id(compound_id: str) -> tuple[str, int, int]:
@@ -1794,7 +1835,8 @@ class TelegramManager:
         chat_id = args["chat_id"]
         automatic = self._format_task_card_text(
             args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""),
-            rows=args.get("rows"), metadata=args.get("metadata"))
+            rows=args.get("rows"), metadata=args.get("metadata"),
+            normal_rows=self._taskcard_normal_rows())
         # Compose with the proposed automatic frame + the live programmable slot,
         # deliver, and commit the automatic frame only once the edit/send/replace
         # succeeds (a failed edit must not poison the stored channel state).
@@ -1978,7 +2020,8 @@ class TelegramManager:
             return {"status": "error", "error": "Failed to update task card"}
         automatic = self._format_task_card_text(
             args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""),
-            rows=args.get("rows"), metadata=args.get("metadata"))
+            rows=args.get("rows"), metadata=args.get("metadata"),
+            normal_rows=self._taskcard_normal_rows())
         # All automatic mutations share the same edit-first delivery discipline:
         # identical content is success, unknown transport failure fails loud, and
         # only a provider-confirmed edit-impossible condition may replace.
@@ -2005,7 +2048,8 @@ class TelegramManager:
             rows = args.get("rows")
             if rows is not None:
                 automatic = self._format_task_card_text(
-                    "", "", "", rows=rows, metadata=args.get("metadata")
+                    "", "", "", rows=rows, metadata=args.get("metadata"),
+                    normal_rows=self._taskcard_normal_rows(),
                 )
             else:
                 tool = args.get("tool", "")
@@ -2082,15 +2126,24 @@ class TelegramManager:
     def _format_task_card_text(
         cls, tool: str, action: str, reasoning: str,
         *, rows: list | None = None, metadata: dict | None = None,
+        normal_rows: int = _TASK_CARD_DEFAULT_NORMAL_ROWS,
+        now: datetime | None = None,
     ) -> str:
         """Render a Task Card: header, one line per tool row, fixed footer.
 
         When ``rows`` is supplied (the batched multi-row form) each parallel or
         sequential call renders as its own row showing ``tool.action``, its
-        redacted reasoning excerpt, its own whole-second elapsed, and a
-        ``✓`` marker once it has completed.  The scalar ``tool``/``action``/``reasoning``
-        path is retained for backward-compatible single-tool callers and does
-        not render the footer (it is the legacy transient-step form).
+        redacted reasoning excerpt, its own captured start stamp, its own
+        whole-second elapsed, and a ``✓`` marker once it has completed.  The
+        scalar ``tool``/``action``/``reasoning`` path is retained for
+        backward-compatible single-tool callers and does not render the footer
+        (it is the legacy transient-step form).
+
+        ``normal_rows`` is the live operator setting echoed in the footer
+        (defaults to the manager's default when a caller omits it, e.g. narrow
+        tests exercising the render in isolation). ``now`` is the render
+        instant used for the bottom ``Current Time:`` line (defaults to the
+        real local time; injectable so tests stay deterministic).
 
         Secret redaction always runs on each row's reasoning *before* any
         excerpt or length trim, so a secret can never survive truncation, and
@@ -2105,7 +2158,8 @@ class TelegramManager:
         """
         if rows is None:
             return cls._format_scalar_task_card_text(tool, action, reasoning)
-        return cls._format_rows_task_card_text(rows, metadata=metadata)
+        return cls._format_rows_task_card_text(
+            rows, metadata=metadata, normal_rows=normal_rows, now=now)
 
     @classmethod
     def _format_scalar_task_card_text(cls, tool: str, action: str, reasoning: str) -> str:
@@ -2195,8 +2249,12 @@ class TelegramManager:
     @classmethod
     def _format_rows_task_card_text(
         cls, rows: list, *, metadata: dict | None = None,
+        normal_rows: int = _TASK_CARD_DEFAULT_NORMAL_ROWS,
+        now: datetime | None = None,
     ) -> str:
         from lingtai.kernel.trace_redaction import redact_text
+
+        footer = _task_card_footer(normal_rows)
 
         # Split tool rows (redacted, capped reasoning) from sanitized API-error
         # rows (fixed machine summary, no reasoning to redact).  Redact every tool
@@ -2205,12 +2263,11 @@ class TelegramManager:
         # ceiling while keeping every row visible.  NOTE: the budget bounds
         # excerpt shrinkage only, not the total render — fixed per-row scaffolding
         # (below) is unbounded in row count, so an extreme operator-set N can
-        # still exceed the ceiling and Telegram's transport limit.  The start
-        # stamps are collected here only to derive the single card-level time line
-        # — no stamp is rendered inline on a row.
-        tool_prepared: list[tuple[int, str, str, str, bool]] = []
+        # still exceed the ceiling and Telegram's transport limit.  Each row
+        # carries its own captured ``started_at`` inline; malformed/missing
+        # values degrade to an empty suffix rather than raising.
+        tool_prepared: list[tuple[int, str, str, str, bool, str]] = []
         api_prepared: list[tuple[int, str]] = []
-        card_started_at = ""
         for idx, row in enumerate(rows):
             if not isinstance(row, dict):
                 continue
@@ -2225,51 +2282,46 @@ class TelegramManager:
             done = bool(row.get("done", False))
             started_at = row.get("started_at", "")
             started_at = started_at if isinstance(started_at, str) else ""
-            # First non-empty stamp in original row order is the card timestamp
-            # (batched/parallel rows collapse to one card-level time line).
-            if started_at and not card_started_at:
-                card_started_at = started_at
-            tool_prepared.append((idx, label, redacted, elapsed, done))
+            tool_prepared.append((idx, label, redacted, elapsed, done, started_at))
 
         metadata_lines = cls._format_task_card_metadata(metadata)
+        # The bottom time line always reflects the render instant, never a
+        # row's own start instant, and is present even for an empty card.
+        time_line = f"{_TASK_CARD_TIME_PREFIX}{cls._task_card_render_time(now)}"
         if not tool_prepared and not api_prepared:
-            lines = [cls._TASK_CARD_HEADER, "", _TASK_CARD_FOOTER]
+            lines = [cls._TASK_CARD_HEADER, "", footer]
             lines.extend(metadata_lines)
+            lines.append(time_line)
             return "\n".join(lines)
-
-        # The single card-level time line, when any row carried a usable stamp,
-        # is the card's final standalone line after the footer (omitted when no
-        # stamp exists).  Its exact text is included in the length budget below.
-        time_line = (
-            f"{_TASK_CARD_TIME_PREFIX}{card_started_at}" if card_started_at else ""
-        )
 
         # Budget the reasoning excerpts against the render ceiling.  The fixed
         # cost is the header + footer + their newlines plus the *actual*
         # non-reasoning scaffolding of every row (marker, label, elapsed suffix,
-        # and each row's newline) and the single time line — measured, not a flat
-        # estimate.  ``fixed`` is subtracted from the ceiling so the reasoning
-        # excerpts shrink first; when ``fixed`` itself exceeds the ceiling (many
-        # rows and/or long labels), ``budget`` goes negative and ``per_row_cap``
-        # floors at 0 — every row still renders with an empty excerpt, and the
-        # scaffolding alone can then exceed ``_TASK_CARD_TEXT_LIMIT`` (and
-        # Telegram's transport limit).  We deliberately do NOT drop rows or
-        # truncate the final string to fit: the operator asked for N rows, so N
-        # rows are shown.  What remains of the budget is shared evenly across tool
-        # rows so no single row crowds the others out.
+        # own timestamp suffix, and each row's newline) and the time line —
+        # measured, not a flat estimate.  ``fixed`` is subtracted from the
+        # ceiling so the reasoning excerpts shrink first; when ``fixed`` itself
+        # exceeds the ceiling (many rows and/or long labels), ``budget`` goes
+        # negative and ``per_row_cap`` floors at 0 — every row still renders
+        # with an empty excerpt, and the scaffolding alone can then exceed
+        # ``_TASK_CARD_TEXT_LIMIT`` (and Telegram's transport limit).  We
+        # deliberately do NOT drop rows or truncate the final string to fit:
+        # the operator asked for N rows, so N rows are shown.  What remains of
+        # the budget is shared evenly across tool rows so no single row crowds
+        # the others out.
         api_scaffold = sum(len(line) + 1 for _, line in api_prepared)
         tool_scaffold = 0
-        for _, label, _redacted, elapsed, done in tool_prepared:
+        for _, label, _redacted, elapsed, done, started_at in tool_prepared:
             marker = "✓ " if done else "• "
             prefix = f"{marker}{label}: " if label else marker
+            stamp_suffix = f" · {started_at}" if started_at else ""
             # +1 newline, +1 for a possible truncation ellipsis (conservative).
-            tool_scaffold += len(prefix) + len(f" ({elapsed}s)") + 2
+            tool_scaffold += len(prefix) + len(f" ({elapsed}s)") + len(stamp_suffix) + 2
         fixed = (
             len(cls._TASK_CARD_HEADER) + 1  # header + newline
             + 1                              # blank line before footer
-            + len(_TASK_CARD_FOOTER)
+            + len(footer)
             + sum(len(line) + 1 for line in metadata_lines)
-            + (len(time_line) + 1 if time_line else 0)  # time line + its newline
+            + len(time_line) + 1             # time line + its newline
             + api_scaffold + tool_scaffold
         )
         budget = cls._TASK_CARD_TEXT_LIMIT - fixed
@@ -2282,22 +2334,29 @@ class TelegramManager:
 
         # Render in original row order so tool and API rows interleave correctly.
         by_idx: dict[int, str] = {}
-        for idx, label, redacted, elapsed, done in tool_prepared:
+        for idx, label, redacted, elapsed, done, started_at in tool_prepared:
             excerpt = redacted[:per_row_cap] + "…" if len(redacted) > per_row_cap else redacted
             marker = "✓ " if done else "• "
             prefix = f"{marker}{label}: " if label else marker
-            by_idx[idx] = f"{prefix}{excerpt} ({elapsed}s)"
+            stamp_suffix = f" · {started_at}" if started_at else ""
+            by_idx[idx] = f"{prefix}{excerpt} ({elapsed}s){stamp_suffix}"
         for idx, line in api_prepared:
             by_idx[idx] = line
 
         lines = [cls._TASK_CARD_HEADER]
         lines.extend(by_idx[i] for i in sorted(by_idx))
         lines.append("")
-        lines.append(_TASK_CARD_FOOTER)
+        lines.append(footer)
         lines.extend(metadata_lines)
-        if time_line:
-            lines.append(time_line)
+        lines.append(time_line)
         return "\n".join(lines)
+
+    @staticmethod
+    def _task_card_render_time(now: datetime | None) -> str:
+        """Resolve the render-time stamp, defaulting to the real local instant."""
+        if now is None:
+            now = datetime.now().astimezone()
+        return _format_task_card_current_time(now)
 
     @staticmethod
     def _task_card_machine_identifier(value: object, *, limit: int) -> str | None:
