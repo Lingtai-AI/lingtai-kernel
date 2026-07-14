@@ -99,6 +99,12 @@ def test_substrate_reference_daemon_explicit_preset_must_be_allowed():
     assert "_preset_ref_in" in text
 
 
+def test_substrate_reference_daemon_preset_failures_refuse_whole_batch():
+    text = _read(SUBSTRATE_REFERENCE)
+    assert text.count("refuses the whole batch") >= 2
+    assert "before any emanation is scheduled" in text
+
+
 def test_substrate_reference_omitted_daemon_preset_is_parent_derived():
     text = _read(SUBSTRATE_REFERENCE)
     assert "parent-derived" in text
