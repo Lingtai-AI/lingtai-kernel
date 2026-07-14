@@ -3199,11 +3199,12 @@ class DaemonManager:
                     spec["task"], schemas, system_prompt=task_context
                 )
                 run_dir.prompt_path.write_text(system_prompt, encoding="utf-8")
-                run_dir._state["call_parameters"]["mcp"] = [
+                call_parameters = dict(run_dir.state_snapshot()["call_parameters"])
+                call_parameters["mcp"] = [
                     self._redact_mcp_registration_for_prompt(r)
                     for r in task_mcp_regs
                 ]
-                run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+                run_dir.update_state(call_parameters=call_parameters)
             except Exception as e:
                 self._close_task_mcp_clients(task_mcp_clients)
                 run_dir.mark_failed(e)
@@ -3331,6 +3332,7 @@ class DaemonManager:
             user_backend_argv = list(context.backend_argv)
             backend_argv = list(user_backend_argv)
             backend_harness_argv: list[str] = []
+            state_updates: dict = {}
             backend_options = spec.get("backend_options") or None
             system_prompt = f"[{backend} backend — task delegated to external CLI]"
 
@@ -3394,11 +3396,12 @@ class DaemonManager:
                         + task_context
                     )
                 run_dir.prompt_path.write_text(system_prompt, encoding="utf-8")
-                run_dir._state["call_parameters"]["mcp"] = [
+                call_parameters = dict(run_dir.state_snapshot()["call_parameters"])
+                call_parameters["mcp"] = [
                     self._redact_mcp_registration_for_prompt(r)
                     for r in mcp_regs
                 ]
-                run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+                run_dir.update_state(call_parameters=call_parameters)
                 cli_task = self._compose_cli_task(
                     spec["task"], task_context, backend=backend,
                 )
@@ -3425,7 +3428,7 @@ class DaemonManager:
                     ]
                 elif backend == "kimicode" and _cli_backend_loads_common_mcp(backend):
                     kimi_mcp_config = _write_kimicode_mcp_config(run_dir, mcp_regs)
-                    run_dir._state["backend_harness_files"] = {
+                    state_updates["backend_harness_files"] = {
                         "kimicode_mcp_config": str(kimi_mcp_config)
                     }
                 backend_argv = [*user_backend_argv, *backend_harness_argv]
@@ -3436,16 +3439,12 @@ class DaemonManager:
             # Persist user-supplied options separately from harness-owned argv
             # so run artifacts do not imply the model supplied MCP loader flags.
             if backend_options is not None:
-                run_dir._state["backend_options"] = backend_options
-                run_dir._state["backend_argv"] = list(user_backend_argv)
+                state_updates["backend_options"] = backend_options
+                state_updates["backend_argv"] = list(user_backend_argv)
             if backend_harness_argv:
-                run_dir._state["backend_harness_argv"] = list(backend_harness_argv)
-            if (
-                backend_options is not None
-                or backend_harness_argv
-                or run_dir._state.get("backend_harness_files")
-            ):
-                run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+                state_updates["backend_harness_argv"] = list(backend_harness_argv)
+            if state_updates:
+                run_dir.update_state(**state_updates)
             self._log("daemon_backend_options",
                       em_id=em_id, backend=backend,
                       argv=list(user_backend_argv),
@@ -4675,6 +4674,75 @@ class DaemonManager:
             message = "MiMo Code reported a structured error event"
         return redact_text(message)[:500]
 
+    @staticmethod
+    def _mimocode_normalize_usage(
+        event: dict,
+    ) -> tuple[str, dict[str, int], dict] | None:
+        """Normalize one MiMo Code 0.1.5 ``step_finish`` usage event.
+
+        MiMo's terminal JSON event is deliberately narrower than the generic
+        OpenCode parser: only ``type == "step_finish"`` with a nested
+        ``part.type == "step-finish"`` is accepted. Every source counter must
+        be an actual non-negative ``int`` (booleans, strings, missing fields,
+        and negatives are rejected), and ``part.id`` is the source-stable
+        identity used for replay suppression. ``tokens.input`` already excludes
+        cache usage, so it is copied directly rather than adjusted.
+        """
+        if not isinstance(event, dict) or event.get("type") != "step_finish":
+            return None
+        part = event.get("part")
+        if not isinstance(part, dict) or part.get("type") != "step-finish":
+            return None
+        part_id = part.get("id")
+        if not isinstance(part_id, str) or not part_id.strip():
+            return None
+        tokens = part.get("tokens")
+        if not isinstance(tokens, dict):
+            return None
+        cache = tokens.get("cache")
+        if not isinstance(cache, dict):
+            return None
+        values = {
+            "input": tokens.get("input"),
+            "output": tokens.get("output"),
+            "reasoning": tokens.get("reasoning"),
+            "cache_read": cache.get("read"),
+            "cache_write": cache.get("write"),
+        }
+        if any(type(value) is not int or value < 0 for value in values.values()):
+            return None
+        normalized = {
+            "input": values["input"],
+            "output": values["output"],
+            "cached": values["cache_read"] + values["cache_write"],
+            "thinking": values["reasoning"],
+        }
+        if not any(normalized.values()):
+            return None
+        return part_id, normalized, part
+
+    @staticmethod
+    def _mimocode_usage_state(run_dir: DaemonRunDir) -> tuple[threading.Lock, set[str]]:
+        """Return the per-run MiMo usage dedupe state."""
+        return run_dir.__dict__.setdefault(
+            "_mimocode_usage_state", (threading.Lock(), set()),
+        )
+
+    def _mimocode_record_usage(self, run_dir: DaemonRunDir, event: dict) -> None:
+        """Persist one new MiMo usage part through the UI-only CLI hook."""
+        normalized = self._mimocode_normalize_usage(event)
+        if normalized is None:
+            return
+        part_id, usage, raw_part = normalized
+        lock, seen_part_ids = self._mimocode_usage_state(run_dir)
+        with lock:
+            if part_id in seen_part_ids:
+                return
+            seen_part_ids.add(part_id)
+            # record_cli_tokens mutates shared run state and appends its event;
+            # keep both writes in the same per-run transaction as dedupe.
+            run_dir.record_cli_tokens(**usage, raw=raw_part)
+
     def _run_opencode_emanation(
         self,
         em_id: str,
@@ -4690,6 +4758,7 @@ class DaemonManager:
         cmd_prefix: list[str] | None = None,
         text_extractor: Callable[[dict], str] | None = None,
         error_detector: Callable[[dict], str | None] | None = None,
+        usage_recorder: Callable[[dict], None] | None = None,
     ) -> str:
         """Run an OpenCode-family CLI session as the emanation backend.
 
@@ -4708,9 +4777,10 @@ class DaemonManager:
         an event (MiMo Code passes a strict ``type == "text"``-only extractor so
         reasoning/tool/step ``part.text`` never leaks as the answer);
         ``error_detector`` lets a backend recognize a structured error event and
-        fail loudly even on exit 0 (MiMo Code's ``type == "error"``). See
-        ``_opencode_extract_text`` / ``_opencode_extract_session_id`` for the
-        default shapes accepted.
+        fail loudly even on exit 0 (MiMo Code's ``type == "error"``). The
+        optional ``usage_recorder`` receives each parsed event for a backend-
+        specific UI-only usage path. See ``_opencode_extract_text`` /
+        ``_opencode_extract_session_id`` for the default shapes accepted.
         """
         extract_text = text_extractor or self._opencode_extract_text
         if cancel_event.is_set():
@@ -4813,6 +4883,8 @@ class DaemonManager:
                 sid = self._opencode_extract_session_id(event)
                 if sid:
                     _store_session_id(sid)
+                if usage_recorder is not None:
+                    usage_recorder(event)
 
                 # A structured backend error must fail the run loudly even when
                 # the process later exits 0 (MiMo Code's ``type == "error"``).
@@ -4908,11 +4980,14 @@ class DaemonManager:
         executable and an OpenCode-derived ``run --format json`` command, so
         the OpenCode-family runner (session capture, argv placement, non-JSON
         tolerance) is reused with a distinct session-id field. MiMo's JSONL
-        contract (0.1.5) differs from generic OpenCode in two ways the shared
+        contract (0.1.5) differs from generic OpenCode in three ways the shared
         runner is told about: the user-visible answer is ONLY the
         ``type == "text"`` event's nested ``part.text`` (reasoning/tool/step
-        events also carry ``part.text`` and must be ignored), and a structured
-        ``type == "error"`` event is a terminal failure even on exit 0.
+        events also carry ``part.text`` and must be ignored), a structured
+        ``type == "error"`` event is a terminal failure even on exit 0, and
+        source-reported ``step_finish`` usage is normalized and recorded via
+        ``record_cli_tokens`` for UI totals only (duplicate ``part.id`` values
+        are suppressed; neither token ledger is written).
         """
         return self._run_opencode_emanation(
             em_id, run_dir, task, cancel_event, timeout_event, backend_argv,
@@ -4921,6 +4996,7 @@ class DaemonManager:
             session_state_key="mimocode_session_id",
             text_extractor=self._mimocode_extract_answer_text,
             error_detector=self._mimocode_extract_error,
+            usage_recorder=lambda event: self._mimocode_record_usage(run_dir, event),
         )
 
     def _run_oh_my_pi_emanation(
@@ -5248,6 +5324,7 @@ class DaemonManager:
         build_resume_cmd: Callable[[str, str, str], list[str]] | None = None,
         text_extractor: Callable[[dict], str] | None = None,
         error_detector: Callable[[dict], str | None] | None = None,
+        usage_recorder: Callable[[dict], None] | None = None,
     ) -> dict:
         """Dispatch an OpenCode-family session-resume follow-up off the caller's turn.
 
@@ -5263,6 +5340,8 @@ class DaemonManager:
         ``text_extractor`` / ``error_detector`` apply the same answer/error
         contract to the resume stream that the initial run used (MiMo Code
         passes its strict ``type:text`` / ``type:error`` handlers).
+        ``usage_recorder`` provides the corresponding backend-specific usage
+        path without changing the shared OpenCode behavior.
         """
         run_dir = entry.get("run_dir")
         if run_dir is None:
@@ -5327,7 +5406,7 @@ class DaemonManager:
 
         ask_future = self._ask_pool.submit(
             self._run_ask_opencode_stream, em_id, entry, proc, run_dir,
-            backend_name, text_extractor, error_detector,
+            backend_name, text_extractor, error_detector, usage_recorder,
         )
         ask_future.add_done_callback(
             lambda f, eid=em_id: self._on_ask_done(eid, f)
@@ -5343,9 +5422,12 @@ class DaemonManager:
 
         Resume argv stays the harness-owned
         ``mimo run --session <id> --format json <message>``; the MiMo
-        answer/error contract is applied to the resume stream too, so a
-        ``type:error`` follow-up fails loudly and reasoning/tool ``part.text``
-        never surfaces as the reply.
+        answer/error/usage contract is applied to the resume stream too:
+        source-reported ``step_finish`` usage is normalized and recorded via
+        ``record_cli_tokens`` for UI totals only (duplicate ``part.id`` values
+        are suppressed; neither token ledger is written), a ``type:error``
+        follow-up fails loudly, and reasoning/tool ``part.text`` never surfaces
+        as the reply.
         """
         return self._handle_ask_opencode(
             em_id, entry, message,
@@ -5354,6 +5436,9 @@ class DaemonManager:
             session_state_key="mimocode_session_id",
             text_extractor=self._mimocode_extract_answer_text,
             error_detector=self._mimocode_extract_error,
+            usage_recorder=lambda event: self._mimocode_record_usage(
+                entry["run_dir"], event,
+            ),
         )
 
     @staticmethod
@@ -5387,6 +5472,7 @@ class DaemonManager:
         backend_name: str = "opencode",
         text_extractor: Callable[[dict], str] | None = None,
         error_detector: Callable[[dict], str | None] | None = None,
+        usage_recorder: Callable[[dict], None] | None = None,
     ) -> dict:
         """Background worker: stream an ``opencode run --session`` subprocess.
 
@@ -5435,6 +5521,8 @@ class DaemonManager:
                     continue
 
                 any_event = True
+                if usage_recorder is not None:
+                    usage_recorder(event)
                 if error_detector is not None:
                     detail = error_detector(event)
                     if detail is not None:

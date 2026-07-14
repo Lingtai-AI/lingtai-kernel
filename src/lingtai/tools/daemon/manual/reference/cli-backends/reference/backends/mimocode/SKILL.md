@@ -86,6 +86,16 @@ is ignored and never becomes the daemon result. A structured
 the raw nested payload. The same answer/error contract applies to the `ask`
 resume stream. Non-JSON stdout lines are still recorded as `cli_output`.
 
+For source-reported usage, LingTai accepts only `type == "step_finish"` whose
+nested `part.type == "step-finish"` has a non-empty string `part.id` and all
+five non-negative, non-boolean integer counters: `tokens.input`, `output`, `reasoning`,
+`cache.read`, and `cache.write`. It maps input directly, output directly,
+reasoning to thinking, and the two cache counters to combined cached tokens.
+Malformed or all-zero parts are ignored; each distinct `part.id` is counted
+once across initial and resume streams, and the nested source `part` is kept in
+the `cli_usage` event raw field. This is UI-only `cli_tokens` state: it never
+writes either token ledger and does not infer provider or model.
+
 Per-run `daemon_common` MCP injection is not wired for `mimocode` yet, so the
 MCP completion contract is not enforced on this backend; parent MCP
 registrations reach the run as prompt catalog only.

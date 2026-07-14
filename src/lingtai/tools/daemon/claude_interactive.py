@@ -203,10 +203,8 @@ class ClaudeInteractiveBridge:
             pass
 
     def _write_state(self, **fields) -> None:
-        self.run_dir._state.update(fields)
-        self.run_dir._atomic_write_json(
-            self.run_dir.daemon_json_path, self.run_dir._state,
-        )
+        """Persist interactive-backend metadata through the run owner."""
+        self.run_dir.update_state(**fields)
 
     def _build_settings_json(self) -> str:
         script = shlex.quote(str(self.hook_script_path))

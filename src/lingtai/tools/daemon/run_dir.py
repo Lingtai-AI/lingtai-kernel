@@ -71,6 +71,13 @@ class DaemonRunDir:
         # When None, _safe stays silent (preserves prior behavior for tests).
         self._log_callback = log_callback
         self._started_monotonic = time.monotonic()
+        # Every live writer for this run shares one re-entrant transaction lock.
+        # It covers the in-memory mutation, daemon.json replacement, and any
+        # paired event/heartbeat write; per-run ownership avoids serializing
+        # unrelated daemon runs. Terminal-notification methods acquire their
+        # separate guard before this lock; RLock lets owner helpers compose
+        # without reversing that lock order.
+        self._state_writer_lock = threading.RLock()
         self._terminal_notification_lock = threading.Lock()
         started_at_iso = self._now_iso()
 
@@ -155,7 +162,8 @@ class DaemonRunDir:
     @property
     def group_id(self) -> str | None:
         """The daemon batch group id this run belongs to (None if ungrouped)."""
-        return self._state.get("group_id")
+        with self._state_writer_lock:
+            return self._state.get("group_id")
 
     @property
     def path(self) -> Path:
@@ -195,7 +203,20 @@ class DaemonRunDir:
 
     def state_snapshot(self) -> dict:
         """Return a shallow copy of the current daemon.json state."""
-        return dict(self._state)
+        with self._state_writer_lock:
+            return dict(self._state)
+
+    def update_state(self, **fields) -> None:
+        """Persist owner-controlled daemon state fields as one write transaction.
+
+        Callers that need to add backend/session metadata must use this boundary
+        rather than mutating ``_state`` and calling ``_atomic_write_json``
+        directly. The lock is re-entrant so a caller already in a state
+        transaction can safely compose this helper.
+        """
+        with self._state_writer_lock:
+            self._state.update(fields)
+            self._atomic_write_json(self.daemon_json_path, self._state)
 
     def set_session_id(self, key: str, value: str, *, overwrite: bool = True) -> bool:
         """Persist a backend resume id into daemon.json under *key*.
@@ -219,13 +240,14 @@ class DaemonRunDir:
         """
         if not value:
             return False
-        if self._state.get(key) == value:
-            return False
-        if not overwrite and self._state.get(key):
-            return False
-        self._state[key] = value
-        self._atomic_write_json(self.daemon_json_path, self._state)
-        return True
+        with self._state_writer_lock:
+            if self._state.get(key) == value:
+                return False
+            if not overwrite and self._state.get(key):
+                return False
+            self._state[key] = value
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            return True
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -279,6 +301,11 @@ class DaemonRunDir:
                     # failure is silent by design.
                     pass
 
+    def _safe_state(self, op: str, fn) -> None:
+        """Run a best-effort state/event transaction under the run writer lock."""
+        with self._state_writer_lock:
+            self._safe(op, fn)
+
     # ------------------------------------------------------------------
     # Per-turn hooks
     # ------------------------------------------------------------------
@@ -324,7 +351,7 @@ class DaemonRunDir:
                 },
             )
             self.heartbeat_path.touch()
-        self._safe("bump_turn", _write)
+        self._safe_state("bump_turn", _write)
 
     # ------------------------------------------------------------------
     # Tool dispatch hooks
@@ -358,7 +385,7 @@ class DaemonRunDir:
                 },
             )
             self.heartbeat_path.touch()
-        self._safe("set_current_tool", _write)
+        self._safe_state("set_current_tool", _write)
 
     def clear_current_tool(self, result_status: str) -> None:
         """Mark a tool dispatch finished.
@@ -381,7 +408,7 @@ class DaemonRunDir:
                     "ts": self._now_iso(),
                 },
             )
-        self._safe("clear_current_tool", _write)
+        self._safe_state("clear_current_tool", _write)
 
 
     # ------------------------------------------------------------------
@@ -432,7 +459,7 @@ class DaemonRunDir:
                 entry["truncated"] = True
             self._append_jsonl(self.events_path, entry)
             self.heartbeat_path.touch()
-        self._safe("record_cli_output", _write)
+        self._safe_state("record_cli_output", _write)
 
     # ------------------------------------------------------------------
     # Token accounting — dual ledger writes
@@ -476,7 +503,7 @@ class DaemonRunDir:
             self._state["tokens"]["thinking"] += thinking
             self._state["tokens"]["cached"] += cached
             self._atomic_write_json(self.daemon_json_path, self._state)
-        self._safe("append_tokens.state", _update_state)
+        self._safe_state("append_tokens.state", _update_state)
 
         # Sanitize once, then mirror the same safe pool-attribution subset
         # into both ledgers.  Arbitrary UsageMetadata.extra fields never cross
@@ -576,7 +603,7 @@ class DaemonRunDir:
             if raw is not None:
                 entry["raw"] = raw
             self._append_jsonl(self.events_path, entry)
-        self._safe("record_cli_tokens", _write)
+        self._safe_state("record_cli_tokens", _write)
 
     # ------------------------------------------------------------------
     # Artifact manifest
@@ -817,7 +844,7 @@ class DaemonRunDir:
                 },
             )
             self.heartbeat_path.touch()
-        self._safe("mark_done", _write)
+        self._safe_state("mark_done", _write)
         # Manifest last: result.txt + daemon.json are now final, so the scan
         # captures the terminal artifact set. Its own _safe means a manifest
         # failure can't undo the terminal transition above.
@@ -855,7 +882,7 @@ class DaemonRunDir:
                     "ts": self._now_iso(),
                 },
             )
-        self._safe("mark_failed", _write)
+        self._safe_state("mark_failed", _write)
         self.write_manifest()
 
     def record_cli_termination(
@@ -889,7 +916,7 @@ class DaemonRunDir:
                     "ts": self._now_iso(),
                 },
             )
-        self._safe("record_cli_termination", _write)
+        self._safe_state("record_cli_termination", _write)
 
     def mark_cancelled(self) -> None:
         """Cancel event observed. Sets state=cancelled."""
@@ -908,48 +935,58 @@ class DaemonRunDir:
         remains retryable. A crash with only a pending claim is intentionally
         treated as unpublished by startup reconciliation.
         """
+        # All live terminal-notification state transitions use one lock order:
+        # terminal-notification lock -> per-run state-writer lock.
         with self._terminal_notification_lock:
-            if self._state.get("terminal_notified") is True:
-                return None
-            if isinstance(self._state.get("terminal_notification_claim"), dict):
-                return None
-            key = self.terminal_notification_idempotency_key(self._run_id)
-            self._state["terminal_notification_claim"] = {
-                "status": "pending",
-                "terminal_status": status,
-                "idempotency_key": key,
-                "claimed_at": self._now_iso(),
-            }
-            self._safe(
-                "claim_terminal_notification",
-                lambda: self._atomic_write_json(self.daemon_json_path, self._state),
-            )
-            return key
+            with self._state_writer_lock:
+                if self._state.get("terminal_notified") is True:
+                    return None
+                if isinstance(self._state.get("terminal_notification_claim"), dict):
+                    return None
+                key = self.terminal_notification_idempotency_key(self._run_id)
+                self._state["terminal_notification_claim"] = {
+                    "status": "pending",
+                    "terminal_status": status,
+                    "idempotency_key": key,
+                    "claimed_at": self._now_iso(),
+                }
+                self._safe(
+                    "claim_terminal_notification",
+                    lambda: self._atomic_write_json(self.daemon_json_path, self._state),
+                )
+                return key
 
     def clear_terminal_notification_claim(self) -> None:
         """Clear a failed pending terminal-notification attempt."""
+        # Keep the same terminal-notification lock -> state-writer order as
+        # claim_terminal_notification and mark_terminal_notification_published.
         with self._terminal_notification_lock:
-            if self._state.get("terminal_notified") is True:
-                return
-            self._state["terminal_notification_claim"] = None
-            self._safe(
-                "clear_terminal_notification_claim",
-                lambda: self._atomic_write_json(self.daemon_json_path, self._state),
-            )
+            with self._state_writer_lock:
+                if self._state.get("terminal_notified") is True:
+                    return
+                self._state["terminal_notification_claim"] = None
+                self._safe(
+                    "clear_terminal_notification_claim",
+                    lambda: self._atomic_write_json(self.daemon_json_path, self._state),
+                )
 
     def mark_terminal_notification_published(self, idempotency_key: str) -> None:
         """Persist the durable terminal-notification receipt after publication."""
+        # Keep the single terminal-notification lock -> state-writer order. All
+        # receipt decisions, mutations, and daemon.json persistence stay in the
+        # owner transaction so live writers cannot observe a partial transition.
         with self._terminal_notification_lock:
-            self._state["terminal_notified"] = True
-            self._state["terminal_notification_claim"] = None
-            self._state["terminal_notification_receipt"] = {
-                "idempotency_key": idempotency_key,
-                "published_at": self._now_iso(),
-            }
-            self._safe(
-                "mark_terminal_notification_published",
-                lambda: self._atomic_write_json(self.daemon_json_path, self._state),
-            )
+            with self._state_writer_lock:
+                self._state["terminal_notified"] = True
+                self._state["terminal_notification_claim"] = None
+                self._state["terminal_notification_receipt"] = {
+                    "idempotency_key": idempotency_key,
+                    "published_at": self._now_iso(),
+                }
+                self._safe(
+                    "mark_terminal_notification_published",
+                    lambda: self._atomic_write_json(self.daemon_json_path, self._state),
+                )
 
     @classmethod
     def mark_terminal_notification_published_on_disk(
@@ -991,5 +1028,5 @@ class DaemonRunDir:
                     "ts": self._now_iso(),
                 },
             )
-        self._safe(f"mark_{state}", _write)
+        self._safe_state(f"mark_{state}", _write)
         self.write_manifest()
