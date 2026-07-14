@@ -74,11 +74,15 @@ co-located ANATOMY.md files for each component.
   `release()` unlocks then guarantees the handle is closed in a `finally` (even if
   the explicit `LOCK_UN` raises) before a best-effort unlink, swallows the
   specified `OSError`s, resets its handle, and is idempotent.
-- `PosixRefreshWatcherAdapter` implements `RefreshWatcherPort` by launching
-  `[sys.executable, "-c", script]` via `subprocess.Popen` with all three
-  standard streams set to `DEVNULL`, the given `env` as the full process
-  environment, and `start_new_session=True`
-  (`src/lingtai/adapters/posix/refresh_watcher.py:35-43`); the call returns
+- `PosixRefreshWatcherAdapter` implements `RefreshWatcherPort` by rendering
+  the Core-owned watcher program text from a `RefreshWatcherRequest`
+  (`watcher_program.render_watcher_script`), building the process environment
+  via its own `build_watcher_env` (`src/lingtai/adapters/posix/refresh_watcher.py:30-40`:
+  `os.environ` capture plus `LINGTAI_REFRESH_ENV_OVERWRITE=1` when
+  `request.env_overwrite`), and launching `[sys.executable, "-c", script]` via
+  `subprocess.Popen` with all three standard streams set to `DEVNULL` and
+  `start_new_session=True`
+  (`src/lingtai/adapters/posix/refresh_watcher.py:54-64`); the call returns
   once the process has been started and does not wait for or track it.
 - `PosixGitCliAdapter` implements both `SnapshotPort` and `SourceRevisionPort`
   through fixed Git command families. Separate composed instances target the
