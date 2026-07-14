@@ -27,6 +27,7 @@ class Event:
     response: object | None = None
     item_id: str | None = None
     text: str | None = None
+    arguments: str | None = None
 
 
 class FakeResponses:
@@ -94,6 +95,143 @@ def _function_call_events() -> list[Event]:
             ),
         ),
     ]
+
+
+def _function_call_delta_only_events() -> list[Event]:
+    """Complete tool args arrive only through argument deltas."""
+    return [
+        Event(
+            "response.output_item.added",
+            item=SimpleNamespace(
+                type="function_call",
+                call_id="call_delta_only",
+                name="report_answer",
+            ),
+        ),
+        Event("response.function_call_arguments.delta", delta='{"answer"'),
+        Event("response.function_call_arguments.delta", delta=':"42"}'),
+        Event(
+            "response.output_item.done",
+            item=SimpleNamespace(
+                type="function_call",
+                call_id="call_delta_only",
+                name="report_answer",
+            ),
+        ),
+    ]
+
+
+def _function_call_done_only_events() -> list[Event]:
+    """Complete tool args arrive only on the two terminal done events."""
+    return [
+        Event(
+            "response.output_item.added",
+            item=SimpleNamespace(
+                type="function_call",
+                call_id="call_spark",
+                name="report_answer",
+                arguments="",
+            ),
+        ),
+        Event(
+            "response.function_call_arguments.done",
+            arguments='{"answer":"42"}',
+        ),
+        Event(
+            "response.output_item.done",
+            item=SimpleNamespace(
+                type="function_call",
+                call_id="call_spark",
+                name="report_answer",
+                arguments='{"answer":"42"}',
+            ),
+        ),
+    ]
+
+
+def _function_call_output_item_only_events() -> list[Event]:
+    """Complete tool args arrive only on output_item.done.item.arguments."""
+    return [
+        Event(
+            "response.output_item.added",
+            item=SimpleNamespace(
+                type="function_call",
+                call_id="call_item_done",
+                name="report_answer",
+                arguments="",
+            ),
+        ),
+        Event(
+            "response.output_item.done",
+            item=SimpleNamespace(
+                type="function_call",
+                call_id="call_item_done",
+                name="report_answer",
+                arguments='{"answer":"42"}',
+            ),
+        ),
+    ]
+
+
+def _function_call_arguments_done_only_events() -> list[Event]:
+    """The args-done source is the only terminal source carrying arguments."""
+    return [
+        Event(
+            "response.output_item.added",
+            item=SimpleNamespace(
+                type="function_call",
+                call_id="call_arguments_done",
+                name="report_answer",
+                arguments="",
+            ),
+        ),
+        Event(
+            "response.function_call_arguments.done",
+            arguments='{"answer":"42"}',
+        ),
+        Event(
+            "response.output_item.done",
+            # Omit arguments to isolate the top-level args-done fallback.
+            item=SimpleNamespace(
+                type="function_call",
+                call_id="call_arguments_done",
+                name="report_answer",
+            ),
+        ),
+    ]
+
+
+def _function_call_done_only_multi_tool_events() -> list[Event]:
+    """Two done-only tools preserve the provider's order and IDs."""
+    events: list[Event] = []
+    for call_id, name, args in [
+        ("call_first", "first_tool", '{"order":1}'),
+        ("call_second", "second_tool", '{"order":2}'),
+    ]:
+        events.extend(
+            [
+                Event(
+                    "response.output_item.added",
+                    item=SimpleNamespace(
+                        type="function_call",
+                        call_id=call_id,
+                        name=name,
+                        arguments="",
+                    ),
+                ),
+                Event("response.function_call_arguments.done", arguments=args),
+                Event(
+                    "response.output_item.done",
+                    item=SimpleNamespace(
+                        type="function_call",
+                        call_id=call_id,
+                        name=name,
+                        arguments=args,
+                    ),
+                ),
+            ]
+        )
+    return events
 
 
 def _reasoning_events() -> list[Event]:
@@ -326,6 +464,159 @@ def test_done_only_summary_is_not_duplicated_by_output_item_done():
     ]
     assert [block.text for block in thinking_blocks] == ["Done-only summary."]
 
+
+
+def _create_openai_responses_session(events: list[Event]):
+    """Create a generic Responses session that must emit a tool call."""
+    return OpenAIResponsesSession(
+        client=FakeClient(events),
+        model="gpt-5.5",
+        instructions="system prompt",
+        tools=[
+            {
+                "type": "function",
+                "name": "report_answer",
+                "description": "Report answer",
+                "parameters": _function_schema().parameters,
+            }
+        ],
+        tool_choice="required",
+        extra_kwargs={},
+    )
+
+
+# -- Done-only tool arguments -------------------------------------------------
+
+
+def _assert_done_only_tool_result(result, *, ids, names, args):
+    assert [tool.id for tool in result.tool_calls] == ids
+    assert [tool.name for tool in result.tool_calls] == names
+    assert [tool.args for tool in result.tool_calls] == args
+
+
+@pytest.mark.parametrize("session_kind", ["generic", "codex"])
+def test_done_only_function_call_arguments_are_reconstructed(session_kind):
+    """Both Responses loops recover args from terminal done-only fields."""
+    events = _function_call_done_only_events() + [_completed()]
+    if session_kind == "codex":
+        session = _create_codex_session(events)
+        result = session.send("please answer via tool")
+    else:
+        session = _create_openai_responses_session(events)
+        result = session.send_stream("please answer via tool")
+
+    _assert_done_only_tool_result(
+        result,
+        ids=["call_spark"],
+        names=["report_answer"],
+        args=[{"answer": "42"}],
+    )
+
+
+@pytest.mark.parametrize("session_kind", ["generic", "codex"])
+def test_output_item_done_arguments_are_used_without_arguments_done(session_kind):
+    """The item.done fallback works symmetrically when args-done is absent."""
+    events = _function_call_output_item_only_events() + [_completed()]
+    if session_kind == "codex":
+        result = _create_codex_session(events).send("please answer via tool")
+    else:
+        result = _create_openai_responses_session(events).send_stream(
+            "please answer via tool"
+        )
+
+    _assert_done_only_tool_result(
+        result,
+        ids=["call_item_done"],
+        names=["report_answer"],
+        args=[{"answer": "42"}],
+    )
+
+
+@pytest.mark.parametrize("session_kind", ["generic", "codex"])
+def test_function_call_arguments_done_is_used_when_final_item_omits_arguments(session_kind):
+    """The top-level args-done fallback is not rescued by item.done data."""
+    events = _function_call_arguments_done_only_events() + [_completed()]
+    if session_kind == "codex":
+        result = _create_codex_session(events).send("please answer via tool")
+    else:
+        result = _create_openai_responses_session(events).send_stream(
+            "please answer via tool"
+        )
+
+    _assert_done_only_tool_result(
+        result,
+        ids=["call_arguments_done"],
+        names=["report_answer"],
+        args=[{"answer": "42"}],
+    )
+
+
+@pytest.mark.parametrize("session_kind", ["generic", "codex"])
+def test_delta_only_function_call_arguments_remain_unchanged(session_kind):
+    """Existing delta-only assembly remains byte-for-byte the same."""
+    events = _function_call_delta_only_events() + [_completed()]
+    if session_kind == "codex":
+        result = _create_codex_session(events).send("please answer via tool")
+    else:
+        result = _create_openai_responses_session(events).send_stream(
+            "please answer via tool"
+        )
+
+    _assert_done_only_tool_result(
+        result,
+        ids=["call_delta_only"],
+        names=["report_answer"],
+        args=[{"answer": "42"}],
+    )
+
+
+@pytest.mark.parametrize("session_kind", ["generic", "codex"])
+def test_delta_plus_done_does_not_duplicate_or_clobber_arguments(session_kind):
+    """A non-empty delta buffer wins over complete or malformed terminal data."""
+    events = _function_call_events() + [_completed()]
+    # Replace the final item with malformed terminal JSON to prove the fallback
+    # never overwrites the already-complete delta buffer.
+    events[-2] = Event(
+        "response.output_item.done",
+        item=SimpleNamespace(
+            type="function_call",
+            call_id="call_fake123",
+            name="report_answer",
+            arguments="{malformed",
+        ),
+    )
+    if session_kind == "codex":
+        result = _create_codex_session(events).send("please answer via tool")
+    else:
+        result = _create_openai_responses_session(events).send_stream(
+            "please answer via tool"
+        )
+
+    _assert_done_only_tool_result(
+        result,
+        ids=["call_fake123"],
+        names=["report_answer"],
+        args=[{"answer": "42"}],
+    )
+
+
+@pytest.mark.parametrize("session_kind", ["generic", "codex"])
+def test_done_only_multiple_tools_preserve_order_and_ids(session_kind):
+    """Sequential done-only tools retain provider order, names, IDs, and args."""
+    events = _function_call_done_only_multi_tool_events() + [_completed()]
+    if session_kind == "codex":
+        result = _create_codex_session(events).send("please answer via tool")
+    else:
+        result = _create_openai_responses_session(events).send_stream(
+            "please answer via tool"
+        )
+
+    _assert_done_only_tool_result(
+        result,
+        ids=["call_first", "call_second"],
+        names=["first_tool", "second_tool"],
+        args=[{"order": 1}, {"order": 2}],
+    )
 
 
 def test_codex_responses_trace_disabled_by_default(tmp_path, monkeypatch):

@@ -80,6 +80,19 @@ class StreamingAccumulator:
         if self._pending_tool is not None:
             self._pending_tool["args_json"] += delta
 
+    def set_tool_args_if_empty(self, full: str | None) -> None:
+        """Set complete terminal args only when no fragment was accumulated.
+
+        Responses providers can emit a tool call's complete JSON only on a
+        terminal ``*.done`` event.  A non-empty delta buffer remains
+        authoritative so terminal values are never appended twice or clobber
+        an already assembled call.
+        """
+        if not full:
+            return
+        if self._pending_tool is not None and not self._pending_tool["args_json"]:
+            self._pending_tool["args_json"] = full
+
     def finish_tool(self) -> None:
         """Finalize the current pending tool call."""
         if self._pending_tool is not None:

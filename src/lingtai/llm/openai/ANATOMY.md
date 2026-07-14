@@ -38,10 +38,10 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | Class | Lines | Role |
 |-------|-------|------|
 | `OpenAIChatSession` | `adapter.py:1210` | Chat Completions session with context overflow auto-recovery; sends optional `prompt_cache_key` |
-| `OpenAIResponsesSession` | `adapter.py:1725` | Responses API session. Official OpenAI mode is server-stateful via `previous_response_id`; custom/OpenAI-compatible mode can be internally stateless (`stateless_replay=True`) and replays full canonical history via `to_responses_input` while recording assistant turns and exposing no resume id (`adapter.py:1749-1750`, `adapter.py:1881-1886`, `adapter.py:1917-1918`, `adapter.py:1928-1929`, `adapter.py:2028-2039`). |
-| `OpenAIAdapter` | `adapter.py:2062` | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key`; carries the internal `_responses_stateless_replay` constructor mode into Responses sessions (`adapter.py:2085`, `adapter.py:2120`, `adapter.py:2257-2270`). |
-| `CodexResponsesSession` | `adapter.py:2485` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include/replay, encrypted-reasoning self-heal, cache-affinity headers, honest client/account identity, and honest Codex metadata envelope. |
-| `CodexOpenAIAdapter` | `adapter.py:4182` | Codex provider specialization: forces Responses mode, derives stable per-agent cache/session ids plus a LingTai installation id from the configured anchor, and wires account/metadata hints into Codex sessions. Maps an omitted/`default` thinking level to an explicit `reasoning.effort = "xhigh"` in its `_create_responses_session` (Codex-only default — omitting the field would fall back to the backend's lower default; explicit levels pass through unchanged, and the generic `OpenAIAdapter` keeps omit-on-default). `codex-pool` reuses this adapter, so it inherits the same default. |
+| `OpenAIResponsesSession` | `adapter.py:1725` | Responses API session. Official OpenAI mode is server-stateful via `previous_response_id`; custom/OpenAI-compatible mode can be internally stateless (`stateless_replay=True`) and replays full canonical history via `to_responses_input` while recording assistant turns and exposing no resume id (`adapter.py:1749-1750`, `adapter.py:1881-1886`, `adapter.py:1917-1918`, `adapter.py:1928-1929`, `adapter.py:2035-2046`). |
+| `OpenAIAdapter` | `adapter.py:2069` | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key`; carries the internal `_responses_stateless_replay` constructor mode into Responses sessions (`adapter.py:2092`, `adapter.py:2127`, `adapter.py:2264-2277`). |
+| `CodexResponsesSession` | `adapter.py:2492` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include/replay, encrypted-reasoning self-heal, cache-affinity headers, honest client/account identity, and honest Codex metadata envelope. |
+| `CodexOpenAIAdapter` | `adapter.py:4307` | Codex provider specialization: forces Responses mode, derives stable per-agent cache/session ids plus a LingTai installation id from the configured anchor, and wires account/metadata hints into Codex sessions. Maps an omitted/`default` thinking level to an explicit `reasoning.effort = "xhigh"` in its `_create_responses_session` (Codex-only default — omitting the field would fall back to the backend's lower default; explicit levels pass through unchanged, and the generic `OpenAIAdapter` keeps omit-on-default). `codex-pool` reuses this adapter, so it inherits the same default. |
 
 ### adapter.py helpers
 
@@ -67,19 +67,19 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 - **Interface converters** — imports `to_openai` and `to_responses_input` from `lingtai.llm.interface_converters` (`adapter.py:31`).
 - **Streaming** — imports `StreamingAccumulator` from `lingtai.kernel.llm.streaming` (`adapter.py:32`).
 - **HTTP client** — imports `httpx` for timeout construction (`adapter.py:16`); `openai` SDK for all API calls (`adapter.py:17`).
-- **Subclass hooks** — `_session_class` (`adapter.py:2070`) for Completions path; `_adapter_extra_body()` (`adapter.py:2331`) for provider-specific `extra_body`; `_default_prompt_cache_key()` (`adapter.py:2132`) for the provider-namespaced cache key.
+- **Subclass hooks** — `_session_class` (`adapter.py:2077`) for Completions path; `_adapter_extra_body()` (`adapter.py:2338`) for provider-specific `extra_body`; `_default_prompt_cache_key()` (`adapter.py:2139`) for the provider-namespaced cache key.
 
 ## Composition
 
 ### Two session paths
 
-The adapter forks at `create_chat()` (`adapter.py:2179`) via `_should_use_responses()` (`adapter.py:2160`):
-1. **Responses API** (`_create_responses_session`, `adapter.py:2218`) — when canonical `wire_api="responses"`, or when `wire_api="auto"` and legacy `use_responses=True` AND (`base_url` is None OR `force_responses=True`). Builds `OpenAIResponsesSession`, threading the adapter's `_responses_stateless_replay` into its `stateless_replay` kwarg (`adapter.py:2269`) — so a custom/OpenAI-compatible Responses adapter builds a stateless-replay session while official OpenAI stays stateful.
-2. **Chat Completions** (`_create_completions_session`, `adapter.py:2272`) — fallback for compatible providers and when `wire_api="chat_completions"`. Builds `self._session_class` (subclass-overridable).
+The adapter forks at `create_chat()` (`adapter.py:2186`) via `_should_use_responses()` (`adapter.py:2167`):
+1. **Responses API** (`_create_responses_session`, `adapter.py:2225`) — when canonical `wire_api="responses"`, or when `wire_api="auto"` and legacy `use_responses=True` AND (`base_url` is None OR `force_responses=True`). Builds `OpenAIResponsesSession`, threading the adapter's `_responses_stateless_replay` into its `stateless_replay` kwarg (`adapter.py:2276`) — so a custom/OpenAI-compatible Responses adapter builds a stateless-replay session while official OpenAI stays stateful.
+2. **Chat Completions** (`_create_completions_session`, `adapter.py:2279`) — fallback for compatible providers and when `wire_api="chat_completions"`. Builds `self._session_class` (subclass-overridable).
 
 Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting. Canonical `wire_api` wins over legacy `use_responses`/`force_responses`; when `wire_api` is absent/`auto`, existing behavior is preserved.
 
-### One-shot generation (`OpenAIAdapter.generate`, `adapter.py:2340`)
+### One-shot generation (`OpenAIAdapter.generate`, `adapter.py:2347`)
 
 `generate()` follows the same wire selection as `create_chat()` via `_should_use_responses()`: Chat Completions by default/legacy, or Responses API when `wire_api="responses"` (or legacy `use_responses=True` without a custom base URL / with `force_responses=True`). This keeps service-level one-shot calls consistent with multi-turn sessions.
 
@@ -143,10 +143,10 @@ Flow:
 5. If Codex rejects a full replay with `The encrypted content for item ... could
    not be verified`, treat it as stale raw reasoning state: `_strip_codex_encrypted_reasoning_items`
    (`adapter.py:3575`) removes replay-only `encrypted_content` anchors from
-   `ThinkingBlock.provider_data`, `_reset_ws_epoch` (`adapter.py:3133`) clears
+   `ThinkingBlock.provider_data`, `_reset_ws_epoch` (`adapter.py:3163`) clears
    stale baselines/response-id state, and the adapter retries the same visible
    transcript once as `rest_full_self_heal` / `stateless_full_self_heal`
-   (`adapter.py:3906-3925`). Summary text, assistant text, and tool calls remain
+   (`adapter.py:4019-4038`). Summary text, assistant text, and tool calls remain
    in the canonical interface; only the opaque provider blob is dropped.
 6. After success: record the assistant response into the interface and recompute
    the converter-stable delta baseline (`_ws_record_baseline_from_interface`) so the
@@ -202,7 +202,7 @@ The default request identity is explicit LingTai: `_CODEX_ORIGINATOR = "lingtai"
 
 See `docs/references/codex-http-anatomy-investigation.md` for the capture history, Codex CLI comparison, and the safety rationale behind which metadata LingTai does and does not send.
 
-When a Codex session has a stable LingTai session/thread identity, `CodexResponsesSession` adds an honest metadata envelope alongside the cache-affinity headers (`adapter.py:2657` and the Codex send path at `adapter.py:3666`). Each request gets a fresh `x-client-request-id`; `x-codex-window-id` is the LingTai window id `<session_id>:0`; `x-codex-turn-metadata` is compact JSON carrying `session_id`, `thread_id`, a generated `turn_id`, a truthful LingTai `sandbox` label, and `turn_started_at_unix_ms`; and body `client_metadata.x-codex-installation-id` is carried through `extra_body` because the OpenAI Python SDK has no typed `client_metadata` argument. This is compatibility metadata, not CLI impersonation: LingTai keeps `originator: lingtai` / `User-Agent: LingTai/<version>`, does not send `x-codex-beta-features`, and derives its installation id from LingTai state rather than from the official Codex CLI installation file.
+When a Codex session has a stable LingTai session/thread identity, `CodexResponsesSession` adds an honest metadata envelope alongside the cache-affinity headers (`adapter.py:2664` and the Codex send path at `adapter.py:3779`). Each request gets a fresh `x-client-request-id`; `x-codex-window-id` is the LingTai window id `<session_id>:0`; `x-codex-turn-metadata` is compact JSON carrying `session_id`, `thread_id`, a generated `turn_id`, a truthful LingTai `sandbox` label, and `turn_started_at_unix_ms`; and body `client_metadata.x-codex-installation-id` is carried through `extra_body` because the OpenAI Python SDK has no typed `client_metadata` argument. This is compatibility metadata, not CLI impersonation: LingTai keeps `originator: lingtai` / `User-Agent: LingTai/<version>`, does not send `x-codex-beta-features`, and derives its installation id from LingTai state rather than from the official Codex CLI installation file.
 
 ## State
 
@@ -211,7 +211,7 @@ When a Codex session has a stable LingTai session/thread identity, `CodexRespons
 - **`OpenAIChatSession._interface`** — canonical `ChatInterface`, single source of truth. Mutated in-place: `add_user_message`, `add_tool_results`, `add_assistant_message`, `drop_trailing`.
 - **`OpenAIChatSession._request_timeout`** — per-request HTTP timeout set by caller before dispatch (`adapter.py:1248`). Prevents race between watchdog and SDK.
 - **`OpenAIResponsesSession._response_id` / `_stateless_replay`** — in official/stateful mode `_response_id` is the server-side chain pointer and `session_resume_id`; in custom/stateless mode `_stateless_replay=True`, `_response_id` is not advanced, `session_resume_id` returns `None`, and `get_history()` returns full canonical `ChatInterface` history for durable restart (`adapter.py:1749-1750`, `adapter.py:2028-2039`).
-- **`CodexResponsesSession._response_id`** — transient debug aid only; never threaded into next request (`adapter.py:2485`).
+- **`CodexResponsesSession._response_id`** — transient debug aid only; never threaded into next request (`adapter.py:2492`).
 - **`CodexResponsesSession._current_id`** — the single per-agent affinity id (the hash of the agent path + current molt count) handed to this session, used byte-identically for `_prompt_cache_key` / `_session_id` / `_thread_id`. Set once per session at construction — a NEW session is built for each `create_chat`, and the adapter resolves the molt-current id at that point, so a molt-advanced id reaches the next session without any in-session mutation (no rotation, no epoch, no clock).
 - **Codex Responses trace** — opt-in diagnostics write JSONL metadata to `logs/codex_responses_trace.jsonl` when `LINGTAI_CODEX_RESPONSES_TRACE=1` (override path with `LINGTAI_CODEX_RESPONSES_TRACE_PATH`). Default off; stores event/item shapes, lengths/hashes, usage, and accumulator counts, not raw content.
 - **`OpenAIAdapter._client`** — shared `openai.OpenAI` instance. `_client_kwargs` stored for session `reset()`. Constructor passes `default_headers=merge_lingtai_identity_headers(...)` (`adapter.py:2125`), so OpenAI-compatible HTTP requests carry non-secret LingTai identity/version headers unless a caller/provider header overrides them case-insensitively.
