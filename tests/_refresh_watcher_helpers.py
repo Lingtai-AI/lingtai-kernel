@@ -9,10 +9,12 @@ process-free) watcher.
 The fake records every ``spawn_detached`` call (the typed
 ``RefreshWatcherRequest``) and translates it the same way the production
 POSIX adapter does — rendering the watcher program source via
-``watcher_program.render_watcher_script`` and the process environment via
-the POSIX adapter's ``build_watcher_env`` — so existing tests can keep
-asserting on ``last_script``/``last_env`` text without patching
-``subprocess.Popen`` directly.
+``watcher_program.render_watcher_script`` (the same rendering the production
+entrypoint module performs after decoding the adapter's encoded-request
+transport payload) and the process environment via the POSIX adapter's
+``build_watcher_env`` — so existing tests can keep asserting on
+``last_script``/``last_env`` text without patching ``subprocess.Popen``
+directly.
 """
 from __future__ import annotations
 

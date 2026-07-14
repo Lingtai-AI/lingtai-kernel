@@ -26,6 +26,7 @@ import os
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 from unittest.mock import MagicMock, patch
@@ -101,15 +102,18 @@ def _read_json(path):
 def test_posix_refresh_watcher_adapter_spawns_exact_detached_process():
     """The production adapter must translate a typed `RefreshWatcherRequest`
     into the exact Popen hand-off that was extracted from `_perform_refresh`:
-    current interpreter, rendered script text, built env, detached session,
-    and no inherited stdio. The Port no longer accepts raw script/env.
+    current interpreter, the owned entrypoint module invoked via `-m`, the
+    compact encoded-request payload, built env, detached session, and no
+    inherited stdio. The Port no longer accepts raw script/env, and the
+    transport no longer puts the ~480-line generated program source directly
+    on argv via `-c`.
     """
     from lingtai.adapters.posix.refresh_watcher import (
+        ENTRYPOINT_MODULE,
         PosixRefreshWatcherAdapter,
         build_watcher_env,
     )
-    from lingtai.kernel.refresh_watcher import RefreshWatcherRequest
-    from lingtai.kernel.refresh_watcher.watcher_program import render_watcher_script
+    from lingtai.kernel.refresh_watcher import RefreshWatcherRequest, encode_request
 
     request = RefreshWatcherRequest(
         taken_path="/wd/.refresh.taken",
@@ -122,7 +126,7 @@ def test_posix_refresh_watcher_adapter_spawns_exact_detached_process():
         address="wd",
         identity_fields_json='{"kernel_version": "v1"}',
     )
-    expected_script = render_watcher_script(request)
+    expected_payload = encode_request(request)
 
     with patch("lingtai.adapters.posix.refresh_watcher.subprocess.Popen") as popen, \
             patch.dict("os.environ", {"PATH": "/test/bin"}, clear=True):
@@ -130,7 +134,7 @@ def test_posix_refresh_watcher_adapter_spawns_exact_detached_process():
         expected_env = build_watcher_env(request)
 
     popen.assert_called_once_with(
-        [sys.executable, "-c", expected_script],
+        [sys.executable, "-m", ENTRYPOINT_MODULE, expected_payload],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -139,6 +143,181 @@ def test_posix_refresh_watcher_adapter_spawns_exact_detached_process():
     )
     assert expected_env["PATH"] == "/test/bin"
     assert expected_env["LINGTAI_REFRESH_ENV_OVERWRITE"] == "1"
+    assert ENTRYPOINT_MODULE == "lingtai.adapters.posix.refresh_watcher_entrypoint"
+
+
+def _sample_request(**overrides):
+    from lingtai.kernel.refresh_watcher import RefreshWatcherRequest
+
+    fields = dict(
+        taken_path="/wd/.refresh.taken",
+        lock_path="/wd/.agent.lock",
+        events_path="/wd/logs/events.jsonl",
+        stderr_log="/wd/logs/refresh_relaunch.log",
+        working_dir="/wd",
+        cmd=("lingtai-agent", "run", "/wd"),
+        agent_name="alice",
+        address="wd",
+        identity_fields_json='{"kernel_version": "v1"}',
+    )
+    fields.update(overrides)
+    return RefreshWatcherRequest(**fields)
+
+
+def test_encode_decode_request_roundtrip():
+    """`decode_request(encode_request(request))` must reproduce an equal
+    request — the wire shape a transport carries across a process boundary
+    must be lossless for every field, including the tuple `cmd` (JSON has no
+    tuple type, so `decode_request` must restore it, not leave it a list).
+    """
+    from lingtai.kernel.refresh_watcher import decode_request, encode_request
+
+    request = _sample_request()
+    payload = encode_request(request)
+    decoded = decode_request(payload)
+
+    assert decoded == request
+    assert isinstance(decoded.cmd, tuple)
+
+
+def test_encode_request_is_deterministic():
+    """The same request must always encode to the same bytes — a fixed field
+    order, not dict-iteration-order-dependent — so the transport payload is
+    directly diffable/testable.
+    """
+    from lingtai.kernel.refresh_watcher import encode_request
+
+    request = _sample_request()
+    assert encode_request(request) == encode_request(request)
+
+
+@pytest.mark.parametrize(
+    "bad_payload",
+    [
+        "not json at all",
+        "[1, 2, 3]",
+        '"just a string"',
+        "42",
+        "null",
+        "{}",  # missing every field
+        '{"cmd": [1, 2]}',  # cmd elements not strings, plus missing fields
+    ],
+)
+def test_decode_request_invalid_payload_fails_loudly(bad_payload):
+    from lingtai.kernel.refresh_watcher import decode_request
+
+    with pytest.raises(ValueError):
+        decode_request(bad_payload)
+
+
+def test_decode_request_rejects_extra_and_wrong_type_fields():
+    from lingtai.kernel.refresh_watcher import decode_request, encode_request
+
+    request = _sample_request()
+    payload_dict = json.loads(encode_request(request))
+
+    extra = dict(payload_dict)
+    extra["unexpected"] = "field"
+    with pytest.raises(ValueError):
+        decode_request(json.dumps(extra))
+
+    wrong_type = dict(payload_dict)
+    wrong_type["env_overwrite"] = "yes"
+    with pytest.raises(ValueError):
+        decode_request(json.dumps(wrong_type))
+
+    wrong_cmd = dict(payload_dict)
+    wrong_cmd["cmd"] = "not-a-list"
+    with pytest.raises(ValueError):
+        decode_request(json.dumps(wrong_cmd))
+
+
+def test_refresh_watcher_entrypoint_main_renders_and_executes_request():
+    """`refresh_watcher_entrypoint.main([payload])` must decode the request,
+    render the exact same program text `render_watcher_script` would, and
+    execute it — proving the entrypoint module is itself directly callable
+    for small contract tests, not just a subprocess black box. Uses a fast
+    deadline (0 sleep) via a launch cmd that immediately marks the agent
+    heartbeat fresh so the relaunch loop exits without a real subprocess
+    round-trip through this in-process call.
+    """
+    import lingtai.adapters.posix.refresh_watcher_entrypoint as entrypoint_mod
+    from lingtai.kernel.refresh_watcher import encode_request
+    from lingtai.kernel.refresh_watcher.watcher_program import render_watcher_script
+
+    request = _sample_request()
+    payload = encode_request(request)
+
+    captured = {}
+
+    def fake_exec(code, globals_):
+        captured["code"] = code
+        captured["globals"] = globals_
+
+    with patch.object(entrypoint_mod, "exec", fake_exec, create=True):
+        result = entrypoint_mod.main([payload])
+
+    assert result == 0
+    expected_script = render_watcher_script(request)
+    assert captured["code"] == compile(expected_script, "<refresh_watcher>", "exec")
+
+
+def test_refresh_watcher_entrypoint_main_rejects_bad_argv():
+    import lingtai.adapters.posix.refresh_watcher_entrypoint as entrypoint_mod
+
+    with pytest.raises(SystemExit):
+        entrypoint_mod.main([])
+    with pytest.raises(SystemExit):
+        entrypoint_mod.main(["one", "two"])
+
+
+def test_refresh_watcher_entrypoint_invoked_via_dash_m_runs_watcher_program(tmp_path):
+    """End-to-end smoke test of the new transport: launching
+    `sys.executable -m lingtai.adapters.posix.refresh_watcher_entrypoint
+    <payload>` — exactly the argv shape
+    `PosixRefreshWatcherAdapter.spawn_detached` uses — must decode the
+    request and run the real generated watcher program, reaching the same
+    ack/success events the previous `-c <script>` transport did. The agent
+    already appears alive (a fresh heartbeat) so the relaunch loop's first
+    "already alive" branch exits immediately, keeping the test fast without
+    needing to shrink MAX_ATTEMPTS/HEALTH_CHECK_WAIT inside the real module.
+    """
+    from lingtai.adapters.posix.refresh_watcher import ENTRYPOINT_MODULE, build_watcher_env
+    from lingtai.kernel.refresh_watcher import encode_request
+
+    wd = tmp_path / "wd"
+    (wd / "logs").mkdir(parents=True)
+    (wd / ".agent.heartbeat").write_text(str(__import__("time").time()), encoding="utf-8")
+    request = _sample_request(
+        taken_path=str(wd / ".refresh.taken"),
+        lock_path=str(wd / ".agent.lock"),
+        events_path=str(wd / "logs" / "events.jsonl"),
+        stderr_log=str(wd / "logs" / "refresh_relaunch.log"),
+        working_dir=str(wd),
+        cmd=(sys.executable, "-c", "pass"),
+    )
+    (wd / ".refresh.taken").touch()
+    payload = encode_request(request)
+    env = build_watcher_env(request)
+    # Pytest adds this src-layout checkout to the in-process import path, but
+    # that path is not automatically inherited by a fresh interpreter. Point
+    # the smoke-test subprocess at this exact worktree's src tree so `-m`
+    # exercises the candidate module instead of any separately installed
+    # LingTai version (or failing because no distribution is installed).
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+
+    result = subprocess.run(
+        [sys.executable, "-m", ENTRYPOINT_MODULE, payload],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    events = (wd / "logs" / "events.jsonl").read_text(encoding="utf-8")
+    assert "refresh_watcher_ack" in events
+    assert "refresh_watcher_already_alive" in events
 
 
 def test_build_watcher_env_false_overrides_preexisting_parent_marker(monkeypatch):

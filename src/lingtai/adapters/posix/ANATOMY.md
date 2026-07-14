@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/adapters/posix/mail.py
   - src/lingtai/adapters/posix/workdir_lease.py
   - src/lingtai/adapters/posix/refresh_watcher.py
+  - src/lingtai/adapters/posix/refresh_watcher_entrypoint.py
   - src/lingtai/adapters/posix/notification_store.py
   - src/lingtai/adapters/posix/agent_presence.py
   - src/lingtai/adapters/posix/migration_workspace.py
@@ -74,16 +75,27 @@ co-located ANATOMY.md files for each component.
   `release()` unlocks then guarantees the handle is closed in a `finally` (even if
   the explicit `LOCK_UN` raises) before a best-effort unlink, swallows the
   specified `OSError`s, resets its handle, and is idempotent.
-- `PosixRefreshWatcherAdapter` implements `RefreshWatcherPort` by rendering
-  the Core-owned watcher program text from a `RefreshWatcherRequest`
-  (`watcher_program.render_watcher_script`), building the process environment
-  via its own `build_watcher_env` (`src/lingtai/adapters/posix/refresh_watcher.py:32-55`:
+- `PosixRefreshWatcherAdapter` implements `RefreshWatcherPort` by encoding a
+  `RefreshWatcherRequest` to its compact deterministic JSON wire form
+  (`refresh_watcher.encode_request`), building the process environment via its
+  own `build_watcher_env` (`src/lingtai/adapters/posix/refresh_watcher.py:41-64`:
   `os.environ` capture plus `LINGTAI_REFRESH_ENV_OVERWRITE=1` when
-  `request.env_overwrite`), and launching `[sys.executable, "-c", script]` via
-  `subprocess.Popen` with all three standard streams set to `DEVNULL` and
-  `start_new_session=True`
-  (`src/lingtai/adapters/posix/refresh_watcher.py:69-79`); the call returns
-  once the process has been started and does not wait for or track it.
+  `request.env_overwrite`), and launching
+  `[sys.executable, "-m", ENTRYPOINT_MODULE, payload]` via `subprocess.Popen`
+  with all three standard streams set to `DEVNULL` and
+  `start_new_session=True` (`src/lingtai/adapters/posix/refresh_watcher.py:80-90`);
+  the call returns once the process has been started and does not wait for or
+  track it.
+- `refresh_watcher_entrypoint.main(argv)` is the owned ordinary
+  importable/executable module the launched process runs
+  (`src/lingtai/adapters/posix/refresh_watcher_entrypoint.py`). It decodes the
+  single encoded-request argument via `refresh_watcher.decode_request`,
+  renders the Core-owned watcher program text via
+  `watcher_program.render_watcher_script(request)`, and `exec`s it in a fresh
+  namespace — this is the only place the previously argv-embedded ~480-line
+  generated program text is materialized, replacing the earlier
+  `sys.executable -c <script>` transport. `main` performs no watcher policy
+  itself and is directly callable in tests independent of a real subprocess.
 - `PosixGitCliAdapter` implements both `SnapshotPort` and `SourceRevisionPort`
   through fixed Git command families. Separate composed instances target the
   agent workdir and running source; no arbitrary argv/process/result object is

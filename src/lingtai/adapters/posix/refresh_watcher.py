@@ -1,21 +1,29 @@
 """POSIX detached-process refresh-watcher adapter.
 
 ``PosixRefreshWatcherAdapter`` implements the Core-owned
-``lingtai.kernel.refresh_watcher.RefreshWatcherPort`` by rendering the
-Core-owned watcher program source from a ``RefreshWatcherRequest`` and
-launching it as a new interpreter subprocess, detached into its own POSIX
-session so it survives the caller's exit. It is the only production adapter;
-Core never constructs it.
+``lingtai.kernel.refresh_watcher.RefreshWatcherPort`` by encoding a
+``RefreshWatcherRequest`` to its compact deterministic JSON wire form
+(``lingtai.kernel.refresh_watcher.encode_request``) and launching a new
+interpreter subprocess against the owned entrypoint module
+``lingtai.adapters.posix.refresh_watcher_entrypoint``, detached into its own
+POSIX session so it survives the caller's exit. It is the only production
+adapter; Core never constructs it.
 
-The concrete interpreter path (``sys.executable``), the ``-c`` invocation
-mode, ``stdin``/``stdout``/``stderr`` detachment to ``DEVNULL``,
-``start_new_session=True`` (POSIX process-group detachment, not available on
-Windows), and full-environment construction (``os.environ`` capture plus the
-``env_overwrite`` policy bit from the request, translated to the concrete
-``ENV_OVERWRITE_VAR`` environment-variable name) all live here — they are the
-concrete process mechanism, not part of the technology-neutral Port. Core's
+The concrete interpreter path (``sys.executable``), the ``-m`` module
+invocation (rather than putting the ~480-line generated watcher-program
+source directly on argv via ``-c``), ``stdin``/``stdout``/``stderr``
+detachment to ``DEVNULL``, ``start_new_session=True`` (POSIX process-group
+detachment, not available on Windows), and full-environment construction
+(``os.environ`` capture plus the ``env_overwrite`` policy bit from the
+request, translated to the concrete ``ENV_OVERWRITE_VAR``
+environment-variable name) all live here — they are the concrete process
+mechanism, not part of the technology-neutral Port. Core's
 ``watcher_program`` module never defines or imports ``ENV_OVERWRITE_VAR``; it
-knows only the boolean ``request.env_overwrite`` policy bit.
+knows only the boolean ``request.env_overwrite`` policy bit. The entrypoint
+module (not this adapter) decodes the request back and renders the actual
+watcher-program text via ``watcher_program.render_watcher_script`` — this
+adapter never renders or inspects the program text itself, only the request
+encoding and the subprocess launch.
 """
 from __future__ import annotations
 
@@ -23,10 +31,11 @@ import os
 import subprocess
 import sys
 
-from lingtai.kernel.refresh_watcher import RefreshWatcherPort, RefreshWatcherRequest
-from lingtai.kernel.refresh_watcher.watcher_program import render_watcher_script
+from lingtai.kernel.refresh_watcher import RefreshWatcherPort, RefreshWatcherRequest, encode_request
 
 ENV_OVERWRITE_VAR = "LINGTAI_REFRESH_ENV_OVERWRITE"
+
+ENTRYPOINT_MODULE = "lingtai.adapters.posix.refresh_watcher_entrypoint"
 
 
 def build_watcher_env(request: RefreshWatcherRequest) -> dict[str, str]:
@@ -56,21 +65,23 @@ def build_watcher_env(request: RefreshWatcherRequest) -> dict[str, str]:
 
 
 class PosixRefreshWatcherAdapter(RefreshWatcherPort):
-    """Render and spawn the watcher program as a detached POSIX subprocess.
+    """Encode the request and spawn the watcher as a detached POSIX subprocess.
 
-    The launched process runs the current interpreter (``sys.executable -c
-    script``) with ``build_watcher_env(request)`` as its full environment,
-    all three standard streams sent to ``DEVNULL``, and
-    ``start_new_session=True`` so it is not a child of the caller's process
-    group. The call returns immediately after ``Popen`` starts the process;
-    it does not wait for or track the child.
+    The launched process runs the current interpreter against the owned
+    entrypoint module (``sys.executable -m
+    lingtai.adapters.posix.refresh_watcher_entrypoint <encoded-request>``)
+    with ``build_watcher_env(request)`` as its full environment, all three
+    standard streams sent to ``DEVNULL``, and ``start_new_session=True`` so
+    it is not a child of the caller's process group. The call returns
+    immediately after ``Popen`` starts the process; it does not wait for or
+    track the child.
     """
 
     def spawn_detached(self, request: RefreshWatcherRequest) -> None:
-        script = render_watcher_script(request)
+        payload = encode_request(request)
         env = build_watcher_env(request)
         subprocess.Popen(
-            [sys.executable, "-c", script],
+            [sys.executable, "-m", ENTRYPOINT_MODULE, payload],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -79,4 +90,4 @@ class PosixRefreshWatcherAdapter(RefreshWatcherPort):
         )
 
 
-__all__ = ["PosixRefreshWatcherAdapter", "build_watcher_env"]
+__all__ = ["PosixRefreshWatcherAdapter", "build_watcher_env", "ENTRYPOINT_MODULE"]

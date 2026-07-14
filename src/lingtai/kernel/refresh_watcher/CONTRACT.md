@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/kernel/refresh_watcher/watcher_program.py
   - src/lingtai/kernel/refresh_watcher/MANUAL.md
   - src/lingtai/adapters/posix/refresh_watcher.py
+  - src/lingtai/adapters/posix/refresh_watcher_entrypoint.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/agent.py
@@ -50,17 +51,26 @@ authority-bearing consumer is `_perform_refresh`
 
 This Port governs the hand-off of the watcher process itself, and Core owns a
 directly callable *renderer* (`watcher_program.render_watcher_script`) that
-produces the watcher program's text — the launched watcher is still
-generated `python -c` program source, executed later as a detached
-subprocess, not ordinary in-process executable/importable module code, and
-this slice does not claim the watcher's own policy became independently
-unit-testable. The watcher program's internal behavior — the
-`.refresh`/`.refresh.taken` handshake, ACK/lock deadlines, relaunch retry
-policy, stale-duplicate cleanup, and terminal-failure redaction/alerting —
-is rendered by `watcher_program.render_watcher_script` from a
-`RefreshWatcherRequest`; it is unaffected by which adapter spawns the
-rendered text. `base_agent/ANATOMY.md` still documents the historical
-behavior narrative for `lifecycle.py`'s role in building the request.
+produces the watcher program's text. The transport that carries a request
+across the process boundary is now the owned entrypoint module
+`lingtai.adapters.posix.refresh_watcher_entrypoint`, invoked via
+`python -m` with a compact deterministic JSON encoding of the request
+(`refresh_watcher.encode_request`/`decode_request`) as its single argument,
+rather than the ~480-line generated program text passed directly on argv via
+`-c`. The entrypoint module itself is ordinary importable/executable code —
+`main(argv)` is directly callable in tests — but it renders and `exec`s the
+same generated program text `render_watcher_script` always produced; this
+slice does not claim the watcher's own retry/heartbeat/duplicate-cleanup
+*policy* became independently unit-testable line-by-line, only that the
+*transport* carrying it across the process boundary is now an ordinary
+module rather than raw source on argv. The watcher program's internal
+behavior — the `.refresh`/`.refresh.taken` handshake, ACK/lock deadlines,
+relaunch retry policy, stale-duplicate cleanup, and terminal-failure
+redaction/alerting — is rendered by `watcher_program.render_watcher_script`
+from a `RefreshWatcherRequest`; it is unaffected by which adapter spawns the
+rendered text or how the request crosses the process boundary.
+`base_agent/ANATOMY.md` still documents the historical behavior narrative
+for `lifecycle.py`'s role in building the request.
 
 ## Behavior
 
@@ -91,7 +101,7 @@ strictly before any `.refresh`/`.refresh.taken` handshake mutation or
 agent mid-handshake. The no-launch-cmd path (`_build_launch_cmd()` returns
 `None`, e.g. bare `BaseAgent`) remains fully usable without a watcher, since
 it never reaches `spawn_detached`. Agents MUST NOT let concrete process
-identities (interpreter path, `-c` invocation, stream detachment,
+identities (interpreter path, `-m` module invocation, stream detachment,
 `start_new_session`, POSIX process groups) leak up through this Port, and
 MUST NOT construct a concrete adapter inside Core. The Port makes no promise
 about the launched process's exit code, output, or lifetime beyond "detached
@@ -136,26 +146,45 @@ vocabulary. There is no wait, poll, signal, or process-identity query.
 
 `PosixRefreshWatcherAdapter` is the only production adapter
 (`src/lingtai/adapters/posix/refresh_watcher.py`). Its `spawn_detached`
-renders the program text via the Core-owned
-`watcher_program.render_watcher_script(request)`
-(`src/lingtai/kernel/refresh_watcher/watcher_program.py`) and the process
+encodes the request via the Core-owned
+`refresh_watcher.encode_request(request)`
+(`src/lingtai/kernel/refresh_watcher/__init__.py`) and builds the process
 environment via its own `build_watcher_env(request)` (captures `os.environ`
 and applies `request.env_overwrite` as `LINGTAI_REFRESH_ENV_OVERWRITE=1`),
-then launches `[sys.executable, "-c", script]` via `subprocess.Popen` with
-`stdin`, `stdout`, and `stderr` all set to `subprocess.DEVNULL` and
+then launches `[sys.executable, "-m", ENTRYPOINT_MODULE, payload]` — where
+`ENTRYPOINT_MODULE` is `lingtai.adapters.posix.refresh_watcher_entrypoint`
+and `payload` is the encoded request — via `subprocess.Popen` with `stdin`,
+`stdout`, and `stderr` all set to `subprocess.DEVNULL` and
 `start_new_session=True` — the concrete detachment mechanism, POSIX-specific
 because `start_new_session` is not available on Windows, so the adapter lives
 under `adapters/posix` like `PosixWorkdirLeaseAdapter`. Core never constructs
-it and never calls `os.environ` or `subprocess` itself. A deterministic
-in-memory `FakeRefreshWatcher` in `tests/_refresh_watcher_helpers.py`
-implements the same Port — recording every `RefreshWatcherRequest` and
-translating it the same way the production adapter does (rendering script
-and env) instead of launching a process — to prove substitutability. A
+it and never calls `os.environ` or `subprocess` itself.
+`lingtai.adapters.posix.refresh_watcher_entrypoint` is the owned ordinary
+importable/executable module the launched process runs
+(`src/lingtai/adapters/posix/refresh_watcher_entrypoint.py`); its `main(argv)`
+decodes the single-argument payload via `refresh_watcher.decode_request`,
+renders the program text via the Core-owned
+`watcher_program.render_watcher_script(request)`
+(`src/lingtai/kernel/refresh_watcher/watcher_program.py`), and `exec`s it in
+a fresh namespace — reproducing the exact same generated program text and
+runtime behavior the previous `-c`-embedded transport did. `main` is directly
+callable in tests independent of a real subprocess launch; it performs no
+watcher policy itself, only the decode→render→exec pipeline. This module is
+process/transport mechanism (only ever invoked as a subprocess entrypoint),
+so it lives beside the adapter under `adapters/posix`, not in Core. A
+deterministic in-memory `FakeRefreshWatcher` in
+`tests/_refresh_watcher_helpers.py` implements the same Port — recording
+every `RefreshWatcherRequest` and translating it the same way the production
+adapter's rendering does (via `render_watcher_script`/`build_watcher_env`,
+bypassing the encode/decode transport step since it never crosses a process
+boundary) instead of launching a process — to prove substitutability. A
 Windows production adapter is explicitly out of scope for this slice.
 
 ## Contract rules
 
-1. `spawn_detached(request)` launches a process running exactly
+1. `spawn_detached(request)` launches a process that decodes
+   `refresh_watcher.encode_request(request)` back to an equal request (via
+   `refresh_watcher.decode_request`) and runs exactly
    `watcher_program.render_watcher_script(request)` with exactly the
    adapter's `build_watcher_env(request)` as its full environment; the call
    returns once the process has been started and does not block on or track
@@ -184,15 +213,21 @@ Windows production adapter is explicitly out of scope for this slice.
    so every agent built through a composition root has a real refresh-watcher
    capability. An explicitly injected watcher wins over composition-root
    construction. Only a raw, hand-constructed `BaseAgent` may omit it.
-5. Core imports, receives, and invokes only the Port and
-   `RefreshWatcherRequest`. Concrete process construction (interpreter path,
-   stream detachment, session/group mechanics, `os.environ` capture, and the
-   concrete environment-variable name — `ENV_OVERWRITE_VAR` — used to signal
-   env-file overwrite) belongs to the outer adapter; Core never names or
-   imports it. `watcher_program.py` is Core-owned and performs no OS calls;
-   it knows only the boolean `request.env_overwrite` policy bit, never the
-   env-var transport name, and is a pure function from `RefreshWatcherRequest`
-   to program-source text.
+5. Core imports, receives, and invokes only the Port, `RefreshWatcherRequest`,
+   and `encode_request`/`decode_request`. Concrete process construction
+   (interpreter path, `-m` module invocation, stream detachment,
+   session/group mechanics, `os.environ` capture, and the concrete
+   environment-variable name — `ENV_OVERWRITE_VAR` — used to signal env-file
+   overwrite) belongs to the outer adapter and its entrypoint module; Core
+   never names or imports either. `watcher_program.py` is Core-owned and
+   performs no OS calls; it knows only the boolean `request.env_overwrite`
+   policy bit, never the env-var transport name, and is a pure function from
+   `RefreshWatcherRequest` to program-source text. `encode_request`/
+   `decode_request` (`src/lingtai/kernel/refresh_watcher/__init__.py`) are
+   likewise Core-owned, pure, and technology-neutral: they define the request's
+   compact deterministic JSON wire shape and validate it on the way back, but
+   know nothing about how a transport delivers the encoded string (argv, a
+   file, stdin, ...) — that remains the adapter/entrypoint's concern.
 6. The generated watcher program's terminal-failure metadata bounds and
    redacts `last_stderr_tail`, `last_cleanup_error`, and `last_relaunch_error`
    identically (via the shared `_redact_bounded` helper in the rendered
@@ -221,6 +256,16 @@ Windows production adapter is explicitly out of scope for this slice.
    failing loudly (`ValueError`) on invalid JSON or a non-object top-level
    value, before any generated source is produced — an invalid snapshot MUST
    NOT silently render broken or empty watcher-program text.
+9. `decode_request(encode_request(request))` MUST equal `request` for every
+   valid `RefreshWatcherRequest`, including restoring `cmd` to a `tuple`
+   (JSON has no tuple type, so the decoded value would otherwise be a `list`).
+   `encode_request` MUST be deterministic — the same request always encodes
+   to the same bytes (fixed field order, not dict-iteration-order-dependent).
+   `decode_request` MUST fail loudly (`ValueError`) on invalid JSON, a
+   non-object top-level value, a missing or unexpected field, or a field of
+   the wrong shape (`cmd` not a list of strings, a path/id field not a
+   string, `env_overwrite` not a bool) — never silently constructing a
+   malformed request from untrusted transport input.
 
 ## Contract tests
 
@@ -239,11 +284,35 @@ watcher-script assertions in those files already pin.
 `test_posix_refresh_watcher_adapter_spawns_exact_detached_process`
 (`tests/test_perform_refresh_handshake.py`) proves the production adapter's
 `spawn_detached(request)` translates a `RefreshWatcherRequest` into the exact
-`Popen` call via `render_watcher_script`/`build_watcher_env`. These tests
-prove the Port is exercised without any real subprocess; the watcher
-program's own runtime behavior (executed via a real interpreter subprocess in
-a small number of existing tests) is unaffected by and independent of which
-adapter performs the hand-off.
+`Popen` call — `[sys.executable, "-m", ENTRYPOINT_MODULE, encode_request(request)]`
+plus `build_watcher_env(request)`. These tests prove the Port is exercised
+without any real subprocess; the watcher program's own runtime behavior
+(executed via a real interpreter subprocess in a small number of existing
+tests) is unaffected by and independent of which adapter performs the
+hand-off or how the request crosses the process boundary.
+
+`test_encode_decode_request_roundtrip`, `test_encode_request_is_deterministic`,
+`test_decode_request_invalid_payload_fails_loudly`, and
+`test_decode_request_rejects_extra_and_wrong_type_fields`
+(`tests/test_perform_refresh_handshake.py`) pin contract rule 9's
+serialization/validation guarantees directly against
+`refresh_watcher.encode_request`/`decode_request`, independent of any
+transport or subprocess.
+`test_refresh_watcher_entrypoint_main_renders_and_executes_request` and
+`test_refresh_watcher_entrypoint_main_rejects_bad_argv`
+(`tests/test_perform_refresh_handshake.py`) call
+`refresh_watcher_entrypoint.main(argv)` directly (no subprocess) and prove it
+decodes the payload, renders the exact same text `render_watcher_script`
+would, and `exec`s it — and that a malformed argv shape fails loudly rather
+than silently doing nothing.
+`test_refresh_watcher_entrypoint_invoked_via_dash_m_runs_watcher_program`
+(`tests/test_perform_refresh_handshake.py`) is the smallest end-to-end smoke
+test of the new transport: it launches
+`sys.executable -m lingtai.adapters.posix.refresh_watcher_entrypoint
+<payload>` — the exact argv shape the production adapter uses — as a real
+subprocess and asserts the real generated watcher program ran (reaching its
+ack/already-alive events), proving the `-m` transport is not merely
+structurally correct but actually executes the watcher.
 
 Two focused tests in `tests/test_perform_refresh_handshake.py` pin the
 optional-construction / fail-at-use split:

@@ -5,13 +5,15 @@ related_files:
   - src/lingtai/kernel/refresh_watcher/__init__.py
   - src/lingtai/kernel/refresh_watcher/watcher_program.py
   - src/lingtai/adapters/posix/refresh_watcher.py
+  - src/lingtai/adapters/posix/refresh_watcher_entrypoint.py
 maintenance: |
   Keep this manual's what/how/why in sync with RefreshWatcherPort,
-  RefreshWatcherRequest, watcher_program.render_watcher_script, and the POSIX
-  adapter whenever their behavior changes. Update related_files when a cited
-  file moves. This manual is linked from both refresh_watcher/CONTRACT.md and
-  refresh_watcher/ANATOMY.md per root CONTRACT.md Design principle 4 — keep
-  both edges present.
+  RefreshWatcherRequest, encode_request/decode_request,
+  watcher_program.render_watcher_script, the POSIX adapter, and its
+  entrypoint module whenever their behavior changes. Update related_files
+  when a cited file moves. This manual is linked from both
+  refresh_watcher/CONTRACT.md and refresh_watcher/ANATOMY.md per root
+  CONTRACT.md Design principle 4 — keep both edges present.
 ---
 # Refresh Watcher Manual
 
@@ -52,15 +54,31 @@ data afterward.
    duplicate-process cleanup (SIGTERM → 5s grace → SIGKILL), redacted event
    logging, and the terminal failure artifact/notification. This module
    performs no OS calls itself.
-3. **The POSIX adapter renders the environment and launches.**
+3. **The POSIX adapter encodes the request and launches the entrypoint.**
    `PosixRefreshWatcherAdapter.spawn_detached(request)`
    (`src/lingtai/adapters/posix/refresh_watcher.py`) calls
-   `render_watcher_script`, builds the launched process's environment via
-   `build_watcher_env` (captures `os.environ`, applies the
-   `env_overwrite` request field as `LINGTAI_REFRESH_ENV_OVERWRITE=1`), and
-   launches `[sys.executable, "-c", script]` via `subprocess.Popen` with all
-   three streams to `DEVNULL` and `start_new_session=True`.
-4. **The watcher program runs standalone.** Once spawned it re-derives
+   `refresh_watcher.encode_request(request)` for the compact deterministic
+   JSON wire payload, builds the launched process's environment via
+   `build_watcher_env` (captures `os.environ`, applies the `env_overwrite`
+   request field as `LINGTAI_REFRESH_ENV_OVERWRITE=1`), and launches
+   `[sys.executable, "-m", "lingtai.adapters.posix.refresh_watcher_entrypoint",
+   payload]` via `subprocess.Popen` with all three streams to `DEVNULL` and
+   `start_new_session=True`. Unlike the previous transport, the ~480-line
+   generated program text is never placed on argv — only the small encoded
+   request is.
+4. **The entrypoint module decodes, renders, and runs.**
+   `refresh_watcher_entrypoint.main(argv)`
+   (`src/lingtai/adapters/posix/refresh_watcher_entrypoint.py`) — the
+   process's actual `__main__` when launched via `-m` — decodes the single
+   argument via `refresh_watcher.decode_request`, calls
+   `render_watcher_script(request)` to produce the exact same program text
+   the previous transport embedded directly, and `exec`s it in a fresh
+   namespace. `main` is itself ordinary importable/executable code (directly
+   callable in tests, independent of a real subprocess), but it performs no
+   watcher policy of its own — it is a thin decode→render→exec pipeline, so
+   the watcher's actual runtime behavior remains entirely owned by
+   `render_watcher_script`.
+5. **The watcher program runs standalone.** Once running it re-derives
    everything it needs from literals embedded by `render_watcher_script`; it
    holds no reference to the parent process's live objects and outlives it.
 
@@ -84,11 +102,32 @@ and its *output text* can be asserted on (as the existing pinned-substring
 and AST-structural tests do), but the watcher's actual runtime behavior —
 the ACK/lock poll, the relaunch retry loop, stale-duplicate cleanup — is
 still only exercisable by running the rendered text as a real detached
-`python -c` subprocess, exactly as before this slice; it did not become
-ordinary in-process importable/unit-testable module code, and this slice
-does not claim otherwise. `render_watcher_script` remaining a pure
-string-render function (rather than a templating engine or code-generation
-framework) is deliberate — the smallest change that makes the program *text*
-directly producible and inspectable without redesigning the watcher's
-retry/heartbeat/duplicate-cleanup policy, or introducing a process-
-supervision Port, both of which stay explicit non-goals for a later slice.
+subprocess; it did not become ordinary in-process importable/unit-testable
+module code, and this slice does not claim otherwise. `render_watcher_script`
+remaining a pure string-render function (rather than a templating engine or
+code-generation framework) is deliberate — the smallest change that makes
+the program *text* directly producible and inspectable without redesigning
+the watcher's retry/heartbeat/duplicate-cleanup policy, or introducing a
+process-supervision Port, both of which stay explicit non-goals for a later
+slice.
+
+A later slice replaced only the *transport* that carries a request across
+that process boundary: the adapter used to place the entire ~480-line
+rendered program text directly on argv (`sys.executable -c <script>`), which
+is unusual as an OS-level invocation (an opaque blob on the command line,
+awkward to observe via `ps`, and not what "the interpreter runs a program"
+ordinarily looks like) even though the *rendering* was already a normal
+function call. Now the adapter launches an ordinary owned module via
+`-m` (`lingtai.adapters.posix.refresh_watcher_entrypoint`) with a small
+compact JSON-encoded request as its one argument; the entrypoint's `main`
+is itself ordinary importable/executable code directly callable in tests.
+This is still not a redesign of the watcher's policy or a claim that the
+ACK/lock/retry/cleanup behavior became independently unit-testable — `main`
+still renders the same generated text via `render_watcher_script` and
+`exec`s it, so the watcher's actual behavior is exercised exactly the same
+way as before (running rendered text as a real subprocess). It is a
+transport-shape improvement — replacing "raw generated source on argv" with
+"an ordinary module invocation carrying compact typed data" — not a Process/
+Clock/Filesystem/Publication Port abstraction, a Windows adapter, or a
+broader process-supervision redesign, all of which remain explicit non-goals
+for a later slice.
