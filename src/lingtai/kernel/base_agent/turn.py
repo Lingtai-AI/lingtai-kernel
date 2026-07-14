@@ -1759,7 +1759,19 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             # IDLE/ASLEEP injects synthesized notification + MSG_TC_WAKE; a later
             # ACTIVE tool-result batch stamps the notification normally.
             if agent._notification_live_holder is not None:
-                from ..meta_block import skeletonize_notification_holder
+                from ..meta_block import (
+                    note_email_clear_intent_before_holder_destroyed,
+                    skeletonize_notification_holder,
+                )
+                # The live holder here can be a SYNTHESIZED IDLE/ASLEEP-wake
+                # pair carrying a live email persistent snapshot; unlike an
+                # ordinary tool-result holder, skeletonize_notification_holder
+                # destructively wipes that content in place. Preserve the
+                # clear obligation (content-free — a boolean intent only)
+                # before it is erased, so a later current-zero batch can
+                # still stamp the durable tombstone instead of silently
+                # losing the only evidence email had gone stale.
+                note_email_clear_intent_before_holder_destroyed(agent)
                 skeletonize_notification_holder(agent)
         else:
             _prior_holder = agent._notification_live_holder

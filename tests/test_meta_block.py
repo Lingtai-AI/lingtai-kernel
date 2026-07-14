@@ -28,6 +28,7 @@ from lingtai.kernel.meta_block import (
     clear_active_notification_holder,
     current_tool_result_chars,
     render_meta,
+    skeletonize_notification_holder,
     slim_adapter_comment_for_tail,
     stamp_meta,
     static_adapter_comment,
@@ -2215,6 +2216,1043 @@ def test_attach_active_notifications_empty_resets_signature_for_reappearance(tmp
     new_holder = attach_active_notifications(agent, [third], prior_holder=None)
     assert new_holder is third.content
     assert "notifications" in third.content["_meta"]
+
+
+def test_attach_active_notifications_stamps_email_cleared_marker_on_full_clear(tmp_path):
+    # Real producer lifecycle: unread email arrives, is stamped as a live
+    # persistent snapshot, then the producer clears `.notification/email.json`
+    # (the real transition `_rerender_unread_digest` performs at unread == 0)
+    # and ALL channels go empty. Without an explicit marker, full-history
+    # replay would have no evidence the snapshot ended and would keep
+    # presenting the old nonempty snapshot as current (Terra B1).
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert holder is first.content
+    assert first.content["_meta"]["notification_persistent"]["email"]["email_ids"] == [
+        "email-1"
+    ]
+
+    # The real producer-owned clear path: delete the mirror file.
+    assert agent._notification_store.clear("email") is True
+
+    second = ToolResultBlock(id="t2", name="x", content={"ok": False})
+    result = attach_active_notifications(agent, [second], prior_holder=holder)
+
+    assert result is None  # no active notifications, matching existing contract
+    # The durable clear tombstone is stamped on THIS batch's dict result even
+    # though attach_active_notifications reports no live holder — it is
+    # durable append-only evidence for full-history replay, not a live holder.
+    cleared = second.content["_meta"]["notification_persistent"]["email"]
+    assert cleared["cleared"] is True
+    assert isinstance(cleared.get("cleared_at"), str) and cleared["cleared_at"]
+    # No email content/body leaks into the tombstone.
+    assert "emails" not in cleared
+    assert "email_ids" not in cleared
+    # The prior nonempty snapshot is retained as a historical trace (no
+    # retroactive strip) — model-facing replay filtering is a converter-layer
+    # concern (see tests/test_timely_transient_serialization.py), not this one.
+    assert first.content["_meta"]["notification_persistent"]["email"]["email_ids"] == [
+        "email-1"
+    ]
+
+
+def test_attach_active_notifications_stamps_email_cleared_marker_with_other_channel_active(
+    tmp_path,
+):
+    # Email clears to zero while a DIFFERENT channel (soul) stays active —
+    # the "all payload empty" branch never fires, so the clear marker must be
+    # stamped from the "material change, still some active channel" branch.
+    _write_email_notif(tmp_path)
+    notif_dir = tmp_path / ".notification"
+    (notif_dir / "soul.json").write_text(
+        '{"header": "soul flow", "icon": "🌊", "priority": "normal", '
+        '"data": {"voices": [{"source": "insights", "voice": "hum"}]}}',
+        encoding="utf-8",
+    )
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert first.content["_meta"]["notification_persistent"]["email"]["email_ids"] == [
+        "email-1"
+    ]
+
+    # Email clears; soul stays active, so the payload is still non-empty
+    # overall and the batch takes the "material change" branch, not the
+    # "all empty" branch.
+    assert agent._notification_store.clear("email") is True
+
+    second = ToolResultBlock(id="t2", name="x", content={"ok": False})
+    result = attach_active_notifications(agent, [second], prior_holder=holder)
+
+    assert result is second.content  # soul is still active -> new live holder
+    assert "soul" in second.content["_meta"]["notifications"]
+    cleared = second.content["_meta"]["notification_persistent"]["email"]
+    assert cleared["cleared"] is True
+    assert "emails" not in cleared
+
+
+def test_attach_active_notifications_no_email_cleared_marker_when_email_was_never_active(
+    tmp_path,
+):
+    # No prior email snapshot ever existed — an unrelated channel going empty
+    # must NOT invent a clear marker out of nothing.
+    notif_dir = tmp_path / ".notification"
+    notif_dir.mkdir(parents=True, exist_ok=True)
+    (notif_dir / "soul.json").write_text(
+        '{"header": "soul flow", "icon": "🌊", "priority": "normal", '
+        '"data": {"voices": [{"source": "insights", "voice": "hum"}]}}',
+        encoding="utf-8",
+    )
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    attach_active_notifications(agent, [first], prior_holder=None)
+    assert "notification_persistent" not in first.content.get("_meta", {})
+
+    (notif_dir / "soul.json").unlink()
+    second = ToolResultBlock(id="t2", name="x", content={"ok": False})
+    result = attach_active_notifications(agent, [second], prior_holder=first.content)
+
+    assert result is None
+    assert "_meta" not in second.content or "notification_persistent" not in second.content.get(
+        "_meta", {}
+    )
+
+
+def test_attach_active_notifications_no_duplicate_clear_marker_once_stamped(tmp_path):
+    # Once the clear tombstone is stamped, a later empty batch (email still
+    # absent, nothing changed) must not stamp a SECOND redundant clear marker
+    # — the prior clear is itself the newest email state, not a "live"
+    # snapshot that needs re-clearing.
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert agent._notification_store.clear("email") is True
+
+    second = ToolResultBlock(id="t2", name="x", content={"ok": False})
+    attach_active_notifications(agent, [second], prior_holder=holder)
+    assert second.content["_meta"]["notification_persistent"]["email"]["cleared"] is True
+
+    third = ToolResultBlock(id="t3", name="x", content={"ok": False})
+    result = attach_active_notifications(agent, [third], prior_holder=None)
+
+    assert result is None
+    assert "notification_persistent" not in third.content.get("_meta", {})
+
+
+def test_attach_active_notifications_no_dict_carrier_retains_clear_intent_for_later_batch(
+    tmp_path,
+):
+    # Terra repair-v2 B2: a live-to-absent email transition witnessed in a
+    # batch whose tool results are ALL non-dict (e.g. plain strings) must not
+    # be discarded. `_stamp_email_cleared_marker_if_possible` cannot land the
+    # tombstone this batch (no dict carrier), so the intent must be retained
+    # and consumed on the NEXT batch that does offer one.
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert agent._notification_store.clear("email") is True
+
+    # This batch has ONLY string-shaped results: no dict carrier at all.
+    string_only_batch = [ToolResultBlock(id="t2", name="x", content="plain text")]
+    result = attach_active_notifications(agent, string_only_batch, prior_holder=holder)
+    assert result is None
+    # Nothing to stamp onto in this batch; the intent must survive.
+    assert agent._email_pending_clear is True
+
+    # A LATER batch offers a real dict-shaped carrier. The standing intent
+    # must be consumed here even though this batch's own notification state
+    # is unchanged (still all-empty).
+    third = ToolResultBlock(id="t3", name="x", content={"ok": False})
+    result = attach_active_notifications(agent, [third], prior_holder=None)
+    assert result is None
+    cleared = third.content["_meta"]["notification_persistent"]["email"]
+    assert cleared["cleared"] is True
+    assert "emails" not in cleared
+    # Consumed: does not fire a second time.
+    assert agent._email_pending_clear is False
+
+
+def test_attach_active_notifications_no_dict_carrier_retains_intent_with_other_channel_active(
+    tmp_path,
+):
+    # Same as above, but the batch that lacks a dict carrier occurs while
+    # ANOTHER channel is still active (so this batch takes the "material
+    # change, some channel active" branch of attach_active_notifications
+    # instead of the "all empty" branch — a different code path that must
+    # ALSO retain the pending intent when it has no dict target).
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert agent._notification_store.clear("email") is True
+
+    notif_dir = tmp_path / ".notification"
+    (notif_dir / "soul.json").write_text(
+        '{"header": "soul flow", "icon": "🌊", "priority": "normal", '
+        '"data": {"voices": [{"source": "insights", "voice": "hum"}]}}',
+        encoding="utf-8",
+    )
+    # Active notifications exist (soul), but this batch has no dict result at
+    # all -> attach_active_notifications's own "no dict target" branch
+    # returns prior_holder unchanged and stamps nothing (not even a
+    # tombstone): `holder` still carries its ORIGINAL live email snapshot
+    # from the first attach call, untouched.
+    string_only_batch = [ToolResultBlock(id="t2", name="x", content="plain text")]
+    result = attach_active_notifications(agent, string_only_batch, prior_holder=holder)
+    assert result is holder
+    assert holder["_meta"]["notification_persistent"]["email"]["email_ids"] == ["email-1"]
+    assert not holder["_meta"]["notification_persistent"]["email"].get("cleared")
+
+    # NOTE: this specific branch (active notifications, no dict target) never
+    # observed was_email_live in the first place -- it returns before that
+    # computation -- so nothing was recorded as pending here. The intent is
+    # only ever noted where was_email_live IS computed (the all-empty branch,
+    # or the material-change branch once a dict target exists). This test
+    # locks that the no-target early-return does not itself crash or corrupt
+    # state when a live-to-absent transition is still only latent in
+    # `prior_holder`; the next real batch below still resolves it correctly
+    # via `was_email_live`, computed fresh from `prior_holder` each call.
+    third = ToolResultBlock(id="t3", name="x", content={"ok": False})
+    result = attach_active_notifications(agent, [third], prior_holder=holder)
+    assert result is third.content
+    cleared = third.content["_meta"]["notification_persistent"]["email"]
+    assert cleared["cleared"] is True
+
+
+def test_attach_active_notifications_synthesized_prior_holder_clear_intent(tmp_path):
+    # A synthesized IDLE-injected pair can also be the outgoing live holder.
+    # Its content dict has the same `_meta.notification_persistent.email`
+    # shape as a normal result, so the clear-transition detection (which only
+    # inspects that shape, not `_synthesized`) must behave identically.
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+
+    synthesized_holder = {
+        "_synthesized": True,
+        "_meta": {
+            "notifications": {"email": {"data": {"email_ids": ["email-1"]}}},
+            "notification_persistent": {
+                "email": {"email_ids": ["email-1"], "emails": [{"id": "email-1"}]}
+            },
+        },
+    }
+    assert agent._notification_store.clear("email") is True
+
+    batch = [ToolResultBlock(id="t1", name="x", content={"ok": True})]
+    result = attach_active_notifications(agent, batch, prior_holder=synthesized_holder)
+
+    assert result is None
+    cleared = batch[0].content["_meta"]["notification_persistent"]["email"]
+    assert cleared["cleared"] is True
+    assert "emails" not in cleared
+    # The synthesized pair itself is skeletonized (existing, unrelated
+    # behavior: a synthesized pair carries no live payload of its own once
+    # released — the tombstone is a NEW stamp on the new carrier, not a
+    # mutation of the synthesized pair's content).
+    assert synthesized_holder["_synthesized"] is True
+    assert synthesized_holder["_notification_placeholder"] is True
+    assert "_meta" not in synthesized_holder
+
+
+def test_attach_active_notifications_repeated_empty_batches_stamp_exactly_one_clear(
+    tmp_path,
+):
+    # Terra repair-v2 B2: repeated empty turns after the transition must
+    # produce exactly ONE effective clear tombstone, not duplicate churn.
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert agent._notification_store.clear("email") is True
+
+    second = ToolResultBlock(id="t2", name="x", content={"ok": False})
+    attach_active_notifications(agent, [second], prior_holder=holder)
+    assert second.content["_meta"]["notification_persistent"]["email"]["cleared"] is True
+
+    # Several more empty batches in a row.
+    stamped_count = 0
+    prior = None
+    for i in range(3, 8):
+        block = ToolResultBlock(id=f"t{i}", name="x", content={"ok": False})
+        attach_active_notifications(agent, [block], prior_holder=prior)
+        if "notification_persistent" in (block.content.get("_meta") or {}):
+            stamped_count += 1
+
+    assert stamped_count == 0  # no duplicate clear churn after the first one
+    assert agent._email_pending_clear is False
+
+
+def _reconcile_test_agent(tmp_path, iface):
+    """Minimal agent stand-in for reconcile_email_persistent_history tests.
+
+    Carries a real `_notification_store` (so `_collect_active_notifications_payload`
+    reads actual `.notification/` files), a real `_chat.interface`, and a
+    `_save_chat_history` that actually persists the interface to
+    `history/chat_history.jsonl` via `get_chat_state`/redaction, exactly like
+    the real `BaseAgent._save_chat_history` -- so save/restore idempotence
+    tests exercise the real on-disk round trip, not a stub.
+    """
+    from lingtai.kernel.llm.interface import ChatInterface
+    from tests._notification_store_helpers import notification_store_for
+
+    class _ReconcileTestAgent(SimpleNamespace):
+        agent_name = "test"
+
+        def get_chat_state(self):
+            return {"messages": self._chat.interface.to_dict()}
+
+        def _save_chat_history(self):
+            from lingtai.kernel.trace_redaction import redact_for_trajectory
+
+            history_dir = self._working_dir / "history"
+            history_dir.mkdir(exist_ok=True)
+            state = self.get_chat_state()
+            if state and state.get("messages"):
+                redacted = redact_for_trajectory(state["messages"])
+                lines = [json.dumps(entry, ensure_ascii=False) for entry in redacted]
+                (history_dir / "chat_history.jsonl").write_text(
+                    "\n".join(lines) + "\n", encoding="utf-8"
+                )
+
+    return _ReconcileTestAgent(
+        _working_dir=tmp_path,
+        _notification_store=notification_store_for(tmp_path),
+        _notification_fp=(),
+        _notification_payload_signature=None,
+        _notification_live_holder=None,
+        _email_pending_clear=False,
+        _chat=SimpleNamespace(interface=iface),
+    )
+
+
+def _assert_absent_in_all_five_renderers(iface, needle: str):
+    from lingtai.llm.claude_code.adapter import ClaudeCodeChatSession
+    from lingtai.llm.interface_converters import (
+        to_anthropic,
+        to_gemini,
+        to_openai,
+        to_responses_input,
+    )
+
+    anth_contents = [
+        b["content"]
+        for m in to_anthropic(iface)
+        if isinstance(m.get("content"), list)
+        for b in m["content"]
+        if isinstance(b, dict) and b.get("type") == "tool_result"
+    ]
+    assert not any(needle in c for c in anth_contents if isinstance(c, str))
+
+    openai_contents = [m["content"] for m in to_openai(iface) if m.get("role") == "tool"]
+    assert not any(needle in c for c in openai_contents if isinstance(c, str))
+
+    responses_outputs = [
+        it["output"]
+        for it in to_responses_input(iface)
+        if it.get("type") == "function_call_output"
+    ]
+    assert not any(needle in o for o in responses_outputs if isinstance(o, str))
+
+    gemini_results = [
+        b["result"]
+        for t in to_gemini(iface)
+        for b in t["content"]
+        if isinstance(b, dict) and b.get("type") == "function_result"
+    ]
+    assert not any(needle in r for r in gemini_results if isinstance(r, str))
+
+    session = ClaudeCodeChatSession(
+        adapter=None,
+        model="sonnet",
+        system_prompt="",
+        tools=[],
+        interface=iface,
+        context_window=100_000,
+    )
+    assert needle not in session._render_conversation()
+
+
+def _assert_present_in_all_five_renderers(iface, needle: str):
+    from lingtai.llm.claude_code.adapter import ClaudeCodeChatSession
+    from lingtai.llm.interface_converters import (
+        to_anthropic,
+        to_gemini,
+        to_openai,
+        to_responses_input,
+    )
+
+    anth_contents = [
+        b["content"]
+        for m in to_anthropic(iface)
+        if isinstance(m.get("content"), list)
+        for b in m["content"]
+        if isinstance(b, dict) and b.get("type") == "tool_result"
+    ]
+    assert any(needle in c for c in anth_contents if isinstance(c, str))
+
+    openai_contents = [m["content"] for m in to_openai(iface) if m.get("role") == "tool"]
+    assert any(needle in c for c in openai_contents if isinstance(c, str))
+
+    responses_outputs = [
+        it["output"]
+        for it in to_responses_input(iface)
+        if it.get("type") == "function_call_output"
+    ]
+    assert any(needle in o for o in responses_outputs if isinstance(o, str))
+
+    gemini_results = [
+        b["result"]
+        for t in to_gemini(iface)
+        for b in t["content"]
+        if isinstance(b, dict) and b.get("type") == "function_result"
+    ]
+    assert any(needle in r for r in gemini_results if isinstance(r, str))
+
+    session = ClaudeCodeChatSession(
+        adapter=None,
+        model="sonnet",
+        system_prompt="",
+        tools=[],
+        interface=iface,
+        context_window=100_000,
+    )
+    assert needle in session._render_conversation()
+
+
+def _legacy_email_content(*, message: str = "legacy unread body", email_id: str = "legacy-1") -> dict:
+    return {
+        "ok": True,
+        "_meta": {
+            "notification_persistent": {
+                "email": {
+                    "context_comment": "Unread email content moved here.",
+                    "email_ids": [email_id],
+                    "count": 1,
+                    "newest_received_at": "2026-01-01T00:00:00Z",
+                    "emails": [
+                        {
+                            "id": email_id,
+                            "from": "someone@example.com",
+                            "subject": "old",
+                            "message": message,
+                        }
+                    ],
+                }
+            }
+        },
+    }
+
+
+def test_reconcile_email_persistent_history_immediate_clear_all_five_renderers(tmp_path):
+    # Terra v4 correction: v3's bridge only set a pending flag, which no
+    # renderer ever consults -- rendering IMMEDIATELY after reconciliation
+    # (with NO intervening attach_active_notifications / tool-result call)
+    # still leaked the legacy body in all five renderers. This is the
+    # corrected regression: reconcile, then render at once.
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock
+    from lingtai.kernel.meta_block import reconcile_email_persistent_history
+
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    iface.add_assistant_message([ToolCallBlock(id="legacy_call", name="email", args={})])
+    iface.add_tool_results(
+        [ToolResultBlock(id="legacy_call", name="email", content=_legacy_email_content())]
+    )
+
+    # No `.notification/` directory at all -> current authoritative unread is
+    # zero (the producer already cleared it before/without this fix existing).
+    agent = _reconcile_test_agent(tmp_path, iface)
+
+    reconcile_email_persistent_history(agent)
+
+    # No pending flag is needed for this case anymore -- the durable clear
+    # tombstone must already be a real, appended, well-paired block in
+    # canonical history.
+    assert agent._email_pending_clear is False
+    assert len(iface.entries) == 5  # user, assistant/result (legacy), assistant/result (new pair)
+    new_call_entry = iface.entries[-2]
+    new_result_entry = iface.entries[-1]
+    assert new_call_entry.role == "assistant"
+    assert new_call_entry.content[0].name == "notification"
+    assert new_call_entry.content[0].args.get("action") == "check"
+    new_result_block = new_result_entry.content[0]
+    assert new_result_block.synthesized is True
+    assert new_result_block.content["_synthesized"] is True
+    cleared = new_result_block.content["_meta"]["notification_persistent"]["email"]
+    assert cleared["cleared"] is True
+    assert "emails" not in cleared and "email_ids" not in cleared
+    # No fake user text message was added.
+    assert not any(
+        entry.role == "user" and any(hasattr(b, "text") for b in entry.content)
+        for entry in iface.entries[1:]
+    )
+
+    # IMMEDIATE render, no intervening attach_active_notifications call.
+    _assert_absent_in_all_five_renderers(iface, "legacy unread body")
+
+
+def test_reconcile_email_persistent_history_immediate_current_snapshot_replaces_legacy(
+    tmp_path,
+):
+    # Legacy live snapshot + current producer state is a DIFFERENT live
+    # snapshot (nonzero unread): the current, intact snapshot must be
+    # appended and visible immediately, replacing the legacy one, with no
+    # intervening attach_active_notifications call.
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock
+    from lingtai.kernel.meta_block import reconcile_email_persistent_history
+
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    iface.add_assistant_message([ToolCallBlock(id="legacy_call", name="email", args={})])
+    iface.add_tool_results(
+        [ToolResultBlock(id="legacy_call", name="email", content=_legacy_email_content())]
+    )
+
+    _write_email_notif(
+        tmp_path, email_id="current-1", message="CURRENT authoritative body"
+    )
+    agent = _reconcile_test_agent(tmp_path, iface)
+
+    reconcile_email_persistent_history(agent)
+
+    assert agent._email_pending_clear is False
+    new_result_block = iface.entries[-1].content[0]
+    current_email = new_result_block.content["_meta"]["notification_persistent"]["email"]
+    assert current_email["email_ids"] == ["current-1"]
+    assert "cleared" not in current_email
+
+    _assert_absent_in_all_five_renderers(iface, "legacy unread body")
+    _assert_present_in_all_five_renderers(iface, "CURRENT authoritative body")
+
+
+def test_reconcile_email_persistent_history_no_op_when_no_email_history(tmp_path):
+    # No email persistent child anywhere in history, and no current active
+    # email either: reconciliation must NOT manufacture any pair (clear or
+    # otherwise) out of nothing.
+    from lingtai.kernel.llm.interface import ChatInterface
+    from lingtai.kernel.meta_block import reconcile_email_persistent_history
+
+    iface = ChatInterface()
+    iface.add_user_message("hello, no email ever happened here")
+
+    agent = _reconcile_test_agent(tmp_path, iface)
+    entries_before = len(iface.entries)
+
+    reconcile_email_persistent_history(agent)
+
+    assert agent._email_pending_clear is False
+    assert len(iface.entries) == entries_before  # no synthetic pair appended
+
+
+def test_reconcile_email_persistent_history_no_op_when_already_current(tmp_path):
+    # The newest email child in history is ALREADY exactly the current
+    # authoritative live snapshot -- no duplicate pair, no churn.
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock
+    from lingtai.kernel.meta_block import reconcile_email_persistent_history
+
+    _write_email_notif(tmp_path, email_id="current-1", message="same body")
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    agent = _reconcile_test_agent(tmp_path, iface)
+
+    # First reconcile establishes the current snapshot in history.
+    reconcile_email_persistent_history(agent)
+    entries_after_first = len(iface.entries)
+    assert entries_after_first > 1
+
+    # Second reconcile against the SAME unchanged current state must be a
+    # true no-op: no new pair.
+    reconcile_email_persistent_history(agent)
+    assert len(iface.entries) == entries_after_first
+
+
+def test_reconcile_email_persistent_history_no_op_when_already_cleared(tmp_path):
+    # The newest email child in history is ALREADY an explicit clear
+    # tombstone, and current state is still zero -- already reconciled,
+    # nothing stale to bridge, no duplicate clear pair.
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock
+    from lingtai.kernel.meta_block import (
+        build_email_persistent_cleared_marker,
+        reconcile_email_persistent_history,
+    )
+
+    cleared_content = {
+        "ok": True,
+        "_meta": {
+            "notification_persistent": {"email": build_email_persistent_cleared_marker()}
+        },
+    }
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    iface.add_assistant_message([ToolCallBlock(id="c1", name="x", args={})])
+    iface.add_tool_results([ToolResultBlock(id="c1", name="x", content=cleared_content)])
+
+    agent = _reconcile_test_agent(tmp_path, iface)
+    entries_before = len(iface.entries)
+
+    reconcile_email_persistent_history(agent)
+
+    assert agent._email_pending_clear is False
+    assert len(iface.entries) == entries_before  # no duplicate clear pair
+
+
+def test_reconcile_email_persistent_history_idempotent_across_save_and_restore(tmp_path):
+    # Repeated reconciliation before a durable save must deterministically
+    # re-derive the same conclusion and remain safe; AFTER a durable save,
+    # a completely fresh restore + reconcile pass must be idempotent (no
+    # further pair appended) -- this is the actual restart scenario, using
+    # the real chat_history.jsonl round trip via get_chat_state/redaction
+    # instead of an in-memory-only ChatInterface.
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock
+    from lingtai.kernel.meta_block import reconcile_email_persistent_history
+
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    iface.add_assistant_message([ToolCallBlock(id="legacy_call", name="email", args={})])
+    iface.add_tool_results(
+        [ToolResultBlock(id="legacy_call", name="email", content=_legacy_email_content())]
+    )
+    agent = _reconcile_test_agent(tmp_path, iface)
+
+    # First reconciliation appends the clear pair and persists it to disk.
+    reconcile_email_persistent_history(agent)
+    entries_after_first = len(iface.entries)
+    assert entries_after_first == 5
+    history_file = tmp_path / "history" / "chat_history.jsonl"
+    assert history_file.is_file()
+
+    # Repeated reconciliation BEFORE any further save, against the same
+    # in-memory interface, must not append a second pair.
+    reconcile_email_persistent_history(agent)
+    assert len(iface.entries) == entries_after_first
+
+    # Simulate an actual restart: build a FRESH ChatInterface restored from
+    # the persisted chat_history.jsonl (the real `_start` -> `restore_chat`
+    # code path shape), then reconcile again against it.
+    restored_messages = [
+        json.loads(line)
+        for line in history_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    restored_iface = ChatInterface.from_dict(restored_messages)
+    restored_agent = _reconcile_test_agent(tmp_path, restored_iface)
+
+    reconcile_email_persistent_history(restored_agent)
+
+    # Idempotent: the restored history already ends on the clear tombstone,
+    # so no new pair is appended.
+    assert len(restored_iface.entries) == len(restored_messages)
+    _assert_absent_in_all_five_renderers(restored_iface, "legacy unread body")
+
+
+def test_reconcile_email_persistent_history_idempotent_across_redaction(tmp_path):
+    # Terra repair-v4 review r2, Blocker 2: the actual deployed incident.
+    # Authoritative unread email contains a representative secret-shaped
+    # string (an OpenAI-style API key). `_save_chat_history` runs
+    # `redact_for_trajectory` before the durable JSONL write, so the
+    # HISTORICAL child read back after restart has the secret replaced with
+    # a `<REDACTED:...>` placeholder, while `current_email` is rebuilt RAW
+    # from the (unchanged) live producer store on every reconcile call. Raw
+    # dict equality between the two would never match, appending a new
+    # reconciliation pair (and re-saving another redacted copy) on every
+    # single restart even though the producer's authoritative state never
+    # changed.
+    from lingtai.kernel.llm.interface import ChatInterface
+    from lingtai.kernel.meta_block import reconcile_email_persistent_history
+
+    secret = "sk-abc1234567890123456789012345678901234567890"
+    _write_email_notif(tmp_path, email_id="secret-1", message=f"here is my key: {secret}")
+
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    agent = _reconcile_test_agent(tmp_path, iface)
+
+    # 1/2. First reconciliation appends the current live pair (containing
+    # the raw secret in memory) and durably saves it.
+    reconcile_email_persistent_history(agent)
+    entries_after_first = len(iface.entries)
+    assert entries_after_first == 3
+    history_file = tmp_path / "history" / "chat_history.jsonl"
+
+    # 3. Real chat save must have redacted the raw secret -- assert it is
+    # genuinely absent from the on-disk representation, not merely from some
+    # separate assertion path.
+    raw_disk = history_file.read_text(encoding="utf-8")
+    assert secret not in raw_disk
+    assert "<REDACTED:api_key>" in raw_disk
+
+    # 4. Restore into a COMPLETELY FRESH interface/agent (the real restart
+    # shape), with the SAME unchanged authoritative producer state.
+    restored_messages = [
+        json.loads(line)
+        for line in raw_disk.splitlines()
+        if line.strip()
+    ]
+    restored_iface = ChatInterface.from_dict(restored_messages)
+    restored_agent = _reconcile_test_agent(tmp_path, restored_iface)
+
+    # 5. Second reconciliation against the SAME unchanged producer state
+    # must append NO new pair (this is the exact defect: raw-vs-redacted
+    # equality previously always failed here), and immediate rendering
+    # must still correctly show the (redacted) email as current with no
+    # crash and no raw secret ever appearing anywhere in wire history.
+    entries_before_second = len(restored_iface.entries)
+    reconcile_email_persistent_history(restored_agent)
+    assert len(restored_iface.entries) == entries_before_second  # no churn
+
+    for entry in restored_iface.entries:
+        for block in entry.content:
+            content = getattr(block, "content", None)
+            assert secret not in json.dumps(content, default=str)
+
+    newest_child = restored_iface.entries[-1].content[0].content["_meta"][
+        "notification_persistent"
+    ]["email"]
+    assert newest_child["email_ids"] == ["secret-1"]
+    assert "cleared" not in newest_child
+
+    # 6. Changed NONSECRET semantic content (a genuinely different email)
+    # must still append a replacement pair -- the redaction-aware
+    # comparison must not become so loose that real changes are missed.
+    _write_email_notif(
+        tmp_path, email_id="different-1", message="a completely different message"
+    )
+    entries_before_third = len(restored_iface.entries)
+    reconcile_email_persistent_history(restored_agent)
+    assert len(restored_iface.entries) == entries_before_third + 2
+    replaced_child = restored_iface.entries[-1].content[0].content["_meta"][
+        "notification_persistent"
+    ]["email"]
+    assert replaced_child["email_ids"] == ["different-1"]
+
+
+def test_lifecycle_start_reconciles_email_before_message_loop_can_render(tmp_path):
+    # Terra v4 ordering requirement: prove via the REAL BaseAgent.start() ->
+    # lifecycle._start() path (not a hand-built stand-in) that the
+    # reconciliation pair already exists in canonical wire history by the
+    # time start() returns -- i.e. before the main message loop thread can
+    # possibly drive a session.send()/render. lifecycle._start() creates
+    # agent._thread (the main loop) only AFTER restore_chat +
+    # reconcile_email_persistent_history have already run synchronously on
+    # the calling thread, so inspecting agent._chat.interface immediately
+    # after start() returns observes the true pre-render state.
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock
+    from lingtai.kernel.state import AgentState
+    from lingtai.llm.interface_converters import to_openai
+    from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
+    from tests._agent_presence_helpers import make_test_presence_store
+    from tests._notification_store_helpers import notification_store_for
+    from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+    from tests._workdir_lease_helpers import make_test_lease
+    from unittest.mock import MagicMock
+
+    def make_mock_service():
+        svc = MagicMock()
+        svc.get_adapter.return_value = MagicMock()
+        svc.provider = "gemini"
+        svc.model = "gemini-test"
+
+        # `restore_chat` -> `SessionManager._rebuild_session` calls
+        # `create_session(..., interface=interface)` and stores whatever
+        # comes back as `agent._chat`. A bare MagicMock()'s `.interface`
+        # would be an auto-generated Mock attribute, not the REAL restored
+        # interface -- so this test would trivially pass regardless of
+        # whether restore actually happened. Return a stand-in whose
+        # `.interface` IS the exact interface object that was passed in.
+        def _create_session(*, interface=None, **kwargs):
+            session = MagicMock()
+            session.interface = interface if interface is not None else ChatInterface()
+            return session
+
+        svc.create_session.side_effect = _create_session
+        return svc
+
+    working_dir = tmp_path / "agent"
+    history_dir = working_dir / "history"
+    history_dir.mkdir(parents=True)
+
+    # Pre-seed durable history with a legacy live email snapshot, exactly as
+    # a restored process would find it on disk -- built through the real
+    # ChatInterface -> to_dict() -> JSONL shape, not a hand-authored fixture.
+    seed_iface = ChatInterface()
+    seed_iface.add_user_message("start")
+    seed_iface.add_assistant_message([ToolCallBlock(id="legacy_call", name="email", args={})])
+    seed_iface.add_tool_results(
+        [ToolResultBlock(id="legacy_call", name="email", content=_legacy_email_content())]
+    )
+    lines = [json.dumps(entry, ensure_ascii=False) for entry in seed_iface.to_dict()]
+    (history_dir / "chat_history.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    # No `.notification/` directory -> current authoritative unread is zero.
+    agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=working_dir,
+        workdir_lease=make_test_lease(),
+        agent_presence=make_test_presence_store(),
+        snapshot_port=make_test_snapshot_port(),
+        source_revision_port=make_test_source_revision_port(),
+        notification_store=notification_store_for(working_dir),
+    )
+    try:
+        agent.start()
+        # By the time start() returns, restore_chat + reconciliation have
+        # already run synchronously; the main loop thread (agent._thread)
+        # exists but is blocked on inbox.get() with nothing queued, so it
+        # cannot have rendered anything yet. Assert on the interface RIGHT
+        # NOW, with no intervening turn.
+        assert agent.state == AgentState.IDLE
+        iface = agent._chat.interface
+        rendered = to_openai(iface)
+        tool_contents = [m["content"] for m in rendered if m.get("role") == "tool"]
+        assert not any(
+            "legacy unread body" in c for c in tool_contents if isinstance(c, str)
+        ), "legacy email body still visible immediately after start() -- reconciliation did not run before render was possible"
+    finally:
+        agent.stop(timeout=2.0)
+
+
+def test_attach_active_notifications_context_molt_batch_preserves_pending_clear_intent(
+    tmp_path,
+):
+    # A context-molt batch bypasses attach_active_notifications entirely (see
+    # base_agent/turn.py) and only skeletonizes the live holder. When that
+    # holder is an ORDINARY (non-synthesized) tool-result dict, skeletonize
+    # leaves its content untouched, so a later non-molt batch can still
+    # recompute `was_email_live` fresh from `prior_holder` -- no pending
+    # flag is even needed for this shape. This test locks that baseline.
+    # The SYNTHESIZED-holder case (where skeletonize destructively wipes the
+    # content in place) is a materially different seam, covered separately
+    # by `test_note_email_clear_intent_before_holder_destroyed_*` below.
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert agent._notification_store.clear("email") is True
+
+    # Simulate the molt-batch bypass: base_agent/turn.py's molt branch calls
+    # skeletonize_notification_holder(agent) directly and does NOT call
+    # attach_active_notifications at all for this batch.
+    agent._notification_live_holder = holder
+    skeletonize_notification_holder(agent)
+
+    later = ToolResultBlock(id="t2", name="x", content={"ok": False})
+    result = attach_active_notifications(agent, [later], prior_holder=holder)
+    assert result is None
+    cleared = later.content["_meta"]["notification_persistent"]["email"]
+    assert cleared["cleared"] is True
+
+
+def _real_synthesized_email_holder(*, email_id: str = "email-1", message: str = "live body") -> dict:
+    """The REAL shape `_inject_notification_pair` builds and registers as
+    `agent._notification_live_holder` for an IDLE/ASLEEP wake delivering an
+    unread email (`base_agent/__init__.py:1607-1877`): a dict with
+    `_synthesized: True` plus a `_meta` envelope carrying
+    `notification_persistent.email`, alongside sibling `_meta.notifications`
+    / `notification_guidance` keys a real delivery also carries. Distinct
+    from an ordinary tool-result holder -- this is what
+    `skeletonize_notification_holder` destructively wipes in place."""
+    return {
+        "_synthesized": True,
+        "_meta": {
+            "notifications": {"email": {"data": {"email_ids": [email_id]}}},
+            "notification_guidance": {"ref": "meta_guidance.notification_handling"},
+            "notification_persistent": {
+                "email": {
+                    "email_ids": [email_id],
+                    "emails": [{"id": email_id, "message": message}],
+                }
+            },
+        },
+        "injection_seq": 1,
+    }
+
+
+def test_note_email_clear_intent_before_holder_destroyed_synthesized_holder_then_zero(
+    tmp_path,
+):
+    # Terra repair-v4 review r2, Blocker 1: the real synthesized-IDLE-holder
+    # -> context-molt -> current-zero -> next-carrier path. Drives the ACTUAL
+    # molt code sequence (note-then-skeletonize, matching base_agent/turn.py's
+    # molt branch exactly) against the REAL synthesized holder shape -- not
+    # an ordinary ToolResultBlock dict, which the earlier (invalid) version
+    # of this regression used and which does not exercise the destructive
+    # skeletonize path at all.
+    from lingtai.kernel.meta_block import note_email_clear_intent_before_holder_destroyed
+
+    agent = _notif_agent(tmp_path)
+    synth_holder = _real_synthesized_email_holder()
+    agent._notification_live_holder = synth_holder
+
+    # Exact molt-branch sequence from base_agent/turn.py: note the clear
+    # obligation BEFORE the destructive skeletonize, then skeletonize.
+    note_email_clear_intent_before_holder_destroyed(agent)
+    assert agent._email_pending_clear is True
+    skeletonize_notification_holder(agent)
+
+    # The synthesized holder's content is destructively wiped in place (this
+    # IS the existing, correct, unrelated skeletonize behavior for
+    # synthesized pairs) -- its email content is genuinely gone from that
+    # dict now; the pending flag is the ONLY surviving evidence.
+    assert synth_holder["_synthesized"] is True
+    assert "_meta" not in synth_holder
+    assert agent._notification_live_holder is None
+
+    # Current producer state is now zero unread (no .notification/email.json
+    # ever written in this test). The next batch with a dict carrier must
+    # still durably stamp exactly one clear tombstone from the preserved
+    # pending flag -- there is no live prior_holder content left to derive
+    # `was_email_live` from directly.
+    next_block = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    result = attach_active_notifications(agent, [next_block], prior_holder=None)
+    assert result is None
+    cleared = next_block.content["_meta"]["notification_persistent"]["email"]
+    assert cleared["cleared"] is True
+    assert "emails" not in cleared and "email_ids" not in cleared
+    assert agent._email_pending_clear is False  # consumed, not left standing
+
+
+def test_note_email_clear_intent_before_holder_destroyed_current_live_no_false_clear(
+    tmp_path,
+):
+    # A fresh live email arrives again before the pending intent is
+    # consumed: the eventual consumer (attach_active_notifications) is
+    # gated on `not email_present_this_round`, so noting the intent at the
+    # molt boundary must NOT manufacture a false clear once email is live
+    # again -- the current live snapshot must win.
+    from lingtai.kernel.meta_block import note_email_clear_intent_before_holder_destroyed
+
+    agent = _notif_agent(tmp_path)
+    synth_holder = _real_synthesized_email_holder(email_id="old-1")
+    agent._notification_live_holder = synth_holder
+
+    note_email_clear_intent_before_holder_destroyed(agent)
+    skeletonize_notification_holder(agent)
+    assert agent._email_pending_clear is True
+
+    # Current producer state has a NEW live unread email by the time the
+    # next batch runs.
+    _write_email_notif(tmp_path, email_id="new-1", message="fresh live body")
+    next_block = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    result = attach_active_notifications(agent, [next_block], prior_holder=None)
+
+    assert result is next_block.content
+    current = next_block.content["_meta"]["notification_persistent"]["email"]
+    assert current["email_ids"] == ["new-1"]
+    assert "cleared" not in current  # no false clear despite the standing intent
+
+
+def test_note_email_clear_intent_before_holder_destroyed_no_op_for_ordinary_holder(
+    tmp_path,
+):
+    # Guard: an ORDINARY (non-synthesized) holder must not trigger the
+    # note-before-destroy helper -- skeletonize already leaves ordinary
+    # holders' content intact, so nothing needs preserving, and calling this
+    # unconditionally on every holder type would be redundant/wrong scope.
+    from lingtai.kernel.meta_block import note_email_clear_intent_before_holder_destroyed
+
+    agent = _notif_agent(tmp_path)
+    ordinary_holder = {
+        "ok": True,
+        "_meta": {
+            "notification_persistent": {
+                "email": {"email_ids": ["e1"], "emails": [{"id": "e1"}]}
+            }
+        },
+    }
+    agent._notification_live_holder = ordinary_holder
+
+    note_email_clear_intent_before_holder_destroyed(agent)
+
+    assert getattr(agent, "_email_pending_clear", False) is False
+
+
+def test_note_email_clear_intent_before_holder_destroyed_repeated_calls_no_churn(
+    tmp_path,
+):
+    # Repeated molt boundaries (e.g. several molts in a row with no
+    # intervening real carrier) must not churn -- the flag is a single
+    # boolean, re-noting it is idempotent, and the eventual single consume
+    # still yields exactly one clear tombstone.
+    from lingtai.kernel.meta_block import note_email_clear_intent_before_holder_destroyed
+
+    agent = _notif_agent(tmp_path)
+    for _ in range(3):
+        synth_holder = _real_synthesized_email_holder()
+        agent._notification_live_holder = synth_holder
+        note_email_clear_intent_before_holder_destroyed(agent)
+        skeletonize_notification_holder(agent)
+    assert agent._email_pending_clear is True
+
+    next_block = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    attach_active_notifications(agent, [next_block], prior_holder=None)
+    cleared_count = sum(
+        1
+        for entry_content in [next_block.content]
+        if "notification_persistent" in (entry_content.get("_meta") or {})
+    )
+    assert cleared_count == 1
+    assert agent._email_pending_clear is False
+
+
+def test_note_email_clear_intent_survives_restart_before_next_carrier(tmp_path):
+    # A synthesized holder is skeletonized (pending flag set), but the
+    # process exits before any dict-shaped carrier consumes it -- an
+    # in-memory flag alone cannot survive that restart. On the next start,
+    # `reconcile_email_persistent_history` must independently recover the
+    # SAME authoritative conclusion from canonical history + current
+    # producer state, without needing the lost flag and without resurrecting
+    # stale mail: history's newest email child is whatever was durably
+    # recorded (or nothing, if the synthesized pair was never saved to
+    # disk), and current producer state is compared fresh.
+    from lingtai.kernel.meta_block import (
+        note_email_clear_intent_before_holder_destroyed,
+        reconcile_email_persistent_history,
+    )
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock
+
+    agent = _notif_agent(tmp_path)
+    synth_holder = _real_synthesized_email_holder()
+    agent._notification_live_holder = synth_holder
+    note_email_clear_intent_before_holder_destroyed(agent)
+    skeletonize_notification_holder(agent)
+    assert agent._email_pending_clear is True
+
+    # Process exits here: the flag is lost (a fresh SimpleNamespace agent
+    # below starts with _email_pending_clear=False, exactly like a real
+    # restart). Durable history has NO email child at all -- the live
+    # synthesized delivery from before the crash was never a normal tool
+    # result and was never saved (it lived only in the synthesized pair,
+    # which by design carries no separate durable save of its own beyond
+    # whatever chat_history.jsonl snapshot already existed).
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    fresh_agent = _reconcile_test_agent(tmp_path, iface)
+    # Current producer state is zero unread (no .notification/email.json).
+
+    reconcile_email_persistent_history(fresh_agent)
+
+    # No email child ever existed in DURABLE history, and current state is
+    # zero: the no-manufacture-from-nothing rule applies. This is the
+    # correct, safe outcome -- it must NOT resurrect the pre-crash email as
+    # if it were still live, and it must NOT fabricate a clear for a history
+    # that (durably) never had email.
+    assert len(iface.entries) == 1
+    assert fresh_agent._email_pending_clear is False
 
 
 def test_attach_active_notifications_adds_telegram_persistent_snapshot(tmp_path):

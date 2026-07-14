@@ -145,6 +145,33 @@ def _start(agent) -> None:
             from ..logging import get_logger
             get_logger().warning(f"[{agent.agent_name}] Failed to restore chat history: {e}")
 
+    # Bridge the email whole-snapshot persistent lane across this
+    # restart/refresh, BEFORE the first full-history render can happen (the
+    # main loop / heartbeat have not started sending anything yet — `agent
+    # ._thread` is only created later in this function). A fresh process has
+    # no live `_notification_live_holder` to compare against, so without this
+    # reconciliation a legacy nonempty `notification_persistent.email`
+    # snapshot already at zero current unread would sit as the newest email
+    # child forever with nothing in history recording that it went stale.
+    # This appends a real synthesized `(notification(action="check"),
+    # result)` pair directly into the restored `ChatInterface` when the
+    # newest historical email child does not already match current
+    # authoritative producer state -- a mere in-memory flag would not help,
+    # since the first render can happen before any tool call exists to
+    # consume one. Idempotent and no-op when there is no email history at
+    # all, or when the newest email child already matches current state
+    # (including an existing clear). See
+    # `meta_block.reconcile_email_persistent_history` and
+    # `LICC_NOTIFICATION_CONTRACT.md`.
+    try:
+        from ..meta_block import reconcile_email_persistent_history
+        reconcile_email_persistent_history(agent)
+    except Exception as e:
+        from ..logging import get_logger
+        get_logger().warning(
+            f"[{agent.agent_name}] email persistent history reconciliation failed: {e}"
+        )
+
     # Rehydrate any still-open WorkerStillRunning recovery artifacts into a
     # high-priority notification so the next process re-surfaces the unfinished
     # turn after refresh/relaunch.

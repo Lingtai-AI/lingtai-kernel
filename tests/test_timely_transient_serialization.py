@@ -14,16 +14,33 @@ occurrence per family and omits the stale copies, without mutating
 
 This is SHARED semantics, not a Codex special case: the converters
 (``to_anthropic`` / ``to_openai`` / ``to_responses_input`` / ``to_gemini``)
-and the claude_code full-history render all filter through
-``interface_converters.filter_stale_timely_transient``. On the Codex WS path
-the per-``call_id`` freeze keeps already-sent outputs byte-identical within an
-epoch; a fresh replay after an epoch reset re-freezes from the shared
-converter's serialization and so sheds the stale copies — no adapter-private
-filter state.
+and the claude_code full-history render all filter through the INTERNAL
+``interface_converters._render_full_history_result`` primitive. On the Codex
+WS path the per-``call_id`` freeze keeps already-sent outputs byte-identical
+within an epoch; a fresh replay after an epoch reset re-freezes from the
+shared converter's serialization and so sheds the stale copies — no
+adapter-private filter state.
 
 Summary replacement is unaffected: a summarized result's canonical content IS
-the marker dict, and replays carry it. The durable ``notification_persistent``
-lane and permanent ``tool_meta`` are never filtered.
+the marker dict, and replays carry it. Delta-lane ``notification_persistent``
+blocks (Telegram/WeChat/Feishu ``previous_block`` continuity) and permanent
+``tool_meta`` are never filtered.
+
+``notification_persistent.email`` is a SEPARATE, narrower whole-snapshot
+invariant (see the dedicated section below): it is an atomic current-unread
+snapshot, not timely-transient-family state and not a set of independent
+per-id records.
+
+Public/legacy compatibility: ``filter_stale_timely_transient(block, newest)``
+is the ESTABLISHED two-argument public helper. It is unchanged from before
+the email whole-snapshot feature existed — it filters only the
+timely-transient families and never touches ``notification_persistent`` at
+all. The five model-facing full-history renderers do NOT call it; they call
+the internal ``_render_full_history_result(block, newest, newest_email_snapshot)``,
+which additionally projects the email whole-snapshot state. There is no
+optional-argument bypass on the internal primitive, but the public two-arg
+contract is a source-compatible no-op for any external caller (Terra
+repair-v2 review, blocker 3).
 
 These tests are content-free where possible: they assert key structure, not
 tool-result bodies.
@@ -42,7 +59,9 @@ from lingtai.kernel.llm.interface import (
 )
 
 from lingtai.llm.interface_converters import (
+    _render_full_history_result,
     filter_stale_timely_transient,
+    newest_email_snapshot_holder,
     timely_transient_newest_holders,
     to_anthropic,
     to_gemini,
@@ -217,6 +236,8 @@ def test_filter_returns_original_object_when_nothing_to_filter():
         },
     ):
         block = ToolResultBlock(id="call_1", name="do_x", content=content)
+        assert _render_full_history_result(block, newest, None) is content
+        # The public two-argument helper agrees for every non-email shape.
         assert filter_stale_timely_transient(block, newest) is content
 
 
@@ -225,7 +246,7 @@ def test_filter_keeps_content_of_the_newest_holder_itself():
     block = ToolResultBlock(id="call_1", name="do_x", content=content)
     newest = {"agent_meta": block, "notifications": block}
 
-    assert filter_stale_timely_transient(block, newest) is content
+    assert _render_full_history_result(block, newest, None) is content
 
 
 def test_filter_removes_all_four_stale_keys_and_keeps_others():
@@ -235,7 +256,7 @@ def test_filter_removes_all_four_stale_keys_and_keeps_others():
     }
     block = ToolResultBlock(id="call_1", name="do_x", content=content)
 
-    filtered = filter_stale_timely_transient(block, {})
+    filtered = _render_full_history_result(block, {}, None)
 
     assert filtered == {"ok": True, "_meta": {"tool_meta": {"id": "t1"}}}
     # Canonical content is untouched.
@@ -244,7 +265,11 @@ def test_filter_removes_all_four_stale_keys_and_keeps_others():
 
 def test_filter_preserves_notification_persistent_lane():
     # notification_persistent is the DURABLE communication-context lane, not a
-    # timely transient block — the filter must never touch it.
+    # timely transient block — the filter must never touch it, EXCEPT the
+    # narrower whole-snapshot email invariant tested separately below. This
+    # block carries only a Telegram delta-lane payload (no email), so passing
+    # `newest_email_snapshot=None` (no email snapshot anywhere in history)
+    # must leave it untouched.
     content = {
         "ok": True,
         "_meta": {
@@ -254,7 +279,7 @@ def test_filter_preserves_notification_persistent_lane():
     }
     block = ToolResultBlock(id="call_1", name="do_x", content=content)
 
-    filtered = filter_stale_timely_transient(block, {})
+    filtered = _render_full_history_result(block, {}, None)
 
     assert "notifications" not in filtered["_meta"]
     assert filtered["_meta"]["notification_persistent"] == {
@@ -266,7 +291,7 @@ def test_filter_omits_meta_envelope_when_only_stale_keys():
     content = {"ok": True, "_meta": dict(_ALL_TRANSIENT_META)}
     block = ToolResultBlock(id="call_1", name="do_x", content=content)
 
-    filtered = filter_stale_timely_transient(block, {})
+    filtered = _render_full_history_result(block, {}, None)
 
     assert filtered == {"ok": True}
     assert "_meta" in content  # canonical keeps the envelope
@@ -276,11 +301,92 @@ def test_filter_handles_json_string_content_without_mutating_it():
     original = json.dumps({"ok": True, "_meta": dict(_ALL_TRANSIENT_META)})
     block = ToolResultBlock(id="call_1", name="do_x", content=original)
 
-    filtered = filter_stale_timely_transient(block, {})
+    filtered = _render_full_history_result(block, {}, None)
 
     assert isinstance(filtered, str)
     assert json.loads(filtered) == {"ok": True}
     assert block.content == original  # same canonical string, unmutated
+
+
+# ---------------------------------------------------------------------------
+# B3 repair: the established two-argument public helper contract is restored.
+# ---------------------------------------------------------------------------
+
+
+def test_public_two_argument_helper_never_touches_email_and_does_not_raise():
+    # Legacy/external callers using the pre-existing two-argument signature
+    # must see EXACTLY the pre-email-feature behavior: only timely-transient
+    # families are filtered, notification_persistent (including email) is
+    # untouched, and omitting the (nonexistent) third argument never raises.
+    stale_family = {"ok": True, "_meta": dict(_ALL_TRANSIENT_META)}
+    block_family = ToolResultBlock(id="call_1", name="do_x", content=stale_family)
+    filtered_family = filter_stale_timely_transient(block_family, {})
+    assert filtered_family == {"ok": True}
+
+    email_content = {
+        "ok": True,
+        "_meta": {
+            "tool_meta": {"id": "t1"},
+            "notification_persistent": {
+                "email": {"email_ids": ["A"], "emails": [{"id": "A"}]}
+            },
+        },
+    }
+    block_email = ToolResultBlock(id="call_2", name="email", content=email_content)
+    # A block that is ALSO the "newest" for some family still keeps its email
+    # child untouched by the two-argument helper — it never looks at email.
+    filtered_email = filter_stale_timely_transient(
+        block_email, {"agent_meta": block_email}
+    )
+    assert filtered_email["_meta"]["notification_persistent"]["email"] == {
+        "email_ids": ["A"],
+        "emails": [{"id": "A"}],
+    }
+
+
+def test_public_two_argument_helper_leaves_stale_email_snapshot_in_place():
+    # The two-argument helper is NOT the email whole-snapshot filter: two
+    # blocks with the "same id, different sender" incident shape both keep
+    # their email child when run through the legacy two-argument path alone
+    # (only the internal five-renderer primitive resolves that).
+    stale = ToolResultBlock(
+        id="call_1",
+        name="email",
+        content={
+            "ok": True,
+            "_meta": {
+                "notification_persistent": {
+                    "email": {
+                        "email_ids": ["email-1"],
+                        "emails": [{"id": "email-1", "from": "wrong@example.com"}],
+                    }
+                }
+            },
+        },
+    )
+    current = ToolResultBlock(
+        id="call_2",
+        name="email",
+        content={
+            "ok": True,
+            "_meta": {
+                "notification_persistent": {
+                    "email": {
+                        "email_ids": ["email-1"],
+                        "emails": [{"id": "email-1", "from": "right@example.com"}],
+                    }
+                }
+            },
+        },
+    )
+    filtered_stale = filter_stale_timely_transient(stale, {})
+    filtered_current = filter_stale_timely_transient(current, {})
+    assert filtered_stale["_meta"]["notification_persistent"]["email"]["emails"][0][
+        "from"
+    ] == "wrong@example.com"
+    assert filtered_current["_meta"]["notification_persistent"]["email"]["emails"][0][
+        "from"
+    ] == "right@example.com"
 
 
 def test_newest_holders_track_last_occurrence_per_family():
@@ -292,6 +398,466 @@ def test_newest_holders_track_last_occurrence_per_family():
 
     assert newest["notifications"].id == "call_1"
     assert newest["agent_meta"].id == "call_2"
+
+
+# ---------------------------------------------------------------------------
+# Email whole-snapshot invariant (replaces the rejected per-email-id premise).
+#
+# Email is a producer-owned ATOMIC current-unread snapshot (see
+# ``tools/email/primitives.py::_unread_notification_context`` /
+# ``meta_block.py::_build_email_notification_persistent_payload`` /
+# ``LICC_NOTIFICATION_CONTRACT.md``), not an append-only collection of
+# independent per-id records. Correlated fields (``count``,
+# ``newest_received_at``, ``context_comment``, ``email_ids``, ``emails``) all
+# describe ONE snapshot together and must never be spliced against a
+# different snapshot. Full-history replay keeps only the newest whole
+# ``notification_persistent.email`` child (a live snapshot, or an explicit
+# ``{"cleared": True, ...}`` tombstone once unread count reaches zero — see
+# ``meta_block.build_email_persistent_cleared_marker``) and removes the
+# entire child, whole-block, from every earlier holder.
+# ---------------------------------------------------------------------------
+
+
+def _email_snapshot_content(
+    *, email_ids: list[str], emails: list[dict], count: int, newest_received_at: str
+) -> dict:
+    """An authentic-shaped whole email snapshot, mirroring the real producer
+    payload built by ``_build_email_notification_persistent_payload`` — every
+    correlated field (``count``, ``newest_received_at``, ``context_comment``,
+    ``email_ids``, ``emails``) belongs to the SAME snapshot."""
+    return {
+        "ok": True,
+        "_meta": {
+            "notification_persistent": {
+                "email": {
+                    "context_comment": "Unread email content moved here from "
+                    "_meta.notifications.email.",
+                    "email_ids": email_ids,
+                    "count": count,
+                    "newest_received_at": newest_received_at,
+                    "emails": emails,
+                }
+            }
+        },
+    }
+
+
+def _email_message(msg_id: str, *, sender: str, message: str, subject: str = "Q3 numbers") -> dict:
+    return {
+        "id": msg_id,
+        "from": sender,
+        "subject": subject,
+        "message": message,
+        "unread": True,
+    }
+
+
+def _email_cleared_content() -> dict:
+    from lingtai.kernel.meta_block import build_email_persistent_cleared_marker
+
+    return {
+        "ok": True,
+        "_meta": {
+            "notification_persistent": {"email": build_email_persistent_cleared_marker()}
+        },
+    }
+
+
+@pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
+def test_older_whole_snapshot_absent_after_id_drops_out(outputs):
+    """`[A, B]` then current `[B]`: the earlier WHOLE email child is absent;
+    `A` is never resurrected — this is the corrected replacement for the
+    rejected per-ID merge premise, which kept unique older ids alive."""
+    older = ToolResultBlock(
+        id="call_1",
+        name="email",
+        content=_email_snapshot_content(
+            email_ids=["A", "B"],
+            emails=[
+                _email_message("A", sender="human", message="message A"),
+                _email_message("B", sender="human", message="message B"),
+            ],
+            count=2,
+            newest_received_at="2026-07-06T07:00:00Z",
+        ),
+    )
+    current = ToolResultBlock(
+        id="call_2",
+        name="email",
+        content=_email_snapshot_content(
+            email_ids=["B"],
+            emails=[_email_message("B", sender="human", message="message B")],
+            count=1,
+            newest_received_at="2026-07-06T07:00:00Z",
+        ),
+    )
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    iface.add_assistant_message([ToolCallBlock(id="call_1", name="email", args={})])
+    iface.add_tool_results([older])
+    iface.add_assistant_message([ToolCallBlock(id="call_2", name="email", args={})])
+    iface.add_tool_results([current])
+
+    serialized = outputs(iface)
+
+    replayed_older = json.loads(serialized["call_1"])
+    assert "notification_persistent" not in replayed_older.get("_meta", {}), (
+        "the earlier whole email snapshot must be removed in full, not "
+        "partially spliced to keep id A alive"
+    )
+    replayed_current = json.loads(serialized["call_2"])
+    current_email = replayed_current["_meta"]["notification_persistent"]["email"]
+    assert [e["id"] for e in current_email["emails"]] == ["B"]
+    # A must never resurface anywhere in the newest block either.
+    assert "A" not in [e["id"] for e in current_email["emails"]]
+
+
+@pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
+def test_transition_to_zero_unread_suppresses_all_historical_email_content(outputs):
+    """Read/dismiss to zero must leave no historical email content
+    model-visible after full replay — the explicit clear tombstone is the
+    newest state and every earlier nonempty snapshot is fully removed."""
+    nonempty = ToolResultBlock(
+        id="call_1",
+        name="email",
+        content=_email_snapshot_content(
+            email_ids=["A"],
+            emails=[_email_message("A", sender="human", message="secret body")],
+            count=1,
+            newest_received_at="2026-07-06T07:00:00Z",
+        ),
+    )
+    cleared = ToolResultBlock(id="call_2", name="email", content=_email_cleared_content())
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    iface.add_assistant_message([ToolCallBlock(id="call_1", name="email", args={})])
+    iface.add_tool_results([nonempty])
+    iface.add_assistant_message([ToolCallBlock(id="call_2", name="email", args={})])
+    iface.add_tool_results([cleared])
+
+    serialized = outputs(iface)
+
+    replayed_older = json.loads(serialized["call_1"])
+    assert "notification_persistent" not in replayed_older.get("_meta", {})
+    assert "secret body" not in serialized["call_1"]
+    assert "secret body" not in serialized["call_2"]
+
+    replayed_cleared = json.loads(serialized["call_2"])
+    email_state = replayed_cleared["_meta"]["notification_persistent"]["email"]
+    assert email_state.get("cleared") is True
+
+
+@pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
+def test_correlated_snapshot_fields_all_come_from_one_authoritative_block(outputs):
+    """`count`, `newest_received_at`, `context_comment`, `email_ids`, and
+    `emails` must all come intact from the SAME snapshot — never a partial
+    cross-history splice (the exact honesty violation of the rejected
+    per-ID candidate, which left an old `count`/timestamp standing next to a
+    pruned id list)."""
+    older = ToolResultBlock(
+        id="call_1",
+        name="email",
+        content=_email_snapshot_content(
+            email_ids=["A", "B"],
+            emails=[
+                _email_message("A", sender="human", message="message A"),
+                _email_message("B", sender="human", message="message B"),
+            ],
+            count=2,
+            newest_received_at="2026-07-06T07:00:00Z",
+        ),
+    )
+    current = ToolResultBlock(
+        id="call_2",
+        name="email",
+        content=_email_snapshot_content(
+            email_ids=["B"],
+            emails=[_email_message("B", sender="human", message="message B")],
+            count=1,
+            newest_received_at="2026-07-06T08:00:00Z",
+        ),
+    )
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    iface.add_assistant_message([ToolCallBlock(id="call_1", name="email", args={})])
+    iface.add_tool_results([older])
+    iface.add_assistant_message([ToolCallBlock(id="call_2", name="email", args={})])
+    iface.add_tool_results([current])
+
+    serialized = outputs(iface)
+
+    current_email = json.loads(serialized["call_2"])["_meta"]["notification_persistent"]["email"]
+    assert current_email["count"] == 1
+    assert current_email["newest_received_at"] == "2026-07-06T08:00:00Z"
+    assert current_email["email_ids"] == ["B"]
+    assert "context_comment" in current_email
+    assert len(current_email["emails"]) == 1
+
+
+@pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
+def test_stale_email_snapshot_does_not_masquerade_as_current_sender(outputs):
+    """Reproduces the refresh/full-history-replay incident: a historical
+    ``notification_persistent.email`` block for ``email-1`` carries the WRONG
+    sender plus appended unrelated content, while a LATER block for the SAME
+    email id carries the correct, producer-verified sender/body. The stale
+    WHOLE block must be removed in full, not merely have its id fields
+    patched."""
+    stale = ToolResultBlock(
+        id="call_1",
+        name="email",
+        content=_email_snapshot_content(
+            email_ids=["email-1"],
+            emails=[
+                _email_message(
+                    "email-1",
+                    sender="wrong-sender@example.com",
+                    message="Full body. Also: unrelated SDK claim bolted on by mistake.",
+                )
+            ],
+            count=1,
+            newest_received_at="2026-07-06T07:00:00Z",
+        ),
+    )
+    current = ToolResultBlock(
+        id="call_2",
+        name="email",
+        content=_email_snapshot_content(
+            email_ids=["email-1"],
+            emails=[
+                _email_message(
+                    "email-1", sender="right-sender@example.com", message="Full body."
+                )
+            ],
+            count=1,
+            newest_received_at="2026-07-06T07:00:00Z",
+        ),
+    )
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    iface.add_assistant_message([ToolCallBlock(id="call_1", name="email", args={})])
+    iface.add_tool_results([stale])
+    iface.add_assistant_message([ToolCallBlock(id="call_2", name="email", args={})])
+    iface.add_tool_results([current])
+
+    serialized = outputs(iface)
+
+    replayed_stale = json.loads(serialized["call_1"])
+    assert "notification_persistent" not in replayed_stale.get("_meta", {}), (
+        "stale historical email-1 snapshot with the wrong sender survived "
+        "full-history replay"
+    )
+
+    replayed_current = json.loads(serialized["call_2"])
+    current_email = replayed_current["_meta"]["notification_persistent"]["email"]
+    assert current_email["emails"][0]["from"] == "right-sender@example.com"
+    assert current_email["emails"][0]["message"] == "Full body."
+
+
+@pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
+def test_email_snapshot_coexists_with_delta_lane_previous_block(outputs):
+    """A block sharing the ``notification_persistent`` envelope with a
+    Telegram delta-lane payload must lose only the stale ``.email`` child;
+    the sibling ``mcp.telegram`` payload and its ``previous_block`` continuity
+    must survive untouched."""
+    mixed_old = ToolResultBlock(
+        id="call_1",
+        name="mixed",
+        content={
+            "ok": True,
+            "_meta": {
+                "notification_persistent": {
+                    "email": {
+                        "email_ids": ["A"],
+                        "emails": [_email_message("A", sender="human", message="old")],
+                        "count": 1,
+                    },
+                    "mcp": {
+                        "telegram": {
+                            "messages": [{"id": "t1", "text": "hi"}],
+                            "previous_block": {"is_first_block": True, "tool_result_id": None},
+                        }
+                    },
+                }
+            },
+        },
+    )
+    mixed_new = ToolResultBlock(
+        id="call_2",
+        name="mixed",
+        content={
+            "ok": True,
+            "_meta": {
+                "notification_persistent": {
+                    "email": {
+                        "email_ids": ["B"],
+                        "emails": [_email_message("B", sender="human", message="new")],
+                        "count": 1,
+                    },
+                }
+            },
+        },
+    )
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    iface.add_assistant_message([ToolCallBlock(id="call_1", name="mixed", args={})])
+    iface.add_tool_results([mixed_old])
+    iface.add_assistant_message([ToolCallBlock(id="call_2", name="mixed", args={})])
+    iface.add_tool_results([mixed_new])
+
+    serialized = outputs(iface)
+
+    replayed_old = json.loads(serialized["call_1"])
+    persistent_old = replayed_old["_meta"]["notification_persistent"]
+    assert "email" not in persistent_old, "stale email child must be removed"
+    assert persistent_old["mcp"]["telegram"]["previous_block"] == {
+        "is_first_block": True,
+        "tool_result_id": None,
+    }
+    assert persistent_old["mcp"]["telegram"]["messages"] == [{"id": "t1", "text": "hi"}]
+
+    replayed_new = json.loads(serialized["call_2"])
+    assert replayed_new["_meta"]["notification_persistent"]["email"]["email_ids"] == ["B"]
+
+
+@pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
+def test_malformed_notification_persistent_and_email_fields_do_not_crash(outputs):
+    """Malformed non-dict ``notification_persistent``, a non-dict ``email``
+    value, and malformed id fields must never crash replay — every
+    intermediate value is guarded with ``isinstance``."""
+    malformed_persistent_string = ToolResultBlock(
+        id="call_1", name="x", content={"ok": True, "_meta": {"notification_persistent": "not-a-dict"}}
+    )
+    malformed_persistent_list = ToolResultBlock(
+        id="call_2", name="x", content={"ok": True, "_meta": {"notification_persistent": ["a", "b"]}}
+    )
+    malformed_email_none = ToolResultBlock(
+        id="call_3",
+        name="x",
+        content={"ok": True, "_meta": {"notification_persistent": {"email": None}}},
+    )
+    malformed_email_fields = ToolResultBlock(
+        id="call_4",
+        name="email",
+        content={
+            "ok": True,
+            "_meta": {
+                "notification_persistent": {
+                    "email": {"email_ids": "not-a-list", "emails": "not-a-list-either"}
+                }
+            },
+        },
+    )
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    for cid, block in (
+        ("call_1", malformed_persistent_string),
+        ("call_2", malformed_persistent_list),
+        ("call_3", malformed_email_none),
+        ("call_4", malformed_email_fields),
+    ):
+        iface.add_assistant_message([ToolCallBlock(id=cid, name=block.name, args={})])
+        iface.add_tool_results([block])
+
+    # Must not raise.
+    serialized = outputs(iface)
+    assert set(serialized) == {"call_1", "call_2", "call_3", "call_4"}
+    # The one block with a genuinely dict-shaped (even if malformed-fielded)
+    # email child is the sole newest holder and keeps its content verbatim.
+    replayed_4 = json.loads(serialized["call_4"])
+    assert replayed_4["_meta"]["notification_persistent"]["email"] == {
+        "email_ids": "not-a-list",
+        "emails": "not-a-list-either",
+    }
+
+
+@pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
+def test_duplicate_and_out_of_order_email_ids_are_safe(outputs):
+    """Duplicate ids within one snapshot, and ids repeating across snapshots
+    in any combination, must not crash and must resolve to exactly the
+    newest whole block — the final valid-schema behavior is explicit (newest
+    wire-order block wins), not inferred."""
+    dup_within_block = ToolResultBlock(
+        id="call_1",
+        name="email",
+        content=_email_snapshot_content(
+            email_ids=["A", "A", "B"],
+            emails=[
+                _email_message("A", sender="human", message="first"),
+                _email_message("A", sender="human", message="dup"),
+                _email_message("B", sender="human", message="b"),
+            ],
+            count=2,
+            newest_received_at="2026-07-06T07:00:00Z",
+        ),
+    )
+    later_same_ids_different_order = ToolResultBlock(
+        id="call_2",
+        name="email",
+        content=_email_snapshot_content(
+            email_ids=["B", "A"],
+            emails=[
+                _email_message("B", sender="human", message="b-updated"),
+                _email_message("A", sender="human", message="a-updated"),
+            ],
+            count=2,
+            newest_received_at="2026-07-06T09:00:00Z",
+        ),
+    )
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    iface.add_assistant_message([ToolCallBlock(id="call_1", name="email", args={})])
+    iface.add_tool_results([dup_within_block])
+    iface.add_assistant_message([ToolCallBlock(id="call_2", name="email", args={})])
+    iface.add_tool_results([later_same_ids_different_order])
+
+    serialized = outputs(iface)  # must not raise
+
+    replayed_1 = json.loads(serialized["call_1"])
+    assert "notification_persistent" not in replayed_1.get("_meta", {})
+    replayed_2 = json.loads(serialized["call_2"])
+    current_email = replayed_2["_meta"]["notification_persistent"]["email"]
+    assert current_email["email_ids"] == ["B", "A"]
+    assert current_email["emails"][0]["message"] == "b-updated"
+    assert current_email["emails"][1]["message"] == "a-updated"
+
+
+@pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
+def test_canonical_dict_and_json_string_content_equivalent_after_every_renderer(outputs):
+    """Canonical dict-shaped and JSON-string-shaped ``ToolResultBlock``
+    content must remain byte/value-equivalent after every renderer: a
+    stale whole email snapshot is removed the same way regardless of the
+    canonical content's on-wire representation."""
+    dict_content = _email_snapshot_content(
+        email_ids=["A"],
+        emails=[_email_message("A", sender="human", message="stale")],
+        count=1,
+        newest_received_at="2026-07-06T07:00:00Z",
+    )
+    string_content = json.dumps(dict_content, default=str)
+    current = _email_snapshot_content(
+        email_ids=["B"],
+        emails=[_email_message("B", sender="human", message="current")],
+        count=1,
+        newest_received_at="2026-07-06T08:00:00Z",
+    )
+
+    for stale_content in (dict_content, string_content):
+        iface = ChatInterface()
+        iface.add_user_message("start")
+        iface.add_assistant_message([ToolCallBlock(id="call_1", name="email", args={})])
+        iface.add_tool_results(
+            [ToolResultBlock(id="call_1", name="email", content=stale_content)]
+        )
+        iface.add_assistant_message([ToolCallBlock(id="call_2", name="email", args={})])
+        iface.add_tool_results([ToolResultBlock(id="call_2", name="email", content=current)])
+
+        serialized = outputs(iface)
+        replayed_stale = json.loads(serialized["call_1"])
+        assert "notification_persistent" not in replayed_stale.get("_meta", {})
+
+    # Non-mutating regardless of shape: canonical content is untouched.
+    assert "notification_persistent" in dict_content["_meta"]
+    assert json.loads(string_content)["_meta"]["notification_persistent"]["email"]
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +888,55 @@ def test_claude_code_render_filters_stale_copies():
     assert call_1_content["_meta"]["notifications"] == {
         "email": {"data": {"email_ids": ["email-1"]}}
     }
+
+
+def test_claude_code_render_filters_stale_whole_email_snapshot():
+    """B3 regression: an earlier candidate updated the four ``to_*``
+    converters but left Claude Code's ``_render_conversation`` unfiltered
+    because ``filter_stale_timely_transient`` defaulted the email argument to
+    ``None`` there. The wrong-sender/appended-body incident must not
+    reproduce on this renderer either."""
+    from lingtai.llm.claude_code.adapter import ClaudeCodeChatSession
+
+    stale = _email_snapshot_content(
+        email_ids=["email-1"],
+        emails=[
+            _email_message(
+                "email-1",
+                sender="wrong-sender@example.com",
+                message="Full body. Also: unrelated SDK claim bolted on by mistake.",
+            )
+        ],
+        count=1,
+        newest_received_at="2026-07-06T07:00:00Z",
+    )
+    current = _email_snapshot_content(
+        email_ids=["email-1"],
+        emails=[
+            _email_message("email-1", sender="right-sender@example.com", message="Full body.")
+        ],
+        count=1,
+        newest_received_at="2026-07-06T07:00:00Z",
+    )
+    iface = _iface_with_two_results(stale, current)
+    session = ClaudeCodeChatSession(
+        adapter=None,
+        model="sonnet",
+        system_prompt="",
+        tools=[],
+        interface=iface,
+        context_window=100_000,
+    )
+
+    rendered = session._render_conversation()
+
+    assert "wrong-sender@example.com" not in rendered
+    assert "unrelated SDK claim" not in rendered
+    assert "right-sender@example.com" in rendered
+    # Non-mutating: canonical content still carries the stale copy.
+    assert stale["_meta"]["notification_persistent"]["email"]["emails"][0]["from"] == (
+        "wrong-sender@example.com"
+    )
 
 
 # ---------------------------------------------------------------------------

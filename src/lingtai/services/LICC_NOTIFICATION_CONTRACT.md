@@ -4,8 +4,8 @@ description: >
   Contract for LICC/MCP notification events and their model-visible projection
   into _meta.notifications and _meta.notification_persistent.
 status: active
-contract_version: 2
-last_changed_at: "2026-07-12"
+contract_version: 3
+last_changed_at: "2026-07-14"
 related_files:
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/services/mcp_inbox.py
@@ -20,10 +20,14 @@ related_files:
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/messaging.py
   - src/lingtai/kernel/base_agent/turn.py
+  - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/notification/__init__.py
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/kernel/notifications.py
+  - src/lingtai/llm/interface_converters.py
+  - src/lingtai/llm/claude_code/adapter.py
+  - src/lingtai/tools/email/primitives.py
   - tests/test_licc_notification_contract_doc.py
   - tests/test_mcp_inbox.py
   - tests/test_meta_block.py
@@ -32,6 +36,8 @@ related_files:
   - tests/test_wechat_notification_metadata.py
   - tests/test_feishu_notification_metadata.py
   - tests/test_whatsapp_notification_metadata.py
+  - tests/test_timely_transient_serialization.py
+  - tests/test_layers_email.py
 review_triggers:
   - src/lingtai/services/mcp_inbox.py
   - src/lingtai/services/mcp_licc.py
@@ -44,11 +50,15 @@ review_triggers:
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/messaging.py
   - src/lingtai/kernel/base_agent/turn.py
+  - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/email/
+  - src/lingtai/tools/email/primitives.py
   - src/lingtai/tools/notification/
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/kernel/notifications.py
+  - src/lingtai/llm/interface_converters.py
+  - src/lingtai/llm/claude_code/adapter.py
 maintenance: |
   Keep this file in the same maintenance graph as the ANATOMY.md files listed
   under related_files. If any review_triggers path changes notification event
@@ -258,6 +268,140 @@ presence as proof that there is still an unhandled event. Telegram persistent
 blocks must keep `previous_block` hooks so later deltas can point at earlier
 context without re-sending all history.
 
+Snapshot lanes with no `previous_block` (email, WhatsApp) make a stronger
+promise than the delta lanes: each block IS the producer's ENTIRE current
+bounded/unread state as of that stamping — an atomic whole, not an increment
+on top of history and not a set of independent per-id records. Email's
+correlated fields (`count`, `newest_received_at`, `context_comment`,
+`email_ids`, `emails`) all describe that one snapshot together and must never
+be read or reconstructed as a mix of two different snapshots.
+
+Because canonical history keeps every historical block (no retroactive
+strip), a stale nonempty email snapshot would otherwise sit in model-facing
+full-history replay looking exactly as current as a later one — or, once
+unread count reaches zero and the producer stops emitting any email payload
+at all, would remain the ONLY email evidence in history forever with no
+signal that it had been superseded, including across a process restart where
+no in-memory holder survives to notice the transition. Three mechanisms
+together close this, none of them by having a converter query live
+mailbox/disk state:
+
+- **Whole-snapshot replay filtering.** `lingtai/llm/interface_converters.py`
+  scans the full history once per full-history render
+  (`newest_email_snapshot_holder`) and keeps exactly one authoritative
+  `notification_persistent.email` child — the block holding the newest
+  occurrence in wire order (a live snapshot or an explicit clear tombstone)
+  — while removing the ENTIRE child (never a partial id/field subset) from
+  every other block. All five model-facing full-history renderers
+  (`to_anthropic`, `to_openai`, `to_responses_input`, `to_gemini`, and
+  `llm/claude_code/adapter.py::ClaudeCodeChatSession._render_conversation`)
+  call the same internal `_render_full_history_result` primitive, so none of
+  them can silently skip this projection. The established two-argument
+  public helper `filter_stale_timely_transient(block, newest)` is a SEPARATE,
+  unchanged function — it never looks at `notification_persistent` at all —
+  preserved for any caller outside these five renderers.
+- **In-process explicit clear marker.** The producer (`tools/email/
+  primitives.py::_rerender_unread_digest`) deletes `.notification/email.json`
+  when unread count reaches zero, which on its own leaves no wire evidence
+  that the snapshot ended. `attach_active_notifications`
+  (`src/lingtai/kernel/meta_block.py`) is the owner of this clear-transition
+  WHILE THE PROCESS KEEPS RUNNING: whenever it observes that a live email
+  snapshot has become absent, it stamps a durable, append-only tombstone in
+  its place — `{"cleared": true, "cleared_at": <iso>}`, built by
+  `meta_block.build_email_persistent_cleared_marker` — onto whatever
+  dict-shaped tool result is available that turn. The tombstone carries no
+  message content. Once stamped, it is itself the newest authoritative email
+  state and the whole-snapshot filter above removes every earlier nonempty
+  snapshot the same way it would for a newer nonempty snapshot. If no
+  dict-shaped result exists that turn, the witnessed transition is retained
+  as a bounded pending-clear intent (`agent._email_pending_clear`, a single
+  boolean, not a log) and consumed exactly once on the next turn that offers
+  a carrier. The context-molt batch is a DISTINCT seam: it bypasses
+  `attach_active_notifications` entirely and instead calls
+  `skeletonize_notification_holder` directly on the live holder
+  (`base_agent/turn.py`). That holder can be a SYNTHESIZED IDLE/ASLEEP-wake
+  pair (built by `_inject_notification_pair`), whose content
+  `skeletonize_notification_holder` destructively wipes in place — unlike an
+  ordinary tool-result holder, whose content it leaves untouched. Before that
+  destructive wipe, `meta_block.note_email_clear_intent_before_holder_destroyed`
+  inspects the outgoing holder and notes the same pending-clear flag if it
+  was carrying a live email snapshot, so the obligation survives the
+  destruction of its only evidence. This mechanism has an implicit deadline
+  (the next real tool result), which is always reachable while the process
+  is alive; if the process exits first, the next start's reconciliation
+  (below) independently re-derives the same conclusion.
+- **Startup/refresh reconciliation — the actual immediate-first-render
+  guarantee.** A freshly started process has no live
+  `_notification_live_holder` to compare against (it always initializes to
+  `None`), AND the very first model-facing render can happen before any tool
+  call exists at all — so the in-process mechanism above, and a bare
+  in-memory flag, are both structurally too late: nothing would read a flag
+  until a tool result exists, but the leak happens on render, not on tool
+  dispatch. `meta_block.reconcile_email_persistent_history` closes this gap
+  directly rather than deferring it: it runs once, synchronously, from
+  `base_agent/lifecycle.py::_start` immediately after chat history is
+  restored and BEFORE the main message-loop thread (`agent._thread`) is
+  created — so before anything could possibly drive a
+  `session.send()`/render. (The heartbeat thread is already running by this
+  point, but it only writes liveness; it does not yet run notification sync
+  or signal handling until `_heartbeat_runtime_ready` flips true, so it does
+  not race this reconciliation.) It scans restored history for the newest
+  email child and compares it against the CURRENT authoritative producer
+  state (read once via the same `_collect_active_notifications_payload`
+  helper `attach_active_notifications` uses — never a converter-side disk
+  query), with both sides normalized through the SAME redaction boundary
+  `_save_chat_history` already applies
+  (`trace_redaction.redact_for_trajectory`) before comparing — a historical
+  child was necessarily redacted before reaching disk, while the freshly
+  rebuilt current child is raw, so comparing them raw would never match once
+  an unread body contains a secret-shaped substring, and would append (and
+  re-save) a new record on every single restart even though the producer's
+  state never changed. `redact_for_trajectory` is deterministic and
+  idempotent on already-redacted input, so no second redactor, weaker
+  redaction, or stored raw-secret fingerprint is needed to make this stable.
+  When the two do not already match, it appends exactly one well-paired,
+  NARROW startup reconciliation record directly into the restored
+  `ChatInterface` — an `(assistant ToolCallBlock, user ToolResultBlock)` pair
+  shaped like the live sync loop's synthesized `notification` pair (same
+  block types/names, `synthesized=True` on the result, appended via the
+  interface's own `add_assistant_message`/`add_tool_results`, never a fake
+  user-text message), but it is intentionally NOT byte-shape-identical to a
+  real `_inject_notification_pair` delivery: it carries only `_synthesized`
+  plus `_meta.notification_persistent.email` — no `_meta.notifications`
+  attention hook, no `notification_guidance`, no `build_meta`
+  freshness/`injection_seq` fields, no poison/session-ensure handling, and no
+  live-holder/fingerprint/logging side effects, since this is a one-shot
+  startup correction of already-true state rather than a new attention event,
+  and a fresh process has no live holder to register against and no poisoned
+  prior interface to protect. It then best-effort persists the appended
+  record via `_save_chat_history` — that call is wrapped in its own
+  `try/except`; a write failure there is not fatal and is not silently
+  treated as guaranteed durability: the append already improved THIS
+  process's own in-memory history and therefore its renders, and if the save
+  failed and the process exits before a later successful one, the next
+  restart's reconciliation independently re-derives and re-appends the same
+  conclusion. This makes the authoritative email state ACTUALLY PRESENT in
+  canonical wire history before any renderer runs, rather than merely
+  recording an intent for something else to act on later. It is a no-op when
+  history has no email child at all, when the newest child already matches
+  current producer state exactly at the redaction-normalized comparison
+  (including matching on "already cleared"), and deterministic/idempotent
+  across repeated restarts — re-running it against the same history and
+  producer state reaches the same conclusion, including when the standing
+  unread email's body contains secret-shaped text that would otherwise
+  differ byte-for-byte between the raw current value and its redacted
+  historical copy. It never rewrites/mutates an existing block and never
+  queries a converter.
+
+The producer (`email.read`) remains the source of truth regardless of any of
+these three mechanisms; together they only prevent a superseded snapshot (or
+a snapshot that has since gone to zero, including across a restart) from
+misrepresenting itself as current sender/body/count during replay — and,
+critically, they do so before the FIRST render a restarted process can
+produce, not merely before some later render. Delta lanes are unaffected by
+any of them — their `previous_block` continuity is exactly why they are NOT
+filtered this way.
+
 ### 5. Producer tools own side effects and clearing
 
 The producer tool remains the source of truth for exact reads, replies, and
@@ -294,11 +438,42 @@ Persistent/on-disk state involved in this contract:
   authoritative source for exact read/reply/dismiss semantics.
 - Chat history/tool results — where `_meta.notifications` and
   `_meta.notification_persistent` blocks are recorded for the model and replay.
+  For email, this is also where the `{"cleared": true, "cleared_at": ...}`
+  tombstone lives once unread count reaches zero: it is ordinary durable wire
+  content (a tool result's `_meta`), not a separate store, so it survives
+  refresh/full-history replay the same way any other stamped `_meta` block
+  does — no new persistence mechanism was added.
 
 In-memory state involved in this contract:
 
 - `agent._notification_live_holder` and `_notification_payload_signature` control
-  sparse movement of the transient notification payload.
+  sparse movement of the transient notification payload. The in-process
+  clear-transition detection for email (comparing the outgoing live holder's
+  `notification_persistent.email` against the freshly computed payload) reads
+  this same holder.
+- `agent._email_pending_clear` — a single bounded boolean (not a log), set
+  in two places: (1) by `attach_active_notifications` when it witnesses a
+  live-to-absent email transition it cannot stamp this turn (no dict-shaped
+  carrier); and (2) by
+  `meta_block.note_email_clear_intent_before_holder_destroyed`, called from
+  `base_agent/turn.py`'s context-molt branch immediately before it calls
+  `skeletonize_notification_holder` directly on the live holder — a
+  SYNTHESIZED IDLE/ASLEEP-wake holder's live email content is destructively
+  wiped in place by that call (unlike an ordinary tool-result holder, whose
+  content skeletonize leaves untouched), so the flag must be noted from the
+  still-intact holder before that happens. Consumed exactly once, by
+  `attach_active_notifications`, on the next turn that offers a dict-shaped
+  carrier; consuming it never manufactures a false clear, because the
+  consumer is itself gated on the current round's email actually being
+  absent. This flag is an IN-PROCESS-ONLY mechanism: it plays no role in the
+  cross-restart/first-render guarantee, which
+  `reconcile_email_persistent_history` satisfies by appending a startup
+  reconciliation record directly into canonical history (see Contract rule
+  4) rather than by setting this flag; it is used only as a narrow fallback
+  if `reconcile_email_persistent_history` itself finds the wire has
+  unanswered tool_calls at startup (an unexpected shape for freshly
+  restored, quiescent history) and refuses to append rather than risk a
+  malformed pairing.
 - `agent._notification_persistent_telegram_message_ids` /
   `_notification_persistent_telegram_last_tool_id`, the WeChat counterparts
   `agent._notification_persistent_wechat_message_ids` /
@@ -306,7 +481,8 @@ In-memory state involved in this contract:
   `agent._notification_persistent_feishu_message_ids` /
   `_notification_persistent_feishu_last_tool_id` track per-channel delivery into
   the current provider context (reset on molt). WhatsApp is snapshot-only and
-  keeps no agent-side delivery tracker.
+  keeps no agent-side delivery tracker. Email is also snapshot-only and keeps
+  no per-message delivery tracker.
 
 ## Review triggers
 
@@ -350,7 +526,7 @@ Re-check this contract whenever a change touches any of these areas:
 - **Generic LICC/MCP:** still publishes bounded previews into the raw
   `.notification/mcp.<name>.json` mirror. That is allowed until the producer has
   a persistent context lane.
-- **Email:** migrated to the same attention/context split. Transient `_meta.notifications.email` is an identity-only high-attention hook carrying `email_ids`; unread context lives in `_meta.notification_persistent.email`; the email tool/store remains source of truth.
+- **Email:** migrated to the same attention/context split. Transient `_meta.notifications.email` is an identity-only high-attention hook carrying `email_ids`; unread context lives in `_meta.notification_persistent.email` as an atomic whole-snapshot lane (no `previous_block`); a transition to zero unread is an explicit `{"cleared": true, "cleared_at": ...}` tombstone, not silence; model-facing full-history replay keeps only the newest whole snapshot-or-clear state and removes every earlier child in full (never a per-id splice); the email tool/store remains source of truth.
 
 ## Notes
 

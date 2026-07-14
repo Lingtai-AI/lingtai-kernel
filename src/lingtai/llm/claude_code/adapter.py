@@ -34,7 +34,8 @@ from lingtai.kernel.logging import get_logger
 
 from lingtai.llm.base import LLMAdapter
 from lingtai.llm.interface_converters import (
-    filter_stale_timely_transient,
+    _render_full_history_result,
+    newest_email_snapshot_holder,
     timely_transient_newest_holders,
 )
 
@@ -368,9 +369,12 @@ class ClaudeCodeChatSession(ChatSession):
 
     def _render_conversation(self) -> str:
         # Model-facing full-history serialization: stale timely transient
-        # ``_meta`` copies are omitted (newest per family kept), same as the
-        # shared wire converters.
+        # ``_meta`` copies are omitted (newest per family kept), and the
+        # whole stale ``notification_persistent.email`` snapshot child is
+        # dropped except on its newest holder — same as the shared wire
+        # converters (see ``lingtai.llm.interface_converters``).
         newest = timely_transient_newest_holders(self._interface)
+        newest_email_snapshot = newest_email_snapshot_holder(self._interface)
         lines: list[str] = []
         for entry in self._interface._entries:
             role = entry.role
@@ -393,7 +397,9 @@ class ClaudeCodeChatSession(ChatSession):
                         f"ASSISTANT_ACTION: called tool `{block.name}` with input {args}"
                     )
                 elif isinstance(block, ToolResultBlock):
-                    content = filter_stale_timely_transient(block, newest)
+                    content = _render_full_history_result(
+                        block, newest, newest_email_snapshot
+                    )
                     if not isinstance(content, str):
                         try:
                             content = json.dumps(content, ensure_ascii=False)

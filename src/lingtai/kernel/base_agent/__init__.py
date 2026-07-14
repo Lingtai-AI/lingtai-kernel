@@ -682,6 +682,17 @@ class BaseAgent:
         self._notification_persistent_wechat_last_tool_id: str | None = None
         self._notification_persistent_feishu_message_ids: list[str] = []
         self._notification_persistent_feishu_last_tool_id: str | None = None
+        # Bounded pending-clear intent for the email whole-snapshot lane: set
+        # when a live email persistent snapshot is witnessed transitioning to
+        # absent (in-process, or discovered by startup reconciliation against
+        # restored history) but no dict-shaped tool result was available to
+        # carry the durable clear tombstone that turn. Consumed exactly once
+        # on the next valid carrier by `meta_block.attach_active_notifications`.
+        # A single boolean, not a log — if the process exits before it is
+        # consumed, the next startup's reconciliation re-derives the identical
+        # intent from canonical history + current producer state, so nothing
+        # is lost and nothing accumulates. See `meta_block.reconcile_email_persistent_history`.
+        self._email_pending_clear: bool = False
 
         # Telegram Task Card turn-local context (kernel-driven route B).
         # Set when a Telegram notification wakes the agent; cleared at turn end.

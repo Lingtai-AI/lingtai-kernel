@@ -231,6 +231,18 @@ NOTIFICATION_PERSISTENT_EMAIL_TRUNCATED_COMMENT = (
     "email sends are rejected."
 )
 
+# Email is a snapshot lane (no `previous_block`): each stamped block is the
+# producer's ENTIRE current unread state, not an increment. When unread count
+# drops to zero the producer clears `.notification/email.json` and no new
+# email payload is ever built again — without an explicit marker, the last
+# nonempty snapshot would remain the only email evidence in history forever,
+# and full-history replay would keep presenting it as current (see
+# `lingtai.llm.interface_converters`). `NOTIFICATION_PERSISTENT_EMAIL_CLEARED_KEY`
+# is that marker: a small durable tombstone stamped in place of the email
+# child, carrying no message content, recording only that the snapshot ended.
+NOTIFICATION_PERSISTENT_EMAIL_CLEARED_KEY = "cleared"
+NOTIFICATION_PERSISTENT_EMAIL_CLEARED_AT_KEY = "cleared_at"
+
 # Per-result machine-generated guidance nested under ``tool_meta``.  ``comment``
 # is a small map of topic-keyed hints; today the only topic is ``overflow`` — a
 # hint stamped on capped/large visible tool results pointing the agent at the
@@ -2366,6 +2378,397 @@ def _build_email_notification_persistent_payload(agent, notification_payload: di
     return payload
 
 
+def _email_persistent_child(holder) -> dict | None:
+    """Return the ``notification_persistent.email`` child of a stamped holder.
+
+    ``holder`` is a tool-result content value: a dict, a JSON string (the
+    canonical wire shape a restored ``ToolResultBlock.content`` may carry),
+    or ``None``. Guards every intermediate level with ``isinstance`` so a
+    malformed/foreign shape never raises; returns ``None`` unless the child
+    is itself a dict.
+    """
+    if isinstance(holder, str):
+        try:
+            holder = _json.loads(holder)
+        except ValueError:
+            return None
+    if not isinstance(holder, dict):
+        return None
+    meta = holder.get(META_ENVELOPE_KEY)
+    if not isinstance(meta, dict):
+        return None
+    persistent = meta.get(NOTIFICATION_PERSISTENT_KEY)
+    if not isinstance(persistent, dict):
+        return None
+    email = persistent.get(NOTIFICATION_PERSISTENT_EMAIL_CHANNEL)
+    return email if isinstance(email, dict) else None
+
+
+def _email_persistent_child_is_live_snapshot(email: dict | None) -> bool:
+    """Whether an email persistent child is a live (non-cleared) snapshot."""
+    return isinstance(email, dict) and not email.get(
+        NOTIFICATION_PERSISTENT_EMAIL_CLEARED_KEY
+    )
+
+
+def build_email_persistent_cleared_marker() -> dict:
+    """The durable tombstone stamped when unread email transitions to zero.
+
+    Carries no message content — only the fact that the snapshot ended and
+    when. This is the sole model-facing evidence of the empty transition;
+    without it, full-history replay would keep presenting the last nonempty
+    snapshot as current (see ``lingtai.llm.interface_converters``).
+    """
+    return {
+        NOTIFICATION_PERSISTENT_EMAIL_CLEARED_KEY: True,
+        NOTIFICATION_PERSISTENT_EMAIL_CLEARED_AT_KEY: now_iso_plain(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Email whole-snapshot clear-transition owner
+#
+# A live email persistent snapshot can become superseded-but-unwitnessed in
+# two distinct ways, handled by two DIFFERENT mechanisms because they have
+# different correctness deadlines:
+#
+# 1. In-process (deadline: the next dict-shaped tool result). While the
+#    process keeps running, `attach_active_notifications` may see email drop
+#    out of the live payload but have no dict-shaped tool result this batch
+#    to carry the tombstone (or the batch is a context-molt batch that
+#    bypasses this function entirely — see `base_agent/turn.py`). There is
+#    always a LATER real tool-result carrier in this case (or the process
+#    exits, in which case mechanism 2 below takes over on the next start), so
+#    `agent._email_pending_clear` — a single bounded flag, not a log — is
+#    sufficient: `attach_active_notifications` is the sole consumer, on
+#    whatever dict-shaped result next becomes available.
+# 2. Cross-restart (deadline: the FIRST full-history render after restart,
+#    which can happen before any tool call at all — a flag alone cannot meet
+#    this deadline because nothing reads it until a tool result exists).
+#    `reconcile_email_persistent_history` runs once, synchronously, right
+#    after chat-history restore and before the main message-loop thread is
+#    created (`agent._thread`, created later in `base_agent/lifecycle.py::
+#    _start`) — so before anything could drive a `session.send()`/render.
+#    The heartbeat thread is already started by this point, but it only
+#    writes liveness (`agent._heartbeat_runtime_ready` is still `False`) and
+#    does not yet run notification sync or signal handling, so it cannot
+#    race this reconciliation. When restored history's newest email child
+#    does not already match the CURRENT authoritative producer state (read
+#    once at this lifecycle boundary — never queried from a converter,
+#    compared at the SAME redaction-normalization boundary
+#    `_save_chat_history` applies, see `reconcile_email_persistent_history`'s
+#    own docstring), it appends exactly one well-paired, narrow startup
+#    reconciliation record — NOT byte-shape-identical to a real
+#    `_inject_notification_pair` delivery; see
+#    `_append_email_reconciliation_pair`'s docstring for exactly what it
+#    carries and why the difference is intentional — directly into the
+#    restored `ChatInterface` and best-effort persists it via
+#    `_save_chat_history` (a save failure is not fatal: the append already
+#    happened in memory, so this process's own renders stay correct, and an
+#    unsaved restart simply re-derives and re-appends the same conclusion
+#    next time). It does NOT touch `agent._notification_live_holder`/
+#    `_notification_fp`/`_notification_payload_signature` — those remain the
+#    live sync loop's own bookkeeping, established fresh by the first real
+#    `_sync_notifications` tick or tool-result batch, exactly as before this
+#    function existed; no live-holder/fingerprint/attention/freshness
+#    bookkeeping is needed for a fresh process with no live holder to
+#    register against and no poisoned prior interface to protect.
+# ---------------------------------------------------------------------------
+
+
+def _note_email_pending_clear(agent) -> None:
+    try:
+        agent._email_pending_clear = True
+    except Exception:
+        pass
+
+
+def _consume_email_pending_clear(agent) -> bool:
+    """Return and clear the pending-clear flag (default ``False`` if absent)."""
+    pending = bool(getattr(agent, "_email_pending_clear", False))
+    try:
+        agent._email_pending_clear = False
+    except Exception:
+        pass
+    return pending
+
+
+def note_email_clear_intent_before_holder_destroyed(agent) -> None:
+    """Preserve the clear obligation before a seam that destroys the live holder.
+
+    ``skeletonize_notification_holder`` wipes a SYNTHESIZED holder's content
+    in place (``holder.clear(); holder.update(_NOTIFICATION_SKELETON)``) —
+    the live IDLE/ASLEEP wake path's own pair shape (``_inject_notification_pair``),
+    which can carry a live email persistent snapshot exactly like an ordinary
+    tool-result holder can. ``attach_active_notifications`` already captures
+    ``was_email_live`` from ``prior_holder`` BEFORE it calls
+    ``skeletonize_notification_holder``, so that caller is safe on its own.
+    The context-molt path in ``base_agent/turn.py`` is the one caller that
+    calls ``skeletonize_notification_holder`` directly with no such capture —
+    call this function immediately before that skeletonize call (and ONLY
+    there; ``attach_active_notifications`` must not call this, since it
+    already performs — and then locally consumes — the equivalent capture
+    itself, and calling this too would re-set the flag right after that
+    consume).
+
+    Content-free by design: only notes a boolean intent, never copies the
+    live holder's email body/ids into any new state. If the flag is later
+    consumed while a fresh live email snapshot is already present again,
+    the consumer (``attach_active_notifications``) is itself gated on
+    ``not email_present_this_round``, so this never manufactures a false
+    clear — it can only ever confirm a clear that current producer state
+    still supports at consumption time.
+    """
+    holder = getattr(agent, "_notification_live_holder", None)
+    if not (isinstance(holder, dict) and holder.get("_synthesized")):
+        return
+    if _email_persistent_child_is_live_snapshot(_email_persistent_child(holder)):
+        _note_email_pending_clear(agent)
+
+
+def _build_email_reconciliation_pair_content(current_email_child: dict) -> dict:
+    """Build the synthesized pair body carrying the current email state.
+
+    Mirrors the canonical shape ``_inject_notification_pair`` uses for the
+    live IDLE/ASLEEP wake path (``{"_synthesized": True, "_meta": {...}}``),
+    narrowed to the email lane only: this is a startup reconciliation event,
+    not a full multi-channel notification delivery, so it carries only
+    ``_meta.notification_persistent.email`` — no ``_meta.notifications``
+    high-attention hook (there is nothing new to alert the agent about; the
+    email state was already true, just not yet represented in wire history).
+    """
+    return {
+        "_synthesized": True,
+        "_meta": {NOTIFICATION_PERSISTENT_KEY: {NOTIFICATION_PERSISTENT_EMAIL_CHANNEL: current_email_child}},
+    }
+
+
+def _append_email_reconciliation_pair(interface, current_email_child: dict) -> bool:
+    """Append one well-paired, NARROW startup reconciliation record.
+
+    This is a specialized ``(assistant ToolCallBlock, user ToolResultBlock)``
+    pair shaped like the live sync loop's synthesized ``notification`` pair
+    (same block types/names, ``synthesized=True`` on the result, appended via
+    the same canonical ``iface.add_assistant_message``/``iface.add_tool_results``
+    primitives — never a fake user-text message, never a rewrite of an
+    existing block), but it is intentionally NOT byte-shape-identical to a
+    real ``_inject_notification_pair`` delivery and does not need to be: it
+    carries only ``_synthesized`` plus
+    ``_meta.notification_persistent.email`` — no ``_meta.notifications``
+    high-attention hook, no ``notification_guidance``, no ``build_meta``
+    freshness/``injection_seq`` fields, no poison/session-ensure handling,
+    and no live-holder/fingerprint/logging side effects. Those all exist in
+    the real injector to make a LIVE wake indistinguishable from a voluntary
+    agent read and to drive the run loop; this is a narrow, one-shot startup
+    correction of already-true state, not a new attention event, so none of
+    that bookkeeping is needed — a fresh process has no live holder to
+    register against and no poisoned prior interface to protect.
+
+    Refuses to append (returns ``False``) if the wire has unanswered
+    tool_calls, exactly like ``_inject_notification_pair`` does, to preserve
+    the tool-call/tool-result alternation invariant; the caller treats that
+    as "could not reconcile this pass" and leaves history untouched rather
+    than risk a malformed wire.
+    """
+    import secrets
+
+    from .llm.interface import ToolCallBlock, ToolResultBlock
+
+    if interface.has_pending_tool_calls():
+        return False
+
+    # A random suffix (not just a timestamp) guarantees a unique id even
+    # across repeated calls within the same wall-clock second — two
+    # identical ids would make `add_tool_results` treat the second result as
+    # a same-id "heal" replacement of the first pair's synthesized result
+    # (see `ChatInterface.add_tool_results`), silently merging two distinct
+    # reconciliation events into one entry instead of appending a second one.
+    call_id = f"notif_reconcile_{secrets.token_hex(8)}"
+    call_block = ToolCallBlock(
+        id=call_id,
+        name="notification",
+        args={"action": "check"},
+    )
+    result_block = ToolResultBlock(
+        id=call_id,
+        name="notification",
+        content=_build_email_reconciliation_pair_content(current_email_child),
+        synthesized=True,
+    )
+    interface.add_assistant_message(content=[call_block])
+    interface.add_tool_results([result_block])
+    return True
+
+
+def reconcile_email_persistent_history(agent) -> None:
+    """Idempotent first-post-startup/refresh bridge for the email lane.
+
+    Must run once, synchronously, after chat history is restored and BEFORE
+    the first full-history render (called from
+    ``base_agent/lifecycle.py::_start``, right after ``restore_chat`` and
+    before ``agent._thread`` — the main message loop — is created). A fresh
+    process has no live ``_notification_live_holder``, and — critically —
+    the very first model-facing render can happen before any tool call at
+    all, so a mere in-memory flag consumed by ``attach_active_notifications``
+    is NOT sufficient here (that mechanism remains correct for later
+    in-process transitions — see the module comment above). This function
+    instead makes the authoritative email state ALREADY present in canonical
+    wire history before any renderer runs, by appending a well-paired,
+    NARROW startup reconciliation record when needed — see
+    :func:`_append_email_reconciliation_pair` for exactly what it carries and
+    how it honestly differs from a real ``_inject_notification_pair``
+    delivery (it is not byte-shape-identical, and does not need to be).
+
+    Algorithm:
+        1. Scan the restored ``ChatInterface`` for the newest
+           ``notification_persistent.email`` child
+           (``lingtai.llm.interface_converters.newest_email_snapshot_holder``).
+           This may be an ORDINARY historical child (redacted by the
+           previous ``_save_chat_history`` call) or a well-paired
+           reconciliation record appended by a prior run of this function.
+        2. Read the CURRENT authoritative producer state once via
+           ``_collect_active_notifications_payload`` (the same helper
+           ``attach_active_notifications`` uses — never a converter-side
+           disk/mailbox query), and build what the current authoritative
+           email persistent child would be right now (a live snapshot dict
+           via ``_build_email_notification_persistent_payload``, or ``None``
+           meaning "currently no unread email"). This is always the RAW
+           producer value — the producer intentionally publishes unread
+           bodies in full (``tools/email/primitives.py``); this function
+           never weakens or bypasses that.
+        3. Compare the newest HISTORICAL child against the CURRENT
+           authoritative child AT THE SAME DURABLE-NORMALIZATION BOUNDARY
+           ``_save_chat_history`` already applies
+           (``trace_redaction.redact_for_trajectory``): a historical child
+           was necessarily redacted before it reached disk, while the fresh
+           current child is raw, so the current child is redacted the same
+           way before comparing. ``redact_for_trajectory`` is a pure,
+           deterministic function of the value and is idempotent on
+           already-redacted input, so this never requires storing a second
+           raw copy, a separate redactor, or a weaker redaction pass just to
+           make the comparison stable.
+           - No email child anywhere in history AND current is also absent
+             -> no-op: never manufacture a pair out of nothing.
+           - Newest historical child already matches the redaction-normalized
+             current state exactly (both live snapshots with equal redacted
+             content, or both are/imply a clear state) -> no-op: no
+             duplicate pair, no re-save, no churn across a restart even when
+             the unread body contains secret-shaped text.
+           - Otherwise (newest historical is a live snapshot but current is
+             absent/zero, OR current is a different/newer live snapshot
+             after redaction-normalized comparison, OR history has no email
+             child at all but current IS present) -> append exactly one
+             reconciliation record carrying the CURRENT authoritative state
+             (a live snapshot, or an explicit clear tombstone via
+             ``build_email_persistent_cleared_marker`` when current is
+             absent) and best-effort persist it via ``_save_chat_history``.
+
+    Save-failure semantics: the append already lands in the in-memory
+    ``ChatInterface`` before ``_save_chat_history`` is attempted, and that
+    call is wrapped in its own ``try/except`` — a write failure there is not
+    fatal and is not silently claimed as durable. This process's own renders
+    are already correct regardless; if the write failed and the process
+    exits before a later successful save, the next restart's reconciliation
+    independently re-derives and re-appends the same conclusion from
+    canonical history + current producer state, so correctness does not
+    depend on this specific save succeeding.
+
+    Never rewrites/mutates an existing block, never splices ids/fields
+    across snapshots, never queries live state from a converter, and is
+    deterministic/idempotent: running it again against the same history +
+    producer state reaches the same no-op conclusion once the appended
+    record (or an equivalent later real update) makes the newest historical
+    child match current state at the redaction-normalized comparison.
+    """
+    try:
+        from lingtai.llm.interface_converters import newest_email_snapshot_holder
+        from .trace_redaction import redact_for_trajectory
+    except Exception:
+        return
+
+    chat = getattr(agent, "_chat", None)
+    interface = getattr(chat, "interface", None)
+    if interface is None:
+        return
+
+    try:
+        newest_block = newest_email_snapshot_holder(interface)
+    except Exception:
+        return
+
+    historical_email = _email_persistent_child(
+        getattr(newest_block, "content", None) if newest_block is not None else None
+    )
+
+    try:
+        payload = _collect_active_notifications_payload(agent)
+        current_email = (
+            _build_email_notification_persistent_payload(agent, payload)
+            if isinstance(payload, dict)
+            else None
+        )
+    except Exception:
+        return
+
+    if historical_email is None and current_email is None:
+        # No email child anywhere in history, and nothing currently active:
+        # never manufacture a pair (clear or otherwise) out of nothing.
+        return
+
+    historical_is_live = _email_persistent_child_is_live_snapshot(historical_email)
+
+    if current_email is not None:
+        # Current authoritative state is a live snapshot. No-op only when the
+        # newest historical child is ALREADY exactly this live snapshot
+        # (idempotent re-run / already reconciled). Any other historical
+        # state (absent, a clear tombstone, or a different/older live
+        # snapshot) needs the current snapshot appended so it becomes the
+        # newest wire-visible state.
+        #
+        # Compare at the SAME durable-normalization boundary
+        # `_save_chat_history` already applies (`redact_for_trajectory`),
+        # not raw equality: `historical_email` was read back from disk
+        # AFTER that redaction ran on the previous save, while
+        # `current_email` is freshly rebuilt raw from the live producer
+        # store. A secret-shaped substring (token/bearer/password-like)
+        # would compare unequal forever otherwise -- appending a new pair,
+        # re-saving another redacted copy, on every single restart, even
+        # though the producer's authoritative unread state never changed.
+        # `redact_for_trajectory` is a pure, deterministic function of the
+        # value (idempotent on already-redacted input), so redacting the
+        # fresh current snapshot the same way makes the two sides directly
+        # comparable without inventing a second redactor, weakening
+        # redaction, or persisting/hashing any raw secret.
+        if historical_is_live and redact_for_trajectory(current_email) == historical_email:
+            return
+        to_append = current_email
+    else:
+        # Current authoritative state is "no unread email". No-op when
+        # history already ends on a clear tombstone (or has no email child
+        # at all, handled above). Only a historical LIVE snapshot needs the
+        # explicit clear appended.
+        if not historical_is_live:
+            return
+        to_append = build_email_persistent_cleared_marker()
+
+    appended = _append_email_reconciliation_pair(interface, to_append)
+    if not appended:
+        # Wire has unanswered tool_calls at this lifecycle point (should not
+        # happen for a freshly restored, quiescent history, but refuse
+        # rather than risk a malformed pairing). Fall back to the pending
+        # flag so the next in-process valid carrier still resolves the
+        # live-to-absent case; a genuinely new live snapshot will still be
+        # picked up correctly by the ordinary first-active-payload attach.
+        if current_email is None:
+            _note_email_pending_clear(agent)
+        return
+
+    try:
+        agent._save_chat_history()
+    except Exception:
+        pass
+
+
 def _build_snapshot_im_persistent_payload(
     notification_payload: dict,
     lane: _ImPersistentLane,
@@ -2856,6 +3259,42 @@ def _last_dict_result(tool_results: list) -> dict | None:
     return None
 
 
+def _stamp_email_cleared_marker_on_target(meta: dict) -> None:
+    """Stamp the durable email-cleared tombstone directly into a ``_meta`` dict.
+
+    Shared by both :func:`_stamp_email_cleared_marker_if_possible` (which
+    resolves ``meta`` from a batch's dict result first) and
+    :func:`attach_active_notifications`'s material-change branch (which
+    already has the ``_meta`` dict in hand via :func:`_meta_block`).
+    """
+    persistent = meta.get(NOTIFICATION_PERSISTENT_KEY)
+    if not isinstance(persistent, dict):
+        persistent = {}
+        meta[NOTIFICATION_PERSISTENT_KEY] = persistent
+    persistent[NOTIFICATION_PERSISTENT_EMAIL_CHANNEL] = (
+        build_email_persistent_cleared_marker()
+    )
+
+
+def _stamp_email_cleared_marker_if_possible(tool_results: list) -> bool:
+    """Stamp the durable email-cleared tombstone on this batch's dict result.
+
+    Used from the "no active notifications at all" branch of
+    :func:`attach_active_notifications`. If no dict-shaped tool result is
+    available this batch, returns ``False`` and stamps nothing — the CALLER
+    is responsible for retaining the pending-clear intent
+    (``_note_email_pending_clear``) rather than discarding it, so a later
+    batch with a dict result (or a future restart's
+    ``reconcile_email_persistent_history``) still sees and consumes it.
+    Returns whether the marker was stamped.
+    """
+    target = _last_dict_result(tool_results)
+    if target is None:
+        return False
+    _stamp_email_cleared_marker_on_target(_meta_block(target))
+    return True
+
+
 # Skeleton content placed in a synthesized pair's result dict once its live
 # notification payload has been moved away or cleared.  Keeps the pair in
 # history (preserving conversation structure) while making it clear to the
@@ -3067,6 +3506,21 @@ def attach_active_notifications(
     identical. Committing ``_notification_fp`` here is the bridge that prevents
     the same notification state from being delivered twice (once via tool-result
     meta, again via the synthesized pair).
+
+    Email clear-transition ownership: this function is the owner of
+    IN-PROCESS email whole-snapshot clear transitions (see
+    ``agent._email_pending_clear``). Every branch below that witnesses
+    "email was live and is no longer" — or finds a standing pending-clear
+    intent left by a prior batch/molt that had no dict carrier — attempts to
+    stamp the durable tombstone on whatever dict-shaped result THIS batch
+    offers. If none is available, the intent is retained (never discarded)
+    for the next call to consume. The CROSS-RESTART case (the very first
+    render after a process start, which can happen before any tool call
+    exists for this function to consume a flag against) is owned separately
+    by ``reconcile_email_persistent_history``, which appends the
+    authoritative state directly into canonical history at startup rather
+    than relying on this function or the flag at all — see that function's
+    docstring and the module comment above.
     """
     payload = _collect_active_notifications_payload(agent)
     if not payload:
@@ -3075,6 +3529,9 @@ def attach_active_notifications(
         # payload as a historical trace) and report no live holder remains.
         # Reset the sparse signature so a later reappearance of the same payload
         # attaches again as the first active payload.
+        was_email_live = _email_persistent_child_is_live_snapshot(
+            _email_persistent_child(prior_holder)
+        )
         if prior_holder is not None:
             agent._notification_live_holder = prior_holder
             skeletonize_notification_holder(agent)
@@ -3082,6 +3539,12 @@ def attach_active_notifications(
             agent._notification_payload_signature = None
         except Exception:
             pass
+        pending = was_email_live or _consume_email_pending_clear(agent)
+        if pending and not _stamp_email_cleared_marker_if_possible(tool_results):
+            # No dict-shaped carrier this batch: retain the intent instead of
+            # discarding it. The next batch (or a future restart's
+            # reconciliation) will still see the same standing intent.
+            _note_email_pending_clear(agent)
         return None
 
     target = _last_dict_result(tool_results)
@@ -3090,12 +3553,15 @@ def attach_active_notifications(
         # result to receive the moving payload. Keep the prior live holder
         # (if any) intact and leave _notification_fp uncommitted so the
         # state can still be delivered later via another tool result or
-        # the IDLE synthesized-pair path.
+        # the IDLE synthesized-pair path. A standing pending-clear intent
+        # (this function's own transition or one left by reconciliation) is
+        # untouched here — nothing to stamp it onto yet.
         return prior_holder
 
     # Sparse gate: attach/move only when the payload materially changed since the
     # last emitted one, OR the target is a deliberate notification(action=check)
-    # read (which must always receive the current payload).
+    # read (which must always receive the current payload). A standing
+    # pending-clear intent is consulted regardless of this gate, below.
     signature = notification_payload_signature(payload)
     is_check_read = _is_notification_check_placeholder(target)
     unchanged = signature == getattr(agent, "_notification_payload_signature", None)
@@ -3109,7 +3575,26 @@ def attach_active_notifications(
         # has somehow been lost, fall through and reattach so the payload stays
         # visible instead of committing an invisible state.
         _commit_notification_fp(agent)
+        # A standing pending-clear intent (e.g. left by a molt batch, or by
+        # startup reconciliation before this turn's first dict result) is
+        # orthogonal to whether the LIVE payload changed — email may have
+        # cleared while a different channel's unchanged payload took this
+        # branch. Stamp it onto this ordinary result now rather than waiting
+        # for a materially-changed batch that may never come.
+        if _consume_email_pending_clear(agent):
+            _stamp_email_cleared_marker_on_target(target)
         return prior_holder
+
+    # Whether email was a live (non-cleared) snapshot on the outgoing holder,
+    # captured BEFORE skeletonize/reassignment below so the clear-transition
+    # check below always compares against the true previous state.
+    was_email_live = _email_persistent_child_is_live_snapshot(
+        _email_persistent_child(prior_holder)
+    )
+    # A standing pending-clear intent from a prior batch/molt/restart that had
+    # no carrier is consumed here too — it is orthogonal to `was_email_live`,
+    # which only looks at THIS function's own immediately-prior holder.
+    pending_clear = _consume_email_pending_clear(agent)
 
     # Material change (or deliberate check read). Release the previous holder:
     # a synthesized pair is skeletonized; a normal tool result keeps its old
@@ -3140,6 +3625,25 @@ def attach_active_notifications(
             persistent_payload,
             tool_call_id=_result_tool_call_id(target),
         )
+    # Email dropped out of this round's persistent payload (other channels may
+    # still be active) while it was a live snapshot on the previous holder, OR
+    # a standing pending-clear intent carried over from a prior batch/molt/
+    # restart: stamp the durable clear tombstone here so full-history replay
+    # has explicit evidence the unread snapshot ended, instead of silently
+    # letting the last nonempty snapshot stand as the only email state
+    # forever. A fresh live snapshot this round (email present) makes any
+    # pending intent moot — the new snapshot is the newest authoritative
+    # state either way, so no tombstone is needed on top of it.
+    email_present_this_round = isinstance(persistent_payload, dict) and isinstance(
+        persistent_payload.get(NOTIFICATION_PERSISTENT_KEY), dict
+    ) and isinstance(
+        persistent_payload[NOTIFICATION_PERSISTENT_KEY].get(
+            NOTIFICATION_PERSISTENT_EMAIL_CHANNEL
+        ),
+        dict,
+    )
+    if (was_email_live or pending_clear) and not email_present_this_round:
+        _stamp_email_cleared_marker_on_target(meta_block)
     # Register this dict as the new live holder.
     agent._notification_live_holder = target
 
