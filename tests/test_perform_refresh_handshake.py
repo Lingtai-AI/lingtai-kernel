@@ -13,13 +13,16 @@ Three call sites reach `_perform_refresh` directly:
 so the lock-release phase completes regardless of caller. These tests
 exercise that contract without spawning a real subprocess: the injected
 `FakeRefreshWatcher` (see `tests/_refresh_watcher_helpers.py`) records each
-`spawn_detached(script, env=...)` call in place of the production
-`PosixRefreshWatcherAdapter` (`src/lingtai/kernel/refresh_watcher/CONTRACT.md`).
+`spawn_detached(request)` call (a typed `RefreshWatcherRequest`) in place of
+the production `PosixRefreshWatcherAdapter`
+(`src/lingtai/kernel/refresh_watcher/CONTRACT.md`).
 """
 from __future__ import annotations
 from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
+import ast
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -96,26 +99,178 @@ def _read_json(path):
 
 
 def test_posix_refresh_watcher_adapter_spawns_exact_detached_process():
-    """The first production adapter must preserve the Popen hand-off that was
-    extracted from `_perform_refresh`: current interpreter, exact script/env,
-    detached session, and no inherited stdio.
+    """The production adapter must translate a typed `RefreshWatcherRequest`
+    into the exact Popen hand-off that was extracted from `_perform_refresh`:
+    current interpreter, rendered script text, built env, detached session,
+    and no inherited stdio. The Port no longer accepts raw script/env.
     """
-    from lingtai.adapters.posix.refresh_watcher import PosixRefreshWatcherAdapter
+    from lingtai.adapters.posix.refresh_watcher import (
+        PosixRefreshWatcherAdapter,
+        build_watcher_env,
+    )
+    from lingtai.kernel.refresh_watcher import RefreshWatcherRequest
+    from lingtai.kernel.refresh_watcher.watcher_program import render_watcher_script
 
-    script = "print('watcher sentinel')"
-    env = {"PATH": "/test/bin", "LINGTAI_REFRESH_ENV_OVERWRITE": "1"}
+    request = RefreshWatcherRequest(
+        taken_path="/wd/.refresh.taken",
+        lock_path="/wd/.agent.lock",
+        events_path="/wd/logs/events.jsonl",
+        stderr_log="/wd/logs/refresh_relaunch.log",
+        working_dir="/wd",
+        cmd=("lingtai-agent", "run", "/wd"),
+        agent_name="alice",
+        address="wd",
+        identity_fields_json='{"kernel_version": "v1"}',
+    )
+    expected_script = render_watcher_script(request)
 
-    with patch("lingtai.adapters.posix.refresh_watcher.subprocess.Popen") as popen:
-        PosixRefreshWatcherAdapter().spawn_detached(script, env=env)
+    with patch("lingtai.adapters.posix.refresh_watcher.subprocess.Popen") as popen, \
+            patch.dict("os.environ", {"PATH": "/test/bin"}, clear=True):
+        PosixRefreshWatcherAdapter().spawn_detached(request)
+        expected_env = build_watcher_env(request)
 
     popen.assert_called_once_with(
-        [sys.executable, "-c", script],
+        [sys.executable, "-c", expected_script],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
-        env=env,
+        env=expected_env,
     )
+    assert expected_env["PATH"] == "/test/bin"
+    assert expected_env["LINGTAI_REFRESH_ENV_OVERWRITE"] == "1"
+
+
+def test_build_watcher_env_false_overrides_preexisting_parent_marker(monkeypatch):
+    """`request.env_overwrite=False` must actually mean false: the marker
+    must be absent from the built environment even if the *parent* process's
+    own `os.environ` already has `LINGTAI_REFRESH_ENV_OVERWRITE=1` set (e.g.
+    because this process was itself launched as a prior watcher's relaunch
+    target). Without an explicit removal in the false branch, `build_watcher_env`
+    would silently inherit the parent's stale `True` via the `dict(os.environ)`
+    base copy, so `False` would not mean `False`. The parent's own os.environ
+    must itself be left untouched by the call.
+    """
+    from lingtai.adapters.posix.refresh_watcher import build_watcher_env
+    from lingtai.kernel.refresh_watcher import RefreshWatcherRequest
+
+    monkeypatch.setenv("LINGTAI_REFRESH_ENV_OVERWRITE", "1")
+    monkeypatch.setenv("PATH", "/test/bin")
+
+    request = RefreshWatcherRequest(
+        taken_path="/wd/.refresh.taken",
+        lock_path="/wd/.agent.lock",
+        events_path="/wd/logs/events.jsonl",
+        stderr_log="/wd/logs/refresh_relaunch.log",
+        working_dir="/wd",
+        cmd=("lingtai-agent", "run", "/wd"),
+        agent_name="alice",
+        address="wd",
+        identity_fields_json="{}",
+        env_overwrite=False,
+    )
+
+    env = build_watcher_env(request)
+
+    assert "LINGTAI_REFRESH_ENV_OVERWRITE" not in env
+    assert env["PATH"] == "/test/bin"
+    # The parent process's own environment is a read source, never mutated.
+    assert os.environ["LINGTAI_REFRESH_ENV_OVERWRITE"] == "1"
+
+
+def test_identity_fields_json_snapshot_immune_to_nested_source_mutation():
+    """S8 Repair 2 regression: `runtime_identity_event_fields()` returns a
+    dict whose `kernel_runtime` value is itself a nested mutable dict (in
+    production, the same object as the module-level identity cache — not a
+    copy). A shallow container (e.g. a tuple of `(key, value)` pairs) would
+    still alias and expose that nested dict, so mutating it *after*
+    `RefreshWatcherRequest` construction could silently change what the
+    watcher later renders. `identity_fields_json` — a JSON string snapshot
+    taken at construction time — must be immune: mutating the *source* dict
+    (including its nested sub-dict) after building the request must not
+    change the request's already-serialized snapshot or the rendered
+    program's `identity_fields` literal.
+    """
+    from lingtai.kernel.refresh_watcher import RefreshWatcherRequest
+    from lingtai.kernel.refresh_watcher.watcher_program import render_watcher_script
+
+    nested = {"version": "1.2.3", "stamp": "1.2.3+git.abc123", "git_dirty": False}
+    source = {
+        "kernel_version": "1.2.3",
+        "kernel_runtime_stamp": "1.2.3+git.abc123",
+        "kernel_runtime": nested,
+    }
+    request = RefreshWatcherRequest(
+        taken_path="/wd/.refresh.taken",
+        lock_path="/wd/.agent.lock",
+        events_path="/wd/logs/events.jsonl",
+        stderr_log="/wd/logs/refresh_relaunch.log",
+        working_dir="/wd",
+        cmd=("lingtai-agent", "run", "/wd"),
+        agent_name="alice",
+        address="wd",
+        identity_fields_json=json.dumps(source),
+    )
+
+    # Mutate the source dict AND its nested sub-dict after construction —
+    # exactly the shape a shallow tuple-of-pairs would still have aliased.
+    source["kernel_version"] = "MUTATED"
+    nested["version"] = "MUTATED"
+    nested["git_dirty"] = True
+    source["kernel_runtime"]["stamp"] = "MUTATED"
+
+    script = render_watcher_script(request)
+
+    assert "MUTATED" not in script
+    assert "1.2.3+git.abc123" in script
+    tree = ast.parse(script)
+    identity_assignment = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "identity_fields"
+            for target in node.targets
+        )
+    )
+    rendered = ast.literal_eval(identity_assignment.value)
+    assert rendered["kernel_version"] == "1.2.3"
+    assert rendered["kernel_runtime"]["version"] == "1.2.3"
+    assert rendered["kernel_runtime"]["stamp"] == "1.2.3+git.abc123"
+    assert rendered["kernel_runtime"]["git_dirty"] is False
+
+
+@pytest.mark.parametrize(
+    "bad_json",
+    [
+        "not json at all",
+        "[1, 2, 3]",
+        '"just a string"',
+        "42",
+        "null",
+    ],
+)
+def test_identity_fields_json_invalid_or_non_object_fails_loudly(bad_json):
+    """An invalid or non-object `identity_fields_json` must raise before any
+    generated source is produced, rather than silently rendering broken or
+    empty watcher-program text."""
+    from lingtai.kernel.refresh_watcher import RefreshWatcherRequest
+    from lingtai.kernel.refresh_watcher.watcher_program import render_watcher_script
+
+    request = RefreshWatcherRequest(
+        taken_path="/wd/.refresh.taken",
+        lock_path="/wd/.agent.lock",
+        events_path="/wd/logs/events.jsonl",
+        stderr_log="/wd/logs/refresh_relaunch.log",
+        working_dir="/wd",
+        cmd=("lingtai-agent", "run", "/wd"),
+        agent_name="alice",
+        address="wd",
+        identity_fields_json=bad_json,
+    )
+
+    with pytest.raises(ValueError):
+        render_watcher_script(request)
 
 
 def test_agent_explicit_none_still_composes_production_watcher(monkeypatch, tmp_path):
@@ -605,6 +760,57 @@ def test_refresh_watcher_log_marks_redaction_unavailable_on_import_failure(tmp_p
     record = next(r for r in records if r["type"] == "refresh_watcher_relaunch")
     assert record["attempt"] == 1
     assert record["redaction_unavailable"] is True
+
+
+def test_refresh_watcher_failure_metadata_bounds_and_redacts_cleanup_and_relaunch_errors(tmp_path):
+    """S8 bugfix regression: `_failure_metadata()` previously bounded and
+    redacted only `last_stderr_tail`; `last_cleanup_error` and
+    `last_relaunch_error` (raw `str(exception)`) passed through unbounded and
+    unredacted. Both must now be bounded/redacted identically before reaching
+    `refresh_failed_permanent.json` / the operator notification / the final
+    event.
+
+    Reaching a real `last_cleanup_error`/`last_relaunch_error` value through
+    the full real-interpreter relaunch loop requires a genuine `os.kill`
+    permission failure or an unlaunchable relaunch command, which is not a
+    reliable, portable way to trigger the bug deterministically in a fast
+    test — so this test directly exercises the rendered program's own
+    `_failure_metadata()` function (sliced from the real generated script,
+    the same technique the redaction tests above use) with a synthetic
+    `failure_state` carrying oversized, secret-shaped values in both fields,
+    proving the fix in the actual generated code rather than a reimplementation.
+    """
+    import json as _json
+
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    script = _extract_relaunch_script(agent)
+    marker = "deadline = time.time() + 60\n"
+    assert marker in script
+    prefix = script.split(marker, 1)[0]
+
+    oversized_cleanup_error = "x" * 2000 + f" openai api_key={_FAKE_OPENAI_KEY}"
+    oversized_relaunch_error = "y" * 2000 + f" openai api_key={_FAKE_OPENAI_KEY}"
+    call = (
+        "failure_state['last_cleanup_error'] = _TEST_CLEANUP_ERR\n"
+        "failure_state['last_relaunch_error'] = _TEST_RELAUNCH_ERR\n"
+        "_TEST_RESULT['meta'] = _failure_metadata()\n"
+    )
+    ns = {
+        "_TEST_CLEANUP_ERR": oversized_cleanup_error,
+        "_TEST_RELAUNCH_ERR": oversized_relaunch_error,
+        "_TEST_RESULT": {},
+    }
+    exec(compile(prefix + call, "<relaunch_script>", "exec"), ns)
+
+    meta = ns["_TEST_RESULT"]["meta"]
+    assert len(meta["last_cleanup_error"]) <= 1200
+    assert len(meta["last_relaunch_error"]) <= 1200
+    assert _FAKE_OPENAI_KEY not in meta["last_cleanup_error"]
+    assert _FAKE_OPENAI_KEY not in meta["last_relaunch_error"]
+    assert "REDACTED" in meta["last_cleanup_error"]
+    assert "REDACTED" in meta["last_relaunch_error"]
+    # metadata must still be JSON-serializable (the artifact/notification sink).
+    _json.dumps(meta)
 
 
 # ---------------------------------------------------------------------------
