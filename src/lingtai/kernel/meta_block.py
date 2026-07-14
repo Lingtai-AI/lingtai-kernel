@@ -738,8 +738,11 @@ def build_meta_readme() -> dict:
             "(they are not retroactively removed), and if several appear, only "
             "the NEWEST one is current — older snapshots are past state, not "
             "current state. Model-facing full-history serialization / a fresh "
-            "provider replay presents only the newest copy; old copies persist "
-            "only in recorded history and logs. "
+            "provider replay preserves every historical agent_meta/guidance "
+            "holder's content — replay does not strip or remove old copies. "
+            "Only the LATEST holder in history represents current agent state; "
+            "every older holder is a historical trace, not a current instruction "
+            "or a fact to act on. "
             "agent_meta carries NO token diagnostics: all token/cache "
             "facts — both this call's own facts and the since-last-molt session "
             "aggregate — live "
@@ -783,9 +786,14 @@ def build_meta_readme() -> dict:
             "not retroactively removed), and if several appear, only the NEWEST "
             "one is current — older payloads are not current instructions or "
             "unhandled events; act on new messages through the producer channel "
-            "(telegram.read, email.read, ...). Model-facing full-history "
-            "serialization / a fresh provider replay presents only the newest "
-            "copy; old copies persist only in recorded history and logs. "
+            "(telegram.read, email.read, ...), which remains the source of truth "
+            "for actionable channel content. Model-facing full-history "
+            "serialization / a fresh provider replay preserves every historical "
+            "notifications/notification_guidance holder's content — replay "
+            "does not strip or remove old copies. Only the LATEST holder in "
+            "history represents the current channel state; every older holder "
+            "is a historical trace, not a current instruction or an unhandled "
+            "event to act on. "
             "Not part of the formal tool-result payload; do not summarize "
             "notification contents as the result body."
         ),
@@ -2879,9 +2887,10 @@ def skeletonize_notification_holder(agent) -> None:
       ``_meta.notification_guidance`` payload is RETAINED as a historical
       trace.  Notification payloads are timely transient state (Jason #4307):
       canonical history is no longer retroactively stripped when the payload
-      moves or disappears; only the newest emitted payload is current, and
-      model-facing full-history serialization filters the old copies (newest
-      per family kept) without rewriting recorded history (see
+      moves or disappears; only the newest emitted payload is current.
+      Model-facing full-history serialization preserves every normal-result
+      holder's content and does not strip ``notifications`` or
+      ``notification_guidance`` keys (see
       ``lingtai.llm.interface_converters``).
     * A synthesized pair's content dict — replace ALL keys with the skeleton
       so the pair stays in history but carries no live payload.  The pair
@@ -3046,8 +3055,9 @@ def attach_active_notifications(
           ``_meta`` on the latest dict-shaped result, the fingerprint is
           committed, the new signature is recorded, and that dict is returned as
           the new holder.  Only the newest emitted payload is current;
-          model-facing full-history serialization filters old copies (newest
-          per family kept) without rewriting recorded history (see
+          model-facing full-history serialization preserves every
+          normal-result holder's content and does not strip ``notifications``
+          or ``notification_guidance`` keys (see
           ``lingtai.llm.interface_converters``).
 
     ``post-molt`` is intentionally not special-cased here.  The dangerous race
@@ -3346,10 +3356,11 @@ def attach_active_runtime(
         ``_meta.guidance`` ref onto the new target, record the new signature,
         and return the new holder.  The prior holder RETAINS its snapshot as a
         historical trace — ``agent_meta`` is timely transient state (Jason
-        #4307): canonical history is not retroactively stripped, only the
-        newest emitted snapshot is current, and model-facing full-history
-        serialization filters old copies (newest per family kept) without
-        rewriting recorded history (see ``lingtai.llm.interface_converters``).
+        #4307): canonical history is not retroactively stripped and only the
+        newest emitted snapshot is current. Model-facing full-history
+        serialization preserves every holder's content and does not strip
+        ``agent_meta`` or ``guidance`` keys (see
+        ``lingtai.llm.interface_converters``).
       * When the signature is **unchanged**, nothing is attached or moved and
         ``prior_holder`` is returned unchanged — its ``agent_meta`` stays put.
       * The transient ``_runtime_pending`` scaffolding is stripped from *all*

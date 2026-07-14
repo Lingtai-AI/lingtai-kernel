@@ -33,10 +33,6 @@ from lingtai.kernel.llm.interface import (
 from lingtai.kernel.logging import get_logger
 
 from lingtai.llm.base import LLMAdapter
-from lingtai.llm.interface_converters import (
-    filter_stale_timely_transient,
-    timely_transient_newest_holders,
-)
 
 logger = get_logger()
 
@@ -367,10 +363,11 @@ class ClaudeCodeChatSession(ChatSession):
         return "\n".join(parts)
 
     def _render_conversation(self) -> str:
-        # Model-facing full-history serialization: stale timely transient
-        # ``_meta`` copies are omitted (newest per family kept), same as the
-        # shared wire converters.
-        newest = timely_transient_newest_holders(self._interface)
+        # Model-facing full-history serialization: every historical tool
+        # result's content is rendered as-is, including any
+        # ``_meta.agent_meta`` / ``guidance`` / ``notifications`` /
+        # ``notification_guidance`` it carries — this render does not strip
+        # those keys from any holder, same as the shared wire converters.
         lines: list[str] = []
         for entry in self._interface._entries:
             role = entry.role
@@ -393,7 +390,7 @@ class ClaudeCodeChatSession(ChatSession):
                         f"ASSISTANT_ACTION: called tool `{block.name}` with input {args}"
                     )
                 elif isinstance(block, ToolResultBlock):
-                    content = filter_stale_timely_transient(block, newest)
+                    content = block.content
                     if not isinstance(content, str):
                         try:
                             content = json.dumps(content, ensure_ascii=False)

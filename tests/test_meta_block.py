@@ -329,15 +329,21 @@ def test_build_meta_readme_documents_timely_latest_only_semantics():
     """agent_meta and notifications are timely transient state: older payloads
     may remain in historical context/logs as traces (canonical history is no
     longer retroactively stripped), and only the NEWEST emission is current —
-    old payloads are not current instructions/state."""
+    old payloads are not current instructions/state, and full-history replay
+    does not strip them out."""
     readme = build_meta_readme()
     for key in ("agent_meta", "notifications"):
         doc = readme[key]
         assert "timely" in doc.lower(), key
-        assert "only the NEWEST" in doc, key
+        assert "only the NEWEST" in doc or "Only the LATEST" in doc, key
         assert "historical trace" in doc, key
-    # Old notification payloads must never read as new/unhandled instructions.
+        # Replay preserves historical holders rather than stripping their keys.
+        assert "preserv" in doc.lower(), key
+        assert "does not strip" in doc.lower(), key
+    # Old notification payloads must never read as new/unhandled instructions,
+    # and the producer channel remains authoritative for actionable content.
     assert "not current instructions" in readme["notifications"]
+    assert "source of truth" in readme["notifications"]
 
 
 def test_build_guidance_with_meta_readme_keeps_section_shape_without_packaged_guidance():

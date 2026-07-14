@@ -1327,8 +1327,9 @@ class BaseAgent:
         notification holder at any time. Old synthesized pairs become skeleton
         placeholders but are never deleted; normal tool results keep old
         payload copies as historical timely state. The conversation structure is
-        preserved, and model-facing serialization filters old copies
-        non-mutatingly (newest per family kept).
+        preserved, and model-facing serialization does not strip timely-transient
+        keys from older holders; only the latest holder per family is current
+        state.
 
         The fingerprint is committed only when injection succeeds (or
         when in a state that cannot inject — STUCK/SUSPENDED/empty).
