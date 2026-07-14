@@ -6,13 +6,13 @@ colon, no date, no ``Started`` label, no regional abbreviation).  Heartbeats and
 elapsed edits never change it, and parallel rows each keep their own captured
 instant.
 
-Presentation contract (manager render, Jason #6894/#6899, #7213/#7216): the card
-shows a single card-level time line — never a per-row inline suffix.  It is the
-Task Card's final standalone line, the BARE stamp ``HH:MM:SS UTC±HH`` with no
-label (no ``时间``, no ``Time``, no other prefix), after the fixed progress-only
-footer, using the first non-empty ``started_at`` in original row order for a
-batched/parallel card, and is omitted entirely when no row carries a usable
-stamp.  A fixed injected wall-clock keeps these assertions deterministic.
+Presentation contract (manager render, Jason's row-timestamp/current-time/footer
+request): every normal automatic row carries its OWN inline stamp (derived from
+that row's own ``started_at``, not the first row's), and the card's final
+standalone line reports the RENDER instant (not any row's start instant) as
+``Current Time: HH:MM:SS UTC±HH``, always present.  A fixed injected wall-clock
+(row capture) and an injected ``now`` (render instant) keep these assertions
+deterministic.
 """
 
 from __future__ import annotations
@@ -210,85 +210,84 @@ def test_parallel_rows_keep_distinct_timestamps(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Rendering: single card-level bare-stamp final line, never a per-row inline
-# suffix and never a labelled line (Jason #7213/#7216 removed the label).
+# Rendering: every normal row carries its OWN inline stamp, and the card's
+# final standalone line is the render-time ``Current Time: ...`` label.
 # ---------------------------------------------------------------------------
 
-# The time line is a standalone line carrying only the ``HH:MM:SS UTC±HH`` stamp:
-# it holds "UTC" but, unlike a tool/API row, has no leading marker or "API error".
-def _time_lines(text):
-    return [
-        ln
-        for ln in text.splitlines()
-        if "UTC" in ln
-        and not ln.startswith(("•", "✓"))
-        and "API error" not in ln
-    ]
+_NOW = datetime(2026, 7, 12, 17, 18, 36, tzinfo=timezone(timedelta(hours=-7)))
 
 
-def test_manager_renders_single_time_line_not_inline_on_row():
+def _current_time_line(text):
+    return next(ln for ln in text.splitlines() if ln.startswith("Current Time: "))
+
+
+def test_manager_renders_each_row_with_its_own_started_at():
     text = TelegramManager._format_task_card_text("", "", "", rows=[
         {"tool": "bash", "tool_action": "run", "reasoning": "build",
          "elapsed_s": 3, "done": False, "started_at": "04:08:08 UTC-07"},
-    ])
-    # The stamp is NOT appended to the row line.
+    ], now=_NOW)
     row_line = next(ln for ln in text.splitlines() if "bash.run" in ln)
-    assert "04:08:08 UTC-07" not in row_line
-    assert "UTC" not in row_line
-    assert row_line == "• bash.run: build (3s)"
-    # It is the card's final standalone line, the BARE stamp with no label.
-    lines = text.splitlines()
-    assert lines[-1] == "04:08:08 UTC-07"
-    assert _time_lines(text) == ["04:08:08 UTC-07"]
-    # No label of any kind — no 时间, no Time, no Started prose.
-    assert "时间" not in text
-    assert "Time" not in text
-    assert "Started" not in text
+    assert "04:08:08 UTC-07" in row_line
 
 
-def test_time_line_follows_the_progress_only_footer():
+def test_manager_renders_current_time_line_from_render_instant_not_row_start():
     text = TelegramManager._format_task_card_text("", "", "", rows=[
         {"tool": "bash", "tool_action": "run", "reasoning": "build",
          "elapsed_s": 3, "done": False, "started_at": "04:08:08 UTC-07"},
-    ])
+    ], now=_NOW)
+    lines = text.splitlines()
+    # The bottom line is the labelled render-time stamp, not the row's own start.
+    assert lines[-1] == "Current Time: 17:18:36 UTC-07"
+    assert "04:08:08 UTC-07" != "17:18:36 UTC-07"
+
+
+def test_current_time_line_follows_the_footer():
+    text = TelegramManager._format_task_card_text("", "", "", rows=[
+        {"tool": "bash", "tool_action": "run", "reasoning": "build",
+         "elapsed_s": 3, "done": False, "started_at": "04:08:08 UTC-07"},
+    ], now=_NOW)
     lines = text.splitlines()
     footer_idx = next(i for i, ln in enumerate(lines) if _TASK_CARD_FOOTER in ln)
-    time_idx = next(i for i, ln in enumerate(lines) if ln == "04:08:08 UTC-07")
-    # The time line is strictly after the fixed progress-only footer line.
+    time_idx = next(i for i, ln in enumerate(lines) if ln.startswith("Current Time: "))
     assert time_idx > footer_idx
-    assert lines[time_idx] == "04:08:08 UTC-07"
+    assert lines[time_idx] == "Current Time: 17:18:36 UTC-07"
 
 
-def test_parallel_rows_use_first_nonempty_started_at_for_the_one_time_line():
+def test_parallel_rows_each_keep_their_own_started_at_not_the_first_rows():
     text = TelegramManager._format_task_card_text("", "", "", rows=[
-        # First row has NO stamp; the card time uses the first NON-EMPTY one in
-        # original row order (the second row here), not the earliest clock value.
         {"tool": "bash", "tool_action": "run", "reasoning": "a",
-         "elapsed_s": 5, "done": False, "started_at": ""},
+         "elapsed_s": 5, "done": False, "started_at": "04:08:07 UTC-07"},
         {"tool": "read", "tool_action": "", "reasoning": "b",
          "elapsed_s": 2, "done": False, "started_at": "04:08:09 UTC-07"},
         {"tool": "grep", "tool_action": "", "reasoning": "c",
          "elapsed_s": 1, "done": False, "started_at": "04:08:11 UTC-07"},
-    ])
-    assert _time_lines(text) == ["04:08:09 UTC-07"]
-    # No row line carries an inline stamp.
-    for ln in text.splitlines():
-        if ln.startswith(("•", "✓")):
-            assert "UTC" not in ln
+    ], now=_NOW)
+    bash_line = next(ln for ln in text.splitlines() if "bash" in ln and ln.startswith(("•", "✓")))
+    read_line = next(ln for ln in text.splitlines() if ln.startswith(("•", "✓")) and "read" in ln)
+    grep_line = next(ln for ln in text.splitlines() if ln.startswith(("•", "✓")) and "grep" in ln)
+    # Each row shows its OWN stamp — none reused from another row.
+    assert "04:08:07 UTC-07" in bash_line
+    assert "04:08:09 UTC-07" in read_line
+    assert "04:08:11 UTC-07" in grep_line
+    # The bottom line is still the single render-time stamp, distinct from any row.
+    assert _current_time_line(text) == "Current Time: 17:18:36 UTC-07"
 
 
-def test_no_time_line_when_no_row_has_a_stamp():
+def test_current_time_line_present_even_when_no_row_has_a_stamp():
     text = TelegramManager._format_task_card_text("", "", "", rows=[
         {"tool": "bash", "tool_action": "run", "reasoning": "x",
          "elapsed_s": 1, "done": False, "started_at": ""},
         {"tool": "read", "tool_action": "", "reasoning": "y",
          "elapsed_s": 2, "done": False},
-    ])
-    # No usable stamp anywhere → the time line is omitted entirely.
-    assert _time_lines(text) == []
-    assert "时间" not in text
-    # The footer is still the last line.
-    assert text.splitlines()[-1] == _TASK_CARD_FOOTER
+    ], now=_NOW)
+    # Unlike the retired started_at-derived line, Current Time never depends on
+    # any row carrying a stamp — it always reflects the render instant.
+    assert text.splitlines()[-1] == "Current Time: 17:18:36 UTC-07"
+    # Rows without a stamp render with no inline suffix (malformed/missing
+    # timestamp tolerance), never crashing and never fabricating one.
+    for ln in text.splitlines():
+        if ln.startswith(("•", "✓")):
+            assert "UTC" not in ln
 
 
 def test_api_error_row_has_no_timestamp_field():
@@ -306,35 +305,58 @@ def test_api_error_row_has_no_timestamp_field():
     assert len(api_rows) == 1
     assert "started_at" not in api_rows[0]
     # The rendered API line carries no timestamp inline.
-    text = TelegramManager._format_task_card_text("", "", "", rows=client.last_rows())
+    text = TelegramManager._format_task_card_text(
+        "", "", "", rows=client.last_rows(), now=_NOW)
     api_line = next(ln for ln in text.splitlines() if "API error" in ln)
     assert "UTC" not in api_line
-    # An API-error-only card has no tool stamp, so no 时间 line either.
-    assert _time_lines(text) == []
+    # The render-time line is still present (API-error-only card).
+    assert text.splitlines()[-1] == "Current Time: 17:18:36 UTC-07"
 
 
-def test_api_error_row_does_not_supply_the_time_line_but_a_tool_row_does():
-    """A mixed batch (tool row + API-error row) still renders exactly one time
-    line, sourced from the tool row's stamp; the API-error row never carries one.
+def test_api_error_row_never_carries_a_stamp_alongside_a_stamped_tool_row():
+    """A mixed batch (tool row + API-error row): the tool row shows its own
+    stamp; the API-error row never carries one; the render-time line is last.
     """
     text = TelegramManager._format_task_card_text("", "", "", rows=[
         {"tool": "bash", "tool_action": "run", "reasoning": "build",
          "elapsed_s": 3, "done": False, "started_at": "04:08:08 UTC-07"},
         {"kind": "api_error", "status": 429, "code": "usage_limit_reached",
          "state": "retrying", "attempt": 1, "max_attempts": 3, "done": False},
-    ])
-    assert _time_lines(text) == ["04:08:08 UTC-07"]
+    ], now=_NOW)
+    bash_line = next(ln for ln in text.splitlines() if "bash.run" in ln)
+    assert "04:08:08 UTC-07" in bash_line
     api_line = next(ln for ln in text.splitlines() if "API error" in ln)
     assert "UTC" not in api_line
+    assert text.splitlines()[-1] == "Current Time: 17:18:36 UTC-07"
 
 
 def test_render_tool_row_without_started_at_is_safe():
-    """Backward-compatible: a row missing started_at renders without any stamp
-    (no crash, no time line), so an older in-flight payload still displays."""
+    """Backward-compatible: a row missing started_at renders without any inline
+    stamp (no crash), so an older in-flight payload still displays; the
+    render-time line still renders unconditionally."""
     text = TelegramManager._format_task_card_text("", "", "", rows=[
         {"tool": "bash", "tool_action": "", "reasoning": "x",
          "elapsed_s": 1, "done": False},
-    ])
+    ], now=_NOW)
     assert "bash" in text
     assert "(1s)" in text
-    assert _time_lines(text) == []
+    row_line = next(ln for ln in text.splitlines() if ln.startswith(("•", "✓")))
+    assert "UTC" not in row_line
+    assert text.splitlines()[-1] == "Current Time: 17:18:36 UTC-07"
+
+
+def test_footer_shows_actual_current_normal_row_setting():
+    text = TelegramManager._format_task_card_text("", "", "", rows=[
+        {"tool": "bash", "tool_action": "run", "reasoning": "x",
+         "elapsed_s": 1, "done": False, "started_at": "04:08:08 UTC-07"},
+    ], normal_rows=7, now=_NOW)
+    assert "/taskcard N sets normal rows (1-10, current: 7)." in text
+
+
+def test_footer_current_row_count_stays_within_1_10_semantics():
+    for n in (1, 10):
+        text = TelegramManager._format_task_card_text("", "", "", rows=[
+            {"tool": "bash", "tool_action": "run", "reasoning": "x",
+             "elapsed_s": 1, "done": False, "started_at": "04:08:08 UTC-07"},
+        ], normal_rows=n, now=_NOW)
+        assert f"current: {n}" in text

@@ -461,6 +461,9 @@ def test_no_fallback_exhaustion_renders_terminal(tmp_path, monkeypatch):
 #      (it is not a guarantee for every N; see the high-N boundary test below)
 # ===========================================================================
 
+_MODERATE_NOW = datetime(2026, 7, 12, 17, 18, 36, tzinfo=timezone(timedelta(hours=-7)))
+
+
 def test_timestamped_moderate_rows_stay_under_text_limit():
     """At a moderate row count the excerpt budget has headroom, so shrinking the
     (huge) per-row reasoning keeps the whole render under ``_TASK_CARD_TEXT_LIMIT``.
@@ -470,19 +473,19 @@ def test_timestamped_moderate_rows_stay_under_text_limit():
          "elapsed_s": i, "done": i % 2 == 0, "started_at": "04:08:08 UTC-07"}
         for i in range(12)
     ]
-    text = TelegramManager._format_task_card_text("", "", "", rows=rows)
+    text = TelegramManager._format_task_card_text("", "", "", rows=rows, now=_MODERATE_NOW)
     assert len(text) <= TelegramManager._TASK_CARD_TEXT_LIMIT
     # Every row still represented and the footer survives.
     for i in range(12):
         assert f"tool{i}" in text
     assert _TASK_CARD_FOOTER in text
-    # The card renders ONE card-level time line (never a per-row inline suffix),
-    # counted in the excerpt budget so this moderate card fits.
-    assert text.count("04:08:08 UTC-07") == 1
-    assert text.splitlines()[-1] == "04:08:08 UTC-07"  # bare stamp, no label
+    # Every row carries its own inline stamp now, counted in the excerpt budget
+    # so this moderate card still fits.
     for ln in text.splitlines():
         if ln.startswith(("•", "✓")):
-            assert "UTC" not in ln  # no inline stamp on any row
+            assert "04:08:08 UTC-07" in ln
+    # The bottom line is the single render-time stamp, distinct from row stamps.
+    assert text.splitlines()[-1] == "Current Time: 17:18:36 UTC-07"
 
 
 def test_extreme_row_count_exceeds_budget_but_keeps_every_row():
@@ -500,7 +503,7 @@ def test_extreme_row_count_exceeds_budget_but_keeps_every_row():
          "elapsed_s": 0, "done": False, "started_at": "04:08:08 UTC-07"}
         for i in range(n)
     ]
-    text = TelegramManager._format_task_card_text("", "", "", rows=rows)
+    text = TelegramManager._format_task_card_text("", "", "", rows=rows, now=_MODERATE_NOW)
     # Honest: the whole render is NOT bounded by the budget for extreme N.
     assert len(text) > TelegramManager._TASK_CARD_TEXT_LIMIT
     assert len(text) > 4096  # also above Telegram's hard transport limit
@@ -511,9 +514,9 @@ def test_extreme_row_count_exceeds_budget_but_keeps_every_row():
         assert f"tool{i}" in text
     # ...and there is no blind final-string truncation ellipsis tail.
     assert not text.endswith("…")
-    # The fixed footer and the single card-level time line still render.
+    # The fixed footer and the single render-time line still render.
     assert _TASK_CARD_FOOTER in text
-    assert text.splitlines()[-1] == "04:08:08 UTC-07"  # bare stamp, no label
+    assert text.splitlines()[-1] == "Current Time: 17:18:36 UTC-07"
 
 
 def test_timestamped_rows_redaction_before_truncation():
