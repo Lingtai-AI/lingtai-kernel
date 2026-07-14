@@ -13,7 +13,9 @@ import json
 import threading
 from unittest.mock import patch
 
-from lingtai.tools.daemon import DaemonManager
+import pytest
+
+from lingtai.tools.daemon import DaemonManager, _normalize_cursor_usage
 from tests._daemon_helpers import (
     FiniteFakeProc,
     completed_future,
@@ -42,6 +44,36 @@ def _make_run_dir(agent, *, handle="em-cursor"):
         system_prompt="[stub]",
         backend="cursor",
     )
+
+
+def _cursor_usage(**overrides):
+    usage = {
+        "inputTokens": 1234,
+        "outputTokens": 56,
+        "cacheReadTokens": 789,
+        "cacheWriteTokens": 12,
+    }
+    usage.update(overrides)
+    return usage
+
+
+def _cursor_result(*, session_id="cursor-session-XYZ", result="done", **overrides):
+    event = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": result,
+        "session_id": session_id,
+        "request_id": "request-1",
+        "usage": _cursor_usage(),
+    }
+    event.update(overrides)
+    return event
+
+
+def _source_cursor_stream(*events):
+    """JSONL fixture shaped like Cursor Agent 2026.05.28-a70ca7c."""
+    return [json.dumps(event) + "\n" for event in events]
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +114,36 @@ def test_cursor_documented_result_event_extracts_session_and_text():
     }
     assert DaemonManager._opencode_extract_session_id(event) == "cursor-session-123"
     assert DaemonManager._opencode_extract_text(event) == "full assistant text"
+
+
+def test_cursor_usage_maps_net_input_and_preserves_cache_totals():
+    event = _cursor_result()
+    assert _normalize_cursor_usage(event) == {
+        "input": 1234,
+        "output": 56,
+        "cached": 789 + 12,
+        "thinking": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "result", "subtype": "success", "is_error": False,
+         "usage": _cursor_usage(inputTokens=-1)},
+        {"type": "result", "subtype": "success", "is_error": False,
+         "usage": _cursor_usage(outputTokens=True)},
+        {"type": "result", "subtype": "success", "is_error": False,
+         "usage": {"inputTokens": 1}},
+        {"type": "result", "subtype": "error", "is_error": True,
+         "usage": _cursor_usage()},
+        {"type": "result", "subtype": "success", "is_error": False,
+         "usage": _cursor_usage(inputTokens=0, outputTokens=0,
+                                 cacheReadTokens=0, cacheWriteTokens=0)},
+    ],
+)
+def test_cursor_usage_rejects_invalid_zero_and_unsuccessful_events(event):
+    assert _normalize_cursor_usage(event) is None
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +232,134 @@ def test_cursor_emanate_persists_session_id_and_final_result(tmp_path):
     assert result == "final cursor answer"
 
 
+def test_cursor_source_usage_is_ui_only_raw_and_model_joined(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    init = {
+        "type": "system", "subtype": "init", "apiKeySource": "login",
+        "session_id": "cursor-source-session", "model": "gpt-example",
+    }
+    result_event = _cursor_result(session_id="cursor-source-session")
+    run_dir = _make_run_dir(agent, handle="em-cur-usage")
+
+    with patch(
+        "lingtai.tools.daemon.subprocess.Popen",
+        return_value=FiniteFakeProc(
+            stdout_lines=_source_cursor_stream(init, result_event),
+        ),
+    ):
+        result = mgr._run_cursor_emanation(
+            "em-cur-usage", run_dir, "Use source usage.",
+            threading.Event(), threading.Event(),
+        )
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert result == "done"
+    assert state["backend"] == "cursor"
+    assert state["model"] == "gpt-example"
+    assert "provider" not in state
+    assert state["cli_tokens"] == {
+        "input": 1234, "output": 56, "cached": 801,
+        "thinking": 0, "calls": 1,
+    }
+    events = [
+        json.loads(line) for line in run_dir.events_path.read_text().splitlines()
+    ]
+    usage_events = [event for event in events if event.get("event") == "cli_usage"]
+    assert len(usage_events) == 1
+    assert usage_events[0]["raw"] == result_event["usage"]
+    assert not run_dir.token_ledger_path.exists()
+    assert not (agent._working_dir / "logs" / "token_ledger.jsonl").exists()
+
+
+def test_cursor_model_join_requires_preceding_matching_init_and_provider_stays_unknown(
+    tmp_path,
+):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    init = {
+        "type": "system", "subtype": "init", "apiKeySource": "login",
+        "session_id": "init-session", "model": "should-not-join",
+    }
+    result_event = _cursor_result(session_id="different-session")
+    run_dir = _make_run_dir(agent, handle="em-cur-unmatched")
+
+    with patch(
+        "lingtai.tools.daemon.subprocess.Popen",
+        return_value=FiniteFakeProc(
+            stdout_lines=_source_cursor_stream(init, result_event),
+        ),
+    ):
+        mgr._run_cursor_emanation(
+            "em-cur-unmatched", run_dir, "Keep model unknown.",
+            threading.Event(), threading.Event(),
+        )
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert state["model"] == "unknown"
+    assert state["backend"] == "cursor"
+    assert "provider" not in state
+
+
+def test_cursor_duplicate_terminal_events_account_once(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    first = _cursor_result(result="first")
+    second = _cursor_result(result="second")
+    run_dir = _make_run_dir(agent, handle="em-cur-duplicate")
+
+    with patch(
+        "lingtai.tools.daemon.subprocess.Popen",
+        return_value=FiniteFakeProc(
+            stdout_lines=_source_cursor_stream(first, second),
+        ),
+    ):
+        result = mgr._run_cursor_emanation(
+            "em-cur-duplicate", run_dir, "Count one terminal.",
+            threading.Event(), threading.Event(),
+        )
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert result == "second"
+    assert state["cli_tokens"]["calls"] == 1
+    usage_events = [
+        json.loads(line) for line in run_dir.events_path.read_text().splitlines()
+        if '"event": "cli_usage"' in line
+    ]
+    assert len(usage_events) == 1
+
+
+def test_cursor_invalid_and_zero_usage_events_are_not_recorded(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    malformed = _cursor_result(result="malformed", **{"usage": {
+        "inputTokens": "1234", "outputTokens": 56,
+        "cacheReadTokens": 789, "cacheWriteTokens": 12,
+    }})
+    zero = _cursor_result(
+        result="zero",
+        **{"usage": _cursor_usage(inputTokens=0, outputTokens=0,
+                                  cacheReadTokens=0, cacheWriteTokens=0)},
+    )
+    run_dir = _make_run_dir(agent, handle="em-cur-invalid-usage")
+
+    with patch(
+        "lingtai.tools.daemon.subprocess.Popen",
+        return_value=FiniteFakeProc(
+            stdout_lines=_source_cursor_stream(malformed, zero),
+        ),
+    ):
+        result = mgr._run_cursor_emanation(
+            "em-cur-invalid-usage", run_dir, "Ignore malformed usage.",
+            threading.Event(), threading.Event(),
+        )
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert result == "zero"
+    assert state["cli_tokens"]["calls"] == 0
+    assert '"event": "cli_usage"' not in run_dir.events_path.read_text()
+
+
 def test_cursor_emanate_marks_error_result_failed(tmp_path):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
@@ -198,6 +388,7 @@ def test_cursor_emanate_marks_error_result_failed(tmp_path):
 
     state = json.loads(run_dir.daemon_json_path.read_text())
     assert state["state"] == "failed"
+    assert state["cli_tokens"]["calls"] == 0
 
 
 
@@ -307,6 +498,57 @@ def test_ask_cursor_resumes_with_captured_session_id(tmp_path):
     assert "--output-format" in cmd
     assert cmd[cmd.index("--output-format") + 1] == "stream-json"
     assert cmd[-1] == "how is it going?"
+
+
+def test_cursor_initial_and_resume_accumulate_ui_usage_without_ledgers(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    session_id = "cursor-initial-resume"
+    init = {
+        "type": "system", "subtype": "init", "apiKeySource": "login",
+        "session_id": session_id, "model": "cursor-model",
+    }
+    initial_result = _cursor_result(
+        session_id=session_id, result="initial done",
+        **{"usage": _cursor_usage(inputTokens=100, outputTokens=10,
+                                  cacheReadTokens=20, cacheWriteTokens=3)},
+    )
+    resume_result = _cursor_result(
+        session_id=session_id, result="resume done",
+        **{"usage": _cursor_usage(inputTokens=200, outputTokens=20,
+                                  cacheReadTokens=30, cacheWriteTokens=4)},
+    )
+    run_dir = _make_run_dir(agent, handle="em-cur-initial-resume")
+
+    with patch(
+        "lingtai.tools.daemon.subprocess.Popen",
+        side_effect=[
+            FiniteFakeProc(stdout_lines=_source_cursor_stream(init, initial_result)),
+            FiniteFakeProc(stdout_lines=_source_cursor_stream(resume_result)),
+        ],
+    ):
+        mgr._run_cursor_emanation(
+            "em-cur-initial-resume", run_dir, "Initial task.",
+            threading.Event(), threading.Event(),
+        )
+        run_dir._state["cursor_session_id"] = session_id
+        run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+        _register_cursor_entry(mgr, run_dir, em_id="em-cur-initial-resume")
+        sent = mgr.handle({
+            "action": "ask", "id": "em-cur-initial-resume",
+            "message": "Resume task.",
+        })
+        assert sent["status"] == "sent"
+        mgr._emanations["em-cur-initial-resume"]["ask_future"].result(timeout=5)
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert state["model"] == "cursor-model"
+    assert state["cli_tokens"] == {
+        "input": 300, "output": 30, "cached": 57,
+        "thinking": 0, "calls": 2,
+    }
+    assert not run_dir.token_ledger_path.exists()
+    assert not (agent._working_dir / "logs" / "token_ledger.jsonl").exists()
 
 
 def test_ask_cursor_error_result_publishes_failure(tmp_path):
