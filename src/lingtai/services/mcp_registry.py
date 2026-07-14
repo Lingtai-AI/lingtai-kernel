@@ -385,6 +385,17 @@ def _escape_xml(s: str) -> str:
     )
 
 
+#: Safe account keys rendered into the model-facing prompt XML. Excludes
+#: ``last_verified_at``: it is a volatile re-verification timestamp that
+#: changes on plain refresh with no source/config change, which would
+#: otherwise invalidate the prompt-cache prefix. It remains in the disk
+#: identity document, `read_identities()`, and the ``mcp(action="info")``
+#: diagnostic payload — only this prompt render omits it.
+_PROMPT_ACCOUNT_KEYS = tuple(
+    k for k in IDENTITY_SAFE_ACCOUNT_KEYS if k != "last_verified_at"
+)
+
+
 def _build_identity_xml(identity: dict | None, indent: str = "    ") -> list[str]:
     """Render a non-secret <identity> block for one MCP, or [] if absent."""
     if not identity:
@@ -393,15 +404,9 @@ def _build_identity_xml(identity: dict | None, indent: str = "    ") -> list[str
     if not accounts:
         return []
     lines = [f"{indent}<identity>"]
-    verified = identity.get("last_verified_at")
-    if verified:
-        lines.append(
-            f"{indent}  <last_verified_at>"
-            f"{_escape_xml(str(verified))}</last_verified_at>"
-        )
     for acct in accounts:
         lines.append(f"{indent}  <account>")
-        for key in IDENTITY_SAFE_ACCOUNT_KEYS:
+        for key in _PROMPT_ACCOUNT_KEYS:
             if key in acct:
                 lines.append(
                     f"{indent}    <{key}>{_escape_xml(str(acct[key]))}</{key}>"

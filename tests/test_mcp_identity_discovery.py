@@ -364,6 +364,42 @@ def test_identity_rendered_into_prompt_xml(tmp_path):
     assert "bot_token" not in body
 
 
+def test_last_verified_at_absent_from_prompt_xml_but_present_in_read_identities(tmp_path):
+    """`last_verified_at` is a volatile re-verification timestamp that changes
+    on plain refresh with no source/config change. It must remain visible in
+    the underlying discovered identity state (`read_identities`) and the
+    `mcp(action="info")` diagnostic payload, but must be excluded from the
+    model-facing `<registered_mcp>` prompt XML — at both the identity level
+    (the old `<last_verified_at>` sibling of `<account>`) and the account
+    level — so it never invalidates the prompt-cache prefix."""
+    agent, workdir = _mk_agent(tmp_path, addons=["telegram"])
+    _write_identity(workdir, "telegram", _telegram_identity())
+
+    # Underlying discovered identity state still carries last_verified_at.
+    ids = read_identities(workdir)
+    assert ids["telegram"]["last_verified_at"] == "2026-06-24T09:59:00+00:00"
+    assert ids["telegram"]["accounts"][0]["last_verified_at"] == (
+        "2026-06-24T09:59:00+00:00"
+    )
+
+    # Diagnostic payload (mcp(action="info")) still carries it too.
+    handler = agent._tool_handlers.get("mcp")
+    result = handler({"action": "info"})
+    registered = {r["name"]: r for r in result["registered"]}
+    ident = registered["telegram"]["identity"]
+    assert ident["last_verified_at"] == "2026-06-24T09:59:00+00:00"
+    assert ident["accounts"][0]["last_verified_at"] == "2026-06-24T09:59:00+00:00"
+
+    # But the model-facing prompt XML omits it entirely, at both levels.
+    section = agent._prompt_manager._sections.get("mcp")
+    body = section.body if hasattr(section, "body") else str(section)
+    assert "<registered_mcp>" in body
+    assert "my_agent_bot" in body
+    assert "<last_verified_at>" not in body
+    assert "last_verified_at" not in body
+    assert "2026-06-24T09:59:00+00:00" not in body
+
+
 def test_prompt_xml_has_no_secret_even_with_poisoned_file(tmp_path):
     agent, workdir = _mk_agent(tmp_path, addons=["telegram"])
     _write_identity(
