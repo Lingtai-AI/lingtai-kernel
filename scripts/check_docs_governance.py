@@ -36,10 +36,10 @@ EXPECTED_TOP_LEVEL_KEYS = frozenset(
     {
         "name", "version", "extensions", "discovery", "required_fields",
         "field_constraints", "metadata_modes", "metadata_mode_overrides",
-        "placeholder_patterns", "related_files", "maintenance",
+        "placeholder_patterns", "lifecycle_contract", "related_files", "maintenance",
     }
 )
-EXPECTED_CONTRACT_VERSION = 6
+EXPECTED_CONTRACT_VERSION = 7
 EXPECTED_CONTRACT_NAME = "docs-governance-contract"
 EXPECTED_EXTENSIONS = [".md"]
 EXPECTED_DISCOVERY = {"tracked": True, "untracked_not_ignored": True}
@@ -54,6 +54,18 @@ EXPECTED_MAINTENANCE_CONSTRAINT_KEYS = frozenset(
 )
 EXPECTED_METADATA_MODE_NAMES = frozenset({"frontmatter", "html_comment"})
 EXPECTED_METADATA_MODE_OVERRIDES = {".github/PULL_REQUEST_TEMPLATE.md": "html_comment"}
+EXPECTED_LIFECYCLE_KEYS = frozenset(
+    {
+        "field",
+        "supported_values",
+        "exit_condition_field",
+        "exit_condition_min_length",
+        "exit_condition_forbidden_patterns",
+    }
+)
+EXPECTED_LIFECYCLE_FIELD = "lifecycle"
+EXPECTED_LIFECYCLE_SUPPORTED_VALUES = ["temporary"]
+EXPECTED_LIFECYCLE_EXIT_CONDITION_FIELD = "temporary_until"
 
 
 class ContractError(RuntimeError):
@@ -181,6 +193,56 @@ def validate_docs_contract_shape(contract: object) -> dict:
         except re.error as exc:
             raise ContractError(f"docs.yaml: bad placeholder pattern {pattern!r}: {exc}") from exc
 
+    lifecycle_contract = contract.get("lifecycle_contract")
+    if (
+        not isinstance(lifecycle_contract, dict)
+        or set(lifecycle_contract) != EXPECTED_LIFECYCLE_KEYS
+    ):
+        raise ContractError("docs.yaml: lifecycle_contract has the wrong key set")
+    if lifecycle_contract.get("field") != EXPECTED_LIFECYCLE_FIELD:
+        raise ContractError(
+            f"docs.yaml: lifecycle_contract.field must be {EXPECTED_LIFECYCLE_FIELD!r}"
+        )
+    if lifecycle_contract.get("supported_values") != EXPECTED_LIFECYCLE_SUPPORTED_VALUES:
+        raise ContractError(
+            "docs.yaml: lifecycle_contract.supported_values must be exactly "
+            f"{EXPECTED_LIFECYCLE_SUPPORTED_VALUES!r}"
+        )
+    if (
+        lifecycle_contract.get("exit_condition_field")
+        != EXPECTED_LIFECYCLE_EXIT_CONDITION_FIELD
+    ):
+        raise ContractError(
+            "docs.yaml: lifecycle_contract.exit_condition_field must be "
+            f"{EXPECTED_LIFECYCLE_EXIT_CONDITION_FIELD!r}"
+        )
+    exit_min_length = lifecycle_contract.get("exit_condition_min_length")
+    if (
+        not isinstance(exit_min_length, int)
+        or isinstance(exit_min_length, bool)
+        or exit_min_length < 1
+    ):
+        raise ContractError(
+            "docs.yaml: lifecycle_contract.exit_condition_min_length must be a positive integer"
+        )
+    exit_forbidden_patterns = lifecycle_contract.get("exit_condition_forbidden_patterns")
+    if (
+        not isinstance(exit_forbidden_patterns, list)
+        or not exit_forbidden_patterns
+        or not all(isinstance(pattern, str) for pattern in exit_forbidden_patterns)
+    ):
+        raise ContractError(
+            "docs.yaml: lifecycle_contract.exit_condition_forbidden_patterns "
+            "must be a non-empty list of strings"
+        )
+    for pattern in exit_forbidden_patterns:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ContractError(
+                f"docs.yaml: bad lifecycle exit condition pattern {pattern!r}: {exc}"
+            ) from exc
+
     return contract
 
 
@@ -195,6 +257,13 @@ def load_docs_contract() -> dict:
 
 def compiled_placeholder_patterns(contract: dict) -> list:
     return [re.compile(p) for p in contract["placeholder_patterns"]]
+
+
+def compiled_lifecycle_exit_condition_forbidden_patterns(contract: dict) -> list:
+    return [
+        re.compile(pattern)
+        for pattern in contract["lifecycle_contract"]["exit_condition_forbidden_patterns"]
+    ]
 
 
 def _is_clean_repo_relative_posix_path(rp) -> str | None:
@@ -275,6 +344,62 @@ def validate_metadata_mapping(rel: str, meta, contract: dict) -> list[str]:
             for pat in patterns:
                 if pat.search(value):
                     failures.append(f"{rel}: placeholder left unfilled in maintenance: {value!r}")
+    failures.extend(validate_lifecycle_mapping(rel, meta, contract))
+    return failures
+
+
+def validate_lifecycle_mapping(rel: str, meta: dict, contract: dict) -> list[str]:
+    """OPTIONAL per-document lifecycle check: both fields absent is valid.
+    See docs.yaml's lifecycle_contract prose for the full rationale."""
+    lc = contract["lifecycle_contract"]
+    lifecycle_field = lc["field"]
+    exit_field = lc["exit_condition_field"]
+    has_lifecycle = lifecycle_field in meta
+    has_exit_condition = exit_field in meta
+    if not has_lifecycle and not has_exit_condition:
+        return []
+
+    failures: list[str] = []
+    patterns = compiled_placeholder_patterns(contract)
+    exit_forbidden_patterns = compiled_lifecycle_exit_condition_forbidden_patterns(contract)
+
+    if not has_lifecycle:
+        failures.append(
+            f"{rel}: {exit_field} present without {lifecycle_field!r} set to a supported value"
+        )
+        return failures
+
+    lifecycle_value = meta[lifecycle_field]
+    if not isinstance(lifecycle_value, str) or not lifecycle_value or lifecycle_value not in lc["supported_values"]:
+        failures.append(
+            f"{rel}: {lifecycle_field} must be one of {lc['supported_values']!r}, got {lifecycle_value!r}"
+        )
+        return failures
+
+    if not has_exit_condition:
+        failures.append(f"{rel}: {lifecycle_field}: {lifecycle_value!r} requires {exit_field!r}")
+        return failures
+
+    exit_value = meta[exit_field]
+    if not isinstance(exit_value, str):
+        failures.append(f"{rel}: {exit_field} must be a string, got {type(exit_value).__name__}")
+        return failures
+    if sum(not char.isspace() for char in exit_value) < lc["exit_condition_min_length"]:
+        failures.append(
+            f"{rel}: {exit_field} must contain at least "
+            f"{lc['exit_condition_min_length']} non-whitespace characters"
+        )
+        return failures
+    for pat in patterns:
+        if pat.search(exit_value):
+            failures.append(f"{rel}: placeholder left unfilled in {exit_field}: {exit_value!r}")
+    for pat in exit_forbidden_patterns:
+        if pat.search(exit_value):
+            failures.append(
+                f"{rel}: {exit_field} is non-concrete or contains a placeholder: "
+                f"{exit_value!r}"
+            )
+            break
     return failures
 
 

@@ -1,4 +1,4 @@
-"""Docs YAML governance validator tests (V6).
+"""Docs YAML governance validator tests (V7).
 
 related_files.target_policy is owner_validated_relative_link: generic
 validation is syntax-only, never existence. Tests here prove both that
@@ -66,6 +66,20 @@ def test_every_in_scope_doc_has_required_fields():
     for path in checker.discover_doc_paths(contract):
         failures.extend(checker.check_one_document_path(path, contract, repo_root=ROOT))
     assert not failures, "\n".join(failures)
+
+
+def test_fsutil_migration_plan_is_marked_temporary_with_valid_exit_condition():
+    contract = checker.load_docs_contract()
+    path = ROOT / "docs/plans/2026-06-25-fsutil-migration.md"
+    text = path.read_text(encoding="utf-8")
+    meta, error = checker.parse_doc_metadata_text(
+        "docs/plans/2026-06-25-fsutil-migration.md", text, contract
+    )
+    assert error is None, error
+    assert meta["lifecycle"] == "temporary"
+    assert len(meta["temporary_until"].strip()) >= contract["lifecycle_contract"]["exit_condition_min_length"]
+    failures = checker.check_one_document_path(path, contract, repo_root=ROOT)
+    assert not failures, failures
 
 
 def test_root_anatomy_and_contract_pass_generic_check_without_weakening_architecture_tests():
@@ -178,6 +192,154 @@ def test_concise_real_maintenance_rule_is_valid():
         contract,
     )
     assert not failures, failures
+
+
+def test_durable_doc_omits_lifecycle_fields_and_is_valid():
+    contract = checker.load_docs_contract()
+    failures = checker.validate_metadata_mapping(
+        "x.md",
+        {"maintenance": "Update when the API changes.", "related_files": ["y.md"]},
+        contract,
+    )
+    assert not failures, failures
+
+
+def test_valid_temporary_lifecycle_metadata_passes():
+    contract = checker.load_docs_contract()
+    failures = checker.validate_metadata_mapping(
+        "x.md",
+        {
+            "maintenance": "Update when the API changes.",
+            "related_files": ["y.md"],
+            "lifecycle": "temporary",
+            "temporary_until": "Archive once the migration checklist is fully resolved.",
+        },
+        contract,
+    )
+    assert not failures, failures
+
+
+def test_temporary_lifecycle_missing_exit_condition_rejected():
+    contract = checker.load_docs_contract()
+    failures = checker.validate_metadata_mapping(
+        "x.md",
+        {"maintenance": "Update when the API changes.", "related_files": ["y.md"], "lifecycle": "temporary"},
+        contract,
+    )
+    assert any("requires" in f and "temporary_until" in f for f in failures)
+
+
+def test_temporary_until_without_lifecycle_rejected():
+    contract = checker.load_docs_contract()
+    failures = checker.validate_metadata_mapping(
+        "x.md",
+        {
+            "maintenance": "Update when the API changes.",
+            "related_files": ["y.md"],
+            "temporary_until": "Archive once the migration checklist is fully resolved.",
+        },
+        contract,
+    )
+    assert any("temporary_until present without" in f for f in failures)
+
+
+@pytest.mark.parametrize("bad_value", ["archived", "", "TEMPORARY", 1, None, True])
+def test_unsupported_or_non_string_lifecycle_value_rejected(bad_value):
+    contract = checker.load_docs_contract()
+    failures = checker.validate_metadata_mapping(
+        "x.md",
+        {
+            "maintenance": "Update when the API changes.",
+            "related_files": ["y.md"],
+            "lifecycle": bad_value,
+            "temporary_until": "Archive once the migration checklist is fully resolved.",
+        },
+        contract,
+    )
+    assert any("must be one of" in f for f in failures)
+
+
+def test_non_string_exit_condition_rejected():
+    contract = checker.load_docs_contract()
+    failures = checker.validate_metadata_mapping(
+        "x.md",
+        {
+            "maintenance": "Update when the API changes.",
+            "related_files": ["y.md"],
+            "lifecycle": "temporary",
+            "temporary_until": 12345,
+        },
+        contract,
+    )
+    assert any("must be a string" in f for f in failures)
+
+
+def test_too_short_exit_condition_rejected():
+    contract = checker.load_docs_contract()
+    minimum = contract["lifecycle_contract"]["exit_condition_min_length"]
+    failures = checker.validate_metadata_mapping(
+        "x.md",
+        {
+            "maintenance": "Update when the API changes.",
+            "related_files": ["y.md"],
+            "lifecycle": "temporary",
+            "temporary_until": ("a " * (minimum - 1)).rstrip(),
+        },
+        contract,
+    )
+    assert any(f"at least {minimum}" in f for f in failures)
+
+
+def test_placeholder_exit_condition_rejected():
+    contract = checker.load_docs_contract()
+    failures = checker.validate_metadata_mapping(
+        "x.md",
+        {
+            "maintenance": "Update when the API changes.",
+            "related_files": ["y.md"],
+            "lifecycle": "temporary",
+            "temporary_until": "Archive once [FILL_IN] is resolved.",
+        },
+        contract,
+    )
+    assert any("placeholder" in f for f in failures)
+
+
+@pytest.mark.parametrize(
+    "exit_condition",
+    [
+        "When done, TBD TBD TBD TBD",
+        "When everything is finally completely done.",
+        "After the migration is complete.",
+    ],
+)
+def test_non_concrete_exit_condition_rejected(exit_condition):
+    contract = checker.load_docs_contract()
+    failures = checker.validate_metadata_mapping(
+        "x.md",
+        {
+            "maintenance": "Update when the API changes.",
+            "related_files": ["y.md"],
+            "lifecycle": "temporary",
+            "temporary_until": exit_condition,
+        },
+        contract,
+    )
+    assert any("non-concrete or contains a placeholder" in failure for failure in failures)
+
+
+def test_temporary_lifecycle_does_not_exempt_required_fields():
+    contract = checker.load_docs_contract()
+    failures = checker.validate_metadata_mapping(
+        "x.md",
+        {
+            "lifecycle": "temporary",
+            "temporary_until": "Archive once the migration checklist is fully resolved.",
+        },
+        contract,
+    )
+    assert "x.md: missing required field 'related_files'" in failures
+    assert "x.md: missing required field 'maintenance'" in failures
 
 
 def test_duplicate_related_path_rejected(tmp_path):
@@ -346,6 +508,53 @@ def test_unsupported_version_rejected():
     bad = dict(checker.load_docs_contract())
     bad["version"] = 999
     with pytest.raises(checker.ContractError, match="version"):
+        checker.validate_docs_contract_shape(bad)
+
+
+def test_canonical_contract_is_v7_with_lifecycle_contract_block():
+    contract = checker.load_docs_contract()
+    assert contract["version"] == 7
+    assert contract["lifecycle_contract"] == {
+        "field": "lifecycle",
+        "supported_values": ["temporary"],
+        "exit_condition_field": "temporary_until",
+        "exit_condition_min_length": 20,
+        "exit_condition_forbidden_patterns": [
+            r"(?i)\b(?:tbd|todo|fixme|xxx|n/a)\b",
+            r"(?i)^\s*when(?:\s+\w+){0,4}\s+(?:is\s+)?done\s*[.!]?\s*$",
+            r"(?i)^\s*after\s+(?:the\s+)?migration(?:\s+is\s+(?:done|complete|completed))?\s*[.!]?\s*$",
+        ],
+    }
+
+
+def test_missing_lifecycle_contract_block_rejected():
+    bad = dict(checker.load_docs_contract())
+    del bad["lifecycle_contract"]
+    with pytest.raises(checker.ContractError, match="lifecycle"):
+        checker.validate_docs_contract_shape(bad)
+
+
+def test_wrong_lifecycle_supported_values_rejected():
+    bad = dict(checker.load_docs_contract())
+    bad["lifecycle_contract"] = dict(bad["lifecycle_contract"])
+    bad["lifecycle_contract"]["supported_values"] = ["temporary", "deprecated"]
+    with pytest.raises(checker.ContractError, match="supported_values"):
+        checker.validate_docs_contract_shape(bad)
+
+
+def test_lifecycle_exit_condition_min_length_must_be_positive_int():
+    bad = dict(checker.load_docs_contract())
+    bad["lifecycle_contract"] = dict(bad["lifecycle_contract"])
+    bad["lifecycle_contract"]["exit_condition_min_length"] = 0
+    with pytest.raises(checker.ContractError, match="exit_condition_min_length"):
+        checker.validate_docs_contract_shape(bad)
+
+
+def test_bad_lifecycle_exit_condition_pattern_rejected():
+    bad = dict(checker.load_docs_contract())
+    bad["lifecycle_contract"] = dict(bad["lifecycle_contract"])
+    bad["lifecycle_contract"]["exit_condition_forbidden_patterns"] = ["[unclosed"]
+    with pytest.raises(checker.ContractError, match="exit condition pattern"):
         checker.validate_docs_contract_shape(bad)
 
 

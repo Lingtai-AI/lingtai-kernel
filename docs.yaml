@@ -1,5 +1,5 @@
 name: docs-governance-contract
-version: 6
+version: 7
 extensions:
   - .md
 discovery:
@@ -41,6 +41,16 @@ metadata_mode_overrides:
   .github/PULL_REQUEST_TEMPLATE.md: html_comment
 placeholder_patterns:
   - "\\[[A-Z][A-Z_]*\\]"
+lifecycle_contract:
+  field: lifecycle
+  supported_values:
+    - temporary
+  exit_condition_field: temporary_until
+  exit_condition_min_length: 20
+  exit_condition_forbidden_patterns:
+    - '(?i)\b(?:tbd|todo|fixme|xxx|n/a)\b'
+    - '(?i)^\s*when(?:\s+\w+){0,4}\s+(?:is\s+)?done\s*[.!]?\s*$'
+    - '(?i)^\s*after\s+(?:the\s+)?migration(?:\s+is\s+(?:done|complete|completed))?\s*[.!]?\s*$'
 related_files:
   - scripts/check_docs_governance.py
   - tests/test_docs_governance.py
@@ -52,12 +62,34 @@ maintenance: |
   validation contract for every Markdown document in the repository — all
   244 candidates, with zero path-level content exemptions. A change to
   required_fields, field_constraints, metadata_modes,
-  metadata_mode_overrides, or placeholder_patterns requires updating
-  scripts/check_docs_governance.py and tests/test_docs_governance.py in the
-  same change, and requires bumping version. The checker keeps only the
+  metadata_mode_overrides, placeholder_patterns, or lifecycle_contract requires
+  updating scripts/check_docs_governance.py and tests/test_docs_governance.py
+  in the same change, and requires bumping version. The checker keeps only the
   versioned interpreter/schema guards needed to reject unsupported contract
   shapes, then executes the parsed contract values; it must not maintain a
   separate path exemption list or silently ignore a declared rule.
+
+  lifecycle_contract defines a small, OPTIONAL per-document `lifecycle`
+  marker for genuinely temporary documents (e.g. a dated migration-backlog
+  plan). The field is not part of required_fields: most documents omit it
+  entirely and are unaffected. A document may declare `lifecycle: temporary`
+  (the only supported value) alongside a `temporary_until` string of at least
+  lifecycle_contract.exit_condition_min_length non-whitespace characters
+  describing a concrete, checkable exit condition — not a placeholder.
+  Declaring `temporary_until` without `lifecycle: temporary`, declaring an
+  unsupported/empty/non-string lifecycle value, or omitting/providing an
+  invalid `temporary_until` when `lifecycle: temporary` is declared is a
+  contract violation. exit_condition_forbidden_patterns supplies a small
+  mechanical anti-placeholder floor: placeholder tokens and generic bare
+  "when done" / "after migration" statements are rejected, while owners and
+  review remain responsible for semantic concreteness. This marker grants no
+  content or path-level exemption: it adds lifecycle-specific requirements to
+  a document that explicitly opts in, while every
+  required_fields/field_constraints check above still applies
+  unchanged. Reports, frozen investigations, active contracts, and templates
+  are durable by default and must not declare lifecycle: temporary merely for
+  convenience — the field exists for documents whose owner has an actual,
+  evidence-grounded plan to archive them.
 
   maintenance.min_length and maintenance.forbidden_exact_values form a
   deliberately small, language-agnostic anti-placeholder floor: at least 20
