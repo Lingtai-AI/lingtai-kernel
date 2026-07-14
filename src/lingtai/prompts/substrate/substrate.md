@@ -104,11 +104,13 @@ throughput, tier 1 for opportunistic/free use.
 
 A preset's identity is its exact file path; `system(action="presets")` lists
 only your `manifest.preset.allowed` paths, never a directory scan or "every
-preset in the library." A daemon task's explicit `tasks[].preset` path is a
-separate worker path that does not consult that `allowed` gate; omitting it
-inherits the parent's effective non-MCP surface instead. For the full preset
-runtime model (raw vs resolved init config, swap/revert/refresh sequence,
-daemon/CLI distinctions), read `system-manual` → `reference/substrate-manual/SKILL.md`.
+preset in the library." A daemon task's explicit `tasks[].preset` path must
+already be a member of that same `allowed` set — being saved to the library
+directory is not by itself authorization; omitting it inherits the parent's
+effective non-MCP surface instead and skips this check entirely. For the full
+preset runtime model (raw vs resolved init config, swap/revert/refresh
+sequence, daemon/CLI distinctions, and how to authorize a preset for daemon
+use), read `system-manual` → `reference/substrate-manual/SKILL.md`.
 
 **Three context-compression / continuation modes.** Context is finite; you have
 three deliberate ways to keep it lean, ordered from local to whole-conversation:

@@ -104,10 +104,12 @@ knowledge and reusable procedures in skills.
 To switch your own model/capabilities, call `system(action="presets")` for
 your exact `allowed` paths, then `system(action="refresh", preset=<path>)` (or
 `revert_preset=true`) — a config/prompt/MCP edit needs this refresh, not
-`summarize`. For a daemon task, pass `tasks[].preset` as an explicit path or
-omit it to inherit the parent's regular surface; that explicit path does not
-reuse your `allowed` list. External CLI daemon backends skip LingTai preset
-resolution entirely. See `system-manual` → `reference/substrate-manual/SKILL.md` §11.
+`summarize`. For a daemon task, pass `tasks[].preset` as an explicit path
+already in your `allowed` set (an unauthorized path is refused before
+dispatch — ask the config owner to add it, then refresh), or omit `preset` to
+inherit the parent's regular surface and skip that check entirely. External
+CLI daemon backends skip LingTai preset resolution entirely. See
+`system-manual` → `reference/substrate-manual/SKILL.md` §11.
 
 ### Use the Right Body
 

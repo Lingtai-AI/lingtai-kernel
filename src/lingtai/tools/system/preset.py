@@ -1,6 +1,11 @@
 """Preset management — refresh, swap, list presets."""
 from __future__ import annotations
 
+# Compatibility re-export — callers/tests import `_preset_ref_in` from here.
+# The implementation lives in the kernel so system and daemon share one
+# normalization primitive; see `lingtai.kernel.presets._preset_ref_in`.
+from lingtai.kernel.presets import _preset_ref_in  # noqa: F401
+
 
 def _update_default_preset(agent, preset_name: str) -> None:
     """Best-effort: persist *preset_name* as manifest.preset.default in
@@ -27,11 +32,6 @@ def _update_default_preset(agent, preset_name: str) -> None:
 # ---------------------------------------------------------------------------
 # refresh
 # ---------------------------------------------------------------------------
-
-# Compatibility re-export — callers/tests import `_preset_ref_in` from here.
-# The implementation lives in the kernel so system and daemon share one
-# normalization primitive; see `lingtai.kernel.presets._preset_ref_in`.
-from lingtai.kernel.presets import _preset_ref_in  # noqa: F401
 
 
 def _check_context_fits(agent, preset_name: str) -> tuple:
