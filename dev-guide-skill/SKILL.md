@@ -6,6 +6,15 @@ description: >
   packaging, capabilities, adapters, or developer documentation in
   lingtai-kernel. Routes each task through the exact baseline, the distributed
   ANATOMY/CONTRACT systems, focused validation, and pull-request safety gates.
+related_files:
+- ANATOMY.md
+- CONTRACT.md
+- CONTRIBUTING.md
+- docs.yaml
+- src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
+- tests/test_architecture_documents.py
+maintenance: |
+  Mandatory repository-local development router; update it, tests/test_architecture_documents.py's public-entry-points test, and README/Anatomy/Contract entry routes together whenever the workflow, the docs.yaml governance pointer, or the pull-request/side-effect gate changes.
 ---
 
 # LingTai Kernel Development
@@ -162,6 +171,18 @@ or opening the PR:
 Commit, push, open/close/merge PRs, publish, install, refresh, release, or change
 configuration only within the maintainer's explicit authorization for that
 specific side effect. Opening a PR does not imply permission to merge it.
+
+## Keep documentation frontmatter current
+
+Every Markdown file in the repository — including this file's own
+frontmatter above — must carry `related_files` and `maintenance` YAML
+metadata, checked by [`docs.yaml`](../docs.yaml) and validated by
+`scripts/check_docs_governance.py` / `tests/test_docs_governance.py`. This
+is a separate, generic baseline from the Anatomy/Contract frontmatter
+schemas above — do not conflate them. When you add or edit a doc, fill in
+real `related_files`/`maintenance`; when you create a new governed
+component ANATOMY.md/CONTRACT.md, its stricter specialized schema already
+satisfies this baseline.
 
 ## Grow this as the repository agent dev kit
 

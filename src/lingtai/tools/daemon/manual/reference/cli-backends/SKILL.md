@@ -8,6 +8,12 @@ description: >
   Kimi Code, Cursor, and Oh-My-Pi flag discovery, built-in LingTai knowledge entrypoint).
 version: 1.13.0
 last_changed_at: "2026-07-09T19:24:35-07:00"
+related_files:
+- src/lingtai/tools/daemon/manual/SKILL.md
+- src/lingtai/tools/daemon/DAEMON_CONTRACT.md
+- src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/lingtai/SKILL.md
+maintenance: |
+  Tracks the daemon CLI backends topic it documents; update when that integration changes.
 ---
 
 # Daemon CLI Backend Reference

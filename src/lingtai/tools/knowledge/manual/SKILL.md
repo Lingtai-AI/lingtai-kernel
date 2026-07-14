@@ -9,6 +9,12 @@ description: >
   over related entries, or explain how knowledge differs from portable skills.
 version: 1.0.0
 last_changed_at: "2026-06-09T13:24:44-07:00"
+related_files:
+- src/lingtai/tools/knowledge/__init__.py
+- src/lingtai/tools/knowledge/ANATOMY.md
+- src/lingtai/tools/knowledge/CONTRACT.md
+maintenance: |
+  Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
 
 # The Knowledge Capability

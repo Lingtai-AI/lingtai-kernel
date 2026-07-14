@@ -1,3 +1,11 @@
+---
+related_files:
+- CLAUDE.md
+- dev-guide-skill/SKILL.md
+maintenance: |
+  The full coding-agent reference CLAUDE.md routes to; keep its worktree rule, package-architecture description, and anatomy-navigation guidance synced with actual repository conventions as they evolve.
+---
+
 # Claude Code Guide
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.

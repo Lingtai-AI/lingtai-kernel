@@ -6,6 +6,11 @@ description: >
   daemon harness candidate.
 version: 0.1.0
 last_changed_at: "2026-06-13T04:41:27-07:00"
+related_files:
+- src/lingtai/tools/bash/manual/SKILL.md
+- src/lingtai/tools/bash/_async_supervisor.py
+maintenance: |
+  Tracks the Zed / ACP agent bridge backend/topic behavior it documents; update when that integration changes.
 ---
 
 # Zed / ACP agent bridge

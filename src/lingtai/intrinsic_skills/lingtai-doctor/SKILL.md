@@ -10,6 +10,10 @@ description: >
 version: 0.1.0
 tags: [doctor, diagnostics, mcp, addons, heartbeat, migration, recovery]
 last_changed_at: "2026-06-12T14:27:46-07:00"
+related_files:
+- src/lingtai/intrinsic_skills/lingtai-doctor/scripts/doctor.py
+maintenance: |
+  Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
 ---
 
 # LingTai Doctor

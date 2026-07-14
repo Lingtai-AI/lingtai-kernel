@@ -1,3 +1,11 @@
+---
+related_files:
+- src/lingtai/tools/mcp/manual/SKILL.md
+- src/lingtai/tools/mcp/manual/reference/troubleshooting.md
+maintenance: |
+  Kernel-curated MCP addon setup contract routed to from mcp/manual/SKILL.md and cross-linked from troubleshooting.md; update it whenever a curated addon (imap/telegram/feishu/wechat/whatsapp/cloud_mail) changes its config fields or install story.
+---
+
 # Curated addons — imap / telegram / feishu / wechat / whatsapp / cloud_mail
 
 LingTai's first-party email and chat integrations. They now ship inside the `lingtai` distribution under `lingtai.mcp_servers.{imap,telegram,feishu,wechat,whatsapp,cloud_mail}` so a single kernel release carries the curated MCP surface atomically. Historical `lingtai_*` import packages remain as thin compatibility wrappers. Historical standalone package names remain useful as provenance/homepage names, but the normal runtime path no longer depends on separate addon wheels.

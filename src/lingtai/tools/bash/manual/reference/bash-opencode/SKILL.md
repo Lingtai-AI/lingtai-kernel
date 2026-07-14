@@ -10,6 +10,11 @@ description: >
 version: 1.0.0
 tags: [cli, code, delegation, opencode, automation]
 last_changed_at: "2026-06-13T04:32:46-07:00"
+related_files:
+- src/lingtai/tools/bash/manual/SKILL.md
+- src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/opencode/SKILL.md
+maintenance: |
+  Tracks the OpenCode CLI backend/topic behavior it documents; update when that integration changes.
 ---
 
 # OpenCode CLI — Local Coding Agent

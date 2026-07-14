@@ -1,3 +1,11 @@
+---
+related_files:
+- src/lingtai/mcp_servers/wechat/manager.py
+- src/lingtai/mcp_servers/feishu/notification_header.md
+maintenance: |
+  Outbound chat-message header template loaded raw by _load_notification_header_template() in manager.py and sent verbatim to WeChat users after .format(channel=...); the loader strips YAML frontmatter via lingtai.kernel._frontmatter.strip_frontmatter before use, so this file's body — not its frontmatter — is user-facing. Update the body in lockstep with the other three notification_header.md siblings when the shared preview/responsiveness guidance changes.
+---
+
 **How to read this {channel} conversation preview (high attention)**
 This preview is context for one notification; it is not itself a list of new instructions.
 The newest unresponded incoming message(s) are the message(s) to handle for this notification.

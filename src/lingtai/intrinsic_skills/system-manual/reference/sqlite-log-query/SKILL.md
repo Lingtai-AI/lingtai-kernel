@@ -15,6 +15,11 @@ description: >
 version: 1.2.0
 tags: [lingtai, system-manual, sqlite, log.sqlite, runtime-logs, trace, jsonl, daemon, trajectory, mining, event-log, improvement, pitfalls, observability, cheap-model]
 last_changed_at: "2026-06-24T23:45:17-07:00"
+related_files:
+- src/lingtai/intrinsic_skills/system-manual/SKILL.md
+- src/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/scripts/event_summary.py
+maintenance: |
+  Tracks the sqlite-log-query topic it documents; update when that integration changes.
 ---
 
 # SQLite Log Query

@@ -1,3 +1,12 @@
+---
+related_files:
+- docs/references/claude-code-guide.md
+- dev-guide-skill/SKILL.md
+- CONTRIBUTING.md
+maintenance: |
+  Tracks the Claude Code entry-point routing (worktree rule, dev-guide-skill lookup, full-guide pointer); update it whenever the mandatory pre-task routing sequence or its linked targets change.
+---
+
 # CLAUDE.md
 
 This root file is intentionally short. It is the entry point Claude Code reads

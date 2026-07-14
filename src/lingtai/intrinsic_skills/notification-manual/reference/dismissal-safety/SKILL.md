@@ -10,6 +10,12 @@ description: >
 version: 0.1.0
 tags: [lingtai, notifications, dismiss, force, stale, safety]
 last_changed_at: "2026-07-12T20:20:43-07:00"
+related_files:
+- src/lingtai/intrinsic_skills/notification-manual/SKILL.md
+- src/lingtai/tools/notification/__init__.py
+- src/lingtai/tools/notification/schema.py
+maintenance: |
+  Tracks the notification dismissal-safety topic it documents; update when that integration changes.
 ---
 
 # Notification Dismissal Safety

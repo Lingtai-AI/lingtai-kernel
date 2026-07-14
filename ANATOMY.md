@@ -155,6 +155,8 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
 - [`dev-guide-skill/`](dev-guide-skill/) — the repository-local agent dev kit:
   its skill routes agents into the Anatomy and Contract systems and may grow
   focused scripts, references, templates, or assets as real workflows recur.
+- [`scripts/`](scripts/) — root utility/checker scripts, including the
+  docs-governance validator described below.
 - [`.github/`](.github/) — GitHub Actions, issue templates, and pull request
   templates.
 - [`crates/lingtai-search-sidecar/`](crates/lingtai-search-sidecar/) — Rust file
@@ -172,6 +174,10 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
 - [`ANATOMY.md`](ANATOMY.md) — this repository map and anatomy-of-anatomy.
 - [`CONTRACT.md`](CONTRACT.md) — the distributed code interface definition root
   and contract-of-contract.
+- [`docs.yaml`](docs.yaml) — the canonical, machine-readable all-doc
+  metadata contract and authoring template; validated by
+  [`scripts/check_docs_governance.py`](scripts/check_docs_governance.py)
+  and [`tests/test_docs_governance.py`](tests/test_docs_governance.py).
 - [`README.md`](README.md) — public English network entry point; translated
   readmes live under `docs/readmes/`.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — public contributor entry point.

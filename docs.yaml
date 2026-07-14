@@ -1,0 +1,131 @@
+name: docs-governance-contract
+version: 7
+extensions:
+  - .md
+discovery:
+  tracked: true
+  untracked_not_ignored: true
+required_fields:
+  - related_files
+  - maintenance
+field_constraints:
+  related_files:
+    type: list
+    min_items: 1
+    unique: true
+    no_self_reference: true
+    target_policy: owner_validated_relative_link
+  maintenance:
+    type: string
+    min_length: 20
+    forbidden_exact_values:
+      - todo
+      - tbd
+      - fixme
+      - xxx
+      - n/a
+      - none
+      - x
+metadata_modes:
+  frontmatter:
+    description: "Default. Leading '---'-fenced YAML block."
+    applies_to: "*"
+  html_comment:
+    description: >
+      YAML wrapped in a leading HTML comment ('<!--' / '-->') instead of a
+      '---' fence, for a file whose external raw-byte consumer cannot be
+      patched (GitHub injecting .github/PULL_REQUEST_TEMPLATE.md verbatim
+      into a new PR's description). Alternate SYNTAX for the same two
+      required fields, not a content exemption.
+metadata_mode_overrides:
+  .github/PULL_REQUEST_TEMPLATE.md: html_comment
+placeholder_patterns:
+  - "\\[[A-Z][A-Z_]*\\]"
+lifecycle_contract:
+  field: lifecycle
+  supported_values:
+    - temporary
+  exit_condition_field: temporary_until
+  exit_condition_min_length: 20
+  exit_condition_forbidden_patterns:
+    - '(?i)\b(?:tbd|todo|fixme|xxx|n/a)\b'
+    - '(?i)^\s*when(?:\s+\w+){0,4}\s+(?:is\s+)?done\s*[.!]?\s*$'
+    - '(?i)^\s*after\s+(?:the\s+)?migration(?:\s+is\s+(?:done|complete|completed))?\s*[.!]?\s*$'
+related_files:
+  - scripts/check_docs_governance.py
+  - tests/test_docs_governance.py
+  - dev-guide-skill/SKILL.md
+  - tests/test_architecture_documents.py
+  - ANATOMY.md
+maintenance: |
+  This file is the canonical, machine-readable authoring template and
+  validation contract for every Markdown document in the repository — all
+  244 candidates, with zero path-level content exemptions. A change to
+  required_fields, field_constraints, metadata_modes,
+  metadata_mode_overrides, placeholder_patterns, or lifecycle_contract requires
+  updating scripts/check_docs_governance.py and tests/test_docs_governance.py
+  in the same change, and requires bumping version. The checker keeps only the
+  versioned interpreter/schema guards needed to reject unsupported contract
+  shapes, then executes the parsed contract values; it must not maintain a
+  separate path exemption list or silently ignore a declared rule.
+
+  lifecycle_contract defines a small, OPTIONAL per-document `lifecycle`
+  marker for genuinely temporary documents (e.g. a dated migration-backlog
+  plan). The field is not part of required_fields: most documents omit it
+  entirely and are unaffected. A document may declare `lifecycle: temporary`
+  (the only supported value) alongside a `temporary_until` string of at least
+  lifecycle_contract.exit_condition_min_length non-whitespace characters
+  describing a concrete, checkable exit condition — not a placeholder.
+  Declaring `temporary_until` without `lifecycle: temporary`, declaring an
+  unsupported/empty/non-string lifecycle value, or omitting/providing an
+  invalid `temporary_until` when `lifecycle: temporary` is declared is a
+  contract violation. exit_condition_forbidden_patterns supplies a small
+  mechanical anti-placeholder floor: placeholder tokens and generic bare
+  "when done" / "after migration" statements are rejected, while owners and
+  review remain responsible for semantic concreteness. This marker grants no
+  content or path-level exemption: it adds lifecycle-specific requirements to
+  a document that explicitly opts in, while every
+  required_fields/field_constraints check above still applies
+  unchanged. Reports, frozen investigations, active contracts, and templates
+  are durable by default and must not declare lifecycle: temporary merely for
+  convenience — the field exists for documents whose owner has an actual,
+  evidence-grounded plan to archive them.
+
+  maintenance.min_length and maintenance.forbidden_exact_values form a
+  deliberately small, language-agnostic anti-placeholder floor: at least 20
+  non-whitespace characters and no exact case-insensitive placeholder value.
+  They do not pretend to prove semantic quality; document owners and review
+  remain responsible for making each rule specific to the document.
+
+  related_files.target_policy is owner_validated_relative_link: this
+  generic contract validates that every related_files entry is a
+  non-empty, unique, repo-relative-POSIX-syntax string without a Windows
+  drive designator, placeholder, or self-reference. It does NOT universally
+  require every entry to resolve to a real file at the repository root,
+  because many
+  existing owners (Anatomy/Contract twins, the prompt-source
+  progressive-disclosure crawl graph in src/lingtai/prompts/*.yaml, the
+  molt-gate session-journal path convention) already encode owner-specific
+  logical or crawl-relative link semantics predating this contract, and a
+  generic all-doc governance layer must not redefine or invalidate those
+  established, specialized semantics. Presence and syntax are validated
+  generically here; deeper resolution/crawl correctness remains owned by
+  each document's existing specialized validator
+  (tests/test_architecture_documents.py for governed Anatomy/Contract
+  pairs, the prompt catalog loader for prompt-source YAML, the psyche molt
+  gate for session-journal paths, and so on). The one-time migration that
+  introduced this contract held its OWN new related_files values to a
+  stricter existence-or-planned-in-manifest preflight before writing them;
+  that stricter check was migration-specific, not part of this generic,
+  ongoing contract.
+
+  This contract does not redefine or weaken the root ANATOMY.md/CONTRACT.md
+  architecture-document frontmatter schemas (tests/test_architecture_documents.py
+  remains separately, more strictly authoritative for those) or the
+  tool-glossary schema in src/lingtai/kernel/tool_glossary.py, which this
+  same change extends to require related_files/maintenance alongside its
+  four identity fields rather than being exempted from them.
+  metadata_mode_overrides is a syntax accommodation for one unpatchable
+  external consumer; it is not a mechanism for excluding a document from
+  the required_fields check, and its value is itself closed (exactly one
+  entry) so a future addition must be an explicit, reviewed contract change.

@@ -10,6 +10,13 @@ description: >
 version: 0.4.0
 tags: [lingtai, notifications, channels, dismiss, manual, force, stale, nudge]
 last_changed_at: "2026-07-12T20:20:43-07:00"
+related_files:
+- src/lingtai/tools/notification/__init__.py
+- src/lingtai/tools/notification/schema.py
+- src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
+- src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
+maintenance: |
+  Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
 
 # Notification Manual — Router

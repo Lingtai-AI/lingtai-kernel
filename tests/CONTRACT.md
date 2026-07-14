@@ -1,3 +1,11 @@
+---
+related_files:
+- CONTRACT.md
+- tests/test_architecture_documents.py
+maintenance: |
+  Self-declared methodology/workflow charter, explicitly NOT a governed component Contract under the root CONTRACT.md system (no related_files entry there, no paired tests/ANATOMY.md); update it only when the testing methodology itself changes, and do not promote it into the governed Contract graph without giving tests/ a real implemented Port. This generic docs.yaml two-field baseline applies independently of that opt-out.
+---
+
 # Test Methodology Charter
 
 > **This is a methodology/workflow charter, not a governed component Contract.**

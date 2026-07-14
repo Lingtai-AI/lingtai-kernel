@@ -4,6 +4,13 @@ description: |
   Operational guide for the `soul` tool — your inner voice. Read this when: you call `soul(action='flow')` and get a `status: disabled` result; you want to understand why soul flow is off by default and how the operator enables it; you are tuning `delay_seconds`/`consultation_past_count` with `config` and want to know whether fires will actually happen; or you need the difference between the always-available actions (inquiry/config/voice/dismiss) and the opt-in `flow`. Covers the `LINGTAI_SOUL_FLOW_ENABLED` env gate, disabled-flow behavior, delay-vs-off-switch semantics, enabling/disabling, troubleshooting, and the privacy/cost rationale.
 version: 1.0.0
 last_changed_at: "2026-07-01T09:00:00-07:00"
+related_files:
+- src/lingtai/tools/soul/__init__.py
+- src/lingtai/tools/soul/flow.py
+- src/lingtai/tools/soul/config.py
+- src/lingtai/tools/soul/consultation.py
+maintenance: |
+  Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
 ---
 
 # Soul Manual

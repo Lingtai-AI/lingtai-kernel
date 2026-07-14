@@ -1,3 +1,12 @@
+---
+related_files:
+- src/lingtai/llm/openai/adapter.py
+- src/lingtai/llm/openai/codex_ws.py
+- src/lingtai/llm/openai/ANATOMY.md
+maintenance: |
+  Historical wire-shape investigation report (dated 2026-06-22, PR #454 era); content is frozen as a point-in-time capture — do not rewrite retroactively, but correct factual errors and note in-repo if the adapter's header/body shape it describes later diverges.
+---
+
 # Codex HTTP anatomy investigation: LingTai vs. Codex CLI
 
 Date: 2026-06-22  

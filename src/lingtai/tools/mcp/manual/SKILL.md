@@ -42,6 +42,12 @@ description: >
   Read this for *what to do*; read anatomy for *how it works*.
 version: 3.2.0
 last_changed_at: "2026-06-24T16:26:32-07:00"
+related_files:
+- src/lingtai/tools/mcp/__init__.py
+- src/lingtai/tools/mcp/ANATOMY.md
+- src/lingtai/tools/mcp/CONTRACT.md
+maintenance: |
+  Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
 
 # MCP Capability — How To Use It

@@ -7,6 +7,11 @@ description: >
 version: 0.2.0
 tags: [lingtai, goal, notifications, reminders]
 last_changed_at: "2026-07-12T20:20:43-07:00"
+related_files:
+- src/lingtai/intrinsic_skills/system-manual/SKILL.md
+- src/lingtai/kernel/nudge/goal.py
+maintenance: |
+  Tracks the goal-notification topic it documents; update when that integration changes.
 ---
 
 # Goal Manual

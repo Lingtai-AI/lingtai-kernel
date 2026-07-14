@@ -7,6 +7,12 @@ description: >
   and how to inspect progress without guessing.
 version: 1.2.1
 last_changed_at: "2026-07-03T10:53:00-07:00"
+related_files:
+- src/lingtai/tools/daemon/manual/SKILL.md
+- src/lingtai/tools/daemon/run_dir.py
+- src/lingtai/tools/daemon/runtime.py
+maintenance: |
+  Tracks the daemon artifact-forensics topic it documents; update when that integration changes.
 ---
 
 # Daemon Forensics Reference

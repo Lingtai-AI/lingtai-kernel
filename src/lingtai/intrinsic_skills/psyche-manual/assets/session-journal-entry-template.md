@@ -1,3 +1,12 @@
+---
+related_files:
+- src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
+- src/lingtai/tools/psyche/_session_journal.py
+- src/lingtai/tools/psyche/ANATOMY.md
+maintenance: |
+  Session-journal / molt-history entry scaffold whose required frontmatter marker (`type: session-journal`) and path convention are enforced by the molt gate in src/lingtai/tools/psyche/_session_journal.py; update it in lockstep whenever that validator's required fields or path rule change.
+---
+
 # Session-Journal / Molt-History Entry Template
 
 Use this when writing the molt-history record for a session segment, *before* a

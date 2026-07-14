@@ -104,6 +104,9 @@ _GOOD_FM = textwrap.dedent("""\
     schema_version: 1
     tool_package: lingtai.tools.test
     language: zh
+    related_files:
+      - docs.yaml
+    maintenance: Test fixture glossary for parse_glossary unit tests.
     ---
     body text""")
 
@@ -647,6 +650,9 @@ class TestSourceValidation:
                 schema_version: 1
                 tool_package: lingtai.tools.fake
                 language: {lang}
+                related_files:
+                  - docs.yaml
+                maintenance: Fake fixture glossary for validator mutation tests.
                 ---
                 {body}"""
             )
@@ -697,3 +703,54 @@ class TestSourceValidation:
         monkeypatch.setattr(validator.importlib_resources, "files", lambda _pkg: root)
         errors = validator.validate_package("fake")
         assert any(expected in error for error in errors), errors
+
+
+# ---------------------------------------------------------------------------
+# related_files / maintenance — docs-governance fields (V5)
+# ---------------------------------------------------------------------------
+
+
+class TestDocsGovernanceFields:
+    def test_missing_related_files_rejected(self):
+        text = _GOOD_FM.replace("related_files:\n  - docs.yaml\n", "")
+        with pytest.raises(GlossaryValidationError, match="missing"):
+            parse_glossary(text, tool_package="lingtai.tools.test", language="zh")
+
+    def test_empty_related_files_rejected(self):
+        text = _GOOD_FM.replace(
+            "related_files:\n  - docs.yaml\n", "related_files: []\n"
+        )
+        with pytest.raises(GlossaryValidationError, match="related_files"):
+            parse_glossary(text, tool_package="lingtai.tools.test", language="zh")
+
+    def test_missing_maintenance_rejected(self):
+        text = _GOOD_FM.replace(
+            "maintenance: Test fixture glossary for parse_glossary unit tests.\n", ""
+        )
+        with pytest.raises(GlossaryValidationError, match="missing"):
+            parse_glossary(text, tool_package="lingtai.tools.test", language="zh")
+
+    def test_empty_maintenance_rejected(self):
+        text = _GOOD_FM.replace(
+            "maintenance: Test fixture glossary for parse_glossary unit tests.\n",
+            "maintenance: \"\"\n",
+        )
+        with pytest.raises(GlossaryValidationError, match="maintenance"):
+            parse_glossary(text, tool_package="lingtai.tools.test", language="zh")
+
+    def test_extra_field_beyond_six_still_rejected(self):
+        text = _GOOD_FM.replace(
+            "maintenance: Test fixture glossary for parse_glossary unit tests.\n",
+            "maintenance: Test fixture glossary for parse_glossary unit tests.\n"
+            "extra: field\n",
+        )
+        with pytest.raises(GlossaryValidationError, match="unknown"):
+            parse_glossary(text, tool_package="lingtai.tools.test", language="zh")
+
+    def test_non_string_related_files_item_rejected_not_crashed(self):
+        text = _GOOD_FM.replace(
+            "related_files:\n  - docs.yaml\n",
+            "related_files:\n  - docs.yaml\n  - [nested, list]\n",
+        )
+        with pytest.raises(GlossaryValidationError, match="related_files"):
+            parse_glossary(text, tool_package="lingtai.tools.test", language="zh")

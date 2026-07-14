@@ -119,7 +119,7 @@ def test_oh_my_pi_child_mcp_status_matches_source():
 
 
 def test_oh_my_pi_child_stays_tiny_not_a_flag_catalog():
-    line_count = len(CHILD.read_text(encoding="utf-8").splitlines())
+    line_count = len(_body(CHILD).splitlines())
     assert line_count <= 90, (
         "the Oh-My-Pi backend submanual is a tiny entrypoint to live CLI help; "
         f"{line_count} lines suggests it is growing into a flag catalog"

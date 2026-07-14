@@ -1,3 +1,14 @@
+---
+related_files:
+- src/lingtai/kernel/session.py
+- src/lingtai/kernel/base_agent/__init__.py
+- src/lingtai/kernel/base_agent/identity.py
+- src/lingtai/tools/psyche/_molt.py
+- src/lingtai/llm/openai/adapter.py
+maintenance: |
+  Spec-first design doc (status: spec-first, dated 2026-07-02, branch spec/runtime-agent-session-objects-20260702) that cites code by file:line; update its citations and "Implementation status" section as the runtime/agent session objects move from spec to shipped code, so the file:line grounding does not rot.
+---
+
 # Runtime session vs. agent session — explicit kernel objects
 
 Status: **spec-first** (this branch ships the spec + a benchmark/prototype of the

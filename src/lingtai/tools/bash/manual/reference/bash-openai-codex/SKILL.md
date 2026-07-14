@@ -10,6 +10,11 @@ description: >
 version: 1.0.1
 tags: [cli, code, delegation, openai, codex]
 last_changed_at: "2026-06-13T04:41:27-07:00"
+related_files:
+- src/lingtai/tools/bash/manual/SKILL.md
+- src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/codex/SKILL.md
+maintenance: |
+  Tracks the OpenAI Codex CLI backend/topic behavior it documents; update when that integration changes.
 ---
 
 # OpenAI Codex CLI

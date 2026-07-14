@@ -11,6 +11,12 @@ description: |
   before every send.
 version: 1.5.1
 last_changed_at: "2026-07-13T12:15:00-07:00"
+related_files:
+- src/lingtai/mcp_servers/telegram/manager.py
+- src/lingtai/mcp_servers/telegram/server.py
+- src/lingtai/mcp_servers/telegram/task_card/SKILL.md
+maintenance: |
+  Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
 ---
 
 # Telegram MCP — usage manual (progressive disclosure)

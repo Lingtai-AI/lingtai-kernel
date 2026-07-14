@@ -1,3 +1,11 @@
+---
+related_files:
+- reports/kernel-release-v0.13.0-20260620/prs.md
+- reports/kernel-release-v0.13.0-20260620/release-body.md
+maintenance: |
+  Historical record of the v0.13.0 release; content is frozen except for factual corrections — do not rewrite retroactively to reflect later changes.
+---
+
 - `17d12d4` docs: add GitHub community entry points (#402)
 - `8061f04` feat(read): add max_chars continuation control and manual
 - `b77d91f` docs(procedures): emphasize daemon context isolation

@@ -1,3 +1,10 @@
+---
+related_files:
+- CONTRIBUTING.md
+maintenance: |
+  Tracks community conduct expectations and the maintainer reporting path; keep it synced with how the project actually moderates issues, PRs, and reviews.
+---
+
 # Code of Conduct
 
 LingTai is a research and developer community. We expect contributors and users

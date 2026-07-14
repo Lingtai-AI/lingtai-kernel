@@ -3,6 +3,14 @@ kind: tool-glossary
 schema_version: 1
 tool_package: lingtai.tools.knowledge
 language: zh
+related_files:
+- docs.yaml
+- src/lingtai/kernel/tool_glossary.py
+- src/lingtai/tools/glossary_validator.py
+- src/lingtai/tools/knowledge/glossary-en.md
+- src/lingtai/tools/knowledge/glossary-wen.md
+maintenance: |
+  Simplified-Chinese (zh) glossary for the `knowledge` tool package (lingtai.tools.knowledge); body must stay non-empty. Update in lockstep with glossary-en.md/glossary-wen.md whenever knowledge's public tool schema changes.
 ---
 **术语对照**
 

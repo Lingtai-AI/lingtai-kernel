@@ -1,3 +1,11 @@
+---
+related_files:
+- README.md
+- CONTRIBUTING.md
+maintenance: |
+  Tracks the support channels and what to include when asking for help; update it if the support intake path (GitHub Issues) or expected report contents change.
+---
+
 # Support
 
 For questions and help with `lingtai-kernel`:

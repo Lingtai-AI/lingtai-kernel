@@ -676,7 +676,7 @@ def test_public_and_agent_entry_points_route_to_the_local_network() -> None:
     dev_meta, dev_skill = _read_document(ROOT_DEV_SKILL)
     anatomy_skill = ANATOMY_SKILL.read_text(encoding="utf-8")
 
-    assert list(dev_meta) == ["name", "description"]
+    assert list(dev_meta) == ["name", "description", "related_files", "maintenance"]
     assert dev_meta["name"] == "lingtai-kernel-dev"
     assert "Use this before changing code" in dev_meta["description"]
     assert "repository’s local dev guide skill" in readme

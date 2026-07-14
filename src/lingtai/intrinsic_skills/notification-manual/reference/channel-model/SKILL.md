@@ -9,6 +9,12 @@ description: >
 version: 0.1.0
 tags: [lingtai, notifications, channels, protocol, sync, nudge]
 last_changed_at: "2026-07-12T20:20:43-07:00"
+related_files:
+- src/lingtai/intrinsic_skills/notification-manual/SKILL.md
+- src/lingtai/tools/notification/schema.py
+- src/lingtai/kernel/notification_store/__init__.py
+maintenance: |
+  Tracks the notification channel-model/protocol topic it documents; update when that integration changes.
 ---
 
 # Notification Channel Model

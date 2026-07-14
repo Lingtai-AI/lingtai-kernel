@@ -4,6 +4,11 @@ description: [ONE_LINE_DESCRIPTION]  # REQUIRED: What this skill does + when NOT
 version: 1.0.0              # Semantic versioning
 tags: [[optional, tags]]      # Optional: search/categorization tags
 # last_changed_at: "YYYY-MM-DDTHH:MM:SSZ"  # Required only for LingTai-maintained skills
+related_files:
+- src/lingtai/tools/skills/manual/SKILL.md
+- src/lingtai/tools/skills/manual/scripts/validate.py
+maintenance: |
+  Copy-paste SKILL.md authoring template referenced by skills/manual/SKILL.md's scaffolding steps; keep its structure valid against scripts/validate.py so skills built from it pass validation without modification. This file's pre-existing `name`/`description` frontmatter values carry the intentional skill-name and one-line-description authoring placeholders for authors to fill in on copies of this file, owned by scripts/validate.py's own PLACEHOLDER_RE — docs-governance placeholder checking applies only to the `maintenance`/`related_files` fields below, which are real, non-placeholder text, so no field-level carve-out is needed.
 ---
 
 # [SKILL NAME]

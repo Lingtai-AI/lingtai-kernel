@@ -1,3 +1,11 @@
+---
+related_files:
+- reports/kernel-release-v0.15.2-20260627/commits.md
+- reports/kernel-release-v0.15.2-20260627/release-body.md
+maintenance: |
+  Historical record of the v0.15.2 release; content is frozen except for factual corrections — do not rewrite retroactively to reflect later changes.
+---
+
 # LingTai kernel v0.15.2 release report
 
 ## Scope

@@ -1,3 +1,23 @@
+---
+related_files:
+- docs/readmes/README.zh.md
+- docs/readmes/README.wen.md
+- CONTRIBUTING.md
+- SECURITY.md
+- SUPPORT.md
+- docs/references/acknowledgements.md
+- dev-guide-skill/SKILL.md
+- ANATOMY.md
+- CONTRACT.md
+- src/lingtai/kernel/ANATOMY.md
+- src/lingtai/ANATOMY.md
+- src/lingtai/tools/ANATOMY.md
+- src/lingtai/mcp_servers/ANATOMY.md
+- docs/references/claude-code-guide.md
+maintenance: |
+  Tracks the public repo overview and architecture entry-point table; must stay synced with docs/readmes/ translations and with the linked entry-point files whenever the repository's structure or onboarding steps change.
+---
+
 <div align="center">
 
 # lingtai-kernel

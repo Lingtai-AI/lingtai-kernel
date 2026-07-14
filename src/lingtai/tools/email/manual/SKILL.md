@@ -15,6 +15,13 @@ description: >
 version: 1.0.1
 tags: [capabilities, email, communication]
 last_changed_at: "2026-07-09T22:24:00-07:00"
+related_files:
+- src/lingtai/tools/email/manager.py
+- src/lingtai/tools/email/primitives.py
+- src/lingtai/tools/email/ANATOMY.md
+- src/lingtai/tools/email/CONTRACT.md
+maintenance: |
+  Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
 
 # Email Manual — the internal `email` tool

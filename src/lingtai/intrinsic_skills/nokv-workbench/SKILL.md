@@ -11,6 +11,12 @@ description: >
   point-in-time history reads.
 version: 0.3.0
 tags: [nokv, mcp, workbench, artifacts, provenance, snapshots, checkpoints, leases]
+related_files:
+- src/lingtai/intrinsic_skills/nokv-workbench/assets/PREFLIGHT.md
+- src/lingtai/intrinsic_skills/nokv-workbench/assets/init-snippet.json
+- src/lingtai/intrinsic_skills/nokv-workbench/assets/mcp_registry.example.jsonl
+maintenance: |
+  Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
 ---
 
 # NoKV Workbench
