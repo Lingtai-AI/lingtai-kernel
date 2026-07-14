@@ -97,10 +97,10 @@ any fact about its later state.
 This is a navigation-only Port anatomy; the concrete `subprocess`/POSIX
 detachment mechanism and full-environment construction are normative in the
 paired `CONTRACT.md` and live in the adapter, not here.
-`watcher_program.render_watcher_script`'s generated program text preserves
-the previously inline `lifecycle.py` script's internal behavior byte-for-byte
-(handshake deadlines, relaunch retry, stale-duplicate cleanup, redaction) —
-this Port and its renderer govern only the program's text and hand-off to a
+For Core-produced requests, `watcher_program.render_watcher_script` preserves
+the previously inline `lifecycle.py` script's runtime behavior (handshake
+deadlines, relaunch retry, stale-duplicate cleanup, redaction) without claiming
+textual byte identity — this Port and its renderer govern only the hand-off to a
 detached process, not a redesign of that policy. `base_agent/ANATOMY.md`
 still narrates that behavior in its `lifecycle.py` entry for readers
 descending from `base_agent/`.

@@ -10,9 +10,9 @@ production code instead of a string literal buried in lifecycle control
 flow — it does not turn the watcher's own policy into independently
 executable/importable code: the returned value is still generated ``python
 -c`` program *source text*, run later as a detached subprocess, not a
-function this process calls. The generated program text and its runtime
-behavior are byte-for-byte identical to what shipped before this move — this
-slice does not redesign retry/heartbeat/duplicate policy, and does not
+function this process calls. For Core-produced requests, the generated program
+preserves the previously shipped runtime behavior; this slice does not claim
+textual byte identity, redesign retry/heartbeat/duplicate policy, or
 introduce a process-supervision Port; that remains a later slice.
 
 Identity fields cross the request boundary as

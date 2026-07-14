@@ -77,12 +77,12 @@ co-located ANATOMY.md files for each component.
 - `PosixRefreshWatcherAdapter` implements `RefreshWatcherPort` by rendering
   the Core-owned watcher program text from a `RefreshWatcherRequest`
   (`watcher_program.render_watcher_script`), building the process environment
-  via its own `build_watcher_env` (`src/lingtai/adapters/posix/refresh_watcher.py:30-40`:
+  via its own `build_watcher_env` (`src/lingtai/adapters/posix/refresh_watcher.py:32-55`:
   `os.environ` capture plus `LINGTAI_REFRESH_ENV_OVERWRITE=1` when
   `request.env_overwrite`), and launching `[sys.executable, "-c", script]` via
   `subprocess.Popen` with all three standard streams set to `DEVNULL` and
   `start_new_session=True`
-  (`src/lingtai/adapters/posix/refresh_watcher.py:54-64`); the call returns
+  (`src/lingtai/adapters/posix/refresh_watcher.py:69-79`); the call returns
   once the process has been started and does not wait for or track it.
 - `PosixGitCliAdapter` implements both `SnapshotPort` and `SourceRevisionPort`
   through fixed Git command families. Separate composed instances target the
