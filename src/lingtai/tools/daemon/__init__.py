@@ -5555,16 +5555,16 @@ class DaemonManager:
         event: dict,
         run_dir: DaemonRunDir,
         init_models: dict[str, str],
-        usage_recorded: bool,
-    ) -> bool:
-        """Join source-reported model and account one valid terminal usage."""
+        usage_candidate: tuple[dict[str, int], dict] | None,
+    ) -> tuple[dict[str, int], dict] | None:
+        """Join source model and retain the first valid terminal usage candidate."""
         init_model = self._cursor_init_model(event)
         if init_model is not None:
             init_models[init_model[0]] = init_model[1]
-            return usage_recorded
+            return usage_candidate
 
         if event.get("type") != "result":
-            return usage_recorded
+            return usage_candidate
 
         session_id = self._cursor_result_session_id(event)
         if session_id is not None:
@@ -5572,20 +5572,30 @@ class DaemonManager:
             if model is not None:
                 self._cursor_set_model(run_dir, model)
 
-        if usage_recorded:
-            return True
+        if usage_candidate is not None:
+            return usage_candidate
         usage = _normalize_cursor_usage(event)
         if usage is None:
-            return False
+            return None
+        return usage, event["usage"]
+
+    @staticmethod
+    def _cursor_record_usage_candidate(
+        run_dir: DaemonRunDir,
+        usage_candidate: tuple[dict[str, int], dict] | None,
+    ) -> None:
+        """Persist a buffered usage candidate after stream success only."""
+        if usage_candidate is None:
+            return
+        usage, raw = usage_candidate
         try:
             run_dir.record_cli_tokens(
                 input=usage["input"], output=usage["output"],
                 cached=usage["cached"], thinking=usage["thinking"],
-                raw=event["usage"],
+                raw=raw,
             )
         except Exception:
             pass
-        return True
 
     def _build_cursor_prompt(self, task: str) -> str:
         """Compose the initial prompt sent to Cursor Agent CLI."""
@@ -5656,7 +5666,7 @@ class DaemonManager:
 
         session_id_captured: str | None = None
         init_models: dict[str, str] = {}
-        usage_recorded = False
+        usage_candidate: tuple[dict[str, int], dict] | None = None
         text_chunks: list[str] = []
         final_text: str | None = None
         final_is_error = False
@@ -5689,8 +5699,8 @@ class DaemonManager:
                     continue
 
                 any_event = True
-                usage_recorded = self._cursor_process_usage_event(
-                    event, run_dir, init_models, usage_recorded,
+                usage_candidate = self._cursor_process_usage_event(
+                    event, run_dir, init_models, usage_candidate,
                 )
                 sid = self._opencode_extract_session_id(event)
                 if sid:
@@ -5723,6 +5733,9 @@ class DaemonManager:
             stderr_thread.join(timeout=2.0)
             self._unregister_cli_proc(proc, group_id=run_dir.group_id)
 
+        if cancel_event.is_set():
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
+
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
         if proc.returncode != 0:
@@ -5745,6 +5758,11 @@ class DaemonManager:
             )
             run_dir.mark_failed(exc)
             raise exc
+
+        if cancel_event.is_set():
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
+
+        self._cursor_record_usage_candidate(run_dir, usage_candidate)
 
         if final_text is not None:
             text = final_text.strip()
@@ -5853,7 +5871,7 @@ class DaemonManager:
         stderr_lines = stderr_thread.lines
 
         init_models: dict[str, str] = {}
-        usage_recorded = False
+        usage_candidate: tuple[dict[str, int], dict] | None = None
         text_chunks: list[str] = []
         final_text: str | None = None
         final_is_error = False
@@ -5880,8 +5898,8 @@ class DaemonManager:
                     continue
 
                 any_event = True
-                usage_recorded = self._cursor_process_usage_event(
-                    event, run_dir, init_models, usage_recorded,
+                usage_candidate = self._cursor_process_usage_event(
+                    event, run_dir, init_models, usage_candidate,
                 )
                 text = self._opencode_extract_text(event)
                 if text:
@@ -5939,6 +5957,8 @@ class DaemonManager:
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
             return {"status": "error", "id": em_id, "message": err}
+
+        self._cursor_record_usage_candidate(run_dir, usage_candidate)
 
         if final_text is not None:
             output = final_text.strip()

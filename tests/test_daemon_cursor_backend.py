@@ -392,6 +392,87 @@ def test_cursor_emanate_marks_error_result_failed(tmp_path):
 
 
 
+@pytest.mark.parametrize(
+    ("tail_event", "returncode", "error_text"),
+    [
+        (
+            {"type": "result", "subtype": "error", "is_error": True,
+             "result": "initial structured failure"},
+            0,
+            "initial structured failure",
+        ),
+        (None, 7, "exited"),
+    ],
+)
+def test_cursor_initial_valid_usage_is_buffered_until_success(
+    tmp_path, tail_event, returncode, error_text,
+):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    success = _cursor_result(result="initial success")
+    events = [success] + ([tail_event] if tail_event is not None else [])
+    run_dir = _make_run_dir(agent, handle="em-cur-initial-failed-usage")
+
+    with patch(
+        "lingtai.tools.daemon.subprocess.Popen",
+        return_value=FiniteFakeProc(
+            stdout_lines=_source_cursor_stream(*events),
+            returncode=returncode,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match=error_text):
+            mgr._run_cursor_emanation(
+                "em-cur-initial-failed-usage", run_dir, "Fail after usage.",
+                threading.Event(), threading.Event(),
+            )
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert state["state"] == "failed"
+    assert state["cli_tokens"]["calls"] == 0
+    usage_events = [
+        json.loads(line) for line in run_dir.events_path.read_text().splitlines()
+        if json.loads(line).get("event") == "cli_usage"
+    ]
+    assert usage_events == []
+
+
+
+def test_cursor_initial_wait_signal_cannot_persist_usage_candidate(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    cancel = threading.Event()
+    timeout = threading.Event()
+
+    class WaitSignalsCancel(FiniteFakeProc):
+        def wait(self, timeout_value=None):
+            timeout.set()
+            cancel.set()
+            return super().wait(timeout_value)
+
+    run_dir = _make_run_dir(agent, handle="em-cur-post-eof-cancel")
+    proc = WaitSignalsCancel(
+        stdout_lines=_source_cursor_stream(
+            _cursor_result(result="valid before post-EOF timeout"),
+        ),
+    )
+
+    with patch("lingtai.tools.daemon.subprocess.Popen", return_value=proc):
+        result = mgr._run_cursor_emanation(
+            "em-cur-post-eof-cancel", run_dir, "Cancel after EOF.",
+            cancel, timeout,
+        )
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert result == "[cancelled]"
+    assert state["state"] == "timeout"
+    assert state["cli_tokens"]["calls"] == 0
+    events = [
+        json.loads(line) for line in run_dir.events_path.read_text().splitlines()
+    ]
+    assert [event for event in events if event.get("event") == "cli_usage"] == []
+
+
+
 def test_emanate_cursor_routes_to_cli_handler(tmp_path):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
@@ -579,6 +660,60 @@ def test_ask_cursor_error_result_publishes_failure(tmp_path):
     assert followup["status"] == "error"
     assert "error result" in followup["message"]
     assert "resume failed" in followup["message"]
+
+
+
+@pytest.mark.parametrize(
+    ("tail_event", "returncode", "error_text"),
+    [
+        (
+            {"type": "result", "subtype": "error", "is_error": True,
+             "result": "resume structured failure"},
+            0,
+            "resume structured failure",
+        ),
+        (None, 7, "exited"),
+    ],
+)
+def test_cursor_resume_valid_usage_is_buffered_until_success(
+    tmp_path, tail_event, returncode, error_text,
+):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    success = _cursor_result(result="resume success")
+    events = [success] + ([tail_event] if tail_event is not None else [])
+    run_dir = _make_run_dir(agent, handle="em-cur-resume-failed-usage")
+    run_dir._state["cursor_session_id"] = "cursor-resumable-failed-usage"
+    run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+    _register_cursor_entry(mgr, run_dir, em_id="em-cur-resume-failed-usage")
+
+    with patch(
+        "lingtai.tools.daemon.subprocess.Popen",
+        return_value=FiniteFakeProc(
+            stdout_lines=_source_cursor_stream(*events),
+            returncode=returncode,
+        ),
+    ):
+        sent = mgr.handle({
+            "action": "ask",
+            "id": "em-cur-resume-failed-usage",
+            "message": "Fail after resume usage.",
+        })
+
+    assert sent["status"] == "sent"
+    ask_future = mgr._emanations["em-cur-resume-failed-usage"]["ask_future"]
+    assert ask_future is not None
+    followup = ask_future.result(timeout=5)
+    assert followup["status"] == "error"
+    assert error_text in followup["message"]
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert state["cli_tokens"]["calls"] == 0
+    usage_events = [
+        json.loads(line) for line in run_dir.events_path.read_text().splitlines()
+        if json.loads(line).get("event") == "cli_usage"
+    ]
+    assert usage_events == []
 
 
 
